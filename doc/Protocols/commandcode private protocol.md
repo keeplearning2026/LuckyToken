@@ -1,5 +1,6 @@
 # CommandCode Private Protocol
 
+**Version:** 0.2
 **Protocol:** CommandCode Private Generate Protocol
 **Primary Endpoint:** `POST /alpha/generate`
 **Transport:** HTTP + JSON request / event-stream response
@@ -48,6 +49,7 @@ HTTP Request
 ├── POST /alpha/generate
 ├── Request Headers
 └── JSON Body
+    ├── mode?
     ├── config
     ├── memory
     ├── taste
@@ -102,30 +104,29 @@ https://api.commandcode.ai/alpha/generate
 
 Whether alternate origins are accepted is outside the established protocol evidence.
 
+The reconstructed core request does not require a top-level `mode`, but captured CommandCode traffic includes an observed optional `mode` extension such as `custom-agent` and `title-gen`. This extension is documented separately in Appendix A and should not be confused with a universally required core field.
+
 ------
 
 ## 1.2 Evidence Classes
 
 Because this is a private protocol, every important claim belongs to one of four evidence classes.
 
-### Confirmed Wire
+### Captured Wire
 
-A structure directly supported by:
-
-- captured CommandCode traffic;
-- strict reconstructed wire types;
-- repeated upstream events;
-- source-backed parity fixtures.
+A structure or value directly observed in captured CommandCode HTTP or SSE traffic.
 
 Example:
 
 ```text
-params.messages[].content is an array.
+config.environment = "win32"
 ```
+
+Captured wire evidence is the strongest evidence available in this specification, but it still proves only that the observed service/client exchange used that shape or value. It does not prove that every alternate value would be rejected.
 
 ### Observed Client Behavior
 
-A value or derivation observed from CommandCode-compatible client behavior.
+A value or derivation observed from a CommandCode or CommandCode-compatible client implementation or capture.
 
 Example:
 
@@ -133,23 +134,25 @@ Example:
 x-cli-environment = "production"
 ```
 
-This describes what an observed client sends.
+This describes what an observed producer sends.
 
 It does **not** prove that the server rejects every other value.
 
-### Reconstructed Producer Behavior
+### Reconstructed Contract / Producer Behavior
 
-An algorithm reconstructed from compatibility source plus capture parity.
+A structure or algorithm reconstructed from strict wire types, compatibility source, capture parity, and source-backed fixtures.
 
-Example:
+Examples:
 
 ```text
+params.messages[].content is reconstructed as an array.
+
 project root
 → lowercase path segments
 → "-" joined x-project-slug
 ```
 
-This is useful when implementing a compatible producer but must not be confused with a formally published server rule.
+This evidence is useful for implementing a compatible producer or parser, but reconstructed representability must not be promoted into a server guarantee. For example, a local type such as `serde_json::Value` proves that the implementation can represent arbitrary JSON; it does not prove that the CommandCode service accepts every possible JSON shape.
 
 ### Unknown
 
@@ -228,9 +231,27 @@ Observed successful generation responses use an event-stream transport:
 Content-Type: text/event-stream
 ```
 
-The response body contains JSON events carried in SSE `data:` fields.
+The canonical observed framing carries JSON events in SSE `data:` fields:
+
+```text
+data: {"type":"text-delta","text":"Hello"}
+```
+
+The reconstructed strict consumer also accepts a bare JSON event line inside the event-stream body:
+
+```text
+{"type":"text-delta","text":"Hello"}
+```
+
+This alternate physical framing should be treated as a transport/compatibility observation rather than as a different semantic protocol. The semantic event object is still identified by its JSON `type` field.
+
+SSE comments and metadata lines such as blank lines, `:`, `event:`, `id:`, and `retry:` do not themselves constitute CommandCode semantic events.
 
 The semantic event protocol is described in Chapters 7 and 8.
+
+### 2.2.1 Early / Non-Event Error Bodies
+
+Compatibility handling also recognizes that an upstream response may begin with a plain JSON error object, for example an object carrying `error` or `success: false`, without a CommandCode event `type`. The complete server-side schema for these early/non-event error bodies is not established and is therefore outside the closed event schema in Chapter 7.
 
 ------
 
@@ -284,7 +305,7 @@ Request Headers
 | `Accept-Encoding`        | string    | yes               | `br, gzip, deflate`             |
 | `x-command-code-version` | string    | yes               | observed client version         |
 | `x-cli-environment`      | string    | yes               | observed `"production"`         |
-| `x-taste-learning`       | string    | yes               | observed `"false"`              |
+| `x-taste-learning`       | string    | yes               | producer-dependent; observed `"false"` and `"true"` |
 | `x-co-flag`              | string    | yes               | observed `"false"`              |
 | `x-session-id`           | string    | yes               | opaque request/session identity |
 | `x-project-slug`         | string    | conditional       | project identity                |
@@ -357,15 +378,24 @@ Implementations should therefore treat the value as a compatibility/version para
 
 ## 3.6 CommandCode Client Metadata
 
-Observed:
+Observed producer profiles include:
 
 ```http
 x-cli-environment: production
-x-taste-learning: false
 x-co-flag: false
 ```
 
-These values should be understood as an **observed producer profile**.
+`x-taste-learning` is producer-controlled rather than a fixed protocol literal. Observed profiles include at least:
+
+```text
+commandcode-router producer
+└── x-taste-learning: false
+
+pi CommandCode provider profile
+└── x-taste-learning: true
+```
+
+Therefore `false` must not be treated as a universal CommandCode server requirement.
 
 The available evidence does not establish the full allowed value space for these headers.
 
@@ -389,7 +419,7 @@ Semantically it carries an opaque conversation/request identity.
 
 The private protocol does not expose an algorithm for deriving the value from another client protocol.
 
-A compatibility producer must generate or obtain a stable string appropriate to its conversation/session model.
+A compatibility producer must generate or obtain an opaque identity string appropriate to its own request/session model. Its lifetime and stability are producer policy, not an established CommandCode wire requirement.
 
 ### Observed relationship
 
@@ -555,6 +585,7 @@ The reconstructed request object is:
 ```text
 CommandCodeRequest
 │
+├── mode?                  # observed extension; not required by reconstructed core type
 ├── config
 │   └── CcConfig
 │
@@ -581,6 +612,9 @@ Conceptual TypeScript representation:
 
 ```ts
 interface CommandCodeRequest {
+  // observed extension in some captures; not required by reconstructed core type
+  mode?: string
+
   config: CcConfig
 
   memory: unknown
@@ -598,25 +632,28 @@ interface CommandCodeRequest {
 
 ## 4.2 Top-Level Field Contract
 
-| Field            | Wire Type  | Observed Presence | Meaning / Evidence          |
-| ---------------- | ---------- | ----------------- | --------------------------- |
-| `config`         | object     | yes               | environment/project context |
-| `memory`         | JSON value | yes               | opaque context field        |
-| `taste`          | JSON value | yes               | opaque context field        |
-| `skills`         | JSON value | yes               | opaque context field        |
-| `permissionMode` | string     | yes               | permission/execution mode   |
-| `threadId`       | string     | yes               | opaque thread identity      |
-| `params`         | object     | yes               | model invocation            |
+| Field            | Wire Type  | Observed Presence | Meaning / Evidence                                           |
+| ---------------- | ---------- | ----------------- | ------------------------------------------------------------ |
+| `mode`           | string     | conditional       | observed client-mode extension; not part of reconstructed core type, we can ignore mode |
+| `config`         | object     | yes               | environment/project context                                  |
+| `memory`         | JSON value | yes               | opaque context field                                         |
+| `taste`          | JSON value | yes               | opaque context field                                         |
+| `skills`         | JSON value | yes               | opaque context field                                         |
+| `permissionMode` | string     | yes               | permission/execution mode                                    |
+| `threadId`       | string     | yes               | opaque thread identity                                       |
+| `params`         | object     | yes               | model invocation                                             |
 
 ------
 
 ## 4.3 `memory`
 
-Wire type:
+Reconstructed representation:
 
 ```text
-any JSON value
+JSON value
 ```
+
+This means the compatibility implementation can represent arbitrary JSON at this field. It does **not** establish that the CommandCode service accepts every possible non-null JSON shape.
 
 Observed baseline value:
 
@@ -640,11 +677,13 @@ unless it has separate evidence for richer memory semantics.
 
 ## 4.4 `taste`
 
-Wire type:
+Reconstructed representation:
 
 ```text
-any JSON value
+JSON value
 ```
+
+The non-null server schema is not established; representability in the compatibility implementation is not evidence of universal server acceptance.
 
 Observed baseline:
 
@@ -658,11 +697,13 @@ The non-null schema is not established.
 
 ## 4.5 `skills`
 
-Wire type:
+Reconstructed representation:
 
 ```text
-any JSON value
+JSON value
 ```
+
+The non-null server schema is not established; representability in the compatibility implementation is not evidence of universal server acceptance.
 
 Observed baseline:
 
@@ -1082,14 +1123,17 @@ Reconstructed producer resolution:
 ```text
 1. git symbolic-ref refs/remotes/origin/HEAD
 
-2. if a remote HEAD is available:
-   strip "refs/remotes/origin/"
+2. if stdout starts with "refs/remotes/origin/":
+   strip that prefix and return the branch name
 
-3. otherwise probe:
+3. otherwise, if symbolic-ref produced a non-empty string:
+   preserve and return that non-empty string
+
+4. otherwise probe:
    main
    master
 
-4. if no candidate is resolved:
+5. if no candidate is resolved:
    ""
 ```
 
@@ -1635,6 +1679,8 @@ Field contract:
 | `toolName`   | string                | required |
 | `input`      | JSON value            | required |
 
+The reconstructed representation permits `input` to carry a JSON value. Observed coding-tool invocations are object-shaped; acceptance of arbitrary non-object input by the service is not established.
+
 The discriminator uses:
 
 ```text
@@ -1781,11 +1827,11 @@ not:
 inputSchema
 ```
 
-The reconstructed CommandCode tool definition does not require an outer OpenAI-style `function` wrapper.
+The reconstructed CommandCode tool definition does not require an outer OpenAI-style `function` wrapper. `input_schema` is represented generically by the compatibility implementation, while observed usage is JSON-Schema-like object data; the complete accepted schema language is not established.
 
 ------
 
-# 4.12 Representative Request
+# 4.12 Representative Core Request
 
 The following is a neutral representative request using only the reconstructed protocol structures:
 
@@ -1902,12 +1948,11 @@ They do not prove that the CommandCode server requires every rule.
 ## 5.1 Field Provenance
 
 ```text
-Observed Literal / Stable Client Values
+Observed Literal / Stable Values in the Router-Compatible Producer Profile
 ├── Content-Type = application/json
 ├── Accept = */*
 ├── Accept-Encoding = br, gzip, deflate
 ├── x-cli-environment = production
-├── x-taste-learning = false
 ├── x-co-flag = false
 ├── User-Agent = cli
 ├── accept-language = *
@@ -1915,6 +1960,11 @@ Observed Literal / Stable Client Values
 ├── memory = null
 ├── taste = null
 └── skills = null
+
+Producer-Dependent Metadata
+└── x-taste-learning
+    ├── false  (commandcode-router profile)
+    └── true   (observed pi CommandCode provider profile)
 
 Per-Request Generated
 └── traceparent
@@ -2055,9 +2105,9 @@ Those are outside the CommandCode private wire protocol.
 
 # 6. Response Transport
 
-## 6.1 SSE Framing
+## 6.1 Event-Stream Framing
 
-Observed CommandCode events use Server-Sent Event data lines:
+Observed CommandCode events use an HTTP event-stream response. The canonical physical framing is an SSE `data:` line:
 
 ```text
 data: {"type":"start"}
@@ -2065,17 +2115,47 @@ data: {"type":"start"}
 data: {"type":"text-delta","text":"Hello"}
 ```
 
-The event payload is JSON.
+Compatibility evidence and the reconstructed strict consumer also support a bare JSON event line inside the same event-stream body:
 
-The primary discriminator is:
+```text
+{"type":"start"}
+
+{"type":"text-delta","text":"Hello"}
+```
+
+The event payload is JSON in either case.
+
+The primary semantic discriminator is:
 
 ```text
 type
 ```
 
-This specification describes the observed upstream SSE representation.
+Known non-semantic framing/metadata includes:
 
-Consumer-specific acceptance of alternate non-SSE framing is not part of the protocol.
+```text
+blank / whitespace-only line
+: comment
+event: ...
+id: ...
+retry: ...
+```
+
+These lines do not create CommandCode semantic events.
+
+A transport sentinel may also appear as:
+
+```text
+[DONE]
+```
+
+or:
+
+```text
+data: [DONE]
+```
+
+Its semantics are described separately in §8.7. Bare JSON acceptance is documented here as an observed/compatibility transport behavior; it does not create a separate semantic event protocol.
 
 ------
 
@@ -2200,6 +2280,15 @@ Example:
 This marks the beginning of a provider/model generation step.
 
 The protocol evidence does not establish a required additional core payload.
+
+Observed streams may additionally carry fields such as:
+
+```text
+request
+warnings
+```
+
+These are observed optional payload fields, not established universal requirements, and consumers should preserve unknown additional fields at the raw protocol layer when lossless capture matters.
 
 ------
 
@@ -2486,7 +2575,34 @@ No alternate aliases are part of the established wire structure in this specific
 
 ------
 
-## 7.5.6 Tool Stream Identity
+## 7.5.6 Incremental Preview vs Completed Input
+
+The reconstructed compatibility consumer treats the concatenation of:
+
+```text
+tool-input-delta.delta
+```
+
+as a serialized preview of the eventual input. At `tool-input-end`, that preview can be parsed and validated as a JSON object when possible.
+
+The later:
+
+```text
+tool-call.input
+```
+
+is the completed structured invocation payload and is semantically stronger than the partial stream fragments. Compatibility implementations may compare the assembled preview against the completed `tool-call` to detect mismatches.
+
+Therefore:
+
+```text
+concatenated tool-input-delta fragments
+≠ authoritative completed tool call
+```
+
+------
+
+## 7.5.7 Tool Stream Identity
 
 Observed compatible lifecycle:
 
@@ -2503,6 +2619,43 @@ tool-call.toolCallId
 This allows incremental fragments to be correlated with their eventual completed tool call.
 
 A compatible stream consumer should therefore track incremental tool state by ID.
+
+------
+
+## 7.5.8 Interleaving and Concurrent Content Lifecycles
+
+CommandCode content lifecycles are not guaranteed to be globally serialized into one open block at a time. Compatibility source explicitly accounts for multiple content/tool lifecycles being interleaved in one response stream.
+
+A valid consumer therefore should not model the stream as only:
+
+```text
+one current block
+```
+
+Instead, it may need to track independent state by block kind and, for tool input, by ID.
+
+Illustrative interleaving:
+
+```text
+reasoning-start
+reasoning-delta
+
+tool-input-start(A)
+
+text-start
+
+tool-input-delta(A)
+text-delta
+reasoning-delta
+
+tool-input-end(A)
+tool-call(toolCallId=A)
+
+reasoning-end
+text-end
+```
+
+This example is illustrative rather than a closed ordering grammar. The key protocol property is that start/delta/end identity must be preserved independently and that a consumer must not assume an arbitrary delta is a complete standalone block.
 
 ------
 
@@ -2586,7 +2739,8 @@ Structure:
 FinishEvent
 ├── type = "finish"
 ├── finishReason
-└── totalUsage
+├── totalUsage
+└── rawFinishReason?   # observed optional extension; semantics not closed
 ```
 
 Example:
@@ -2605,6 +2759,8 @@ Example:
   }
 }
 ```
+
+Observed finish events may also carry `rawFinishReason`. The current reconstructed semantic normalizer does not require or consume it, and its complete semantics are not established; it should therefore be treated as an optional observed extension rather than a core required field.
 
 The important protocol distinction is:
 
@@ -2629,6 +2785,16 @@ tool-result
 is recognized in the reconstructed CommandCode event family.
 
 The complete stable event payload schema has not been established by the available evidence.
+
+Observed/compatibility payloads may carry fields such as:
+
+```text
+toolCallId
+output
+status
+```
+
+These names are useful evidence but are not promoted here into a closed required schema.
 
 Therefore this specification does not invent one.
 
@@ -2728,7 +2894,9 @@ These are a useful implementation baseline.
 
 However the wire object may carry additional fields.
 
-A protocol parser should not discard them unless its application intentionally chooses a narrower semantic representation.
+The raw protocol specification should distinguish field presence on the wire from local normalization defaults. The current reconstructed Router normalizer may substitute numeric zero for some missing usage members when constructing its narrower `CcUsage` representation; that parser behavior does **not** prove that the corresponding raw wire members are required, nor that omission and zero are semantically identical upstream.
+
+A protocol parser should not discard additional fields unless its application intentionally chooses a narrower semantic representation.
 
 ------
 
@@ -2883,6 +3051,8 @@ event.
 
 Therefore `[DONE]` should be treated as transport framing rather than a replacement for the semantic `finish` event.
 
+In the reconstructed strict consumer, `[DONE]` encountered before a semantic `finish`/`error` terminal is treated as an ended-before-terminal condition rather than successful completion. This is a consumer safety rule consistent with the distinction above; it should not be reinterpreted as proof that every CommandCode server version always emits `[DONE]` after `finish`.
+
 ------
 
 ## 8.8 Physical EOF
@@ -2902,6 +3072,8 @@ The application-specific error assigned to premature EOF is outside this private
 ------
 
 # 8.9 Typical Event Lifecycles
+
+The following sequences are illustrative common lifecycles, not an exclusive global ordering grammar. Content/tool lifecycles may interleave as described in §7.5.8, and multi-step streams may repeat step-level boundaries.
 
 ## 8.9.1 Text Completion
 
@@ -3203,7 +3375,7 @@ Network, timeout, local parser failure, or caller cancellation are separate tran
 
 ------
 
-## 9.10 Unknown Values Should Remain Unknown
+## 9.10 Forward-Compatibility Guidance for Unknown Values
 
 The following are not established as permanently closed:
 
@@ -3217,7 +3389,9 @@ extra usage fields
 future event types
 ```
 
-A private-protocol implementation should prefer preserving unknown values over inventing unsupported mappings.
+At the raw protocol layer, an implementation should prefer preserving unknown fields and unknown event-type strings over inventing unsupported mappings or silently collapsing them into known values.
+
+A higher semantic conversion layer may still reject an unknown event when it cannot safely preserve downstream state-machine semantics. That stricter application behavior is distinct from the raw wire fact that the unknown value existed and should remain diagnosable.
 
 ------
 
@@ -3236,6 +3410,19 @@ Observed values include:
 ```text
 custom-agent
 title-gen
+```
+
+Current provenance notes:
+
+```text
+custom-agent
+└── observed in Claude Code CLI direct CommandCode traffic
+
+title-gen
+└── observed in CommandCode internal title-generation traffic
+
+commandcode-router baseline producer
+└── omits mode
 ```
 
 Examples:
@@ -3277,9 +3464,14 @@ The complete enum and semantics are not established.
 The following areas remain intentionally open because the current evidence does not establish a complete contract:
 
 ```text
+Transport
+├── exact server/producer provenance of bare JSON event lines
+└── exact relationship between `[DONE]` and semantic `finish` across producer/service versions
+
 Headers
 ├── which observed metadata headers are server-required
-└── complete accepted version/header value space
+├── complete accepted version/header value space
+└── complete producer/server semantics of x-taste-learning
 
 Request
 ├── non-null memory schema
@@ -3299,16 +3491,20 @@ Model Invocation
 
 Events
 ├── complete provider-metadata schema
+├── complete optional start-step payload schema
 ├── complete tool-result event schema
 ├── complete error-event schema
+├── complete rawFinishReason semantics
 ├── complete finishReason value set
+├── exact constraints on interleaving content lifecycles
 └── future/unknown event types
 
 Usage
 └── exact presence requirements for all extended usage fields
 
 Extensions
-└── complete mode enum and behavior
+├── complete mode enum and behavior
+└── which producer modes require or omit mode
 ```
 
 These gaps should remain explicit.
@@ -3341,6 +3537,8 @@ POST /alpha/generate
 │   └── sec-fetch-mode
 │
 └── CommandCodeRequest
+    │
+    ├── mode?  (observed extension)
     │
     ├── config
     │   ├── workingDir
@@ -3409,11 +3607,14 @@ CommandCode Stream
 │   │   │   ├── reasoning-delta*
 │   │   │   └── reasoning-end
 │   │   │
-│   │   └── Tool
-│   │       ├── tool-input-start
-│   │       ├── tool-input-delta*
-│   │       ├── tool-input-end
-│   │       └── tool-call
+│   │   ├── Tool Input / Invocation
+│   │   │   ├── tool-input-start
+│   │   │   ├── tool-input-delta*
+│   │   │   ├── tool-input-end
+│   │   │   └── tool-call
+│   │   │
+│   │   └── Tool Result
+│   │       └── tool-result
 │   │
 │   ├── provider-metadata*
 │   └── finish-step
@@ -3427,7 +3628,40 @@ CommandCode Stream
 
 # Appendix D. Minimal Implementation Surface
 
-An implementation of the reconstructed core protocol needs to understand at minimum:
+A compatible implementation benefits from separating the minimum **parser surface** from the minimum **semantic generation surface**.
+
+## D.1 Parser Minimum
+
+A parser that wants to recognize the reconstructed protocol without misclassifying known ignorable events should understand at minimum:
+
+```text
+HTTP / Framing
+├── text/event-stream response
+├── data: JSON event lines
+├── observed bare JSON event lines
+├── ignorable SSE metadata/comments
+└── [DONE] transport sentinel
+
+Known Event Discriminators
+├── start
+├── start-step
+├── provider-metadata
+├── text-start / text-delta / text-end
+├── reasoning-start / reasoning-delta / reasoning-end
+├── tool-input-start / tool-input-delta / tool-input-end
+├── tool-call
+├── tool-result
+├── finish-step
+├── finish
+└── error
+
+Forward Compatibility
+└── preserve/diagnose unknown event type strings and extra raw fields
+```
+
+## D.2 Semantic Generation Minimum
+
+An implementation that produces or consumes the core generation semantics needs at minimum:
 
 ```text
 Request
@@ -3451,9 +3685,10 @@ Message Content
 ├── tool-call
 └── tool-result
 
-Stream
+Stream Semantics
 ├── text lifecycle
 ├── reasoning lifecycle
+├── interleaving-aware block tracking
 ├── tool-input lifecycle
 ├── completed tool-call
 ├── finish-step
