@@ -1,6 +1,6 @@
 # LuckyToken Core Architecture Specification v5.5
 
-**Status:** Final Freeze Candidate — Dependency Semantics Corrected Against Current Pi Runtime
+**Status:** FROZEN — Dependency Semantics Corrected Against Current Pi Runtime
 
 本文件描述 LuckyToken 的 Core Architecture。
 
@@ -2851,7 +2851,7 @@ parse
   Result
   - validated Client state
   - external model selector
-  - protocol-owned renderState
+  - protocol-owned renderState, if required / established
 
   Effects
   - none required beyond parsing/validation
@@ -5255,7 +5255,15 @@ TransportManager
 
 ## 8.1 Provider Boundary
 
-### Module Contract — Generic Provider Shape
+### Pi Provider Boundary Contract
+
+Pi `Provider` is the generic external runtime contract used by LuckyToken.
+
+Pi-owned Provider implementations remain Pi-owned. LuckyToken does not redefine their internal dependency closure.
+
+When LuckyToken implements a concrete Provider itself, that implementation is a LuckyToken-owned module and must satisfy the Module / Operation Runtime Closure rules in Chapter 2.
+
+### LuckyToken-Owned Concrete Provider Module Shape
 
 ```text
 Responsibility
@@ -5674,21 +5682,23 @@ Generic Execution 不从 raw upstream partial state 重建 semantic completion�
 
 ---
 
-## 8.6 Provider State Lifecycle
+## 8.6 Provider Lifetime Scope
 
 Provider-lifetime 与 request-lifetime state 必须分开。
 
 ```text
 Provider
-├── Provider lifetime
-│   ├── identity
-│   ├── upstream implementation
-│   ├── model behavior
-│   ├── endpoint / static configuration
-│   ├── authentication behavior
-│   └── stable compatibility policy
 │
-└── one request
+├── Bound Lifetime Dependencies
+│   ├── upstream implementation / configuration
+│   ├── endpoint / static configuration
+│   ├── authentication / compatibility policy
+│   └── direct integration capabilities
+│
+├── Provider-Owned Runtime State
+│   └── mutable model / catalog / cache / runtime state, if any
+│
+└── One Request
     ├── upstream request representation
     ├── effective request configuration
     ├── transport state
@@ -5696,6 +5706,8 @@ Provider
     ├── partial upstream state
     └── terminal state
 ```
+
+A dependency being retained for the Provider lifetime does not make it Provider-owned state. Ownership follows the authoritative-lifecycle rule defined in §2.10.
 
 Provider object 可能并发服务多个 request，因此 request-specific mutable state 不能变成 Provider-global mutable state。
 
@@ -6077,19 +6089,19 @@ ordinary Provider-local functions are sufficient.
 
 ### `memory`, `taste`, `skills`
 
-Strict wire types允许 arbitrary JSON，而 current source-backed producer policy发送：
+These are CommandCode-specific request fields owned by the CommandCode Private Provider boundary.
 
-```text
-memory = null
-taste = null
-skills = null
-```
+Their exact current values, non-null semantics, defaulting rules, and compatibility behavior belong to the CommandCode Private Protocol and the Pi ↔ CommandCode Conversion Specification.
 
-LuckyToken current CommandCode Provider 可以保留这一 compatibility policy。它不是“CommandCode server 永远只允许 null”的 protocol claim，也不需要建立 LuckyToken-wide semantic models。
+Their presence does not justify LuckyToken-wide memory, taste, or skills semantic models.
 
 ### `permissionMode`
 
-`permissionMode` 由 narrow CommandCode Provider configuration/policy owns。Current bundled producer default 是 `auto-accept`，但 Architecture 不把它升级为 LuckyToken-wide permission subsystem。
+`permissionMode` is owned by narrow CommandCode Provider policy/configuration.
+
+Its exact wire value, defaulting behavior, supported value space, and compatibility mapping belong to the CommandCode Private Protocol and Pi ↔ CommandCode Conversion Specification.
+
+Its presence does not justify a LuckyToken-wide permission subsystem.
 
 ---
 
@@ -7008,12 +7020,12 @@ Module
 
 Summary：
 
-| Module | Bound Dependencies | Owned Runtime State | Main Operations | Must Not Access |
+| Module | Bound Dependencies | Important Owned State | Main Operations | Must Not Access |
 | --- | --- | --- | --- | --- |
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
 | **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
 | **Auth** | auth policy/config; credential/project lookup capability; session-resolution policy; fallback identity capability | Auth-owned mutable lookup/index/cache state only if any | `resolve(headers)` | Model; Context; Pi Options; Provider wire |
-| **Generic Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | inbound Auth; Client wire; generic whole-request object |
+| **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | inbound Auth; Client wire; generic whole-request object |
 | **CommandCode Private Provider** | endpoint/config; compatibility policy; Project Snapshot; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object |
 
 Bound configuration/policy may be retained by a module but is not repeated under `Owned State`.
@@ -7039,11 +7051,15 @@ Summary：
 | **`composeOptions`** | Router defaults/policy when bound | protocol controls; sessionId; projectDir?; AbortSignal | `ModelsSimpleStreamOptions` | none |
 | **`execute`** | Models | Model + Context + Options | committed success or aborted/error failure | consume Pi stream; commit one atomic outcome |
 
+
+
 ### External Pi Runtime View
 
-Pi `Models` 不套用 LuckyToken-owned Module Contract 来重新定义 construction。
+LuckyToken uses Pi's public runtime contracts rather than redefining them:
 
-Current Pi runtime is summarized separately：
+Pi Runtime
+├── Models
+└── Provider contract
 
 ```text
 createModels(optional CredentialStore / ModelsStore / AuthContext)
@@ -7066,6 +7082,10 @@ deferred operations
 ```
 
 LuckyToken Core's primary inference dependency is `Models.streamSimple(...)`, but that does not collapse the entire Pi `Models` API into one operation。
+
+Pi built-in Provider implementations remain Pi-owned.
+
+A LuckyToken-specific Provider, such as the CommandCode Private Provider, implements the same Pi Provider contract, while its own implementation dependency closure is LuckyToken-owned.
 
 ## 11.4 Fact Flow Contract Map
 
