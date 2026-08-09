@@ -1,34 +1,52 @@
-# CommandCode `/alpha/generate` Wire Protocol
+# CommandCode Private Protocol
 
-> Source-backed protocol reference for LuckyToken.
->
-> This document describes the CommandCode upstream wire format as reconstructed from the current `commandcode-router` implementation, its strict wire types, runtime request generation, SSE parser, tests, fixtures, and captured Command Code CLI traffic.
->
-> `docs/PROTOCOLS.md` is used as a reference draft, but source code and real capture fixtures are authoritative where they differ.
+**Protocol:** CommandCode Private Generate Protocol
+**Primary Endpoint:** `POST /alpha/generate`
+**Transport:** HTTP + JSON request / event-stream response
+**Status:** Reverse-engineered private protocol
+**Purpose:** Source-backed specification of the CommandCode request, response, event lifecycle, and observed CommandCode client producer behavior.
+
+This document describes the CommandCode private protocol itself.
+
+It defines:
+
+- the upstream HTTP endpoint;
+- request headers;
+- request JSON structure;
+- project/config context;
+- message and content block structures;
+- tool definitions and tool identity;
+- response stream framing;
+- CommandCode stream events;
+- usage and termination semantics;
+- observed CommandCode client field-generation behavior.
+
+It does **not** define:
+
+- how another protocol maps into CommandCode;
+- client model routing;
+- model aliases or fallback routing;
+- downstream client authentication;
+- local model-discovery APIs;
+- application-specific session policy;
+- application-specific retry, timeout, or cancellation policy;
+- application-specific response rendering.
+
+Because CommandCode is a private protocol, this specification distinguishes verified wire facts from reconstructed client behavior and unknown server-side requirements.
 
 ------
 
-## 1. Scope and Evidence
+# 1. Scope and Evidence
 
-### 1.1 Protocol boundary
+## 1.1 Protocol Boundary
 
-The primary CommandCode inference endpoint is:
-
-```text
-POST /alpha/generate
-```
-
-Current default upstream:
-
-```text
-https://api.commandcode.ai/alpha/generate
-```
-
-The interaction is:
+The observed CommandCode inference interaction is:
 
 ```text
 HTTP Request
-├── Headers
+│
+├── POST /alpha/generate
+├── Request Headers
 └── JSON Body
     ├── config
     ├── memory
@@ -37,215 +55,279 @@ HTTP Request
     ├── permissionMode
     ├── threadId
     └── params
+        ├── model
+        ├── system
+        ├── messages[]
+        ├── tools[]
+        ├── max_tokens
+        ├── stream
+        ├── reasoning_effort?
+        └── temperature?
 
-            ↓
+                ↓
 
-     CommandCode upstream
+         CommandCode Service
 
-            ↓
+                ↓
 
-HTTP 200
-└── text/event-stream
-    └── CommandCode events
+HTTP Response
+└── Event Stream
+    ├── start / step events
+    ├── text events
+    ├── reasoning events
+    ├── tool events
+    ├── usage / finish-step
+    └── terminal
+        ├── finish
+        └── error
 ```
 
-### 1.2 Evidence priority
-
-This document uses the following evidence order:
-
-1. strict CommandCode Rust wire types;
-2. actual upstream request builder;
-3. runtime request/context generation;
-4. SSE parser and stream lifecycle implementation;
-5. tests and golden/capture fixtures;
-6. `docs/PROTOCOLS.md`.
-
-Important source files include:
-
-```text
-crates/ccr-protocol/src/commandcode/types.rs
-crates/ccr-protocol/src/commandcode/sse.rs
-
-crates/ccr-runtime/src/handlers/router/pipeline.rs
-crates/ccr-runtime/src/handlers/router/request_context.rs
-
-crates/ccr-runtime/src/config_store.rs
-crates/ccr-runtime/src/project_paths.rs
-crates/ccr-runtime/src/request_thread.rs
-crates/ccr-runtime/src/request_session.rs
-
-crates/ccr-runtime/src/model_catalog.rs
-crates/ccr-runtime/src/model_routing.rs
-
-crates/ccr-runtime/src/streaming/commandcode_sse.rs
-
-fixtures/runtime/cc-config-official-capture.json
-```
-
-The strict request shape is defined by `CommandCodeRequest`, `CcConfig`, `CcParams`, `CcMessage`, and `CcContentBlock`.
-
-### 1.3 Wire fact vs producer policy
-
-Two kinds of facts must not be confused.
-
-**Wire contract** describes the structure actually exchanged with CommandCode, for example:
-
-```text
-threadId
-params.model
-params.messages
-toolCallId
-toolName
-input_schema
-finishReason
-totalUsage
-```
-
-**Current CCR producer policy** describes how `commandcode-router` chooses values, for example:
-
-```text
-x-taste-learning = false
-memory = null
-permissionMode default = auto-accept
-params.stream = true
-temperature fallback = 0.3
-```
-
-LuckyToken can preserve producer policy for compatibility without assuming the CommandCode server accepts no other value.
-
-------
-
-# 2. HTTP Endpoint
-
-## 2.1 Base URL
-
-Current configuration contains:
-
-```json
-{
-  "commandCode": {
-    "apiBaseUrl": "https://api.commandcode.ai",
-    "version": "1.7.0"
-  }
-}
-```
-
-The endpoint is constructed as:
-
-```text
-trimTrailingSlash(apiBaseUrl)
-+ "/alpha/generate"
-```
-
-Therefore:
+The observed API origin is:
 
 ```text
 https://api.commandcode.ai
-→ https://api.commandcode.ai/alpha/generate
-
-https://api.commandcode.ai/
-→ https://api.commandcode.ai/alpha/generate
 ```
 
-The base URL is configuration-driven rather than a wire constant.
+The primary generation path is:
 
-## 2.2 Method
+```text
+/alpha/generate
+```
+
+Therefore the observed production endpoint is:
+
+```text
+https://api.commandcode.ai/alpha/generate
+```
+
+Whether alternate origins are accepted is outside the established protocol evidence.
+
+------
+
+## 1.2 Evidence Classes
+
+Because this is a private protocol, every important claim belongs to one of four evidence classes.
+
+### Confirmed Wire
+
+A structure directly supported by:
+
+- captured CommandCode traffic;
+- strict reconstructed wire types;
+- repeated upstream events;
+- source-backed parity fixtures.
+
+Example:
+
+```text
+params.messages[].content is an array.
+```
+
+### Observed Client Behavior
+
+A value or derivation observed from CommandCode-compatible client behavior.
+
+Example:
+
+```text
+x-cli-environment = "production"
+```
+
+This describes what an observed client sends.
+
+It does **not** prove that the server rejects every other value.
+
+### Reconstructed Producer Behavior
+
+An algorithm reconstructed from compatibility source plus capture parity.
+
+Example:
+
+```text
+project root
+→ lowercase path segments
+→ "-" joined x-project-slug
+```
+
+This is useful when implementing a compatible producer but must not be confused with a formally published server rule.
+
+### Unknown
+
+The available evidence does not establish a closed rule.
+
+Examples:
+
+```text
+all possible permissionMode values
+all possible finishReason values
+complete provider-metadata schema
+complete error payload schema
+```
+
+A compatible implementation should preserve these unknowns rather than inventing closed enums without evidence.
+
+------
+
+## 1.3 Naming and Casing
+
+CommandCode uses mixed naming conventions.
+
+Examples:
+
+```text
+Request root
+├── permissionMode     camelCase
+├── threadId           camelCase
+└── params.max_tokens  snake_case
+
+Content blocks
+├── toolCallId         camelCase
+├── toolName           camelCase
+└── mimeType           camelCase
+
+Tool definition
+└── input_schema       snake_case
+
+Events
+├── type = "text-delta"
+├── type = "tool-input-start"
+└── finishReason       camelCase
+```
+
+Field names and discriminator strings should therefore be preserved exactly.
+
+Do not normalize casing globally.
+
+------
+
+# 2. HTTP Transport
+
+## 2.1 Request
+
+Method:
 
 ```http
 POST /alpha/generate
 ```
 
-Request body:
+Request body media type:
 
-```text
-application/json
+```http
+Content-Type: application/json
 ```
 
-Current runtime expects a successful inference response to be an SSE response.
+The body is one JSON object described in Chapter 4.
+
+------
+
+## 2.2 Response
+
+Observed successful generation responses use an event-stream transport:
+
+```http
+Content-Type: text/event-stream
+```
+
+The response body contains JSON events carried in SSE `data:` fields.
+
+The semantic event protocol is described in Chapters 7 and 8.
 
 ------
 
 # 3. Request Headers
 
-## 3.1 Header hierarchy
+## 3.1 Header Hierarchy
+
+Observed CommandCode-compatible requests contain:
 
 ```text
-Headers
+Request Headers
+│
 ├── Authentication
 │   └── Authorization
 │
-├── HTTP representation
+├── HTTP Representation
 │   ├── Content-Type
 │   ├── Accept
 │   └── Accept-Encoding
 │
-├── CommandCode client metadata
+├── CommandCode Client Metadata
 │   ├── x-command-code-version
 │   ├── x-cli-environment
 │   ├── x-taste-learning
 │   └── x-co-flag
 │
-├── Request identity
-│   ├── x-session-id
-│   └── traceparent
+├── Request / Conversation Identity
+│   └── x-session-id
 │
-├── Project identity
+├── Project Identity
 │   └── x-project-slug?
 │
-└── Generic client metadata
+├── Trace Context
+│   └── traceparent
+│
+└── Generic Client Metadata
     ├── User-Agent
     ├── accept-language
     └── sec-fetch-mode
 ```
 
-The current upstream request builder creates this set directly.
+------
 
-## 3.2 Header field table
+## 3.2 Header Field Contract
 
-| Header                   | Presence                     | Classification        | Current value / generation     |
-| ------------------------ | ---------------------------- | --------------------- | ------------------------------ |
-| `Authorization`          | required by current producer | dynamic secret        | `Bearer <CommandCode API key>` |
-| `Content-Type`           | always                       | constant              | `application/json`             |
-| `Accept`                 | always                       | constant              | `*/*`                          |
-| `Accept-Encoding`        | always                       | constant              | `br, gzip, deflate`            |
-| `x-command-code-version` | always                       | configuration         | `commandCode.version`          |
-| `x-cli-environment`      | always                       | producer constant     | `production`                   |
-| `x-taste-learning`       | always                       | producer policy       | `false`                        |
-| `x-co-flag`              | always                       | producer policy       | `false`                        |
-| `x-session-id`           | always                       | request-derived       | resolved upstream thread ID    |
-| `x-project-slug`         | conditional                  | project-derived       | project slug                   |
-| `traceparent`            | always                       | generated per request | W3C-style trace context        |
-| `User-Agent`             | always                       | producer constant     | `cli`                          |
-| `accept-language`        | always                       | producer constant     | `*`                            |
-| `sec-fetch-mode`         | always                       | producer constant     | `cors`                         |
+| Header                   | Wire Type | Observed Presence | Observed Value / Meaning        |
+| ------------------------ | --------- | ----------------- | ------------------------------- |
+| `Authorization`          | string    | yes               | `Bearer <credential>`           |
+| `Content-Type`           | string    | yes               | `application/json`              |
+| `Accept`                 | string    | yes               | `*/*`                           |
+| `Accept-Encoding`        | string    | yes               | `br, gzip, deflate`             |
+| `x-command-code-version` | string    | yes               | observed client version         |
+| `x-cli-environment`      | string    | yes               | observed `"production"`         |
+| `x-taste-learning`       | string    | yes               | observed `"false"`              |
+| `x-co-flag`              | string    | yes               | observed `"false"`              |
+| `x-session-id`           | string    | yes               | opaque request/session identity |
+| `x-project-slug`         | string    | conditional       | project identity                |
+| `traceparent`            | string    | yes               | trace context                   |
+| `User-Agent`             | string    | yes               | observed `"cli"`                |
+| `accept-language`        | string    | yes               | observed `"*"`                  |
+| `sec-fetch-mode`         | string    | yes               | observed `"cors"`               |
+
+Unless explicitly stated otherwise, “observed presence” describes the reconstructed compatible producer profile rather than a proven server-required-header list.
 
 ------
 
 ## 3.3 `Authorization`
 
-Format:
+Observed format:
 
 ```http
-Authorization: Bearer <api-key>
+Authorization: Bearer <credential>
 ```
 
-The credential is the upstream CommandCode API key.
+The value authenticates the caller to the CommandCode upstream service.
 
-It is distinct from credentials used by a client to authenticate to LuckyToken/Router:
+The credential itself is opaque to this protocol.
 
-```text
-Client credential
-→ authenticates client to Router
-
-CommandCode API key
-→ authenticates Router to CommandCode
-```
-
-The current runtime reads the upstream credential from its secret store before constructing the request.
+Its storage, acquisition, rotation, or selection is outside the wire contract.
 
 ------
 
-## 3.4 `x-command-code-version`
+## 3.4 HTTP Representation Headers
+
+Observed values:
+
+```http
+Content-Type: application/json
+Accept: */*
+Accept-Encoding: br, gzip, deflate
+```
+
+These values are part of the observed CommandCode client request profile.
+
+------
+
+## 3.5 `x-command-code-version`
 
 Type:
 
@@ -253,32 +335,43 @@ Type:
 string
 ```
 
-Current bundled value:
+Observed value in the reconstructed baseline:
 
 ```text
 1.7.0
 ```
 
-Source:
+Example:
 
-```text
-router configuration
-└── commandCode.version
+```http
+x-command-code-version: 1.7.0
 ```
 
-The request builder sends the configured string directly.
+This identifies the CommandCode client/protocol version presented upstream.
 
-It is therefore:
+The available evidence does not establish that the server requires exactly `1.7.0`.
 
-```text
-configuration-driven
-```
-
-rather than generated per request.
+Implementations should therefore treat the value as a compatibility/version parameter rather than a permanently fixed protocol literal.
 
 ------
 
-## 3.5 `x-session-id`
+## 3.6 CommandCode Client Metadata
+
+Observed:
+
+```http
+x-cli-environment: production
+x-taste-learning: false
+x-co-flag: false
+```
+
+These values should be understood as an **observed producer profile**.
+
+The available evidence does not establish the full allowed value space for these headers.
+
+------
+
+## 3.7 `x-session-id`
 
 Type:
 
@@ -286,69 +379,93 @@ Type:
 string
 ```
 
-The current producer guarantees:
+Example:
 
-```text
-header x-session-id
-=
-body threadId
+```http
+x-session-id: 5a0df440-c8f0-4cea-b159-c9e401408e07
 ```
 
-Both receive the same resolved upstream thread ID.
+Semantically it carries an opaque conversation/request identity.
 
-Thread calculation is described in §6.
+The private protocol does not expose an algorithm for deriving the value from another client protocol.
+
+A compatibility producer must generate or obtain a stable string appropriate to its conversation/session model.
+
+### Observed relationship
+
+The reconstructed producer profile uses the same logical thread identity for:
+
+```text
+x-session-id
+```
+
+and:
+
+```text
+request.threadId
+```
+
+Whether the CommandCode server strictly requires equality is not established.
+
+Therefore:
+
+```text
+same value
+```
+
+is a useful compatibility profile, not a formally proven server invariant.
 
 ------
 
-## 3.6 `x-project-slug`
+## 3.8 `x-project-slug`
 
-### Presence
-
-```text
-project-bound request
-→ header present
-
-project-less request
-→ header omitted
-```
-
-It is not sent as an empty string for project-less requests.
-
-### Generation
-
-Current function:
+Type:
 
 ```text
-project_root_to_cc_slug(projectRoot)
+string
 ```
 
-Algorithm:
+The header identifies project context.
+
+Example:
+
+```http
+x-project-slug: d-project-example
+```
+
+Observed project-aware requests include it.
+
+The exact server behavior when the header is omitted is not established by the core private protocol evidence.
+
+### Reconstructed producer derivation
+
+The compatibility producer algorithm is:
 
 ```text
 project root
 ↓
-trim whitespace
+trim surrounding whitespace
 ↓
 replace "\" with "/"
 ↓
-normalize Windows extended-path prefix
+normalize Windows extended path prefix
 ↓
 lowercase
 ↓
-split by "/"
+split on "/"
 ↓
-discard empty components
+discard empty segments
 ↓
-strip trailing ":" from components
+strip trailing ":" from path components
 ↓
-join with "-"
+join components with "-"
 ```
 
 Examples:
 
 ```text
-D:\project\commandcode-router
-→ d-project-commandcode-router
+D:\project\example
+→ d-project-example
 
 D:/project/app
 → d-project-app
@@ -363,33 +480,29 @@ D:/project/app
 → unc-server-share-app
 ```
 
-### Important correction to the old documentation
-
-The current source does **not** generate:
+Important representation:
 
 ```text
-/d/project/app
+D:\project\app
 ```
 
-for `x-project-slug`.
-
-That Git-Bash-style representation exists as a different path utility.
-
-The actual current header value is:
+produces:
 
 ```text
 d-project-app
 ```
 
-for `D:/project/app`.
+not:
+
+```text
+/d/project/app
+```
 
 ------
 
-## 3.7 `traceparent`
+## 3.9 `traceparent`
 
-Generated once per upstream request.
-
-Format:
+Observed format follows the W3C traceparent shape:
 
 ```text
 00-{trace-id}-{span-id}-01
@@ -398,25 +511,73 @@ Format:
 where:
 
 ```text
-trace-id = 16 random bytes = 32 hexadecimal characters
-span-id  = 8 random bytes  = 16 hexadecimal characters
+trace-id
+= 32 lowercase hexadecimal characters
+= 16 bytes
+
+span-id
+= 16 lowercase hexadecimal characters
+= 8 bytes
 ```
 
-Example shape:
+Example:
 
 ```text
 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 ```
 
-The implementation generates new random trace/span identifiers for every upstream request.
+Reconstructed producer behavior generates new random trace and span identifiers for each upstream request.
+
+------
+
+## 3.10 Generic Client Metadata
+
+Observed values:
+
+```http
+User-Agent: cli
+accept-language: *
+sec-fetch-mode: cors
+```
+
+These belong to the observed CommandCode client profile.
+
+The available evidence does not establish whether they are semantically required by the service.
 
 ------
 
 # 4. Request Body
 
-## 4.1 Top-level structure
+## 4.1 Request Hierarchy
 
-Exact structure:
+The reconstructed request object is:
+
+```text
+CommandCodeRequest
+│
+├── config
+│   └── CcConfig
+│
+├── memory
+├── taste
+├── skills
+│
+├── permissionMode
+├── threadId
+│
+└── params
+    └── CcParams
+        ├── model
+        ├── system
+        ├── messages[]
+        ├── tools[]
+        ├── max_tokens
+        ├── stream
+        ├── reasoning_effort?
+        └── temperature?
+```
+
+Conceptual TypeScript representation:
 
 ```ts
 interface CommandCodeRequest {
@@ -433,128 +594,141 @@ interface CommandCodeRequest {
 }
 ```
 
-Wire hierarchy:
+------
 
-```text
-CommandCodeRequest
-├── config
-├── memory
-├── taste
-├── skills
-├── permissionMode
-├── threadId
-└── params
-```
+## 4.2 Top-Level Field Contract
 
-## 4.2 Top-level field table
-
-| Field            | Wire type  | Presence | Current producer         |
-| ---------------- | ---------- | -------- | ------------------------ |
-| `config`         | object     | always   | project context          |
-| `memory`         | JSON value | always   | `null`                   |
-| `taste`          | JSON value | always   | `null`                   |
-| `skills`         | JSON value | always   | `null`                   |
-| `permissionMode` | string     | always   | runtime configuration    |
-| `threadId`       | string     | always   | resolved thread identity |
-| `params`         | object     | always   | model invocation         |
+| Field            | Wire Type  | Observed Presence | Meaning / Evidence          |
+| ---------------- | ---------- | ----------------- | --------------------------- |
+| `config`         | object     | yes               | environment/project context |
+| `memory`         | JSON value | yes               | opaque context field        |
+| `taste`          | JSON value | yes               | opaque context field        |
+| `skills`         | JSON value | yes               | opaque context field        |
+| `permissionMode` | string     | yes               | permission/execution mode   |
+| `threadId`       | string     | yes               | opaque thread identity      |
+| `params`         | object     | yes               | model invocation            |
 
 ------
 
-## 4.3 `memory`, `taste`, `skills`
+## 4.3 `memory`
 
-The strict type permits arbitrary JSON:
+Wire type:
 
-```ts
-memory: unknown
-taste: unknown
-skills: unknown
+```text
+any JSON value
 ```
 
-The current Router producer always emits:
+Observed baseline value:
+
+```json
+null
+```
+
+The available evidence establishes that `null` is used by the compatibility profile.
+
+It does not establish the full schema accepted by the server for non-null `memory`.
+
+Therefore a minimal compatible producer may use:
+
+```json
+"memory": null
+```
+
+unless it has separate evidence for richer memory semantics.
+
+------
+
+## 4.4 `taste`
+
+Wire type:
+
+```text
+any JSON value
+```
+
+Observed baseline:
+
+```json
+"taste": null
+```
+
+The non-null schema is not established.
+
+------
+
+## 4.5 `skills`
+
+Wire type:
+
+```text
+any JSON value
+```
+
+Observed baseline:
+
+```json
+"skills": null
+```
+
+The non-null schema is not established.
+
+------
+
+## 4.6 `permissionMode`
+
+Wire type:
+
+```text
+string
+```
+
+Observed value:
+
+```text
+auto-accept
+```
+
+Example:
 
 ```json
 {
-  "memory": null,
-  "taste": null,
-  "skills": null
+  "permissionMode": "auto-accept"
 }
 ```
 
-This establishes:
+The complete allowed value set is not established by the available evidence.
 
-```text
-current CCR producer behavior = null
-```
-
-It does **not** prove:
-
-```text
-CommandCode protocol requires these fields to be null
-```
+Therefore the protocol should not define a closed `permissionMode` enum without additional captures.
 
 ------
 
-## 4.4 `permissionMode`
+## 4.7 `threadId`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-Converter default:
+Example:
 
-```text
-auto-accept
+```json
+{
+  "threadId": "5a0df440-c8f0-4cea-b159-c9e401408e07"
+}
 ```
 
-Before upstream transmission the runtime overwrites it using:
+It identifies the logical generation thread.
 
-```text
-runtime.permissionMode
-```
+The value is opaque.
 
-Current bundled default:
-
-```text
-auto-accept
-```
-
-Therefore actual upstream generation is:
-
-```text
-permissionMode
-=
-current runtime.permissionMode
-```
+The server-visible wire protocol does not define how a caller must derive it from another protocol or local session object.
 
 ------
 
-## 4.5 `threadId`
+# 4.8 `config`
 
-Type:
-
-```text
-string
-```
-
-This is request/conversation identity.
-
-Current producer invariant:
-
-```text
-body.threadId
-=
-header.x-session-id
-```
-
-See §6 for calculation.
-
-------
-
-# 5. `config` — Project Context
-
-## 5.1 Structure
+## 4.8.1 Structure
 
 ```ts
 interface CcConfig {
@@ -573,126 +747,124 @@ interface CcConfig {
 }
 ```
 
-The exact casing is part of the wire shape.
-
-A repository fixture contains an actual captured Command Code CLI `config` object and validates this structure against the strict type.
-
-------
-
-## 5.2 Project context modes
-
-Current Router has two producer modes:
+Hierarchy:
 
 ```text
-Project Context
-├── Project-bound
-│   └── dynamic filesystem/Git config
+config
 │
-└── Project-less
-    └── fixed empty config
+├── Environment
+│   ├── workingDir
+│   ├── date
+│   └── environment
+│
+├── Project Structure
+│   └── structure[]
+│
+└── Git Context
+    ├── isGitRepo
+    ├── currentBranch
+    ├── mainBranch
+    ├── gitStatus
+    └── recentCommits[]
 ```
 
-Selection is based on:
-
-```text
-project exists?
-```
-
-rather than directly on credential type.
+The field names and casing are part of the reconstructed wire structure.
 
 ------
 
-## 5.3 `workingDir`
+## 4.8.2 Field Contract
 
-Type:
+| Field           | Type     | Meaning                         |
+| --------------- | -------- | ------------------------------- |
+| `workingDir`    | string   | project working directory       |
+| `date`          | string   | current date context            |
+| `environment`   | string   | operating-system environment    |
+| `structure`     | string[] | project-root entries            |
+| `isGitRepo`     | boolean  | whether root is a Git work tree |
+| `currentBranch` | string   | current Git branch              |
+| `mainBranch`    | string   | inferred main/default branch    |
+| `gitStatus`     | string   | Git porcelain status text       |
+| `recentCommits` | string[] | recent one-line Git commits     |
+
+------
+
+## 4.8.3 `workingDir`
+
+Wire type:
 
 ```text
 string
 ```
 
-Project-bound calculation:
+Observed representation preserves a normal native path string.
 
-```text
-workingDir = projectRoot
-```
-
-There is no Git-Bash-path conversion inside `build_cc_config()`.
-
-An actual Command Code CLI capture contains:
+Example Windows capture form:
 
 ```json
 {
-  "workingDir": "D:\\project\\commandcode protocol\\outputs"
+  "workingDir": "D:\\project\\example"
 }
 ```
 
-Project-less value:
+There is no evidence that the field itself uses the hyphenated `x-project-slug` representation.
+
+Therefore:
 
 ```text
-""
+workingDir
 ```
+
+and:
+
+```text
+x-project-slug
+```
+
+are distinct representations.
 
 ------
 
-## 5.4 `date`
+## 4.8.4 `date`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-Format:
+Observed format:
 
 ```text
 YYYY-MM-DD
 ```
 
-Calculation:
-
-```text
-current UTC time
-↓
-format("%Y-%m-%d")
-```
-
 Example:
 
 ```text
-2026-08-07
+2026-08-09
 ```
 
-This is a **UTC date**, not explicitly the local system calendar date.
+Reconstructed producer generation:
 
-The same calculation is used for project-bound and project-less configurations.
+```text
+current UTC date
+↓
+YYYY-MM-DD
+```
+
+The use of UTC is part of the reconstructed compatible producer profile.
 
 ------
 
-## 5.5 `environment`
+## 4.8.5 `environment`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-Normal project-bound calculation:
-
-```text
-OS identifier
-↓
-CommandCode mapping
-```
-
-Current mapping:
-
-```text
-windows → win32
-macos   → darwin
-other   → original platform name
-```
-
-Typical values:
+Observed examples:
 
 ```text
 win32
@@ -700,7 +872,20 @@ darwin
 linux
 ```
 
-The official captured Windows config contains:
+Reconstructed producer mapping:
+
+```text
+Windows
+→ win32
+
+macOS
+→ darwin
+
+other platform
+→ platform identifier
+```
+
+Windows capture evidence confirms:
 
 ```json
 {
@@ -708,17 +893,11 @@ The official captured Windows config contains:
 }
 ```
 
-Project-less value:
-
-```text
-""
-```
-
 ------
 
-## 5.6 `structure`
+## 4.8.6 `structure`
 
-Type:
+Wire type:
 
 ```text
 string[]
@@ -726,31 +905,35 @@ string[]
 
 Meaning:
 
-> Names of entries directly under the project root.
+> Names of entries directly below `workingDir`.
 
-It is **not recursive**.
+The reconstructed producer profile does **not** recursively enumerate the entire project tree.
 
 Generation:
 
 ```text
-read projectRoot directory
+read workingDir
 ↓
 take immediate children
 ↓
-convert each file name to string
+convert entry name to string
 ↓
-exclude hidden entries
-↓
-exclude selected directories
+filter excluded entries
 ↓
 sort
 ↓
-truncate to 500 entries
+limit
 ```
 
-### Hidden-entry rule
+### Hidden Entries
 
-Anything whose top-level name starts with `.` is discarded.
+Entries whose names begin with:
+
+```text
+.
+```
+
+are excluded by the reconstructed producer.
 
 Examples:
 
@@ -762,9 +945,9 @@ Examples:
 .env
 ```
 
-### Explicit excluded directories
+### Reconstructed Directory Exclusion Set
 
-Current list:
+Observed/reconstructed compatibility logic excludes directories including:
 
 ```text
 node_modules
@@ -780,18 +963,18 @@ __pycache__
 venv
 ```
 
-The explicit list is checked for directories.
+Because hidden entries are already filtered by name, several entries above are excluded by more than one rule.
 
 ### Ordering
 
-The remaining names are sorted.
+Entries are sorted lexicographically by the reconstructed producer.
 
 ### Limit
 
-Maximum:
+The reconstructed limit is:
 
 ```text
-500
+500 entries
 ```
 
 ### Example
@@ -808,222 +991,225 @@ Maximum:
 }
 ```
 
-The real CLI capture also verifies sorted top-level entries and hidden-entry exclusion.
+These generation rules describe the reconstructed CommandCode-compatible client profile.
 
-Project-less value:
-
-```json
-[]
-```
+The available evidence does not prove that the server itself rejects a differently generated `structure`.
 
 ------
 
-## 5.7 `isGitRepo`
+## 4.8.7 `isGitRepo`
 
-Type:
+Wire type:
 
 ```text
 boolean
 ```
 
-Calculation:
+Reconstructed generation command:
 
 ```text
-git -C <projectRoot> rev-parse --is-inside-work-tree
+git -C <workingDir> rev-parse --is-inside-work-tree
 ```
 
-Current implementation uses command success:
+Producer interpretation:
 
 ```text
-exit success
+command succeeds
 → true
 
-command fails / non-zero
+command fails
 → false
+```
+
+Example:
+
+```json
+{
+  "isGitRepo": true
+}
 ```
 
 ------
 
-## 5.8 `currentBranch`
+## 4.8.8 `currentBranch`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-If not a Git repository:
+Reconstructed producer command:
+
+```text
+git -C <workingDir> branch --show-current
+```
+
+Then:
+
+```text
+trim stdout
+```
+
+Example:
+
+```json
+{
+  "currentBranch": "main"
+}
+```
+
+If Git does not provide a branch name, the reconstructed profile can produce:
 
 ```text
 ""
 ```
 
-Otherwise:
-
-```text
-git -C <projectRoot> branch --show-current
-↓
-trim
-```
-
-Example:
-
-```text
-main
-```
-
-Detached HEAD or command failure can produce an empty string.
+for example under detached HEAD.
 
 ------
 
-## 5.9 `mainBranch`
+## 4.8.9 `mainBranch`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-Only resolved for Git repositories.
-
-Resolution order:
+Reconstructed producer resolution:
 
 ```text
 1. git symbolic-ref refs/remotes/origin/HEAD
 
-2. if successful:
+2. if a remote HEAD is available:
    strip "refs/remotes/origin/"
 
 3. otherwise probe:
    main
    master
 
-4. if no usable candidate:
+4. if no candidate is resolved:
    ""
 ```
 
-For candidate fallback:
+Candidate probing uses:
 
 ```text
-git rev-parse --verify main
-git rev-parse --verify master
+git rev-parse --verify <candidate>
 ```
 
-The current implementation accepts a candidate when the trimmed hash has length 40.
+The compatibility implementation accepts a candidate when it resolves to a 40-character Git object ID.
+
+This is a reconstructed producer algorithm, not a proven server validation rule.
 
 ------
 
-## 5.10 `gitStatus`
+## 4.8.10 `gitStatus`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-It is a single string containing Git porcelain output.
-
-Command:
+Observed/reconstructed source:
 
 ```text
-git -C <projectRoot> status --porcelain=v1
+git -C <workingDir> status --porcelain=v1
 ```
 
-Then:
+The complete stdout string is then:
 
 ```text
-stdout.trim()
+trimmed once
 ```
 
-If trimmed output is empty:
+If the trimmed output is empty, the reconstructed profile uses:
 
 ```text
 Working tree clean
 ```
 
-If the Git command itself fails:
+### Whole-String Trim Behavior
 
-```text
-""
-```
+This produces an important representation detail.
 
-### Important official-client behavior
-
-The entire stdout string is trimmed once.
-
-This means a leading space on the **first** porcelain line disappears.
-
-Raw:
+Raw Git output:
 
 ```text
  D input.txt
- M outputs/readme.txt
+ M output.txt
 ```
 
-Wire value:
+After trimming the **whole string**:
 
 ```text
 D input.txt
- M outputs/readme.txt
+ M output.txt
 ```
 
-Later lines retain their leading status space.
+The first line loses the leading whitespace at the beginning of the entire string.
 
-This unusual behavior is intentionally reproduced because an actual Command Code CLI capture demonstrates it.
+Later lines keep their leading whitespace.
 
-Therefore an implementation aiming for parity should **not trim every Git-status line independently**.
+This behavior has capture/parity evidence and should be reproduced by implementations targeting close CommandCode CLI compatibility.
+
+Do **not** trim every line independently.
 
 ------
 
-## 5.11 `recentCommits`
+## 4.8.11 `recentCommits`
 
-Type:
+Wire type:
 
 ```text
 string[]
 ```
 
-Command:
+Reconstructed command:
 
 ```text
-git -C <projectRoot> log -3 --oneline
+git -C <workingDir> log -3 --oneline
 ```
 
 Processing:
 
 ```text
-split lines
+split by line
 ↓
-trim each line
+trim line
 ↓
-drop empty lines
+drop empty line
 ```
 
-Maximum normal length:
+Maximum normal result:
 
 ```text
-3
+3 entries
 ```
 
 Example:
 
 ```json
-[
-  "c89c728 Initial commit"
-]
+{
+  "recentCommits": [
+    "c89c728 Initial commit",
+    "a18b332 Add protocol fixtures"
+  ]
+}
 ```
 
 ------
 
-## 5.12 Complete project-bound `config`
+## 4.8.12 Representative `config`
 
 ```json
 {
-  "workingDir": "D:\\project\\LuckyToken",
+  "workingDir": "D:\\project\\example",
   "date": "2026-08-09",
   "environment": "win32",
   "structure": [
-    "AGENTS.md",
     "README.md",
     "package.json",
     "src"
@@ -1038,145 +1224,13 @@ Example:
 }
 ```
 
-------
-
-## 5.13 Project-less `config`
-
-Project-less requests do not scan the filesystem and do not run Git.
-
-Exact current producer shape:
-
-```json
-{
-  "workingDir": "",
-  "date": "2026-08-09",
-  "environment": "",
-  "structure": [],
-  "isGitRepo": false,
-  "currentBranch": "",
-  "mainBranch": "",
-  "gitStatus": "",
-  "recentCommits": []
-}
-```
-
-Only:
-
-```text
-date
-```
-
-is dynamic.
-
-Project-less requests also omit `x-project-slug`.
+This example illustrates the observed/reconstructed project-aware producer profile.
 
 ------
 
-# 6. Thread and Session Identity
+# 4.9 `params`
 
-## 6.1 Identity hierarchy
-
-```text
-Client session information
-        ↓
-Thread resolution policy
-        ↓
-upstreamThreadId
-        ├── body.threadId
-        └── header.x-session-id
-```
-
-## 6.2 Thread modes
-
-Current configuration supports:
-
-```text
-clientSession
-requestId
-```
-
-Bundled default:
-
-```text
-clientSession
-```
-
-### `requestId`
-
-```text
-threadId = Router request ID
-```
-
-regardless of client session headers.
-
-### `clientSession`
-
-```text
-valid client session exists
-→ threadId = client session ID
-
-otherwise
-→ threadId = Router request ID
-```
-
-------
-
-## 6.3 Request ID
-
-Router request IDs use UUID v4 string format.
-
-Example:
-
-```text
-762c56a7-fc82-4178-9da5-ce6b1cc833d0
-```
-
-------
-
-## 6.4 Current client-session sources
-
-This is producer policy rather than CommandCode wire structure.
-
-Anthropic-side requests:
-
-```text
-x-claude-code-session-id
-x-session-affinity
-```
-
-OpenAI-side requests:
-
-```text
-x-session-id
-```
-
-Current resolution rules:
-
-```text
-no candidate
-→ no client session
-
-one usable candidate
-→ use trimmed value
-
-multiple candidates with identical value
-→ use value
-
-multiple conflicting candidates
-→ reject session identity and fall back
-
-empty value
-→ fall back
-
-invalid header value
-→ fall back
-```
-
-------
-
-# 7. `params` — Model Invocation
-
-## 7.1 Structure
+## 4.9.1 Structure
 
 ```ts
 interface CcParams {
@@ -1194,11 +1248,12 @@ interface CcParams {
 }
 ```
 
-Wire hierarchy:
+Hierarchy:
 
 ```text
 params
-├── Model Selection
+│
+├── Model
 │   ├── model
 │   ├── max_tokens
 │   └── reasoning_effort?
@@ -1210,42 +1265,22 @@ params
 ├── Tools
 │   └── tools[]
 │
-└── Generation Controls
+└── Generation
     ├── stream
     └── temperature?
 ```
 
 ------
 
-## 7.2 `model`
+## 4.9.2 `model`
 
-Type:
+Wire type:
 
 ```text
 string
 ```
 
-This is the resolved CommandCode model ID.
-
-It is not necessarily the client's original requested model.
-
-Current producer flow:
-
-```text
-client model
-↓
-ordered routing regex rules
-↓
-first matching rule
-        OR
-mandatory fallback
-↓
-target model
-↓
-params.model
-```
-
-Example target model IDs:
+Example observed model identifiers include:
 
 ```text
 deepseek/deepseek-v4-pro
@@ -1254,100 +1289,19 @@ Qwen/Qwen3.7-Flash
 gpt-5.6-luna
 ```
 
-------
+The protocol only establishes that the field carries the target upstream model identifier.
 
-## 7.3 Model routing semantics
-
-Routing rules are evaluated in stored order.
-
-```text
-for rule in rules:
-    if rule.regex matches trimmed client model:
-        return rule target
-
-return fallback target
-```
-
-An empty client model also falls back.
-
-The fallback is mandatory.
+How a caller selects that identifier is outside the CommandCode wire contract.
 
 ------
 
-## 7.4 `max_tokens`
+## 4.9.3 `system`
 
-Type:
-
-```text
-unsigned integer
-```
-
-Current producer rule:
-
-```text
-params.max_tokens
-=
-resolved model catalog.maxOutputTokens
-```
-
-It is **not currently copied from client `max_tokens`**.
-
-Examples from the current bundled catalog:
-
-| Target model                 | `max_tokens` |
-| ---------------------------- | ------------ |
-| `Qwen/Qwen3.7-Flash`         | 64000        |
-| `deepseek/deepseek-v4-pro`   | 64000        |
-| `deepseek/deepseek-v4-flash` | 32000        |
-| `gpt-5.6-luna`               | 64000        |
-
-This is an important correction to simplified documentation that describes `64000` as a universal default.
-
-------
-
-## 7.5 `reasoning_effort`
-
-Wire key:
-
-```text
-reasoning_effort
-```
-
-Current known strict values:
-
-```text
-high
-max
-```
-
-Generation:
-
-```text
-routing rule / fallback
-└── reasoningEffort
-        ↓
-model resolution
-        ↓
-params.reasoning_effort
-```
-
-The current Router intentionally treats routing configuration as the authority rather than client reasoning-effort fields.
-
-The routing compiler also verifies that the selected effort is supported by the target model.
-
-The wire field is optional at the type level, but current conversion paths populate it.
-
-------
-
-## 7.6 `system`
-
-Type:
+Wire type:
 
 ```text
 string
 ```
-
-Always represented as a string.
 
 Example:
 
@@ -1357,23 +1311,50 @@ Example:
 }
 ```
 
-No structured system-block array exists inside `CcParams`.
+The field is a single string.
 
-How Anthropic, OpenAI, or Pi system representations become this string belongs in conversion specifications rather than the CommandCode protocol itself.
+The reconstructed `CcParams` schema does not use a structured system-block array.
 
 ------
 
-## 7.7 `stream`
+## 4.9.4 `max_tokens`
 
-Type:
+Wire type:
+
+```text
+integer
+```
+
+Observed values depend on the selected model/request.
+
+Examples include:
+
+```text
+32000
+64000
+```
+
+The private wire protocol does not establish how a caller must select the value.
+
+It is therefore best treated as:
+
+```text
+caller-supplied model invocation limit
+```
+
+rather than as one universal constant.
+
+------
+
+## 4.9.5 `stream`
+
+Wire type:
 
 ```text
 boolean
 ```
 
-At conversion time it may initially reflect the client value.
-
-However, before the actual CommandCode request is transmitted, current Router handlers force:
+Observed generation requests use:
 
 ```json
 {
@@ -1381,20 +1362,54 @@ However, before the actual CommandCode request is transmitted, current Router ha
 }
 ```
 
-Therefore the actual current upstream producer behavior is:
+The response protocol documented here is therefore based on the streaming form.
 
-```text
-CCR → CommandCode
-params.stream = true
+Whether all CommandCode server behavior for:
+
+```json
+{
+  "stream": false
+}
 ```
 
-Client streaming preference affects downstream rendering, not whether CommandCode itself streams.
+is equivalent or supported has not been established by the available evidence.
 
 ------
 
-## 7.8 `temperature`
+## 4.9.6 `reasoning_effort`
 
-Type:
+Wire field:
+
+```text
+reasoning_effort
+```
+
+Optional.
+
+Reconstructed strict values:
+
+```text
+high
+max
+```
+
+Example:
+
+```json
+{
+  "reasoning_effort": "max"
+}
+```
+
+The available evidence supports these values in the reconstructed baseline.
+
+It does not establish whether future/alternate CommandCode versions accept additional values.
+
+------
+
+## 4.9.7 `temperature`
+
+Wire type:
 
 ```text
 number
@@ -1402,38 +1417,23 @@ number
 
 Optional.
 
-Generation:
+Example:
 
-```text
-client temperature exists
-→ use client value
-
-otherwise configured temperatureFallback exists
-→ use fallback
-
-otherwise
-→ omit field
+```json
+{
+  "temperature": 0.3
+}
 ```
 
-Equivalent current logic:
+The protocol does not establish a universal default.
 
-```text
-request.temperature ?? temperatureFallback
-```
-
-Current bundled fallback:
-
-```text
-0.3
-```
-
-Because serialization skips `None`, the key is completely absent when no temperature is selected.
+If omitted, the server/provider behavior is not defined by the evidence in this specification.
 
 ------
 
-# 8. Messages and Content Blocks
+# 4.10 Messages
 
-## 8.1 Message structure
+## 4.10.1 Message Structure
 
 ```ts
 interface CcMessage {
@@ -1442,25 +1442,30 @@ interface CcMessage {
 }
 ```
 
-Important invariant:
+Hierarchy:
 
 ```text
-content is always an array
+CcMessage
+├── role
+└── content[]
+    └── CcContentBlock
 ```
 
-There is no string shorthand in the strict CommandCode representation.
+Important structural rule:
+
+```text
+content
+```
+
+is an array in the reconstructed wire representation.
+
+There is no established string shorthand.
 
 ------
 
-## 8.2 Current roles
+## 4.10.2 Roles
 
-The wire type itself stores:
-
-```text
-role: string
-```
-
-Current producer paths primarily generate:
+Observed roles include:
 
 ```text
 user
@@ -1468,26 +1473,40 @@ assistant
 tool
 ```
 
-A `system` string value is also representable by the type.
+The wire type itself stores the role as a string rather than a closed enum.
 
-Role should therefore not be assumed to be a closed server-side enum solely from the Rust type.
+Therefore a parser should preserve unknown role strings rather than inventing an unsupported closed server enum.
+
+A role should not be declared valid solely because the underlying implementation type is `string`; observed roles and theoretically representable strings are different evidence classes.
 
 ------
 
-## 8.3 Content hierarchy
+## 4.10.3 Content Block Hierarchy
 
 ```text
-content[]
-├── text
-├── reasoning
-├── image
-├── tool-call
-└── tool-result
+CcContentBlock
+│
+├── Text
+│   └── type = "text"
+│
+├── Reasoning
+│   └── type = "reasoning"
+│
+├── Image
+│   └── type = "image"
+│
+├── Tool Call
+│   └── type = "tool-call"
+│
+└── Tool Result
+    └── type = "tool-result"
 ```
 
 ------
 
-## 8.4 Text block
+## 4.10.4 Text Block
+
+Structure:
 
 ```json
 {
@@ -1496,16 +1515,18 @@ content[]
 }
 ```
 
-Fields:
+Field contract:
 
-| Field  | Type   | Rule              |
-| ------ | ------ | ----------------- |
-| `type` | string | constant `"text"` |
-| `text` | string | content           |
+| Field  | Type             | Presence |
+| ------ | ---------------- | -------- |
+| `type` | literal `"text"` | required |
+| `text` | string           | required |
 
 ------
 
-## 8.5 Reasoning block
+## 4.10.5 Reasoning Block
+
+Structure:
 
 ```json
 {
@@ -1514,24 +1535,45 @@ Fields:
 }
 ```
 
-Fields:
+Field contract:
 
-| Field  | Type   | Rule                   |
-| ------ | ------ | ---------------------- |
-| `type` | string | constant `"reasoning"` |
-| `text` | string | reasoning content      |
+| Field  | Type                  | Presence |
+| ------ | --------------------- | -------- |
+| `type` | literal `"reasoning"` | required |
+| `text` | string                | required |
 
-The content field is named:
+The reasoning content property is:
 
 ```text
 text
 ```
 
-not `thinking`.
+not:
+
+```text
+thinking
+```
+
+or:
+
+```text
+reasoning
+```
 
 ------
 
-## 8.6 Image block
+## 4.10.6 Image Block
+
+Structure:
+
+```text
+ImageBlock
+├── type = "image"
+├── image
+└── mimeType
+```
+
+Example:
 
 ```json
 {
@@ -1541,26 +1583,37 @@ not `thinking`.
 }
 ```
 
-Structure:
-
-```text
-image block
-├── type = "image"
-├── image
-└── mimeType
-```
-
-`image` contains a data URL:
+`image` contains a complete data URL:
 
 ```text
 data:<mime-type>;base64,<base64-data>
 ```
 
-`mimeType` is separately present in camelCase.
+`mimeType` separately carries the MIME type.
+
+Field contract:
+
+| Field      | Type              | Presence |
+| ---------- | ----------------- | -------- |
+| `type`     | literal `"image"` | required |
+| `image`    | string            | required |
+| `mimeType` | string            | required |
 
 ------
 
-## 8.7 Tool-call block
+## 4.10.7 Tool Call Block
+
+Structure:
+
+```text
+ToolCallBlock
+├── type = "tool-call"
+├── toolCallId
+├── toolName
+└── input
+```
+
+Example:
 
 ```json
 {
@@ -1573,26 +1626,40 @@ data:<mime-type>;base64,<base64-data>
 }
 ```
 
-Fields:
+Field contract:
 
-| Field        | Type          | Required |
-| ------------ | ------------- | -------- |
-| `type`       | `"tool-call"` | yes      |
-| `toolCallId` | string        | yes      |
-| `toolName`   | string        | yes      |
-| `input`      | JSON value    | yes      |
+| Field        | Type                  | Presence |
+| ------------ | --------------------- | -------- |
+| `type`       | literal `"tool-call"` | required |
+| `toolCallId` | string                | required |
+| `toolName`   | string                | required |
+| `input`      | JSON value            | required |
 
-Notice the mixed naming style:
+The discriminator uses:
 
 ```text
-type         → kebab-case value
-toolCallId   → camelCase
-toolName     → camelCase
+tool-call
 ```
+
+while the identity/name fields use camelCase.
 
 ------
 
-## 8.8 Tool-result block
+## 4.10.8 Tool Result Block
+
+Structure:
+
+```text
+ToolResultBlock
+├── type = "tool-result"
+├── toolCallId
+├── toolName?
+└── output
+    ├── type
+    └── value
+```
+
+Example success:
 
 ```json
 {
@@ -1606,50 +1673,48 @@ toolName     → camelCase
 }
 ```
 
-Structure:
-
-```text
-tool-result
-├── type = "tool-result"
-├── toolCallId
-├── toolName?
-└── output
-    ├── type
-    └── value
-```
-
-`toolName` is optional in the strict wire type.
-
-Output types:
-
-```text
-text
-error-text
-```
-
-Success example:
+Example failure:
 
 ```json
 {
-  "type": "text",
-  "value": "result"
+  "type": "tool-result",
+  "toolCallId": "toolu_01ABC",
+  "toolName": "read",
+  "output": {
+    "type": "error-text",
+    "value": "tool failed"
+  }
 }
 ```
 
-Error example:
+Field contract:
 
-```json
-{
-  "type": "error-text",
-  "value": "tool failed"
-}
-```
+| Field          | Type                      | Presence |
+| -------------- | ------------------------- | -------- |
+| `type`         | literal `"tool-result"`   | required |
+| `toolCallId`   | string                    | required |
+| `toolName`     | string                    | optional |
+| `output`       | object                    | required |
+| `output.type`  | `"text"` / `"error-text"` | required |
+| `output.value` | string                    | required |
 
 ------
 
-## 8.9 Tool identity invariant
+## 4.10.9 Tool Identity
 
-Conversation history should preserve:
+The conversation-level identity relationship is:
+
+```text
+assistant tool-call
+└── toolCallId = X
+
+        ↓
+
+tool result
+└── toolCallId = X
+```
+
+Therefore:
 
 ```text
 tool-call.toolCallId
@@ -1657,15 +1722,15 @@ tool-call.toolCallId
 tool-result.toolCallId
 ```
 
-Current Router runs tool-pair cleanup before producing the final upstream request.
+is the reconstructed semantic pairing rule.
 
-That cleanup is a producer correctness mechanism; the basic wire requirement is that tool identity remains traceable.
+A compatible producer should preserve the ID exactly.
 
 ------
 
-# 9. Tool Definitions
+# 4.11 Tool Definitions
 
-## 9.1 Structure
+## 4.11.1 Structure
 
 ```ts
 interface CcToolDefinition {
@@ -1673,6 +1738,15 @@ interface CcToolDefinition {
   description?: string
   input_schema: unknown
 }
+```
+
+Hierarchy:
+
+```text
+CcToolDefinition
+├── name
+├── description?
+└── input_schema
 ```
 
 Example:
@@ -1695,7 +1769,7 @@ Example:
 }
 ```
 
-Important wire naming:
+The wire field is:
 
 ```text
 input_schema
@@ -1707,33 +1781,21 @@ not:
 inputSchema
 ```
 
-There is also no required OpenAI-style wrapper:
-
-```json
-{
-  "type": "function",
-  "function": {}
-}
-```
-
-Current converters normalize the top-level schema to an object schema before upstream transmission.
+The reconstructed CommandCode tool definition does not require an outer OpenAI-style `function` wrapper.
 
 ------
 
-# 10. Complete Request Examples
+# 4.12 Representative Request
 
-## 10.1 Project-bound request
-
-Representative shape:
+The following is a neutral representative request using only the reconstructed protocol structures:
 
 ```json
 {
   "config": {
-    "workingDir": "D:\\project\\LuckyToken",
+    "workingDir": "D:\\project\\example",
     "date": "2026-08-09",
     "environment": "win32",
     "structure": [
-      "AGENTS.md",
       "README.md",
       "package.json",
       "src"
@@ -1757,6 +1819,7 @@ Representative shape:
 
   "params": {
     "model": "deepseek/deepseek-v4-pro",
+
     "system": "You are a coding assistant.",
 
     "messages": [
@@ -1797,11 +1860,12 @@ Representative shape:
 }
 ```
 
-Relevant headers:
+Representative observed header profile:
 
 ```http
-Authorization: Bearer <command-code-api-key>
+POST /alpha/generate
 
+Authorization: Bearer <credential>
 Content-Type: application/json
 Accept: */*
 Accept-Encoding: br, gzip, deflate
@@ -1812,7 +1876,7 @@ x-taste-learning: false
 x-co-flag: false
 
 x-session-id: 5a0df440-c8f0-4cea-b159-c9e401408e07
-x-project-slug: d-project-luckytoken
+x-project-slug: d-project-example
 
 traceparent: 00-<32hex>-<16hex>-01
 
@@ -1823,79 +1887,177 @@ sec-fetch-mode: cors
 
 ------
 
-## 10.2 Project-less request
+# 5. Observed CommandCode Client Producer Profile
 
-```json
-{
-  "config": {
-    "workingDir": "",
-    "date": "2026-08-09",
-    "environment": "",
-    "structure": [],
-    "isGitRepo": false,
-    "currentBranch": "",
-    "mainBranch": "",
-    "gitStatus": "",
-    "recentCommits": []
-  },
+This chapter describes behavior useful for reproducing an observed CommandCode-compatible client.
 
-  "memory": null,
-  "taste": null,
-  "skills": null,
+It is deliberately separated from the wire schema.
 
-  "permissionMode": "auto-accept",
-  "threadId": "<resolved-thread-id>",
+These rules describe **how a known compatible producer constructs fields**.
 
-  "params": {
-    "model": "deepseek/deepseek-v4-pro",
-    "system": "",
-    "messages": [
-      {
-        "role": "user",
-        "content": [
-          {
-            "type": "text",
-            "text": "Hello"
-          }
-        ]
-      }
-    ],
-    "tools": [],
-    "max_tokens": 64000,
-    "stream": true,
-    "reasoning_effort": "max",
-    "temperature": 0.3
-  }
-}
-```
+They do not prove that the CommandCode server requires every rule.
 
-There is no:
+------
+
+## 5.1 Field Provenance
 
 ```text
+Observed Literal / Stable Client Values
+├── Content-Type = application/json
+├── Accept = */*
+├── Accept-Encoding = br, gzip, deflate
+├── x-cli-environment = production
+├── x-taste-learning = false
+├── x-co-flag = false
+├── User-Agent = cli
+├── accept-language = *
+├── sec-fetch-mode = cors
+├── memory = null
+├── taste = null
+└── skills = null
+
+Per-Request Generated
+└── traceparent
+
+Project-Derived
+├── x-project-slug
+└── config
+    ├── workingDir
+    ├── structure
+    ├── isGitRepo
+    ├── currentBranch
+    ├── mainBranch
+    ├── gitStatus
+    └── recentCommits
+
+Time-Derived
+└── config.date
+
+Platform-Derived
+└── config.environment
+
+Conversation / Request Values
+├── threadId
+├── x-session-id
+├── system
+├── messages
+└── tools
+
+Invocation Parameters
+├── model
+├── max_tokens
+├── reasoning_effort
+├── temperature
+└── stream
+```
+
+------
+
+## 5.2 Project Context Generation
+
+The reconstructed project-context producer executes approximately:
+
+```text
+project root
+│
+├── workingDir
+│   └── original native path
+│
+├── date
+│   └── current UTC YYYY-MM-DD
+│
+├── environment
+│   └── OS mapping
+│
+├── structure
+│   └── top-level filtered/sorted names
+│
+└── Git context
+    ├── rev-parse --is-inside-work-tree
+    ├── branch --show-current
+    ├── symbolic-ref origin/HEAD
+    ├── status --porcelain=v1
+    └── log -3 --oneline
+```
+
+This is useful for producer parity.
+
+It is not evidence that the server itself computes or validates the same data.
+
+------
+
+## 5.3 Project Slug Generation
+
+Compatibility algorithm:
+
+```text
+native project path
+↓
+slash normalization
+↓
+lowercase
+↓
+segment normalization
+↓
+"-" join
+↓
 x-project-slug
 ```
 
-header.
+Example:
 
-------
-
-# 11. Response Transport
-
-## 11.1 Response type
-
-Current Router expects the upstream inference response to use:
-
-```http
-Content-Type: text/event-stream
+```text
+D:\Project\Example
+→ d-project-example
 ```
 
-Response body is consumed as a stream of lines.
+------
+
+## 5.4 Trace Generation
+
+Compatibility algorithm:
+
+```text
+random 16-byte trace ID
++
+random 8-byte span ID
+↓
+lowercase hex
+↓
+00-{trace-id}-{span-id}-01
+```
 
 ------
 
-## 11.2 Accepted event framing
+## 5.5 Thread Identity
 
-Standard SSE:
+The wire fields are:
+
+```text
+x-session-id
+threadId
+```
+
+The reconstructed compatibility profile sends the same logical thread identity in both locations.
+
+The actual source of that identity is a caller responsibility.
+
+This protocol intentionally does not prescribe:
+
+- UUID generation;
+- another protocol's session header;
+- request-ID fallback;
+- client-specific session resolution.
+
+Those are outside the CommandCode private wire protocol.
+
+------
+
+# 6. Response Transport
+
+## 6.1 SSE Framing
+
+Observed CommandCode events use Server-Sent Event data lines:
 
 ```text
 data: {"type":"start"}
@@ -1903,123 +2065,147 @@ data: {"type":"start"}
 data: {"type":"text-delta","text":"Hello"}
 ```
 
-Current parser also accepts bare JSON event lines:
+The event payload is JSON.
+
+The primary discriminator is:
 
 ```text
-{"type":"start"}
-{"type":"text-delta","text":"Hello"}
+type
 ```
+
+This specification describes the observed upstream SSE representation.
+
+Consumer-specific acceptance of alternate non-SSE framing is not part of the protocol.
 
 ------
 
-## 11.3 Ignored transport lines
-
-The parser ignores:
-
-```text
-blank lines
-whitespace-only lines
-
-: comments
-
-event: ...
-id: ...
-retry: ...
-```
-
-It also ignores non-JSON bare metadata lines.
-
-------
-
-## 11.4 Raw event envelope
+## 6.2 Event Envelope
 
 Conceptually:
 
 ```ts
-interface RawCcSseEvent {
-  type?: string
-  [key: string]: unknown
+interface CommandCodeEvent {
+  type: string
+  [field: string]: unknown
 }
 ```
 
-Extra fields are retained rather than rejected.
+This conceptual form expresses only a wire property:
 
-This provides wire-level forward compatibility.
+> Event payloads are JSON objects identified primarily by `type`, and observed events may contain additional fields.
 
-Known event types are normalized more strictly.
+It does not imply that `type` is optional for valid protocol events.
+
+Known event structures are described below.
 
 ------
 
-# 12. SSE Event Protocol
-
-## 12.1 Event hierarchy
+## 6.3 Stream Hierarchy
 
 ```text
 CommandCode Stream
 │
-├── Stream Lifecycle
-│   └── start
-│
-├── Step Lifecycle
+├── Stream / Step
+│   ├── start
 │   ├── start-step
 │   ├── provider-metadata
 │   └── finish-step
 │
-├── Text Lifecycle
+├── Text
 │   ├── text-start
-│   ├── text-delta
+│   ├── text-delta*
 │   └── text-end
 │
-├── Reasoning Lifecycle
+├── Reasoning
 │   ├── reasoning-start
-│   ├── reasoning-delta
+│   ├── reasoning-delta*
 │   └── reasoning-end
 │
-├── Tool Lifecycle
+├── Tool Input
 │   ├── tool-input-start
-│   ├── tool-input-delta
-│   ├── tool-input-end
+│   ├── tool-input-delta*
+│   └── tool-input-end
+│
+├── Tool Invocation
 │   └── tool-call
 │
-├── tool-result
+├── Tool Result Event
+│   └── tool-result
 │
 └── Terminal
     ├── finish
     └── error
 ```
 
-Unknown event types remain representable separately.
+------
+
+# 7. SSE Event Protocol
+
+## 7.1 Event Summary
+
+| Event               | Established Core Fields                   |
+| ------------------- | ----------------------------------------- |
+| `start`             | no core payload established               |
+| `start-step`        | no core payload established               |
+| `provider-metadata` | provider-specific payload                 |
+| `text-start`        | no core payload established               |
+| `text-delta`        | `text`                                    |
+| `text-end`          | no core payload established               |
+| `reasoning-start`   | no core payload established               |
+| `reasoning-delta`   | `text`                                    |
+| `reasoning-end`     | no core payload established               |
+| `tool-input-start`  | `id`, `toolName`, optional `dynamic`      |
+| `tool-input-delta`  | `id`, `delta`                             |
+| `tool-input-end`    | `id`                                      |
+| `tool-call`         | `toolCallId`, `toolName`, `input`         |
+| `tool-result`       | schema not fully established              |
+| `finish-step`       | optional `finishReason`, optional `usage` |
+| `finish`            | `finishReason`, `totalUsage`              |
+| `error`             | payload exists; complete shape not closed |
+
+Additional fields may be present.
+
+The table intentionally does not turn every compatibility-parser requirement into a claim about every possible upstream event.
 
 ------
 
-## 12.2 Event field table
+# 7.2 Stream and Step Events
 
-| Event               | Required fields                   | Optional / additional     |
-| ------------------- | --------------------------------- | ------------------------- |
-| `start`             | none                              | extra fields tolerated    |
-| `start-step`        | none                              | metadata                  |
-| `provider-metadata` | none in normalized core           | provider payload          |
-| `text-start`        | none                              | metadata                  |
-| `text-delta`        | `text: string`                    | extra fields              |
-| `text-end`          | none                              | extra fields              |
-| `reasoning-start`   | none                              | extra fields              |
-| `reasoning-delta`   | `text: string`                    | extra fields              |
-| `reasoning-end`     | none                              | extra fields              |
-| `tool-input-start`  | `id`, `toolName`                  | `dynamic?: boolean`       |
-| `tool-input-delta`  | `id`, `delta`                     | extra fields              |
-| `tool-input-end`    | `id`                              | extra fields              |
-| `tool-call`         | `toolCallId`, `toolName`, `input` | extra fields              |
-| `finish-step`       | none                              | `finishReason?`, `usage?` |
-| `finish`            | `finishReason`, `totalUsage`      | extra fields              |
-| `error`             | flexible message source           | `code?`                   |
-| `tool-result`       | none in normalized core           | raw data retained         |
-| unknown             | `type`                            | raw fields retained       |
+## 7.2.1 `start`
+
+Example:
+
+```json
+{
+  "type": "start"
+}
+```
+
+This marks stream initialization in observed event sequences.
+
+No additional stable payload schema is established here.
 
 ------
 
-## 12.3 Text lifecycle
+## 7.2.2 `start-step`
 
-Normal text lifecycle:
+Example:
+
+```json
+{
+  "type": "start-step"
+}
+```
+
+This marks the beginning of a provider/model generation step.
+
+The protocol evidence does not establish a required additional core payload.
+
+------
+
+# 7.3 Text Lifecycle
+
+## 7.3.1 Lifecycle
 
 ```text
 text-start
@@ -2029,7 +2215,33 @@ text-delta*
 text-end
 ```
 
-Delta example:
+------
+
+## 7.3.2 `text-start`
+
+Example:
+
+```json
+{
+  "type": "text-start"
+}
+```
+
+Additional metadata can exist, but no additional field is part of the established minimal contract in this specification.
+
+------
+
+## 7.3.3 `text-delta`
+
+Structure:
+
+```text
+TextDelta
+├── type = "text-delta"
+└── text
+```
+
+Example:
 
 ```json
 {
@@ -2038,11 +2250,29 @@ Delta example:
 }
 ```
 
-`text` is required for a known `text-delta`.
+`text` is incremental generated text.
+
+Multiple events are concatenated in stream order for the corresponding text lifecycle.
 
 ------
 
-## 12.4 Reasoning lifecycle
+## 7.3.4 `text-end`
+
+Example:
+
+```json
+{
+  "type": "text-end"
+}
+```
+
+This closes the current text lifecycle.
+
+------
+
+# 7.4 Reasoning Lifecycle
+
+## 7.4.1 Lifecycle
 
 ```text
 reasoning-start
@@ -2052,7 +2282,31 @@ reasoning-delta*
 reasoning-end
 ```
 
-Delta:
+------
+
+## 7.4.2 `reasoning-start`
+
+Example:
+
+```json
+{
+  "type": "reasoning-start"
+}
+```
+
+------
+
+## 7.4.3 `reasoning-delta`
+
+Structure:
+
+```text
+ReasoningDelta
+├── type = "reasoning-delta"
+└── text
+```
+
+Example:
 
 ```json
 {
@@ -2061,7 +2315,7 @@ Delta:
 }
 ```
 
-Again, the incremental content field is named:
+The incremental reasoning property is named:
 
 ```text
 text
@@ -2069,27 +2323,58 @@ text
 
 ------
 
-## 12.5 Tool-input lifecycle
+## 7.4.4 `reasoning-end`
 
-Tool generation has two semantic levels:
+Example:
+
+```json
+{
+  "type": "reasoning-end"
+}
+```
+
+This closes the reasoning lifecycle.
+
+------
+
+# 7.5 Tool Input Lifecycle
+
+## 7.5.1 Hierarchy
+
+Tool generation is represented in two semantic stages:
 
 ```text
-Incremental tool input
+Incremental Tool Input
+│
 ├── tool-input-start
 ├── tool-input-delta*
 └── tool-input-end
 
-Completed semantic tool call
+        ↓
+
+Completed Tool Invocation
 └── tool-call
 ```
 
-This distinction is critical.
+This is an important protocol distinction.
 
-A `tool-input-delta` sequence is not itself a completed tool call.
+A sequence of tool-input fragments is not itself the completed tool call.
 
 ------
 
-### `tool-input-start`
+## 7.5.2 `tool-input-start`
+
+Structure:
+
+```text
+ToolInputStart
+├── type = "tool-input-start"
+├── id
+├── toolName
+└── dynamic?
+```
+
+Example:
 
 ```json
 {
@@ -2100,22 +2385,28 @@ A `tool-input-delta` sequence is not itself a completed tool call.
 }
 ```
 
-Required:
+Established fields:
 
-```text
-id
-toolName
-```
-
-Optional:
-
-```text
-dynamic
-```
+| Field      | Type     |
+| ---------- | -------- |
+| `id`       | string   |
+| `toolName` | string   |
+| `dynamic`  | boolean? |
 
 ------
 
-### `tool-input-delta`
+## 7.5.3 `tool-input-delta`
+
+Structure:
+
+```text
+ToolInputDelta
+├── type = "tool-input-delta"
+├── id
+└── delta
+```
+
+Example:
 
 ```json
 {
@@ -2125,7 +2416,7 @@ dynamic
 }
 ```
 
-Followed by, for example:
+followed by:
 
 ```json
 {
@@ -2135,13 +2426,15 @@ Followed by, for example:
 }
 ```
 
-`delta` is a string fragment.
+`delta` is a serialized incremental fragment.
 
-Do not treat it as already-parsed complete tool input.
+It is not the final structured input object.
 
 ------
 
-### `tool-input-end`
+## 7.5.4 `tool-input-end`
+
+Structure:
 
 ```json
 {
@@ -2150,11 +2443,23 @@ Do not treat it as already-parsed complete tool input.
 }
 ```
 
-This ends the incremental input lifecycle for that ID.
+It closes the incremental input lifecycle associated with `id`.
 
 ------
 
-### `tool-call`
+## 7.5.5 `tool-call`
+
+Structure:
+
+```text
+ToolCallEvent
+├── type = "tool-call"
+├── toolCallId
+├── toolName
+└── input
+```
+
+Example:
 
 ```json
 {
@@ -2167,7 +2472,9 @@ This ends the incremental input lifecycle for that ID.
 }
 ```
 
-Required exact fields:
+This represents the completed semantic tool invocation.
+
+The field names are:
 
 ```text
 toolCallId
@@ -2175,20 +2482,13 @@ toolName
 input
 ```
 
-The strict parser does not replace these with legacy aliases such as:
-
-```text
-args
-arguments
-name
-text
-```
+No alternate aliases are part of the established wire structure in this specification.
 
 ------
 
-## 12.6 Tool identity
+## 7.5.6 Tool Stream Identity
 
-Expected lifecycle relationship:
+Observed compatible lifecycle:
 
 ```text
 tool-input-start.id
@@ -2200,17 +2500,15 @@ tool-input-end.id
 tool-call.toolCallId
 ```
 
-A consumer should therefore track in-progress tools by ID.
+This allows incremental fragments to be correlated with their eventual completed tool call.
 
-Do not use one global tool-input buffer.
-
-This also allows multiple tool inputs to be interleaved safely.
+A compatible stream consumer should therefore track incremental tool state by ID.
 
 ------
 
-## 12.7 `provider-metadata`
+# 7.6 `provider-metadata`
 
-Example possible shape:
+Observed event:
 
 ```json
 {
@@ -2221,18 +2519,27 @@ Example possible shape:
 }
 ```
 
-Current core parser recognizes the event type but does not define a closed typed schema for provider metadata.
+The event type is established.
 
-This should therefore be treated as provider-specific extensible metadata.
+The internal schema of:
+
+```text
+providerMetadata
+```
+
+is provider-specific and not closed by the available evidence.
+
+It should therefore be treated as opaque/extensible metadata.
 
 ------
 
-## 12.8 `finish-step`
+# 7.7 `finish-step`
 
 Structure:
 
 ```text
-finish-step
+FinishStep
+├── type = "finish-step"
 ├── finishReason?
 └── usage?
 ```
@@ -2254,17 +2561,35 @@ Example:
 }
 ```
 
-Both fields are optional at the current normalized event level.
+The reconstructed event model allows:
 
-A stream can contain more than one `finish-step`.
+```text
+finishReason
+usage
+```
+
+to be absent.
+
+Observed streams may contain more than one generation step and therefore more than one `finish-step`.
+
+`finish-step` is **not** the final message/stream success boundary.
 
 ------
 
-## 12.9 `finish`
+# 7.8 `finish`
 
-`finish` is the normal successful semantic terminal event.
+`finish` is the established successful semantic terminal event.
 
-Shape:
+Structure:
+
+```text
+FinishEvent
+├── type = "finish"
+├── finishReason
+└── totalUsage
+```
+
+Example:
 
 ```json
 {
@@ -2281,323 +2606,304 @@ Shape:
 }
 ```
 
-Required:
+The important protocol distinction is:
 
 ```text
-finishReason
-totalUsage
+finish-step
+→ step-level completion
+
+finish
+→ overall semantic terminal
 ```
 
 ------
 
-# 13. Usage, Errors, and Terminal Semantics
+# 7.9 `tool-result` Event
 
-## 13.1 Usage structure
+The event type:
 
-Stable normalized core:
-
-```ts
-interface CcUsage {
-  inputTokens: number
-  outputTokens: number
-
-  inputTokenDetails: {
-    cacheReadTokens: number
-    cacheWriteTokens: number
-  }
-}
+```text
+tool-result
 ```
+
+is recognized in the reconstructed CommandCode event family.
+
+The complete stable event payload schema has not been established by the available evidence.
+
+Therefore this specification does not invent one.
+
+Consumers needing lossless compatibility should preserve the raw event payload.
 
 ------
 
-## 13.2 Usage fallback values
+# 7.10 `error`
 
-When normalizing `finish.totalUsage`:
+The stream can terminate semantically with:
 
 ```text
-missing inputTokens
-→ 0
-
-missing outputTokens
-→ 0
-
-missing inputTokenDetails
-→ cacheReadTokens = 0
-→ cacheWriteTokens = 0
-
-missing cacheReadTokens
-→ 0
-
-missing cacheWriteTokens
-→ 0
+type = "error"
 ```
 
-This is consumer normalization behavior, not proof that the server always omits or always supplies any of these fields.
+The available compatibility evidence shows error payloads can carry message/code information, but the complete upstream wire schema is not sufficiently established to define one closed error object.
+
+A safe conceptual form is:
+
+```text
+ErrorEvent
+├── type = "error"
+└── error-specific payload
+```
+
+Possible observed/compatibility fields include:
+
+```text
+error
+message
+code
+```
+
+The exact value representation should be preserved rather than aggressively normalized at the protocol boundary.
 
 ------
 
-## 13.3 Extended observed usage fields
+# 8. Usage and Termination
 
-Real upstream data can contain additional usage information such as:
+## 8.1 Usage Hierarchy
 
-```text
-totalUsage
-├── inputTokens
-├── inputTokenDetails
-│   ├── noCacheTokens
-│   ├── cacheReadTokens
-│   └── cacheWriteTokens
-│
-├── outputTokens
-├── outputTokenDetails
-│   ├── textTokens
-│   └── reasoningTokens
-│
-├── totalTokens
-├── reasoningTokens
-└── cachedInputTokens
-```
-
-The current core model intentionally retains only:
+Observed usage data is carried primarily in:
 
 ```text
-inputTokens
-outputTokens
-cacheReadTokens
-cacheWriteTokens
-```
-
-Unknown/extra fields do not invalidate the event.
-
-------
-
-## 13.4 `finishReason`
-
-Wire representation:
-
-```text
-string
-```
-
-The parser does not impose a closed enum at the CommandCode wire layer.
-
-Observed/current compatibility values include families such as:
-
-```text
-normal
-├── stop
-├── end_turn
-└── end-turn
-
-tool
-├── tool-calls
-├── tool_calls
-├── tool_use
-├── function_call
-└── function_calls
-
-length
-├── length
-├── max_tokens
-├── max-tokens
-└── max_output_tokens
-
-stop sequence
-├── stop_sequence
-└── stop-sequence
-
-pause
-├── pause_turn
-└── pause-turn
-
-refusal/safety
-├── refusal
-├── content_filter
-├── content-filter
-├── safety
-└── blocked
-```
-
-These are observed/compatibility values rather than a formally established closed CommandCode enum.
-
-------
-
-## 13.5 Error events
-
-Core normalized shape:
-
-```ts
-interface CommandCodeError {
-  type: "error"
-  message: string
-  code?: string
-}
-```
-
-Accepted message forms include:
-
-### String `error`
-
-```json
-{
-  "type": "error",
-  "error": "Something failed"
-}
-```
-
-### Object `error`
-
-```json
-{
-  "type": "error",
-  "error": {
-    "message": "Something failed"
-  }
-}
-```
-
-### Top-level `message`
-
-```json
-{
-  "type": "error",
-  "message": "Something failed"
-}
-```
-
-Optional:
-
-```json
-{
-  "code": "..."
-}
-```
-
-If no message can be extracted:
-
-```text
-Unknown error
-```
-
-------
-
-## 13.6 Unknown events
-
-For:
-
-```json
-{
-  "type": "future-event",
-  "anything": "..."
-}
-```
-
-the raw event remains valid and is normalized as an unknown event carrying:
-
-```text
-future-event
-```
-
-Therefore:
-
-```text
-unknown event type
-≠
-malformed known event
-```
-
-Known event missing a required field is an error.
-
-Unknown future event type is preserved.
-
-------
-
-## 13.7 `[DONE]`
-
-The parser recognizes:
-
-```text
-data: [DONE]
+finish-step.usage
 ```
 
 and:
 
 ```text
-[DONE]
+finish.totalUsage
 ```
 
-However:
+A representative hierarchy is:
 
 ```text
-[DONE]
+Usage
+│
+├── inputTokens
+├── outputTokens
+│
+├── inputTokenDetails
+│   ├── noCacheTokens?
+│   ├── cacheReadTokens?
+│   └── cacheWriteTokens?
+│
+├── outputTokenDetails?
+│   ├── textTokens?
+│   └── reasoningTokens?
+│
+├── totalTokens?
+├── reasoningTokens?
+└── cachedInputTokens?
 ```
 
-is **transport framing**, not the successful CommandCode terminal.
-
-Successful semantic completion requires:
-
-```text
-finish
-```
-
-A `[DONE]` encountered before `finish` or `error` is treated by the current runtime as:
-
-```text
-EndedBeforeTerminal
-```
+Not every observed event contains every field.
 
 ------
 
-## 13.8 EOF
+## 8.2 Core Observed Usage Fields
 
-EOF is also not semantic success.
+The most consistently reconstructed fields are:
+
+```ts
+interface CommandCodeUsageCore {
+  inputTokens: number
+  outputTokens: number
+
+  inputTokenDetails?: {
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+}
+```
+
+These are a useful implementation baseline.
+
+However the wire object may carry additional fields.
+
+A protocol parser should not discard them unless its application intentionally chooses a narrower semantic representation.
+
+------
+
+## 8.3 Extended Observed Usage
+
+Observed/reconstructed upstream data may additionally include:
+
+```text
+noCacheTokens
+textTokens
+reasoningTokens
+totalTokens
+cachedInputTokens
+```
+
+Example conceptual object:
+
+```json
+{
+  "inputTokens": 7583,
+  "inputTokenDetails": {
+    "noCacheTokens": 159,
+    "cacheReadTokens": 7424,
+    "cacheWriteTokens": 0
+  },
+  "outputTokens": 25,
+  "outputTokenDetails": {
+    "textTokens": 20,
+    "reasoningTokens": 5
+  },
+  "totalTokens": 7608,
+  "reasoningTokens": 5,
+  "cachedInputTokens": 7424
+}
+```
+
+This specification intentionally does not define parser-side default values for omitted fields.
+
+Missing on the wire and numeric zero are different states unless additional CommandCode evidence proves otherwise.
+
+------
+
+## 8.4 `finishReason`
+
+Wire type:
+
+```text
+string
+```
+
+Example verified by the documented event examples:
+
+```text
+stop
+```
+
+The complete CommandCode `finishReason` enum is **not established**.
+
+Therefore the correct protocol model is:
+
+```ts
+type FinishReason = string
+```
+
+with known observed values recorded separately as evidence becomes available.
+
+A compatible implementation should:
+
+```text
+preserve unknown finishReason strings
+```
+
+rather than collapsing them into a guessed closed enum.
+
+Values accepted by unrelated downstream-compatibility code must not automatically be treated as CommandCode wire values.
+
+------
+
+## 8.5 Successful Terminal
+
+The established successful semantic terminal is:
 
 ```text
 finish
-→ successful terminal
+```
 
+Conceptually:
+
+```text
+stream events
+↓
+finish
+↓
+successful CommandCode generation terminal
+```
+
+`finish-step` does not replace `finish`.
+
+------
+
+## 8.6 Error Terminal
+
+The established semantic failure event is:
+
+```text
 error
-→ semantic failure
-
-EOF before finish/error
-→ incomplete stream
 ```
 
-Current runtime reports an incomplete stream as:
+Conceptually:
 
 ```text
-EndedBeforeTerminal
+stream events
+↓
+error
+↓
+upstream semantic failure
 ```
 
-and retains diagnostic metadata such as the last event type.
+Application-level timeout, network failure, cancellation, or local parse failure are not CommandCode semantic events and therefore are not defined as protocol terminal variants here.
 
 ------
 
-## 13.9 Terminal rule
+## 8.7 `[DONE]`
 
-The source-backed semantic rule is:
+Compatibility/capture evidence includes a transport sentinel:
 
 ```text
-SUCCESS
-└── finish
-
-FAILURE
-├── error
-├── parse error
-├── read/network error
-├── timeout
-├── cancellation
-├── premature [DONE]
-└── EOF before semantic terminal
+[DONE]
 ```
 
-The current stream reader stops after yielding `finish` or `error`.
+or SSE form:
+
+```text
+data: [DONE]
+```
+
+where encountered.
+
+It must be distinguished from:
+
+```text
+finish
+```
+
+The established semantic completion signal is the JSON:
+
+```text
+type = "finish"
+```
+
+event.
+
+Therefore `[DONE]` should be treated as transport framing rather than a replacement for the semantic `finish` event.
 
 ------
 
-## 13.10 Typical stream lifecycles
+## 8.8 Physical EOF
 
-### Text
+EOF is a transport condition, not a JSON protocol event.
+
+The protocol-level success evidence is:
+
+```text
+finish
+```
+
+Consequently a consumer seeking strict semantic completion should not infer a `finish` event merely because the transport ended.
+
+The application-specific error assigned to premature EOF is outside this private protocol specification.
+
+------
+
+# 8.9 Typical Event Lifecycles
+
+## 8.9.1 Text Completion
 
 ```text
 start
@@ -2615,7 +2921,9 @@ finish-step
 finish
 ```
 
-### Reasoning + text
+------
+
+## 8.9.2 Reasoning + Text Completion
 
 ```text
 start
@@ -2639,20 +2947,22 @@ finish-step
 finish
 ```
 
-### Tool call
+------
+
+## 8.9.3 Tool Invocation
 
 ```text
 start
 ↓
 start-step
 ↓
-tool-input-start
+tool-input-start(id)
 ↓
-tool-input-delta*
+tool-input-delta(id)*
 ↓
-tool-input-end
+tool-input-end(id)
 ↓
-tool-call
+tool-call(toolCallId=id)
 ↓
 finish-step
 ↓
@@ -2661,500 +2971,290 @@ finish
 
 ------
 
-# 14. `GET /v1/models` — Model Discovery Companion Contract
+## 8.9.4 Multi-Step Generation
 
-> This section is deliberately separated from `/alpha/generate`.
->
-> `GET /v1/models` is a **client-facing commandcode-router discovery endpoint**.
->
-> It is not evidence that `api.commandcode.ai` exposes the same endpoint.
-
-## 14.1 Endpoint
-
-```http
-GET /v1/models
-```
-
-Purpose:
+Because:
 
 ```text
-Router model catalog
+start-step
+finish-step
+```
+
+are step-level events, the general structure can be understood as:
+
+```text
+start
+
 ↓
-filter visible models
+Step 1
+├── start-step
+├── content events
+└── finish-step
+
 ↓
-project capability metadata
+Step 2
+├── start-step
+├── content events
+└── finish-step
+
 ↓
-client model discovery
+finish
 ```
 
-The implementation directly projects the current model catalog.
+where the number of steps depends on upstream behavior.
 
 ------
 
-## 14.2 Authentication
+# 9. Protocol Invariants
 
-The endpoint is protected by the Router authentication middleware.
+## 9.1 Exact Field Naming
 
-Credential transport can be:
-
-```http
-Authorization: Bearer <token>
-```
-
-or:
-
-```http
-x-api-key: <token>
-```
-
-Authorization Bearer is checked first.
-
-Because `/v1/models` does not map to one protocol, configured global Anthropic or OpenAI client credentials can satisfy the global-token path.
-
-------
-
-## 14.3 Query parameters
-
-Current handler does not consume a pagination parameter.
-
-For example:
-
-```text
-/v1/models
-```
-
-and:
-
-```text
-/v1/models?limit=1000
-```
-
-return the same visible catalog.
-
-A test explicitly verifies this behavior.
-
-------
-
-## 14.4 Response hierarchy
-
-```text
-ModelsResponse
-├── object = "list"
-└── data[]
-    └── ModelResponseEntry
-        ├── id
-        ├── object
-        ├── type
-        ├── owned_by
-        ├── context_length
-        ├── max_input_tokens
-        ├── reasoning_efforts[]
-        ├── input_modalities[]
-        └── capabilities[]
-```
-
-Exact conceptual shape:
-
-```ts
-interface ModelsResponse {
-  object: "list"
-  data: ModelResponseEntry[]
-}
-
-interface ModelResponseEntry {
-  id: string
-
-  object: "model"
-  type: "model"
-
-  owned_by: string
-
-  context_length: number
-  max_input_tokens: number
-
-  reasoning_efforts: string[]
-  input_modalities: string[]
-  capabilities: string[]
-}
-```
-
-------
-
-## 14.5 Visibility rule
-
-A catalog model appears when:
-
-```text
-enabled == true
-AND
-advertised == true
-```
-
-There is no separate advertised-model list.
-
-------
-
-## 14.6 `id`
-
-Source:
-
-```text
-catalog map key
-```
-
-Example:
-
-```text
-deepseek/deepseek-v4-pro
-```
-
-No display-name transformation is performed.
-
-------
-
-## 14.7 `object`
-
-Constant:
-
-```text
-model
-```
-
-------
-
-## 14.8 `type`
-
-Constant:
-
-```text
-model
-```
-
-------
-
-## 14.9 `owned_by`
-
-Generation:
-
-```text
-model ID
-↓
-split at first "/"
-↓
-first component
-```
+The protocol uses exact mixed casing.
 
 Examples:
 
 ```text
-Qwen/Qwen3.7-Flash
-→ Qwen
-
-deepseek/deepseek-v4-pro
-→ deepseek
-
-gpt-5.6-luna
-→ gpt-5.6-luna
+permissionMode
+threadId
+max_tokens
+reasoning_effort
+toolCallId
+toolName
+mimeType
+input_schema
+finishReason
+totalUsage
 ```
 
-If no slash exists, the complete model ID is returned.
+Do not globally camelCase or snake_case wire objects.
 
 ------
 
-## 14.10 `context_length`
+## 9.2 Message Content Is Structured
 
-Direct projection:
-
-```text
-catalog.contextWindow
-```
-
-No calculation beyond serialization.
-
-------
-
-## 14.11 `max_input_tokens`
-
-Direct projection:
+The reconstructed message representation is:
 
 ```text
-catalog.maxInputTokens
+message.content[]
 ```
 
-------
-
-## 14.12 `reasoning_efforts`
-
-Direct projection:
+not:
 
 ```text
-catalog.reasoningEfforts
+message.content = string
 ```
 
-Current known values:
-
-```text
-high
-max
-```
-
-An empty array means no reasoning capability according to the current catalog model.
-
-------
-
-## 14.13 `input_modalities`
-
-Direct projection:
-
-```text
-catalog.capabilities.input
-```
-
-Current possible values:
-
-```text
-text
-image
-```
-
-Current catalog validation requires text input.
-
-------
-
-## 14.14 `capabilities`
-
-This field is derived.
-
-Algorithm:
-
-```text
-capabilities = []
-
-if reasoning_efforts is non-empty:
-    capabilities.push("reasoning")
-
-if catalog.capabilities.tools:
-    capabilities.push("tools")
-```
-
-Therefore when both apply, current ordering is:
-
-```json
-[
-  "reasoning",
-  "tools"
-]
-```
-
-------
-
-## 14.15 Catalog information not exposed
-
-The internal catalog also contains:
-
-```text
-enabled
-advertised
-maxOutputTokens
-pricing
-capabilities.output
-```
-
-These fields are not currently included in `/v1/models`.
-
-For example:
-
-```text
-maxOutputTokens
-```
-
-still controls upstream `params.max_tokens`, even though discovery clients do not see it.
-
-------
-
-## 14.16 Ordering
-
-The catalog uses an ordered map.
-
-The handler iterates it directly.
-
-Therefore the returned model list has deterministic model-ID key ordering.
-
-------
-
-## 14.17 Current bundled models
-
-Current bundled catalog includes:
-
-```text
-Qwen/Qwen3.7-Flash
-deepseek/deepseek-v4-pro
-deepseek/deepseek-v4-flash
-gpt-5.6-luna
-```
-
-All four are currently enabled and advertised in the bundled catalog.
-
-Example response entry:
+Text itself is represented as:
 
 ```json
 {
-  "id": "Qwen/Qwen3.7-Flash",
-  "object": "model",
-  "type": "model",
-  "owned_by": "Qwen",
-  "context_length": 1000000,
-  "max_input_tokens": 1000000,
-  "reasoning_efforts": [
-    "high",
-    "max"
-  ],
-  "input_modalities": [
-    "text",
-    "image"
-  ],
-  "capabilities": [
-    "reasoning",
-    "tools"
-  ]
+  "type": "text",
+  "text": "..."
 }
 ```
 
 ------
 
-# Appendix A. Current Producer Value Classification
+## 9.3 Content Block Type Is Semantic
 
-The current `commandcode-router` behavior can be summarized by source of information.
-
-## A.1 Constants
+Known block discriminators:
 
 ```text
-Content-Type = application/json
-
-Accept = */*
-
-Accept-Encoding = br, gzip, deflate
-
-x-cli-environment = production
-
-x-taste-learning = false
-
-x-co-flag = false
-
-User-Agent = cli
-
-accept-language = *
-
-sec-fetch-mode = cors
-
-memory = null
-
-taste = null
-
-skills = null
-
-actual upstream params.stream = true
+text
+reasoning
+image
+tool-call
+tool-result
 ```
 
-## A.2 Configuration-derived
+Each discriminator has its own field schema.
+
+Do not flatten them into one generic text representation.
+
+------
+
+## 9.4 Tool Call Identity Is Stable
+
+Historical conversation:
 
 ```text
-apiBaseUrl
-
-x-command-code-version
-
-permissionMode
-
-temperature fallback
-
-thread-ID mode
-
-model routing
-
-reasoning effort
+tool-call.toolCallId
 ```
 
-## A.3 Project-derived
+must remain associated with:
 
 ```text
-config.workingDir
-
-config.structure
-
-config.isGitRepo
-
-config.currentBranch
-
-config.mainBranch
-
-config.gitStatus
-
-config.recentCommits
-
-x-project-slug
+tool-result.toolCallId
 ```
 
-## A.4 Time-derived
+Streamed invocation:
 
 ```text
-config.date
+tool-input-*.id
 ```
 
-Format:
+must remain associated with the eventual:
 
 ```text
-UTC YYYY-MM-DD
+tool-call.toolCallId
 ```
 
-## A.5 Request/session-derived
+when they describe the same invocation.
+
+------
+
+## 9.5 Tool Input Has Partial and Complete States
 
 ```text
-threadId
-
-x-session-id
-
-system
-
-messages
-
-tools
-
-temperature when explicitly supplied
+tool-input-delta.delta
 ```
 
-## A.6 Model/catalog-derived
+is serialized partial input.
 
 ```text
-params.model
-
-params.max_tokens
-
-params.reasoning_effort
+tool-call.input
 ```
 
-## A.7 Random per upstream request
+is completed semantic input.
+
+Therefore:
 
 ```text
-traceparent.trace-id
-
-traceparent.span-id
+partial tool input
+≠
+complete tool call
 ```
 
 ------
 
-# Appendix B. Observed `mode` Variants
+## 9.6 Text and Reasoning Have Explicit Lifecycles
 
-Captured material referenced by `PROTOCOLS.md` shows that other CommandCode clients can send a top-level `mode`.
-
-Observed examples include:
+Text:
 
 ```text
-mode = "custom-agent"
-
-mode = "title-gen"
+text-start
+→ text-delta*
+→ text-end
 ```
 
-The strict request produced by current `commandcode-router` contains no `mode` field.
+Reasoning:
+
+```text
+reasoning-start
+→ reasoning-delta*
+→ reasoning-end
+```
+
+Consumers should not treat an arbitrary delta as an independently complete block.
+
+------
+
+## 9.7 Step Completion and Stream Completion Differ
+
+```text
+finish-step
+```
+
+means:
+
+```text
+step boundary
+```
+
+while:
+
+```text
+finish
+```
+
+means:
+
+```text
+overall semantic terminal
+```
+
+They are not interchangeable.
+
+------
+
+## 9.8 Successful Terminal Is `finish`
+
+The core semantic success rule is:
+
+```text
+SUCCESS
+└── finish
+```
+
+Transport closure or `[DONE]` does not itself create a semantic `finish`.
+
+------
+
+## 9.9 Semantic Failure Is `error`
+
+The upstream protocol failure terminal is:
+
+```text
+ERROR
+└── error event
+```
+
+Network, timeout, local parser failure, or caller cancellation are separate transport/application states.
+
+------
+
+## 9.10 Unknown Values Should Remain Unknown
+
+The following are not established as permanently closed:
+
+```text
+role
+permissionMode
+finishReason
+providerMetadata
+error payload
+extra usage fields
+future event types
+```
+
+A private-protocol implementation should prefer preserving unknown values over inventing unsupported mappings.
+
+------
+
+# Appendix A. Observed Top-Level `mode` Extension
+
+Captured CommandCode traffic indicates that some requests can carry an additional top-level:
+
+```text
+mode
+```
+
+field.
+
+Observed values include:
+
+```text
+custom-agent
+title-gen
+```
+
+Examples:
+
+```json
+{
+  "mode": "custom-agent"
+}
+```
+
+and:
+
+```json
+{
+  "mode": "title-gen"
+}
+```
+
+The baseline generate request does not require `mode` in the reconstructed core request type.
 
 Therefore:
 
@@ -3162,84 +3262,212 @@ Therefore:
 mode
 ```
 
-should currently be treated as an observed client-mode extension rather than a required `/alpha/generate` field for LuckyToken's initial CommandCode producer.
+is best classified as:
+
+> observed CommandCode client-mode extension
+
+rather than a universally required `/alpha/generate` field.
+
+The complete enum and semantics are not established.
 
 ------
 
-# Appendix C. Core Implementation Invariants
+# Appendix B. Evidence Gaps
 
-A LuckyToken implementation targeting the behavior documented here should preserve at least:
+The following areas remain intentionally open because the current evidence does not establish a complete contract:
 
 ```text
-HTTP
-├── POST /alpha/generate
-├── JSON body
-└── upstream SSE response
+Headers
+├── which observed metadata headers are server-required
+└── complete accepted version/header value space
 
-Request identity
-├── threadId is a string
-└── current parity behavior keeps threadId == x-session-id
-
-Config
-├── all config keys are present
-├── date = UTC YYYY-MM-DD
-├── structure = sorted top-level entries
-├── gitStatus = whole-string-trimmed porcelain v1
-└── recentCommits = git log -3 --oneline
+Request
+├── non-null memory schema
+├── non-null taste schema
+├── non-null skills schema
+├── complete permissionMode enum
+├── server requirements for x-session-id/threadId equality
+└── stream=false behavior
 
 Messages
-├── content is always an array
-├── content blocks use exact type strings
-├── toolCallId remains stable
-└── tool-result refers to its tool call
+└── complete role enum
 
-Tools
-├── tool definition uses input_schema
-└── tool-call uses toolCallId/toolName/input
+Model Invocation
+├── complete supported model catalog
+├── complete reasoning_effort enum across versions
+└── server-side temperature semantics/defaults
 
-Streaming
-├── text has start/delta/end lifecycle
-├── reasoning has start/delta/end lifecycle
-├── tool input has start/delta/end lifecycle
-├── tool-call is the completed semantic call
-├── finish is semantic success
-├── error is semantic failure
-├── [DONE] is not semantic success
-└── EOF before terminal is incomplete
+Events
+├── complete provider-metadata schema
+├── complete tool-result event schema
+├── complete error-event schema
+├── complete finishReason value set
+└── future/unknown event types
+
+Usage
+└── exact presence requirements for all extended usage fields
+
+Extensions
+└── complete mode enum and behavior
+```
+
+These gaps should remain explicit.
+
+A private protocol specification becomes less reliable, not more reliable, when unknown behavior is silently filled in from unrelated compatibility code.
+
+------
+
+# Appendix C. Canonical Protocol Trees
+
+## C.1 Request
+
+```text
+POST /alpha/generate
+│
+├── Headers
+│   ├── Authorization
+│   ├── Content-Type
+│   ├── Accept
+│   ├── Accept-Encoding
+│   ├── x-command-code-version
+│   ├── x-cli-environment
+│   ├── x-taste-learning
+│   ├── x-co-flag
+│   ├── x-session-id
+│   ├── x-project-slug?
+│   ├── traceparent
+│   ├── User-Agent
+│   ├── accept-language
+│   └── sec-fetch-mode
+│
+└── CommandCodeRequest
+    │
+    ├── config
+    │   ├── workingDir
+    │   ├── date
+    │   ├── environment
+    │   ├── structure[]
+    │   ├── isGitRepo
+    │   ├── currentBranch
+    │   ├── mainBranch
+    │   ├── gitStatus
+    │   └── recentCommits[]
+    │
+    ├── memory
+    ├── taste
+    ├── skills
+    ├── permissionMode
+    ├── threadId
+    │
+    └── params
+        │
+        ├── model
+        ├── system
+        │
+        ├── messages[]
+        │   ├── role
+        │   └── content[]
+        │       ├── text
+        │       ├── reasoning
+        │       ├── image
+        │       ├── tool-call
+        │       └── tool-result
+        │
+        ├── tools[]
+        │   ├── name
+        │   ├── description?
+        │   └── input_schema
+        │
+        ├── max_tokens
+        ├── stream
+        ├── reasoning_effort?
+        └── temperature?
 ```
 
 ------
 
-# Appendix D. Protocol Boundary for LuckyToken
-
-This document should remain the specification for:
+## C.2 Response Stream
 
 ```text
-LuckyToken
-↔
-CommandCode wire
+CommandCode Stream
+│
+├── start
+│
+├── Step*
+│   │
+│   ├── start-step
+│   │
+│   ├── Content*
+│   │   │
+│   │   ├── Text
+│   │   │   ├── text-start
+│   │   │   ├── text-delta*
+│   │   │   └── text-end
+│   │   │
+│   │   ├── Reasoning
+│   │   │   ├── reasoning-start
+│   │   │   ├── reasoning-delta*
+│   │   │   └── reasoning-end
+│   │   │
+│   │   └── Tool
+│   │       ├── tool-input-start
+│   │       ├── tool-input-delta*
+│   │       ├── tool-input-end
+│   │       └── tool-call
+│   │
+│   ├── provider-metadata*
+│   └── finish-step
+│
+└── Terminal
+    ├── finish
+    └── error
 ```
 
-It should not contain mappings such as:
+------
+
+# Appendix D. Minimal Implementation Surface
+
+An implementation of the reconstructed core protocol needs to understand at minimum:
 
 ```text
-Anthropic → Pi
-Pi → CommandCode
-CommandCode → Pi
-Pi → Anthropic
+Request
+├── headers
+├── config
+├── threadId
+└── params
+    ├── model
+    ├── system
+    ├── messages
+    ├── tools
+    ├── max_tokens
+    ├── stream
+    ├── reasoning_effort?
+    └── temperature?
+
+Message Content
+├── text
+├── reasoning
+├── image
+├── tool-call
+└── tool-result
+
+Stream
+├── text lifecycle
+├── reasoning lifecycle
+├── tool-input lifecycle
+├── completed tool-call
+├── finish-step
+├── finish
+└── error
 ```
 
-Those belong in separate conversion specifications.
-
-The clean architecture boundary is:
+The producer profile additionally defines how to reproduce:
 
 ```text
-Protocol Spec
-└── What CommandCode wire means
-
-Conversion Spec
-└── How another semantic model maps to it
-
-Architecture Spec
-└── Which LuckyToken module performs that conversion
+config
+x-project-slug
+traceparent
+observed metadata headers
 ```
+
+without introducing unrelated routing, authentication, discovery, conversion, or application-session policy into the CommandCode private protocol itself.
