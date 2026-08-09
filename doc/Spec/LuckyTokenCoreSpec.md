@@ -7055,13 +7055,13 @@ Summary：
 
 ### External Pi Runtime View
 
-LuckyToken uses Pi's public runtime contracts rather than redefining them:
+LuckyToken-owned concrete Provider 的 direct dependencies 必须按 concrete integration 声明。
 
+```text
 Pi Runtime
 ├── Models
 └── Provider contract
 
-```text
 createModels(optional CredentialStore / ModelsStore / AuthContext)
         │
         ▼
