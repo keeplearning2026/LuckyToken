@@ -5321,7 +5321,7 @@ Must Not Access
 - generic whole-request context
 ```
 
-Provider 的 direct dependencies 必须按 concrete integration 声明。
+LuckyToken-owned concrete Provider 的 direct dependencies 必须按 concrete integration 声明。
 
 Generic Provider chapter 不要求每个 Provider 都注入：
 
@@ -7055,7 +7055,7 @@ Summary：
 
 ### External Pi Runtime View
 
-LuckyToken-owned concrete Provider 的 direct dependencies 必须按 concrete integration 声明。
+LuckyToken uses Pi's public runtime contracts rather than redefining them:
 
 ```text
 Pi Runtime
