@@ -1,3708 +1,2875 @@
-# CommandCode Private Protocol
+# CommandCode Private Protocol v1.0
 
-**Version:** 0.2
-**Protocol:** CommandCode Private Generate Protocol
-**Primary Endpoint:** `POST /alpha/generate`
-**Transport:** HTTP + JSON request / event-stream response
-**Status:** Reverse-engineered private protocol
-**Purpose:** Source-backed specification of the CommandCode request, response, event lifecycle, and observed CommandCode client producer behavior.
+> 兼容目标：`command-code@1.9.0` 的 gateway generate protocol  
+> 实现语言：TypeScript / Node.js 22+  
+> 读者：负责实现 request sender、response decoder 与 protocol router 的 AI
 
-This document describes the CommandCode private protocol itself.
+本文只定义实现协议所需的 contract 和推荐实现。
 
-It defines:
+本文中的 `MUST`、`MUST NOT`、`SHOULD`、`MAY` 表示实现约束。未指定 Protocol B 时，本文只定义 `content[] A` → `content[] B` 的直接 adapter 接口和真正 SSE framing；Protocol B 的 event schema 必须由 B-specific adapter 提供，不能凭空假定。
 
-- the upstream HTTP endpoint;
-- request headers;
-- request JSON structure;
-- project/config context;
-- message and content block structures;
-- tool definitions and tool identity;
-- response stream framing;
-- CommandCode stream events;
-- usage and termination semantics;
-- observed CommandCode client field-generation behavior.
+---
 
-It does **not** define:
+# 1. 实现目标
 
-- how another protocol maps into CommandCode;
-- client model routing;
-- model aliases or fallback routing;
-- downstream client authentication;
-- local model-discovery APIs;
-- application-specific session policy;
-- application-specific retry, timeout, or cancellation policy;
-- application-specific response rendering.
+实现分为五层：
 
-Because CommandCode is a private protocol, this specification distinguishes verified wire facts from reconstructed client behavior and unknown server-side requirements.
-
-------
-
-# 1. Scope and Evidence
-
-## 1.1 Protocol Boundary
-
-The observed CommandCode inference interaction is:
-
-```text
-HTTP Request
-│
-├── POST /alpha/generate
-├── Request Headers
-└── JSON Body
-    ├── mode?
-    ├── config
-    ├── memory
-    ├── taste
-    ├── skills
-    ├── permissionMode
-    ├── threadId
-    └── params
-        ├── model
-        ├── system
-        ├── messages[]
-        ├── tools[]
-        ├── max_tokens
-        ├── stream
-        ├── reasoning_effort?
-        └── temperature?
-
-                ↓
-
-         CommandCode Service
-
-                ↓
-
-HTTP Response
-└── Event Stream
-    ├── start / step events
-    ├── text events
-    ├── reasoning events
-    ├── tool events
-    ├── usage / finish-step
-    └── terminal
-        ├── finish
-        └── error
-```
-
-The observed API origin is:
-
-```text
-https://api.commandcode.ai
-```
-
-The primary generation path is:
-
-```text
-/alpha/generate
-```
-
-Therefore the observed production endpoint is:
-
-```text
-https://api.commandcode.ai/alpha/generate
-```
-
-Whether alternate origins are accepted is outside the established protocol evidence.
-
-The reconstructed core request does not require a top-level `mode`, but captured CommandCode traffic includes an observed optional `mode` extension such as `custom-agent` and `title-gen`. This extension is documented separately in Appendix A and should not be confused with a universally required core field.
-
-------
-
-## 1.2 Evidence Classes
-
-Because this is a private protocol, every important claim belongs to one of four evidence classes.
-
-### Captured Wire
-
-A structure or value directly observed in captured CommandCode HTTP or SSE traffic.
-
-Example:
-
-```text
-config.environment = "win32"
-```
-
-Captured wire evidence is the strongest evidence available in this specification, but it still proves only that the observed service/client exchange used that shape or value. It does not prove that every alternate value would be rejected.
-
-### Observed Client Behavior
-
-A value or derivation observed from a CommandCode or CommandCode-compatible client implementation or capture.
-
-Example:
-
-```text
-x-cli-environment = "production"
-```
-
-This describes what an observed producer sends.
-
-It does **not** prove that the server rejects every other value.
-
-### Reconstructed Contract / Producer Behavior
-
-A structure or algorithm reconstructed from strict wire types, compatibility source, capture parity, and source-backed fixtures.
-
-Examples:
-
-```text
-params.messages[].content is reconstructed as an array.
-
-project root
-→ lowercase path segments
-→ "-" joined x-project-slug
-```
-
-This evidence is useful for implementing a compatible producer or parser, but reconstructed representability must not be promoted into a server guarantee. For example, a local type such as `serde_json::Value` proves that the implementation can represent arbitrary JSON; it does not prove that the CommandCode service accepts every possible JSON shape.
-
-### Unknown
-
-The available evidence does not establish a closed rule.
-
-Examples:
-
-```text
-all possible permissionMode values
-all possible finishReason values
-complete provider-metadata schema
-complete error payload schema
-```
-
-A compatible implementation should preserve these unknowns rather than inventing closed enums without evidence.
-
-------
-
-## 1.3 Naming and Casing
-
-CommandCode uses mixed naming conventions.
-
-Examples:
-
-```text
-Request root
-├── permissionMode     camelCase
-├── threadId           camelCase
-└── params.max_tokens  snake_case
-
-Content blocks
-├── toolCallId         camelCase
-├── toolName           camelCase
-└── mimeType           camelCase
-
-Tool definition
-└── input_schema       snake_case
-
-Events
-├── type = "text-delta"
-├── type = "tool-input-start"
-└── finishReason       camelCase
-```
-
-Field names and discriminator strings should therefore be preserved exactly.
-
-Do not normalize casing globally.
-
-------
-
-# 2. HTTP Transport
-
-## 2.1 Request
-
-Method:
-
-```http
-POST /alpha/generate
-```
-
-Request body media type:
-
-```http
-Content-Type: application/json
-```
-
-The body is one JSON object described in Chapter 4.
-
-------
-
-## 2.2 Response
-
-Observed successful generation responses use an event-stream transport:
-
-```http
-Content-Type: text/event-stream
-```
-
-The canonical observed framing carries JSON events in SSE `data:` fields:
-
-```text
-data: {"type":"text-delta","text":"Hello"}
-```
-
-The reconstructed strict consumer also accepts a bare JSON event line inside the event-stream body:
-
-```text
-{"type":"text-delta","text":"Hello"}
-```
-
-This alternate physical framing should be treated as a transport/compatibility observation rather than as a different semantic protocol. The semantic event object is still identified by its JSON `type` field.
-
-SSE comments and metadata lines such as blank lines, `:`, `event:`, `id:`, and `retry:` do not themselves constitute CommandCode semantic events.
-
-The semantic event protocol is described in Chapters 7 and 8.
-
-### 2.2.1 Early / Non-Event Error Bodies
-
-Compatibility handling also recognizes that an upstream response may begin with a plain JSON error object, for example an object carrying `error` or `success: false`, without a CommandCode event `type`. The complete server-side schema for these early/non-event error bodies is not established and is therefore outside the closed event schema in Chapter 7.
-
-------
-
-# 3. Request Headers
-
-## 3.1 Header Hierarchy
-
-Observed CommandCode-compatible requests contain:
-
-```text
-Request Headers
-│
-├── Authentication
-│   └── Authorization
-│
-├── HTTP Representation
-│   ├── Content-Type
-│   ├── Accept
-│   └── Accept-Encoding
-│
-├── CommandCode Client Metadata
-│   ├── x-command-code-version
-│   ├── x-cli-environment
-│   ├── x-taste-learning
-│   └── x-co-flag
-│
-├── Request / Conversation Identity
-│   └── x-session-id
-│
-├── Project Identity
-│   └── x-project-slug?
-│
-├── Trace Context
-│   └── traceparent
-│
-└── Generic Client Metadata
-    ├── User-Agent
-    ├── accept-language
-    └── sec-fetch-mode
-```
-
-------
-
-## 3.2 Header Field Contract
-
-| Header                   | Wire Type | Observed Presence | Observed Value / Meaning        |
-| ------------------------ | --------- | ----------------- | ------------------------------- |
-| `Authorization`          | string    | yes               | `Bearer <credential>`           |
-| `Content-Type`           | string    | yes               | `application/json`              |
-| `Accept`                 | string    | yes               | `*/*`                           |
-| `Accept-Encoding`        | string    | yes               | `br, gzip, deflate`             |
-| `x-command-code-version` | string    | yes               | observed client version         |
-| `x-cli-environment`      | string    | yes               | observed `"production"`         |
-| `x-taste-learning`       | string    | yes               | producer-dependent; observed `"false"` and `"true"` |
-| `x-co-flag`              | string    | yes               | observed `"false"`              |
-| `x-session-id`           | string    | yes               | opaque request/session identity |
-| `x-project-slug`         | string    | conditional       | project identity                |
-| `traceparent`            | string    | yes               | trace context                   |
-| `User-Agent`             | string    | yes               | observed `"cli"`                |
-| `accept-language`        | string    | yes               | observed `"*"`                  |
-| `sec-fetch-mode`         | string    | yes               | observed `"cors"`               |
-
-Unless explicitly stated otherwise, “observed presence” describes the reconstructed compatible producer profile rather than a proven server-required-header list.
-
-------
-
-## 3.3 `Authorization`
-
-Observed format:
-
-```http
-Authorization: Bearer <credential>
-```
-
-The value authenticates the caller to the CommandCode upstream service.
-
-The credential itself is opaque to this protocol.
-
-Its storage, acquisition, rotation, or selection is outside the wire contract.
-
-------
-
-## 3.4 HTTP Representation Headers
-
-Observed values:
-
-```http
-Content-Type: application/json
-Accept: */*
-Accept-Encoding: br, gzip, deflate
-```
-
-These values are part of the observed CommandCode client request profile.
-
-------
-
-## 3.5 `x-command-code-version`
-
-Type:
-
-```text
-string
-```
-
-Observed value in the reconstructed baseline:
-
-```text
-1.7.0
-```
-
-Example:
-
-```http
-x-command-code-version: 1.7.0
-```
-
-This identifies the CommandCode client/protocol version presented upstream.
-
-The available evidence does not establish that the server requires exactly `1.7.0`.
-
-Implementations should therefore treat the value as a compatibility/version parameter rather than a permanently fixed protocol literal.
-
-------
-
-## 3.6 CommandCode Client Metadata
-
-Observed producer profiles include:
-
-```http
-x-cli-environment: production
-x-co-flag: false
-```
-
-`x-taste-learning` is producer-controlled rather than a fixed protocol literal. Observed profiles include at least:
-
-```text
-commandcode-router producer
-└── x-taste-learning: false
-
-pi CommandCode provider profile
-└── x-taste-learning: true
-```
-
-Therefore `false` must not be treated as a universal CommandCode server requirement.
-
-The available evidence does not establish the full allowed value space for these headers.
-
-------
-
-## 3.7 `x-session-id`
-
-Type:
-
-```text
-string
-```
-
-Example:
-
-```http
-x-session-id: 5a0df440-c8f0-4cea-b159-c9e401408e07
-```
-
-Semantically it carries an opaque conversation/request identity.
-
-The private protocol does not expose an algorithm for deriving the value from another client protocol.
-
-A compatibility producer must generate or obtain an opaque identity string appropriate to its own request/session model. Its lifetime and stability are producer policy, not an established CommandCode wire requirement.
-
-### Observed relationship
-
-The reconstructed producer profile uses the same logical thread identity for:
-
-```text
-x-session-id
-```
-
-and:
-
-```text
-request.threadId
-```
-
-Whether the CommandCode server strictly requires equality is not established.
-
-Therefore:
-
-```text
-same value
-```
-
-is a useful compatibility profile, not a formally proven server invariant.
-
-------
-
-## 3.8 `x-project-slug`
-
-Type:
-
-```text
-string
-```
-
-The header identifies project context.
-
-Example:
-
-```http
-x-project-slug: d-project-example
-```
-
-Observed project-aware requests include it.
-
-The exact server behavior when the header is omitted is not established by the core private protocol evidence.
-
-### Reconstructed producer derivation
-
-The compatibility producer algorithm is:
-
-```text
-project root
-↓
-trim surrounding whitespace
-↓
-replace "\" with "/"
-↓
-normalize Windows extended path prefix
-↓
-lowercase
-↓
-split on "/"
-↓
-discard empty segments
-↓
-strip trailing ":" from path components
-↓
-join components with "-"
-```
-
-Examples:
-
-```text
-D:\project\example
-→ d-project-example
-
-D:/project/app
-→ d-project-app
-
-//?/D:/project/app
-→ d-project-app
-
-/home/user/project
-→ home-user-project
-
-//?/UNC/server/share/app
-→ unc-server-share-app
-```
-
-Important representation:
-
-```text
-D:\project\app
-```
-
-produces:
-
-```text
-d-project-app
-```
-
-not:
-
-```text
-/d/project/app
-```
-
-------
-
-## 3.9 `traceparent`
-
-Observed format follows the W3C traceparent shape:
-
-```text
-00-{trace-id}-{span-id}-01
-```
-
-where:
-
-```text
-trace-id
-= 32 lowercase hexadecimal characters
-= 16 bytes
-
-span-id
-= 16 lowercase hexadecimal characters
-= 8 bytes
-```
-
-Example:
-
-```text
-00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
-```
-
-Reconstructed producer behavior generates new random trace and span identifiers for each upstream request.
-
-------
-
-## 3.10 Generic Client Metadata
-
-Observed values:
-
-```http
-User-Agent: cli
-accept-language: *
-sec-fetch-mode: cors
-```
-
-These belong to the observed CommandCode client profile.
-
-The available evidence does not establish whether they are semantically required by the service.
-
-------
-
-# 4. Request Body
-
-## 4.1 Request Hierarchy
-
-The reconstructed request object is:
-
-```text
-CommandCodeRequest
-│
-├── mode?                  # observed extension; not required by reconstructed core type
-├── config
-│   └── CcConfig
-│
-├── memory
-├── taste
-├── skills
-│
-├── permissionMode
-├── threadId
-│
-└── params
-    └── CcParams
-        ├── model
-        ├── system
-        ├── messages[]
-        ├── tools[]
-        ├── max_tokens
-        ├── stream
-        ├── reasoning_effort?
-        └── temperature?
-```
-
-Conceptual TypeScript representation:
-
-```ts
-interface CommandCodeRequest {
-  // observed extension in some captures; not required by reconstructed core type
-  mode?: string
-
-  config: CcConfig
-
-  memory: unknown
-  taste: unknown
-  skills: unknown
-
-  permissionMode: string
-  threadId: string
-
-  params: CcParams
-}
-```
-
-------
-
-## 4.2 Top-Level Field Contract
-
-| Field            | Wire Type  | Observed Presence | Meaning / Evidence                                           |
-| ---------------- | ---------- | ----------------- | ------------------------------------------------------------ |
-| `mode`           | string     | conditional       | observed client-mode extension; not part of reconstructed core type, we can ignore mode |
-| `config`         | object     | yes               | environment/project context                                  |
-| `memory`         | JSON value | yes               | opaque context field                                         |
-| `taste`          | JSON value | yes               | opaque context field                                         |
-| `skills`         | JSON value | yes               | opaque context field                                         |
-| `permissionMode` | string     | yes               | permission/execution mode                                    |
-| `threadId`       | string     | yes               | opaque thread identity                                       |
-| `params`         | object     | yes               | model invocation                                             |
-
-------
-
-## 4.3 `memory`
-
-Reconstructed representation:
-
-```text
-JSON value
-```
-
-This means the compatibility implementation can represent arbitrary JSON at this field. It does **not** establish that the CommandCode service accepts every possible non-null JSON shape.
-
-Observed baseline value:
-
-```json
-null
-```
-
-The available evidence establishes that `null` is used by the compatibility profile.
-
-It does not establish the full schema accepted by the server for non-null `memory`.
-
-Therefore a minimal compatible producer may use:
-
-```json
-"memory": null
-```
-
-unless it has separate evidence for richer memory semantics.
-
-------
-
-## 4.4 `taste`
-
-Reconstructed representation:
-
-```text
-JSON value
-```
-
-The non-null server schema is not established; representability in the compatibility implementation is not evidence of universal server acceptance.
-
-Observed baseline:
-
-```json
-"taste": null
-```
-
-The non-null schema is not established.
-
-------
-
-## 4.5 `skills`
-
-Reconstructed representation:
-
-```text
-JSON value
-```
-
-The non-null server schema is not established; representability in the compatibility implementation is not evidence of universal server acceptance.
-
-Observed baseline:
-
-```json
-"skills": null
-```
-
-The non-null schema is not established.
-
-------
-
-## 4.6 `permissionMode`
-
-Wire type:
-
-```text
-string
-```
-
-Observed value:
-
-```text
-auto-accept
-```
-
-Example:
-
-```json
-{
-  "permissionMode": "auto-accept"
-}
-```
-
-The complete allowed value set is not established by the available evidence.
-
-Therefore the protocol should not define a closed `permissionMode` enum without additional captures.
-
-------
-
-## 4.7 `threadId`
-
-Wire type:
-
-```text
-string
-```
-
-Example:
-
-```json
-{
-  "threadId": "5a0df440-c8f0-4cea-b159-c9e401408e07"
-}
-```
-
-It identifies the logical generation thread.
-
-The value is opaque.
-
-The server-visible wire protocol does not define how a caller must derive it from another protocol or local session object.
-
-------
-
-# 4.8 `config`
-
-## 4.8.1 Structure
-
-```ts
-interface CcConfig {
-  workingDir: string
-  date: string
-  environment: string
-
-  structure: string[]
-
-  isGitRepo: boolean
-  currentBranch: string
-  mainBranch: string
-
-  gitStatus: string
-  recentCommits: string[]
-}
-```
-
-Hierarchy:
-
-```text
-config
-│
-├── Environment
-│   ├── workingDir
-│   ├── date
-│   └── environment
-│
-├── Project Structure
-│   └── structure[]
-│
-└── Git Context
-    ├── isGitRepo
-    ├── currentBranch
-    ├── mainBranch
-    ├── gitStatus
-    └── recentCommits[]
-```
-
-The field names and casing are part of the reconstructed wire structure.
-
-------
-
-## 4.8.2 Field Contract
-
-| Field           | Type     | Meaning                         |
-| --------------- | -------- | ------------------------------- |
-| `workingDir`    | string   | project working directory       |
-| `date`          | string   | current date context            |
-| `environment`   | string   | operating-system environment    |
-| `structure`     | string[] | project-root entries            |
-| `isGitRepo`     | boolean  | whether root is a Git work tree |
-| `currentBranch` | string   | current Git branch              |
-| `mainBranch`    | string   | inferred main/default branch    |
-| `gitStatus`     | string   | Git porcelain status text       |
-| `recentCommits` | string[] | recent one-line Git commits     |
-
-------
-
-## 4.8.3 `workingDir`
-
-Wire type:
-
-```text
-string
-```
-
-Observed representation preserves a normal native path string.
-
-Example Windows capture form:
-
-```json
-{
-  "workingDir": "D:\\project\\example"
-}
-```
-
-There is no evidence that the field itself uses the hyphenated `x-project-slug` representation.
-
-Therefore:
-
-```text
-workingDir
-```
-
-and:
-
-```text
-x-project-slug
-```
-
-are distinct representations.
-
-------
-
-## 4.8.4 `date`
-
-Wire type:
-
-```text
-string
-```
-
-Observed format:
-
-```text
-YYYY-MM-DD
-```
-
-Example:
-
-```text
-2026-08-09
-```
-
-Reconstructed producer generation:
-
-```text
-current UTC date
-↓
-YYYY-MM-DD
-```
-
-The use of UTC is part of the reconstructed compatible producer profile.
-
-------
-
-## 4.8.5 `environment`
-
-Wire type:
-
-```text
-string
-```
-
-Observed examples:
-
-```text
-win32
-darwin
-linux
-```
-
-Reconstructed producer mapping:
-
-```text
-Windows
-→ win32
-
-macOS
-→ darwin
-
-other platform
-→ platform identifier
-```
-
-Windows capture evidence confirms:
-
-```json
-{
-  "environment": "win32"
-}
-```
-
-------
-
-## 4.8.6 `structure`
-
-Wire type:
-
-```text
-string[]
-```
-
-Meaning:
-
-> Names of entries directly below `workingDir`.
-
-The reconstructed producer profile does **not** recursively enumerate the entire project tree.
-
-Generation:
-
-```text
-read workingDir
-↓
-take immediate children
-↓
-convert entry name to string
-↓
-filter excluded entries
-↓
-sort
-↓
-limit
-```
-
-### Hidden Entries
-
-Entries whose names begin with:
-
-```text
-.
-```
-
-are excluded by the reconstructed producer.
-
-Examples:
-
-```text
-.git
-.github
-.claude
-.cc
-.env
-```
-
-### Reconstructed Directory Exclusion Set
-
-Observed/reconstructed compatibility logic excludes directories including:
-
-```text
-node_modules
-.git
-.cc
-dist
-build
-.next
-.nuxt
-.output
-__pycache__
-.venv
-venv
-```
-
-Because hidden entries are already filtered by name, several entries above are excluded by more than one rule.
-
-### Ordering
-
-Entries are sorted lexicographically by the reconstructed producer.
-
-### Limit
-
-The reconstructed limit is:
-
-```text
-500 entries
-```
-
-### Example
-
-```json
-{
-  "structure": [
-    "README.md",
-    "package.json",
-    "scripts",
-    "src",
-    "tsconfig.json"
-  ]
-}
-```
-
-These generation rules describe the reconstructed CommandCode-compatible client profile.
-
-The available evidence does not prove that the server itself rejects a differently generated `structure`.
-
-------
-
-## 4.8.7 `isGitRepo`
-
-Wire type:
-
-```text
-boolean
-```
-
-Reconstructed generation command:
-
-```text
-git -C <workingDir> rev-parse --is-inside-work-tree
-```
-
-Producer interpretation:
-
-```text
-command succeeds
-→ true
-
-command fails
-→ false
-```
-
-Example:
-
-```json
-{
-  "isGitRepo": true
-}
-```
-
-------
-
-## 4.8.8 `currentBranch`
-
-Wire type:
-
-```text
-string
-```
-
-Reconstructed producer command:
-
-```text
-git -C <workingDir> branch --show-current
-```
-
-Then:
-
-```text
-trim stdout
-```
-
-Example:
-
-```json
-{
-  "currentBranch": "main"
-}
-```
-
-If Git does not provide a branch name, the reconstructed profile can produce:
-
-```text
-""
-```
-
-for example under detached HEAD.
-
-------
-
-## 4.8.9 `mainBranch`
-
-Wire type:
-
-```text
-string
-```
-
-Reconstructed producer resolution:
-
-```text
-1. git symbolic-ref refs/remotes/origin/HEAD
-
-2. if stdout starts with "refs/remotes/origin/":
-   strip that prefix and return the branch name
-
-3. otherwise, if symbolic-ref produced a non-empty string:
-   preserve and return that non-empty string
-
-4. otherwise probe:
-   main
-   master
-
-5. if no candidate is resolved:
-   ""
-```
-
-Candidate probing uses:
-
-```text
-git rev-parse --verify <candidate>
-```
-
-The compatibility implementation accepts a candidate when it resolves to a 40-character Git object ID.
-
-This is a reconstructed producer algorithm, not a proven server validation rule.
-
-------
-
-## 4.8.10 `gitStatus`
-
-Wire type:
-
-```text
-string
-```
-
-Observed/reconstructed source:
-
-```text
-git -C <workingDir> status --porcelain=v1
-```
-
-The complete stdout string is then:
-
-```text
-trimmed once
-```
-
-If the trimmed output is empty, the reconstructed profile uses:
-
-```text
-Working tree clean
-```
-
-### Whole-String Trim Behavior
-
-This produces an important representation detail.
-
-Raw Git output:
-
-```text
- D input.txt
- M output.txt
-```
-
-After trimming the **whole string**:
-
-```text
-D input.txt
- M output.txt
-```
-
-The first line loses the leading whitespace at the beginning of the entire string.
-
-Later lines keep their leading whitespace.
-
-This behavior has capture/parity evidence and should be reproduced by implementations targeting close CommandCode CLI compatibility.
-
-Do **not** trim every line independently.
-
-------
-
-## 4.8.11 `recentCommits`
-
-Wire type:
-
-```text
-string[]
-```
-
-Reconstructed command:
-
-```text
-git -C <workingDir> log -3 --oneline
-```
-
-Processing:
-
-```text
-split by line
-↓
-trim line
-↓
-drop empty line
-```
-
-Maximum normal result:
-
-```text
-3 entries
-```
-
-Example:
-
-```json
-{
-  "recentCommits": [
-    "c89c728 Initial commit",
-    "a18b332 Add protocol fixtures"
-  ]
-}
-```
-
-------
-
-## 4.8.12 Representative `config`
-
-```json
-{
-  "workingDir": "D:\\project\\example",
-  "date": "2026-08-09",
-  "environment": "win32",
-  "structure": [
-    "README.md",
-    "package.json",
-    "src"
-  ],
-  "isGitRepo": true,
-  "currentBranch": "main",
-  "mainBranch": "main",
-  "gitStatus": "M src/index.ts",
-  "recentCommits": [
-    "abc1234 fix: example"
-  ]
-}
-```
-
-This example illustrates the observed/reconstructed project-aware producer profile.
-
-------
-
-# 4.9 `params`
-
-## 4.9.1 Structure
-
-```ts
-interface CcParams {
-  model: string
-  system: string
-
-  messages: CcMessage[]
-  tools: CcToolDefinition[]
-
-  max_tokens: number
-  stream: boolean
-
-  reasoning_effort?: "high" | "max"
-  temperature?: number
-}
-```
-
-Hierarchy:
-
-```text
-params
-│
-├── Model
-│   ├── model
-│   ├── max_tokens
-│   └── reasoning_effort?
-│
-├── Prompt
-│   ├── system
-│   └── messages[]
-│
-├── Tools
-│   └── tools[]
-│
-└── Generation
-    ├── stream
-    └── temperature?
-```
-
-------
-
-## 4.9.2 `model`
-
-Wire type:
-
-```text
-string
-```
-
-Example observed model identifiers include:
-
-```text
-deepseek/deepseek-v4-pro
-deepseek/deepseek-v4-flash
-Qwen/Qwen3.7-Flash
-gpt-5.6-luna
-```
-
-The protocol only establishes that the field carries the target upstream model identifier.
-
-How a caller selects that identifier is outside the CommandCode wire contract.
-
-------
-
-## 4.9.3 `system`
-
-Wire type:
-
-```text
-string
-```
-
-Example:
-
-```json
-{
-  "system": "You are a coding assistant."
-}
-```
-
-The field is a single string.
-
-The reconstructed `CcParams` schema does not use a structured system-block array.
-
-------
-
-## 4.9.4 `max_tokens`
-
-Wire type:
-
-```text
-integer
-```
-
-Observed values depend on the selected model/request.
-
-Examples include:
-
-```text
-32000
-64000
-```
-
-The private wire protocol does not establish how a caller must select the value.
-
-It is therefore best treated as:
-
-```text
-caller-supplied model invocation limit
-```
-
-rather than as one universal constant.
-
-------
-
-## 4.9.5 `stream`
-
-Wire type:
-
-```text
-boolean
-```
-
-Observed generation requests use:
-
-```json
-{
-  "stream": true
-}
-```
-
-The response protocol documented here is therefore based on the streaming form.
-
-Whether all CommandCode server behavior for:
-
-```json
-{
-  "stream": false
-}
-```
-
-is equivalent or supported has not been established by the available evidence.
-
-------
-
-## 4.9.6 `reasoning_effort`
-
-Wire field:
-
-```text
-reasoning_effort
-```
-
-Optional.
-
-Reconstructed strict values:
-
-```text
-high
-max
-```
-
-Example:
-
-```json
-{
-  "reasoning_effort": "max"
-}
-```
-
-The available evidence supports these values in the reconstructed baseline.
-
-It does not establish whether future/alternate CommandCode versions accept additional values.
-
-------
-
-## 4.9.7 `temperature`
-
-Wire type:
-
-```text
-number
-```
-
-Optional.
-
-Example:
-
-```json
-{
-  "temperature": 0.3
-}
-```
-
-The protocol does not establish a universal default.
-
-If omitted, the server/provider behavior is not defined by the evidence in this specification.
-
-------
-
-# 4.10 Messages
-
-## 4.10.1 Message Structure
-
-```ts
-interface CcMessage {
-  role: string
-  content: CcContentBlock[]
-}
-```
-
-Hierarchy:
-
-```text
-CcMessage
-├── role
-└── content[]
-    └── CcContentBlock
-```
-
-Important structural rule:
-
-```text
-content
-```
-
-is an array in the reconstructed wire representation.
-
-There is no established string shorthand.
-
-------
-
-## 4.10.2 Roles
-
-Observed roles include:
-
-```text
-user
-assistant
-tool
-```
-
-The wire type itself stores the role as a string rather than a closed enum.
-
-Therefore a parser should preserve unknown role strings rather than inventing an unsupported closed server enum.
-
-A role should not be declared valid solely because the underlying implementation type is `string`; observed roles and theoretically representable strings are different evidence classes.
-
-------
-
-## 4.10.3 Content Block Hierarchy
-
-```text
-CcContentBlock
-│
-├── Text
-│   └── type = "text"
-│
-├── Reasoning
-│   └── type = "reasoning"
-│
-├── Image
-│   └── type = "image"
-│
-├── Tool Call
-│   └── type = "tool-call"
-│
-└── Tool Result
-    └── type = "tool-result"
-```
-
-------
-
-## 4.10.4 Text Block
-
-Structure:
-
-```json
-{
-  "type": "text",
-  "text": "Hello"
-}
-```
-
-Field contract:
-
-| Field  | Type             | Presence |
-| ------ | ---------------- | -------- |
-| `type` | literal `"text"` | required |
-| `text` | string           | required |
-
-------
-
-## 4.10.5 Reasoning Block
-
-Structure:
-
-```json
-{
-  "type": "reasoning",
-  "text": "Reasoning content"
-}
-```
-
-Field contract:
-
-| Field  | Type                  | Presence |
-| ------ | --------------------- | -------- |
-| `type` | literal `"reasoning"` | required |
-| `text` | string                | required |
-
-The reasoning content property is:
-
-```text
-text
-```
-
-not:
-
-```text
-thinking
-```
-
-or:
-
-```text
-reasoning
-```
-
-------
-
-## 4.10.6 Image Block
-
-Structure:
-
-```text
-ImageBlock
-├── type = "image"
-├── image
-└── mimeType
-```
-
-Example:
-
-```json
-{
-  "type": "image",
-  "image": "data:image/png;base64,iVBORw0KGgo...",
-  "mimeType": "image/png"
-}
-```
-
-`image` contains a complete data URL:
-
-```text
-data:<mime-type>;base64,<base64-data>
-```
-
-`mimeType` separately carries the MIME type.
-
-Field contract:
-
-| Field      | Type              | Presence |
-| ---------- | ----------------- | -------- |
-| `type`     | literal `"image"` | required |
-| `image`    | string            | required |
-| `mimeType` | string            | required |
-
-------
-
-## 4.10.7 Tool Call Block
-
-Structure:
-
-```text
-ToolCallBlock
-├── type = "tool-call"
-├── toolCallId
-├── toolName
-└── input
-```
-
-Example:
-
-```json
-{
-  "type": "tool-call",
-  "toolCallId": "toolu_01ABC",
-  "toolName": "read",
-  "input": {
-    "file_path": "src/index.ts"
-  }
-}
-```
-
-Field contract:
-
-| Field        | Type                  | Presence |
-| ------------ | --------------------- | -------- |
-| `type`       | literal `"tool-call"` | required |
-| `toolCallId` | string                | required |
-| `toolName`   | string                | required |
-| `input`      | JSON value            | required |
-
-The reconstructed representation permits `input` to carry a JSON value. Observed coding-tool invocations are object-shaped; acceptance of arbitrary non-object input by the service is not established.
-
-The discriminator uses:
-
-```text
-tool-call
-```
-
-while the identity/name fields use camelCase.
-
-------
-
-## 4.10.8 Tool Result Block
-
-Structure:
-
-```text
-ToolResultBlock
-├── type = "tool-result"
-├── toolCallId
-├── toolName?
-└── output
-    ├── type
-    └── value
-```
-
-Example success:
-
-```json
-{
-  "type": "tool-result",
-  "toolCallId": "toolu_01ABC",
-  "toolName": "read",
-  "output": {
-    "type": "text",
-    "value": "file contents"
-  }
-}
-```
-
-Example failure:
-
-```json
-{
-  "type": "tool-result",
-  "toolCallId": "toolu_01ABC",
-  "toolName": "read",
-  "output": {
-    "type": "error-text",
-    "value": "tool failed"
-  }
-}
-```
-
-Field contract:
-
-| Field          | Type                      | Presence |
-| -------------- | ------------------------- | -------- |
-| `type`         | literal `"tool-result"`   | required |
-| `toolCallId`   | string                    | required |
-| `toolName`     | string                    | optional |
-| `output`       | object                    | required |
-| `output.type`  | `"text"` / `"error-text"` | required |
-| `output.value` | string                    | required |
-
-------
-
-## 4.10.9 Tool Identity
-
-The conversation-level identity relationship is:
-
-```text
-assistant tool-call
-└── toolCallId = X
-
+~~~text
+Protocol A client request
         ↓
+CommandCode request encoder
+        ↓
+POST /alpha/generate
+        ↓
+CommandCode bare JSON Lines response
+        ↓
+Atomic ID-indexed Ordered Block Assembler
+        ↓
+content[] A + finish + usage + rawEvents
+        ├── no conversion → return content[] A，结束
+        │
+        └── conversion required
+                ↓
+        Protocol B direct adapter
+                ↓
+        content[] B + finish/usage B
+                ↓
+        Protocol B event encoder + SSE framing
+~~~
 
-tool result
-└── toolCallId = X
-```
+如果 caller 只需要 CommandCode protocol，第一版在得到 committed `content[] A`、finish 和 usage 后就结束，不需要任何 conversion layer。
 
-Therefore:
+只有在模拟另一种 Protocol B server 时，才启用 buffered direct adapter：先完整消费并验证 CommandCode response，再把 `content[] A` 直接转换成 `content[] B`，最后生成 Protocol B events 和 SSE response。它不是 live transform，但能保证 upstream `abort`、stream error 或 conversion error 不会把 partial content 发送给 downstream client。
 
-```text
-tool-call.toolCallId
-=
-tool-result.toolCallId
-```
+## 1.1 明确不做的事情
 
-is the reconstructed semantic pairing rule.
+- 不复制 official CommandCode consumer 的 current-text/current-reasoning folding 逻辑。
+- 不把 CommandCode JSON Lines 直接改名后当成 Protocol B events。
+- 不把 network chunk 当成 event boundary。
+- 不实现或推测 `params.stream:false`。
+- 不把 response-side `tool-result` 混入推荐 `content[] A`。
+- 不在 Protocol B 未确定时伪造其 event name、usage schema 或 stop reason。
 
-A compatible producer should preserve the ID exactly.
+---
 
-------
+# 2. Runtime 与 dependency
 
-# 4.11 Tool Definitions
+推荐 runtime：
 
-## 4.11.1 Structure
+~~~text
+Node.js >= 22
+TypeScript >= 5
+native fetch / Request / Response / ReadableStream
+~~~
 
-```ts
-interface CcToolDefinition {
-  name: string
-  description?: string
-  input_schema: unknown
+安装与 official 1.9.0 producer 对齐的 package version：
+
+~~~bash
+npm install @sindresorhus/slugify@2.2.1 zod@4.1.5
+~~~
+
+仅在项目已经使用 OpenTelemetry 时再安装：
+
+~~~bash
+npm install @opentelemetry/api@1.9.0
+~~~
+
+用途：
+
+| Package/API | 用途 | 是否必需 |
+|---|---|---:|
+| `@sindresorhus/slugify@2.2.1` | 计算 `x-project-slug` | yes |
+| `zod@4.1.5` | 验证 body `threadId` 是否为 UUID | recommended |
+| `node:crypto` | `x-session-id`、trace ID、span ID | built-in |
+| `node:fs/promises` | `config.structure` | built-in |
+| `node:child_process` | Git fields | built-in |
+| `@opentelemetry/api@1.9.0` | 从 active span 取得 trace context | optional |
+
+只安装 `@opentelemetry/api` 不会自动创建 span。若没有完整 OTel SDK/provider，使用本文的 `node:crypto` implementation 或 omission `traceparent`。
+
+---
+
+# 3. HTTP request contract
+
+## 3.1 Endpoint
+
+Production：
+
+~~~text
+POST https://api.commandcode.ai/alpha/generate
+~~~
+
+其他已知 environment：
+
+~~~text
+staging: https://staging-api.commandcode.ai
+local:   http://localhost:<9090 + portOffset>
+~~~
+
+Router SHOULD 把 `baseUrl` 作为显式 deployment config，并固定 path `/alpha/generate`。不要根据 model name 改 path。
+
+## 3.2 Serialization
+
+- request body 使用 `JSON.stringify`。
+- `undefined` property 被 omission。
+- `null` 必须保留。
+- request 不是 multipart。
+- `params.stream` 必须是 literal `true`。
+
+## 3.3 Request headers
+
+推荐发送一个干净的 `Content-Type: application/json`。不需要复现某些 runtime 产生的重复 `application/json, application/json`。
+
+~~~ts
+export interface CommandCodeHeaderInput {
+  apiKey?: string;
+  cliEnvironment?: string;
+  cwd: string;
+  sessionId: string;
+  traceparent?: string;
+  tasteLearning?: boolean;
+  coFlag?: boolean;
+  ossPrimaryProvider?: string;
+  zeroDataRetention?: boolean;
+  oauthToken?: string;
+  oauthProvider?: string;
 }
-```
+~~~
 
-Hierarchy:
+| Header | 计算规则 |
+|---|---|
+| `Content-Type` | fixed `application/json` |
+| `Accept` | explicit `*/*`，或 omission 让 Node Fetch/Undici 自动添加 |
+| `User-Agent` | fixed `cli` |
+| `x-command-code-version` | fixed `1.9.0` |
+| `x-cli-environment` | `prod` 转成 `production`；其他 string 原样使用；默认 `production` |
+| `x-project-slug` | `slugify(cwd) || "root"` |
+| `x-taste-learning` | boolean 转 lowercase string；默认 `false` |
+| `x-co-flag` | boolean 转 lowercase string；默认 `false` |
+| `x-session-id` | logical session UUID；默认 `crypto.randomUUID()` |
+| `Authorization` | 有 CommandCode API key 时为 `Bearer <key>`，否则 omission |
+| `traceparent` | valid chat span 时发送；否则 omission |
+| `x-oss-primary-provider` | 有 selected OSS provider 时发送 |
+| `x-cmd-zdr` | zero-data-retention 启用时发送 string `1` |
+| `x-oauth-token` | 有 provider OAuth token 时发送 |
+| `x-oauth-provider` | 与 provider OAuth token 配套的 provider identifier |
 
-```text
-CcToolDefinition
-├── name
-├── description?
-└── input_schema
-```
+`Host`、`Connection`、`Content-Length`、`Accept-Encoding` 等 transport headers 由 HTTP runtime 计算，application code MUST NOT 手工计算 `Content-Length`。
 
-Example:
+### 3.3.1 `x-project-slug`
 
-```json
+~~~ts
+import slugify from "@sindresorhus/slugify";
+
+export function buildProjectSlug(cwd: string): string {
+  if (typeof cwd !== "string") {
+    throw new TypeError("cwd must be a string");
+  }
+  return slugify(cwd) || "root";
+}
+~~~
+
+不要先自行替换 path separator；直接把 runtime cwd 传给 `slugify`。为了不同机器和时间得到一致行为，必须 pin `2.2.1`，不要只写 caret range。
+
+### 3.3.2 `x-session-id` 与 `threadId`
+
+两者是独立字段：
+
+- `x-session-id` 是 transport/session identity。
+- `threadId` 是 request body identity，只在 valid UUID 时发送。
+- 普通 session 可以让二者使用同一个 UUID，这是推荐的简单实现。
+- child/custom-agent flow 可以让二者不同。
+- receiver 不应要求二者相等。
+- `pause_turn` continuation 必须复用二者。
+
+~~~ts
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+
+export function createSessionIdentity(
+  threadId?: string,
+): { sessionId: string; threadId?: string } {
+  const sessionId = randomUUID();
+  const candidate = threadId ?? sessionId;
+
+  return {
+    sessionId,
+    threadId: z.uuid().safeParse(candidate).success
+      ? candidate
+      : undefined,
+  };
+}
+~~~
+
+如果 caller 显式提供已有 `sessionId`，必须验证它是 non-empty string；协议兼容实现最好使用 UUID v4。
+
+### 3.3.3 `traceparent`
+
+Wire format：
+
+~~~text
+00-<32 lowercase hex traceId>-<16 lowercase hex spanId>-01
+~~~
+
+约束：
+
+- trace ID 为 16 bytes，不能全 0。
+- span ID 为 8 bytes，不能全 0。
+- flags 固定 `01`。
+- 一个 logical turn 可以复用 trace ID。
+- 每次新的 complete attempt 使用新的 span ID。
+- 同一次 complete 内的 `pause_turn` continuation 复用完整 `traceparent`。
+- outer retry SHOULD 创建新 span ID；若仍在同一 logical turn，可保留 trace ID。
+- 没有 valid context 时 omission，不能发送 malformed value。
+
+不使用 OTel：
+
+~~~ts
+import { randomBytes } from "node:crypto";
+
+function randomNonZeroHex(bytes: number): string {
+  for (;;) {
+    const value = randomBytes(bytes).toString("hex");
+    if (!/^0+$/.test(value)) return value;
+  }
+}
+
+export interface TurnTrace {
+  traceId: string;
+}
+
+export interface CompleteTrace extends TurnTrace {
+  spanId: string;
+  traceparent: string;
+}
+
+export function createTurnTrace(): TurnTrace {
+  return { traceId: randomNonZeroHex(16) };
+}
+
+export function createCompleteTrace(
+  turn: TurnTrace,
+): CompleteTrace {
+  const spanId = randomNonZeroHex(8);
+  return {
+    traceId: turn.traceId,
+    spanId,
+    traceparent: `00-${turn.traceId}-${spanId}-01`,
+  };
+}
+~~~
+
+使用已有 OTel：
+
+~~~ts
+import { isSpanContextValid, trace } from "@opentelemetry/api";
+
+export function traceparentFromActiveSpan():
+  | string
+  | undefined {
+  const span = trace.getActiveSpan();
+  if (!span) return undefined;
+
+  const context = span.spanContext();
+  if (!isSpanContextValid(context)) return undefined;
+
+  return `00-${context.traceId}-${context.spanId}-01`;
+}
+~~~
+
+### 3.3.4 Header builder
+
+~~~ts
+const TRACEPARENT_RE =
+  /^00-(?!0{32})([0-9a-f]{32})-(?!0{16})([0-9a-f]{16})-01$/;
+
+export function normalizeCliEnvironment(
+  value = "production",
+): string {
+  return value === "prod" ? "production" : value;
+}
+
+export function buildCommandCodeHeaders(
+  input: CommandCodeHeaderInput,
+): Headers {
+  const headers = new Headers({
+    "content-type": "application/json",
+    accept: "*/*",
+    "user-agent": "cli",
+    "x-command-code-version": "1.9.0",
+    "x-cli-environment": normalizeCliEnvironment(
+      input.cliEnvironment,
+    ),
+    "x-project-slug": buildProjectSlug(input.cwd),
+    "x-taste-learning": String(input.tasteLearning ?? false),
+    "x-co-flag": String(input.coFlag ?? false),
+    "x-session-id": input.sessionId,
+  });
+
+  if (input.apiKey) {
+    headers.set("authorization", `Bearer ${input.apiKey}`);
+  }
+  if (
+    input.traceparent
+    && TRACEPARENT_RE.test(input.traceparent)
+  ) {
+    headers.set("traceparent", input.traceparent);
+  }
+  if (input.ossPrimaryProvider) {
+    headers.set(
+      "x-oss-primary-provider",
+      input.ossPrimaryProvider,
+    );
+  }
+  if (input.zeroDataRetention) {
+    headers.set("x-cmd-zdr", "1");
+  }
+  if (input.oauthToken) {
+    headers.set("x-oauth-token", input.oauthToken);
+  }
+  if (input.oauthProvider) {
+    headers.set("x-oauth-provider", input.oauthProvider);
+  }
+
+  return headers;
+}
+~~~
+
+## 3.4 Request body type
+
+~~~ts
+export interface ServerConfig {
+  workingDir: string;
+  date: string;
+  environment: string;
+  structure: string[];
+  isGitRepo: boolean;
+  currentBranch: string;
+  mainBranch: string;
+  gitStatus: string;
+  recentCommits: string[];
+}
+
+export type PermissionMode =
+  | "standard"
+  | "plan"
+  | "auto-accept";
+
+export interface WireTextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface WireReasoningBlock {
+  type: "reasoning";
+  text: string;
+}
+
+export interface WireImageBlock {
+  type: "image";
+  image: string;
+  mimeType: string;
+}
+
+export interface WireToolCallBlock {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}
+
+export interface WireToolResultBlock {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: "";
+  output: {
+    type: "text";
+    value: string;
+  };
+}
+
+export type WireMessage =
+  | {
+      role: "user";
+      content: Array<WireTextBlock | WireImageBlock>;
+    }
+  | {
+      role: "assistant";
+      content: Array<
+        | WireTextBlock
+        | WireReasoningBlock
+        | WireToolCallBlock
+      >;
+    }
+  | {
+      role: "tool";
+      content: WireToolResultBlock[];
+    };
+
+export interface WireTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface GenerateParams {
+  model: string;
+  messages: WireMessage[];
+  tools: WireTool[];
+  system?: string;
+  max_tokens: number;
+  stream: true;
+  temperature?: number;
+  reasoning_effort?: string;
+}
+
+export interface GenerateRequest {
+  config: ServerConfig;
+  memory: null;
+  taste: null;
+  skills: null;
+  permissionMode: PermissionMode;
+  threadId?: string;
+  mode?: string;
+  params: GenerateParams;
+}
+~~~
+
+## 3.5 Top-level body fields
+
+| Field | 计算规则 |
+|---|---|
+| `config` | 按第 4 章构造；一个 logical completion 内固定 |
+| `memory` | fixed `null` |
+| `taste` | fixed `null` |
+| `skills` | fixed `null` |
+| `permissionMode` | 用下方 mapping 计算 |
+| `threadId` | valid UUID 时发送，否则 omission |
+| `mode` | caller 提供 non-empty string 时发送，否则 omission |
+| `params` | 按第 5 章构造 |
+
+`memory:null`、`taste:null`、`skills:null` 不表示 system prompt 没有这些 context；它们可以已经被 application 编译进 `params.system`。
+
+Permission mapping：
+
+~~~ts
+export function toWirePermissionMode(
+  mode?: string,
+): PermissionMode {
+  if (mode === "bypass" || mode === "auto-accept") {
+    return "auto-accept";
+  }
+  if (mode === "plan") return "plan";
+  return "standard";
+}
+~~~
+
+已知 `mode` 包括 `compact`、`vision`、`tool-desc`、`learning`、`title-gen`、`agent`、`custom-agent`。普通 main request 通常 omission；它不是 `permissionMode`。
+
+---
+
+# 4. `config` 的完整计算方法
+
+## 4.1 `workingDir`、`date`、`environment`
+
+~~~text
+workingDir  = process.cwd()，保留原始 path string
+date        = new Date().toISOString().split("T")[0]
+environment = process.platform，例如 win32、linux、darwin
+~~~
+
+`date` 使用 UTC date，不是 local date。
+
+## 4.2 `structure`
+
+算法：
+
+1. 只执行一次 `readdir(cwd)`。
+2. 只读取 cwd immediate names，不 recurse，不 stat。
+3. 删除所有 `.` 开头的 name。
+4. 删除 fixed case-sensitive exclusion set。
+5. 使用 JavaScript default `.sort()`。
+6. 把额外 workspace root 格式化为 `scope:<path>`，append 到 sorted names 后面。
+7. scope entries 不参与 sort。
+8. `readdir` 失败时仍返回 scope entries。
+
+Exclusion set：
+
+~~~text
+node_modules dist build .git .svn .hg coverage .nyc_output
+.cache tmp temp .next .nuxt out
+~~~
+
+没有 recursive tree，也没有 500-entry cap。
+
+## 4.3 Git fields
+
+按以下顺序和 fallback 执行：
+
+~~~text
+git rev-parse --git-dir
+git branch --show-current
+git symbolic-ref --short refs/remotes/origin/HEAD
+git branch -r
+git status --porcelain
+git log --oneline -3
+~~~
+
+任何 Git command failure、non-zero exit 或 exception 都转成 empty string。
+
+`mainBranch`：
+
+1. remote HEAD non-empty：删除开头 `origin/`。
+2. 否则 remote branches string 包含 `origin/main`：使用 `main`。
+3. 否则包含 `origin/master`：使用 `master`。
+4. 否则使用 `main`。
+
+Non-Git repository：
+
+~~~json
 {
-  "name": "read",
-  "description": "Read a file",
+  "isGitRepo": false,
+  "currentBranch": "",
+  "mainBranch": "",
+  "gitStatus": "",
+  "recentCommits": []
+}
+~~~
+
+Git working tree clean 时 `gitStatus` 为 fixed string `Working tree clean`。
+
+## 4.4 TypeScript implementation
+
+~~~ts
+import os from "node:os";
+import process from "node:process";
+import { readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+const STRUCTURE_EXCLUSIONS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  ".git",
+  ".svn",
+  ".hg",
+  "coverage",
+  ".nyc_output",
+  ".cache",
+  "tmp",
+  "temp",
+  ".next",
+  ".nuxt",
+  "out",
+]);
+
+function formatScopeDir(input: {
+  dir: string;
+  cwd: string;
+  home: string;
+}): string {
+  const { dir, cwd, home } = input;
+  if (dir === cwd) return ".";
+  if (dir.startsWith(cwd + "/")) {
+    return "./" + dir.slice(cwd.length + 1);
+  }
+  if (dir === home) return "~";
+  if (dir.startsWith(home + "/")) {
+    return "~/" + dir.slice(home.length + 1);
+  }
+  return dir;
+}
+
+async function readStructure(input: {
+  cwd: string;
+  home: string;
+  workspaceRoots: string[];
+}): Promise<string[]> {
+  const scopes = input.workspaceRoots
+    .filter((dir) => dir !== input.cwd)
+    .map((dir) =>
+      "scope:" + formatScopeDir({
+        dir,
+        cwd: input.cwd,
+        home: input.home,
+      }),
+    );
+
+  try {
+    const entries = await readdir(input.cwd);
+    return [
+      ...entries
+        .filter(
+          (name) =>
+            !name.startsWith(".")
+            && !STRUCTURE_EXCLUSIONS.has(name),
+        )
+        .sort(),
+      ...scopes,
+    ];
+  } catch {
+    return scopes;
+  }
+}
+
+async function gitOutput(
+  cwd: string,
+  args: string[],
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+async function resolveMainBranch(
+  cwd: string,
+): Promise<string> {
+  const remoteHead = await gitOutput(cwd, [
+    "symbolic-ref",
+    "--short",
+    "refs/remotes/origin/HEAD",
+  ]);
+  if (remoteHead) {
+    return remoteHead.replace(/^origin\//, "");
+  }
+
+  const remoteBranches = await gitOutput(cwd, [
+    "branch",
+    "-r",
+  ]);
+  if (remoteBranches.includes("origin/main")) return "main";
+  if (remoteBranches.includes("origin/master")) return "master";
+  return "main";
+}
+
+export async function buildServerConfig(input: {
+  cwd?: string;
+  home?: string;
+  platform?: string;
+  workspaceRoots?: string[];
+} = {}): Promise<ServerConfig> {
+  const cwd = input.cwd ?? process.cwd();
+  const home = input.home
+    ?? process.env.HOME
+    ?? process.env.USERPROFILE
+    ?? os.homedir();
+  const platform = input.platform ?? process.platform;
+  const workspaceRoots = input.workspaceRoots ?? [cwd];
+
+  const structure = await readStructure({
+    cwd,
+    home,
+    workspaceRoots,
+  });
+  const date = new Date().toISOString().split("T")[0] ?? "";
+  const gitDir = await gitOutput(cwd, [
+    "rev-parse",
+    "--git-dir",
+  ]);
+
+  if (!gitDir) {
+    return {
+      workingDir: cwd,
+      date,
+      environment: platform,
+      structure,
+      isGitRepo: false,
+      currentBranch: "",
+      mainBranch: "",
+      gitStatus: "",
+      recentCommits: [],
+    };
+  }
+
+  const currentBranch = await gitOutput(cwd, [
+    "branch",
+    "--show-current",
+  ]);
+  const mainBranch = await resolveMainBranch(cwd);
+  const rawGitStatus = await gitOutput(cwd, [
+    "status",
+    "--porcelain",
+  ]);
+  const rawRecentCommits = await gitOutput(cwd, [
+    "log",
+    "--oneline",
+    "-3",
+  ]);
+
+  return {
+    workingDir: cwd,
+    date,
+    environment: platform,
+    structure,
+    isGitRepo: true,
+    currentBranch,
+    mainBranch,
+    gitStatus: rawGitStatus || "Working tree clean",
+    recentCommits: rawRecentCommits
+      ? rawRecentCommits.split("\n")
+      : [],
+  };
+}
+~~~
+
+Additional workspace roots 必须与 cwd/home 使用一致的 path representation。上述 `formatScopeDir` 用 literal `/` 做 prefix comparison；普通单-root router 直接使用 `workspaceRoots:[cwd]` 即可。
+
+推荐每个 logical completion 计算一次 `config`，并在所有 `pause_turn` continuation 中复用。是否跨多个用户 turn cache 是 client policy，不改变 wire schema。
+
+---
+
+# 5. `params`、messages 与 tools
+
+## 5.1 `params` fields
+
+| Field | 计算规则 |
+|---|---|
+| `model` | caller 选择的 CommandCode provider/model identifier；required |
+| `messages` | 已转换的 CommandCode wire messages；required，可为空但不推荐 |
+| `tools` | 当前可用 tool definitions；required；没有 tool 时为 `[]` |
+| `system` | caller 提供 string 时发送；`undefined` 时 omission |
+| `max_tokens` | caller override，否则 fixed default `64000` |
+| `stream` | literal `true`，不可设置为 false |
+| `temperature` | number 时发送，包括 `0`；`undefined` 时 omission |
+| `reasoning_effort` | selected model 支持且 caller 指定时发送，否则 omission |
+
+`reasoning_effort` 已知值至少有 `low`、`medium`、`high`、`xhigh`、`max`，但每个 model 只支持 subset。Router MUST 用 model capability table 决定是否发送，不能对所有 model 强加同一 value。
+
+~~~ts
+export function buildGenerateParams(input: {
+  model: string;
+  messages: WireMessage[];
+  tools?: WireTool[];
+  system?: string;
+  maxTokens?: number;
+  temperature?: number;
+  reasoningEffort?: string;
+  modelSupportsReasoningEffort?: boolean;
+}): GenerateParams {
+  const params: GenerateParams = {
+    model: input.model,
+    messages: input.messages,
+    tools: input.tools ?? [],
+    max_tokens: input.maxTokens ?? 64_000,
+    stream: true,
+  };
+
+  if (input.system !== undefined) {
+    params.system = input.system;
+  }
+  if (input.temperature !== undefined) {
+    params.temperature = input.temperature;
+  }
+  if (
+    input.modelSupportsReasoningEffort
+    && input.reasoningEffort
+  ) {
+    params.reasoning_effort = input.reasoningEffort;
+  }
+
+  return params;
+}
+~~~
+
+## 5.2 Message block rules
+
+Assistant：
+
+~~~text
+text       → {type:"text", text}
+reasoning  → {type:"reasoning", text}
+tool call  → {type:"tool-call", toolCallId, toolName, input}
+~~~
+
+User：
+
+~~~text
+text  → {type:"text", text}
+image → {
+          type:"image",
+          image:"data:<mime>;base64,<base64-data>",
+          mimeType:"<mime>"
+        }
+~~~
+
+Tool result request：
+
+~~~ts
+export function createToolResultMessage(input: {
+  toolCallId: string;
+  textParts: string[];
+}): WireMessage {
+  return {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: input.toolCallId,
+        toolName: "",
+        output: {
+          type: "text",
+          value: input.textParts.join("\n"),
+        },
+      },
+    ],
+  };
+}
+~~~
+
+`toolName:""` 只属于下一次 request 中的 request-side `tool-result`。它不表示 response SSE 的 `tool-call.toolName` 为空。Response tool name 来自 `tool-input-start.toolName` 或 final `tool-call.toolName`。
+
+一个 prepared internal user message 同时包含 tool results 和普通 user content 时，应拆成两个 wire message，顺序为 `role:"tool"` 后 `role:"user"`。
+
+空 text block、orphan tool result、provider-executed replay 和 internal metadata 应在进入 wire encoder 前清理。它们属于 application history preparation，不属于 HTTP framing。
+
+## 5.3 Tool definition
+
+只发送三个 field：
+
+~~~json
+{
+  "name": "read_file",
+  "description": "...",
   "input_schema": {
     "type": "object",
-    "properties": {
-      "file_path": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "file_path"
-    ]
+    "properties": {}
   }
 }
-```
+~~~
 
-The wire field is:
+不要把 runtime callback、permission state、MCP connection object 或 application metadata 放进 request。
 
-```text
-input_schema
-```
+## 5.4 Complete request builder
 
-not:
+~~~ts
+export interface BuildGenerateRequestInput {
+  config: ServerConfig;
+  permissionMode?: string;
+  threadId?: string;
+  mode?: string;
+  params: GenerateParams;
+}
 
-```text
-inputSchema
-```
+export function buildGenerateRequest(
+  input: BuildGenerateRequestInput,
+): GenerateRequest {
+  const body: GenerateRequest = {
+    config: input.config,
+    memory: null,
+    taste: null,
+    skills: null,
+    permissionMode: toWirePermissionMode(
+      input.permissionMode,
+    ),
+    params: input.params,
+  };
 
-The reconstructed CommandCode tool definition does not require an outer OpenAI-style `function` wrapper. `input_schema` is represented generically by the compatibility implementation, while observed usage is JSON-Schema-like object data; the complete accepted schema language is not established.
+  if (
+    input.threadId
+    && z.uuid().safeParse(input.threadId).success
+  ) {
+    body.threadId = input.threadId;
+  }
+  if (input.mode) body.mode = input.mode;
+  return body;
+}
 
-------
+export async function sendGenerateRequest(input: {
+  baseUrl: string;
+  headers: Headers;
+  body: GenerateRequest;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const url = new URL("/alpha/generate", input.baseUrl);
+  return fetch(url, {
+    method: "POST",
+    headers: input.headers,
+    body: JSON.stringify(input.body),
+    signal: input.signal,
+  });
+}
+~~~
 
-# 4.12 Representative Core Request
+---
 
-The following is a neutral representative request using only the reconstructed protocol structures:
+# 6. CommandCode response transport
 
-```json
+## 6.1 HTTP layer
+
+Success response 通常为：
+
+~~~http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream; charset=utf-8
+Cache-Control: no-cache
+
+{"type":"text-start","id":"0"}
+{"type":"text-delta","id":"0","text":"hello"}
+{"type":"text-end","id":"0"}
+{"type":"finish","finishReason":"stop","totalUsage":{}}
+~~~
+
+尽管 media type 是 `text/event-stream`，body framing 是 bare JSON Lines，不是 conventional SSE：
+
+~~~text
+JSON.stringify(event) + "\n"
+~~~
+
+CommandCode decoder MUST NOT 要求 `data:`、`event:`、blank-line delimiter 或 `[DONE]`。同时 MUST NOT 假定一个 HTTP chunk 等于一行或一个 event。
+
+Success parser 不应使用 Content-Type 作为 gate；只要 body 是有效 bare JSON Lines 就可以解析。
+
+Non-2xx response：读取完整 body 并作为 HTTP error 处理。Retry classification 建议：
+
+| Failure | retryable |
+|---|---:|
+| network exception | true |
+| HTTP 429 | true，除非 application 识别为不可重试的 plan-window limit |
+| HTTP 500–599 | true |
+| other non-2xx | false |
+| 2xx but response body missing | true |
+| EOF without `finish` or `abort` | true |
+| stream `error` event | 使用 event.isRetryable；缺失时 false |
+
+## 6.2 Physical line decoder
+
+正确算法：
+
+~~~text
+response.body bytes
+  → TextDecoder.decode(chunk, {stream:true})
+  → buffer
+  → split LF
+  → trim each line
+  → skip empty line
+  → JSON.parse(whole line)
+  → event reducer
+  → flush TextDecoder at physical EOF
+  → parse final unterminated line
+~~~
+
+`TextDecoder` 的 `{stream:true}` 只表示保留跨 network chunk 的 UTF-8 partial code point；它与 request `params.stream:true` 不是同一个概念。
+
+## 6.3 Event catalog
+
+### Content lifecycle
+
+~~~ts
+export type ContentEvent =
+  | { type: "text-start"; id: string }
+  | { type: "text-delta"; id: string; text: string }
+  | { type: "text-end"; id: string }
+  | {
+      type: "reasoning-start";
+      id: string;
+      providerMetadata?: unknown;
+    }
+  | { type: "reasoning-delta"; id: string; text: string }
+  | { type: "reasoning-end"; id: string }
+  | {
+      type: "tool-input-start";
+      id: string;
+      toolName: string;
+      providerExecuted?: boolean;
+      dynamic?: boolean;
+    }
+  | { type: "tool-input-delta"; id: string; delta: string }
+  | { type: "tool-input-end"; id: string }
+  | {
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      input?: unknown;
+      args?: unknown;
+      providerExecuted?: boolean;
+    };
+~~~
+
+Rules：
+
+- `text-delta.text` 按 `id` append。
+- `reasoning-delta.text` 按 `id` append。
+- `tool-input-start.id` 预留 tool block 的顺序位置。
+- `tool-input-delta.delta` 只保存为 raw input preview。
+- `tool-input-end` 只结束 input delta lifecycle，不 materialize tool block。
+- final `tool-call.toolCallId` 应与前述 `id` 相同。
+- `tool-call.input ?? tool-call.args ?? {}` 是 authoritative final input。
+
+### Metadata and terminal events
+
+~~~ts
+export interface CommandCodeUsage
+  extends Record<string, unknown> {
+  inputTokens?: number;
+  inputTokenDetails?: {
+    noCacheTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    [key: string]: unknown;
+  };
+  outputTokens?: number;
+  outputTokenDetails?: {
+    textTokens?: number;
+    reasoningTokens?: number;
+    [key: string]: unknown;
+  };
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+}
+
+export type CommandCodeDefinedFinishReason =
+  | "stop"
+  | "length"
+  | "content-filter"
+  | "tool-calls"
+  | "error"
+  | "other";
+
+export interface FinishEvent
+  extends Record<string, unknown> {
+  type: "finish";
+  finishReason?:
+    | CommandCodeDefinedFinishReason
+    | (string & {});
+  rawFinishReason?: string;
+  totalUsage?: CommandCodeUsage;
+  systemPromptTokens?: number;
+}
+
+export type TerminalEvent =
+  | FinishEvent
+  | { type: "abort" }
+  | {
+      type: "error";
+      error:
+        | string
+        | {
+            message?: string;
+            statusCode?: number;
+            isRetryable?: boolean;
+            [key: string]: unknown;
+          };
+    };
+~~~
+
+Other events：
+
+| Event | Semantic action |
+|---|---|
+| `start` | raw preserve，semantic ignore |
+| `start-step` | raw preserve，semantic ignore |
+| `provider-metadata` | raw preserve，semantic ignore |
+| `finish-step` | raw preserve，semantic ignore；不是 final usage source |
+| response-side `tool-result` | raw preserve，推荐 content ignore |
+| unknown event | raw preserve，semantic ignore |
+
+Final usage 以最后一个实际出现的 `finish.totalUsage` 为准。`finish-step.usage` 可以有更多 provider metadata，但不能取代 final `finish.totalUsage`。
+
+---
+
+# 7. 推荐的 Atomic ID-indexed Ordered Block Assembler
+
+## 7.1 Invariants
+
+每个 HTTP response 创建独立 staging area：
+
+~~~text
+rawEvents[]
+
+textById       Map<string, TextSlot>
+reasoningById  Map<string, ReasoningSlot>
+toolById       Map<string, ToolSlot>
+slots[]        first-appearance order
+~~~
+
+必须满足：
+
+1. Map key 直接使用 event `id`；三个 content type 使用三个 Map，不需要复合 key。
+2. block 第一次出现时 push 一个 slot，此后永不移动。
+3. 最终 `content[] A` 的 order 等于各 block 第一个相关 wire event 的到达顺序。
+4. `tool-input-start` 创建 invisible placeholder；只有 final `tool-call` 才填充并关闭。
+5. response-side `tool-result` 不进入 content。
+6. `finish` 只记录 terminal metadata；仍需等 physical EOF。
+7. `finish + EOF` 才 commit。
+8. `abort` 立即 rollback 当前 response 的 semantic slots、finish 和 usage，然后 cancel/drain body；返回 `content:[]`、`committed:false`、`aborted:true`。
+9. `error` 立即失败，不 commit。
+10. malformed/unknown line 保存在 `rawEvents`/warnings，不得修改 semantic state。
+
+Buffered router MUST 在 assembler commit 前不向 Protocol B client 发送任何 semantic bytes。这是 abort 能真正 rollback 的前提。
+
+## 7.2 Result model
+
+~~~ts
+export interface NormalizedUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface TextContentBlock {
+  type: "text";
+  id: string;
+  text: string;
+}
+
+export interface ReasoningContentBlock {
+  type: "reasoning";
+  id: string;
+  text: string;
+}
+
+export interface ToolUseContentBlock {
+  type: "tool_use";
+  id: string;
+  toolName: string;
+  input: unknown;
+}
+
+export type ContentBlockA =
+  | TextContentBlock
+  | ReasoningContentBlock
+  | ToolUseContentBlock;
+
+export interface RawEventRecord {
+  sequence: number;
+  rawLine: string;
+  event?: Record<string, unknown> & { type: string };
+  parseError?: string;
+}
+
+export interface ProtocolWarning {
+  sequence: number;
+  code: string;
+  message: string;
+  eventType?: string;
+  id?: string;
+}
+
+export interface CommandCodeResult {
+  content: ContentBlockA[];
+  finish?: FinishEvent;
+  rawUsage?: CommandCodeUsage;
+  usage: NormalizedUsage;
+  systemPromptTokens?: number;
+  committed: boolean;
+  aborted: boolean;
+  rawEvents: RawEventRecord[];
+  warnings: ProtocolWarning[];
+}
+~~~
+
+`content[]` 只保存 model semantic blocks。Finish、usage、abort、provider metadata、warnings 均为 response-level state。
+
+## 7.3 Reducer table
+
+| Event | Action |
+|---|---|
+| `text-start(id)` | reserve text slot |
+| `text-delta(id)` | missing 时 reserve；append text |
+| `text-end(id)` | close text slot |
+| `reasoning-start(id)` | reserve reasoning slot |
+| `reasoning-delta(id)` | missing 时 reserve；append text |
+| `reasoning-end(id)` | close reasoning slot |
+| `tool-input-start(id)` | reserve tool placeholder；保存 toolName |
+| `tool-input-delta(id)` | append raw input preview |
+| `tool-input-end(id)` | set `inputStreamEnded=true` |
+| `tool-call(toolCallId)` | find/create placeholder；写 authoritative input；close |
+| `tool-result` | raw only |
+| `finish` | update finish/usage；continue reading |
+| `abort` | rollback；cancel/drain；no commit |
+| `error` | throw；no commit |
+| EOF | close unfinished text/reasoning with warning；omit unfinished tool；要求已有 finish |
+
+Closed id 后又来的 start/delta SHOULD 被 ignore 并记录 `EVENT_AFTER_END`，不要为 malformed stream 引入 occurrence key 或重排已有 slot。
+
+## 7.4 TypeScript reference implementation
+
+~~~ts
+type UnknownRecord = Record<string, unknown>;
+
+export interface CommandCodeEvent extends UnknownRecord {
+  type: string;
+}
+
+type CloseReason =
+  | "text-end"
+  | "reasoning-end"
+  | "tool-call"
+  | "eof";
+
+interface BaseSlot {
+  id: string;
+  order: number;
+  firstSequence: number;
+  lastSequence: number;
+  state: "open" | "closed";
+  closedBy?: CloseReason;
+}
+
+interface TextSlot extends BaseSlot {
+  kind: "text";
+  text: string;
+}
+
+interface ReasoningSlot extends BaseSlot {
+  kind: "reasoning";
+  text: string;
+}
+
+interface ToolSlot extends BaseSlot {
+  kind: "tool";
+  toolName: string;
+  rawInput: string;
+  input?: unknown;
+  inputStreamEnded: boolean;
+}
+
+type InternalSlot = TextSlot | ReasoningSlot | ToolSlot;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return (
+    typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+  );
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeUsage(
+  raw: CommandCodeUsage,
+): NormalizedUsage {
+  return {
+    inputTokens: raw.inputTokens ?? 0,
+    outputTokens: raw.outputTokens ?? 0,
+    cacheReadTokens:
+      raw.inputTokenDetails?.cacheReadTokens ?? 0,
+    cacheWriteTokens:
+      raw.inputTokenDetails?.cacheWriteTokens ?? 0,
+  };
+}
+
+export class CommandCodeStreamError extends Error {
+  constructor(
+    message: string,
+    readonly event: CommandCodeEvent,
+    readonly rawEvents: RawEventRecord[],
+    readonly warnings: ProtocolWarning[],
+    readonly retryable: boolean,
+    readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = "CommandCodeStreamError";
+  }
+}
+
+export class CommandCodeContentAssembler {
+  private nextSequence = 0;
+  private readonly slots: InternalSlot[] = [];
+  private readonly textById = new Map<string, TextSlot>();
+  private readonly reasoningById =
+    new Map<string, ReasoningSlot>();
+  private readonly toolById = new Map<string, ToolSlot>();
+
+  private finishEvent: FinishEvent | undefined;
+  private rawUsageValue: CommandCodeUsage | undefined;
+  private normalizedUsage: NormalizedUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  private systemPromptTokenCount: number | undefined;
+  private sawAbort = false;
+  private finalized = false;
+
+  readonly rawEvents: RawEventRecord[] = [];
+  readonly warnings: ProtocolWarning[] = [];
+
+  get aborted(): boolean {
+    return this.sawAbort;
+  }
+
+  consumeRawLine(rawLine: string): void {
+    const line = rawLine.trim();
+    if (!line) return;
+
+    const sequence = this.nextSequence++;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (cause) {
+      const parseError = cause instanceof Error
+        ? cause.message
+        : String(cause);
+      this.rawEvents.push({ sequence, rawLine, parseError });
+      this.warn(sequence, "NON_JSON_LINE", parseError);
+      return;
+    }
+
+    if (!isRecord(parsed) || typeof parsed.type !== "string") {
+      this.rawEvents.push({
+        sequence,
+        rawLine,
+        parseError: "JSON value is not an event object",
+      });
+      this.warn(
+        sequence,
+        "INVALID_EVENT",
+        "JSON value is not an event object",
+      );
+      return;
+    }
+
+    const event = parsed as CommandCodeEvent;
+    this.rawEvents.push({ sequence, rawLine, event });
+    this.consumeEvent(event, sequence);
+  }
+
+  finalizeAfterTransportEnd(): CommandCodeResult {
+    if (this.finalized) {
+      throw new Error("Assembler was already finalized");
+    }
+    this.finalized = true;
+
+    if (this.sawAbort) {
+      return {
+        content: [],
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+        committed: false,
+        aborted: true,
+        rawEvents: [...this.rawEvents],
+        warnings: [...this.warnings],
+      };
+    }
+
+    for (const slot of this.slots) {
+      if (slot.state === "closed") continue;
+      if (slot.kind === "tool") {
+        this.warn(
+          slot.lastSequence,
+          "INCOMPLETE_TOOL_CALL",
+          "tool input ended without final tool-call",
+          "tool-call",
+          slot.id,
+        );
+        continue;
+      }
+      slot.state = "closed";
+      slot.closedBy = "eof";
+      this.warn(
+        slot.lastSequence,
+        "BLOCK_CLOSED_BY_EOF",
+        "Block had no matching end event",
+        slot.kind,
+        slot.id,
+      );
+    }
+
+    if (!this.finishEvent) {
+      throw new Error("Stream ended without finish or abort");
+    }
+
+    const content: ContentBlockA[] = [];
+    for (const slot of this.slots) {
+      if (slot.kind === "text") {
+        if (slot.text) {
+          content.push({
+            type: "text",
+            id: slot.id,
+            text: slot.text,
+          });
+        }
+        continue;
+      }
+      if (slot.kind === "reasoning") {
+        if (slot.text) {
+          content.push({
+            type: "reasoning",
+            id: slot.id,
+            text: slot.text,
+          });
+        }
+        continue;
+      }
+      if (slot.state === "closed") {
+        content.push({
+          type: "tool_use",
+          id: slot.id,
+          toolName: slot.toolName,
+          input: slot.input ?? {},
+        });
+      }
+    }
+
+    return {
+      content,
+      finish: this.finishEvent,
+      rawUsage: this.rawUsageValue,
+      usage: this.normalizedUsage,
+      systemPromptTokens: this.systemPromptTokenCount,
+      committed: true,
+      aborted: false,
+      rawEvents: [...this.rawEvents],
+      warnings: [...this.warnings],
+    };
+  }
+
+  private consumeEvent(
+    event: CommandCodeEvent,
+    sequence: number,
+  ): void {
+    if (this.sawAbort) {
+      this.warn(
+        sequence,
+        "EVENT_AFTER_ABORT",
+        "Semantic event ignored after abort rollback",
+        event.type,
+      );
+      return;
+    }
+
+    switch (event.type) {
+      case "text-start": {
+        const id = this.requireId(event, "id", sequence);
+        if (id) this.reserveText(id, sequence, event.type);
+        return;
+      }
+      case "text-delta": {
+        const id = this.requireId(event, "id", sequence);
+        if (!id) return;
+        const slot = this.reserveText(id, sequence, event.type);
+        if (!slot) return;
+        slot.text += asString(event.text) ?? "";
+        slot.lastSequence = sequence;
+        return;
+      }
+      case "text-end": {
+        const id = this.requireId(event, "id", sequence);
+        if (id) {
+          this.close(
+            this.textById,
+            id,
+            sequence,
+            "text-end",
+            event.type,
+          );
+        }
+        return;
+      }
+      case "reasoning-start": {
+        const id = this.requireId(event, "id", sequence);
+        if (id) this.reserveReasoning(id, sequence, event.type);
+        return;
+      }
+      case "reasoning-delta": {
+        const id = this.requireId(event, "id", sequence);
+        if (!id) return;
+        const slot = this.reserveReasoning(
+          id,
+          sequence,
+          event.type,
+        );
+        if (!slot) return;
+        slot.text += asString(event.text) ?? "";
+        slot.lastSequence = sequence;
+        return;
+      }
+      case "reasoning-end": {
+        const id = this.requireId(event, "id", sequence);
+        if (id) {
+          this.close(
+            this.reasoningById,
+            id,
+            sequence,
+            "reasoning-end",
+            event.type,
+          );
+        }
+        return;
+      }
+      case "tool-input-start": {
+        const id = this.requireId(event, "id", sequence);
+        if (!id) return;
+        const slot = this.reserveTool(id, sequence, event.type);
+        if (!slot) return;
+        slot.toolName = asString(event.toolName)
+          ?? slot.toolName;
+        return;
+      }
+      case "tool-input-delta": {
+        const id = this.requireId(event, "id", sequence);
+        if (!id) return;
+        const slot = this.reserveTool(id, sequence, event.type);
+        if (!slot) return;
+        slot.rawInput += asString(event.delta) ?? "";
+        slot.lastSequence = sequence;
+        return;
+      }
+      case "tool-input-end": {
+        const id = this.requireId(event, "id", sequence);
+        if (!id) return;
+        const slot = this.toolById.get(id);
+        if (!slot || slot.state === "closed") {
+          this.warn(
+            sequence,
+            "END_WITHOUT_OPEN_BLOCK",
+            "tool-input-end has no open placeholder",
+            event.type,
+            id,
+          );
+          return;
+        }
+        slot.inputStreamEnded = true;
+        slot.lastSequence = sequence;
+        return;
+      }
+      case "tool-call": {
+        const id = this.requireId(
+          event,
+          "toolCallId",
+          sequence,
+        );
+        if (!id) return;
+        const slot = this.reserveTool(id, sequence, event.type);
+        if (!slot) return;
+        slot.toolName = asString(event.toolName)
+          ?? slot.toolName;
+        slot.input = event.input ?? event.args ?? {};
+        slot.state = "closed";
+        slot.closedBy = "tool-call";
+        slot.lastSequence = sequence;
+        return;
+      }
+      case "tool-result":
+        this.warn(
+          sequence,
+          "IGNORED_SERVER_TOOL_RESULT",
+          "response-side tool-result kept only in rawEvents",
+          event.type,
+          asString(event.toolCallId),
+        );
+        return;
+      case "finish": {
+        const finish = event as FinishEvent;
+        this.finishEvent = finish;
+        if (isRecord(finish.totalUsage)) {
+          this.rawUsageValue = finish.totalUsage;
+          this.normalizedUsage = normalizeUsage(
+            finish.totalUsage,
+          );
+        }
+        if (typeof finish.systemPromptTokens === "number") {
+          this.systemPromptTokenCount =
+            finish.systemPromptTokens;
+        }
+        return;
+      }
+      case "abort":
+        this.sawAbort = true;
+        this.rollbackStagedSemanticState();
+        this.warn(
+          sequence,
+          "ATOMIC_RESPONSE_ABORT",
+          "Response-local semantic state was rolled back",
+          event.type,
+        );
+        return;
+      case "error": {
+        const detail = event.error;
+        const objectDetail = isRecord(detail) ? detail : undefined;
+        const message = objectDetail
+          ? asString(objectDetail.message) ?? "Stream error"
+          : asString(detail) ?? "Stream error";
+        throw new CommandCodeStreamError(
+          message,
+          event,
+          [...this.rawEvents],
+          [...this.warnings],
+          objectDetail?.isRetryable === true,
+          typeof objectDetail?.statusCode === "number"
+            ? objectDetail.statusCode
+            : 500,
+        );
+      }
+      default:
+        return;
+    }
+  }
+
+  private reserveText(
+    id: string,
+    sequence: number,
+    eventType: string,
+  ): TextSlot | undefined {
+    return this.reserve(
+      this.textById,
+      id,
+      sequence,
+      eventType,
+      (order) => ({
+        kind: "text",
+        id,
+        order,
+        firstSequence: sequence,
+        lastSequence: sequence,
+        state: "open",
+        text: "",
+      }),
+    );
+  }
+
+  private reserveReasoning(
+    id: string,
+    sequence: number,
+    eventType: string,
+  ): ReasoningSlot | undefined {
+    return this.reserve(
+      this.reasoningById,
+      id,
+      sequence,
+      eventType,
+      (order) => ({
+        kind: "reasoning",
+        id,
+        order,
+        firstSequence: sequence,
+        lastSequence: sequence,
+        state: "open",
+        text: "",
+      }),
+    );
+  }
+
+  private reserveTool(
+    id: string,
+    sequence: number,
+    eventType: string,
+  ): ToolSlot | undefined {
+    return this.reserve(
+      this.toolById,
+      id,
+      sequence,
+      eventType,
+      (order) => ({
+        kind: "tool",
+        id,
+        order,
+        firstSequence: sequence,
+        lastSequence: sequence,
+        state: "open",
+        toolName: "",
+        rawInput: "",
+        inputStreamEnded: false,
+      }),
+    );
+  }
+
+  private reserve<T extends InternalSlot>(
+    map: Map<string, T>,
+    id: string,
+    sequence: number,
+    eventType: string,
+    create: (order: number) => T,
+  ): T | undefined {
+    const existing = map.get(id);
+    if (existing) {
+      if (existing.state === "closed") {
+        this.warn(
+          sequence,
+          "EVENT_AFTER_END",
+          "Event arrived after block was closed",
+          eventType,
+          id,
+        );
+        return undefined;
+      }
+      existing.lastSequence = sequence;
+      return existing;
+    }
+
+    const slot = create(this.slots.length);
+    map.set(id, slot);
+    this.slots.push(slot);
+    return slot;
+  }
+
+  private close<T extends InternalSlot>(
+    map: Map<string, T>,
+    id: string,
+    sequence: number,
+    closedBy: CloseReason,
+    eventType: string,
+  ): void {
+    const slot = map.get(id);
+    if (!slot || slot.state === "closed") {
+      this.warn(
+        sequence,
+        "END_WITHOUT_OPEN_BLOCK",
+        "End event has no open block",
+        eventType,
+        id,
+      );
+      return;
+    }
+    slot.state = "closed";
+    slot.closedBy = closedBy;
+    slot.lastSequence = sequence;
+  }
+
+  private rollbackStagedSemanticState(): void {
+    this.slots.length = 0;
+    this.textById.clear();
+    this.reasoningById.clear();
+    this.toolById.clear();
+    this.finishEvent = undefined;
+    this.rawUsageValue = undefined;
+    this.normalizedUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    this.systemPromptTokenCount = undefined;
+  }
+
+  private requireId(
+    event: CommandCodeEvent,
+    field: "id" | "toolCallId",
+    sequence: number,
+  ): string | undefined {
+    const id = asString(event[field]);
+    if (id) return id;
+    this.warn(
+      sequence,
+      "MISSING_ID",
+      `Event is missing ${field}`,
+      event.type,
+    );
+    return undefined;
+  }
+
+  private warn(
+    sequence: number,
+    code: string,
+    message: string,
+    eventType?: string,
+    id?: string,
+  ): void {
+    this.warnings.push({
+      sequence,
+      code,
+      message,
+      eventType,
+      id,
+    });
+  }
+}
+~~~
+
+## 7.5 HTTP body consumer
+
+~~~ts
+export class CommandCodeHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+    readonly retryable: boolean,
+  ) {
+    super(
+      `CommandCode HTTP ${status}`
+      + (body ? `: ${body}` : ""),
+    );
+    this.name = "CommandCodeHttpError";
+  }
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+export async function consumeCommandCodeResponse(
+  response: Response,
+): Promise<CommandCodeResult> {
+  if (!response.ok) {
+    const body = (await response.text()).trim();
+    throw new CommandCodeHttpError(
+      response.status,
+      body,
+      isRetryableHttpStatus(response.status),
+    );
+  }
+
+  const stream = response.body;
+  if (!stream) {
+    throw new CommandCodeHttpError(
+      response.status,
+      "CommandCode returned an empty stream",
+      true,
+    );
+  }
+
+  const assembler = new CommandCodeContentAssembler();
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const lf = buffer.indexOf("\n");
+        if (lf < 0) break;
+
+        assembler.consumeRawLine(buffer.slice(0, lf));
+        buffer = buffer.slice(lf + 1);
+
+        if (assembler.aborted) {
+          try {
+            await reader.cancel(
+              "CommandCode response emitted abort",
+            );
+          } catch {
+            // Semantic state has already been rolled back.
+          }
+          return assembler.finalizeAfterTransportEnd();
+        }
+      }
+    }
+
+    buffer += decoder.decode();
+    assembler.consumeRawLine(buffer);
+    return assembler.finalizeAfterTransportEnd();
+  } catch (cause) {
+    try {
+      await reader.cancel(cause);
+    } catch {
+      // Preserve the original failure.
+    }
+    throw cause;
+  } finally {
+    reader.releaseLock();
+  }
+}
+~~~
+
+收到 `abort` 后取消 reader，rawEvents 会保存到 `abort` 为止。若 debug recorder 必须保留 server 在 `abort` 后仍发送的所有 bytes，必须在独立 recording layer 继续 drain；不能让 recorder 的需求改变 semantic rollback 结果。
+
+---
+
+# 8. Finish、usage、abort 与 continuation
+
+## 8.1 Finish reason
+
+### 8.1.1 Wire fields
+
+`type:"finish"` event 中的 completion-reason wire fields 只有两个：
+
+~~~ts
+export type CommandCodeDefinedFinishReason =
+  | "stop"
+  | "length"
+  | "content-filter"
+  | "tool-calls"
+  | "error"
+  | "other";
+
+export interface FinishEvent
+  extends Record<string, unknown> {
+  type: "finish";
+  /** Defined producer values plus future/unknown strings. */
+  finishReason?:
+    | CommandCodeDefinedFinishReason
+    | (string & {});
+  rawFinishReason?: string;
+  totalUsage?: CommandCodeUsage;
+  systemPromptTokens?: number;
+}
+~~~
+
+| Field | Source-side meaning | 收到后的用途 |
+|---|---|---|
+| `finishReason` | CommandCode/gateway 层的 finish category | 用 exact string comparison 计算内部 `stopReason` |
+| `rawFinishReason` | provider/service 保留的 raw reason | 优先作为 diagnostic reason；控制 `pause_turn` continuation |
+| `totalUsage` | final token usage | 计算 normalized usage；不是 reason field |
+| `systemPromptTokens` | system prompt token count | 单独保存；不是 reason field |
+
+Wire `finish` event **没有** `stopReason` field。`stopReason` 是 CommandCode client 接收 event 后计算出来的内部 field。
+
+`finish-step` event 也可能出现 `finishReason`、`rawFinishReason` 和 `usage`，但 source consumer 完全忽略 `finish-step`。只有 `type:"finish"` 决定 completion、最终 reason 和 final usage。
+
+### 8.1.2 Defined values 与 open raw values
+
+`finishReason` 来自统一后的 provider finish category。Defined producer values 为：
+
+| `finishReason` | Unified meaning | CommandCode final internal `stopReason` |
+|---|---|---|
+| `stop` | normal stop / stop sequence | `end_turn` |
+| `length` | maximum output tokens reached | `max_tokens` |
+| `content-filter` | generation stopped by content filter | `end_turn` |
+| `tool-calls` | model emitted tool calls | `tool_use` |
+| `error` | provider represented termination as finish error | `end_turn` |
+| `other` | provider-specific reason not covered above | `end_turn` |
+| missing or future unknown string | tolerant fallback | `end_turn` |
+
+Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。只有 exact `tool-calls` 和 exact `length` 得到 special normalized result；其余全部 fallback 到 `end_turn`。
+
+`finishReason:"error"` 仍然是一个正常 `type:"finish"` event，source client 不会仅因该 value throw。只有独立的 `type:"error"` event 才进入 stream error path。
+
+`rawFinishReason` 的 producer type 是 `string | undefined`，没有可穷举的 enum。它保留原 provider/service reason。CommandCode client 唯一用于 control flow 的 special value是：
+
+~~~text
+"pause_turn" → send another /alpha/generate request
+~~~
+
+其他 raw value 只被保留和用于 diagnostics/telemetry，不改变 normalized `stopReason`。如果 `rawFinishReason` 缺失，client 使用 `finishReason` 作为 returned raw reason：
+
+~~~ts
+const returnedRawFinishReason =
+  event.rawFinishReason ?? event.finishReason;
+~~~
+
+### 8.1.3 两阶段归一化
+
+Gateway response 的 source implementation 分两步处理 reason：
+
+~~~ts
+export type StreamStopReason =
+  | "tool_calls"
+  | "max_tokens"
+  | "end_turn";
+
+export type ModelStopReason =
+  | "tool_use"
+  | "max_tokens"
+  | "end_turn";
+
+export interface AcceptedFinishReason {
+  /** rawFinishReason ?? finishReason */
+  rawFinishReason?: string;
+  /** consumeStream() intermediate value */
+  streamStopReason: StreamStopReason;
+  /** createModelClient.complete() return value */
+  stopReason: ModelStopReason;
+  pauseTurn: boolean;
+}
+
+function normalizeStopReason(
+  raw?: string,
+): ModelStopReason {
+  const value = (raw ?? "").toLowerCase();
+
+  if (
+    value === "tool_use"
+    || value === "tool-calls"
+    || value === "tool_calls"
+  ) {
+    return "tool_use";
+  }
+  if (value === "length" || value === "max_tokens") {
+    return "max_tokens";
+  }
+  return "end_turn";
+}
+
+export function acceptFinishReason(
+  event: FinishEvent,
+): AcceptedFinishReason {
+  const rawFinishReason =
+    event.rawFinishReason ?? event.finishReason;
+
+  const streamStopReason: StreamStopReason =
+    event.finishReason === "tool-calls"
+      ? "tool_calls"
+      : event.finishReason === "length"
+        ? "max_tokens"
+        : "end_turn";
+
+  return {
+    rawFinishReason,
+    streamStopReason,
+    stopReason: normalizeStopReason(streamStopReason),
+    pauseTurn: rawFinishReason === "pause_turn",
+  };
+}
+~~~
+
+Exact gateway mapping：
+
+~~~text
+wire finishReason       consumeStream stopReason   complete() stopReason
+──────────────────────  ─────────────────────────  ─────────────────────
+"tool-calls"           "tool_calls"               "tool_use"
+"length"               "max_tokens"               "max_tokens"
+other / missing         "end_turn"                 "end_turn"
+~~~
+
+这里的第一阶段是 exact comparison。虽然通用 `normalizeStopReason()` 能识别 `tool_use`、`tool_calls`、`tool-calls`、`length`、`max_tokens`，但 `/alpha/generate` gateway path 会先把 wire `finishReason` 严格压缩为三种 intermediate value。因此 wire 应使用：
+
+~~~text
+client tool turn: finishReason = "tool-calls"
+length stop:      finishReason = "length"
+~~~
+
+Wire `finishReason:"tool_calls"` 或 `finishReason:"tool_use"` 不会在第一阶段被当成 tool finish；它们会落到 `end_turn`。同理，wire `finishReason:"max_tokens"` 不会通过第一阶段的 exact `"length"` check。
+
+`rawFinishReason` 不覆盖 normalized `stopReason`。例如：
+
+~~~json
+{
+  "type": "finish",
+  "finishReason": "stop",
+  "rawFinishReason": "pause_turn"
+}
+~~~
+
+结果是：
+
+~~~text
+rawFinishReason = "pause_turn"
+stopReason      = "end_turn"
+pauseTurn       = true
+~~~
+
+因此 router 必须分别保存 raw reason 和 normalized stop reason，不能用一个 field 代替另一个。
+
+### 8.1.4 Source client 收到后的处理
+
+CommandCode 收到 `finish` 后按以下顺序使用：
+
+1. `consumeStream()` 设置 `sawFinish=true`。
+2. 保存 `rawFinishReason = event.rawFinishReason ?? event.finishReason`。
+3. 只用 `event.finishReason` 计算 intermediate `tool_calls` / `max_tokens` / `end_turn`。
+4. 读取 `totalUsage` 和 `systemPromptTokens`。
+5. 不停止 physical read；继续处理后续 lines，直到 EOF。
+6. 同一 HTTP response 出现多个 `finish` 时，后一个 reason 覆盖前一个；有新 `totalUsage` 时才替换 usage。
+7. EOF 没有 `finish` 或 `abort` 时，作为 truncated response 失败。
+
+`createModelClient.complete()` 随后：
+
+1. 使用 `rawFinishReason === "pause_turn"` 判断是否发送 continuation request。
+2. Continuation 复用相同 request state；content 按 response order concatenate，usage 跨 responses sum。
+3. 最后保存最后一个 response 的 raw reason 与 stop reason。
+4. 对 stop reason 再执行 `normalizeStopReason()`，最终只返回 `tool_use`、`max_tokens` 或 `end_turn`。
+5. Telemetry 的 finish reason 使用 `rawFinishReason ?? stopReason`。
+
+Agent loop 收到 complete result 后：
+
+1. `model_request_end.stopReason` 优先报告 `rawFinishReason`，缺失时才使用 normalized `stopReason`。
+2. Tool 是否执行不是只看 `stopReason`；source 会检查 `content` 中是否存在 non-provider-executed client `tool_use` block，然后执行这些 tools。
+3. 没有 client tool call 时，`stopReason:"max_tokens"` 作为 length recovery/follow-up input；default continuation provider 在已有 visible content 时最多生成 3 次 length-recovery follow-up。其他 normalized reason 按 `end_turn` 处理。
+4. Agent 最终 run-level stop reason 还可能是 `interrupted`、`run_error`、`stop_hook`、`max_turns` 等，它与单次 model response 的 `stopReason` 不是同一层字段。
+
+所以 `finishReason:"tool-calls"` 与 `content` 中的 tool blocks 正常情况下应一致，但 router 仍必须从 `content[] A` 生成 tool events，而不能仅凭 finish reason 伪造 tool call。
+
+按 defined `finishReason` 展开后，source client 的实际行为是：
+
+| Received `finishReason` | Model-client result | Agent-layer behavior |
+|---|---|---|
+| `stop` | `stopReason:"end_turn"` | 有 client tool blocks 就执行 tools；没有则 normal end/stop-hook flow |
+| `length` | `stopReason:"max_tokens"` | 有 client tool blocks 仍先执行 tools；没有时可进入 length-recovery/follow-up |
+| `tool-calls` | `stopReason:"tool_use"` | 只有 `content` 中确实存在 client tool blocks 才执行 tools；reason 本身不创建 tool call |
+| `content-filter` | `stopReason:"end_turn"` | 没有专用 content-filter error path |
+| `error` | `stopReason:"end_turn"` | 不 throw；独立 `type:"error"` event 才 throw |
+| `other` | `stopReason:"end_turn"` | 没有专用分支 |
+| missing/unknown | `stopReason:"end_turn"` | tolerant fallback |
+
+按 `rawFinishReason` 展开：
+
+| Received `rawFinishReason` | Source client behavior |
+|---|---|
+| `pause_turn` | 发送下一次相同 `/alpha/generate` request；不把 previous content append 到 messages |
+| other non-empty string | 保存到 result，优先用于 telemetry 和 `model_request_end.stopReason` display；不改变 normalized stop reason |
+| missing | 使用 `finishReason` 作为 returned raw reason |
+
+### 8.1.5 本文实现是否同步 Source client
+
+本文实现只同步到 CommandCode model-client response layer，不复制整个 CommandCode agent runtime。
+
+必须同步：
+
+| Behavior | Why |
+|---|---|
+| 保存完整 final `FinishEvent` | 后续仍需原始 `finishReason`、`rawFinishReason`、usage |
+| `rawFinishReason = rawFinishReason ?? finishReason` | 与 source result 一致 |
+| exact `tool-calls` / `length` / fallback normalization | 提供 source-compatible derived `stopReason` |
+| `rawFinishReason:"pause_turn"` continuation | 它属于 model-client logical completion |
+| multiple finish 的 last-value behavior | 与 stream reducer 一致 |
+| finish 后读到 physical EOF | 防止漏掉 trailing events 和 truncated response |
+| usage normalization 与 cross-continuation sum | 得到完整 logical usage |
+
+不应同步：
+
+| Behavior | Why |
+|---|---|
+| 自动执行 client tools | 属于 agent/application layer；router 只返回 tool blocks |
+| `max_tokens` 后自动插入 recovery prompt | 会改变原 response；不属于 response decoder |
+| stop hooks、follow-up queue、steering | 属于 CommandCode agent runtime |
+| `max_turns`、run-level stop reason | 属于多轮 agent loop，不是单次 model response |
+| CommandCode telemetry/UI event | 不属于 wire protocol output |
+
+推荐 result usage：
+
+~~~ts
+export async function decodeOneCommandCodeResponse(
+  response: Response,
+) {
+  const resultA = await consumeCommandCodeResponse(response);
+
+  if (!resultA.committed || resultA.aborted || !resultA.finish) {
+    throw new Error("CommandCode response was not committed");
+  }
+
+  const acceptedFinish = acceptFinishReason(resultA.finish);
+
+  if (acceptedFinish.pauseTurn) {
+    throw new Error(
+      "Use completeWithPauseTurn() for pause_turn",
+    );
+  }
+
+  // Do not execute tools here. Return content[] A to the caller.
+  return {
+    content: resultA.content,
+    finish: resultA.finish,
+    acceptedFinish,
+    usage: resultA.usage,
+    rawUsage: resultA.rawUsage,
+  };
+}
+~~~
+
+`acceptedFinish.stopReason` 是方便 application 模拟 Source client 的 derived view，不应覆盖或删除原始 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`。
+
+## 8.2 Usage
+
+Final source 是 `finish.totalUsage`。必须同时保存 raw object 和 normalized view：
+
+~~~text
+totalUsage.inputTokens
+  → usage.inputTokens
+
+totalUsage.outputTokens
+  → usage.outputTokens
+
+totalUsage.inputTokenDetails.cacheReadTokens
+  → usage.cacheReadTokens
+
+totalUsage.inputTokenDetails.cacheWriteTokens
+  → usage.cacheWriteTokens
+~~~
+
+Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 missing。Raw object 还可能包含：
+
+- `inputTokenDetails.noCacheTokens`
+- `outputTokenDetails.textTokens`
+- `outputTokenDetails.reasoningTokens`
+- `totalTokens`
+- `reasoningTokens`
+- `cachedInputTokens`
+- future provider fields
+
+`systemPromptTokens` 位于 finish 顶层，不在 `totalUsage` 内。
+
+同一个 HTTP response 多次出现 `finish` 时：最后一个 finish event 决定 final finish metadata；只有出现新的 `totalUsage` 时才替换 current raw/normalized usage。
+
+## 8.3 `abort`
+
+`{"type":"abort"}` 是 server → client response event：
+
+- 不是 request body field。
+- 不是 CommandCode client 发给 upstream 的取消 HTTP request。
+- 表示本 response 被有意终止。
+- Atomic implementation 必须丢弃当前 response 的 staged content、pending tool、finish 与 usage。
+- Router 不应把 partial content 转成 Protocol B content。
+
+`AbortController`/`AbortSignal` 是 local HTTP cancellation mechanism，和 wire `abort` event 是不同概念。Downstream client disconnect 或 timeout 时，router SHOULD 通过 signal 取消 upstream fetch，但不需要向 CommandCode 发送额外 JSON request field。
+
+## 8.4 `pause_turn`
+
+Trigger：
+
+~~~json
+{
+  "type": "finish",
+  "finishReason": "stop",
+  "rawFinishReason": "pause_turn",
+  "totalUsage": {}
+}
+~~~
+
+这表示 logical completion 还没有结束。发送下一次 `/alpha/generate` request 时：
+
+- 复用相同 prepared messages。
+- 不把 previous response content append 到 `params.messages`。
+- 复用 tools、system、config、permissionMode、threadId、mode。
+- 复用 resolved auth headers、`x-session-id` 和完整 chat-span `traceparent`。
+- 不需要 continuation backoff。
+- 最多建议 1 initial + 5 continuation = 6 HTTP responses。
+
+推荐 logical atomic wrapper：
+
+~~~ts
+export interface LogicalCommandCodeResult {
+  content: ContentBlockA[];
+  finish: FinishEvent;
+  usage: NormalizedUsage;
+  parts: CommandCodeResult[];
+}
+
+export async function completeWithPauseTurn(
+  sendSamePreparedRequest: () => Promise<Response>,
+  maxResponses = 6,
+): Promise<LogicalCommandCodeResult> {
+  const parts: CommandCodeResult[] = [];
+
+  for (let index = 0; index < maxResponses; index++) {
+    const response = await sendSamePreparedRequest();
+    const part = await consumeCommandCodeResponse(response);
+
+    if (!part.committed || part.aborted || !part.finish) {
+      throw new Error("CommandCode response was not committed");
+    }
+    parts.push(part);
+
+    const rawReason =
+      part.finish.rawFinishReason
+      ?? part.finish.finishReason;
+
+    if (rawReason !== "pause_turn") {
+      return {
+        content: parts.flatMap((item) => item.content),
+        finish: part.finish,
+        usage: parts.reduce<NormalizedUsage>(
+          (sum, item) => ({
+            inputTokens:
+              sum.inputTokens + item.usage.inputTokens,
+            outputTokens:
+              sum.outputTokens + item.usage.outputTokens,
+            cacheReadTokens:
+              sum.cacheReadTokens
+              + item.usage.cacheReadTokens,
+            cacheWriteTokens:
+              sum.cacheWriteTokens
+              + item.usage.cacheWriteTokens,
+          }),
+          {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        ),
+        parts,
+      };
+    }
+  }
+
+  throw new Error("pause_turn continuation limit exceeded");
+}
+~~~
+
+即使每个 part 已在 response-local level commit，router 也必须等最后一个 non-`pause_turn` part 后才向 Protocol B 开始 response。任何 part abort/error 时，整个 logical completion 不发布。
+
+---
+
+# 9. 两种结束方式
+
+## 9.1 不需要 protocol conversion
+
+如果 application 只需要调用 CommandCode：
+
+~~~ts
+const response = await sendGenerateRequest({
+  baseUrl,
+  headers,
+  body,
+  signal,
+});
+
+const resultA = await consumeCommandCodeResponse(response);
+if (!resultA.committed || resultA.aborted) {
+  throw new Error("CommandCode response was not committed");
+}
+
+// 最终结果。到这里结束，不需要 adapter 或额外 representation。
+const contentA: ContentBlockA[] = resultA.content;
+~~~
+
+Application 同时保留 `resultA.finish`、`resultA.usage`、`resultA.rawUsage`、`resultA.rawEvents` 即可。它们是 response metadata/debug data，不是另一种 content representation。
+
+## 9.2 需要 protocol conversion
+
+只有在 router 要模拟 Protocol B server 时才执行：
+
+~~~text
+content[] A
+    → B-specific direct block mapping
+    → content[] B
+
+finish/usage A
+    → B-specific direct finish/usage mapping
+    → finish/usage B
+
+content[] B + finish/usage B
+    → B events
+    → SSE B
+~~~
+
+转换规则：
+
+- 直接遍历 `content[] A`，每个 A block 映射成零个、一个或多个 B blocks。
+- 保持 array order，不按 type、ID 或 completion time 重排。
+- A text → B 的 text block。
+- A reasoning → B 的 reasoning/thinking block，或执行明确的 omission/summary policy。
+- A tool_use → B 的 tool_use/function_call/tool_call block。
+- Tool call ID 默认原样保留。
+- `finishReason A`、`rawFinishReason A` 与 `usage A` 必须进入 B-specific finish/usage converter，不能作为 A event 原样转发。
+- 本文不定义它们在 B 中的 field name、value、nesting、event type 或 event position；这些只能由确定版本的 Protocol B schema 决定。
+- `finish` 和 `usage` 都是 response-level metadata，不放入 `content[] B`。
+- `rawEvents` 只用于 debug，不参加 A → B conversion。
+
+如果 Protocol B 对 tool-call ID 有 prefix、length 或 character set 限制，必须维护 stable bidirectional mapping，并至少保存到下一次 B request-side tool result 转回 A tool result 完成。不能在 response 和下一次 request 中分别随机生成 ID。
+
+---
+
+# 10. `content[] A` → `content[] B` → SSE B
+
+## 10.1 Protocol B 必须提供的能力
+
+`content[] B` 不是完整 response。B-specific adapter 还必须构造：
+
+- response/message ID
+- model、role、object fields
+- block index
+- target terminal/completion reason
+- usage
+- provider metadata
+- error schema
+- event lifecycle
+- terminal event
+- HTTP status/headers
+
+推荐接口：
+
+~~~ts
+export interface SseFrame {
+  event?: string;
+  id?: string;
+  retry?: number;
+  data: string;
+}
+
+export interface ProtocolBCodec<
+  BContent,
+  BFinish,
+  BResult,
+  BEvent,
+> {
+  /** Direct content[] A -> content[] B conversion. */
+  convertContent(
+    contentA: readonly ContentBlockA[],
+  ): BContent[];
+
+  /** Direct finish/usage A -> finish/usage B conversion. */
+  convertFinish(input: {
+    finishA: FinishEvent;
+    usageA: NormalizedUsage;
+    rawUsageA?: CommandCodeUsage;
+    systemPromptTokensA?: number;
+    sourceModel?: string;
+  }): BFinish;
+
+  /** Combine content[] B and finish/usage B into a B response. */
+  buildResult(input: {
+    content: BContent[];
+    finish: BFinish;
+  }): BResult;
+
+  /** Must return events in exact Protocol B order. */
+  events(result: BResult): Iterable<BEvent>;
+
+  /** Convert one semantic B event to one SSE frame. */
+  frame(event: BEvent): SseFrame;
+
+  /** Validate before HTTP 200 headers are returned. */
+  validate(result: BResult): void;
+
+  /** B-specific non-stream HTTP error response. */
+  errorResponse(error: unknown): Response;
+}
+~~~
+
+`events(result)` 必须遵守 Protocol B 自己的 lifecycle。本文只要求 `finishReason`、`rawFinishReason` 与 usage 在需要 A → B conversion 时经过 `convertFinish()`；不规定转换结果的字段、取值或发送位置。
+
+B conversion MUST preserve semantic order：
+
+~~~text
+content[] A order
+  → content[] B order
+  → B content block start/index order
+~~~
+
+一个 source block 映射成多个 target blocks 时，在 source position 原地连续展开。不要把 reasoning 全部移到最前、tool 全部移到最后。若 B schema 强制不同顺序，B adapter 应明确记录 warning 或直接 reject，不能静默重排。
+
+## 10.2 `finishReason`、`rawFinishReason` 与 usage 的直接转换
+
+输入来自 CommandCode final `finish` event：
+
+~~~text
+finishA.finishReason
+finishA.rawFinishReason
+finishA.totalUsage
+finishA.systemPromptTokens
+resultA.usage                 # normalized four-field view
+resultA.rawUsage              # original totalUsage object
+~~~
+
+Conversion boundary：
+
+1. 先使用 `acceptFinishReason(finishA)` 完成 CommandCode A 自己的 client-side processing。
+2. `accepted.pauseTurn === true` 时继续请求 A；logical completion 尚未结束，不进入 final B conversion。
+3. Final non-pause response 把原始 `finishA.finishReason`、`finishA.rawFinishReason`、raw/normalized usage 和 `systemPromptTokens` 一起传入 `convertFinish()`。
+4. `convertFinish()` 必须由具体 Protocol B adapter 实现。
+5. 本文不为未知 B 规定任何 reason mapping、token-field mapping、event name、event order 或 unsupported-field policy。
+6. 不得把 CommandCode raw `{"type":"finish",...}` JSON line直接当作 B event；“转换”与“原样转发”是两种不同操作。
+
+## 10.3 Reasoning policy
+
+Protocol B 可能：
+
+- 支持 equivalent reasoning block：direct map。
+- 只支持 summary：map 为 summary，并在 B adapter 的 debug metadata/warning 中声明 approximation。
+- 不支持 reasoning：omission，并明确记录 warning；strict mode 可以 reject。
+- 要求 signature：只有 source 有 valid signature 时才能提供；不得伪造。
+- 只支持 opaque/encrypted reasoning：不能把 plain source reasoning 冒充 native opaque item。
+
+不要无条件把 reasoning 拼进 visible assistant text，这会改变 response semantics。
+
+## 10.4 真正 SSE framing
+
+Protocol B 若使用 conventional SSE，每个 event frame 是：
+
+~~~text
+event: <optional event name>\n
+id: <optional id>\n
+retry: <optional milliseconds>\n
+data: <line 1>\n
+data: <line 2>\n
+\n
+~~~
+
+一条 blank line 结束一个 SSE frame。JSON payload 通常放在 `data:` 后，但 event name 和 JSON schema 由 Protocol B 决定。
+
+这和 CommandCode 的 bare JSON Lines 不同：
+
+~~~text
+CommandCode A: JSON.stringify(event) + "\n"
+Protocol B SSE: data/event fields + blank line
+~~~
+
+### SSE frame encoder
+
+~~~ts
+function assertSingleLine(
+  name: string,
+  value: string,
+): void {
+  if (/[\r\n]/.test(value)) {
+    throw new TypeError(`${name} must not contain CR or LF`);
+  }
+}
+
+export function encodeSseFrame(frame: SseFrame): string {
+  let output = "";
+
+  if (frame.event !== undefined) {
+    assertSingleLine("event", frame.event);
+    output += `event: ${frame.event}\n`;
+  }
+  if (frame.id !== undefined) {
+    assertSingleLine("id", frame.id);
+    output += `id: ${frame.id}\n`;
+  }
+  if (frame.retry !== undefined) {
+    if (!Number.isInteger(frame.retry) || frame.retry < 0) {
+      throw new TypeError("retry must be a non-negative integer");
+    }
+    output += `retry: ${frame.retry}\n`;
+  }
+
+  const normalizedData = frame.data.replace(/\r\n?/g, "\n");
+  for (const line of normalizedData.split("\n")) {
+    output += `data: ${line}\n`;
+  }
+  return output + "\n";
+}
+~~~
+
+### Buffered SSE response
+
+~~~ts
+export function createProtocolBSseResponse<
+  BContent,
+  BFinish,
+  BResult,
+  BEvent,
+>(
+  result: BResult,
+  codec: ProtocolBCodec<
+    BContent,
+    BFinish,
+    BResult,
+    BEvent
+  >,
+): Response {
+  // All conversion and serialization errors must happen here,
+  // before returning a 200 Response.
+  codec.validate(result);
+  const encoded = Array.from(codec.events(result), (event) =>
+    encodeSseFrame(codec.frame(event)),
+  );
+
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      try {
+        for (const frame of encoded) {
+          controller.enqueue(encoder.encode(frame));
+        }
+        controller.close();
+      } catch (cause) {
+        controller.error(cause);
+      }
+    },
+  });
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    },
+  });
+}
+~~~
+
+Application code 不设置 `Content-Length` 或 `Transfer-Encoding`。某些 serverless runtime 不允许 application 设置 `Connection`；此时 omission 并交给 platform。
+
+`data:[DONE]` 不是 universal SSE rule。只有 Protocol B 的指定 endpoint/version 要求时，B codec 才能发送它。
+
+## 10.5 End-to-end adapter
+
+~~~ts
+export async function adaptCommandCodeToProtocolB<
+  BContent,
+  BFinish,
+  BResult,
+  BEvent,
+>(input: {
+  upstreamResponse: Response;
+  sourceModel?: string;
+  codec: ProtocolBCodec<
+    BContent,
+    BFinish,
+    BResult,
+    BEvent
+  >;
+}): Promise<Response> {
+  try {
+    const resultA = await consumeCommandCodeResponse(
+      input.upstreamResponse,
+    );
+
+    if (!resultA.committed || resultA.aborted) {
+      return input.codec.errorResponse(
+        new Error("CommandCode generation aborted"),
+      );
+    }
+
+    if (!resultA.finish) {
+      return input.codec.errorResponse(
+        new Error("CommandCode finish event is missing"),
+      );
+    }
+
+    const contentB = input.codec.convertContent(
+      resultA.content,
+    );
+    const finishB = input.codec.convertFinish({
+      finishA: resultA.finish,
+      usageA: resultA.usage,
+      rawUsageA: resultA.rawUsage,
+      systemPromptTokensA: resultA.systemPromptTokens,
+      sourceModel: input.sourceModel,
+    });
+    const resultB = input.codec.buildResult({
+      content: contentB,
+      finish: finishB,
+    });
+    return createProtocolBSseResponse(resultB, input.codec);
+  } catch (cause) {
+    return input.codec.errorResponse(cause);
+  }
+}
+~~~
+
+若使用 `completeWithPauseTurn`，直接把 logical result 的最终 `content`、`finish` 和 aggregated `usage` 交给同一 B adapter；不能逐 part 开始 B response。
+
+---
+
+# 11. Error、retry 与 cancellation policy
+
+## 11.1 Buffered adapter
+
+| Failure point | Protocol B behavior |
+|---|---|
+| A network/HTTP failure，B headers 未发送 | 用 B-specific non-2xx status + JSON error body |
+| A stream `error`，B headers 未发送 | B-specific non-2xx error |
+| A truncated EOF | retry A；exhausted 后 B-specific non-2xx error |
+| A `abort` | rollback A；不要发送 content B；返回 B-specific abort/error |
+| `content[] A` → `content[] B` conversion failure | B-specific non-2xx error |
+| B result validation/serialization failure | B-specific non-2xx error |
+| downstream disconnect | cancel A fetch signal when possible |
+
+Retry MUST 发生在 B 200 response 开始之前。每次 retry 使用新的 response-local assembler；不能把 failed attempt 的 slots、usage 或 raw terminal state合并到 next attempt。
+
+## 11.2 Live adapter 的限制
+
+如果未来实现 live A → B transform，一旦 B bytes 已经发送：
+
+- 上游 abort 无法撤回已发送 text/reasoning/tool block。
+- conversion error 只能发送 B-defined in-stream error 或直接 EOF。
+- retry 可能产生 duplicate content。
+- tool placeholder、partial JSON、backpressure、block index 和 lifecycle 都要 incremental 管理。
+
+因此 v1.0 推荐且规范化的实现是 buffered semantic adapter。Live adapter 是独立 profile，不能声称具备 atomic rollback。
+
+---
+
+# 12. Protocol examples
+
+## 12.1 Minimal text request
+
+~~~json
 {
   "config": {
-    "workingDir": "D:\\project\\example",
+    "workingDir": "C:\\work\\repo",
     "date": "2026-08-09",
     "environment": "win32",
-    "structure": [
-      "README.md",
-      "package.json",
-      "src"
-    ],
+    "structure": ["package.json", "src"],
     "isGitRepo": true,
     "currentBranch": "main",
     "mainBranch": "main",
-    "gitStatus": "M src/index.ts",
-    "recentCommits": [
-      "abc1234 fix: example"
-    ]
+    "gitStatus": "Working tree clean",
+    "recentCommits": ["abc1234 Initial commit"]
   },
-
   "memory": null,
   "taste": null,
   "skills": null,
-
-  "permissionMode": "auto-accept",
-
-  "threadId": "5a0df440-c8f0-4cea-b159-c9e401408e07",
-
+  "permissionMode": "standard",
+  "threadId": "2b722f90-c48c-46b4-bef5-b21a4d080277",
   "params": {
-    "model": "deepseek/deepseek-v4-pro",
-
-    "system": "You are a coding assistant.",
-
+    "model": "provider/model",
     "messages": [
       {
         "role": "user",
         "content": [
-          {
-            "type": "text",
-            "text": "Read src/index.ts"
-          }
+          {"type": "text", "text": "hello"}
         ]
       }
     ],
-
-    "tools": [
-      {
-        "name": "read",
-        "description": "Read a file",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "file_path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_path"
-          ]
-        }
-      }
-    ],
-
+    "tools": [],
+    "system": "You are a coding agent.",
     "max_tokens": 64000,
-    "stream": true,
-    "reasoning_effort": "max",
-    "temperature": 0.3
+    "stream": true
   }
 }
-```
-
-Representative observed header profile:
-
-```http
-POST /alpha/generate
-
-Authorization: Bearer <credential>
-Content-Type: application/json
-Accept: */*
-Accept-Encoding: br, gzip, deflate
-
-x-command-code-version: 1.7.0
-x-cli-environment: production
-x-taste-learning: false
-x-co-flag: false
-
-x-session-id: 5a0df440-c8f0-4cea-b159-c9e401408e07
-x-project-slug: d-project-example
-
-traceparent: 00-<32hex>-<16hex>-01
-
-User-Agent: cli
-accept-language: *
-sec-fetch-mode: cors
-```
-
-------
-
-# 5. Observed CommandCode Client Producer Profile
-
-This chapter describes behavior useful for reproducing an observed CommandCode-compatible client.
-
-It is deliberately separated from the wire schema.
-
-These rules describe **how a known compatible producer constructs fields**.
-
-They do not prove that the CommandCode server requires every rule.
-
-------
-
-## 5.1 Field Provenance
-
-```text
-Observed Literal / Stable Values in the Router-Compatible Producer Profile
-├── Content-Type = application/json
-├── Accept = */*
-├── Accept-Encoding = br, gzip, deflate
-├── x-cli-environment = production
-├── x-co-flag = false
-├── User-Agent = cli
-├── accept-language = *
-├── sec-fetch-mode = cors
-├── memory = null
-├── taste = null
-└── skills = null
-
-Producer-Dependent Metadata
-└── x-taste-learning
-    ├── false  (commandcode-router profile)
-    └── true   (observed pi CommandCode provider profile)
-
-Per-Request Generated
-└── traceparent
-
-Project-Derived
-├── x-project-slug
-└── config
-    ├── workingDir
-    ├── structure
-    ├── isGitRepo
-    ├── currentBranch
-    ├── mainBranch
-    ├── gitStatus
-    └── recentCommits
-
-Time-Derived
-└── config.date
-
-Platform-Derived
-└── config.environment
-
-Conversation / Request Values
-├── threadId
-├── x-session-id
-├── system
-├── messages
-└── tools
-
-Invocation Parameters
-├── model
-├── max_tokens
-├── reasoning_effort
-├── temperature
-└── stream
-```
-
-------
-
-## 5.2 Project Context Generation
-
-The reconstructed project-context producer executes approximately:
-
-```text
-project root
-│
-├── workingDir
-│   └── original native path
-│
-├── date
-│   └── current UTC YYYY-MM-DD
-│
-├── environment
-│   └── OS mapping
-│
-├── structure
-│   └── top-level filtered/sorted names
-│
-└── Git context
-    ├── rev-parse --is-inside-work-tree
-    ├── branch --show-current
-    ├── symbolic-ref origin/HEAD
-    ├── status --porcelain=v1
-    └── log -3 --oneline
-```
-
-This is useful for producer parity.
-
-It is not evidence that the server itself computes or validates the same data.
-
-------
-
-## 5.3 Project Slug Generation
-
-Compatibility algorithm:
-
-```text
-native project path
-↓
-slash normalization
-↓
-lowercase
-↓
-segment normalization
-↓
-"-" join
-↓
-x-project-slug
-```
-
-Example:
-
-```text
-D:\Project\Example
-→ d-project-example
-```
-
-------
-
-## 5.4 Trace Generation
-
-Compatibility algorithm:
-
-```text
-random 16-byte trace ID
-+
-random 8-byte span ID
-↓
-lowercase hex
-↓
-00-{trace-id}-{span-id}-01
-```
-
-------
-
-## 5.5 Thread Identity
-
-The wire fields are:
-
-```text
-x-session-id
-threadId
-```
-
-The reconstructed compatibility profile sends the same logical thread identity in both locations.
-
-The actual source of that identity is a caller responsibility.
-
-This protocol intentionally does not prescribe:
-
-- UUID generation;
-- another protocol's session header;
-- request-ID fallback;
-- client-specific session resolution.
-
-Those are outside the CommandCode private wire protocol.
-
-------
-
-# 6. Response Transport
-
-## 6.1 Event-Stream Framing
-
-Observed CommandCode events use an HTTP event-stream response. The canonical physical framing is an SSE `data:` line:
-
-```text
-data: {"type":"start"}
-
-data: {"type":"text-delta","text":"Hello"}
-```
-
-Compatibility evidence and the reconstructed strict consumer also support a bare JSON event line inside the same event-stream body:
-
-```text
-{"type":"start"}
-
-{"type":"text-delta","text":"Hello"}
-```
-
-The event payload is JSON in either case.
-
-The primary semantic discriminator is:
-
-```text
-type
-```
-
-Known non-semantic framing/metadata includes:
-
-```text
-blank / whitespace-only line
-: comment
-event: ...
-id: ...
-retry: ...
-```
-
-These lines do not create CommandCode semantic events.
-
-A transport sentinel may also appear as:
-
-```text
-[DONE]
-```
-
-or:
-
-```text
-data: [DONE]
-```
-
-Its semantics are described separately in §8.7. Bare JSON acceptance is documented here as an observed/compatibility transport behavior; it does not create a separate semantic event protocol.
-
-------
-
-## 6.2 Event Envelope
-
-Conceptually:
-
-```ts
-interface CommandCodeEvent {
-  type: string
-  [field: string]: unknown
-}
-```
-
-This conceptual form expresses only a wire property:
-
-> Event payloads are JSON objects identified primarily by `type`, and observed events may contain additional fields.
-
-It does not imply that `type` is optional for valid protocol events.
-
-Known event structures are described below.
-
-------
-
-## 6.3 Stream Hierarchy
-
-```text
-CommandCode Stream
-│
-├── Stream / Step
-│   ├── start
-│   ├── start-step
-│   ├── provider-metadata
-│   └── finish-step
-│
-├── Text
-│   ├── text-start
-│   ├── text-delta*
-│   └── text-end
-│
-├── Reasoning
-│   ├── reasoning-start
-│   ├── reasoning-delta*
-│   └── reasoning-end
-│
-├── Tool Input
-│   ├── tool-input-start
-│   ├── tool-input-delta*
-│   └── tool-input-end
-│
-├── Tool Invocation
-│   └── tool-call
-│
-├── Tool Result Event
-│   └── tool-result
-│
-└── Terminal
-    ├── finish
-    └── error
-```
-
-------
-
-# 7. SSE Event Protocol
-
-## 7.1 Event Summary
-
-| Event               | Established Core Fields                   |
-| ------------------- | ----------------------------------------- |
-| `start`             | no core payload established               |
-| `start-step`        | no core payload established               |
-| `provider-metadata` | provider-specific payload                 |
-| `text-start`        | no core payload established               |
-| `text-delta`        | `text`                                    |
-| `text-end`          | no core payload established               |
-| `reasoning-start`   | no core payload established               |
-| `reasoning-delta`   | `text`                                    |
-| `reasoning-end`     | no core payload established               |
-| `tool-input-start`  | `id`, `toolName`, optional `dynamic`      |
-| `tool-input-delta`  | `id`, `delta`                             |
-| `tool-input-end`    | `id`                                      |
-| `tool-call`         | `toolCallId`, `toolName`, `input`         |
-| `tool-result`       | schema not fully established              |
-| `finish-step`       | optional `finishReason`, optional `usage` |
-| `finish`            | `finishReason`, `totalUsage`              |
-| `error`             | payload exists; complete shape not closed |
-
-Additional fields may be present.
-
-The table intentionally does not turn every compatibility-parser requirement into a claim about every possible upstream event.
-
-------
-
-# 7.2 Stream and Step Events
-
-## 7.2.1 `start`
-
-Example:
-
-```json
+~~~
+
+## 12.2 Interleaved response and final `content[] A`
+
+~~~jsonl
+{"type":"reasoning-start","id":"r1"}
+{"type":"reasoning-delta","id":"r1","text":"check"}
+{"type":"text-start","id":"t1"}
+{"type":"text-delta","id":"t1","text":"answer"}
+{"type":"tool-input-start","id":"call_1","toolName":"read_file"}
+{"type":"tool-input-delta","id":"call_1","delta":"{\"path\":\"a.ts\"}"}
+{"type":"text-end","id":"t1"}
+{"type":"reasoning-end","id":"r1"}
+{"type":"tool-input-end","id":"call_1"}
+{"type":"tool-call","toolCallId":"call_1","toolName":"read_file","input":{"path":"a.ts"}}
+{"type":"finish","finishReason":"tool-calls","totalUsage":{"inputTokens":100,"inputTokenDetails":{"cacheReadTokens":40},"outputTokens":20,"totalTokens":120}}
+~~~
+
+Result order 由 first appearance 决定，不由 end time 决定：
+
+~~~json
+[
+  {"type":"reasoning","id":"r1","text":"check"},
+  {"type":"text","id":"t1","text":"answer"},
+  {"type":"tool_use","id":"call_1","toolName":"read_file","input":{"path":"a.ts"}}
+]
+~~~
+
+Normalized usage：
+
+~~~json
 {
-  "type": "start"
+  "inputTokens": 100,
+  "outputTokens": 20,
+  "cacheReadTokens": 40,
+  "cacheWriteTokens": 0
 }
-```
+~~~
 
-This marks stream initialization in observed event sequences.
+## 12.3 Next request with tool result
 
-No additional stable payload schema is established here.
-
-------
-
-## 7.2.2 `start-step`
-
-Example:
-
-```json
+~~~json
 {
-  "type": "start-step"
+  "role": "tool",
+  "content": [
+    {
+      "type": "tool-result",
+      "toolCallId": "call_1",
+      "toolName": "",
+      "output": {
+        "type": "text",
+        "value": "file contents"
+      }
+    }
+  ]
 }
-```
+~~~
 
-This marks the beginning of a provider/model generation step.
+## 12.4 Abort
 
-The protocol evidence does not establish a required additional core payload.
+~~~jsonl
+{"type":"text-start","id":"t1"}
+{"type":"text-delta","id":"t1","text":"partial"}
+{"type":"abort"}
+~~~
 
-Observed streams may additionally carry fields such as:
+Atomic result：
 
-```text
-request
-warnings
-```
-
-These are observed optional payload fields, not established universal requirements, and consumers should preserve unknown additional fields at the raw protocol layer when lossless capture matters.
-
-------
-
-# 7.3 Text Lifecycle
-
-## 7.3.1 Lifecycle
-
-```text
-text-start
-↓
-text-delta*
-↓
-text-end
-```
-
-------
-
-## 7.3.2 `text-start`
-
-Example:
-
-```json
+~~~json
 {
-  "type": "text-start"
-}
-```
-
-Additional metadata can exist, but no additional field is part of the established minimal contract in this specification.
-
-------
-
-## 7.3.3 `text-delta`
-
-Structure:
-
-```text
-TextDelta
-├── type = "text-delta"
-└── text
-```
-
-Example:
-
-```json
-{
-  "type": "text-delta",
-  "text": "Hello"
-}
-```
-
-`text` is incremental generated text.
-
-Multiple events are concatenated in stream order for the corresponding text lifecycle.
-
-------
-
-## 7.3.4 `text-end`
-
-Example:
-
-```json
-{
-  "type": "text-end"
-}
-```
-
-This closes the current text lifecycle.
-
-------
-
-# 7.4 Reasoning Lifecycle
-
-## 7.4.1 Lifecycle
-
-```text
-reasoning-start
-↓
-reasoning-delta*
-↓
-reasoning-end
-```
-
-------
-
-## 7.4.2 `reasoning-start`
-
-Example:
-
-```json
-{
-  "type": "reasoning-start"
-}
-```
-
-------
-
-## 7.4.3 `reasoning-delta`
-
-Structure:
-
-```text
-ReasoningDelta
-├── type = "reasoning-delta"
-└── text
-```
-
-Example:
-
-```json
-{
-  "type": "reasoning-delta",
-  "text": "..."
-}
-```
-
-The incremental reasoning property is named:
-
-```text
-text
-```
-
-------
-
-## 7.4.4 `reasoning-end`
-
-Example:
-
-```json
-{
-  "type": "reasoning-end"
-}
-```
-
-This closes the reasoning lifecycle.
-
-------
-
-# 7.5 Tool Input Lifecycle
-
-## 7.5.1 Hierarchy
-
-Tool generation is represented in two semantic stages:
-
-```text
-Incremental Tool Input
-│
-├── tool-input-start
-├── tool-input-delta*
-└── tool-input-end
-
-        ↓
-
-Completed Tool Invocation
-└── tool-call
-```
-
-This is an important protocol distinction.
-
-A sequence of tool-input fragments is not itself the completed tool call.
-
-------
-
-## 7.5.2 `tool-input-start`
-
-Structure:
-
-```text
-ToolInputStart
-├── type = "tool-input-start"
-├── id
-├── toolName
-└── dynamic?
-```
-
-Example:
-
-```json
-{
-  "type": "tool-input-start",
-  "id": "toolu_01ABC",
-  "toolName": "read",
-  "dynamic": false
-}
-```
-
-Established fields:
-
-| Field      | Type     |
-| ---------- | -------- |
-| `id`       | string   |
-| `toolName` | string   |
-| `dynamic`  | boolean? |
-
-------
-
-## 7.5.3 `tool-input-delta`
-
-Structure:
-
-```text
-ToolInputDelta
-├── type = "tool-input-delta"
-├── id
-└── delta
-```
-
-Example:
-
-```json
-{
-  "type": "tool-input-delta",
-  "id": "toolu_01ABC",
-  "delta": "{\"file_path\":\"src/"
-}
-```
-
-followed by:
-
-```json
-{
-  "type": "tool-input-delta",
-  "id": "toolu_01ABC",
-  "delta": "index.ts\"}"
-}
-```
-
-`delta` is a serialized incremental fragment.
-
-It is not the final structured input object.
-
-------
-
-## 7.5.4 `tool-input-end`
-
-Structure:
-
-```json
-{
-  "type": "tool-input-end",
-  "id": "toolu_01ABC"
-}
-```
-
-It closes the incremental input lifecycle associated with `id`.
-
-------
-
-## 7.5.5 `tool-call`
-
-Structure:
-
-```text
-ToolCallEvent
-├── type = "tool-call"
-├── toolCallId
-├── toolName
-└── input
-```
-
-Example:
-
-```json
-{
-  "type": "tool-call",
-  "toolCallId": "toolu_01ABC",
-  "toolName": "read",
-  "input": {
-    "file_path": "src/index.ts"
-  }
-}
-```
-
-This represents the completed semantic tool invocation.
-
-The field names are:
-
-```text
-toolCallId
-toolName
-input
-```
-
-No alternate aliases are part of the established wire structure in this specification.
-
-------
-
-## 7.5.6 Incremental Preview vs Completed Input
-
-The reconstructed compatibility consumer treats the concatenation of:
-
-```text
-tool-input-delta.delta
-```
-
-as a serialized preview of the eventual input. At `tool-input-end`, that preview can be parsed and validated as a JSON object when possible.
-
-The later:
-
-```text
-tool-call.input
-```
-
-is the completed structured invocation payload and is semantically stronger than the partial stream fragments. Compatibility implementations may compare the assembled preview against the completed `tool-call` to detect mismatches.
-
-Therefore:
-
-```text
-concatenated tool-input-delta fragments
-≠ authoritative completed tool call
-```
-
-------
-
-## 7.5.7 Tool Stream Identity
-
-Observed compatible lifecycle:
-
-```text
-tool-input-start.id
-=
-tool-input-delta.id
-=
-tool-input-end.id
-=
-tool-call.toolCallId
-```
-
-This allows incremental fragments to be correlated with their eventual completed tool call.
-
-A compatible stream consumer should therefore track incremental tool state by ID.
-
-------
-
-## 7.5.8 Interleaving and Concurrent Content Lifecycles
-
-CommandCode content lifecycles are not guaranteed to be globally serialized into one open block at a time. Compatibility source explicitly accounts for multiple content/tool lifecycles being interleaved in one response stream.
-
-A valid consumer therefore should not model the stream as only:
-
-```text
-one current block
-```
-
-Instead, it may need to track independent state by block kind and, for tool input, by ID.
-
-Illustrative interleaving:
-
-```text
-reasoning-start
-reasoning-delta
-
-tool-input-start(A)
-
-text-start
-
-tool-input-delta(A)
-text-delta
-reasoning-delta
-
-tool-input-end(A)
-tool-call(toolCallId=A)
-
-reasoning-end
-text-end
-```
-
-This example is illustrative rather than a closed ordering grammar. The key protocol property is that start/delta/end identity must be preserved independently and that a consumer must not assume an arbitrary delta is a complete standalone block.
-
-------
-
-# 7.6 `provider-metadata`
-
-Observed event:
-
-```json
-{
-  "type": "provider-metadata",
-  "providerMetadata": {
-    "cai": {}
-  }
-}
-```
-
-The event type is established.
-
-The internal schema of:
-
-```text
-providerMetadata
-```
-
-is provider-specific and not closed by the available evidence.
-
-It should therefore be treated as opaque/extensible metadata.
-
-------
-
-# 7.7 `finish-step`
-
-Structure:
-
-```text
-FinishStep
-├── type = "finish-step"
-├── finishReason?
-└── usage?
-```
-
-Example:
-
-```json
-{
-  "type": "finish-step",
-  "finishReason": "stop",
+  "content": [],
   "usage": {
-    "inputTokens": 7583,
-    "outputTokens": 25,
-    "inputTokenDetails": {
-      "cacheReadTokens": 7424,
-      "cacheWriteTokens": 0
-    }
-  }
-}
-```
-
-The reconstructed event model allows:
-
-```text
-finishReason
-usage
-```
-
-to be absent.
-
-Observed streams may contain more than one generation step and therefore more than one `finish-step`.
-
-`finish-step` is **not** the final message/stream success boundary.
-
-------
-
-# 7.8 `finish`
-
-`finish` is the established successful semantic terminal event.
-
-Structure:
-
-```text
-FinishEvent
-├── type = "finish"
-├── finishReason
-├── totalUsage
-└── rawFinishReason?   # observed optional extension; semantics not closed
-```
-
-Example:
-
-```json
-{
-  "type": "finish",
-  "finishReason": "stop",
-  "totalUsage": {
-    "inputTokens": 7583,
-    "outputTokens": 25,
-    "inputTokenDetails": {
-      "cacheReadTokens": 7424,
-      "cacheWriteTokens": 0
-    }
-  }
-}
-```
-
-Observed finish events may also carry `rawFinishReason`. The current reconstructed semantic normalizer does not require or consume it, and its complete semantics are not established; it should therefore be treated as an optional observed extension rather than a core required field.
-
-The important protocol distinction is:
-
-```text
-finish-step
-→ step-level completion
-
-finish
-→ overall semantic terminal
-```
-
-------
-
-# 7.9 `tool-result` Event
-
-The event type:
-
-```text
-tool-result
-```
-
-is recognized in the reconstructed CommandCode event family.
-
-The complete stable event payload schema has not been established by the available evidence.
-
-Observed/compatibility payloads may carry fields such as:
-
-```text
-toolCallId
-output
-status
-```
-
-These names are useful evidence but are not promoted here into a closed required schema.
-
-Therefore this specification does not invent one.
-
-Consumers needing lossless compatibility should preserve the raw event payload.
-
-------
-
-# 7.10 `error`
-
-The stream can terminate semantically with:
-
-```text
-type = "error"
-```
-
-The available compatibility evidence shows error payloads can carry message/code information, but the complete upstream wire schema is not sufficiently established to define one closed error object.
-
-A safe conceptual form is:
-
-```text
-ErrorEvent
-├── type = "error"
-└── error-specific payload
-```
-
-Possible observed/compatibility fields include:
-
-```text
-error
-message
-code
-```
-
-The exact value representation should be preserved rather than aggressively normalized at the protocol boundary.
-
-------
-
-# 8. Usage and Termination
-
-## 8.1 Usage Hierarchy
-
-Observed usage data is carried primarily in:
-
-```text
-finish-step.usage
-```
-
-and:
-
-```text
-finish.totalUsage
-```
-
-A representative hierarchy is:
-
-```text
-Usage
-│
-├── inputTokens
-├── outputTokens
-│
-├── inputTokenDetails
-│   ├── noCacheTokens?
-│   ├── cacheReadTokens?
-│   └── cacheWriteTokens?
-│
-├── outputTokenDetails?
-│   ├── textTokens?
-│   └── reasoningTokens?
-│
-├── totalTokens?
-├── reasoningTokens?
-└── cachedInputTokens?
-```
-
-Not every observed event contains every field.
-
-------
-
-## 8.2 Core Observed Usage Fields
-
-The most consistently reconstructed fields are:
-
-```ts
-interface CommandCodeUsageCore {
-  inputTokens: number
-  outputTokens: number
-
-  inputTokenDetails?: {
-    cacheReadTokens?: number
-    cacheWriteTokens?: number
-  }
-}
-```
-
-These are a useful implementation baseline.
-
-However the wire object may carry additional fields.
-
-The raw protocol specification should distinguish field presence on the wire from local normalization defaults. The current reconstructed Router normalizer may substitute numeric zero for some missing usage members when constructing its narrower `CcUsage` representation; that parser behavior does **not** prove that the corresponding raw wire members are required, nor that omission and zero are semantically identical upstream.
-
-A protocol parser should not discard additional fields unless its application intentionally chooses a narrower semantic representation.
-
-------
-
-## 8.3 Extended Observed Usage
-
-Observed/reconstructed upstream data may additionally include:
-
-```text
-noCacheTokens
-textTokens
-reasoningTokens
-totalTokens
-cachedInputTokens
-```
-
-Example conceptual object:
-
-```json
-{
-  "inputTokens": 7583,
-  "inputTokenDetails": {
-    "noCacheTokens": 159,
-    "cacheReadTokens": 7424,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
     "cacheWriteTokens": 0
   },
-  "outputTokens": 25,
-  "outputTokenDetails": {
-    "textTokens": 20,
-    "reasoningTokens": 5
-  },
-  "totalTokens": 7608,
-  "reasoningTokens": 5,
-  "cachedInputTokens": 7424
+  "committed": false,
+  "aborted": true
 }
-```
-
-This specification intentionally does not define parser-side default values for omitted fields.
-
-Missing on the wire and numeric zero are different states unless additional CommandCode evidence proves otherwise.
-
-------
-
-## 8.4 `finishReason`
-
-Wire type:
-
-```text
-string
-```
-
-Example verified by the documented event examples:
-
-```text
-stop
-```
-
-The complete CommandCode `finishReason` enum is **not established**.
-
-Therefore the correct protocol model is:
-
-```ts
-type FinishReason = string
-```
-
-with known observed values recorded separately as evidence becomes available.
-
-A compatible implementation should:
-
-```text
-preserve unknown finishReason strings
-```
-
-rather than collapsing them into a guessed closed enum.
-
-Values accepted by unrelated downstream-compatibility code must not automatically be treated as CommandCode wire values.
-
-------
-
-## 8.5 Successful Terminal
-
-The established successful semantic terminal is:
-
-```text
-finish
-```
-
-Conceptually:
-
-```text
-stream events
-↓
-finish
-↓
-successful CommandCode generation terminal
-```
-
-`finish-step` does not replace `finish`.
-
-------
-
-## 8.6 Error Terminal
-
-The established semantic failure event is:
-
-```text
-error
-```
-
-Conceptually:
-
-```text
-stream events
-↓
-error
-↓
-upstream semantic failure
-```
-
-Application-level timeout, network failure, cancellation, or local parse failure are not CommandCode semantic events and therefore are not defined as protocol terminal variants here.
-
-------
-
-## 8.7 `[DONE]`
-
-Compatibility/capture evidence includes a transport sentinel:
-
-```text
-[DONE]
-```
-
-or SSE form:
-
-```text
-data: [DONE]
-```
-
-where encountered.
-
-It must be distinguished from:
-
-```text
-finish
-```
-
-The established semantic completion signal is the JSON:
-
-```text
-type = "finish"
-```
-
-event.
-
-Therefore `[DONE]` should be treated as transport framing rather than a replacement for the semantic `finish` event.
-
-In the reconstructed strict consumer, `[DONE]` encountered before a semantic `finish`/`error` terminal is treated as an ended-before-terminal condition rather than successful completion. This is a consumer safety rule consistent with the distinction above; it should not be reinterpreted as proof that every CommandCode server version always emits `[DONE]` after `finish`.
-
-------
-
-## 8.8 Physical EOF
-
-EOF is a transport condition, not a JSON protocol event.
-
-The protocol-level success evidence is:
-
-```text
-finish
-```
-
-Consequently a consumer seeking strict semantic completion should not infer a `finish` event merely because the transport ended.
-
-The application-specific error assigned to premature EOF is outside this private protocol specification.
-
-------
-
-# 8.9 Typical Event Lifecycles
-
-The following sequences are illustrative common lifecycles, not an exclusive global ordering grammar. Content/tool lifecycles may interleave as described in §7.5.8, and multi-step streams may repeat step-level boundaries.
-
-## 8.9.1 Text Completion
-
-```text
-start
-↓
-start-step
-↓
-text-start
-↓
-text-delta*
-↓
-text-end
-↓
-finish-step
-↓
-finish
-```
-
-------
-
-## 8.9.2 Reasoning + Text Completion
-
-```text
-start
-↓
-start-step
-↓
-reasoning-start
-↓
-reasoning-delta*
-↓
-reasoning-end
-↓
-text-start
-↓
-text-delta*
-↓
-text-end
-↓
-finish-step
-↓
-finish
-```
-
-------
-
-## 8.9.3 Tool Invocation
-
-```text
-start
-↓
-start-step
-↓
-tool-input-start(id)
-↓
-tool-input-delta(id)*
-↓
-tool-input-end(id)
-↓
-tool-call(toolCallId=id)
-↓
-finish-step
-↓
-finish
-```
-
-------
-
-## 8.9.4 Multi-Step Generation
-
-Because:
-
-```text
-start-step
-finish-step
-```
-
-are step-level events, the general structure can be understood as:
-
-```text
-start
-
-↓
-Step 1
-├── start-step
-├── content events
-└── finish-step
-
-↓
-Step 2
-├── start-step
-├── content events
-└── finish-step
-
-↓
-finish
-```
-
-where the number of steps depends on upstream behavior.
-
-------
-
-# 9. Protocol Invariants
-
-## 9.1 Exact Field Naming
-
-The protocol uses exact mixed casing.
-
-Examples:
-
-```text
-permissionMode
-threadId
-max_tokens
-reasoning_effort
-toolCallId
-toolName
-mimeType
-input_schema
-finishReason
-totalUsage
-```
-
-Do not globally camelCase or snake_case wire objects.
-
-------
-
-## 9.2 Message Content Is Structured
-
-The reconstructed message representation is:
-
-```text
-message.content[]
-```
-
-not:
-
-```text
-message.content = string
-```
-
-Text itself is represented as:
-
-```json
-{
-  "type": "text",
-  "text": "..."
-}
-```
-
-------
-
-## 9.3 Content Block Type Is Semantic
-
-Known block discriminators:
-
-```text
-text
-reasoning
-image
-tool-call
-tool-result
-```
-
-Each discriminator has its own field schema.
-
-Do not flatten them into one generic text representation.
-
-------
-
-## 9.4 Tool Call Identity Is Stable
-
-Historical conversation:
-
-```text
-tool-call.toolCallId
-```
-
-must remain associated with:
-
-```text
-tool-result.toolCallId
-```
-
-Streamed invocation:
-
-```text
-tool-input-*.id
-```
-
-must remain associated with the eventual:
-
-```text
-tool-call.toolCallId
-```
-
-when they describe the same invocation.
-
-------
-
-## 9.5 Tool Input Has Partial and Complete States
-
-```text
-tool-input-delta.delta
-```
-
-is serialized partial input.
-
-```text
-tool-call.input
-```
-
-is completed semantic input.
-
-Therefore:
-
-```text
-partial tool input
-≠
-complete tool call
-```
-
-------
-
-## 9.6 Text and Reasoning Have Explicit Lifecycles
-
-Text:
-
-```text
-text-start
-→ text-delta*
-→ text-end
-```
-
-Reasoning:
-
-```text
-reasoning-start
-→ reasoning-delta*
-→ reasoning-end
-```
-
-Consumers should not treat an arbitrary delta as an independently complete block.
-
-------
-
-## 9.7 Step Completion and Stream Completion Differ
-
-```text
-finish-step
-```
-
-means:
-
-```text
-step boundary
-```
-
-while:
-
-```text
-finish
-```
-
-means:
-
-```text
-overall semantic terminal
-```
-
-They are not interchangeable.
-
-------
-
-## 9.8 Successful Terminal Is `finish`
-
-The core semantic success rule is:
-
-```text
-SUCCESS
-└── finish
-```
-
-Transport closure or `[DONE]` does not itself create a semantic `finish`.
-
-------
-
-## 9.9 Semantic Failure Is `error`
-
-The upstream protocol failure terminal is:
-
-```text
-ERROR
-└── error event
-```
-
-Network, timeout, local parser failure, or caller cancellation are separate transport/application states.
-
-------
-
-## 9.10 Forward-Compatibility Guidance for Unknown Values
-
-The following are not established as permanently closed:
-
-```text
-role
-permissionMode
-finishReason
-providerMetadata
-error payload
-extra usage fields
-future event types
-```
-
-At the raw protocol layer, an implementation should prefer preserving unknown fields and unknown event-type strings over inventing unsupported mappings or silently collapsing them into known values.
-
-A higher semantic conversion layer may still reject an unknown event when it cannot safely preserve downstream state-machine semantics. That stricter application behavior is distinct from the raw wire fact that the unknown value existed and should remain diagnosable.
-
-------
-
-# Appendix A. Observed Top-Level `mode` Extension
-
-Captured CommandCode traffic indicates that some requests can carry an additional top-level:
-
-```text
-mode
-```
-
-field.
-
-Observed values include:
-
-```text
-custom-agent
-title-gen
-```
-
-Current provenance notes:
-
-```text
-custom-agent
-└── observed in Claude Code CLI direct CommandCode traffic
-
-title-gen
-└── observed in CommandCode internal title-generation traffic
-
-commandcode-router baseline producer
-└── omits mode
-```
-
-Examples:
-
-```json
-{
-  "mode": "custom-agent"
-}
-```
-
-and:
-
-```json
-{
-  "mode": "title-gen"
-}
-```
-
-The baseline generate request does not require `mode` in the reconstructed core request type.
-
-Therefore:
-
-```text
-mode
-```
-
-is best classified as:
-
-> observed CommandCode client-mode extension
-
-rather than a universally required `/alpha/generate` field.
-
-The complete enum and semantics are not established.
-
-------
-
-# Appendix B. Evidence Gaps
-
-The following areas remain intentionally open because the current evidence does not establish a complete contract:
-
-```text
-Transport
-├── exact server/producer provenance of bare JSON event lines
-└── exact relationship between `[DONE]` and semantic `finish` across producer/service versions
-
-Headers
-├── which observed metadata headers are server-required
-├── complete accepted version/header value space
-└── complete producer/server semantics of x-taste-learning
-
-Request
-├── non-null memory schema
-├── non-null taste schema
-├── non-null skills schema
-├── complete permissionMode enum
-├── server requirements for x-session-id/threadId equality
-└── stream=false behavior
-
-Messages
-└── complete role enum
-
-Model Invocation
-├── complete supported model catalog
-├── complete reasoning_effort enum across versions
-└── server-side temperature semantics/defaults
-
-Events
-├── complete provider-metadata schema
-├── complete optional start-step payload schema
-├── complete tool-result event schema
-├── complete error-event schema
-├── complete rawFinishReason semantics
-├── complete finishReason value set
-├── exact constraints on interleaving content lifecycles
-└── future/unknown event types
-
-Usage
-└── exact presence requirements for all extended usage fields
-
-Extensions
-├── complete mode enum and behavior
-└── which producer modes require or omit mode
-```
-
-These gaps should remain explicit.
-
-A private protocol specification becomes less reliable, not more reliable, when unknown behavior is silently filled in from unrelated compatibility code.
-
-------
-
-# Appendix C. Canonical Protocol Trees
-
-## C.1 Request
-
-```text
-POST /alpha/generate
-│
-├── Headers
-│   ├── Authorization
-│   ├── Content-Type
-│   ├── Accept
-│   ├── Accept-Encoding
-│   ├── x-command-code-version
-│   ├── x-cli-environment
-│   ├── x-taste-learning
-│   ├── x-co-flag
-│   ├── x-session-id
-│   ├── x-project-slug?
-│   ├── traceparent
-│   ├── User-Agent
-│   ├── accept-language
-│   └── sec-fetch-mode
-│
-└── CommandCodeRequest
-    │
-    ├── mode?  (observed extension)
-    │
-    ├── config
-    │   ├── workingDir
-    │   ├── date
-    │   ├── environment
-    │   ├── structure[]
-    │   ├── isGitRepo
-    │   ├── currentBranch
-    │   ├── mainBranch
-    │   ├── gitStatus
-    │   └── recentCommits[]
-    │
-    ├── memory
-    ├── taste
-    ├── skills
-    ├── permissionMode
-    ├── threadId
-    │
-    └── params
-        │
-        ├── model
-        ├── system
-        │
-        ├── messages[]
-        │   ├── role
-        │   └── content[]
-        │       ├── text
-        │       ├── reasoning
-        │       ├── image
-        │       ├── tool-call
-        │       └── tool-result
-        │
-        ├── tools[]
-        │   ├── name
-        │   ├── description?
-        │   └── input_schema
-        │
-        ├── max_tokens
-        ├── stream
-        ├── reasoning_effort?
-        └── temperature?
-```
-
-------
-
-## C.2 Response Stream
-
-```text
-CommandCode Stream
-│
-├── start
-│
-├── Step*
-│   │
-│   ├── start-step
-│   │
-│   ├── Content*
-│   │   │
-│   │   ├── Text
-│   │   │   ├── text-start
-│   │   │   ├── text-delta*
-│   │   │   └── text-end
-│   │   │
-│   │   ├── Reasoning
-│   │   │   ├── reasoning-start
-│   │   │   ├── reasoning-delta*
-│   │   │   └── reasoning-end
-│   │   │
-│   │   ├── Tool Input / Invocation
-│   │   │   ├── tool-input-start
-│   │   │   ├── tool-input-delta*
-│   │   │   ├── tool-input-end
-│   │   │   └── tool-call
-│   │   │
-│   │   └── Tool Result
-│   │       └── tool-result
-│   │
-│   ├── provider-metadata*
-│   └── finish-step
-│
-└── Terminal
-    ├── finish
-    └── error
-```
-
-------
-
-# Appendix D. Minimal Implementation Surface
-
-A compatible implementation benefits from separating the minimum **parser surface** from the minimum **semantic generation surface**.
-
-## D.1 Parser Minimum
-
-A parser that wants to recognize the reconstructed protocol without misclassifying known ignorable events should understand at minimum:
-
-```text
-HTTP / Framing
-├── text/event-stream response
-├── data: JSON event lines
-├── observed bare JSON event lines
-├── ignorable SSE metadata/comments
-└── [DONE] transport sentinel
-
-Known Event Discriminators
-├── start
-├── start-step
-├── provider-metadata
-├── text-start / text-delta / text-end
-├── reasoning-start / reasoning-delta / reasoning-end
-├── tool-input-start / tool-input-delta / tool-input-end
-├── tool-call
-├── tool-result
-├── finish-step
-├── finish
-└── error
-
-Forward Compatibility
-└── preserve/diagnose unknown event type strings and extra raw fields
-```
-
-## D.2 Semantic Generation Minimum
-
-An implementation that produces or consumes the core generation semantics needs at minimum:
-
-```text
-Request
-├── headers
-├── config
-├── threadId
-└── params
-    ├── model
-    ├── system
-    ├── messages
-    ├── tools
-    ├── max_tokens
-    ├── stream
-    ├── reasoning_effort?
-    └── temperature?
-
-Message Content
-├── text
-├── reasoning
-├── image
-├── tool-call
-└── tool-result
-
-Stream Semantics
-├── text lifecycle
-├── reasoning lifecycle
-├── interleaving-aware block tracking
-├── tool-input lifecycle
-├── completed tool-call
-├── finish-step
-├── finish
-└── error
-```
-
-The producer profile additionally defines how to reproduce:
-
-```text
-config
-x-project-slug
-traceparent
-observed metadata headers
-```
-
-without introducing unrelated routing, authentication, discovery, conversion, or application-session policy into the CommandCode private protocol itself.
+~~~
+
+`partial` 不进入最终 `content[] A`。因此需要转换时，它也不会进入 `content[] B` 或 Protocol B SSE。
+
+---
+
+# 13. AI implementation checklist
+
+AI 在生成实现前必须逐项确认：
+
+## Request
+
+- [ ] 固定 `POST /alpha/generate`。
+- [ ] `Content-Type: application/json`。
+- [ ] `x-project-slug = slugify(cwd) || "root"`，package pin `2.2.1`。
+- [ ] `x-session-id` 与 `threadId` 独立，但普通 flow 可相同。
+- [ ] `threadId` 无效时 omission，不发送 empty string/null。
+- [ ] `traceparent` 满足 W3C length/non-zero rules；pause continuation 复用。
+- [ ] `config.structure` 只读取 immediate entries。
+- [ ] Git failures 转 empty values。
+- [ ] `memory/taste/skills` 明确发送 `null`。
+- [ ] permission mapping 正确。
+- [ ] request-side tool result 固定 `toolName:""`、`output.type:"text"`。
+- [ ] `max_tokens` 默认 64000。
+- [ ] `stream` 是 literal `true`。
+
+## Response A
+
+- [ ] 按 UTF-8 byte stream 解码，不按 HTTP chunk 解析 event。
+- [ ] 按 LF 分割 bare JSON Lines，不解析 `data:` SSE。
+- [ ] final unterminated line 在 EOF 时也解析。
+- [ ] 每个 HTTP response 使用新的 assembler。
+- [ ] 三个 Map + 一个 ordered `slots[]`。
+- [ ] slot order 是 first event appearance order。
+- [ ] tool start 占位，final tool-call materialize。
+- [ ] response-side tool-result raw preserve、semantic ignore。
+- [ ] finish 后继续读取到 EOF。
+- [ ] finish.totalUsage raw preserve并 normalized。
+- [ ] abort rollback并取消/drain，不 commit partial content。
+- [ ] error/truncated EOF 不 commit。
+- [ ] pause_turn 在 logical level继续请求并最后一次性 publish。
+
+## Conversion and response B
+
+- [ ] 不需要转换时，返回 `content[] A` 后结束。
+- [ ] 需要转换时，直接把 `content[] A` 转成 `content[] B`。
+- [ ] 不以 source JSON Lines 作为 A → B conversion unit。
+- [ ] 保持 block semantic order。
+- [ ] tool-call ID 跨 response/request stable。
+- [ ] reasoning 使用 explicit target policy。
+- [ ] 正确读取 A wire `finishReason` 与 `rawFinishReason`；不把内部 `stopReason` 误写成 wire field。
+- [ ] `rawFinishReason A` 先完成 `pause_turn` control flow；pause response 不进入 final B conversion。
+- [ ] Final `finishReason A`、`rawFinishReason A`、usage 与 `systemPromptTokens` 全部交给 B-specific `convertFinish()`。
+- [ ] 不在通用 adapter 中假定 B 的 reason value、token field、nesting 或 event position。
+- [ ] 不把 CommandCode raw finish JSON line直接当作 B event。
+- [ ] B result 在返回 HTTP 200 前完整 validation/serialization。
+- [ ] B codec 生成 B-specific semantic events。
+- [ ] 真 SSE 每个 frame 使用 `data:` 等 field，并以 blank line 结束。
+- [ ] `[DONE]` 只在指定 B endpoint/version 要求时发送。
+- [ ] upstream error/abort 发生时，buffered profile 尚未发送任何 B semantic bytes。
+
+---
+
+# 14. 最终推荐
+
+v1.0 推荐唯一主路径：
+
+~~~text
+1. Build exact CommandCode request.
+2. Send params.stream=true.
+3. Decode bare JSON Lines.
+4. Assemble response-local blocks by event id.
+5. Preserve first-appearance order in slots[].
+6. Commit only on finish + physical EOF.
+7. Roll back the whole response on abort/error.
+8. Produce content[] A plus finish/usage/rawEvents.
+9. If no conversion is required, return content[] A and stop.
+10. If conversion is required, convert content[] A directly to content[] B.
+11. Pass finishReason/rawFinishReason/usage A through B-specific conversion.
+12. Build B events exactly as the selected B protocol defines.
+13. Validate every B event before starting HTTP 200.
+14. Encode Protocol B events with Protocol B's exact SSE framing.
+~~~
+
+这套设计把 source wire、最终 `content[] A`、可选的 `content[] B` 和 target wire 分离，但不增加中间 conversion layer。只使用 CommandCode 时，`content[] A` 就是终点；只有 router 需要模拟 Protocol B 时才继续转换。Buffered conversion 的代价是等待完整 upstream response 后再 replay B stream；换来的结果是顺序明确、tool association 稳定、usage/finish 可验证，并且 abort/error 不会污染 downstream client。
