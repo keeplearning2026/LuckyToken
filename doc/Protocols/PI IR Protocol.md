@@ -1,19 +1,36 @@
-# Pi AI Semantic IR Specification
+# Pi AI Semantic IR and Runtime Contract
 
 **Upstream Repository:** `earendil-works/pi`
 **Module:** `packages/ai`
 **Package:** `@earendil-works/pi-ai`
 **Inspected Version:** `0.84.1`
-**Inspected Baseline:** `936aff00918de1187f085f123c2812d8f2d67745`
-**Scope:** Core text/multimodal LLM semantic IR and runtime contract
+**Source Baseline:** `936aff00918de1187f085f123c2812d8f2d67745`
+**Scope:** Chat/model semantic IR, streaming events, tools, execution options, and the `Models` / `Provider` runtime boundary.
+
+This document is intended to be an **implementation contract for LuckyToken**.
+
+It describes the actual semantic types and runtime behavior exposed by `packages/ai`.
+
+It does **not** describe:
+
+- Anthropic wire format;
+- OpenAI wire format;
+- CommandCode wire format;
+- protocol-to-protocol conversion rules;
+- Pi Coding Agent session/TUI behavior;
+- image-generation APIs.
+
+Those concerns belong in separate specifications.
 
 ------
 
-# 1. Purpose and Scope
+# 1. Protocol Overview
 
-Pi AI does not define an HTTP wire protocol for its internal model abstraction.
+## 1.1 Pi AI is not a wire protocol
 
-Its core text-generation API defines a **semantic runtime contract**:
+Pi AI does not expose one universal HTTP request format.
+
+Instead, it defines a provider-neutral semantic invocation:
 
 ```text
 Pi Invocation
@@ -26,46 +43,181 @@ Pi Invocation
 Models / Provider
         │
         ▼
+Provider API Adapter
+        │
+        ▼
 AssistantMessageEventStream
         │
         ▼
 AssistantMessage
 ```
 
-The semantic IR is therefore composed of two major sides:
+The provider adapter is responsible for turning this semantic representation into an actual upstream protocol such as:
 
 ```text
-Pi Semantic IR
-│
-├── Request-Side Semantic State
-│   ├── Model
-│   ├── Context
-│   └── Options
-│
-└── Response-Side Semantic State
-    ├── AssistantMessageEventStream
-    └── AssistantMessage
+anthropic-messages
+openai-responses
+openai-completions
+google-generative-ai
+bedrock-converse-stream
+...
 ```
 
-`Models`, `Provider`, authentication, and credential resolution are runtime infrastructure around this IR rather than additional conversational IR objects.
-
-Pi also contains a separate image-generation API. That API is outside the scope of this specification.
+The semantic types themselves remain provider-neutral.
 
 ------
 
-# 2. Top-Level Invocation Contract
+## 1.2 Core semantic contract
 
-The simplified execution entry point is:
+For LuckyToken, the most important abstraction is:
+
+```text
+Model
++
+Context
++
+SimpleStreamOptions
+        │
+        ▼
+AssistantMessageEventStream
+        │
+        ▼
+AssistantMessage
+```
+
+This can be viewed as:
+
+```text
+REQUEST-SIDE IR
+├── Model
+├── Context
+│   ├── systemPrompt
+│   ├── messages[]
+│   └── tools[]
+└── Options
+
+RESPONSE-SIDE IR
+├── AssistantMessageEventStream
+└── AssistantMessage
+```
+
+`Models`, `Provider`, authentication, credentials, model discovery, and provider dispatch surround this IR as runtime infrastructure rather than conversational state.
+
+------
+
+## 1.3 Main implementation boundary for LuckyToken
+
+A clean protocol conversion architecture is:
+
+```text
+Client Wire
+    │
+    ▼
+Client Protocol Parser
+    │
+    ▼
+Pi Semantic IR
+├── Model
+├── Context
+└── Options
+    │
+    ▼
+Pi Runtime
+    │
+    ▼
+AssistantMessage / Events
+    │
+    ▼
+Client Protocol Renderer
+    │
+    ▼
+Client Wire
+```
+
+Therefore protocol adapters should normally produce:
+
+```text
+Model
+Context
+Options
+```
+
+and consume:
+
+```text
+AssistantMessageEvent
+AssistantMessage
+```
+
+They should not need to know the provider's HTTP representation.
+
+------
+
+# 2. Invocation Contract
+
+## 2.1 Unified entry points
+
+Pi exposes two levels of text-generation API.
+
+### Provider-neutral simplified API
 
 ```ts
 models.streamSimple(
   model,
   context,
-  options,
-)
+  options?,
+): AssistantMessageEventStream
 ```
 
-Its logical hierarchy is:
+and:
+
+```ts
+models.completeSimple(
+  model,
+  context,
+  options?,
+): Promise<AssistantMessage>
+```
+
+`SimpleStreamOptions` exposes Pi's normalized reasoning model and common request options.
+
+This is usually the appropriate abstraction for a multi-provider protocol router.
+
+------
+
+### API-specific API
+
+```ts
+models.stream(
+  model,
+  context,
+  options?,
+): AssistantMessageEventStream
+```
+
+and:
+
+```ts
+models.complete(
+  model,
+  context,
+  options?,
+): Promise<AssistantMessage>
+```
+
+The options are selected according to:
+
+```text
+model.api
+```
+
+and can expose API-specific controls.
+
+Pi's `ApiOptionsMap` performs this type-level mapping.
+
+------
+
+## 2.2 Invocation hierarchy
 
 ```text
 streamSimple()
@@ -78,79 +230,50 @@ streamSimple()
 │
 └── options?
     └── ModelsSimpleStreamOptions
-         │
-         ▼
+        │
+        ▼
 AssistantMessageEventStream
 ```
 
-`Models.streamSimple()` returns the stream synchronously while asynchronous setup such as authentication may happen behind the stream boundary.
+`Models.streamSimple()` returns the stream **synchronously**.
 
-The final semantic value produced by the stream is an:
+Authentication resolution and other asynchronous setup may occur behind that stream through `lazyStream()`.
+
+------
+
+## 2.3 `completeSimple()`
+
+Conceptually:
 
 ```text
+completeSimple(...)
+↓
+streamSimple(...)
+↓
+stream.result()
+↓
 AssistantMessage
 ```
 
-Pi also provides:
+The important consequence is:
 
-```ts
-completeSimple(
-  model,
-  context,
-  options,
-): Promise<AssistantMessage>
-```
+> `completeSimple()` returning an `AssistantMessage` does not by itself mean the generation succeeded.
 
-which is implemented through:
+An error or abort is also represented by an `AssistantMessage`.
+
+Success must be determined from:
 
 ```text
-streamSimple(...).result()
+AssistantMessage.stopReason
 ```
+
+This behavior follows directly from `AssistantMessageEventStream.result()`, which extracts the final message from **both** `done` and `error` terminal events.
 
 ------
 
-# 3. Request-Side IR
+# 3. Model
 
-The complete request-side hierarchy is:
-
-```text
-Pi Invocation
-│
-├── Model
-│   ├── Identity
-│   ├── Endpoint
-│   ├── Capabilities
-│   ├── Limits
-│   ├── Reasoning Mapping
-│   ├── Pricing
-│   ├── Sampling Defaults
-│   ├── Headers
-│   └── Compatibility
-│
-├── Context
-│   ├── systemPrompt?
-│   ├── messages[]
-│   └── tools[]?
-│
-└── Options
-    ├── Generation
-    ├── Lifecycle
-    ├── Authentication Override
-    ├── Transport
-    ├── Retry / Timeout
-    ├── Cache / Session
-    ├── Metadata / Telemetry
-    ├── Hooks
-    ├── Reasoning
-    ├── Deferred Execution
-    └── Models-Level Header Transform
-```
-
-------
-
-# 4. Model
-
-## 4.1 Model Tree
+## 3.1 Model hierarchy
 
 ```text
 Model<Api>
@@ -179,106 +302,173 @@ Model<Api>
 │
 ├── Pricing
 │   └── cost
-│       ├── input
-│       ├── output
-│       ├── cacheRead
-│       ├── cacheWrite
-│       └── tiers?
 │
 ├── Sampling Defaults
 │   └── samplingParams?
 │
-├── Transport Defaults
+├── Request Defaults
 │   └── headers?
 │
 └── API Compatibility
     └── compat?
 ```
 
-The current source defines the unified model object with these fields. Its `compat` type depends on the model's API family.
+The actual model type is defined directly in `packages/ai/src/types.ts`.
 
 ------
 
-## 4.2 Identity
+## 3.2 Model field contract
 
 ```ts
-interface ModelIdentity {
+interface Model<TApi extends Api> {
   id: string
   name: string
+
+  api: TApi
   provider: ProviderId
-  api: Api
+
+  baseUrl: string
+
+  reasoning: boolean
+  thinkingLevelMap?: ThinkingLevelMap
+
+  input: ("text" | "image")[]
+
+  cost: ModelCost
+
+  contextWindow: number
+  maxTokens: number
+
+  samplingParams?: Record<string, unknown>
+
+  headers?: Record<string, string>
+
+  compat?: ...
 }
 ```
 
-Semantic meaning:
+Field semantics:
 
-```text
-provider
-└── identifies the owning Provider
-
-api
-└── identifies the API implementation used by that Provider
-
-id
-└── identifies the model within the Provider
-
-name
-└── human-readable model name
-```
-
-`Api` is extensible:
-
-```text
-KnownApi
-+
-arbitrary string API identifiers
-```
-
-and `ProviderId` likewise permits providers outside the built-in set.
+| Field              | Type    | Meaning                                 |
+| ------------------ | ------- | --------------------------------------- |
+| `id`               | string  | model identifier within its provider    |
+| `name`             | string  | human-readable name                     |
+| `api`              | `Api`   | upstream API implementation             |
+| `provider`         | string  | provider owning the model               |
+| `baseUrl`          | string  | effective base endpoint                 |
+| `reasoning`        | boolean | model supports reasoning                |
+| `thinkingLevelMap` | map     | normalized → provider reasoning mapping |
+| `input`            | array   | supported generic input modalities      |
+| `cost`             | object  | normalized pricing                      |
+| `contextWindow`    | number  | model context limit                     |
+| `maxTokens`        | number  | model output-token capability           |
+| `samplingParams`   | object  | model default sampling parameters       |
+| `headers`          | object  | static model request headers            |
+| `compat`           | object  | API-family compatibility overrides      |
 
 ------
 
-## 4.3 Endpoint
+## 3.3 Model identity
+
+Pi separates three identities:
 
 ```text
-Model
-└── baseUrl
-baseUrl: string
+Provider
+└── provider
+
+API implementation
+└── api
+
+Model inside provider
+└── id
 ```
 
-The model carries its effective base endpoint configuration.
+For example, conceptually:
 
-The runtime may create a request-local copy with another `baseUrl` when authentication resolution supplies an endpoint override.
+```text
+provider = "openrouter"
+api      = "openai-completions"
+id       = "anthropic/claude-..."
+```
+
+These fields should not be collapsed into one synthetic model string inside LuckyToken.
 
 ------
 
-## 4.4 Capabilities
+## 3.4 `Api`
+
+Current built-in API identifiers are:
 
 ```text
-Model
-└── Capabilities
-    ├── reasoning: boolean
-    │
-    └── input[]
-        ├── "text"
-        └── "image"
+openai-completions
+mistral-conversations
+openai-responses
+azure-openai-responses
+openai-codex-responses
+anthropic-messages
+bedrock-converse-stream
+google-generative-ai
+google-vertex
+pi-messages
 ```
 
-The generic Pi model capability system currently distinguishes:
+However the type is:
 
-```text
-text input
-image input
-reasoning capability
+```ts
+type Api = KnownApi | (string & {})
 ```
 
-It does not model arbitrary provider-specific content types in the generic `Model.input` union.
+Therefore custom API identifiers are explicitly supported.
+
+The semantic IR must not use a closed enum that rejects every future/custom API identifier.
 
 ------
 
-## 4.5 Thinking Levels
+## 3.5 Provider identity
 
-Pi defines normalized reasoning levels:
+Likewise:
+
+```ts
+type ProviderId = KnownProvider | string
+```
+
+Provider IDs are extensible strings.
+
+A new custom provider therefore does not require modifying the core semantic message types.
+
+------
+
+## 3.6 Model input capabilities
+
+Generic model input capability is currently:
+
+```text
+Model.input[]
+├── text
+└── image
+```
+
+Example:
+
+```ts
+input: ["text", "image"]
+```
+
+This is a coarse generic capability declaration.
+
+Provider-specific content types do not automatically become generic `Model.input` variants.
+
+------
+
+## 3.7 Reasoning capability
+
+```text
+reasoning: boolean
+```
+
+indicates whether the model supports reasoning/thinking.
+
+Normalized Pi reasoning levels are:
 
 ```text
 ThinkingLevel
@@ -290,7 +480,7 @@ ThinkingLevel
 └── max
 ```
 
-Model-level mappings also support:
+Model-level mappings additionally include:
 
 ```text
 off
@@ -304,63 +494,77 @@ type ModelThinkingLevel =
   | ThinkingLevel
 ```
 
-The model can map these normalized Pi levels into provider/model-specific values:
+------
 
-```text
-thinkingLevelMap
-│
-├── off?
-├── minimal?
-├── low?
-├── medium?
-├── high?
-├── xhigh?
-└── max?
+## 3.8 `thinkingLevelMap`
+
+Type:
+
+```ts
+type ThinkingLevelMap =
+  Partial<Record<ModelThinkingLevel, string | null>>
 ```
 
-A missing mapping uses provider behavior.
-
-A mapping value of:
+Semantics:
 
 ```text
-null
+key missing
+→ provider/default behavior
+
+key = string
+→ map Pi level to this provider/model value
+
+key = null
+→ model explicitly does not support this level
 ```
 
-marks that level as unsupported.
+Example conceptually:
+
+```ts
+{
+  low: "low",
+  medium: "medium",
+  high: "high",
+  max: null
+}
+```
+
+`thinkingLevelMap` belongs to model capability/configuration, not conversational context.
 
 ------
 
-## 4.6 Model Limits
+## 3.9 Limits
 
 ```text
 Model
 └── Limits
     ├── contextWindow
     └── maxTokens
-contextWindow: number
-maxTokens: number
 ```
 
-These are model-level characteristics.
+Both are model-level characteristics.
 
-They are distinct from the optional request-level:
+They must be distinguished from request option:
 
 ```text
 Options.maxTokens
 ```
 
+which is a per-invocation control.
+
 ------
 
-## 4.7 Model Pricing
+## 3.10 Pricing
+
+Structure:
 
 ```text
 Model.cost
 │
-├── Base Rates
-│   ├── input
-│   ├── output
-│   ├── cacheRead
-│   └── cacheWrite
+├── input
+├── output
+├── cacheRead
+├── cacheWrite
 │
 └── tiers?
     └── ModelCostTier[]
@@ -371,35 +575,15 @@ Model.cost
         └── cacheWrite
 ```
 
-Rates are represented as cost per million tokens.
+Rates are represented as dollars per million tokens.
 
-Tiered pricing can replace the base rates above an input-token threshold.
-
-------
-
-## 4.8 Sampling Defaults
-
-```text
-Model
-└── samplingParams?
-    └── Record<string, unknown>
-```
-
-These are model-default sampling parameters.
-
-Request-level:
-
-```text
-Options.samplingParams
-```
-
-overrides model defaults per key where the API adapter supports generic sampling parameters.
+A pricing tier applies to the whole request when its input threshold is selected; the highest matching threshold applies.
 
 ------
 
-# 5. Context
+# 4. Context and Message IR
 
-## 5.1 Context Tree
+## 4.1 Context hierarchy
 
 ```text
 Context
@@ -407,7 +591,6 @@ Context
 ├── systemPrompt?
 │
 ├── messages[]
-│   │
 │   ├── UserMessage
 │   ├── AssistantMessage
 │   └── ToolResultMessage
@@ -416,7 +599,7 @@ Context
     └── Tool
 ```
 
-The actual core type is:
+Exact type:
 
 ```ts
 interface Context {
@@ -428,9 +611,9 @@ interface Context {
 
 ------
 
-## 5.2 Context Semantic Role
+## 4.2 Semantic meaning of Context
 
-`Context` represents conversational information presented to the model:
+`Context` represents **what is presented to the model**:
 
 ```text
 Context
@@ -439,30 +622,55 @@ Context
 └── tool definitions
 ```
 
-It does not contain the model being called or execution controls.
-
-Those are represented separately by:
+It deliberately does not contain:
 
 ```text
-Model
-Options
+provider credential
+HTTP headers
+base URL
+request timeout
+retry settings
+telemetry
+AbortController
+model selection
 ```
+
+Those belong to `Model`, `Options`, or runtime infrastructure.
+
+This is an important information boundary for LuckyToken.
 
 ------
 
-# 6. Message Hierarchy
+## 4.3 System prompt
 
-## 6.1 Message Union
+```ts
+systemPrompt?: string
+```
+
+Pi has one normalized system-prompt string.
+
+There is no ordinary core:
+
+```text
+role = "system"
+```
+
+message variant in the `Message` union.
+
+A source protocol with structured or mid-conversation system semantics therefore requires an explicit conversion policy; it cannot simply be copied into a nonexistent Pi `SystemMessage`.
+
+------
+
+## 4.4 Message hierarchy
 
 ```text
 Message
-│
 ├── UserMessage
 ├── AssistantMessage
 └── ToolResultMessage
 ```
 
-Formally:
+Exact union:
 
 ```ts
 type Message =
@@ -471,37 +679,36 @@ type Message =
   | ToolResultMessage
 ```
 
-Pi does not define a normal `system` message variant.
+------
 
-System instructions are represented by:
+## 4.5 Parent/content matrix
 
-```text
-Context.systemPrompt
-```
+The semantic content relationship is:
+
+| Message             | Text | Image | Thinking | ToolCall |
+| ------------------- | ---- | ----- | -------- | -------- |
+| `UserMessage`       | yes  | yes   | no       | no       |
+| `AssistantMessage`  | yes  | no    | yes      | yes      |
+| `ToolResultMessage` | yes  | yes   | no       | no       |
+
+This parent relationship should be preserved rather than introducing one universal content array that permits every block everywhere.
 
 ------
 
-# 7. UserMessage
+## 4.6 UserMessage
 
-## 7.1 UserMessage Tree
+Tree:
 
 ```text
 UserMessage
-│
 ├── role = "user"
-│
 ├── content
-│   │
 │   ├── string
-│   │
-│   └── UserContent[]
-│       ├── TextContent
-│       └── ImageContent
-│
+│   └── (TextContent | ImageContent)[]
 └── timestamp
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface UserMessage {
@@ -515,74 +722,69 @@ interface UserMessage {
 }
 ```
 
-Timestamp is a Unix timestamp in milliseconds.
+`timestamp` is Unix time in milliseconds.
 
 ------
 
-## 7.2 User Content Capability
+## 4.7 User string shorthand
 
-A user message directly supports:
+Pi allows:
 
-```text
-UserMessage
-└── content
-    ├── TextContent
-    └── ImageContent
+```ts
+{
+  role: "user",
+  content: "Hello",
+  timestamp: Date.now()
+}
 ```
 
-It does not directly contain:
+as well as:
 
-```text
-ThinkingContent
-ToolCall
-ToolResultMessage
+```ts
+{
+  role: "user",
+  content: [
+    {
+      type: "text",
+      text: "Hello"
+    }
+  ],
+  timestamp: Date.now()
+}
 ```
 
-Tool results are represented as their own message type.
+A conversion implementation should choose one stable internal form where useful but must understand both legal `UserMessage.content` representations.
 
 ------
 
-# 8. Semantic Content Types
+## 4.8 Content hierarchy
 
-## 8.1 Content Type Tree
-
-Across the message hierarchy, the core semantic content objects are:
+Core semantic content types are:
 
 ```text
 Semantic Content
-│
 ├── TextContent
-│
 ├── ImageContent
-│
 ├── ThinkingContent
-│
 └── ToolCall
 ```
 
-Their allowed parents differ:
-
-| Parent              | Text | Image | Thinking | ToolCall |
-| ------------------- | ---- | ----- | -------- | -------- |
-| `UserMessage`       | Yes  | Yes   | No       | No       |
-| `AssistantMessage`  | Yes  | No    | Yes      | Yes      |
-| `ToolResultMessage` | Yes  | Yes   | No       | No       |
+These are not all valid under every message parent.
 
 ------
 
-# 9. TextContent
+## 4.9 TextContent
 
-## 9.1 Text Tree
+Tree:
 
 ```text
 TextContent
-│
 ├── type = "text"
 ├── text
 └── textSignature?
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface TextContent {
@@ -592,37 +794,34 @@ interface TextContent {
 }
 ```
 
-`textSignature` contains optional provider-specific message metadata.
+`textSignature` is provider continuity/message metadata rather than user-visible text.
 
-Pi also defines a versioned structured representation that can be serialized into this string:
+Pi also defines:
 
-```text
-TextSignatureV1
-│
-├── v = 1
-├── id
-└── phase?
-    ├── commentary
-    └── final_answer
+```ts
+interface TextSignatureV1 {
+  v: 1
+  id: string
+  phase?: "commentary" | "final_answer"
+}
 ```
 
-The signature is metadata associated with the content; it is not part of the visible text itself.
+The `TextContent` field itself remains a string because providers may carry other/legacy signature forms.
 
 ------
 
-# 10. ImageContent
+## 4.10 ImageContent
 
-## 10.1 Image Tree
+Tree:
 
 ```text
 ImageContent
-│
 ├── type = "image"
 ├── data
 └── mimeType
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface ImageContent {
@@ -632,40 +831,49 @@ interface ImageContent {
 }
 ```
 
-`data` contains:
+Critical representation rule:
 
 ```text
+data
+=
 base64 encoded image bytes
 ```
 
-not a complete data URL.
+It is **not** a complete data URL.
 
-Example conceptual shape:
+Correct:
 
 ```ts
 {
   type: "image",
-  data: "<base64>",
+  data: "iVBORw0KGgo...",
   mimeType: "image/png"
 }
 ```
 
+Not Pi-native:
+
+```text
+data:image/png;base64,iVBORw0KGgo...
+```
+
+The latter must be decoded/split by a conversion layer before becoming `ImageContent`.
+
 ------
 
-# 11. ThinkingContent
+## 4.11 ThinkingContent
 
-## 11.1 Thinking Tree
+Tree:
 
 ```text
 ThinkingContent
-│
 ├── type = "thinking"
 ├── thinking
 ├── thinkingSignature?
 └── redacted?
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface ThinkingContent {
@@ -678,63 +886,216 @@ interface ThinkingContent {
 
 ------
 
-## 11.2 Normal Thinking
+## 4.12 Normal vs redacted thinking
 
-```text
-ThinkingContent
-├── thinking = semantic reasoning text
-├── thinkingSignature? = opaque provider metadata
-└── redacted = false / omitted
-```
-
-------
-
-## 11.3 Redacted Thinking
-
-Pi does **not** define a separate `RedactedThinkingContent` type.
+Pi does not define two separate semantic content types.
 
 Instead:
 
 ```text
-ThinkingContent
-├── redacted = true
-├── thinking
-└── thinkingSignature
-```
-
-represents redacted reasoning.
-
-The source documents that the opaque encrypted payload may be stored in:
-
-```text
-thinkingSignature
-```
-
-so it can be replayed for provider continuity.
-
-Therefore:
-
-```text
-normal thinking
+Normal Thinking
+└── ThinkingContent
+    ├── thinking = text
+    ├── thinkingSignature?
+    └── redacted absent/false
 ```
 
 and:
 
 ```text
-redacted thinking
+Redacted Thinking
+└── ThinkingContent
+    ├── thinking
+    ├── thinkingSignature
+    └── redacted = true
 ```
 
-are two states of the same Pi `ThinkingContent` type.
+The source explicitly documents that an opaque encrypted redacted payload may be stored in:
+
+```text
+thinkingSignature
+```
+
+so it can be replayed to the provider later.
+
+Therefore an Anthropic `redacted_thinking` block maps to a **state of Pi `ThinkingContent`**, not a separate Pi content class.
+
+That mapping itself belongs in the Anthropic → Pi conversion spec.
 
 ------
 
-# 12. ToolCall
+## 4.13 AssistantMessage as conversation history
 
-## 12.1 ToolCall Tree
+`AssistantMessage` is both:
+
+1. the final output of an invocation; and
+2. a valid previous message inside the next `Context.messages`.
+
+This is intentional.
+
+Typical lifecycle:
+
+```text
+Context
+└── UserMessage
+
+        ↓ generate
+
+AssistantMessage
+
+        ↓ append
+
+Context.messages
+├── UserMessage
+└── AssistantMessage
+```
+
+Pi's own examples use this exact pattern.
+
+------
+
+## 4.14 Aborted/error assistant history
+
+Even an aborted `AssistantMessage` can technically be appended to context and continued.
+
+Pi's README explicitly demonstrates continuing after an aborted partial response.
+
+That is a Pi capability.
+
+A higher-level application such as LuckyToken may deliberately choose a stricter atomic policy and discard failed/aborted partial responses instead.
+
+That is an application/runtime policy, not a Pi IR restriction.
+
+------
+
+# 5. Tool Semantic Protocol
+
+## 5.1 Tool hierarchy
+
+Pi separates:
+
+```text
+Tool Protocol
+│
+├── Definition
+│   └── Context.tools[]
+│
+├── Model Invocation
+│   └── AssistantMessage
+│       └── ToolCall
+│
+└── Execution Result
+    └── ToolResultMessage
+```
+
+This mirrors the semantic tool lifecycle rather than provider-specific wire formats.
+
+------
+
+## 5.2 Tool definition
+
+Exact generic type:
+
+```ts
+interface Tool<TParameters extends TSchema = TSchema> {
+  name: string
+  description: string
+  parameters: TParameters
+
+  constrainedSampling?:
+    | false
+    | ConstrainedSamplingConfig
+}
+```
+
+Tool schemas use TypeBox `TSchema`.
+
+Pi re-exports:
+
+```text
+Type
+Static
+TSchema
+```
+
+from its public core entrypoint.
+
+------
+
+## 5.3 Tool tree
+
+```text
+Tool
+├── name
+├── description
+├── parameters
+│   └── TypeBox schema
+│
+└── constrainedSampling?
+```
+
+Unlike some wire protocols, Pi's generic Tool does not have:
+
+```text
+type = "function"
+```
+
+as part of the normal semantic definition.
+
+------
+
+## 5.4 Constrained sampling
+
+Pi supports:
+
+```text
+constrainedSampling
+├── false
+│
+├── json_schema
+│   ├── type = "json_schema"
+│   └── strict
+│       ├── prefer
+│       └── require
+│
+└── grammar
+    ├── type = "grammar"
+    └── variants
+        ├── openai_lark?
+        └── openai_regex?
+```
+
+Exact union:
+
+```ts
+type ConstrainedSamplingConfig =
+  | {
+      type: "json_schema"
+      strict: "prefer" | "require"
+    }
+  | {
+      type: "grammar"
+      variants: Partial<
+        Record<
+          "openai_lark" | "openai_regex",
+          string
+        >
+      >
+    }
+```
+
+This describes semantic intent/capability.
+
+Individual provider adapters determine whether and how it can be represented upstream.
+
+------
+
+## 5.5 ToolCall
+
+Tree:
 
 ```text
 ToolCall
-│
 ├── type = "toolCall"
 │
 ├── Identity
@@ -749,7 +1110,7 @@ ToolCall
     └── thoughtSignature?
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface ToolCall {
@@ -767,79 +1128,94 @@ interface ToolCall {
 
 ------
 
-## 12.2 Tool Identity
+## 5.6 Tool identity
 
 ```text
-ToolCall
-├── id
-└── name
+AssistantMessage
+└── ToolCall
+    └── id = X
+         │
+         ▼
+ToolResultMessage
+└── toolCallId = X
 ```
 
-identify one semantic tool invocation.
-
-The tool result references this invocation through:
+Therefore:
 
 ```text
+ToolCall.id
+=
 ToolResultMessage.toolCallId
 ```
 
-------
+is the core cross-turn identity invariant.
 
-## 12.3 Tool Arguments
-
-Completed tool arguments are represented as:
-
-```text
-arguments
-└── Record<string, any>
-```
-
-Partial streaming tool JSON is **not** represented by `ToolCall.arguments`.
-
-Partial tool input exists only in the stream event lifecycle before `toolcall_end`.
+A protocol conversion must preserve this identity.
 
 ------
 
-## 12.4 Tool Provider Metadata
+## 5.7 Tool arguments
 
-```text
-thoughtSignature?
+Completed semantic arguments are:
+
+```ts
+arguments: Record<string, any>
 ```
 
-is used by providers such as Google for opaque reasoning continuity.
+A completed `ToolCall` therefore does not contain raw partial JSON syntax.
 
-```text
-namespace?
-```
+However, during stream generation the partial `ToolCall` object can contain partially parsed arguments.
 
-supports namespaced/dynamically loaded tools such as those represented by OpenAI Responses.
-
-These are part of the generic semantic tool-call object because Pi must round-trip provider-specific continuity where required.
+The stream lifecycle distinguishes this from a complete call.
 
 ------
 
-# 13. ToolResultMessage
+## 5.8 `thoughtSignature`
 
-## 13.1 ToolResult Tree
+```ts
+thoughtSignature?: string
+```
+
+is opaque provider continuity metadata.
+
+The source specifically notes Google-style thought context as one use.
+
+LuckyToken should preserve it when round-tripping Pi messages but should not interpret its contents.
+
+------
+
+## 5.9 `namespace`
+
+```ts
+namespace?: string
+```
+
+supports namespaced or dynamically loaded tool semantics such as OpenAI Responses tools.
+
+Again, this is semantic/provider continuity data, not part of ordinary tool arguments.
+
+------
+
+## 5.10 ToolResultMessage
+
+Tree:
 
 ```text
 ToolResultMessage
-│
 ├── role = "toolResult"
 │
-├── Tool Identity
+├── Identity
 │   ├── toolCallId
 │   └── toolName
 │
-├── Content
-│   └── content[]
-│       ├── TextContent
-│       └── ImageContent
+├── content[]
+│   ├── TextContent
+│   └── ImageContent
 │
 ├── Result State
 │   └── isError
 │
-├── Optional Tool Metadata
+├── Optional Metadata
 │   ├── details?
 │   ├── usage?
 │   └── addedToolNames?
@@ -847,7 +1223,7 @@ ToolResultMessage
 └── timestamp
 ```
 
-Type:
+Exact type:
 
 ```ts
 interface ToolResultMessage<TDetails = any> {
@@ -856,8 +1232,7 @@ interface ToolResultMessage<TDetails = any> {
   toolCallId: string
   toolName: string
 
-  content:
-    (TextContent | ImageContent)[]
+  content: (TextContent | ImageContent)[]
 
   details?: TDetails
 
@@ -873,405 +1248,310 @@ interface ToolResultMessage<TDetails = any> {
 
 ------
 
-## 13.2 Tool Identity Relationship
+## 5.11 `isError`
 
 ```text
-AssistantMessage
-└── ToolCall
-    └── id
-         │
-         ▼
-ToolResultMessage
-└── toolCallId
+false
+→ normal tool result
+
+true
+→ tool execution failed
 ```
 
-Semantic relationship:
-
-```text
-ToolCall.id
-=
-ToolResultMessage.toolCallId
-```
+Pi represents failure as structured state on the tool-result message rather than a separate error-message role.
 
 ------
 
-## 13.3 Tool Name
+## 5.12 Tool result usage
 
-Unlike some wire protocols that only reference a tool-call ID, Pi tool results also explicitly carry:
-
-```text
-toolName
-```
-
-Therefore the semantic tool result contains both:
-
-```text
-toolCallId
-toolName
-```
-
-------
-
-## 13.4 Tool Result Usage
-
-A tool result may contain:
-
-```text
+```ts
 usage?: Usage
 ```
 
-The source explicitly notes that this usage belongs to the tool execution itself and is:
+represents usage generated by the **tool execution itself** where available.
 
-```text
-not part of main LLM context accounting
-```
+The source explicitly states this is not part of main LLM context accounting.
 
 ------
 
-## 13.5 Deferred Tool Availability
+## 5.13 Deferred tool loading
 
-A tool result may also carry:
-
-```text
+```ts
 addedToolNames?: string[]
 ```
 
-This identifies tools from `Context.tools` that became available after this result.
+means that named tools from:
 
-It is used by providers with native deferred tool loading.
+```text
+Context.tools
+```
+
+became available after this tool result.
+
+Providers with native deferred tool loading may use this as the load point.
+
+Other providers may ignore it and treat all `Context.tools` as normally available.
 
 ------
 
-# 14. Tool Definitions
+# 6. Invocation Options
 
-## 14.1 Tool Tree
+## 6.1 Options hierarchy
+
+For the simplified API:
 
 ```text
-Tool
+ModelsSimpleStreamOptions
 │
-├── name
-├── description
-├── parameters
-│   └── TypeBox / JSON-schema-compatible schema
+├── Request Lifecycle
+│   ├── signal?
+│   ├── timeoutMs?
+│   ├── maxRetries?
+│   └── maxRetryDelayMs?
 │
-└── constrainedSampling?
-    │
-    ├── false
-    │
-    ├── JSON Schema Constraint
-    │   ├── type = "json_schema"
-    │   └── strict
-    │       ├── prefer
-    │       └── require
-    │
-    └── Grammar Constraint
-        ├── type = "grammar"
-        └── variants
-            ├── openai_lark?
-            └── openai_regex?
+├── Authentication / Provider Environment
+│   ├── apiKey?
+│   ├── env?
+│   └── headers?
+│
+├── HTTP / Transport
+│   ├── fetch?
+│   ├── transport?
+│   └── websocketConnectTimeoutMs?
+│
+├── Generation
+│   ├── temperature?
+│   ├── samplingParams?
+│   └── maxTokens?
+│
+├── Reasoning
+│   ├── reasoning?
+│   └── thinkingBudgets?
+│
+├── Cache / Session
+│   ├── cacheRetention?
+│   └── sessionId?
+│
+├── Deferred Execution
+│   └── deferred?
+│
+├── Metadata / Telemetry
+│   ├── metadata?
+│   └── telemetryContext?
+│
+├── Hooks
+│   ├── onPayload?
+│   └── onResponse?
+│
+└── Models-Level Transformation
+    └── transformHeaders?
 ```
 
-Type:
+The majority of these fields come from `ProviderRequestOptions`, `StreamOptions`, and `SimpleStreamOptions`; `transformHeaders` is added at the `Models` collection boundary.
+
+------
+
+## 6.2 ProviderRequestOptions
+
+Core structure:
 
 ```ts
-interface Tool<TParameters extends TSchema = TSchema> {
-  name: string
-  description: string
-  parameters: TParameters
+interface ProviderRequestOptions {
+  signal?: AbortSignal
 
-  constrainedSampling?:
-    | false
-    | ConstrainedSamplingConfig
+  telemetryContext?: TelemetryContext
+
+  apiKey?: string
+  fetch?: typeof globalThis.fetch
+
+  env?: Record<string, string>
+
+  onPayload?: (...)
+  onResponse?: (...)
+
+  headers?: Record<string, string | null>
+
+  timeoutMs?: number
+  maxRetries?: number
+  maxRetryDelayMs?: number
 }
 ```
 
 ------
 
-## 14.2 Tool Parameters
-
-The generic Pi tool input schema is represented through TypeBox's:
-
-```text
-TSchema
-```
-
-The semantic concept is:
-
-```text
-tool parameters schema
-```
-
-rather than any provider-specific tool-definition wire format.
-
-------
-
-# 15. Historical AssistantMessage
-
-An `AssistantMessage` can appear in two different semantic locations:
-
-```text
-AssistantMessage
-│
-├── Historical Context Message
-│   └── Context.messages[]
-│
-└── Current Invocation Result
-    └── stream terminal result
-```
-
-Both use the same type.
-
-This allows completed assistant output to be replayed directly as conversation history.
-
-------
-
-# 16. Options
-
-## 16.1 Models.streamSimple Options Tree
-
-The actual high-level option accepted by `Models.streamSimple()` is:
-
-```text
-ModelsSimpleStreamOptions
-│
-├── SimpleStreamOptions
-│   │
-│   ├── ProviderRequestOptions
-│   ├── StreamOptions
-│   └── Simple-Specific Options
-│   │
-│   └── inherited fields
-│
-└── ModelsRequestTransforms
-    └── transformHeaders?
-```
-
-This distinction matters:
-
-```text
-Provider.streamSimple()
-```
-
-receives:
-
-```text
-SimpleStreamOptions
-```
-
-whereas:
-
-```text
-Models.streamSimple()
-```
-
-accepts:
-
-```text
-ModelsSimpleStreamOptions
-```
-
-which adds a final header transformation hook.
-
-------
-
-# 17. Provider Request Options
-
-## 17.1 ProviderRequestOptions Tree
-
-```text
-ProviderRequestOptions
-│
-├── Lifecycle
-│   └── signal?
-│
-├── Telemetry
-│   └── telemetryContext?
-│
-├── Authentication Override
-│   └── apiKey?
-│
-├── Transport Injection
-│   ├── fetch?
-│   └── env?
-│
-├── Request Hooks
-│   ├── onPayload?
-│   └── onResponse?
-│
-├── Headers
-│   └── headers?
-│
-└── Retry / Timeout
-    ├── timeoutMs?
-    ├── maxRetries?
-    └── maxRetryDelayMs?
-```
-
-------
-
-## 17.2 Lifecycle
+## 6.3 `signal`
 
 ```ts
 signal?: AbortSignal
 ```
 
-is the generic cancellation contract for provider requests.
+This is the primary request cancellation mechanism.
+
+LuckyToken should pass its request-lifetime cancellation signal directly into Pi rather than invent a second provider-specific cancellation channel.
 
 ------
 
-## 17.3 Telemetry
-
-```ts
-telemetryContext?: TelemetryContext
-```
-
-carries explicit parent telemetry context for the logical request.
-
-This is execution metadata, not conversation content.
-
-------
-
-## 17.4 Authentication Override
+## 6.4 `apiKey`
 
 ```ts
 apiKey?: string
 ```
 
-allows explicit request-level API-key override.
+This is an explicit per-request auth override.
 
-This is distinct from normal credential resolution performed by `Models`.
-
-------
-
-## 17.5 Provider Environment
-
-```ts
-env?: ProviderEnv
-```
-
-represents provider-scoped environment/configuration overrides.
-
-These values take precedence over process-level environment values where provider implementations use them.
-
-------
-
-## 17.6 Fetch Injection
-
-```ts
-fetch?: FetchFunction
-```
-
-allows injection of a custom HTTP fetch implementation for providers that support it.
-
-It does not affect transports such as WebSockets.
-
-------
-
-## 17.7 Request Hooks
-
-Before transmission:
+At the `Models` runtime boundary:
 
 ```text
-onPayload
-└── inspect or replace provider payload
+explicit options.apiKey
+→ wins over resolved provider auth apiKey
 ```
 
-After HTTP response headers arrive:
-
-```text
-onResponse
-└── inspect provider response metadata
-```
-
-These are transport lifecycle hooks.
-
-They are not model-visible semantic information.
+For ordinary application operation, provider auth can instead be resolved by `Models`.
 
 ------
 
-## 17.8 Request Headers
+## 6.5 `env`
 
 ```ts
-headers?: Record<string, string | null>
+env?: Record<string, string>
 ```
 
-A string value overrides/adds a header.
+Provider-scoped environment overrides.
 
-A value of:
+These take precedence over ambient environment values used during provider resolution.
+
+They are execution configuration, not model-visible context.
+
+------
+
+## 6.6 `headers`
+
+Type:
+
+```ts
+Record<string, string | null>
+```
+
+Semantics:
 
 ```text
+string
+→ set/override header
+
 null
+→ suppress provider/API default header with same name
 ```
 
-suppresses a provider/API default header with the same name where supported.
+Header merging is case-insensitive at the `Models` layer.
 
 ------
 
-# 18. StreamOptions
+## 6.7 `fetch`
 
-## 18.1 StreamOptions Tree
-
-```text
-StreamOptions
-│
-├── ProviderRequestOptions
-│
-├── Generation
-│   ├── temperature?
-│   ├── maxTokens?
-│   └── samplingParams?
-│
-├── Transport Selection
-│   ├── transport?
-│   └── websocketConnectTimeoutMs?
-│
-├── Prompt Cache / Affinity
-│   ├── cacheRetention?
-│   └── sessionId?
-│
-└── Metadata
-    └── metadata?
-```
-
-------
-
-## 18.2 Temperature
+Optional custom HTTP implementation:
 
 ```ts
-temperature?: number
+fetch?: typeof globalThis.fetch
 ```
 
-Generic sampling temperature.
+Default:
 
-Individual providers/models may reject or ignore it.
+```text
+globalThis.fetch
+```
+
+It only applies to provider adapters capable of injecting a custom fetch implementation.
+
+It does not control WebSocket transports.
 
 ------
 
-## 18.3 Maximum Output Tokens
+## 6.8 Lifecycle controls
+
+```text
+timeoutMs
+maxRetries
+maxRetryDelayMs
+```
+
+are common request controls where the underlying provider/API supports them.
+
+`maxRetryDelayMs` has a documented default of:
+
+```text
+60000 ms
+```
+
+Setting it to:
+
+```text
+0
+```
+
+disables the retry-delay cap.
+
+------
+
+## 6.9 StreamOptions
+
+Additional stream options:
+
+```ts
+interface StreamOptions {
+  temperature?: number
+  samplingParams?: Record<string, unknown>
+  maxTokens?: number
+
+  transport?:
+    | "sse"
+    | "websocket"
+    | "websocket-cached"
+    | "auto"
+
+  cacheRetention?:
+    | "none"
+    | "short"
+    | "long"
+
+  sessionId?: string
+
+  websocketConnectTimeoutMs?: number
+
+  metadata?: Record<string, unknown>
+}
+```
+
+------
+
+## 6.10 `maxTokens`
 
 ```ts
 maxTokens?: number
 ```
 
-is the request-level output-token preference.
+is a request-level generation limit.
 
-It is distinct from:
+It is separate from:
 
 ```text
 Model.maxTokens
 ```
 
+which describes model capability/default metadata.
+
+A protocol adapter should not confuse these two layers.
+
 ------
 
-## 18.4 Sampling Parameters
+## 6.11 `samplingParams`
 
 ```ts
 samplingParams?: Record<string, unknown>
 ```
 
-is an escape hatch for sampling fields that Pi does not model individually.
+is a generic escape hatch for OpenAI-compatible endpoints.
 
-The source explicitly documents examples including:
+The source documents examples such as:
 
 ```text
 top_p
@@ -1280,100 +1560,144 @@ min_p
 repetition_penalty
 ```
 
-Only compatible API adapters apply these arbitrary fields.
+Per-request keys override:
+
+```text
+Model.samplingParams
+```
+
+for adapters that support this generic mechanism.
+
+Other API families may ignore it.
 
 ------
 
-## 18.5 Transport
+## 6.12 Transport
 
-Pi's normalized transport preference is:
+Normalized transport choices:
 
 ```text
-Transport
-├── sse
-├── websocket
-├── websocket-cached
-└── auto
+sse
+websocket
+websocket-cached
+auto
 ```
 
-Providers that do not support transport selection ignore it.
+A provider that does not support transport selection can ignore this option.
 
 ------
 
-## 18.6 Cache Retention
+## 6.13 Cache retention
+
+Normalized values:
 
 ```text
-cacheRetention
-├── none
-├── short
-└── long
+none
+short
+long
 ```
 
-Default documented behavior is:
+Default documented preference:
 
 ```text
 short
 ```
 
-Providers map the preference to their own cache mechanisms.
+Providers translate these values into whatever cache mechanism their wire protocol supports.
+
+This is exactly why cache policy belongs in `Options`, not `Context`.
 
 ------
 
-## 18.7 Session Identifier
+## 6.14 `sessionId`
 
 ```ts
 sessionId?: string
 ```
 
-can be used by provider adapters for:
+allows providers to perform:
 
-```text
-prompt caching
-request routing
-session affinity
-other session-aware behavior
-```
+- session-affinity routing;
+- provider prompt caching;
+- session-aware behavior.
 
-Providers that do not use it ignore it.
+Providers that do not understand it ignore it.
+
+It is request execution metadata, not conversational content.
 
 ------
 
-## 18.8 Metadata
+## 6.15 `metadata`
 
 ```ts
 metadata?: Record<string, unknown>
 ```
 
-Providers consume metadata fields they recognize and ignore others.
+Provider adapters extract fields they understand.
 
-------
+Other entries may be ignored.
 
-# 19. SimpleStreamOptions
-
-## 19.1 Simple-Specific Tree
+Again:
 
 ```text
-SimpleStreamOptions
-│
-├── StreamOptions
-│
-├── Reasoning
-│   ├── reasoning?
-│   └── thinkingBudgets?
-│
-└── Deferred Execution
-    └── deferred?
+Options.metadata
+≠
+Context
 ```
 
 ------
 
-## 19.2 Reasoning
+## 6.16 Hooks
+
+### `onPayload`
+
+```ts
+onPayload?: (
+  payload,
+  model
+) => payload | undefined | Promise<...>
+```
+
+Called before sending the provider payload.
+
+Returning:
+
+```text
+undefined
+```
+
+keeps the payload unchanged.
+
+Returning another value replaces it.
+
+------
+
+### `onResponse`
+
+Invoked after an HTTP response has arrived.
+
+Normalized response metadata:
+
+```ts
+interface ProviderResponse {
+  status: number
+  headers: Record<string, string>
+}
+```
+
+These hooks belong to execution/debugging infrastructure.
+
+------
+
+## 6.17 Simplified reasoning
+
+`SimpleStreamOptions` adds:
 
 ```ts
 reasoning?: ThinkingLevel
 ```
 
-Normalized levels:
+with values:
 
 ```text
 minimal
@@ -1384,468 +1708,174 @@ xhigh
 max
 ```
 
-`streamSimple()` is the API that accepts Pi's normalized reasoning abstraction.
+This is the main provider-neutral reasoning control.
 
-Provider-specific APIs then translate this normalized value into their own request representation.
+Provider adapters translate it into their own wire representation.
 
-------
-
-## 19.3 Thinking Budgets
-
-```text
-thinkingBudgets
-├── minimal?
-├── low?
-├── medium?
-└── high?
-```
-
-These are optional token budgets for providers whose reasoning levels are implemented through token budgets.
+Pi's README explicitly recommends this unified interface for `streamSimple()` / `completeSimple()`.
 
 ------
 
-## 19.4 Deferred Execution
+## 6.18 Thinking budgets
 
-```text
-deferred
-│
-├── boolean
-│
-└── configuration
-    └── window?
-        ├── 15m
-        ├── 1h
-        └── 24h
+```ts
+thinkingBudgets?: {
+  minimal?: number
+  low?: number
+  medium?: number
+  high?: number
+}
 ```
 
-Type:
+These apply to token-budget-based providers.
+
+They do not redefine Pi's generic reasoning-level enum.
+
+------
+
+## 6.19 Deferred execution
 
 ```ts
 deferred?:
   | boolean
   | {
-      window?: "15m" | "1h" | "24h"
+      window?:
+        | "15m"
+        | "1h"
+        | "24h"
     }
 ```
 
-This requests asynchronous/deferred execution from a provider that supports it.
+A capable provider may return a durable deferred handle rather than completing immediately.
+
+This is optional provider functionality.
 
 ------
 
-# 20. Models-Level Header Transform
+# 7. AssistantMessage
 
-`Models.streamSimple()` additionally accepts:
-
-```text
-ModelsRequestTransforms
-└── transformHeaders?
-transformHeaders?:
-  (
-    headers: ProviderHeaders
-  ) =>
-    ProviderHeaders |
-    Promise<ProviderHeaders>
-```
-
-The transform runs after:
-
-```text
-provider/model headers
-+
-resolved authentication headers
-+
-explicit request headers
-```
-
-have been assembled.
-
-This hook belongs to `Models`, not to the lower-level `Provider.streamSimple()` contract.
-
-------
-
-# 21. Complete Request-Side Tree
-
-```text
-Pi Invocation
-│
-├── Model
-│   │
-│   ├── Identity
-│   │   ├── id
-│   │   ├── name
-│   │   ├── provider
-│   │   └── api
-│   │
-│   ├── Endpoint
-│   │   └── baseUrl
-│   │
-│   ├── Capabilities
-│   │   ├── reasoning
-│   │   └── input[]
-│   │       ├── text
-│   │       └── image
-│   │
-│   ├── Limits
-│   │   ├── contextWindow
-│   │   └── maxTokens
-│   │
-│   ├── Reasoning Mapping
-│   │   └── thinkingLevelMap
-│   │
-│   ├── Pricing
-│   │   └── cost
-│   │
-│   ├── samplingParams?
-│   ├── headers?
-│   └── compat?
-│
-├── Context
-│   │
-│   ├── systemPrompt?
-│   │
-│   ├── messages[]
-│   │   │
-│   │   ├── UserMessage
-│   │   │   └── content
-│   │   │       ├── string
-│   │   │       ├── TextContent
-│   │   │       └── ImageContent
-│   │   │
-│   │   ├── AssistantMessage
-│   │   │   └── content[]
-│   │   │       ├── TextContent
-│   │   │       ├── ThinkingContent
-│   │   │       └── ToolCall
-│   │   │
-│   │   └── ToolResultMessage
-│   │       ├── toolCallId
-│   │       ├── toolName
-│   │       ├── content[]
-│   │       │   ├── TextContent
-│   │       │   └── ImageContent
-│   │       ├── isError
-│   │       ├── details?
-│   │       ├── usage?
-│   │       └── addedToolNames?
-│   │
-│   └── tools[]?
-│       └── Tool
-│           ├── name
-│           ├── description
-│           ├── parameters
-│           └── constrainedSampling?
-│
-└── ModelsSimpleStreamOptions?
-    │
-    ├── Lifecycle
-    │   └── signal
-    │
-    ├── Generation
-    │   ├── temperature
-    │   ├── maxTokens
-    │   └── samplingParams
-    │
-    ├── Reasoning
-    │   ├── reasoning
-    │   └── thinkingBudgets
-    │
-    ├── Authentication Override
-    │   └── apiKey
-    │
-    ├── Transport
-    │   ├── headers
-    │   ├── env
-    │   ├── fetch
-    │   └── transport
-    │
-    ├── Retry / Timeout
-    │   ├── timeoutMs
-    │   ├── maxRetries
-    │   ├── maxRetryDelayMs
-    │   └── websocketConnectTimeoutMs
-    │
-    ├── Cache / Affinity
-    │   ├── cacheRetention
-    │   └── sessionId
-    │
-    ├── Metadata / Telemetry
-    │   ├── metadata
-    │   └── telemetryContext
-    │
-    ├── Hooks
-    │   ├── onPayload
-    │   ├── onResponse
-    │   └── transformHeaders
-    │
-    └── Deferred
-        └── deferred
-```
-
-------
-
-# 22. Response-Side IR
-
-The response side has two layers:
-
-```text
-Pi Response
-│
-├── Runtime Incremental Form
-│   └── AssistantMessageEventStream
-│
-└── Terminal Semantic Form
-    └── AssistantMessage
-```
-
-The stream is a construction protocol.
-
-The `AssistantMessage` is the final semantic object.
-
-------
-
-# 23. AssistantMessage
-
-## 23.1 AssistantMessage Tree
+## 7.1 Response hierarchy
 
 ```text
 AssistantMessage
 │
-├── Role
-│   └── role = "assistant"
+├── Identity
+│   ├── role = "assistant"
+│   ├── api
+│   ├── provider
+│   ├── model
+│   ├── responseModel?
+│   └── responseId?
 │
-├── Semantic Content
+├── Content
 │   └── content[]
 │       ├── TextContent
 │       ├── ThinkingContent
 │       └── ToolCall
 │
-├── Request Identity
-│   ├── api
-│   ├── provider
-│   └── model
-│
-├── Upstream Response Identity
-│   ├── responseModel?
-│   └── responseId?
+├── Accounting
+│   └── usage
 │
 ├── Termination
 │   ├── stopReason
 │   ├── rawStopReason?
-│   ├── endTurn?
-│   ├── errorMessage?
+│   └── endTurn?
+│
+├── Deferred State
 │   └── deferred?
 │
-├── Usage
-│   └── Usage
-│
-├── Diagnostics
+├── Failure Information
+│   ├── errorMessage?
 │   └── diagnostics?
 │
 └── timestamp
 ```
 
+Exact source type is defined in `types.ts`.
+
 ------
 
-# 24. Requested vs Actual Model Identity
+## 7.2 Field contract
 
-The assistant response preserves both levels when necessary:
+| Field           | Type              | Meaning                                         |
+| --------------- | ----------------- | ----------------------------------------------- |
+| `role`          | `"assistant"`     | constant semantic role                          |
+| `content`       | array             | ordered generated semantic content              |
+| `api`           | string            | API implementation used                         |
+| `provider`      | string            | provider used                                   |
+| `model`         | string            | requested Pi model ID                           |
+| `responseModel` | string?           | concrete model reported upstream when different |
+| `responseId`    | string?           | upstream response/message identifier            |
+| `diagnostics`   | array?            | provider/runtime diagnostics                    |
+| `usage`         | `Usage`           | normalized token/cost accounting                |
+| `stopReason`    | `StopReason`      | normalized terminal/current state               |
+| `deferred`      | `DeferredHandle`? | async provider handle                           |
+| `errorMessage`  | string?           | failure description                             |
+| `rawStopReason` | string?           | original upstream reason                        |
+| `endTurn`       | boolean?          | preserved provider indication                   |
+| `timestamp`     | number            | Unix milliseconds                               |
+
+------
+
+## 7.3 `model` vs `responseModel`
 
 ```text
-AssistantMessage
-│
-├── model
-│   └── requested Pi model ID
-│
-└── responseModel?
-    └── concrete upstream response model
-```
+model
+→ model Pi requested
 
-`responseModel` is used when the provider reports a concrete model that differs from the requested model.
+responseModel
+→ concrete model reported by provider when different
+```
 
 Example use case:
 
 ```text
 requested:
-  auto
+openrouter / auto
 
-actual upstream:
-  anthropic/...
+provider actually selected:
+anthropic/...
 ```
+
+The semantic distinction should be retained.
 
 ------
 
-## 24.1 Response Identifier
+## 7.4 `responseId`
 
-```ts
-responseId?: string
-```
+Opaque provider-specific response/message identifier.
 
-stores the provider's response/message identifier when one is exposed.
+It is optional because not every upstream API exposes one.
 
-It is separate from:
-
-```text
-ToolCall.id
-```
-
-and from any client-protocol message ID.
+Do not make it a required universal identifier.
 
 ------
 
-# 25. Assistant Content Tree
+## 7.5 Content ordering
 
 ```text
 AssistantMessage.content[]
-│
-├── TextContent
-│   ├── text
-│   └── textSignature?
-│
+```
+
+is ordered.
+
+Example:
+
+```text
+content[]
 ├── ThinkingContent
-│   ├── thinking
-│   ├── thinkingSignature?
-│   └── redacted?
-│
+├── TextContent
+├── ToolCall
 └── ToolCall
-    ├── id
-    ├── name
-    ├── arguments
-    ├── thoughtSignature?
-    └── namespace?
 ```
 
-The array order is the semantic output order.
+Protocol conversion must preserve this ordering whenever source semantics depend on it.
 
 ------
 
-# 26. Termination
+# 8. Usage
 
-## 26.1 StopReason Tree
-
-```text
-StopReason
-│
-├── Nonterminal
-│   └── pending
-│
-├── Successful Terminal
-│   ├── stop
-│   ├── length
-│   ├── toolUse
-│   └── deferred
-│
-└── Failure Terminal
-    ├── error
-    └── aborted
-```
-
-Exact union:
-
-```ts
-type StopReason =
-  | "pending"
-  | "stop"
-  | "length"
-  | "toolUse"
-  | "error"
-  | "aborted"
-  | "deferred"
-```
-
-------
-
-## 26.2 Raw Stop Reason
-
-```ts
-rawStopReason?: string
-```
-
-can preserve the provider's original stop-reason value before normalization into the Pi `StopReason` vocabulary.
-
-------
-
-## 26.3 End-Turn Metadata
-
-```ts
-endTurn?: boolean
-```
-
-preserves an explicit provider indication that the model ended its turn.
-
-The source documents that it is currently:
-
-```text
-diagnostic/debugging information
-```
-
-and does not control agent flow.
-
-------
-
-## 26.4 Error Message
-
-Failure messages can carry:
-
-```ts
-errorMessage?: string
-```
-
-The stream contract requires an error-terminal assistant message to use:
-
-```text
-stopReason = "error"
-```
-
-or:
-
-```text
-stopReason = "aborted"
-```
-
-and include the error information.
-
-------
-
-# 27. Deferred Response
-
-## 27.1 DeferredHandle Tree
-
-```text
-DeferredHandle
-│
-├── Provider Identity
-│   ├── provider
-│   ├── modelId
-│   └── api
-│
-├── Provider Handle
-│   └── id
-│
-├── Lifecycle Hints
-│   ├── expiresAt?
-│   └── pollAfterMs?
-│
-└── Reconstruction Data
-    └── data?
-```
-
-A successful deferred terminal uses:
-
-```text
-stopReason = "deferred"
-```
-
-and may place the handle in:
-
-```text
-AssistantMessage.deferred
-```
-
-------
-
-# 28. Usage
-
-## 28.1 Usage Tree
+## 8.1 Usage hierarchy
 
 ```text
 Usage
@@ -1867,483 +1897,436 @@ Usage
     └── total
 ```
 
+Exact type:
+
+```ts
+interface Usage {
+  input: number
+  output: number
+
+  cacheRead: number
+  cacheWrite: number
+  cacheWrite1h?: number
+
+  reasoning?: number
+
+  totalTokens: number
+
+  cost: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+  }
+}
+```
+
 ------
 
-## 28.2 Reasoning Token Invariant
+## 8.2 Reasoning token invariant
 
-The source explicitly defines:
+When present:
 
 ```text
 reasoning
-⊆
-output
 ```
 
-`output` already includes reasoning tokens.
+is a subset of:
+
+```text
+output
+```
 
 Therefore:
 
 ```text
+total output
+≠
 output + reasoning
 ```
 
-must **not** be used to calculate total completion tokens.
+because that would double-count reasoning tokens.
+
+The source documents this explicitly.
 
 ------
 
-## 28.3 Long Cache Write Breakdown
+## 8.3 `cacheWrite1h`
 
-```ts
-cacheWrite1h?: number
+When present:
+
+```text
+cacheWrite1h
 ```
 
-is the subset of:
+is a subset of:
 
 ```text
 cacheWrite
 ```
 
-that was written with one-hour retention.
+It currently represents the long-retention split reported by Anthropic.
 
-The source notes that currently only Anthropic reports this split.
-
-------
-
-# 29. Diagnostics
-
-```text
-AssistantMessage
-└── diagnostics?
-    └── AssistantMessageDiagnostic[]
-```
-
-Diagnostics carry redacted provider/runtime information about failures and recoveries.
-
-They are response diagnostics rather than model-generated semantic content.
-
-They are therefore structurally separate from:
-
-```text
-AssistantMessage.content[]
-```
+It must not be added again when computing total cache-written tokens.
 
 ------
 
-# 30. Event Stream Protocol
+## 8.4 Cost
 
-## 30.1 Top-Level Event Tree
+`Usage.cost` is normalized alongside token counts.
+
+Applications consuming Pi should normally use:
+
+```text
+usage.cost.total
+```
+
+instead of recomputing costs from provider-specific wire responses.
+
+------
+
+# 9. Streaming Event Protocol
+
+## 9.1 Event hierarchy
 
 ```text
 AssistantMessageEventStream
 │
-├── Message Start
+├── Message
 │   └── start
 │
-├── Content Lifecycle*
-│   │
-│   ├── Text Lifecycle
-│   │
-│   ├── Thinking Lifecycle
-│   │
-│   └── ToolCall Lifecycle
+├── Text Content
+│   ├── text_start
+│   ├── text_delta*
+│   └── text_end
+│
+├── Thinking Content
+│   ├── thinking_start
+│   ├── thinking_delta*
+│   └── thinking_end
+│
+├── Tool Content
+│   ├── toolcall_start
+│   ├── toolcall_delta*
+│   └── toolcall_end
 │
 └── Terminal
     ├── done
     └── error
 ```
 
-The source contract states that streams should emit:
+This is the actual `AssistantMessageEvent` union.
+
+------
+
+## 9.2 Event field contract
+
+| Event            | Key fields                            |
+| ---------------- | ------------------------------------- |
+| `start`          | `partial`                             |
+| `text_start`     | `contentIndex`, `partial`             |
+| `text_delta`     | `contentIndex`, `delta`, `partial`    |
+| `text_end`       | `contentIndex`, `content`, `partial`  |
+| `thinking_start` | `contentIndex`, `partial`             |
+| `thinking_delta` | `contentIndex`, `delta`, `partial`    |
+| `thinking_end`   | `contentIndex`, `content`, `partial`  |
+| `toolcall_start` | `contentIndex`, `partial`             |
+| `toolcall_delta` | `contentIndex`, `delta`, `partial`    |
+| `toolcall_end`   | `contentIndex`, `toolCall`, `partial` |
+| `done`           | `reason`, `message`                   |
+| `error`          | `reason`, `error`                     |
+
+------
+
+## 9.3 Message lifecycle
+
+A conforming stream should emit:
 
 ```text
 start
+↓
+content lifecycle*
+↓
+done | error
 ```
 
-before partial updates and terminate with exactly the semantic terminal categories:
+The source contract explicitly says:
+
+> `start` precedes partial updates, and every conforming stream terminates with either `done` or `error`.
+
+------
+
+## 9.4 `partial`
+
+Most non-terminal events contain:
+
+```ts
+partial: AssistantMessage
+```
+
+This is the current accumulated semantic message state.
+
+It allows a consumer to inspect:
 
 ```text
-done
-error
+partial.content
+partial.usage
+partial.stopReason
+...
+```
+
+while generation continues.
+
+A converter should not treat this partial message as terminal state.
+
+------
+
+## 9.5 `contentIndex`
+
+Every content lifecycle event identifies:
+
+```text
+contentIndex
+```
+
+corresponding to:
+
+```text
+partial.content[contentIndex]
+```
+
+This gives the stream a hierarchical relationship:
+
+```text
+AssistantMessage
+└── content[index]
+    ├── text lifecycle
+    ├── thinking lifecycle
+    └── tool lifecycle
+```
+
+This should be preferred over maintaining one unstructured global delta buffer.
+
+------
+
+## 9.6 Text lifecycle
+
+```text
+TextContent[index]
+├── text_start
+├── text_delta*
+└── text_end
+```
+
+### Start
+
+```ts
+{
+  type: "text_start",
+  contentIndex,
+  partial
+}
+```
+
+### Delta
+
+```ts
+{
+  type: "text_delta",
+  contentIndex,
+  delta,
+  partial
+}
+```
+
+`delta` is newly received text.
+
+### End
+
+```ts
+{
+  type: "text_end",
+  contentIndex,
+  content,
+  partial
+}
+```
+
+`content` contains the completed text for that block.
+
+------
+
+## 9.7 Thinking lifecycle
+
+```text
+ThinkingContent[index]
+├── thinking_start
+├── thinking_delta*
+└── thinking_end
+```
+
+`thinking_delta.delta` is incremental reasoning text.
+
+`thinking_end.content` is the completed thinking text for that content block.
+
+------
+
+## 9.8 Tool-call lifecycle
+
+```text
+ToolCall[index]
+├── toolcall_start
+├── toolcall_delta*
+└── toolcall_end
+```
+
+This distinction is particularly important for a protocol router.
+
+------
+
+## 9.9 `toolcall_start`
+
+At start:
+
+```text
+tool identity exists
+arguments may still be incomplete
+```
+
+The partial message already contains a `ToolCall` at:
+
+```text
+partial.content[contentIndex]
+```
+
+Pi's stream tests verify that the tool name and ID are available at start.
+
+------
+
+## 9.10 `toolcall_delta`
+
+Event:
+
+```ts
+{
+  type: "toolcall_delta",
+  contentIndex,
+  delta,
+  partial
+}
+```
+
+Two representations coexist intentionally:
+
+```text
+event.delta
+→ raw incremental serialized argument fragment
+
+event.partial.content[contentIndex].arguments
+→ current partially parsed object
+```
+
+Pi's tests explicitly verify that during tool deltas:
+
+```text
+ToolCall.arguments
+```
+
+already exists as an object and can be partially populated.
+
+This leads to a critical lifecycle rule:
+
+> A partially populated `ToolCall` inside `partial` is not yet a completed semantic tool call.
+
+------
+
+## 9.11 `toolcall_end`
+
+Event:
+
+```ts
+{
+  type: "toolcall_end",
+  contentIndex,
+  toolCall,
+  partial
+}
+```
+
+Here:
+
+```text
+toolCall
+```
+
+is the completed semantic `ToolCall`.
+
+Only at this stage should a stream converter treat streamed tool arguments as complete.
+
+------
+
+## 9.12 Parallel/interleaved content
+
+Because every lifecycle event carries a:
+
+```text
+contentIndex
+```
+
+consumers should maintain state keyed by index.
+
+Do not assume only one active content block exists globally.
+
+This is especially important when adapting protocols capable of parallel tool calls or interleaved structured content.
+
+------
+
+# 10. Terminal, Error, Abort, and Deferred Semantics
+
+## 10.1 StopReason
+
+Exact normalized union:
+
+```text
+StopReason
+├── pending
+├── stop
+├── length
+├── toolUse
+├── error
+├── aborted
+└── deferred
 ```
 
 ------
 
-# 31. AssistantMessageEventStream Runtime Shape
+## 10.2 Meaning
 
-`AssistantMessageEventStream` is:
-
-```text
-AsyncIterable<AssistantMessageEvent>
-+
-result(): Promise<AssistantMessage>
-```
-
-Its generic event-stream implementation contains an internal queue:
-
-```text
-Event arrives
-│
-├── iterator currently waiting
-│   └── deliver immediately
-│
-└── no waiting iterator
-    └── enqueue event
-```
-
-After a terminal event is pushed, later `push()` calls are ignored.
+| Reason     | State                                         |
+| ---------- | --------------------------------------------- |
+| `pending`  | partial/in-progress message                   |
+| `stop`     | successful normal completion                  |
+| `length`   | successful terminal due to output limit       |
+| `toolUse`  | successful terminal requesting tool execution |
+| `deferred` | successful terminal yielding deferred work    |
+| `error`    | failed generation                             |
+| `aborted`  | request cancellation                          |
 
 ------
 
-# 32. Start Event
+## 10.3 Successful stream terminal
+
+`done` can only carry:
 
 ```text
-start
-└── partial
-    └── AssistantMessage
+stop
+length
+toolUse
+deferred
 ```
 
 Type:
-
-```ts
-{
-  type: "start"
-  partial: AssistantMessage
-}
-```
-
-This represents the initial partial assistant-message state.
-
-------
-
-# 33. Content Index
-
-All incremental content events use:
-
-```ts
-contentIndex: number
-```
-
-This identifies:
-
-```text
-AssistantMessage.content[contentIndex]
-```
-
-Conceptually:
-
-```text
-AssistantMessage.content[]
-│
-├── [0] ThinkingContent
-├── [1] TextContent
-└── [2] ToolCall
-```
-
-The event protocol therefore already supplies canonical content ordering.
-
-------
-
-# 34. Text Event Lifecycle
-
-## 34.1 Tree
-
-```text
-Text Lifecycle
-│
-├── text_start
-│   ├── contentIndex
-│   └── partial
-│
-├── text_delta*
-│   ├── contentIndex
-│   ├── delta
-│   └── partial
-│
-└── text_end
-    ├── contentIndex
-    ├── content
-    └── partial
-```
-
-State machine:
-
-```text
-NONE
- │
- │ text_start
- ▼
-OPEN
- │
- ├── text_delta*
- │
- │ text_end
- ▼
-COMPLETE
-```
-
-------
-
-## 34.2 Text Start
-
-```ts
-{
-  type: "text_start"
-  contentIndex: number
-  partial: AssistantMessage
-}
-```
-
-------
-
-## 34.3 Text Delta
-
-```ts
-{
-  type: "text_delta"
-  contentIndex: number
-  delta: string
-  partial: AssistantMessage
-}
-```
-
-`delta` is the incremental text fragment.
-
-------
-
-## 34.4 Text End
-
-```ts
-{
-  type: "text_end"
-  contentIndex: number
-  content: string
-  partial: AssistantMessage
-}
-```
-
-`content` is the completed text value for that block.
-
-------
-
-# 35. Thinking Event Lifecycle
-
-## 35.1 Tree
-
-```text
-Thinking Lifecycle
-│
-├── thinking_start
-│   ├── contentIndex
-│   └── partial
-│
-├── thinking_delta*
-│   ├── contentIndex
-│   ├── delta
-│   └── partial
-│
-└── thinking_end
-    ├── contentIndex
-    ├── content
-    └── partial
-```
-
-State machine:
-
-```text
-NONE
- │
- │ thinking_start
- ▼
-OPEN
- │
- ├── thinking_delta*
- │
- │ thinking_end
- ▼
-COMPLETE
-```
-
-------
-
-## 35.2 Signature Handling
-
-The generic Pi event union does **not** define a separate:
-
-```text
-thinking_signature_delta
-```
-
-or:
-
-```text
-signature_delta
-```
-
-event.
-
-Provider-specific signatures are represented through the evolving:
-
-```text
-partial: AssistantMessage
-```
-
-and ultimately through:
-
-```text
-ThinkingContent.thinkingSignature
-```
-
-in the semantic message.
-
-This is an important distinction between Pi's generic event protocol and wire protocols such as Anthropic Messages SSE.
-
-------
-
-# 36. ToolCall Event Lifecycle
-
-## 36.1 Tree
-
-```text
-ToolCall Lifecycle
-│
-├── toolcall_start
-│   ├── contentIndex
-│   └── partial
-│
-├── toolcall_delta*
-│   ├── contentIndex
-│   ├── delta
-│   └── partial
-│
-└── toolcall_end
-    ├── contentIndex
-    ├── toolCall
-    └── partial
-```
-
-State:
-
-```text
-NONE
- │
- │ toolcall_start
- ▼
-OPEN
- │
- ├── toolcall_delta*
- │
- │ toolcall_end
- ▼
-COMPLETE
-```
-
-------
-
-## 36.2 Partial Tool Input
-
-```ts
-{
-  type: "toolcall_delta"
-  contentIndex: number
-  delta: string
-  partial: AssistantMessage
-}
-```
-
-`delta` is a string fragment of the streaming tool-call representation.
-
-It is temporary stream state.
-
-It is not the completed semantic tool-call object.
-
-------
-
-## 36.3 Completed ToolCall
-
-```ts
-{
-  type: "toolcall_end"
-
-  contentIndex: number
-
-  toolCall: ToolCall
-
-  partial: AssistantMessage
-}
-```
-
-The authoritative complete semantic call is:
-
-```text
-toolcall_end.toolCall
-```
-
-Therefore:
-
-```text
-toolcall_delta
-≠
-ToolCall
-```
-
-------
-
-# 37. Partial AssistantMessage
-
-Every nonterminal semantic event carries:
-
-```text
-partial: AssistantMessage
-```
-
-This is Pi's current accumulated semantic state.
-
-Conceptually:
-
-```text
-Event
-│
-├── event-specific delta/completion data
-└── partial
-    └── current complete message snapshot/state
-```
-
-Consumers can inspect this evolving message while the stream is running.
-
-The terminal events then provide the final message separately.
-
-------
-
-# 38. Terminal Events
-
-## 38.1 Terminal Tree
-
-```text
-Terminal
-│
-├── Success
-│   └── done
-│       ├── reason
-│       │   ├── stop
-│       │   ├── length
-│       │   ├── toolUse
-│       │   └── deferred
-│       │
-│       └── message
-│           └── AssistantMessage
-│
-└── Failure
-    └── error
-        ├── reason
-        │   ├── error
-        │   └── aborted
-        │
-        └── error
-            └── AssistantMessage
-```
-
-------
-
-# 39. Done Event
 
 ```ts
 {
@@ -2359,17 +2342,18 @@ Terminal
 }
 ```
 
-This is the successful terminal event.
-
-The authoritative final result is:
-
-```text
-done.message
-```
-
 ------
 
-# 40. Error Event
+## 10.4 Failure terminal
+
+`error` can only carry:
+
+```text
+error
+aborted
+```
+
+Type:
 
 ```ts
 {
@@ -2383,187 +2367,253 @@ done.message
 }
 ```
 
-This is the failure terminal event.
+The `AssistantMessage` may contain partial content and partial usage accumulated before failure.
 
-The final semantic failure object is:
-
-```text
-error.error
-```
-
-Despite the property name, it is still an:
-
-```text
-AssistantMessage
-```
-
-not a JavaScript `Error`.
+Pi documents this explicitly.
 
 ------
 
-# 41. `result()` Semantics
+## 10.5 `.result()` is not a success predicate
 
-`AssistantMessageEventStream.result()` resolves when either:
+`AssistantMessageEventStream` is implemented as:
 
 ```text
 done
+→ result = event.message
+
+error
+→ result = event.error
+```
+
+Therefore:
+
+```ts
+const message = await stream.result()
+```
+
+may produce:
+
+```text
+stopReason = stop
 ```
 
 or:
 
 ```text
-error
+stopReason = error
 ```
 
-is pushed.
-
-Resolution:
+or:
 
 ```text
-done
-└── result() resolves to done.message
-error
-└── result() resolves to error.error
+stopReason = aborted
 ```
 
-Therefore:
+without the promise rejecting merely because generation failed.
 
-```text
-await stream.result()
+Correct success test:
+
+```ts
+switch (message.stopReason) {
+  case "stop":
+  case "length":
+  case "toolUse":
+  case "deferred":
+    // semantic terminal
+
+  case "error":
+  case "aborted":
+    // failure
+}
 ```
-
-means:
-
-```text
-the stream reached a Pi terminal message
-```
-
-not necessarily:
-
-```text
-the request succeeded
-```
-
-A caller must inspect the returned message's:
-
-```text
-stopReason
-```
-
-when success/failure distinction matters.
 
 ------
 
-# 42. Stream Error Contract
+## 10.6 Error delivery contract
 
-Pi's `StreamFunction` contract states:
+`StreamFunction` explicitly specifies:
 
 ```text
-Once the stream function has been invoked
-│
-└── request / model / runtime failures
-    └── should be encoded in the returned stream
-        rather than thrown
+once invoked
+↓
+request/model/runtime failure
+↓
+must be encoded into returned stream
+↓
+error terminal event
 ```
 
-Failure termination must produce:
+rather than being thrown outside the stream.
+
+This gives callers one terminal state model.
+
+------
+
+## 10.7 Setup failures
+
+Even failures occurring before provider streaming begins, such as:
+
+```text
+auth resolution
+lazy module loading
+unknown provider
+```
+
+are converted by `lazyStream()` into:
 
 ```text
 AssistantMessage
-├── stopReason = "error" | "aborted"
-└── errorMessage
+├── content = []
+├── usage = zero
+├── stopReason = "error"
+├── errorMessage
+└── timestamp
 ```
 
-and emit it through:
-
-```text
-error event
-```
-
-------
-
-# 43. Lazy Setup Failure
-
-Pi's lazy stream wrapper converts asynchronous setup failures such as:
-
-```text
-authentication resolution
-lazy API loading
-provider setup
-```
-
-into a normal stream failure:
+and then emitted as:
 
 ```text
 error
-└── AssistantMessage
-    ├── content = []
-    ├── usage = zero
-    ├── stopReason = "error"
-    └── errorMessage
 ```
 
-This means asynchronous pre-provider setup can still participate in the same stream terminal protocol.
+terminal event.
 
 ------
 
-# 44. Models Runtime
+## 10.8 Abort
 
-`Models` is the runtime collection surrounding the semantic IR.
+The request cancellation input is:
 
-## 44.1 Models Tree
+```ts
+AbortSignal
+```
+
+When a provider request is cancelled, the normalized terminal state is:
+
+```text
+stopReason = "aborted"
+```
+
+with:
+
+```text
+event.type = "error"
+event.reason = "aborted"
+```
+
+Pi can preserve any partial content already received.
+
+LuckyToken may choose an atomic policy that discards that partial state before producing downstream output.
+
+------
+
+## 10.9 Stream queue behavior
+
+`EventStream` keeps an internal queue when no iterator consumer is waiting.
+
+Conceptually:
+
+```text
+producer pushes event
+│
+├── consumer waiting
+│   └── deliver immediately
+│
+└── no consumer waiting
+    └── queue event
+```
+
+Once a terminal event is pushed:
+
+```text
+done = true
+```
+
+and later pushes are ignored.
+
+For long atomic operations, actively consuming the stream is preferable to simply waiting for `.result()` while allowing every intermediate event to accumulate in the queue.
+
+------
+
+## 10.10 DeferredHandle
+
+Structure:
+
+```text
+DeferredHandle
+├── provider
+├── modelId
+├── api
+├── id
+├── expiresAt?
+├── pollAfterMs?
+└── data?
+```
+
+Exact type:
+
+```ts
+interface DeferredHandle {
+  provider: string
+  modelId: string
+  api: string
+
+  id: string
+
+  expiresAt?: number
+  pollAfterMs?: number
+
+  data?: JsonValue
+}
+```
+
+The `id` is provider-specific durable state such as a response ID or batch identity.
+
+------
+
+# 11. Models / Provider Runtime Companion Contract
+
+This chapter describes runtime infrastructure surrounding the semantic IR.
+
+It is intentionally separate from Chapters 3–10.
+
+------
+
+## 11.1 Runtime hierarchy
 
 ```text
 Models
 │
-├── Provider Registry
-│   ├── getProviders()
-│   ├── getProvider()
-│   ├── getModels()
-│   └── getModel()
+├── Provider A
+│   ├── Auth
+│   ├── Models[]
+│   └── Stream implementation
 │
-├── Dynamic Model Discovery
-│   └── refresh()
+├── Provider B
+│   ├── Auth
+│   ├── Models[]
+│   └── Stream implementation
 │
-├── Authentication
-│   ├── checkAuth()
-│   ├── getAvailable()
-│   ├── getAuth()
-│   ├── login()
-│   └── logout()
-│
-├── Execution
-│   ├── stream()
-│   ├── complete()
-│   ├── streamSimple()
-│   └── completeSimple()
-│
-└── Deferred Execution
-    ├── fetchDeferred()
-    └── cancelDeferred()
+└── Provider C
+    └── ...
 ```
 
-Pi describes `Models` as the runtime collection responsible for:
+A model identifies its owning provider through:
 
 ```text
-providers
-+
-authentication application
-+
-stream convenience
+Model.provider
 ```
 
-while Providers own the actual stream behavior.
+`Models` uses this field for dispatch.
 
 ------
 
-# 45. Provider Runtime
+## 11.2 Provider contract
 
-## 45.1 Provider Tree
+Core hierarchy:
 
 ```text
 Provider
-│
 ├── Identity
 │   ├── id
 │   └── name
@@ -2577,149 +2627,145 @@ Provider
 │
 ├── Models
 │   ├── getModels()
-│   ├── refreshModels()?
-│   └── filterModels()?
+│   ├── refreshModels?()
+│   └── filterModels?()
 │
-├── Execution
-│   ├── stream()
-│   └── streamSimple()
-│
-└── Deferred Execution?
-    ├── fetchDeferred()
-    └── cancelDeferred()
-```
-
-Provider is the concrete runtime unit that owns:
-
-```text
-authentication semantics
-model catalog
-provider stream implementation
+└── Execution
+    ├── stream()
+    ├── streamSimple()
+    ├── fetchDeferred?()
+    └── cancelDeferred?()
 ```
 
 ------
 
-# 46. Models → Provider Execution Lifecycle
+## 11.3 Provider ownership
 
-For:
+The provider is the concrete runtime unit.
 
-```ts
-models.streamSimple(
-  model,
-  context,
-  options
-)
-```
-
-the source implementation follows this conceptual lifecycle:
+It owns:
 
 ```text
-Model + Context + Options
-        │
-        ▼
-Models
-        │
-        ├── require model.provider
-        │
-        ├── resolve Provider
-        │
-        ├── resolve authentication
-        │
-        ├── apply API-key override
-        │
-        ├── merge auth/request headers
-        │
-        ├── run transformHeaders
-        │
-        ├── merge provider environment
-        │
-        ├── apply auth baseUrl override
-        │
-        ▼
-request-local Model + SimpleStreamOptions
-        │
-        ▼
-Provider.streamSimple()
-        │
-        ▼
-AssistantMessageEventStream
+provider identity
+model catalog
+auth semantics
+stream behavior
+optional dynamic model refresh
 ```
 
-This boundary is important:
+The public README describes this exact ownership model.
+
+Therefore LuckyToken should not add another generic provider registry between its code and `Models` unless it has a demonstrated application-specific need.
+
+------
+
+## 11.4 Models collection
+
+Core read API:
 
 ```text
-Context
+getProviders()
+getProvider(id)
+
+getModels(provider?)
+getModel(provider, id)
+
+getAvailable(provider?)
 ```
 
-is passed through as semantic conversation state.
+Execution:
 
-Authentication and transport preparation occur around:
+```text
+stream()
+complete()
+
+streamSimple()
+completeSimple()
+
+fetchDeferred()
+cancelDeferred()
+```
+
+Auth/control:
+
+```text
+checkAuth()
+getAuth()
+
+login()
+logout()
+
+refresh()
+```
+
+The runtime model list is provider-owned and retrieved through `Provider.getModels()`.
+
+------
+
+## 11.5 Dispatch path
+
+`Models.streamSimple()` follows:
 
 ```text
 Model
-Options
+↓
+model.provider
+↓
+require Provider
+↓
+resolve/apply auth
+↓
+request-local Model + Options
+↓
+Provider.streamSimple()
+↓
+AssistantMessageEventStream
 ```
 
-not inside `Context`.
+This is an important architecture boundary.
+
+Protocol adapters do not need their own provider dispatcher.
 
 ------
 
-# 47. Authentication Runtime
+## 11.6 Authentication boundary
 
-Authentication is runtime infrastructure around the IR.
-
-## 47.1 Authentication Tree
+Pi distinguishes:
 
 ```text
-Provider Authentication
-│
-├── CredentialStore
-│
-├── Credential
-│   ├── ApiKeyCredential
-│   └── OAuthCredential
-│
-├── ProviderAuth
-│   ├── apiKey?
-│   └── oauth?
-│
-├── Resolution
-│   └── AuthResult
-│       ├── ModelAuth
-│       ├── env?
-│       └── source?
-│
-└── Request Auth
-    └── ModelAuth
-        ├── apiKey?
-        ├── headers?
-        └── baseUrl?
+stored credential
+↓
+provider auth resolution
+↓
+ModelAuth
 ```
 
-The final `ModelAuth` is deliberately narrow:
+`ModelAuth` contains only request-facing auth information:
+
+```ts
+interface ModelAuth {
+  apiKey?: string
+  headers?: Record<string, string | null>
+  baseUrl?: string
+}
+```
+
+If a value cannot be expressed as:
 
 ```text
-request authentication
-├── API key
-├── headers
-└── base URL
+apiKey
+headers
+baseUrl
 ```
 
-The source explicitly states that values that cannot be represented as these fields are:
-
-```text
-provider configuration
-```
-
-rather than request auth.
+the source explicitly treats it as provider configuration rather than request auth.
 
 ------
 
-# 48. Credential Tree
+## 11.7 Credential hierarchy
 
 ```text
 Credential
-│
 ├── ApiKeyCredential
 │   ├── type = "api_key"
 │   ├── key?
@@ -2730,257 +2776,215 @@ Credential
     ├── refresh
     ├── access
     ├── expires
-    └── extension fields
+    └── provider fields...
 ```
 
-Credentials are keyed by:
-
-```text
-Provider.id
-```
-
-in `CredentialStore`.
+Credentials are keyed by provider ID.
 
 ------
 
-# 49. CredentialStore
+## 11.8 CredentialStore
+
+Interface:
 
 ```text
 CredentialStore
-│
 ├── read()
 ├── list()
 ├── modify()
 └── delete()
 ```
 
-The important concurrency contract is:
+A major invariant is:
 
 ```text
 modify()
-└── serialized read-modify-write
+=
+serialized read-modify-write
 ```
 
-Pi performs OAuth refresh inside this serialized mutation mechanism so concurrent requests do not double-refresh a rotated credential.
+The source uses this as the only credential write path so concurrent OAuth refreshes cannot independently rotate the same token.
+
+LuckyToken can implement its own persistent `CredentialStore` without changing the Pi semantic IR.
 
 ------
 
-# 50. Authentication Resolution
+## 11.9 Auth resolution precedence
 
-The runtime request-auth lifecycle is:
+Current auth resolution behaves approximately as:
 
 ```text
-Provider
+explicit request apiKey?
+│
+├── yes
+│   └── provider API-key resolution using explicit key
+│
+└── no
+    │
+    ├── stored credential?
+    │   ├── OAuth → refresh if required → toAuth()
+    │   └── API key → resolve()
+    │
+    └── no stored credential
+        └── ambient provider auth
+            ├── env
+            ├── profile
+            ├── ADC
+            └── provider-specific source
+```
+
+A stored credential owns the provider; Pi does not silently fall back to ambient credentials after a stored credential fails or has an incompatible type.
+
+------
+
+## 11.10 Request auth application
+
+After auth is resolved:
+
+```text
+resolved auth
 +
-stored Credential
+model static headers
 +
-ambient AuthContext
-+
-request overrides
-        │
-        ▼
-Models.getAuth()
-        │
-        ▼
-AuthResult
-│
-├── ModelAuth
-│   ├── apiKey
-│   ├── headers
-│   └── baseUrl
-│
-├── env
-└── source
+explicit request options
+        ↓
+request-local Model / Options
+        ↓
+optional transformHeaders()
+        ↓
+provider dispatch
 ```
 
-Then `Models.applyAuth()` merges the result with explicit request options.
+Current precedence includes:
 
-Explicit request values win per field.
+```text
+explicit request apiKey
+> resolved apiKey
+```
+
+Request headers override matching resolved/model headers case-insensitively.
+
+Then:
+
+```text
+transformHeaders()
+```
+
+runs last.
 
 ------
 
-# 51. OAuth Refresh
+## 11.11 Request-local base URL
 
-OAuth resolution lifecycle:
+If authentication returns:
 
 ```text
-Stored OAuthCredential
-        │
-        ├── not expired
-        │       ↓
-        │   use credential
-        │
-        └── expired
-                ↓
-        CredentialStore.modify()
-                │
-                ▼
-        Provider OAuth.refresh()
-                │
-                ▼
-        updated OAuthCredential
-                │
-                ▼
-        Provider OAuth.toAuth()
-                │
-                ▼
-             ModelAuth
+auth.baseUrl
 ```
 
-Refresh is performed under the credential-store mutation lock.
+`Models` creates a request-local model copy:
+
+```ts
+{
+  ...model,
+  baseUrl: auth.baseUrl
+}
+```
+
+The original catalog `Model` is not globally mutated.
+
+This is a useful information-lifecycle pattern for LuckyToken:
+
+```text
+stable catalog Model
+↓
+request-local effective Model
+↓
+request ends
+↓
+effective copy dies
+```
 
 ------
 
-# 52. Abort Semantics
+## 11.12 Custom providers
 
-## 52.1 Request Abort Tree
+Pi already provides:
 
-```text
-AbortSignal
-│
-├── Provider Request
-├── Auth Resolution
-├── OAuth Refresh
-├── Dynamic Model Refresh
-├── Login / Logout
-└── Deferred Operations
+```ts
+createProvider(...)
 ```
 
-`AbortSignal` is part of the core provider request options and public auth operations.
+for composing:
+
+```text
+identity
+auth
+models
+API stream implementation
+optional dynamic model source
+```
+
+A provider can use:
+
+```text
+one API implementation
+```
+
+for all models or:
+
+```text
+Map<model.api, API implementation>
+```
+
+for mixed-API providers.
+
+This is the natural integration point for a future CommandCode provider.
 
 ------
 
-## 52.2 Stream Abort Terminal
+# 12. Implementation Invariants for LuckyToken
 
-At the semantic stream level:
+## 12.1 Semantic boundary
 
-```text
-aborted request
-        │
-        ▼
-error event
-├── reason = "aborted"
-└── error
-    └── AssistantMessage
-        ├── stopReason = "aborted"
-        └── errorMessage
-```
-
-Pi therefore distinguishes:
-
-```text
-aborted
-```
-
-from:
-
-```text
-error
-```
-
-at both the terminal event and `AssistantMessage.stopReason` levels.
-
-------
-
-# 53. Deferred Execution Lifecycle
-
-Deferred execution is also represented in the generic runtime:
-
-```text
-Initial Request
-│
-├── options.deferred
-│
-└── Provider
-     │
-     ▼
-done
-├── reason = "deferred"
-└── message
-    ├── stopReason = "deferred"
-    └── deferred = DeferredHandle
-              │
-              ▼
-Models.fetchDeferred()
-              │
-              ▼
-AssistantMessage
-```
-
-Optional cancellation is exposed through:
-
-```text
-Models.cancelDeferred()
-```
-
-when supported by the Provider.
-
-------
-
-# 54. Semantic Layer Boundaries
-
-The Pi AI model cleanly separates these concerns:
+Keep this boundary:
 
 ```text
 Model
-└── who / what is being called
+→ who/what is being called
 
 Context
-└── what semantic conversation is supplied
+→ what the model sees
 
 Options
-└── how this invocation should execute
-
-Models
-└── provider collection + auth application + dispatch
-
-Provider
-└── concrete upstream execution
-
-EventStream
-└── incremental construction protocol
-
-AssistantMessage
-└── terminal semantic result
+→ how this invocation executes
 ```
 
-These are separate layers even though they participate in one invocation.
+Do not merge them into one universal request object.
 
 ------
 
-# 55. Core Semantic Invariants
+## 12.2 Context isolation
 
-## 55.1 Model Identity
+Never put infrastructure data into `Context` merely because it is convenient.
 
-```text
-Model.provider
-```
-
-identifies the Provider used by `Models`.
+Examples that should normally stay outside:
 
 ```text
-Model.api
+API keys
+provider headers
+request IDs
+logging metadata
+timing data
+retry state
+HTTP status
+debug information
+AbortController
 ```
-
-identifies the provider API implementation.
 
 ------
 
-## 55.2 Context Purity
-
-The structural Context contract contains only:
-
-```text
-systemPrompt
-messages
-tools
-```
-
-Execution options are not fields of `Context`.
-
-------
-
-## 55.3 Message Ordering
+## 12.3 Message ordering
 
 ```text
 Context.messages[]
@@ -2988,325 +2992,527 @@ Context.messages[]
 
 is ordered semantic conversation history.
 
+Do not reorder messages during protocol conversion unless the source-to-Pi conversion specification explicitly requires a transformation.
+
 ------
 
-## 55.4 Assistant Content Ordering
+## 12.4 Content ordering
 
 ```text
 AssistantMessage.content[]
 ```
 
-is ordered semantic assistant content.
+is ordered.
 
-Streaming:
+Preserve:
 
 ```text
-contentIndex
+thinking
+text
+tool calls
 ```
 
-corresponds to this array.
+in their semantic order.
 
 ------
 
-## 55.5 Tool Identity
+## 12.5 Parent/content rules
+
+Do not create invalid generic combinations such as:
+
+```text
+UserMessage + ThinkingContent
+UserMessage + ToolCall
+AssistantMessage + ImageContent
+ToolResultMessage + ThinkingContent
+```
+
+without first changing the Pi semantic model.
+
+The current source types deliberately prevent those combinations.
+
+------
+
+## 12.6 Image representation
+
+Pi image:
+
+```text
+base64 bytes + mimeType
+```
+
+not:
+
+```text
+data URL
+```
+
+Every wire adapter must normalize its own representation at the conversion boundary.
+
+------
+
+## 12.7 Tool identity
+
+Never arbitrarily regenerate:
 
 ```text
 ToolCall.id
-=
+```
+
+because:
+
+```text
 ToolResultMessage.toolCallId
 ```
 
-is the semantic tool invocation relationship.
+depends on it.
 
 ------
 
-## 55.6 Completed ToolCall
+## 12.8 Partial tool calls
+
+During:
 
 ```text
 toolcall_delta
 ```
 
-contains temporary stream fragments.
-
-The completed semantic call is:
+the current:
 
 ```text
-toolcall_end.toolCall
+partial.content[contentIndex].arguments
 ```
+
+may already look like a valid object.
+
+That does **not** make the tool call complete.
+
+Only:
+
+```text
+toolcall_end
+```
+
+provides the completed semantic `ToolCall`.
 
 ------
 
-## 55.7 Thinking Representation
+## 12.9 Content index
 
-Pi uses one:
-
-```text
-ThinkingContent
-```
-
-type for both normal and redacted reasoning.
-
-Redaction is represented by:
+Use:
 
 ```text
-redacted = true
+contentIndex
 ```
 
-with provider continuity data potentially stored in:
+as the authoritative mapping between stream event and `AssistantMessage.content`.
 
-```text
-thinkingSignature
-```
+Do not invent a separate global stream slot.
 
 ------
 
-## 55.8 Thinking Signatures Are Not Generic Events
+## 12.10 Terminal events
 
-The generic event protocol has:
-
-```text
-thinking_start
-thinking_delta
-thinking_end
-```
-
-but no independent signature event.
-
-Signatures live in the semantic assistant-message state.
-
-------
-
-## 55.9 Usage
-
-```text
-reasoning
-⊆
-output
-```
-
-Reasoning must not be added again to output token accounting.
-
-------
-
-## 55.10 Terminal Outcome
-
-A conforming semantic stream terminates as:
+A conforming Pi stream has exactly one semantic terminal:
 
 ```text
 done
-```
-
-or:
-
-```text
+or
 error
 ```
 
-with the terminal carrying the final `AssistantMessage`.
+After terminal, `EventStream.push()` ignores further events.
 
 ------
 
-## 55.11 Error Result
+## 12.11 Result success
 
-```text
-stream.result()
+Never write:
+
+```ts
+await stream.result()
+// therefore success
 ```
 
-resolving does not imply success.
-
-Both successful and failed terminal messages resolve the result promise.
-
-------
-
-## 55.12 Provider Failures
-
-Once a stream API has been invoked, runtime/request/model failures should be represented by the returned stream rather than escaping as ordinary synchronous failures.
-
-------
-
-# 56. Complete Response Hierarchy
+Instead:
 
 ```text
-Pi Response
+result()
+↓
+AssistantMessage.stopReason
+```
+
+must determine success/failure.
+
+------
+
+## 12.12 Abort
+
+For a request-scoped router:
+
+```text
+client disconnect / Ctrl+C
+↓
+AbortSignal
+↓
+Pi options.signal
+↓
+Provider
+↓
+upstream cancellation
+```
+
+LuckyToken should avoid an independent second cancellation state machine unless required by another subsystem.
+
+------
+
+## 12.13 Atomic downstream policy
+
+Pi permits error/aborted messages containing partial content.
+
+LuckyToken can still enforce:
+
+```text
+consume Pi stream internally
+↓
+done?
+├── yes → commit response
+└── no  → discard semantic partial response
+```
+
+This keeps the Pi contract intact while allowing LuckyToken to implement stronger atomic semantics.
+
+------
+
+## 12.14 Usage
+
+Never calculate:
+
+```text
+output + reasoning
+```
+
+because reasoning is already part of output.
+
+Likewise do not add:
+
+```text
+cacheWrite1h
+```
+
+again to `cacheWrite`.
+
+------
+
+## 12.15 Provider identity
+
+Do not create a second independent provider/model identity layer unless LuckyToken has functionality Pi cannot express.
+
+The canonical runtime identity is already:
+
+```text
+Model.provider
+Model.id
+Model.api
+```
+
+------
+
+## 12.16 Stable semantic prefix
+
+Keep dynamic execution metadata outside `Context` where possible.
+
+This naturally protects stable model-visible prefixes from:
+
+```text
+request IDs
+timestamps generated by infrastructure
+provider routing details
+transport headers
+debug metadata
+```
+
+`Message.timestamp` is part of the Pi semantic object for application/history bookkeeping, but a provider adapter decides whether that value is ever sent to an upstream model.
+
+------
+
+# Appendix A. Core Type Summary
+
+```text
+Pi Core
 │
-├── AssistantMessageEventStream
+├── Model
+│
+├── Context
+│   ├── systemPrompt?
+│   ├── messages[]
+│   │   ├── UserMessage
+│   │   ├── AssistantMessage
+│   │   └── ToolResultMessage
+│   └── tools[]?
+│
+├── Options
+│   ├── StreamOptions
+│   └── SimpleStreamOptions
+│
+├── Content
+│   ├── TextContent
+│   ├── ImageContent
+│   ├── ThinkingContent
+│   └── ToolCall
+│
+├── Response
+│   ├── AssistantMessage
+│   ├── Usage
+│   └── StopReason
+│
+└── Stream
+    └── AssistantMessageEvent
+```
+
+------
+
+# Appendix B. Complete Invocation Tree
+
+```text
+Pi Invocation
+│
+├── Model
+│   ├── id
+│   ├── name
+│   ├── provider
+│   ├── api
+│   ├── baseUrl
+│   ├── reasoning
+│   ├── thinkingLevelMap?
+│   ├── input[]
+│   ├── contextWindow
+│   ├── maxTokens
+│   ├── cost
+│   ├── samplingParams?
+│   ├── headers?
+│   └── compat?
+│
+├── Context
 │   │
-│   ├── start
-│   │   └── partial
+│   ├── systemPrompt?
 │   │
-│   ├── Text Lifecycle*
+│   ├── messages[]
+│   │   │
+│   │   ├── UserMessage
+│   │   │   ├── role = user
+│   │   │   ├── content
+│   │   │   │   ├── string
+│   │   │   │   └── [TextContent | ImageContent]
+│   │   │   └── timestamp
+│   │   │
+│   │   ├── AssistantMessage
+│   │   │   ├── content[]
+│   │   │   │   ├── TextContent
+│   │   │   │   ├── ThinkingContent
+│   │   │   │   └── ToolCall
+│   │   │   ├── provider/model/api
+│   │   │   ├── usage
+│   │   │   ├── stopReason
+│   │   │   └── timestamp
+│   │   │
+│   │   └── ToolResultMessage
+│   │       ├── toolCallId
+│   │       ├── toolName
+│   │       ├── content[]
+│   │       ├── isError
+│   │       └── timestamp
+│   │
+│   └── tools[]?
+│       └── Tool
+│           ├── name
+│           ├── description
+│           ├── parameters
+│           └── constrainedSampling?
+│
+└── Options
+    ├── signal?
+    ├── apiKey?
+    ├── env?
+    ├── headers?
+    ├── timeoutMs?
+    ├── maxRetries?
+    ├── temperature?
+    ├── samplingParams?
+    ├── maxTokens?
+    ├── transport?
+    ├── cacheRetention?
+    ├── sessionId?
+    ├── metadata?
+    ├── reasoning?
+    ├── thinkingBudgets?
+    └── deferred?
+```
+
+------
+
+# Appendix C. Complete Response Tree
+
+```text
+AssistantMessage
+│
+├── role = "assistant"
+│
+├── content[]
+│   │
+│   ├── TextContent
+│   │   ├── type = "text"
+│   │   ├── text
+│   │   └── textSignature?
+│   │
+│   ├── ThinkingContent
+│   │   ├── type = "thinking"
+│   │   ├── thinking
+│   │   ├── thinkingSignature?
+│   │   └── redacted?
+│   │
+│   └── ToolCall
+│       ├── type = "toolCall"
+│       ├── id
+│       ├── name
+│       ├── arguments
+│       ├── thoughtSignature?
+│       └── namespace?
+│
+├── Runtime Identity
+│   ├── api
+│   ├── provider
+│   ├── model
+│   ├── responseModel?
+│   └── responseId?
+│
+├── Usage
+│   ├── input
+│   ├── output
+│   ├── cacheRead
+│   ├── cacheWrite
+│   ├── cacheWrite1h?
+│   ├── reasoning?
+│   ├── totalTokens
+│   └── cost
+│
+├── Termination
+│   ├── stopReason
+│   ├── rawStopReason?
+│   └── endTurn?
+│
+├── Deferred
+│   └── deferred?
+│
+├── Diagnostics
+│   ├── errorMessage?
+│   └── diagnostics?
+│
+└── timestamp
+```
+
+------
+
+# Appendix D. Complete Stream Tree
+
+```text
+AssistantMessageEventStream
+│
+├── start
+│   └── partial
+│
+├── Content[index]*
+│   │
+│   ├── Text
 │   │   ├── text_start
 │   │   ├── text_delta*
 │   │   └── text_end
 │   │
-│   ├── Thinking Lifecycle*
+│   ├── Thinking
 │   │   ├── thinking_start
 │   │   ├── thinking_delta*
 │   │   └── thinking_end
 │   │
-│   ├── ToolCall Lifecycle*
-│   │   ├── toolcall_start
-│   │   ├── toolcall_delta*
-│   │   └── toolcall_end
-│   │       └── ToolCall
-│   │
-│   └── Terminal
-│       │
-│       ├── done
-│       │   ├── reason
-│       │   │   ├── stop
-│       │   │   ├── length
-│       │   │   ├── toolUse
-│       │   │   └── deferred
-│       │   └── message
-│       │
-│       └── error
-│           ├── reason
-│           │   ├── error
-│           │   └── aborted
-│           └── error
-│               └── AssistantMessage
+│   └── ToolCall
+│       ├── toolcall_start
+│       ├── toolcall_delta*
+│       └── toolcall_end
 │
-└── AssistantMessage
+└── Terminal
     │
-    ├── Identity
-    │   ├── api
-    │   ├── provider
-    │   ├── model
-    │   ├── responseModel?
-    │   └── responseId?
+    ├── done
+    │   ├── stop
+    │   ├── length
+    │   ├── toolUse
+    │   └── deferred
     │
-    ├── content[]
-    │   ├── TextContent
-    │   ├── ThinkingContent
-    │   └── ToolCall
-    │
-    ├── Termination
-    │   ├── stopReason
-    │   ├── rawStopReason?
-    │   ├── endTurn?
-    │   ├── errorMessage?
-    │   └── deferred?
-    │
-    ├── Usage
-    │   └── usage
-    │
-    ├── Diagnostics
-    │   └── diagnostics?
-    │
-    └── timestamp
+    └── error
+        ├── error
+        └── aborted
 ```
 
 ------
 
-# 57. Complete Pi AI Semantic Hierarchy
+# Appendix E. Recommended LuckyToken Boundary
+
+The most useful way for LuckyToken to depend on Pi is:
 
 ```text
-                           PI AI
-
-                            │
-              ┌─────────────┴─────────────┐
-              │                           │
-           REQUEST                     RESPONSE
-              │                           │
-              ▼                           ▼
-
-         Pi Invocation          AssistantMessageEventStream
-              │                           │
-   ┌──────────┼──────────┐                │
-   │          │          │       ┌────────┼─────────┐
- Model     Context     Options   Text   Thinking   ToolCall
-   │          │          │       │         │          │
-   │          │          │       └─────────┼──────────┘
-   │          │          │                 │
-   │          │          │            done / error
-   │          │          │                 │
-   │          │          │                 ▼
-   │          │          │        AssistantMessage
-   │          │          │
-   │          │          │
-   │          │          └── execution controls
-   │          │
-   │          └── model-visible semantics
-   │
-   └── model/provider identity + capability
-
-                            │
-                            ▼
-
-                     Models Runtime
-                            │
-              ┌─────────────┼─────────────┐
-              │             │             │
-          Provider        Auth        Dispatch
-              │             │             │
-              └─────────────┼─────────────┘
-                            │
-                            ▼
-                         Provider
-```
-
-------
-
-# 58. Canonical Mental Model
-
-The Pi AI text-generation contract can ultimately be understood as four nested layers:
-
-```text
-Layer 1 — Semantic Request
-
-Model
-+
-Context
-+
-Options
-
-
-Layer 2 — Runtime Dispatch
-
-Models
-↓
-Authentication
-↓
-Provider
-
-
-Layer 3 — Incremental Semantic Response
-
+Protocol Adapter
+│
+├── parse client wire
+│
+├── resolve Model
+│
+├── create Context
+│
+├── create Options
+│
+└── call Models.streamSimple()
+        │
+        ▼
 AssistantMessageEventStream
-├── text lifecycle
-├── thinking lifecycle
-├── tool-call lifecycle
-└── terminal
-
-
-Layer 4 — Final Semantic Response
-
+        │
+        ▼
 AssistantMessage
-├── content
-├── termination
-├── usage
-└── diagnostics
+        │
+        ▼
+Protocol Renderer
 ```
 
-The central semantic IR remains:
+The conversion boundary should therefore be expressed in terms similar to:
+
+```ts
+interface ProtocolRequestConversion {
+  model: Model<Api>
+  context: Context
+  options: ModelsSimpleStreamOptions
+}
+```
+
+rather than introducing another universal LuckyToken request IR containing the same information.
+
+For response conversion, the authoritative semantic structures should be:
 
 ```text
-Model + Context + Options
-        ↓
+AssistantMessageEvent
 AssistantMessage
 ```
 
-while:
+not another parallel response IR.
+
+This preserves the intended Pi information lifecycle:
 
 ```text
-Models / Provider / Auth
+client wire
+↓
+Pi semantic representation
+↓
+provider runtime
+↓
+Pi semantic response
+↓
+client wire
 ```
 
-define how the request is executed, and:
-
-```text
-AssistantMessageEventStream
-```
-
-defines how the final message is constructed incrementally.
+and allows each protocol-specific representation to die at its natural conversion boundary.
