@@ -5965,9 +5965,35 @@ CommandCode Private Provider
 
 ### Generation Parameters
 
-`params` 的 model/conversation/tool/generation semantics 来自 Pi invocation 与 Private ↔ Pi Conversion rules。
+CommandCode Provider owns conversion of the Pi Provider invocation into CommandCode generation parameters.
 
-Current CommandCode producer policy 中某些 wire values 可能由 resolved model catalog 或 Provider policy决定，而不是逐字段复制 client request。例如 current source evidence 显示 `max_tokens` 来自 resolved model catalog，upstream `stream` 被强制为 `true`。这些是 Conversion / Provider policy，不改变 Generic Core architecture。
+Architecture 只冻结 conversion ownership：
+
+Model<Api>
++
+Context
++
+Provider-facing Options
+        │
+        ▼
+CommandCode Private Provider
+        │
+        ▼
+CommandCode generation parameters
+
+Exact field mappings、precedence、validation、normalization 与 fallback rules 属于 Pi ↔ CommandCode Conversion Specification。
+
+这包括：
+
+- `max_tokens`
+- `stream`
+- `reasoning_effort`
+- `temperature`
+- 以及其他 generation controls
+
+Core Architecture 不规定某个 wire parameter 具体由 `Model`、`Context`、`Options`、Provider policy 或它们的组合如何导出，除非这种 source relationship 本身是解释 architecture ownership 所必需的。
+
+Field-level source selection is a conversion concern, not an architecture ownership concern.
 
 ### Runtime / Project Context
 
@@ -6222,7 +6248,9 @@ Upstream CommandCode API credential 仍由 Pi Provider authentication path 解�
 
 Provider request object 是 temporary transport state，不是 new LuckyToken canonical request。
 
-Exact mapping of Pi messages/tools/system/model/generation controls，以及 current producer policies such as catalog-derived `max_tokens`、forced upstream `stream=true`、reasoning effort 与 temperature fallback，属于 Private ↔ Pi Conversion Spec / Provider compatibility policy。
+Exact mapping of Pi messages、tools、system、model and generation controls—including field precedence、validation、normalization、fallback behavior and compatibility policy—belongs to the Pi ↔ CommandCode Conversion Specification.
+
+Core Architecture owns the conversion boundary; it does not duplicate field-level conversion rules.
 
 ---
 
