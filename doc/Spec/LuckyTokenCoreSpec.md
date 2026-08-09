@@ -1,14 +1,10 @@
-# LuckyToken Architecture Specification v5.3
+# LuckyToken Core Architecture Specification v5.5
 
-**Status:** Generic Core + Auth Boundary + CommandCode Private Integration Architecture FROZEN
+**Status:** Final Freeze Candidate — Dependency Semantics Corrected Against Current Pi Runtime
 
-本文件描述 LuckyToken 的 Core Architecture。当前 Generic Core 的 architecture boundary、information flow、runtime contract、cancellation precedence 与 lifecycle 已完成冻结。只有新的 source evidence 证明 frozen contract 不正确，或新的 demonstrated requirement 无法由现有 boundary 表达时，才重新打开 Generic Core Architecture。
-
-LuckyToken inbound `Auth` boundary、CommandCode Private 的 Provider boundary、request hierarchy、stream lifecycle、tool lifecycle，以及当前 deployment 所需的 session/project runtime source 与 Pi carrier 已由 current source evidence 和 Pi public contracts 关闭。Chapter 10 仅作为 resolved-decision index；exact wire mapping 仍属于 Protocol / Conversion Specs。
+本文件描述 LuckyToken 的 Core Architecture。
 
 全文使用中文作为主要说明语言，同时保留关键英文概念、类型名、协议名和 runtime terminology，避免因为翻译造成术语歧义。
-
----
 
 # 1. 目的与核心流程 — Purpose and Core Flow
 
@@ -76,67 +72,73 @@ HTTP Request
     │
     ▼
 HTTP Boundary
-route / protocol selection / AbortSignal
+├── route / protocol selection
+├── inbound headers / body
+└── AbortSignal
+    │
+    ├───────────────────────────────┐
+    │                               │
+    ▼                               ▼
+Client Protocol                    Auth
+├── validated state               ├── authorized?
+├── model selector                ├── sessionId
+└── renderState                   └── projectDir?
     │
     ▼
-Client Protocol
-parse / source validation
+resolveModel(models, selector)
     │
-    ├── model selector
-    │        ▼
-    │    Model Resolution
-    │        ▼
-    │    Model<Api>
+    ▼
+Model<Api>
     │
-    └── validated Client state
+    ├───────────────────────┐
+    │                       │
+validated state            │
+    │                       │
+    ▼                       │
+Client → Pi conversion      │
+├── Context                 │
+└── protocol controls       │
+                            │
+protocol controls ──────────┐
+sessionId / projectDir? ────┤
+AbortSignal ────────────────┤
+Router defaults ────────────┘
              │
              ▼
-     model-aware Pi conversion
+       composeOptions(...)
              │
-             ├── Context
-             ├── protocol-derived invocation controls
-             └── protocol-owned render state
-                         │
-                         ▼
-                 Request Composition
-                         │
-                         ▼
-        Model + Context + Options
-                         │
-                         ▼
-                       Models
-                         │
-                         ▼
-                      Provider
-                         │
-                         ▼
-                      Upstream
-                         │
-                         ▼
-                      Provider
-                         │
-                         ▼
-           AssistantMessageEventStream
-                         │
-                         ▼
-                     Execution
-                         │
-              ┌──────────┴──────────┐
-              │                     │
-            done                  failure
-              │                     │
-              ▼                     ▼
-      AssistantMessage       aborted | error
-              │                     │
-              └──────────┬──────────┘
-                         ▼
-             Client Protocol Renderer
-                         │
-                         ▼
-                   HTTP Boundary
-                         │
-                         ▼
-                    Client Wire
+             ▼
+           Options
+
+Models + Model + Context + Options
+             │
+             ▼
+          Execution
+             │
+             ▼
+ Models.streamSimple(...)
+             │
+             ▼
+          Provider
+             │
+             ▼
+          Upstream
+             │
+             ▼
+AssistantMessageEventStream
+             │
+             ▼
+   AssistantMessage | failure
+             │
+renderState ─┤
+             ▼
+ Client Protocol Renderer
+             │
+             ▼
+      HTTP Boundary
+             │
+             ▼
+        Client Wire
 ```
 
 当某个 Client Protocol 的 response representation 需要 request-side information 时，该 Protocol 可以保留一个最小的 request-local `render state` 直到 success/failure rendering 完成。
@@ -914,6 +916,449 @@ wrappers
 intermediate representations
 ```
 
+## 2.10 Module and Operation Runtime Closure — 模块与操作运行依赖闭包
+
+Ownership closure 与 dependency closure 是两个不同问题。
+
+一个 module 可以公开很小的 operation：
+
+```text
+headers → AuthResult
+```
+
+但 module 本身仍可能依赖：
+
+```text
+authorization policy
+credential/project lookup capability
+session-resolution capability
+```
+
+反过来，一个 runtime object 也可能公开多个不同 operations，而这些 operations 不应被压成一个假的统一 invocation contract。
+
+因此 v5.5 正式区分：
+
+```text
+Module Contract
+└── module-level dependency / state / operation surface
+
+Operation Contract
+└── one invocation's input / result / effect / temporary state
+```
+
+### Module Contract
+
+LuckyToken-owned module 的 architecture contract：
+
+```text
+Module
+├── Responsibility
+├── Bound Dependencies
+├── Owned State
+├── Operations
+└── Must Not Access
+```
+
+#### Bound Dependency
+
+module 完成 responsibility 所直接需要、但 authoritative lifecycle 不由该 module owns 的 runtime capability / stable dependency。
+
+例如：
+
+```text
+Auth
+├── authorization policy/configuration
+└── credential/project lookup capability
+
+CommandCode Provider
+├── Project Snapshot capability
+└── Trace Context generation capability
+```
+
+`Bound Dependency` 是 architecture relationship，不规定 implementation 必须使用：
+
+```text
+constructor injection
+factory closure
+explicit first function argument
+another direct binding mechanism
+```
+
+Architecture 只冻结：
+
+```text
+dependency exists
++
+dependency source is explicit
+```
+
+#### Owned State
+
+module 对其 authoritative lifecycle 或 mutation 负责的 state。
+
+必须按 lifetime 区分：
+
+```text
+Owned State
+├── Runtime / Long-Lived
+└── Request-Local, if the module actually retains request-local state
+```
+
+核心判定：
+
+> **A bound dependency may be retained by a module, but retaining its reference or value does not make it module-owned state. Owned State means state whose authoritative lifecycle or mutation is owned by that module.**
+
+因此：
+
+```text
+stable injected config
+→ Bound Dependency
+
+module stores that config reference
+→ still Bound Dependency
+
+module-created mutable provider catalog/cache
+→ Owned State
+```
+
+`Bound Dependency` 与 `Owned State` 不能因为“对象被保存在 field 中”而重复分类。
+
+#### Operations
+
+module 可以公开一个或多个 operation。
+
+每个 operation 单独声明自己的 invocation contract。
+
+### Operation Contract
+
+```text
+Operation
+├── Responsibility
+├── Bound Dependencies, if this is a standalone operation
+├── Inputs
+├── Result
+├── Effects
+├── Temporary State
+└── Must Not Access
+```
+
+对于属于某个 module 的 operation：
+
+```text
+module Bound Dependencies
++
+module Owned State
++
+operation Inputs
+```
+
+共同形成该 operation 的 runtime closure。
+
+`Result` 只描述产生给调用者继续使用的 value / semantic outcome。
+
+`Effects` 描述：
+
+```text
+write HTTP response
+mutate owned runtime state
+register provider
+persist credential
+start upstream I/O
+```
+
+等 side effect。
+
+不要把 effect 假装成 output value。
+
+### Closure Invariant
+
+对于 LuckyToken-owned code：
+
+> **Every runtime requirement must be accounted for by a declared bound dependency, operation input, or explicitly owned state. There is no fourth undeclared source.**
+
+对于 standalone operation，例如：
+
+```text
+resolveModel
+composeOptions
+execute
+```
+
+不需要为了套模板创建 runtime class。
+
+### External Runtime Contracts
+
+这个 normative closure rule 约束 LuckyToken-owned architecture。
+
+Pi `Models` 等 external/reference runtime objects 由其自己的 public contract/source 定义。
+
+LuckyToken Architecture 应：
+
+```text
+describe the Pi runtime accurately
++
+declare how LuckyToken uses it
+```
+
+而不是重新规定 Pi 必须如何 construction/injection。
+
+因此 Pi `Models` 使用：
+
+```text
+Pi Models Runtime Ownership and Dependency View
+```
+
+而不是套用 LuckyToken-owned `Module Contract` 重新定义其 constructor。
+
+## 2.11 Direct Dependencies Only — 直接依赖，而不是依赖包
+
+Dependency closure 是递归的。
+
+一个 module 只声明自己**直接**需要的 runtime dependency，不把 dependency 后面的 transitive implementation graph 全部抬到顶层。
+
+正确：
+
+```text
+CommandCode Provider
+└── Project Snapshot capability
+
+Project Snapshot implementation
+├── filesystem
+├── Git
+└── clock/date
+```
+
+不要求：
+
+```text
+CommandCode Provider
+├── filesystem
+├── Git executable
+├── wall clock
+├── cwd
+├── environment reader
+├── random source
+└── every other transitive primitive
+```
+
+除非 Provider 自己直接理解并使用这些 primitives。
+
+核心 invariant：
+
+> **Dependency closure is recursive. A module declares only its direct runtime dependencies; transitive dependencies remain behind the capability that owns them.**
+
+Dependency abstraction 的粒度应跟 responsibility 一致，不跟底层 API 数量一致。
+
+这条规则防止 dependency closure 反过来制造：
+
+```text
+DependencyBag
+RuntimeServices
+ApplicationContext
+ServiceLocator
+```
+
+之类 generic container。
+
+---
+
+## 2.12 Fact Flow Contract — 信息边的语义闭包
+
+Module / Operation Runtime Closure 回答：
+
+> 这个 node 凭什么能够运行？
+
+Fact Flow Contract 回答：
+
+> 这条 information edge 为什么存在？
+
+对于重要的跨-boundary fact，architecture 应能回答：
+
+```text
+Fact
+├── Producer / Owner
+├── Carrier
+├── Semantic Consumers
+├── Transparent Transit
+└── Death Point
+```
+
+### Producer / Owner
+
+谁建立这个 fact，并负责它在当前 stage 的正确性。
+
+### Carrier
+
+fact 穿越 adjacent contract 时使用的 representation。
+
+例如：
+
+```text
+sessionId
+→ Options.sessionId
+
+projectDir
+→ Options.metadata.projectDir
+```
+
+Carrier 是 representation，不是 module。
+
+### Semantic Consumer
+
+真正理解该 field semantics、并根据其 meaning 改变行为的 module。
+
+### Transparent Transit
+
+携带或转发该 carrier、但不理解该 fact 业务语义的 module / operation。
+
+核心 invariant：
+
+> **Transporting a fact does not make a module its semantic owner or semantic consumer.**
+
+例如：
+
+```text
+projectDir
+
+Producer
+└── Auth
+
+Carrier
+└── Options.metadata.projectDir
+
+Semantic Consumer
+└── CommandCode Provider
+
+Transparent Transit
+├── composeOptions
+└── Models
+
+Death Point
+└── Provider derives the request-local CommandCode project representation
+```
+
+因此不能因为 `Models` 接收整个 `Options` 就推出：
+
+```text
+Models understands project semantics
+```
+
+同一个 `Options` 对不同 field 可以产生不同 classification：
+
+```text
+Options.signal
+→ Models is a semantic consumer
+
+Options.metadata.projectDir
+→ Models is transparent transit
+```
+
+> **Semantic-consumer classification is per fact / per field, not per container object.**
+
+### Death Point
+
+当 fact 已经完成自己的责任，并被转换成下一 stage 的 owning representation 时，应停止继续传播。
+
+Fact Flow Contract 不要求对所有局部变量建立 data dictionary。
+
+它只用于：
+
+```text
+cross-boundary facts
+facts with non-obvious ownership
+facts whose carrier may be mistaken for semantic ownership
+facts whose lifetime affects correctness
+```
+
+---
+
+## 2.13 No Dependency Escape Hatches
+
+LuckyToken-owned modules 不得通过以下方式绕过 declared dependency closure。
+
+### Global Singleton
+
+真实 runtime dependency 不应隐藏成：
+
+```ts
+import { models } from "./global-runtime"
+import { config } from "./global-config"
+```
+
+唯一合理的例外是 composition root / explicit runtime owner 本身正在建立这些 objects。
+
+### Undeclared Ambient Reads
+
+如果以下值参与 LuckyToken-owned responsibility 的行为决定：
+
+```text
+process.env
+process.cwd()
+wall clock
+random identity source
+global mutable configuration
+```
+
+它们必须位于 owning capability 的 declared dependency closure 内。
+
+但 framework/library 已经明确规定的 implementation default 不会自动变成 LuckyToken architecture abstraction。
+
+例如 Pi contract 允许 Provider adapter 在未注入 custom `fetch` 时使用其 own default transport behavior；LuckyToken 不需要为此包装每一个 library primitive。
+
+判断标准是：
+
+> **Does this ambient value participate in a LuckyToken-owned responsibility or semantic/runtime decision?**
+
+如果是，则它不能是 undeclared ambient dependency。
+
+### Generic Metadata Bag
+
+以下结构不能成为 information smuggling channel：
+
+```text
+metadata:any
+extras:any
+locals:any
+context:any
+```
+
+Pi `Options.metadata` 可以使用，但只能承载：
+
+```text
+explicit field
++
+known producer
++
+known semantic consumer
++
+matching Pi Provider metadata semantics
+```
+
+`projectDir` 是这种 narrow field；`metadata` 本身不是 generic LuckyToken context。
+
+### Whole Request Object
+
+不得把 unrelated state 通过：
+
+```text
+RequestContext
+ExecutionContext
+ApplicationContext
+```
+
+整体传入深层 module，再由 module 自己寻找：
+
+```text
+auth
+headers
+project
+protocol
+connection
+config
+```
+
+一个 module 需要什么，就通过其 adjacent contract 或 bound dependency 得到什么。
+
 # 3. 系统信息流 — System Information Flow
 
 > **Concept Primer — 本章先建立生命周期视角**
@@ -947,104 +1392,239 @@ Request
 
 ---
 
-## 3.1 Long-Lived Runtime
+## 3.1 Composition Root and Long-Lived Runtime
 
-Startup 把 deployment configuration 转成 normal request 所需的少量 long-lived runtime objects。
+Startup 负责把 deployment configuration 转成 normal request 所需的少量 long-lived runtime objects。
 
-概念上：
+这是一项 **composition root responsibility**。
+
+对于 LuckyToken-owned objects，composition root 建立和绑定 direct dependencies。
+
+对于 Pi `Models`，composition root 遵守 Pi 自己的 construction/registration lifecycle，而不重新定义它。
+
+Current Pi source establishes：
+
+```text
+createModels({
+  credentials?: CredentialStore,
+  modelsStore?: ModelsStore,
+  authContext?: AuthContext,
+})
+        │
+        │ omitted values use Pi defaults
+        ▼
+      Models
+        ▲
+        │
+models.setProvider(provider)
+        │
+     Provider
+```
+
+因此 deployment wiring 更准确地表示为：
 
 ```text
 Deployment / Router Configuration
+                │
+                ▼
+        Startup Composition Root
+                │
+        ├── create Auth
+        ├── create Client Protocol implementations
+        ├── create Providers
         │
-        ▼
-Runtime Composition
+        ├── optionally provide custom Pi stores/context
+        │   ├── CredentialStore?
+        │   ├── ModelsStore?
+        │   └── AuthContext?
         │
-        ├── Auth
-        │   └── private authorization / session-resolution dependencies
+        ├── createModels(optional customizations)
+        │        │
+        │        ▼
+        │      Models
+        │        ▲
+        │        │ setProvider(...)
+        │        └──────── Providers
         │
-        ├── Pi Providers
-        ├── LuckyToken-specific Providers
-        ├── CredentialStore
-        └── ModelsStore
-            └── in-memory by default; persistent/custom implementation optional
-        │
-        ▼
-      Models
-
-HTTP / Router Configuration
-        │
-        ▼
-HTTP Runtime
+        ├── bind Router policy/defaults
+        └── start HTTP runtime
 ```
 
-关键 long-lived state 大致是：
+Pi defaults 可以留在 Pi 内部：
+
+```text
+credentials omitted
+→ InMemoryCredentialStore
+
+modelsStore omitted
+→ InMemoryModelsStore
+
+authContext omitted
+→ default AuthContext
+```
+
+只有 LuckyToken deployment 确实需要：
+
+```text
+persistent credentials
+persistent model catalog
+custom auth environment/context
+```
+
+时，composition root 才显式提供 custom implementation。
+
+Provider 也不是 `createModels()` 的 required construction argument。
+
+它通过 Pi `MutableModels.setProvider(...)` registration operation 进入 `Models` 持有的 provider collection。
+
+Composition root 的责任是：
+
+```text
+construct LuckyToken-owned runtime objects
+configure external Pi runtime through its public contract
+bind direct dependencies
+register Providers
+publish stable runtime objects to request handling
+start runtime
+```
+
+它不 owns：
+
+```text
+Auth policy semantics
+Client conversational semantics
+Pi Context semantics
+Provider wire conversion
+projectDir interpretation
+request business state
+```
+
+因此 composition root 不是：
+
+```text
+DependencyManager
+ServiceContainer
+RuntimeRegistry
+ApplicationContext
+```
+
+Architecture 只要求 dependency source 可见，不要求 DI framework。
+
+普通 implementation 可以很直接：
+
+```text
+auth = createAuth(...)
+models = createModels(optionalCustomStores)
+providers = createProviders(...)
+
+for provider in providers:
+  models.setProvider(provider)
+
+protocols = createProtocols(...)
+policy = loadRouterPolicy(...)
+
+handleRequest(
+  request,
+  auth,
+  models,
+  protocols,
+  policy
+)
+```
+
+关键 long-lived runtime objects：
 
 ```text
 LuckyToken Runtime
 ├── Auth
-│   └── hides inbound authorization/session business details
-│
-├── Models
-│   └── registered Providers
-│
-├── Pi Provider-side auth / persistence capabilities
-│   ├── CredentialStore
-│   └── ModelsStore
-│
-└── HTTP / Router runtime configuration
+├── Client Protocol implementations
+├── Router policy/defaults
+├── HTTP runtime
+└── Pi Models
+    └── registered Providers
 ```
 
-这里的两个 auth boundary 必须保持分离：
+Pi `CredentialStore` / `ModelsStore` / `AuthContext` 可能是：
+
+```text
+Pi internal defaults
+or
+deployment-provided custom implementations
+```
+
+它们不应被 architecture diagram 错写成 LuckyToken 永远必须单独 construction 的 sibling runtime modules。
+
+这里的两个 auth concern 必须保持分离：
 
 ```text
 LuckyToken Auth
-→ client → LuckyToken authorization
+→ inbound client → LuckyToken authorization
 → normalized request-local sessionId / projectDir?
 
-Pi Provider auth
+Pi Models / Provider auth
 → LuckyToken → selected upstream authentication
+→ credential resolution / effective Provider request preparation
 ```
-
-Architecture 不要求 Auth 内部暴露或抽象出：
-
-```text
-TokenManager
-ProjectRegistry
-SessionRegistry
-AuthStore
-```
-
-Auth 的内部 configuration、lookup representation 与 policy 都是 implementation detail，只要固定 per-request input/output contract 保持不变。
 
 Startup representation 不等于 request representation。
 
-例如：
-
-```text
-configuration bytes
-parsed configuration
-Provider construction inputs
-Auth construction inputs
-temporary composition state
-```
-
-可以存在于 startup，但当 runtime composition 完成以后，普通 request 不应继续依赖这些临时 representation。
-
 Persistence 只有在产品明确要求跨 process restart 保存 state 时才引入。
 
-Architecture 不要求特定：
+## 3.2 HTTP Boundary
+
+### Module Contract
 
 ```text
-configuration file names
-credential file formats
-model-store files
-Auth storage formats
-directory layouts
+Responsibility
+- own HTTP request/response transport lifecycle
+- route to the selected Client Protocol
+- own request AbortSignal and connection writability
+
+Bound Dependencies
+- HTTP framework/runtime capability
+- route / protocol selection policy
+
+Owned State
+Runtime:
+- none required beyond state owned by the bound HTTP runtime
+
+Request-Local:
+- request transport state when retained by this boundary
+- AbortSignal/controller state
+- connection / response-open state
+
+Operations
+
+route/read
+  Inputs
+  - one HTTP request
+
+  Result
+  - selected Client Protocol boundary
+  - raw body / headers view for owning boundaries
+  - request AbortSignal
+
+  Effects
+  - establish request-local transport lifecycle
+
+emit
+  Inputs
+  - already-decided client/HTTP response representation
+
+  Result
+  - none
+
+  Effects
+  - mechanically write final status / headers / body when still writable
+
+Must Not Access
+- Client conversational semantics
+- Provider wire semantics
+- Provider credentials
+- project semantics
+- Pi Context internals
 ```
 
----
-
-## 3.2 HTTP Boundary
 
 `HTTP Boundary` 是 HTTP transport 与 LuckyToken semantic/runtime boundaries 的接口。
 
@@ -1126,7 +1706,7 @@ HTTP request begins
 create request AbortSignal
         │
         ▼
-Request Composition
+request assembly
         │
         ▼
 Options.signal
@@ -1177,41 +1757,115 @@ HTTP Boundary 不需要 `HttpManager`、`RequestManager` 或 global connection r
 
 ---
 
-## 3.3 Request Lifecycle
+## 3.3 Request Dependency DAG
 
-一个 normal request 以几个不同 owner 的 sibling sources 开始：
-
-```text
-HTTP Request
-│
-├── Client Protocol Input
-│
-├── Auth Input
-│
-└── HTTP Lifecycle
-```
-
-它们共享 request lifetime，但不共享一个 semantic representation。
-
-概念上：
+一个 normal request 以多个 sibling sources 开始：
 
 ```text
 HTTP Request
 │
-├── Client Protocol
-│   ├── raw protocol input
-│   └── source validation
-│
-├── Auth Boundary
-│   ├── denied
-│   └── authorized
-│       ├── sessionId
-│       └── projectDir?
-│
-└── HTTP Lifecycle
-    ├── AbortSignal
-    └── connection state
+├── Client Protocol input
+├── Auth input
+└── HTTP lifecycle
 ```
+
+它们共享 request lifetime，但不共享一个 generic request representation。
+
+Dependency DAG：
+
+```text
+                          Models
+                            │
+selector ───────────────► resolveModel
+                            │
+                            ▼
+                         Model<Api>
+                            │
+validated Client state ─────┤
+                            ▼
+                     Client → Pi
+                       │          │
+                       ▼          ▼
+                    Context    controls
+
+
+Auth(headers)
+├── sessionId
+└── projectDir?
+
+HTTP Boundary
+└── AbortSignal
+
+Router Policy
+└── defaults
+
+
+controls ───────────────┐
+sessionId ──────────────┤
+projectDir? ────────────┤
+AbortSignal ────────────┤
+defaults ───────────────┘
+          │
+          ▼
+    composeOptions(...)
+          │
+          ▼
+ModelsSimpleStreamOptions
+
+
+Models ───────────────┐
+Model ────────────────┤
+Context ──────────────┤
+Options ──────────────┘
+          │
+          ▼
+        execute
+          │
+          ▼
+AssistantMessage | failure
+
+
+renderState ──────────┐
+result / failure ─────┘
+          │
+          ▼
+   protocol.render
+          │
+          ▼
+     HTTP Boundary
+```
+
+这个 DAG 的 architecture property 是：
+
+> **本 DAG 展示 request-local information flow 与直接参与 request execution 的 runtime objects；它不重复展开每个 module 的全部 bound dependencies。一个 node 的完整 runtime closure 由本 DAG 与对应 Module / Operation Contract 共同确定。**
+>
+> 两者结合以后，仍然必须满足：
+>
+> **不存在从 unrelated environment 临时获取的 undeclared fourth source。**
+
+同时它不表示所有 transit node 都理解经过它的所有 facts。
+
+例如：
+
+```text
+Context
+```
+
+的 semantic consumer 是 concrete Provider/API conversion。
+
+而：
+
+```text
+request orchestration
+Execution
+Models dispatch
+```
+
+只是 Context 的 transparent transit。
+
+---
+
+### Client Protocol path
 
 Client Protocol 先产生：
 
@@ -1221,13 +1875,13 @@ external model selector
 protocol-owned render state
 ```
 
-Model selector 随后被 resolve：
+Model selector 被 resolve：
 
 ```text
 external model selector
         │
         ▼
-Model Resolution
+resolveModel(models, selector)
         │
         ▼
 Model<Api>
@@ -1251,98 +1905,134 @@ model-aware representability
                └── protocol-derived invocation controls
 ```
 
-这里的 `protocol-derived invocation controls` **不是新的 generic LuckyToken contract**。
+`protocol-derived invocation controls` 不是新的 LuckyToken IR。
 
-它只是 Client Protocol 对那些已经属于 Pi `ModelsSimpleStreamOptions` semantic space 的字段做 protocol-owned projection。
+它只是 Client Protocol 对已经属于 Pi `ModelsSimpleStreamOptions` semantic space 的 fields 做 protocol-owned projection。
 
-概念上：
+---
+
+### Auth / HTTP / Router sibling facts
+
+Auth 建立：
 
 ```text
-Client request controls
-        │
-        ▼
-supported projection
-        │
-        ▼
-subset of ModelsSimpleStreamOptions semantics
+sessionId
+projectDir?
 ```
 
-而不是：
+HTTP Boundary 建立：
 
 ```text
-ProtocolOptions
-→ RouterOptions
-→ PiOptions
+AbortSignal
 ```
 
-Request Composition 最终组合：
+Router policy 提供真正属于 invocation policy 的 defaults。
+
+这些 fact 不需要先进入：
 
 ```text
-Model<Api>
+RequestContext
+CanonicalInvocation
+RuntimeContext
+```
+
+才能组合。
+
+---
+
+### Options composition
+
+`composeOptions(...)` 是一个 small request-local operation：
+
+```text
+protocol controls
++
+Auth facts
++
+HTTP AbortSignal
++
+Router invocation defaults
+        │
+        ▼
+composeOptions(...)
+        │
+        ▼
+ModelsSimpleStreamOptions
+```
+
+它只构造 `Options`。
+
+它不重新包装或拥有：
+
+```text
+Model
+Context
+sessionId
+projectDir
+AbortSignal
+```
+
+`Model` 已由 model resolution 建立。
+
+`Context` 已由 Client Protocol conversion 建立。
+
+`sessionId` / `projectDir?` 由 Auth 建立。
+
+`AbortSignal` 由 HTTP Boundary 拥有。
+
+因此不再把：
+
+```text
+request assembly
+→ Model + Context + Options
+```
+
+作为 architectural module relationship。
+
+---
+
+### Execution and rendering
+
+Execution receives:
+
+```text
+Models
++
+Model
 +
 Context
 +
 Options
 ```
 
-Normal execution path：
+and establishes one atomic outcome.
 
-```text
-Model + Context + Options
-        │
-        ▼
-      Models
-        │
-        ▼
-     Provider
-        │
-        ▼
-     Upstream
-        │
-        ▼
-     Provider
-        │
-        ▼
-AssistantMessageEventStream
-        │
-        ▼
-    Execution
-        │
-        ├── done.message
-        │      ↓
-        │ AssistantMessage
-        │
-        └── aborted | error
-               ↓
-             failure
-        │
-        ▼
-Client Protocol Renderer
-        │
-        ▼
-HTTP Boundary
-        │
-        ▼
-HTTP Response
-```
-
-Protocol-owned `render state` 作为一条窄旁路，跨越 Pi execution 直到 response rendering：
+Protocol-owned `render state` 作为窄旁路跨越 Pi execution：
 
 ```text
 Client Protocol parse
         │
-        ├── Pi invocation information ──────────────→ execution
+        ├── Model/Context/Options path ───────────────→ execution
         │
-        └── protocol-owned render state ────────────┐
-                                                    │
-AssistantMessage or request failure ────────────────┤
-                                                    ▼
-                                          Client Renderer
+        └── protocol-owned render state ──────────────┐
+                                                      │
+AssistantMessage or request failure ──────────────────┤
+                                                      ▼
+                                            Client Renderer
 ```
 
 这个 state 不进入 `Context` 或 `Options`。
 
-如果 concrete integration 证明还需要一个不属于 `Model`、`Context`、`Options` 的 request-local fact，必须在 concrete boundary 明确 owner/carrier，而不是提前建立 generic：
+如果 concrete integration 证明还需要一个不属于现有 adjacent contracts 的 request-local fact，必须在 concrete boundary 明确：
+
+```text
+producer
+carrier
+semantic consumer
+death point
+```
+
+而不是提前建立 generic：
 
 ```text
 ProviderMetadata
@@ -1351,8 +2041,6 @@ ProjectContext
 ProviderExecutionContext
 RequestOverrides
 ```
-
----
 
 ## 3.4 Representation Boundaries
 
@@ -1454,7 +2142,7 @@ Representation 应在 next authoritative representation 建立后结束 architec
 | Provider request-local partial state | completion, failure, or abort |
 | `AssistantMessageEventStream` tracking | Execution resolves |
 | `Context` / `Options` | Pi invocation terminates |
-| `AssistantMessage` | Client rendering completes |
+| `committed successful AssistantMessage` | Client success rendering completes |
 | Client response representation | HTTP final write completes or response closes |
 | HTTP request-local transport state | response completes / closes |
 
@@ -1474,95 +2162,52 @@ new representation
 
 短暂共存，但新的 representation 必须成为 authoritative，旧 representation 随后停止传播。
 
-Whole-system lifecycle：
+Whole-system lifecycle 可以简化为：
 
 ```text
-                       LONG-LIVED RUNTIME
+LONG-LIVED
 
-Deployment Configuration
-          │
-          ▼
-   Runtime Composition
-          │
-          ▼
-        Models
-          │
-          └── Providers
+Composition Root
+├── Auth
+├── Models
+│   └── Providers
+├── Client Protocol implementations
+└── Router / HTTP policy
 
 
-────────────────────────────────────────────────────
+ONE REQUEST
 
-                       ONE REQUEST
+Client Protocol ──► Model / Context / controls
+Auth ─────────────► sessionId / projectDir?
+HTTP ─────────────► AbortSignal
+Router ───────────► defaults
+                         │
+                         ▼
+                  composeOptions
+                         │
+                         ▼
+                       Options
 
-HTTP Request
-    │
-    ▼
-HTTP Boundary
-├── route / Client Protocol selection
-├── AbortSignal
-└── connection / response state
-    │
-    ├────────────────────────────────────────────────────┐
-    │                                                    │
-    ▼                                                    │
-Client Protocol                                          │
-├── parse / validate                                     │
-├── selector ──────────────→ Model Resolution            │
-│                                │                       │
-│                                ▼                       │
-│                            Model<Api>                   │
-│                                │                       │
-├── validated semantics ─────────┼─→ model-aware         │
-│                                │   Pi conversion        │
-│                                │        │               │
-│                                │        ├── Context     │
-│                                │        └── controls    │
-│                                │                       │
-└── render state ────────────────────────────────────────┤
-                                                         │
-Auth Boundary ────────────────────→ denied / sessionId + projectDir? │
-                                                         │
-HTTP AbortSignal ───────────────────────────────────────┐ │
-                                                       │ │
-                                      Request Composition│
-                                                       │ │
-                                      Model + Context + Options
-                                                       │
-                                                       ▼
-                                                     Models
-                                                       │
-                                                       ▼
-                                                    Provider
-                                                       │
-                                                       ▼
-                                                    Upstream
-                                                       │
-                                                       ▼
-                                                    Provider
-                                                       │
-                                                       ▼
-                                         AssistantMessageEventStream
-                                                       │
-                                                       ▼
-                                                   Execution
-                                                       │
-                                    ┌──────────────────┴──────────────┐
-                                    │                                 │
-                                  done                          aborted | error
-                                    │                                 │
-                                    ▼                                 ▼
-                            AssistantMessage                        failure
-                                    │                                 │
-                                    └──────────────┬──────────────────┘
-                                                   ▼
-                                         Client Protocol Renderer
-                                                   │
-                                                   ▼
-                                              HTTP Boundary
-                                                   │
-                                                   ▼
-                                              HTTP Response
+Models + Model + Context + Options
+                         │
+                         ▼
+                     Execution
+                         │
+                         ▼
+                 Pi / Provider path
+                         │
+                         ▼
+              AssistantMessage | failure
+                         │
+renderState ─────────────┤
+                         ▼
+                 Client Protocol Renderer
+                         │
+                         ▼
+                    HTTP Boundary
 ```
+
+Detailed dependency edges are defined by §3.3; Fact producer/carrier/consumer/death-point relationships are summarized in Chapter 11.
 
 Core 不需要额外 `CanonicalRequest`、`ExecutionPlan` 或 `UniversalContext` 来连接这些 stages。
 
@@ -1654,9 +2299,195 @@ ProviderExecutor
 
 ## 4.2 Pi Runtime Ownership
 
-Pi 把 runtime responsibility 主要分给 `Models` 与 concrete `Provider`。
+### Pi `Models` Runtime Ownership and Dependency View
 
-概念上：
+Pi `Models` 是 external/runtime dependency owned by Pi，LuckyToken 不重新定义它的 constructor contract。
+
+Current Pi source establishes：
+
+```text
+createModels({
+  credentials?: CredentialStore,
+  modelsStore?: ModelsStore,
+  authContext?: AuthContext,
+})
+```
+
+如果这些 optional customization 缺失，Pi 自己创建：
+
+```text
+InMemoryCredentialStore
+InMemoryModelsStore
+default AuthContext
+```
+
+Provider collection 则由 `ModelsImpl` 自己持有，并通过后续 operations 修改：
+
+```text
+setProvider(provider)
+deleteProvider(id)
+clearProviders()
+```
+
+因此更准确的 runtime view 是：
+
+```text
+Pi Models
+│
+├── internal/default-or-custom dependencies
+│   ├── CredentialStore
+│   ├── ModelsStore
+│   └── AuthContext
+│
+├── owned runtime state
+│   ├── Provider collection / registration state
+│   ├── refresh generations/controllers
+│   └── publication coordination
+│
+└── operations
+    ├── provider registration/read
+    ├── model lookup
+    ├── model refresh
+    ├── auth check/resolution
+    ├── login/logout
+    ├── stream/complete
+    └── deferred fetch/cancel
+```
+
+这不是 LuckyToken 对 Pi 的新 abstraction；只是准确描述 current Pi public/source contract。
+
+### Important Pi Operations
+
+Provider collection：
+
+```text
+setProvider(provider)
+deleteProvider(id)
+clearProviders()
+getProvider(id)
+getProviders()
+```
+
+Model access：
+
+```text
+getModels(...)
+getModel(provider, id)
+getAvailable(...)
+refresh(...)
+```
+
+Auth：
+
+```text
+checkAuth(...)
+getAuth(...)
+login(...)
+logout(...)
+```
+
+Inference：
+
+```text
+stream(...)
+complete(...)
+streamSimple(...)
+completeSimple(...)
+fetchDeferred(...)
+cancelDeferred(...)
+```
+
+所以不能把整个 `Models` runtime 错写成单一：
+
+```text
+Model + Context + Options → Stream
+```
+
+module contract。
+
+### `streamSimple(...)` Operation View
+
+LuckyToken Core 主要依赖：
+
+```text
+Models.streamSimple(
+  model,
+  context,
+  options,
+)
+```
+
+该 operation 的 current source behavior：
+
+```text
+Inputs
+├── Model<Api>
+├── Context
+└── ModelsSimpleStreamOptions
+
+Models consumes
+├── model.provider
+│   └── requireProvider(...)
+│
+├── model.headers
+│   └── participates in getAuth(model)
+│
+└── request auth overrides/options
+    ├── apiKey
+    ├── headers
+    ├── env
+    └── signal
+
+Models request preparation
+├── resolve effective auth
+├── merge effective apiKey / headers / env
+├── apply transformHeaders
+├── possibly derive requestModel.baseUrl
+└── delegate to owning Provider
+
+Result
+└── AssistantMessageEventStream
+```
+
+因此：
+
+> **Pi Models is a semantic consumer of selected runtime-relevant `Model<Api>` fields; it is not transparent transit for the whole Model object.**
+
+这不意味着 Models owns all Model capability semantics。
+
+Client model-aware conversion 与 concrete Provider 仍然消费它们各自需要的 model capabilities。
+
+### Store Ownership Distinction
+
+如果 LuckyToken 提供 custom `CredentialStore` / `ModelsStore`：
+
+```text
+Models
+→ uses/co-ordinates the store contracts
+```
+
+但 underlying stored data 的 authoritative lifecycle 属于对应 Store contract。
+
+不要重复表示为：
+
+```text
+Models owns copied credential/model-store data
+```
+
+Pi `Provider` contract 要求 concrete Provider 声明自己的 auth semantics；但：
+
+```text
+credential storage/resolution
+effective request auth preparation
+```
+
+属于 `Models` runtime responsibility。
+
+Concrete CommandCode Provider 不直接依赖 Pi `CredentialStore`。
+
+### Generic Core Rule
+
+LuckyToken 应保持：
 
 ```text
 Models
@@ -1675,32 +2506,7 @@ Provider
 └── stream implementation
 ```
 
-LuckyToken 应保持这个 ownership，而不是插入另一个 runtime layer。
-
-Normal model dispatch：
-
-```text
-Model<Api>
-    │
-    ▼
-  Models
-    │
-    ▼
-owning Provider
-```
-
-Client Protocol module 不负责：
-
-```text
-load Provider credentials
-select Provider implementation
-refresh Provider authentication
-dispatch directly to upstream
-```
-
-这些属于 Pi runtime boundary。
-
----
+而不是插入另一个 runtime layer。
 
 ## 4.3 Provider Identity、Composition 与 Authentication
 
@@ -2014,6 +2820,75 @@ Client Protocol Boundary 不理解 concrete upstream Provider wire。
 ---
 
 ## 5.1 Boundary Ownership
+
+### Module Contract
+
+```text
+Responsibility
+- own one Client wire protocol
+- validate source protocol state
+- perform model-aware Client ↔ Pi conversion
+- render protocol-visible success/failure responses
+
+Bound Dependencies
+- protocol-specific stable policy/configuration only when required
+
+Owned State
+Runtime:
+- protocol-owned mutable runtime state, if any
+- bound policy/configuration references remain Bound Dependencies
+
+Request-Local:
+- no hidden retained state is required by architecture;
+  validated state / renderState remain explicit operation values
+
+Operations
+
+parse
+  Inputs
+  - Client wire representation
+
+  Result
+  - validated Client state
+  - external model selector
+  - protocol-owned renderState
+
+  Effects
+  - none required beyond parsing/validation
+
+convertToPi
+  Inputs
+  - validated Client state
+  - resolved Model<Api>
+
+  Result
+  - Context
+  - protocol-derived Pi invocation-control projection
+
+  Effects
+  - none required
+
+render
+  Inputs
+  - committed successful AssistantMessage or preserved failure
+  - protocol-owned renderState, if established / required
+
+  Result
+  - Client response representation
+
+  Effects
+  - none; HTTP emission belongs to HTTP Boundary
+
+Must Not Access
+- concrete Provider implementation
+- Provider credentials
+- upstream wire
+- filesystem/project inspection
+- HTTP connection state
+```
+
+Client Protocol module 本身就是 conversion implementation；不要把“protocol/conversion implementation”再包装成一个 generic construction dependency。
+
 
 Inbound processing 分成几个有明确 dependency 的步骤：
 
@@ -2670,22 +3545,91 @@ Client Protocol module 在 response rendering 后不需要保留 upstream execut
 
 > **A Client Protocol owns the meaning and validity of its own wire representation, and converts only valid, explicitly representable semantics into Pi contracts. It preserves only the smallest protocol-owned render state required for response rendering, and it never inherits concrete Provider vocabulary or lifecycle.**
 
-# 6. Request Composition — 请求组合
+# 6. Request Assembly — 请求装配
 
-> **Concept Primer — 本章解释如何把独立 owner 的 request information 组合成一次 Pi invocation**
+> **Concept Primer — 本章描述几个 request-local assembly operations，而不是一个新的 runtime module**
 >
-> - **Request Composition**：把已经由各自 boundary 解释完成的 request facts 组合为 `Model<Api> + Context + ModelsSimpleStreamOptions`。它不是新的 semantic layer。
-> - **Model Selector**：Client/Router API 中用来指定模型的 external representation。它还不是 Pi `Model<Api>`。
-> - **Model<Api>**：通过 Pi `Models` lookup 得到的 authoritative model identity + capabilities。
-> - **Auth Boundary**：固定消费 inbound headers，负责 client authorization 并输出 normalized `sessionId` 与 optional `projectDir`。它与 Provider auth 是不同 responsibility。
-> - **ModelsSimpleStreamOptions**：当前 Core 调用 `Models.streamSimple()` 使用的 Pi invocation options contract。
-> - **Composed Options**：Request Composition 交给 Pi `Models` 的 options。它不是 Pi `Models` 完成 auth preparation 后传给 Provider 的最终 effective options。
-> - **Precedence Rule**：当多个 owner 都可能提供同一 option field 时，明确谁优先，而不是依赖 object-spread order。
-> - **Non-Pi Request Fact**：某 concrete integration 真正需要、但无法正确表示在当前 Pi invocation contracts 中的 request-local fact。它是 concrete integration gap，不是 generic bag 的理由。
+> - **Request Assembly**：ordinary orchestration control flow；负责按依赖顺序调用 owning boundaries/operations。
+> - **Model Resolution**：`external selector + Models → Model<Api>`。
+> - **Client → Pi Conversion**：`validated Client state + Model<Api> → Context + protocol-derived Pi controls`。
+> - **`composeOptions(...)`**：只把已经建立的 request facts / controls 投影为 Pi `ModelsSimpleStreamOptions`。
+> - **Composed Options**：LuckyToken → Pi `Models` 的 invocation input；它不是 Pi `Models` 完成 auth preparation 后交给 concrete Provider 的最终 effective options。
+> - **Precedence Rule**：多个 producer 能影响同一 Pi option field 时，必须显式定义优先级，而不能依赖 object-spread 顺序。
+> - **Non-Pi Request Fact**：若 concrete integration 真正需要、但现有 Pi invocation contract 无法正确承载的 fact，应作为 concrete integration gap 单独证明，而不是建立 generic bag。
 
-Request Composition 把 independently owned request information 组合成一个 executable Pi invocation。
+本章不定义一个：
 
-当前 normal output：
+```text
+RequestComposition service
+```
+
+也不定义一个：
+
+```text
+Model + Context + Options wrapper
+```
+
+三个 authoritative representations 各自由自己的 owner 建立：
+
+```text
+Model<Api>
+← Model Resolution
+
+Context
+← Client Protocol conversion
+
+Options
+← composeOptions(...)
+```
+
+Request orchestration 只负责把它们按 dependency DAG 连接起来。
+
+主要 request sources：
+
+```text
+Client Protocol
+├── external model selector
+├── validated Client state
+├── protocol-owned invocation-control projection
+└── protocol-owned render state
+
+Auth Boundary
+├── access decision
+├── sessionId
+└── projectDir?
+
+HTTP Boundary
+└── AbortSignal
+
+Router Runtime Policy
+└── applicable invocation defaults
+```
+
+这些 sources 不被重新包装成 generic request object。
+
+---
+
+## 6.1 Assembly Is Control Flow, Not a Runtime Module
+
+Request assembly 不建立一个 long-lived `request assembly` service。
+
+它只是 ordinary endpoint / orchestration code 中的几步显式 operation：
+
+```text
+selector
+→ resolveModel(...)
+
+validated Client state + Model
+→ protocol.toPi(...)
+
+protocol controls
++ Auth facts
++ HTTP AbortSignal
++ Router defaults
+→ composeOptions(...)
+```
+
+最终 authoritative Pi invocation 仍然是：
 
 ```text
 Model<Api>
@@ -2695,134 +3639,130 @@ Context
 ModelsSimpleStreamOptions
 ```
 
-简称：
+没有额外：
 
 ```text
-Model + Context + Options
-```
-
-Input ownership：
-
-```text
-Client Protocol
-├── external model selector
-├── validated Client state
-├── protocol-owned invocation-control projection
-└── protocol-owned render state   # bypasses Pi invocation
-
-HTTP Boundary
-└── AbortSignal
-
-Router Runtime Policy
-└── applicable invocation defaults
-
-Auth Boundary
-├── access decision
-├── sessionId
-└── projectDir?
-```
-
-Request Composition 不 reinterpret Client Protocol semantics、Provider wire semantics、auth semantics 或 execution result。
-
-它只负责：
-
-> **在 Pi 需要一个 invocation 的地方，resolve 并组合已经由其他 owner 定义好的 information。**
-
----
-
-## 6.1 Composition Boundary
-
-Composition inputs 来自不同 owner：
-
-```text
-HTTP Request
-│
-├── Client Protocol
-│   ├── model selector
-│   ├── validated Client state
-│   ├── protocol invocation-control projection
-│   └── render state
-│
-├── Auth Boundary
-│   ├── denied
-│   └── authorized
-│       ├── sessionId
-│       └── projectDir?
-│
-├── HTTP Boundary / Lifecycle
-│   └── AbortSignal
-│
-└── Router Runtime
-    └── applicable invocation policy
-```
-
-这些 information 共享 request lifetime，但不被合并成 generic request object。
-
-LuckyToken 不要求：
-
-```text
-RequestContext
-ResolvedRequest
-CanonicalInvocation
+CanonicalRequest
 ExecutionPlan
-ExecutionContext
-RuntimeRequest
+RequestContext
+ProviderExecutionContext
 ```
-
-普通 endpoint 或小型 orchestration function 可以直接调用 owning boundaries，并只保留下一步需要的 values。
 
 ### Dependency Order
 
-Model-aware Pi conversion 依赖 resolved `Model<Api>`，所以 composition sequence 是：
+Natural dependency order：
 
 ```text
-Client parse / source validation
-        │
-        ├── external model selector
-        │             │
-        │             ▼
-        │       Model Resolution
-        │             │
-        │             ▼
-        │         Model<Api>
-        │             │
-        └─────────────┤
-                      ▼
-          Client model-aware conversion
-                      │
-                      ├── Context
-                      └── protocol control projection
-                              │
-                              ▼
-                     Options Composition
+1. HTTP route selects Client Protocol
+2. Client Protocol parses and source-validates
+3. Auth establishes authorization + request identity facts
+4. external selector resolves through Models → Model<Api>
+5. Client Protocol performs model-aware Pi conversion
+6. composeOptions(...) creates ModelsSimpleStreamOptions
+7. Execution invokes Models.streamSimple(...)
 ```
 
-这个 dependency 不意味着 Request Composition owns Client semantics。
-
-它只协调顺序：
+步骤 3 与前面的 source parsing 可以在 implementation 中按安全/efficiency requirement 排序，只要：
 
 ```text
-Model Resolution owns Model<Api>
-Client Protocol owns representability + conversion
-Options Composition owns final Pi invocation assembly
+Auth owns Auth semantics
+Client Protocol owns protocol validity
+Model Resolution owns selector resolution
 ```
 
-Request Composition 不 owns：
+不发生 responsibility leakage。
+
+### `composeOptions` Operation Contract
 
 ```text
-Client message semantics
-Provider credentials
-Provider wire fields
-logging state
-upstream transport state
-upstream stream parser state
+Responsibility
+- project already-established invocation controls/facts into Pi ModelsSimpleStreamOptions
+- apply explicit field precedence/default rules
+
+Bound Dependencies
+- Router invocation defaults/policy, if bound rather than passed directly
+
+Inputs
+- protocol-derived Pi controls
+- Auth sessionId
+- Auth projectDir?
+- HTTP AbortSignal
+
+Result
+- ModelsSimpleStreamOptions
+
+Effects
+- none
+
+Temporary State
+- ordinary local values only
+
+Must Not Access
+- raw HTTP body
+- raw Auth credential material
+- Client conversational representation
+- Provider implementation
+- filesystem/Git
+- upstream wire
 ```
 
-除非其中某个 fact 已经由 Pi invocation contract 明确表达且 semantics 匹配。
+`composeOptions` 是 transparent carrier step。
 
----
+它可能写入：
+
+```text
+sessionId → Options.sessionId
+projectDir? → Options.metadata.projectDir
+signal → Options.signal
+```
+
+但它不是这些 facts 的 semantic consumer。
+
+### No Orchestration Service Graph
+
+不需要：
+
+```text
+RequestCompositionManager
+InvocationBuilderRegistry
+ExecutionContextFactory
+DependencyContainer
+```
+
+ordinary visible control flow 更符合 LuckyToken Core 的 architecture。
 
 ## 6.2 Model Resolution
+
+### Operation Contract
+
+```text
+Responsibility
+- deterministically resolve an external model selector into one authoritative Pi Model<Api>
+
+Bound Dependencies
+- Models
+
+Inputs
+- external model selector
+
+Result
+- Model<Api> or resolution failure
+
+Effects
+- none required
+
+Temporary State
+- selector parsing / candidate lookup state only
+
+Must Not Access
+- Client message semantics
+- Auth
+- Provider wire
+- request project/session facts
+```
+
+Model Resolution 可以是普通 function/operation；Architecture 不要求 `ModelResolver` service。
+
 
 Client Protocol 提供 external model selector。
 
@@ -2897,6 +3837,67 @@ Resolved model capability 随后可以被 Client Protocol 用于 model-aware rep
 ---
 
 ## 6.3 Auth Boundary
+
+### Module Contract
+
+```text
+Responsibility
+- authorize inbound LuckyToken requests
+- normalize request identity facts
+
+Bound Dependencies
+- authorization policy/configuration
+- credential/project lookup capability
+- session resolution policy
+- fallback identity generation capability
+
+Owned State
+Runtime:
+- private mutable auth lookup/index/cache state only when Auth owns its lifecycle
+- bound policy/configuration references remain Bound Dependencies
+
+Request-Local:
+- no hidden retained state required;
+  parsing/lookup intermediates belong to the operation
+
+Operations
+
+resolve
+  Inputs
+  - ReadonlyHeaders
+
+  Result
+  - denied
+  - or:
+    - sessionId
+    - projectDir?
+
+  Effects
+  - may consult/update Auth-owned lookup/cache state according to Auth policy
+
+  Temporary State
+  - credential/session parsing
+  - lookup/intermediate normalization state
+
+Must Not Access
+- Model
+- Context
+- Pi Options
+- Pi Provider credential store
+- concrete Provider implementation
+- CommandCode wire representation
+```
+
+这些 dependencies 表达 capability，不要求建立对应 manager/class。
+
+例如：
+
+```text
+credential/project lookup capability
+```
+
+可以由 Auth 内部很小的 function/data structure 实现。
+
 
 LuckyToken 保留一个始终存在的 `Auth` boundary。
 
@@ -2993,7 +3994,7 @@ session header aliases / parsing state
 
 ---
 
-## 6.4 Pi Options Composition
+## 6.4 Pi Options Composition — `composeOptions(...)`
 
 `Context` 由 Client Protocol conversion 产生。
 
@@ -3055,7 +4056,7 @@ sessionId
 projectDir?
 ```
 
-Auth 不直接构造 Pi `Options`；Request Composition 只做 mechanical projection。
+Auth 不直接构造 Pi `Options`；`composeOptions(...)` 只做 mechanical projection。
 
 ### Protocol-Derived Controls 不是 Intermediate IR
 
@@ -3190,7 +4191,7 @@ ExecutionOptionsFactory
 
 ### Composed Options 不是 Provider-Final Options
 
-Request Composition 产生的是：
+`composeOptions(...)` 产生的是：
 
 ```text
 composed ModelsSimpleStreamOptions
@@ -3330,7 +4331,7 @@ Generic Core 不提前建立 universal carrier。
 
 ## 6.5 Composition Lifecycle and Failure
 
-Request Composition 可以在 Pi execution 开始前失败。
+request assembly 可以在 Pi execution 开始前失败。
 
 例如：
 
@@ -3391,7 +4392,7 @@ protocol-owned render state
 HTTP connection state
 ```
 
-Request Composition 自己不拥有 long-lived state。
+request assembly 自己不拥有 long-lived state。
 
 它的完整 responsibility 是：
 
@@ -3483,7 +4484,52 @@ Client response encoding
 
 ## 7.1 Execution Boundary
 
-Request Composition 已经建立：
+### Operation Contract — `execute`
+
+```text
+Responsibility
+- invoke Pi Models for one request
+- actively consume the Pi execution lifecycle
+- independently observe request cancellation
+- establish one atomic success/failure outcome
+
+Bound Dependencies
+- Models
+
+Inputs
+- Model<Api>
+- Context
+- ModelsSimpleStreamOptions
+
+Result
+- committed successful AssistantMessage
+- or aborted failure
+- or error failure
+
+Effects
+- consume the AssistantMessageEventStream
+- trigger no downstream live-forwarding in Core v1
+
+Temporary State
+- stream iterator/reference
+- terminal observation
+- abort observation
+- success-commit state
+- temporary event references
+
+Must Not Access
+- raw HTTP request
+- LuckyToken Auth
+- Client Protocol internal state
+- concrete Provider implementation
+- upstream wire/events
+- global runtime configuration
+```
+
+`Models` 可以通过 closure binding、factory 或显式 function argument 进入 Execution。Architecture 不规定语法，只禁止 hidden global dependency。
+
+
+request assembly 已经建立：
 
 ```text
 Model<Api>
@@ -3673,7 +4719,7 @@ done(reason=deferred)
 
 所以 `deferred` 不能被当前 renderer 当成 completed generation success。
 
-在 valid Core v1 invocation path 中，Request Composition 不会设置 `ModelsSimpleStreamOptions.deferred`；因此正常情况下不应产生 `done(reason=deferred)`。如果 malformed/unexpected Provider 仍返回该 variant，它属于 unsupported Core outcome，不能被 silently rendered as completed success。
+在 valid Core v1 invocation path 中，`composeOptions(...)` 不会设置 `ModelsSimpleStreamOptions.deferred`；因此正常情况下不应产生 `done(reason=deferred)`。如果 malformed/unexpected Provider 仍返回该 variant，它属于 unsupported Core outcome，不能被 silently rendered as completed success。
 
 ### Success
 
@@ -3939,7 +4985,7 @@ closed-response behavior
 
 ## 7.5 Cancellation and Lifecycle
 
-Request `AbortSignal` 由 `HTTP Boundary` 创建，并在 Request Composition 中进入 Pi `Options`。
+Request `AbortSignal` 由 `HTTP Boundary` 创建，并通过 `composeOptions(...)` 进入 Pi `Options`。
 
 Propagation：
 
@@ -4209,6 +5255,81 @@ TransportManager
 
 ## 8.1 Provider Boundary
 
+### Module Contract — Generic Provider Shape
+
+```text
+Responsibility
+- own one concrete Pi ↔ upstream integration
+- expose Pi Provider operations
+- convert upstream lifecycle into Pi AssistantMessageEventStream
+
+Bound Dependencies
+- stable Provider/upstream configuration
+- concrete compatibility policy
+- direct upstream capability required by that integration
+- direct request-environment capability only when the Provider itself owns that responsibility
+
+Owned State
+Runtime:
+- provider-owned mutable model/catalog/cache/runtime state, if any
+- stable injected configuration/policy references remain Bound Dependencies
+
+Request-Local:
+- no hidden cross-request state;
+  request parser/transport/partial state belongs to the stream operation
+
+Operations
+
+stream / streamSimple
+  Inputs
+  - Model<Api>
+  - Context
+  - Provider-facing Options prepared by Pi Models
+
+  Result
+  - AssistantMessageEventStream
+
+  Effects
+  - create upstream request
+  - execute upstream transport
+  - emit Pi stream lifecycle
+
+  Temporary State
+  - upstream request representation
+  - transport/parser state
+  - partial structured state
+  - terminal state
+
+optional provider operations
+  - refreshModels
+  - fetchDeferred
+  - cancelDeferred
+  as supported by the concrete Provider contract
+
+Must Not Access
+- LuckyToken inbound Auth implementation
+- raw Client Protocol representation
+- Client renderer state
+- generic whole-request context
+```
+
+Provider 的 direct dependencies 必须按 concrete integration 声明。
+
+Generic Provider chapter 不要求每个 Provider 都注入：
+
+```text
+filesystem
+Git
+clock
+fetch wrapper
+environment reader
+```
+
+这些只有在 concrete Provider 直接 owns 相应 responsibility 时才进入它的 closure。
+
+同样，`CredentialStore` 不属于 concrete Provider 的 direct dependency：Pi `Models` owns credential storage/resolution，并通过 Provider-facing options 传递 effective auth material。
+
+
 Pi `Models` 根据 resolved model 找到 owning Provider，并 delegate execution。
 
 ```text
@@ -4286,7 +5407,7 @@ Provider-specific state 不向前泄漏到：
 Client Protocol
 Auth Boundary
 Model Resolution
-Request Composition
+composeOptions / request assembly
 ```
 
 也不在转换成 Pi stream state 后继续向 Generic Execution 泄漏。
@@ -4719,6 +5840,96 @@ Generic Provider ownership 已在 Chapter 8 定义。
 
 ## 9.1 Request Information Hierarchy
 
+### Module Contract — CommandCode Private Provider
+
+```text
+Responsibility
+- own Pi ↔ CommandCode Private conversion
+- derive CommandCode request-local project representation
+- execute the Private upstream lifecycle
+- convert it back to Pi stream semantics
+
+Bound Dependencies
+- stable CommandCode endpoint/provider configuration
+- CommandCode compatibility / permission policy
+- Project Snapshot capability
+- Trace Context generation capability
+- upstream transport implementation/configuration when not supplied through Pi invocation
+
+Owned State
+Runtime:
+- provider-owned mutable model/catalog/cache/runtime state, if any
+- stable endpoint/configuration/policy references remain Bound Dependencies
+
+Request-Local:
+- no hidden cross-request state;
+  request-specific representations belong to the stream operation
+
+Operations
+
+streamSimple
+  Inputs
+  - Model<Api>
+  - Context
+  - Provider-facing Options
+    - effective auth material
+    - signal
+    - sessionId
+    - metadata.projectDir?
+    - invocation controls
+
+  Result
+  - AssistantMessageEventStream
+
+  Effects
+  - derive project snapshot / project slug when applicable
+  - generate per-upstream-request trace context
+  - build and send CommandCode Private request
+  - consume Private event lifecycle
+  - emit Pi lifecycle
+
+  Temporary State
+  - CommandCode request representation
+  - project snapshot result
+  - trace context value
+  - transport/parser state
+  - keyed partial tool state
+  - terminal state
+
+Must Not Access
+- LuckyToken Auth implementation
+- raw inbound client headers
+- Client Protocol representation
+- HTTP response object
+- generic RequestContext/ApplicationContext
+```
+
+`Project Snapshot capability` 的 implementation 可以继续使用小函数。
+
+它后面的 filesystem / Git / clock/date dependencies 属于该 capability 的 recursive closure；不要求把所有 primitives 提升成 CommandCode Provider 顶层 dependency。
+
+`Trace Context generation capability` owns one narrow responsibility：
+
+```text
+one upstream request
+→ fresh W3C-shaped traceparent value
+```
+
+Current CommandCode compatibility evidence generates a new random trace ID and span ID per upstream request.
+
+Architecture 不把底层：
+
+```text
+random bytes
+crypto API
+telemetry library
+```
+
+直接提升成 Provider dependency；这些 transitive primitives 保持在 trace-context capability 后面。
+
+如果未来统一 telemetry/transport capability 已经 authoritative 地 owns outbound trace context，则该 capability 可以替代 standalone trace generator，但 Provider 仍不得从 undeclared random source 临时生成 `traceparent`。
+
+
 Observed `CommandCodeRequest` 有两个天然不同的 wire branch：
 
 ```text
@@ -4774,8 +5985,11 @@ Provider policy/configuration
         ├── memory / taste / skills current compatibility values
         └── permissionMode
 
-Provider request-time environment
-        └── date / filesystem / Git derived snapshot
+Project Snapshot capability
+        └── request-time project/runtime snapshot
+            ├── date
+            ├── filesystem view
+            └── Git-derived state
 ```
 
 这些 facts 不进入 Pi conversational `Context`。
@@ -4788,7 +6002,7 @@ Exact `CommandCodeRequest` schema 属于 CommandCode Private Protocol Spec；exa
 
 ### `config`
 
-`config` 是 request-time project/runtime snapshot。Current source-backed protocol establishes two producer modes：
+`config` 是 request-time project/runtime snapshot。Current source-backed compatibility producer establishes two project-context modes：
 
 ```text
 Options.metadata.projectDir exists
@@ -4803,7 +6017,7 @@ Options.metadata.projectDir absent
         ↓
 project-less
         ↓
-protocol-defined empty project config
+current compatibility producer project-less config
         ↓
 no filesystem/Git scan
 ```
@@ -4909,7 +6123,7 @@ Auth 对外不暴露 token classification，只输出 optional：
 projectDir?
 ```
 
-Request Composition 将它投影到：
+`composeOptions(...)` 将它投影到：
 
 ```text
 Options.metadata.projectDir?
@@ -4968,7 +6182,8 @@ Pi Options                               │
 ├── sessionId ───────────────────────────┤
 └── metadata.projectDir? ────────────────┤
 Provider auth/config/policy ─────────────┤
-request-time environment/filesystem ─────┤
+Project Snapshot capability ──────────────┤
+Trace Context generation capability ──────┤
                                         ▼
                                CommandCodeRequest
                                         │
@@ -5319,19 +6534,34 @@ request terminal
 
 Chapter 8 已定义 generic Provider lifetime split。
 
-CommandCode Private request-local state 可能包括：
+CommandCode Private request scope includes：
 
 ```text
-normalized sessionId / projectDir facts
-runtime / project snapshot
-CommandCodeRequest representation
-Provider-specific headers
-transport state
-text partial state
-reasoning partial state
-keyed tool-input state
-usage accumulation
-terminal state
+Invocation Facts
+├── sessionId
+└── projectDir?
+
+Provider-Owned Temporary State
+├── request-time project snapshot
+├── CommandCodeRequest representation
+├── Provider-owned outbound headers / trace context
+├── transport / parser state
+├── text / reasoning partial state
+├── keyed tool-input state
+├── usage accumulation
+└── terminal state
+```
+
+`sessionId` 与 `projectDir?` 只是 Provider operation scope 中可见的 invocation facts。
+
+它们由上游 boundary 建立，Provider 是 semantic consumer；Provider 暂时持有这些值，不会因此取得它们的 semantic ownership。
+
+即：
+
+```text
+in scope
+≠
+owned state
 ```
 
 这些 incomplete state 不共享到另一 request。
@@ -5496,7 +6726,7 @@ inbound headers
         └── projectDir?
                 │
                 ▼
-        Request Composition
+      composeOptions(...)
                 │
                 ├── Options.sessionId
                 └── Options.metadata.projectDir?
@@ -5528,7 +6758,7 @@ Exact header-source registry、fallback-ID generator、`project_root_to_cc_slug(
 
 ## 10.1 Reopen Rule
 
-Frozen architecture contract 只在新的 evidence 或 demonstrated requirement 证明现有 boundary 不再正确时重开，例如：
+Once v5.5 is frozen, architecture contract 只在新的 evidence 或 demonstrated requirement 证明现有 boundary 不再正确时重开，例如：
 
 ```text
 Pi sessionId no longer expresses the required logical session semantics
@@ -5559,17 +6789,17 @@ Conversion Spec refinement
 
 > **Concept Primer — 本章是导航，不增加新的 architecture truth**
 >
-> - **Architecture Map**：把前面章节已经定义的 runtime、request flow 与 boundary ownership 放在一张图里，帮助读者形成整体 mental model。
-> - **Boundary Ownership Map**：说明每个 major boundary owns 什么，以及明确不 owns 什么。
-> - **Specification Map**：说明 `Protocol Spec`、`Conversion Spec`、`Architecture Spec` 三者如何协作。
-> - **Orthogonal Responsibilities**：三类 spec 不是上下级关系，而是从不同维度描述同一个系统。
-> - **FROZEN**：Generic Core 的 architecture contract 已冻结。只有新的 source evidence 证明 frozen contract 不正确，或新的 demonstrated requirement 无法由现有 boundary 表达时，才重新打开。
-
-本章只总结已定义 architecture，不新增 contracts、invariants、protocol rules 或 conversion rules。
+> - **Module Closure View**：从 node 角度回答“这个 module 凭什么运行”。
+> - **Fact Flow View**：从 edge 角度回答“这个 fact 为什么穿过系统”。
+> - **Transparent Transit**：一个 module/operation 携带 fact，但不理解该 fact 的业务语义。
+> - **Composition Root**：startup wiring responsibility；负责建立和绑定 runtime objects，不负责业务 semantics。
+> - **Architecture Map**：把前面章节定义的 runtime、request DAG、module closure 与 information closure 汇总。
+>
+> 本章只总结前面已经建立的 contracts。
 
 ---
 
-## 11.1 Runtime and Request Map
+## 11.1 Runtime Composition
 
 LuckyToken 有两个主要 lifetime：
 
@@ -5579,149 +6809,134 @@ LuckyToken
 └── Request-Local Lifecycle
 ```
 
-### Long-Lived Runtime
+### Composition Root
 
 ```text
 Deployment / Router Configuration
                 │
                 ▼
-        Runtime Composition
+        Startup Composition Root
                 │
-      ┌─────────┼──────────────────────────┐
-      │         │                          │
-      ▼         ▼                          ▼
-    Auth     Providers               Provider-side stores
-              │                      ├── CredentialStore
-              │                      └── ModelsStore
-              │                          └── in-memory by default
-              ▼
-            Models
-
-HTTP / Router Configuration
-                │
-                ▼
-            HTTP Runtime
+        ├── Auth
+        ├── Client Protocol implementations
+        ├── Providers
+        │
+        ├── optional Pi customizations
+        │   ├── CredentialStore?
+        │   ├── ModelsStore?
+        │   └── AuthContext?
+        │
+        ├── createModels(optional customizations)
+        │        │
+        │        ▼
+        │      Models
+        │        ▲
+        │        │ setProvider(...)
+        │        └──────── Providers
+        │
+        ├── Router policy/defaults
+        └── HTTP runtime
 ```
 
-这里：
+如果 Pi customizations 没有提供，Pi 使用自己的 default stores/context。
+
+因此：
 
 ```text
-Auth
-→ inbound client authorization/session normalization
-
-CredentialStore / Models Provider auth
-→ LuckyToken-to-upstream authentication
+CredentialStore
+ModelsStore
+AuthContext
 ```
 
-两者不是同一个 auth system。
+不是 LuckyToken composition root 永远必须显式 construction 的 sibling modules。
 
-Normal request 依赖已经 constructed 的 runtime objects，而不是 startup parsing state。
-
-### One Request
+Provider 也通过 Pi registration operation：
 
 ```text
-HTTP Request
-    │
-    ▼
+models.setProvider(provider)
+```
+
+进入 `Models` provider collection，而不是 `createModels()` 的 required constructor dependency。
+
+Normal request 依赖已经 constructed/bound 的 runtime objects，不依赖 startup parsing state，也不通过 service locator 重新发现 dependency。
+
+两个 auth concern 保持分离：
+
+```text
+LuckyToken Auth
+→ inbound client authorization / session-project fact normalization
+
+Pi Models / Provider auth
+→ LuckyToken-to-upstream credential resolution and request preparation
+```
+
+---
+
+## 11.2 Request Dependency DAG
+
+```text
+                          Models
+                            │
+selector ───────────────► resolveModel
+                            │
+                            ▼
+                         Model<Api>
+                            │
+validated Client state ─────┤
+                            ▼
+                     Client → Pi
+                       │          │
+                       ▼          ▼
+                    Context    controls
+
+
+Auth(headers)
+├── sessionId
+└── projectDir?
+
 HTTP Boundary
-├── method / path
-├── route + Client Protocol selection
-├── raw headers / body ownership
-├── AbortSignal
-└── connection / response state
-    │
-    ├────────────────────────────────────────────────────────────┐
-    │                                                            │
-    ▼                                                            │
-Client Protocol                                                  │
-├── parse                                                        │
-├── source validation                                            │
-│                                                                │
-├── external model selector ────────────────┐                    │
-│                                            ▼                    │
-│                                      Model Resolution           │
-│                                            │                    │
-│                                            ▼                    │
-│                                        Model<Api>               │
-│                                            │                    │
-├── validated Client state ──────────────────┤                    │
-│                                            ▼                    │
-│                                model-aware Pi conversion        │
-│                                      │            │             │
-│                                      ▼            ▼             │
-│                                   Context   protocol projection │
-│                                               of Pi Options      │
-│                                                            │   │
-└── protocol-owned render state ──────────────────────────────┐   │
-                                                             │   │
-Auth Boundary                                                │   │
-├── denied → pre-execution failure                           │   │
-└── authorized                                               │   │
-    ├── sessionId ───────────────────────────────────────┐    │   │
-    └── projectDir? ─────────────────────────────────────┤    │   │
-                                                        │    │   │
-HTTP AbortSignal ────────────────────────────────────────┤    │   │
-Router invocation policy ────────────────────────────────┤    │   │
-                                                        ▼    │   │
-                                              Request Composition│
-                                                        │        │
-                                                        ▼        │
-                                  Model + Context + Options       │
-                                                        │        │
-                                                        ▼        │
-                                                      Models     │
-                                                        │        │
-                                                        ▼        │
-                                                     Provider    │
-                                                        │        │
-                                                        ▼        │
-                                                     Upstream    │
-                                                        │        │
-                                                        ▼        │
-                                                     Provider    │
-                                                        │        │
-                                                        ▼        │
-                                          AssistantMessageEventStream
-                                                        │
-                                      request AbortSignal│
-                                                ┌───────┴───────┐
-                                                │               │
-                                                ▼               ▼
-                                             Execution     independent
-                                             stream drain  abort observation
-                                                │               │
-                                ┌───────────────┼───────────────┘
-                                │               │
-                    supported done           failure
-                                │               ├── aborted
-                                │               └── error
-                                ▼
-                      signal live at commit?
-                         │              │
-                        yes             no
-                         │              │
-                         ▼              ▼
-                  AssistantMessage   failure: aborted
-                         │
-                         └───────────────────────┬────────────────┐
-                                                 │                │
-protocol-owned render state ─────────────────────┤                │
-                                                 ▼                │
-                                     Client Protocol Renderer     │
-                                                 │                │
-                                                 ▼                │
-                                      response representation     │
-                                                 │                │
-                                                 ▼                │
-                                         HTTP Boundary ◄──────────┘
-                                                 │
-                                   response closed? ─────┤
-                                       │ yes             │ no
-                                       ▼                 ▼
-                                   no write          final HTTP write
-                                                         │
-                                                         ▼
-                                                    Client Wire
+└── AbortSignal
+
+Router Policy
+└── defaults
+
+
+controls ───────────────┐
+sessionId ──────────────┤
+projectDir? ────────────┤
+AbortSignal ────────────┤
+defaults ───────────────┘
+          │
+          ▼
+    composeOptions(...)
+          │
+          ▼
+ModelsSimpleStreamOptions
+
+
+Models ───────────────┐
+Model ────────────────┤
+Context ──────────────┤
+Options ──────────────┘
+          │
+          ▼
+        Execution
+          │
+          ▼
+AssistantMessage | failure
+
+
+renderState ──────────┐
+result / failure ─────┘
+          │
+          ▼
+   Client Protocol Renderer
+          │
+          ▼
+     HTTP Boundary
+          │
+          ▼
+       Client Wire
 ```
 
 Request 的 authoritative Pi invocation 是：
@@ -5744,9 +6959,204 @@ ProviderExecutionContext
 GlobalErrorIR
 ```
 
-### Failure Lifecycle
+`composeOptions(...)` 只构造 Pi `Options`，不拥有或重新包装 `Model` / `Context`。
 
-Failure 不使用统一 taxonomy，而是按 lifecycle 分段：
+---
+
+## 11.3 Module / Operation Contract Map
+
+v5.5 正式区分 module-level contract 与 operation-level contract。
+
+### LuckyToken-Owned Module Contract
+
+```text
+Module
+├── Responsibility
+├── Bound Dependencies
+├── Owned State
+├── Operations
+└── Must Not Access
+```
+
+Summary：
+
+| Module | Bound Dependencies | Owned Runtime State | Main Operations | Must Not Access |
+| --- | --- | --- | --- | --- |
+| **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
+| **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
+| **Auth** | auth policy/config; credential/project lookup capability; session-resolution policy; fallback identity capability | Auth-owned mutable lookup/index/cache state only if any | `resolve(headers)` | Model; Context; Pi Options; Provider wire |
+| **Generic Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | inbound Auth; Client wire; generic whole-request object |
+| **CommandCode Private Provider** | endpoint/config; compatibility policy; Project Snapshot; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object |
+
+Bound configuration/policy may be retained by a module but is not repeated under `Owned State`.
+
+### Standalone Operation Contract
+
+```text
+Operation
+├── Responsibility
+├── Bound Dependencies
+├── Inputs
+├── Result
+├── Effects
+├── Temporary State
+└── Must Not Access
+```
+
+Summary：
+
+| Operation | Bound Dependencies | Inputs | Result | Effects |
+| --- | --- | --- | --- | --- |
+| **Model Resolution** | Models | external selector | `Model<Api>` or failure | none required |
+| **`composeOptions`** | Router defaults/policy when bound | protocol controls; sessionId; projectDir?; AbortSignal | `ModelsSimpleStreamOptions` | none |
+| **`execute`** | Models | Model + Context + Options | committed success or aborted/error failure | consume Pi stream; commit one atomic outcome |
+
+### External Pi Runtime View
+
+Pi `Models` 不套用 LuckyToken-owned Module Contract 来重新定义 construction。
+
+Current Pi runtime is summarized separately：
+
+```text
+createModels(optional CredentialStore / ModelsStore / AuthContext)
+        │
+        ▼
+      Models
+        ▲
+        │
+ setProvider(provider)
+```
+
+and exposes multiple operations：
+
+```text
+provider registration
+model lookup/refresh
+auth/login/logout
+stream/complete
+deferred operations
+```
+
+LuckyToken Core's primary inference dependency is `Models.streamSimple(...)`, but that does not collapse the entire Pi `Models` API into one operation。
+
+## 11.4 Fact Flow Contract Map
+
+只列真正跨 boundary、容易产生 ownership confusion 的重要 facts。
+
+| Fact | Producer / Owner | Carrier | Semantic Consumers | Transparent Transit | Death Point |
+| --- | --- | --- | --- | --- | --- |
+| **model-resolution selector** | Client Protocol | direct orchestration value | Model Resolution | request orchestration | `Model<Api>` established |
+| **protocol-visible model echo fact**, if required | Client Protocol parse | protocol-owned `renderState` | same Client Protocol renderer | request orchestration | rendering completes |
+| **`Model<Api>`** | Model Resolution | direct argument | Client model-aware conversion; **Pi Models**; Provider | request orchestration; Execution | Pi invocation terminal |
+| **`Context`** | Client Protocol conversion | Pi `Context` direct argument | concrete Provider/API conversion | request orchestration; Execution; Models | Pi invocation terminal |
+| **`sessionId`** | Auth | `Options.sessionId` | session-aware Provider | `composeOptions`; Models | Provider no longer requires logical request identity |
+| **`projectDir`** | Auth | `Options.metadata.projectDir` | CommandCode Private Provider | `composeOptions`; Models | Provider derives request-local CommandCode project representation |
+| **`AbortSignal`** | HTTP Boundary | `Options.signal` | Execution; Pi Models auth/setup; Provider/transport | `composeOptions` | request execution/cancellation lifecycle ends |
+| **protocol render state** | Client Protocol | orchestration-local narrow state | same Client Protocol renderer | request orchestration | success/failure rendering completes |
+| **committed successful AssistantMessage** | Execution success commit | direct result | Client Protocol renderer | request orchestration | rendering completes |
+
+`Provider auth material` 不作为单一 Fact Flow row。
+
+Current Pi `applyAuth()` 形成的是多个有不同 producer/precedence 的 effective fields：
+
+```text
+apiKey
+headers
+env
+requestModel.baseUrl
+```
+
+它们不能被错误合并成一个拥有单一 producer 的 semantic fact。
+
+Chapter 4 对 Pi Models request preparation 的描述已经足够；Fact Flow Map 保持小而准确。
+
+### Per-field consumer invariant
+
+本表不把：
+
+```text
+protocol invocation controls
+Provider auth material
+```
+
+作为单一 semantic facts，因为它们都只是多个字段的集合。
+
+每个 field 必须分别判断：
+
+```text
+producer
+precedence
+semantic consumer
+carrier
+lifetime
+```
+
+`Options` 是 container，不是一个单一 semantic fact。
+
+例如：
+
+```text
+Options.signal
+→ Models is semantic consumer
+
+Options.metadata.projectDir
+→ Models is transparent transit
+```
+
+`Model<Api>` 同样是 structured carrier，但在 architecture-level map 中可以整体标记 `Models` 为 semantic consumer，因为 current Pi runtime 明确读取其中的 runtime-relevant fields：
+
+```text
+model.provider
+model.headers
+effective baseUrl path
+```
+
+这不表示 Models 理解所有 model capability semantics。
+
+同样：
+
+```text
+Context passes through Execution
+```
+
+不表示 Execution 理解 messages/tools semantics。
+
+### Selector representation lifetime
+
+Client Protocol 可能同时需要：
+
+```text
+model-resolution selector
+```
+
+以及 response contract 要求的：
+
+```text
+protocol-visible model echo fact
+```
+
+二者不能被当成同一个 representation 跨越不同 death point。
+
+正确 lifecycle：
+
+```text
+source model field
+        │
+        ├── resolution representation
+        │      └── dies when Model<Api> is established
+        │
+        └── if response must echo source representation
+               ↓
+             copy minimal echo fact into renderState
+               ↓
+             dies after rendering
+```
+
+因此不存在“同一个 selector 已死亡却又在 response 中复活”的 representation ambiguity。
+
+## 11.5 Failure and Cancellation Summary
+
+Failure lifecycle 保持既有 contract：
 
 ```text
 Request
@@ -5756,8 +7166,7 @@ Request
 │   ├── Auth denial
 │   ├── model resolution failure
 │   ├── representability failure
-│   └── composition failure
-│       │
+│   └── options composition failure
 │       └── owned by detecting boundary
 │
 └── After Pi execution begins
@@ -5769,18 +7178,13 @@ Request
            └── error
 ```
 
-其中：
+Pi execution begins when LuckyToken invokes:
 
 ```text
-Pi execution begins
-=
-LuckyToken invokes Models.streamSimple(...)
-+
-adopts returned AssistantMessageEventStream
-as Pi completion channel
+Models.streamSimple(...)
 ```
 
-所以 Pi-owned Provider lookup/auth/lazy setup/startup failures 即使发生在 upstream request 前，也属于该阶段。
+and adopts the returned `AssistantMessageEventStream` as Pi completion channel.
 
 Cancellation precedence remains：
 
@@ -5789,49 +7193,32 @@ request signal aborted before success commit
 → aborted
 ```
 
-即使 Pi lazy setup 最终暴露 ordinary `error(reason=error)`。
-
-Architecture 要求：
+A supported successful commit requires：
 
 ```text
-detector
-→ preserve only classification required by downstream contract
-→ renderer
+Pi done(stop | length | toolUse)
++
+request signal not aborted at commit point
 ```
 
-而不是：
+After semantic success commit，later disconnect affects delivery only。
 
-```text
-all failures
-→ LuckyTokenError hierarchy
-→ renderer
-```
-
-### Atomic Downstream Boundary
+Atomic downstream semantics remain unchanged：
 
 ```text
 Pi intermediate events
 → consumed request-locally
 
-supported Pi done
-(stop | length | toolUse)
-+
-request signal live at commit point
-→ AssistantMessage
+successful commit
+→ complete AssistantMessage
 → Client renderer
 ```
 
-因此：
+Current Core 不 live-forward upstream/Pi deltas to downstream Client wire。
 
-```text
-streaming-shaped Client response
-≠
-live upstream token forwarding
-```
+---
 
-Live forwarding 与 Pi deferred execution 都不属于 current Core contract。
-
-### Concrete CommandCode Private Extension
+## 11.6 Concrete CommandCode Private Extension
 
 ```text
                     Pi Invocation
@@ -5846,6 +7233,10 @@ Live forwarding 与 Pi deferred execution 都不属于 current Core contract。
          └───────────────┬────────────────┘
                          ▼
              CommandCode Private Provider
+                         │
+             Bound Dependencies:
+          Project Snapshot capability
+       Trace Context generation capability
                          │
                          ▼
                 POST /alpha/generate
@@ -5866,111 +7257,41 @@ Live forwarding 与 Pi deferred execution 都不属于 current Core contract。
                          │
                          ▼
              Generic Execution rules
-          including abort precedence
 ```
 
 CommandCode Private vocabulary 不进入 Generic Core。
 
----
-
-## 11.2 Boundary Ownership Map
-
-| Boundary | Owns | Does Not Own |
-| --- | --- | --- |
-| **HTTP Boundary** | method/path、raw HTTP input、route / Client Protocol selection、request `AbortSignal`、connection state、final transport emission of already-decided status/headers/body | Client conversational semantics、Client/Router response semantics、Provider wire semantics |
-| **Client Protocol** | Client wire meaning、source validity、model-aware Pi representability、Client ↔ Pi conversion、protocol-owned render state、protocol-visible success/failure representation | concrete upstream Provider wire |
-| **Auth Boundary** | inbound headers → authorization decision + normalized `sessionId` + optional `projectDir`；hides token/session-source business details | Provider credential semantics、Client conversational semantics、Provider wire mapping |
-| **Model Resolution** | external model selector → authoritative `Model<Api>` | Client message semantics、Provider wire conversion |
-| **Request Composition** | assembly of `Model<Api> + Context + ModelsSimpleStreamOptions` | reinterpretation of Client/Provider semantics |
-| **Pi `Models`** | Provider collection、model lookup、Provider auth integration、dispatch、Pi-owned Provider-facing request preparation | Client Protocol parsing |
-| **Provider** | Pi ↔ one concrete upstream integration、upstream lifecycle interpretation、observable incomplete upstream termination → Pi error | Client Protocol validity、generic Client rendering |
-| **Execution** | active Pi stream drain、independent request `AbortSignal` observation、abort-before-success-commit precedence、supported `done(stop | length | toolUse)` success commit、minimal `aborted | error` failure outcome、atomic result boundary | raw upstream interpretation、Provider cancellation transport implementation、deferred lifecycle、reconstruction of Provider semantics |
-| **Client Protocol Renderer** | completed `AssistantMessage` or preserved failure → protocol response representation；uses protocol render state only if it has been established / is required | Provider transport state |
-| **CommandCode Private Provider** | Private request hierarchy、wire construction、Private lifecycle、tool partial/completion state | Generic Core semantics |
-
-Ownership follows information，而不是文件目录或 call stack。
-
-一个 module 不应仅因为参与同一个 HTTP request 就成为 unrelated information 的 transit owner。
-
-### Runtime vs Request-Local State
+`projectDir` 的 flow 是：
 
 ```text
-Long-Lived Runtime
-├── Auth
-│   └── private authorization/session-resolution dependencies
-├── Models
-├── Providers
-├── Provider-lifetime configuration
-├── CredentialStore
-├── ModelsStore
-│   └── in-memory by default; persistent/custom implementation optional
-└── HTTP runtime configuration
-
-Request-Local State
-├── raw HTTP request / connection state
-├── Auth parsing / normalization state
-├── normalized sessionId / projectDir? before Options projection
-├── Client Protocol parsing / validation state
-├── external model selector / lookup state
-├── protocol-owned render state
-├── Context
-├── ModelsSimpleStreamOptions
-├── AbortSignal
-├── Provider request representation
-├── Provider parser / partial state
-├── Pi stream lifecycle state
-├── AssistantMessage or failure outcome
-└── Client response representation
+Auth establishes projectDir
+        │
+        ▼
+Options.metadata.projectDir
+        │
+        │ transparent through Models
+        ▼
+CommandCode Private Provider
+        │
+        ▼
+request-local CommandCode project representation
 ```
 
-典型 death points：
-
-| Information | Stops being architecturally relevant when |
-| --- | --- |
-| Raw HTTP body | Client Protocol parsing completes |
-| Raw client auth material | Auth completes |
-| Auth parsing / lookup state | `AuthResult` established |
-| Successful `AuthResult` | `sessionId` / `projectDir?` projected into composed Pi `Options` |
-| External model selector | `Model<Api>` resolved |
-| Full Client conversation representation | `Context` established |
-| Protocol invocation-control projection | composed Pi `Options` exists |
-| Protocol-owned render state | Client success/failure rendering completes |
-| Provider request representation | upstream transport no longer needs it |
-| Raw upstream event | converted to Provider-local or Pi state |
-| Provider partial state | completion/failure/abort/request terminal |
-| Pi stream / abort / success-commit tracking | Execution resolves |
-| `Context` / `Options` | Pi invocation terminates |
-| `AssistantMessage` / execution failure | Client rendering completes |
-| Client response representation | HTTP write completes or response closes |
-| HTTP request-local state | request/response lifecycle closes |
+只有 Auth 与 CommandCode Provider 理解这个 fact 的 project semantics。
 
 ---
 
-## 11.3 Specification Map
+## 11.7 Specification Map
 
-LuckyToken 保持三种 specification responsibility 分离。
-
-它们不是：
-
-```text
-Protocol
-↓
-Conversion
-↓
-Architecture
-```
-
-这种上下级 pipeline。
-
-更准确的是：
+LuckyToken 保持三种 specification responsibility 分离：
 
 | Spec | 回答的问题 |
 | --- | --- |
-| **Protocol Spec** | 这个 wire/semantic representation 是什么？哪些 state valid/malformed？event lifecycle 是什么？ |
-| **Conversion Spec** | 两个 adjacent representations 之间如何 exact mapping？什么 representable？什么 unsupported？ |
-| **Architecture Spec** | 谁 owns representation？conversion 在哪里发生？information 如何流动、何时死亡、failure 由谁检测？ |
+| **Protocol Spec** | wire/semantic representation 是什么？valid/malformed state 与 event lifecycle 是什么？ |
+| **Conversion Spec** | 两个 adjacent representations 如何 exact mapping？什么 representable / unsupported？ |
+| **Architecture Spec** | 谁 owns representation？module 如何闭合 dependencies？fact 如何流动、谁理解、何时死亡？ |
 
-关系可以理解为：
+关系：
 
 ```text
 Protocol A Spec                 Protocol B / Pi Spec
@@ -5984,82 +7305,56 @@ Protocol A Spec                 Protocol B / Pi Spec
                an Architecture-owned boundary
 ```
 
-例如 CommandCode Private：
+v5.5 的 dependency-semantics corrections 不把 conversion rules 搬进 Architecture。
+
+---
+
+### Freeze Candidate Status
 
 ```text
-CommandCode Private Protocol Spec
-→ defines /alpha/generate wire + lifecycle
-
-CommandCode Private ↔ Pi Conversion Spec
-→ defines exact mappings
-
-Architecture Chapter 9
-→ defines Provider ownership + information lifetime
-
-Architecture Chapter 10
-→ indexes resolved decisions and points to authoritative owning sections
-```
-
-Client Protocol 同理：
-
-```text
-Client Protocol Spec
-→ source wire + validity
-
-Client ↔ Pi Conversion Spec
-→ exact representability + mapping + error mapping
-
-Architecture Chapter 5
-→ owns Client boundary and dependency/lifetime rules
-```
-
-### Frozen Status
-
-当前状态：
-
-```text
-LuckyToken Architecture v5.3
+LuckyToken Core Architecture v5.5
         │
-        ├── Generic Core
-        │      ├── request / execution boundaries       FROZEN
-        │      ├── cancellation precedence              FROZEN
-        │      └── atomic downstream commit             FROZEN
+        ├── Existing information/data flow
+        │      ├── Client ↔ Pi boundary                 preserved
+        │      ├── Pi ↔ Provider boundary               preserved
+        │      ├── Auth input/output                     preserved
+        │      ├── cancellation precedence               preserved
+        │      ├── atomic downstream commit              preserved
+        │      └── CommandCode ownership/carriers        preserved
         │
-        ├── Auth Boundary
-        │      ├── fixed input/output                    FROZEN
-        │      └── hidden authorization/session business FROZEN
-        │
-        └── CommandCode Private Integration
-               ├── runtime/project source                FROZEN
-               ├── logical session carrier               FROZEN
-               ├── project carrier                       FROZEN
-               └── Provider ownership                    FROZEN
-                       │
-                       ▼
-          CommandCode ↔ Pi Conversion Spec
-                       │
-                       ▼
-               implementation plan
-                       │
-                       ▼
-                     tests
-                       │
-                       ▼
-                     code
+        └── Dependency semantics now explicit and corrected
+               ├── Module Contract vs Operation Contract
+               ├── direct Bound Dependencies
+               ├── Owned State authority distinction
+               ├── external Pi Models runtime view
+               ├── Composition Root visibility
+               ├── no undeclared ambient dependencies
+               ├── Fact Flow Contract
+               ├── Transparent Transit
+               └── per-field Semantic Consumer
 ```
 
-Generic Core 与 Auth boundary 不继续主动扩展。CommandCode remaining work now belongs primarily to exact Conversion Spec、Provider implementation details and tests, not architecture source/carrier discovery。
-
-不会因为进入 implementation 再重新探索：
+本次 assumption change：
 
 ```text
-CanonicalRequest
-ExecutionContext
-ProjectManager
-SessionManager
-ProviderMetadata
-GlobalErrorHierarchy
-Direct protocol abstraction
+Previous:
+ownership + representation lifecycle were assumed
+sufficient to expose complete module requirements.
+
+Finding:
+invocation data can be explicit while bound runtime
+capabilities remain implicit.
+
+Correction:
+make module dependency closure and fact-flow semantics
+explicit architecture contracts.
+
+Required runtime behavior change:
+none inherently.
+
+Architecture strengthening:
+hidden dependencies are no longer valid by contract.
 ```
 
-除非新的 demonstrated requirement 明确证明现有 frozen boundary 不足。
+如果下一轮 review 没有发现新的 correctness conflict，v5.5 可以作为 Generic Core dependency semantics 的冻结版本。
+
