@@ -2,8 +2,12 @@ import type { Models } from "@earendil-works/pi-ai";
 
 import type { Auth } from "./auth.js";
 import { execute, ExecutionAbortedError } from "./execution.js";
+import { InvalidRequest, UnsupportedFeature } from "./protocols/anthropic/failures.js";
 import {
-  AnthropicRequestError,
+  assertImplementedAnthropicProfile,
+  resolveAnthropicSourceProfile,
+} from "./protocols/anthropic/profile.js";
+import {
   parseAnthropicTextInvocation,
 } from "./protocols/anthropic/request.js";
 import { renderAnthropicTextMessage } from "./protocols/anthropic/response.js";
@@ -170,6 +174,8 @@ export async function handleHttpRequest(
       });
     }
 
+    const sourceProfile = resolveAnthropicSourceProfile(request.headers);
+
     const rawBody = await readRawBody(
       request,
       lifecycle,
@@ -181,15 +187,13 @@ export async function handleHttpRequest(
         error: { type: "request_too_large" },
       });
     }
-    if (request.headers.get("anthropic-version") !== "2023-06-01") {
-      return jsonResponse(lifecycle, 400, {
-        type: "error",
-        error: { type: "invalid_request_error" },
-      });
-    }
-
     const body: unknown = JSON.parse(rawBody);
-    const invocation = parseAnthropicTextInvocation(body, dependencies.now());
+    assertImplementedAnthropicProfile(sourceProfile);
+    const invocation = parseAnthropicTextInvocation(
+      body,
+      dependencies.now(),
+      sourceProfile.unclassifiedAnthropicHeaders,
+    );
     const model = dependencies.models.getModel(dependencies.providerId, invocation.selector);
     if (!model) {
       return jsonResponse(lifecycle, 404, {
@@ -227,10 +231,16 @@ export async function handleHttpRequest(
     ) {
       throw new HttpRequestAbortedError(lifecycle.signal.reason);
     }
-    if (error instanceof AnthropicRequestError || error instanceof SyntaxError) {
+    if (error instanceof InvalidRequest || error instanceof SyntaxError) {
       return jsonResponse(lifecycle, 400, {
         type: "error",
         error: { type: "invalid_request_error", message: error.message },
+      });
+    }
+    if (error instanceof UnsupportedFeature) {
+      return jsonResponse(lifecycle, 400, {
+        type: "error",
+        error: { type: "unsupported_feature", message: error.message },
       });
     }
     const detail = error instanceof Error ? error.message : String(error);
