@@ -1,0 +1,114 @@
+{
+  "endpoint": "https://fixture.commandcode.test/alpha/generate",
+  "headers": {
+    "accept": "*/*",
+    "authorization": "Bearer effective-key",
+    "content-type": "application/json",
+    "user-agent": "cli",
+    "x-cli-environment": "production",
+    "x-cmd-zdr": "1",
+    "x-co-flag": "false",
+    "x-command-code-version": "1.9.0",
+    "x-custom": "last",
+    "x-oss-primary-provider": "bound-oss",
+    "x-project-slug": "workspace-golden-project",
+    "x-session-id": "00000000-0000-4000-8000-000000000080",
+    "x-taste-learning": "false"
+  },
+  "body": {
+    "config": {
+      "workingDir": "/Workspace/Golden Project",
+      "date": "2026-08-10",
+      "environment": "linux",
+      "structure": ["src"],
+      "isGitRepo": true,
+      "currentBranch": "main",
+      "mainBranch": "main",
+      "gitStatus": "Working tree clean",
+      "recentCommits": ["abc123 golden"]
+    },
+    "memory": null,
+    "taste": null,
+    "skills": null,
+    "permissionMode": "auto-accept",
+    "threadId": "00000000-0000-4000-8000-000000000080",
+    "params": {
+      "model": "golden-model",
+      "system": "Golden system",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            { "type": "text", "text": "look" },
+            {
+              "type": "image",
+              "image": "data:image/png;base64,aQ==",
+              "mimeType": "image/png"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            { "type": "text", "text": "working" },
+            { "type": "reasoning", "text": "inspect both" },
+            {
+              "type": "tool-call",
+              "toolCallId": "call_a",
+              "toolName": "lookup",
+              "input": { "q": "a" }
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "call_b",
+              "toolName": "lookup",
+              "input": { "q": "b" }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call_a",
+              "toolName": "",
+              "output": { "type": "text", "value": "A" }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call_b",
+              "toolName": "",
+              "output": { "type": "error-text", "value": "B failed" }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [{ "type": "text", "text": "continue" }]
+        }
+      ],
+      "tools": [
+        {
+          "name": "lookup",
+          "description": "Lookup",
+          "input_schema": {
+            "type": "object",
+            "properties": { "q": { "type": "string" } },
+            "required": ["q"],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "max_tokens": 123,
+      "stream": true,
+      "temperature": 0,
+      "reasoning_effort": "high"
+    }
+  }
+}

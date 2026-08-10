@@ -11,6 +11,7 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
+  type CommandCodeCompatibilityPolicy,
 } from "./providers/commandcode-private/provider.js";
 import {
   createNodeProjectSnapshot,
@@ -33,6 +34,7 @@ export interface LuckyTokenRuntimeOptions {
   fetch: FetchFunction;
   modelId: string;
   modelInput?: Array<"text" | "image">;
+  commandCodeCompatibility?: CommandCodeCompatibilityPolicy;
   createMessageId?: () => string;
   createSessionId?: () => string;
   projectDir?: string;
@@ -70,6 +72,9 @@ export function createLuckyTokenRuntime(
       model,
       now,
       projectSnapshot: options.projectSnapshot ?? createNodeProjectSnapshot(),
+      ...(options.commandCodeCompatibility === undefined
+        ? {}
+        : { compatibility: options.commandCodeCompatibility }),
     }),
   );
 

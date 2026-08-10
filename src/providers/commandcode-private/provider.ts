@@ -1,17 +1,22 @@
 import {
+  clampThinkingLevel,
   createAssistantMessageEventStream,
   createProvider,
+  getSupportedThinkingLevels,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Context,
   type FetchFunction,
   type Model,
+  type ModelThinkingLevel,
   type Provider,
   type SimpleStreamOptions,
   type StreamFunction,
   type Usage,
 } from "@earendil-works/pi-ai";
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import slugify from "@sindresorhus/slugify";
+import { randomUUID } from "node:crypto";
 
 import {
   classifyProjectDir,
@@ -37,6 +42,14 @@ export interface CommandCodePrivateProviderOptions {
   model: Model<typeof API_ID>;
   now: () => number;
   projectSnapshot: ProjectSnapshot;
+  compatibility?: CommandCodeCompatibilityPolicy;
+  createSessionId?: () => string;
+}
+
+export interface CommandCodeCompatibilityPolicy {
+  cliEnvironment?: string;
+  ossPrimaryProvider?: string;
+  permissionMode?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -292,6 +305,9 @@ export function convertCommandCodeMessages(
       continue;
     }
 
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      continue;
+    }
     if (
       message.stopReason !== "stop" &&
       message.stopReason !== "length" &&
@@ -307,10 +323,25 @@ export function convertCommandCodeMessages(
     const seenCallIds = new Set<string>();
     const content = message.content.map((block) => {
       if (block.type === "text") {
+        if (sameTarget && (block.textSignature?.length ?? 0) > 0) {
+          throw new Error("CommandCode cannot preserve same-target text continuity");
+        }
         return { type: "text" as const, text: block.text };
       }
       if (block.type === "thinking") {
-        throw new Error("CommandCode assistant thinking is not supported yet");
+        if (sameTarget) {
+          if (block.redacted === true) {
+            throw new Error("CommandCode cannot replay same-target redacted thinking");
+          }
+          if ((block.thinkingSignature?.length ?? 0) > 0) {
+            throw new Error(
+              "CommandCode cannot preserve same-target thinking continuity",
+            );
+          }
+        } else if (block.redacted === true) {
+          return undefined;
+        }
+        return { type: "reasoning" as const, text: block.thinking };
       }
       const extended = block as typeof block & { namespace?: unknown };
       if (extended.namespace !== undefined) {
@@ -334,7 +365,7 @@ export function convertCommandCodeMessages(
         toolName: block.name,
         input,
       };
-    });
+    }).filter((block) => block !== undefined);
     converted.push({ role: "assistant", content });
     pending = new Map(calls.map((call) => [call.id, call]));
   }
@@ -370,31 +401,442 @@ export function convertCommandCodeTools(
   });
 }
 
-function buildCommandCodeBody(
+const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+function mapReasoningLevel(
+  model: Model<typeof API_ID>,
+  level: Exclude<ModelThinkingLevel, "off">,
+): string {
+  const explicit = model.thinkingLevelMap?.[level];
+  if (explicit === null) {
+    throw new Error(`Model exposes an unsupported thinking level: ${level}`);
+  }
+  if (explicit !== undefined) {
+    if (!REASONING_EFFORTS.has(explicit)) {
+      throw new Error(`Model maps ${level} to an invalid CommandCode effort`);
+    }
+    return explicit;
+  }
+  if (level === "minimal" || level === "low") return "low";
+  if (level === "medium" || level === "high") return level;
+  throw new Error(`Model must explicitly map CommandCode effort for ${level}`);
+}
+
+function resolveReasoning(
+  model: Model<typeof API_ID>,
+  options: SimpleStreamOptions | undefined,
+): { effort?: string; supportedEfforts: ReadonlySet<string> } {
+  const supportedEfforts = new Set<string>();
+  for (const level of getSupportedThinkingLevels(model)) {
+    if (level !== "off") supportedEfforts.add(mapReasoningLevel(model, level));
+  }
+  if (options?.reasoning === undefined) return { supportedEfforts };
+  const effective = clampThinkingLevel(model, options.reasoning);
+  if (effective === "off") return { supportedEfforts };
+  return { effort: mapReasoningLevel(model, effective), supportedEfforts };
+}
+
+function resolvePermissionMode(value: string | undefined): string {
+  if (value === "plan") return "plan";
+  if (value === "bypass" || value === "auto-accept") return "auto-accept";
+  return "standard";
+}
+
+export interface BuiltCommandCodeBody {
+  body: Record<string, unknown>;
+  supportedReasoningEfforts: ReadonlySet<string>;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const RESERVED_HEADERS = new Set([
+  "content-type",
+  "accept",
+  "user-agent",
+  "x-command-code-version",
+  "x-cli-environment",
+  "x-project-slug",
+  "x-taste-learning",
+  "x-co-flag",
+  "x-session-id",
+  "x-cmd-zdr",
+  "traceparent",
+  "authorization",
+  "x-oss-primary-provider",
+  "x-oauth-token",
+  "x-oauth-provider",
+]);
+
+function resolveProviderSessionId(
+  value: string | undefined,
+  createSessionId: () => string,
+): string {
+  if (value !== undefined && UUID_PATTERN.test(value)) return value;
+  const generated = createSessionId();
+  if (!UUID_PATTERN.test(generated)) {
+    throw new Error("CommandCode session identity generator returned an invalid UUID");
+  }
+  return generated;
+}
+
+function buildCommandCodeHeaders(
+  options: SimpleStreamOptions | undefined,
+  sessionId: string,
+  projectSlug: string | undefined,
+  compatibility: CommandCodeCompatibilityPolicy,
+): Record<string, string> {
+  const headers = new Map<string, string>();
+  for (const [rawName, value] of Object.entries(options?.headers ?? {})) {
+    const name = rawName.toLowerCase();
+    if (RESERVED_HEADERS.has(name)) continue;
+    if (value === null) headers.delete(name);
+    else if (typeof value === "string") headers.set(name, value);
+    else throw new Error(`Pi header ${rawName} must be a string or null`);
+  }
+
+  headers.set("accept", "*/*");
+  headers.set("content-type", "application/json");
+  headers.set("user-agent", "cli");
+  headers.set("x-command-code-version", "1.9.0");
+  headers.set("x-taste-learning", "false");
+  headers.set("x-co-flag", "false");
+  headers.set("x-cmd-zdr", "1");
+  headers.set("x-session-id", sessionId);
+  headers.set(
+    "x-cli-environment",
+    compatibility.cliEnvironment === undefined ||
+      compatibility.cliEnvironment === "prod"
+      ? "production"
+      : compatibility.cliEnvironment,
+  );
+  if (projectSlug !== undefined) headers.set("x-project-slug", projectSlug);
+  if ((options?.apiKey?.length ?? 0) > 0) {
+    headers.set("authorization", `Bearer ${options?.apiKey ?? ""}`);
+  }
+  if ((compatibility.ossPrimaryProvider?.length ?? 0) > 0) {
+    headers.set(
+      "x-oss-primary-provider",
+      compatibility.ossPrimaryProvider as string,
+    );
+  }
+  return Object.fromEntries(headers);
+}
+
+export interface CommandCodeRequestAuthority {
+  config: ServerConfig;
+  modelId: string;
+  modelAcceptsImages: boolean;
+  permissionMode: string;
+  sessionId: string;
+  supportedReasoningEfforts: ReadonlySet<string>;
+}
+
+function sameStringArray(value: unknown, expected: readonly string[]): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === expected.length &&
+    value.every((entry, index) => entry === expected[index])
+  );
+}
+
+function assertAllowedKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  field: string,
+): void {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(value).find((key) => !allowedSet.has(key));
+  if (unknown !== undefined) {
+    throw new Error(`${field} contains an unknown field: ${unknown}`);
+  }
+}
+
+function validateConfig(value: unknown, expected: ServerConfig): void {
+  if (!isRecord(value)) throw new Error("CommandCode config must be an object");
+  assertAllowedKeys(
+    value,
+    [
+      "workingDir",
+      "date",
+      "environment",
+      "structure",
+      "isGitRepo",
+      "currentBranch",
+      "mainBranch",
+      "gitStatus",
+      "recentCommits",
+    ],
+    "CommandCode config",
+  );
+  const scalarKeys = [
+    "workingDir",
+    "date",
+    "environment",
+    "isGitRepo",
+    "currentBranch",
+    "mainBranch",
+    "gitStatus",
+  ] as const;
+  for (const key of scalarKeys) {
+    if (value[key] !== expected[key]) {
+      throw new Error(`CommandCode config authority changed: ${key}`);
+    }
+  }
+  if (!sameStringArray(value.structure, expected.structure)) {
+    throw new Error("CommandCode config authority changed: structure");
+  }
+  if (!sameStringArray(value.recentCommits, expected.recentCommits)) {
+    throw new Error("CommandCode config authority changed: recentCommits");
+  }
+}
+
+function validateWireTools(value: unknown): void {
+  if (!Array.isArray(value)) throw new Error("CommandCode tools must be an array");
+  for (const tool of value) {
+    if (
+      !isRecord(tool) ||
+      typeof tool.name !== "string" ||
+      typeof tool.description !== "string" ||
+      !isRecord(tool.input_schema)
+    ) {
+      throw new Error("CommandCode tool definition is malformed");
+    }
+    if (
+      Object.keys(tool).some(
+        (key) => !["name", "description", "input_schema"].includes(key),
+      )
+    ) {
+      throw new Error("CommandCode tool definition contains an unknown field");
+    }
+  }
+}
+
+function validateWireMessages(
+  value: unknown,
+  modelAcceptsImages: boolean,
+): void {
+  if (!Array.isArray(value)) throw new Error("CommandCode messages must be an array");
+  let pending = new Map<string, string>();
+  for (const message of value) {
+    if (!isRecord(message) || !Array.isArray(message.content)) {
+      throw new Error("CommandCode message is malformed");
+    }
+    assertAllowedKeys(message, ["role", "content"], "CommandCode message");
+    if (message.role === "tool") {
+      if (pending.size === 0) throw new Error("CommandCode contains an orphan tool message");
+      for (const block of message.content) {
+        if (
+          !isRecord(block) ||
+          block.type !== "tool-result" ||
+          typeof block.toolCallId !== "string" ||
+          typeof block.toolName !== "string" ||
+          !isRecord(block.output) ||
+          (block.output.type !== "text" && block.output.type !== "error-text") ||
+          typeof block.output.value !== "string" ||
+          !pending.has(block.toolCallId)
+        ) {
+          throw new Error("CommandCode tool result is malformed, orphaned, or duplicate");
+        }
+        assertAllowedKeys(
+          block,
+          ["type", "toolCallId", "toolName", "output"],
+          "CommandCode tool result",
+        );
+        assertAllowedKeys(block.output, ["type", "value"], "CommandCode output");
+        pending.delete(block.toolCallId);
+      }
+      continue;
+    }
+    if (pending.size > 0) {
+      throw new Error("CommandCode assistant tool turn has missing adjacent results");
+    }
+
+    if (message.role === "user") {
+      for (const block of message.content) {
+        if (!isRecord(block)) throw new Error("CommandCode user block is malformed");
+        if (block.type === "text" && typeof block.text === "string") {
+          assertAllowedKeys(block, ["type", "text"], "CommandCode text block");
+          continue;
+        }
+        if (
+          block.type === "image" &&
+          typeof block.image === "string" &&
+          typeof block.mimeType === "string"
+        ) {
+          if (!modelAcceptsImages) {
+            throw new Error("CommandCode model does not accept image messages");
+          }
+          assertAllowedKeys(
+            block,
+            ["type", "image", "mimeType"],
+            "CommandCode image block",
+          );
+          continue;
+        }
+        throw new Error("CommandCode user content kind is unsupported");
+      }
+      continue;
+    }
+
+    if (message.role !== "assistant") {
+      throw new Error("CommandCode message role is unsupported");
+    }
+    const calls = new Map<string, string>();
+    for (const block of message.content) {
+      if (!isRecord(block)) throw new Error("CommandCode assistant block is malformed");
+      if (
+        (block.type === "text" || block.type === "reasoning") &&
+        typeof block.text === "string"
+      ) {
+        assertAllowedKeys(block, ["type", "text"], "CommandCode text block");
+        continue;
+      }
+      if (
+        block.type !== "tool-call" ||
+        typeof block.toolCallId !== "string" ||
+        typeof block.toolName !== "string" ||
+        !isRecord(block.input)
+      ) {
+        throw new Error("CommandCode assistant content kind is unsupported");
+      }
+      if (calls.has(block.toolCallId)) {
+        throw new Error("CommandCode assistant turn contains duplicate ToolCall IDs");
+      }
+      assertAllowedKeys(
+        block,
+        ["type", "toolCallId", "toolName", "input"],
+        "CommandCode tool call",
+      );
+      calls.set(block.toolCallId, block.toolName);
+    }
+    pending = calls;
+  }
+  if (pending.size > 0) {
+    throw new Error("CommandCode final assistant tool turn has missing results");
+  }
+}
+
+export function validateCommandCodeRequest(
+  value: unknown,
+  authority: CommandCodeRequestAuthority,
+): void {
+  if (!isRecord(value)) throw new Error("CommandCode request must be an object");
+  assertAllowedKeys(
+    value,
+    ["config", "memory", "taste", "skills", "permissionMode", "threadId", "mode", "params"],
+    "CommandCode request",
+  );
+  validateConfig(value.config, authority.config);
+  if (value.memory !== null || value.taste !== null || value.skills !== null) {
+    throw new Error("CommandCode compatibility fields must be null");
+  }
+  if (value.permissionMode !== authority.permissionMode) {
+    throw new Error("CommandCode permission authority changed");
+  }
+  if (value.threadId !== authority.sessionId || !UUID_PATTERN.test(authority.sessionId)) {
+    throw new Error("CommandCode session authority changed");
+  }
+  if (value.mode !== undefined && (typeof value.mode !== "string" || value.mode.length === 0)) {
+    throw new Error("CommandCode mode must be omitted or non-empty");
+  }
+  if (!isRecord(value.params)) throw new Error("CommandCode params must be an object");
+  const params = value.params;
+  assertAllowedKeys(
+    params,
+    [
+      "model",
+      "system",
+      "max_tokens",
+      "stream",
+      "temperature",
+      "reasoning_effort",
+      "messages",
+      "tools",
+    ],
+    "CommandCode params",
+  );
+  if (params.model !== authority.modelId || typeof params.model !== "string") {
+    throw new Error("CommandCode model authority changed");
+  }
+  if (
+    !Number.isSafeInteger(params.max_tokens) ||
+    (params.max_tokens as number) <= 0 ||
+    params.stream !== true
+  ) {
+    throw new Error("CommandCode generation controls are malformed");
+  }
+  if (
+    params.temperature !== undefined &&
+    (typeof params.temperature !== "number" || !Number.isFinite(params.temperature))
+  ) {
+    throw new Error("CommandCode temperature is malformed");
+  }
+  if (
+    params.reasoning_effort !== undefined &&
+    (typeof params.reasoning_effort !== "string" ||
+      !REASONING_EFFORTS.has(params.reasoning_effort) ||
+      !authority.supportedReasoningEfforts.has(params.reasoning_effort))
+  ) {
+    throw new Error("CommandCode reasoning effort exceeds model capability");
+  }
+  if (params.system !== undefined && typeof params.system !== "string") {
+    throw new Error("CommandCode system must be a string when present");
+  }
+  validateWireMessages(params.messages, authority.modelAcceptsImages);
+  validateWireTools(params.tools);
+}
+
+export function buildCommandCodeBody(
   model: Model<typeof API_ID>,
   context: Context,
   options: SimpleStreamOptions | undefined,
   config: ServerConfig,
-): Record<string, unknown> {
+  sessionId: string,
+  compatibility: CommandCodeCompatibilityPolicy,
+): BuiltCommandCodeBody {
   const messages = convertCommandCodeMessages(model, context);
+  const maxTokensCandidate = options?.maxTokens ?? model.maxTokens;
+  if (
+    !Number.isSafeInteger(maxTokensCandidate) ||
+    maxTokensCandidate <= 0
+  ) {
+    throw new Error("CommandCode maxTokens must be a positive safe integer");
+  }
+  const maxTokens = clampMaxTokensToContext(model, context, maxTokensCandidate);
+  if (
+    options?.temperature !== undefined &&
+    (typeof options.temperature !== "number" ||
+      !Number.isFinite(options.temperature))
+  ) {
+    throw new Error("CommandCode temperature must be finite when present");
+  }
+  if (options?.deferred !== undefined && options.deferred !== false) {
+    throw new Error("CommandCode does not support Pi deferred execution");
+  }
+  const reasoning = resolveReasoning(model, options);
 
   const params: Record<string, unknown> = {
     model: model.id,
     messages,
     tools: convertCommandCodeTools(context.tools),
-    max_tokens: options?.maxTokens ?? model.maxTokens,
+    max_tokens: maxTokens,
     stream: true,
   };
   if (context.systemPrompt !== undefined) params.system = context.systemPrompt;
+  if (options?.temperature !== undefined) params.temperature = options.temperature;
+  if (reasoning.effort !== undefined) params.reasoning_effort = reasoning.effort;
 
   return {
-    config,
-    memory: null,
-    taste: null,
-    skills: null,
-    permissionMode: "standard",
-    threadId: options?.sessionId,
-    params,
+    supportedReasoningEfforts: reasoning.supportedEfforts,
+    body: {
+      config,
+      memory: null,
+      taste: null,
+      skills: null,
+      permissionMode: resolvePermissionMode(compatibility.permissionMode),
+      threadId: sessionId,
+      params,
+    },
   };
 }
 
@@ -402,18 +844,21 @@ function createCommandCodeStream(
   boundFetch: FetchFunction,
   now: () => number,
   projectSnapshot: ProjectSnapshot,
+  compatibility: CommandCodeCompatibilityPolicy,
+  createSessionId: () => string,
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
 
     const run = async (): Promise<void> => {
       try {
-        const sessionId = options?.sessionId;
-        if (typeof sessionId !== "string" || sessionId.length === 0) {
-          throw new Error("CommandCode requires one resolved sessionId");
-        }
+        const sessionId = resolveProviderSessionId(
+          options?.sessionId,
+          createSessionId,
+        );
         const signal = options?.signal ?? new AbortController().signal;
         signal.throwIfAborted();
+        const endpoint = new URL("/alpha/generate", model.baseUrl);
         const projectDir = classifyProjectDir(options?.metadata);
         const projectConfig =
           projectDir === undefined
@@ -422,27 +867,34 @@ function createCommandCodeStream(
         signal.throwIfAborted();
         const projectSlug =
           projectDir === undefined ? undefined : slugify(projectDir) || "root";
-        const endpoint = new URL("/alpha/generate", model.baseUrl);
-        const headers: Record<string, string> = {
-          accept: "*/*",
-          authorization: `Bearer ${options?.apiKey ?? ""}`,
-          "content-type": "application/json",
-          "user-agent": "cli",
-          "x-cli-environment": "production",
-          "x-cmd-zdr": "1",
-          "x-co-flag": "false",
-          "x-command-code-version": "1.9.0",
-          "x-session-id": sessionId,
-          "x-taste-learning": "false",
-        };
-        // Core v5.5 makes project-less identity explicit by omitting this wire fact.
-        if (projectSlug !== undefined) headers["x-project-slug"] = projectSlug;
+        const headers = buildCommandCodeHeaders(
+          options,
+          sessionId,
+          projectSlug,
+          compatibility,
+        );
+        const built = buildCommandCodeBody(
+          model,
+          context,
+          options,
+          projectConfig,
+          sessionId,
+          compatibility,
+        );
+        const bodyText = JSON.stringify(built.body);
+        const validationValue: unknown = JSON.parse(bodyText);
+        validateCommandCodeRequest(validationValue, {
+          config: projectConfig,
+          modelId: model.id,
+          modelAcceptsImages: model.input.includes("image"),
+          permissionMode: resolvePermissionMode(compatibility.permissionMode),
+          sessionId,
+          supportedReasoningEfforts: built.supportedReasoningEfforts,
+        });
         const requestInit: RequestInit = {
           method: "POST",
           headers,
-          body: JSON.stringify(
-            buildCommandCodeBody(model, context, options, projectConfig),
-          ),
+          body: bodyText,
         };
         if (options?.signal !== undefined) requestInit.signal = options.signal;
         const response = await (options?.fetch ?? boundFetch)(endpoint, requestInit);
@@ -483,6 +935,8 @@ export function createCommandCodePrivateProvider(
     options.fetch,
     options.now,
     options.projectSnapshot,
+    options.compatibility ?? {},
+    options.createSessionId ?? randomUUID,
   );
   return createProvider({
     id: PROVIDER_ID,
