@@ -1,7 +1,7 @@
-# Anthropic Messages API Protocol Specification v0.2
+# Anthropic Messages API Protocol Specification v0.3
 
 **Protocol:** Anthropic Messages API  
-**Version:** v0.2  
+**Version:** v0.3  
 **Primary Endpoint:** `POST /v1/messages`  
 **Transport:** HTTP + JSON / Server-Sent Events (SSE)  
 **Reference Date:** 2026-08-10
@@ -76,8 +76,6 @@ https://api.anthropic.com/v1/messages
 ```
 
 Messages API 是 stateless request protocol：每次请求通过 `messages` 提供需要的 conversation history，由 server 生成下一条 assistant `Message`。
-
-如果第三方anthropic endpoint的可能不同endpoint，但是协议protocol是一样的。
 
 ------
 
@@ -1113,7 +1111,9 @@ metadata
 
 ## 4.1 Message Hierarchy
 
-A successful non-streaming call returns one assistant `Message`：
+A successful non-streaming call returns one assistant `Message`.
+
+Current output `Message` distinguishes **required field presence** from nullable value:
 
 ```text
 Message
@@ -1124,19 +1124,39 @@ Message
 │   ├── role = "assistant"
 │   └── model
 │
+├── Runtime
+│   └── container
+│       └── Container | null
+│
 ├── Content
 │   └── content[]
 │
 ├── Termination
 │   ├── stop_reason
 │   ├── stop_sequence
-│   └── stop_details?
+│   └── stop_details
+│       └── RefusalStopDetails | null
 │
-├── Usage
-│   └── usage
-│
-└── Runtime
-    └── container?
+└── Usage
+    └── usage
+```
+
+`container` and `stop_details` are not optional fields in the current output contract.
+
+They are:
+
+```text
+required
++
+nullable
+```
+
+Therefore:
+
+```text
+field absent
+≠
+field present with null
 ```
 
 ------
@@ -1146,48 +1166,76 @@ Message
 | Field | Type | Presence | Source / Kind |
 |---|---|---|---|
 | `id` | string | required | server-generated opaque identifier |
-| `type` | `"message"` | required | literal |
+| `container` | `Container \| null` | required | server-generated runtime information |
+| `content` | `ContentBlock[]` | required | server-generated |
+| `model` | string/model identifier | required | server-reported model |
 | `role` | `"assistant"` | required | literal |
-| `model` | string | required | server-reported model |
-| `content` | array | required | server-generated |
-| `stop_reason` | enum/string | required non-stream terminal | server-generated |
-| `stop_sequence` | string/null | required | server-generated |
-| `stop_details` | object/null | feature-dependent | server-generated |
-| `usage` | object | required | server-generated |
-| `container` | object/null | feature-dependent | server-generated |
+| `stop_details` | `RefusalStopDetails \| null` | required | server-generated structured refusal state |
+| `stop_reason` | stop-reason enum / null | required | server-generated termination state |
+| `stop_sequence` | string / null | required | server-generated |
+| `type` | `"message"` | required | literal |
+| `usage` | `Usage` | required | server-generated |
 
-Message IDs are opaque.
+For a successful non-streaming response:
+
+```text
+stop_reason
+→ non-null
+```
+
+For the partial `Message` carried by `message_start`:
+
+```text
+stop_reason
+→ null
+```
+
+Message IDs are opaque; their format and length are not stable protocol semantics.
 
 ------
 
 ## 4.3 Example
 
+A baseline response with no container, no refusal, no citations, no server-tool usage and no populated usage breakdown still carries the current required nullable fields:
+
 ```json
 {
   "id": "msg_01...",
-  "type": "message",
-  "role": "assistant",
-  "model": "claude-opus-5",
+  "container": null,
   "content": [
     {
-      "type": "text",
-      "text": "Hello."
+      "citations": null,
+      "text": "Hello.",
+      "type": "text"
     }
   ],
+  "model": "claude-opus-5",
+  "role": "assistant",
+  "stop_details": null,
   "stop_reason": "end_turn",
   "stop_sequence": null,
+  "type": "message",
   "usage": {
+    "cache_creation": null,
+    "cache_creation_input_tokens": null,
+    "cache_read_input_tokens": null,
+    "inference_geo": null,
     "input_tokens": 10,
-    "output_tokens": 5
+    "output_tokens": 5,
+    "output_tokens_details": null,
+    "server_tool_use": null,
+    "service_tier": null
   }
 }
 ```
+
+This example illustrates field shape and nullability, not a claim that every real response uses these particular null values.
 
 ------
 
 # 4.4 Response Content Blocks
 
-Current output-side content union includes：
+Current output-side content union includes:
 
 ```text
 Message.content[]
@@ -1207,14 +1255,77 @@ Input image/document variants are not simply symmetric output variants.
 
 ## 4.4.1 TextBlock
 
+Current output shape:
+
+```text
+TextBlock
+├── citations
+│   └── TextCitation[] | null
+├── text
+└── type = "text"
+```
+
+Example:
+
 ```json
 {
-  "type": "text",
-  "text": "Hello"
+  "citations": null,
+  "text": "Hello",
+  "type": "text"
 }
 ```
 
-## 4.4.2 ThinkingBlock
+`citations` is required in the current output `TextBlock` contract even when its value is `null`.
+
+Citation-bearing text uses the corresponding `TextCitation[]` value rather than `null`.
+
+------
+
+## 4.4.2 ToolUseBlock
+
+Current output shape:
+
+```text
+ToolUseBlock
+├── id
+├── caller
+│   ├── DirectCaller
+│   └── server-tool caller variants
+├── input
+├── name
+└── type = "tool_use"
+```
+
+`caller` is required in the current output contract.
+
+Direct model-to-client tool invocation uses:
+
+```text
+DirectCaller
+└── type = "direct"
+```
+
+Example direct client tool call:
+
+```json
+{
+  "id": "toolu_01ABC",
+  "caller": {
+    "type": "direct"
+  },
+  "input": {
+    "location": "San Francisco"
+  },
+  "name": "get_weather",
+  "type": "tool_use"
+}
+```
+
+Server-tool caller variants carry their own tool identity and remain distinct from a direct caller.
+
+------
+
+## 4.4.3 ThinkingBlock
 
 ```text
 ThinkingBlock
@@ -1225,9 +1336,11 @@ ThinkingBlock
 
 `signature` is opaque continuity data.
 
-## 4.4.3 Omitted Thinking
+------
 
-A normal thinking block can have：
+## 4.4.4 Omitted Thinking
+
+A normal thinking block can have:
 
 ```text
 thinking = ""
@@ -1236,7 +1349,9 @@ signature = <opaque>
 
 when visible thinking is omitted.
 
-## 4.4.4 RedactedThinkingBlock
+------
+
+## 4.4.5 RedactedThinkingBlock
 
 ```text
 RedactedThinkingBlock
@@ -1252,31 +1367,126 @@ It is semantically distinct from a normal thinking block whose visible text is e
 
 ## 4.5.1 Usage Hierarchy
 
+Current output `Usage` shape is:
+
 ```text
 Usage
 │
+├── Cache
+│   ├── cache_creation
+│   │   └── CacheCreation | null
+│   ├── cache_creation_input_tokens
+│   │   └── number | null
+│   └── cache_read_input_tokens
+│       └── number | null
+│
 ├── Input
-│   ├── input_tokens
-│   ├── cache_creation_input_tokens?
-│   ├── cache_read_input_tokens?
-│   └── cache_creation?
+│   └── input_tokens
+│       └── number
 │
 ├── Output
 │   ├── output_tokens
-│   └── output_tokens_details?
-│       └── thinking_tokens
+│   │   └── number
+│   └── output_tokens_details
+│       └── OutputTokensDetails | null
+│           └── thinking_tokens
 │
 ├── Server Tools
-│   └── server_tool_use?
+│   └── server_tool_use
+│       └── ServerToolUsage | null
 │
 └── Execution Metadata
-    ├── inference_geo?
-    └── service_tier?
+    ├── inference_geo
+    │   └── string | null
+    └── service_tier
+        └── "standard" | "priority" | "batch" | null
 ```
 
-`message_delta.usage` is cumulative.
+All fields shown above belong to the current output `Usage` object.
 
-`thinking_tokens`, where present as a breakdown, are included within authoritative `output_tokens` rather than added on top.
+The following distinction is important:
+
+```text
+cache_creation_input_tokens: number | null
+```
+
+means:
+
+```text
+required field
+with nullable value
+```
+
+not:
+
+```text
+optional field
+```
+
+The same rule applies to the other nullable `Usage` fields.
+
+------
+
+## 4.5.2 CacheCreation
+
+When present:
+
+```text
+CacheCreation
+├── ephemeral_1h_input_tokens
+└── ephemeral_5m_input_tokens
+```
+
+Both are numeric token counts.
+
+`cache_creation_input_tokens` remains the aggregate cache-creation token count.
+
+------
+
+## 4.5.3 OutputTokensDetails
+
+When present:
+
+```text
+OutputTokensDetails
+└── thinking_tokens
+```
+
+`thinking_tokens` is a decomposition of authoritative `output_tokens`.
+
+Therefore:
+
+```text
+thinking_tokens
+⊆
+output_tokens
+```
+
+and must not be added on top of `output_tokens`.
+
+------
+
+## 4.5.4 ServerToolUsage
+
+When present:
+
+```text
+ServerToolUsage
+├── web_fetch_requests
+└── web_search_requests
+```
+
+This records server-tool request counts.
+
+------
+
+## 4.5.5 Streaming Usage
+
+`message_delta.usage` uses a separate streaming shape described in §6.11.
+
+Its counts are cumulative.
+
+It is not identical in field set to the final non-streaming `Usage` object.
 
 ------
 
@@ -1624,7 +1834,7 @@ content can be string
 content can be an array
 ```
 
-but the evidence reviewed for v0.2 does not establish a general protocol equivalence：
+but the evidence reviewed for v0.3 does not establish a general protocol equivalence：
 
 ```text
 omitted
@@ -1815,20 +2025,28 @@ Failure
 
 # 6.3 `message_start`
 
-Begins an incomplete partial Message：
+Begins an incomplete partial `Message`.
+
+The `message` field uses the same current `Message` output contract, with initial streaming values such as empty content and null termination state:
 
 ```text
 message_start
 └── message
     ├── id
-    ├── type = "message"
-    ├── role = "assistant"
-    ├── model
+    ├── container
+    │   └── Container | null
     ├── content = []
+    ├── model
+    ├── role = "assistant"
+    ├── stop_details = null
     ├── stop_reason = null
     ├── stop_sequence = null
+    ├── type = "message"
     └── usage
+        └── current Usage shape
 ```
+
+Because the embedded object is a `Message`, required nullable fields remain part of the object even when their initial value is `null`.
 
 ------
 
@@ -1856,11 +2074,36 @@ COMPLETE
 
 # 6.5 `content_block_start`
 
-Contains：
+Contains:
 
 ```text
 index
 content_block
+```
+
+`content_block` is an output content block variant, so its required output fields apply at block start.
+
+Examples include:
+
+```text
+text start
+└── TextBlock
+    ├── citations
+    │   └── TextCitation[] | null
+    ├── text
+    └── type = "text"
+```
+
+and:
+
+```text
+tool_use start
+└── ToolUseBlock
+    ├── id
+    ├── caller
+    ├── input
+    ├── name
+    └── type = "tool_use"
 ```
 
 The block discriminator determines which delta variants are semantically valid.
@@ -1965,9 +2208,52 @@ Closes the block at the given `index`.
 
 # 6.11 `message_delta`
 
-Can update message-level termination information and cumulative usage.
+`message_delta` updates message-level state and cumulative streaming usage.
 
-Usage values are cumulative rather than independent increments.
+Current hierarchy:
+
+```text
+message_delta
+│
+├── delta
+│   ├── container
+│   │   └── Container | null
+│   ├── stop_details
+│   │   └── RefusalStopDetails | null
+│   ├── stop_reason
+│   │   └── StopReason | null
+│   └── stop_sequence
+│       └── string | null
+│
+└── usage
+    └── MessageDeltaUsage
+```
+
+The four `delta` fields are part of the current delta object even when their value is `null`.
+
+### 6.11.1 MessageDeltaUsage
+
+Current streaming usage shape:
+
+```text
+MessageDeltaUsage
+├── cache_creation_input_tokens
+│   └── number | null
+├── cache_read_input_tokens
+│   └── number | null
+├── input_tokens
+│   └── number | null
+├── output_tokens
+│   └── number
+├── output_tokens_details
+│   └── OutputTokensDetails | null
+└── server_tool_use
+    └── ServerToolUsage | null
+```
+
+These values are cumulative.
+
+`MessageDeltaUsage` is not the same object shape as final `Usage`; for example, it does not carry final `inference_geo` or `service_tier` fields.
 
 ------
 
@@ -2061,7 +2347,52 @@ Server-tool workflow paused and requires continuation in another Messages turn.
 
 ## 7.7 `refusal`
 
-A refusal is normally a valid successful Message response with refusal termination semantics.
+A refusal is a successful HTTP response, not an HTTP processing error.
+
+Canonical termination:
+
+```text
+stop_reason = "refusal"
+```
+
+Current refusal responses also carry structured refusal information through:
+
+```text
+stop_details
+└── RefusalStopDetails
+    ├── type = "refusal"
+    ├── category
+    └── explanation
+```
+
+Current documented categories include:
+
+```text
+cyber
+bio
+frontier_llm
+reasoning_extraction
+general_harms
+```
+
+with `category` itself nullable.
+
+`explanation` is also nullable and is not guaranteed to be stable text.
+
+For current refusal semantics:
+
+```text
+stop_reason = "refusal"
+→ stop_details is present as RefusalStopDetails
+```
+
+For stop reasons other than `refusal`:
+
+```text
+stop_details = null
+```
+
+Streaming refusals deliver `stop_details` on `message_delta` alongside `stop_reason`.
 
 ## 7.8 `model_context_window_exceeded`
 
@@ -2291,7 +2622,7 @@ string S
 
 For ordinary message content, Anthropic explicitly provides that equivalence.
 
-For `ToolResultBlock.content`, v0.2 records both accepted representation families but does not infer the same equivalence without stronger source authority.
+For `ToolResultBlock.content`, v0.3 records both accepted representation families but does not infer the same equivalence without stronger source authority.
 
 ------
 
@@ -2315,6 +2646,54 @@ false
 unless the protocol explicitly defines an equivalence/default relationship.
 
 This is especially relevant to `ToolResultBlock.content`.
+
+------
+
+
+## 8.15 Required-Nullable Is Not Optional
+
+Current Anthropic output schemas distinguish:
+
+```text
+field?: T
+```
+
+from:
+
+```text
+field: T | null
+```
+
+The second form requires field presence even when the semantic value is `null`.
+
+This distinction applies to current response structures including:
+
+```text
+Message.container
+Message.stop_details
+
+TextBlock.citations
+
+Usage nullable fields
+
+RawMessageDeltaEvent.delta nullable fields
+
+MessageDeltaUsage nullable fields
+```
+
+Protocol consumers and protocol-compatible renderers must not silently replace:
+
+```text
+required + null
+```
+
+with:
+
+```text
+field omitted
+```
+
+unless a later protocol profile explicitly changes the contract.
 
 ------
 
@@ -2468,32 +2847,45 @@ Message
 │   ├── role = "assistant"
 │   └── model
 │
+├── Runtime
+│   └── container
+│       └── Container | null
+│
 ├── content[]
 │   ├── TextBlock
+│   │   ├── citations
+│   │   ├── text
+│   │   └── type = "text"
 │   ├── ThinkingBlock
 │   ├── RedactedThinkingBlock
 │   ├── ToolUseBlock
+│   │   ├── id
+│   │   ├── caller
+│   │   ├── input
+│   │   ├── name
+│   │   └── type = "tool_use"
 │   ├── ServerToolUseBlock
 │   └── ExtensionBlock
 │
 ├── Termination
 │   ├── stop_reason
 │   ├── stop_sequence
-│   └── stop_details?
+│   └── stop_details
+│       └── RefusalStopDetails | null
 │
-├── Usage
-│   ├── input_tokens
-│   ├── cache_creation_input_tokens?
-│   ├── cache_read_input_tokens?
-│   ├── output_tokens
-│   ├── output_tokens_details?
-│   ├── server_tool_use?
-│   ├── inference_geo?
-│   └── service_tier?
-│
-└── Runtime
-    └── container?
+└── Usage
+    ├── cache_creation
+    ├── cache_creation_input_tokens
+    ├── cache_read_input_tokens
+    ├── inference_geo
+    ├── input_tokens
+    ├── output_tokens
+    ├── output_tokens_details
+    ├── server_tool_use
+    └── service_tier
 ```
+
+Required nullable fields remain present when their value is `null`.
 
 ------
 
@@ -2503,10 +2895,17 @@ Message
 Anthropic SSE Message Stream
 │
 ├── message_start
-│   └── partial Message
+│   └── Message
+│       ├── container
+│       ├── content = []
+│       ├── stop_details = null
+│       ├── stop_reason = null
+│       ├── stop_sequence = null
+│       └── usage
 │
 ├── ContentBlock[index]*
 │   ├── content_block_start
+│   │   └── complete output-block start shape
 │   ├── content_block_delta*
 │   │   ├── text_delta
 │   │   ├── input_json_delta
@@ -2517,9 +2916,18 @@ Anthropic SSE Message Stream
 │   └── content_block_stop
 │
 ├── message_delta+
-│   ├── stop_reason
-│   ├── stop_sequence
-│   └── cumulative usage
+│   ├── delta
+│   │   ├── container
+│   │   ├── stop_details
+│   │   ├── stop_reason
+│   │   └── stop_sequence
+│   └── MessageDeltaUsage
+│       ├── cache_creation_input_tokens
+│       ├── cache_read_input_tokens
+│       ├── input_tokens
+│       ├── output_tokens
+│       ├── output_tokens_details
+│       └── server_tool_use
 │
 └── message_stop
 
@@ -2530,13 +2938,13 @@ Failure
 └── error
 ```
 
-Normal semantic terminal：
+Normal semantic terminal:
 
 ```text
 message_stop
 ```
 
-not：
+not:
 
 ```text
 [DONE]
@@ -2544,7 +2952,7 @@ not：
 
 ------
 
-# Appendix F. v0.2 Evidence Boundaries
+# Appendix F. v0.3 Evidence Boundaries
 
 This appendix records places where the source structure is established but semantic equivalence is intentionally not inferred.
 
@@ -2570,7 +2978,7 @@ string S
 
 for `ToolResultBlock.content`.
 
-Therefore v0.2 does not assert it.
+Therefore v0.3 does not assert it.
 
 ## F.2 Explicit Empty ToolResult Array
 
@@ -2605,7 +3013,7 @@ or
    content omitted
 ```
 
-Therefore v0.2 records explicit `[]` as an evidenced representation in at least one beta path, while leaving its universal validity and omission-equivalence profile-dependent until stronger protocol authority establishes them.
+Therefore v0.3 records explicit `[]` as an evidenced representation in at least one beta path, while leaving its universal validity and omission-equivalence profile-dependent until stronger protocol authority establishes them.
 
 
 ## F.3 Protocol Evolution
