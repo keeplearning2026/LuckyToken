@@ -10,6 +10,11 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { InvalidRequest, UnsupportedFeature } from "./failures.js";
+import {
+  convertAnthropicTools,
+  validateAnthropicTools,
+  type ValidatedAnthropicTool,
+} from "./tools.js";
 
 export interface AnthropicInvocation {
   selector: string;
@@ -27,6 +32,7 @@ export interface ValidatedAnthropicSourceRequest {
   hasImages: boolean;
   finalAssistantPrefill: boolean;
   systemPrompt?: string;
+  tools?: ValidatedAnthropicTool[];
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
@@ -112,7 +118,7 @@ function validateOptionalFieldShapes(
   }
   for (const name of KNOWN_TOP_LEVEL_FIELDS) {
     if (
-      !["model", "max_tokens", "messages", "stream", "system"].includes(name) &&
+      !["model", "max_tokens", "messages", "stream", "system", "tools"].includes(name) &&
       value[name] !== undefined
     ) {
       unsupported.push(`unsupported top-level field: ${name}`);
@@ -397,6 +403,7 @@ export function validateAnthropicSourceRequest(
   validateOptionalFieldShapes(value, unsupported);
   const messageFacts = validateMessages(messages, unsupported);
   validateToolTurnLifecycle(messageFacts.messages);
+  const tools = validateAnthropicTools(value.tools, unsupported);
   const systemPrompt = validateSystem(value.system, unsupported);
   if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
 
@@ -418,6 +425,7 @@ export function validateAnthropicSourceRequest(
       messageFacts.messages.at(-1)?.role === "assistant",
   };
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
+  if (tools !== undefined) validated.tools = tools;
   return validated;
 }
 
@@ -619,6 +627,8 @@ export function convertValidatedAnthropicRequest(
   if (request.systemPrompt !== undefined) {
     context.systemPrompt = request.systemPrompt;
   }
+  const tools = convertAnthropicTools(request.tools);
+  if (tools !== undefined) context.tools = tools;
 
   return {
     selector: request.selector,

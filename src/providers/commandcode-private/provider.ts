@@ -343,6 +343,33 @@ export function convertCommandCodeMessages(
   return converted;
 }
 
+export function convertCommandCodeTools(
+  tools: Context["tools"],
+): Array<Record<string, unknown>> {
+  return (tools ?? []).map((tool) => {
+    const constrained = tool.constrainedSampling;
+    if (
+      constrained !== undefined &&
+      constrained !== false &&
+      constrained.type === "json_schema" &&
+      constrained.strict === "require"
+    ) {
+      throw new Error(
+        "CommandCode cannot preserve required JSON-schema constrained sampling",
+      );
+    }
+    const inputSchema = cloneLosslessJson(tool.parameters);
+    if (!isRecord(inputSchema)) {
+      throw new Error("Pi Tool parameters must be an object-shaped JSON schema");
+    }
+    return {
+      name: tool.name,
+      description: tool.description,
+      input_schema: inputSchema,
+    };
+  });
+}
+
 function buildCommandCodeBody(
   model: Model<typeof API_ID>,
   context: Context,
@@ -354,7 +381,7 @@ function buildCommandCodeBody(
   const params: Record<string, unknown> = {
     model: model.id,
     messages,
-    tools: [],
+    tools: convertCommandCodeTools(context.tools),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
   };
