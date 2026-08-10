@@ -4,16 +4,19 @@ import type {
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 
+import {
+  CommandCodeContentAssembler,
+  CommandCodeProtocolError,
+  isRetryableCommandCodeResponseError,
+  type CommandCodeResult,
+} from "./assembler.js";
+
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const TRACE_ID_PATTERN = /^(?!0{32}$)[0-9a-f]{32}$/u;
 const SPAN_ID_PATTERN = /^(?!0{16}$)[0-9a-f]{16}$/u;
 
-export interface CommandCodeAttemptResult {
-  text: string;
-  inputTokens: number;
-  outputTokens: number;
-}
+export type CommandCodeAttemptResult = CommandCodeResult;
 
 export interface CommandCodeTraceContextCapability {
   resolveLogicalTraceId(telemetryContext: unknown): string | undefined;
@@ -56,13 +59,6 @@ class AttemptTimeoutError extends RetryableAttemptError {
   constructor(timeoutMs: number) {
     super(`CommandCode attempt timed out after ${timeoutMs}ms`);
     this.name = "AttemptTimeoutError";
-  }
-}
-
-class CommandCodeProtocolError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "CommandCodeProtocolError";
   }
 }
 
@@ -237,10 +233,23 @@ function responseHeaders(headers: Headers): Record<string, string> {
   return Object.fromEntries(headers.entries());
 }
 
-async function readResponseBody(
+function consumeDecodedLines(
+  buffer: string,
+  assembler: CommandCodeContentAssembler,
+): string {
+  let remaining = buffer;
+  while (true) {
+    const newline = remaining.indexOf("\n");
+    if (newline < 0) return remaining;
+    assembler.consumeRawLine(remaining.slice(0, newline));
+    remaining = remaining.slice(newline + 1);
+  }
+}
+
+export async function consumeCommandCodeResponse(
   response: Response,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<CommandCodeResult> {
   if (response.body === null) {
     throw new RetryableAttemptError(
       "CommandCode returned a successful response without a body",
@@ -249,7 +258,8 @@ async function readResponseBody(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let text = "";
+  const assembler = new CommandCodeContentAssembler();
+  let buffer = "";
   try {
     while (true) {
       let next: ReadableStreamReadResult<Uint8Array>;
@@ -268,10 +278,13 @@ async function readResponseBody(
         );
       }
       if (next.done) break;
-      text += decoder.decode(next.value, { stream: true });
+      buffer += decoder.decode(next.value, { stream: true });
+      buffer = consumeDecodedLines(buffer, assembler);
     }
-    text += decoder.decode();
-    return text;
+    buffer += decoder.decode();
+    buffer = consumeDecodedLines(buffer, assembler);
+    if (buffer.trim().length > 0) assembler.consumeRawLine(buffer);
+    return assembler.finalizeAfterTransportEnd();
   } catch (error) {
     try {
       await reader.cancel(error);
@@ -282,108 +295,6 @@ async function readResponseBody(
   } finally {
     reader.releaseLock();
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseCommandCodeTextResult(textBody: string): CommandCodeAttemptResult {
-  const lines = textBody
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  let textId: string | undefined;
-  let text = "";
-  let textClosed = false;
-  let finish: Record<string, unknown> | undefined;
-
-  for (const line of lines) {
-    let event: unknown;
-    try {
-      event = JSON.parse(line);
-    } catch (error) {
-      throw new CommandCodeProtocolError("CommandCode emitted malformed JSON", {
-        cause: error,
-      });
-    }
-    if (!isRecord(event) || typeof event.type !== "string") {
-      throw new CommandCodeProtocolError("CommandCode emitted a malformed event");
-    }
-    switch (event.type) {
-      case "text-start":
-        if (typeof event.id !== "string" || textId !== undefined) {
-          throw new CommandCodeProtocolError(
-            "Invalid CommandCode text-start lifecycle",
-          );
-        }
-        textId = event.id;
-        break;
-      case "text-delta":
-        if (event.id !== textId || textClosed || typeof event.text !== "string") {
-          throw new CommandCodeProtocolError(
-            "Invalid CommandCode text-delta lifecycle",
-          );
-        }
-        text += event.text;
-        break;
-      case "text-end":
-        if (event.id !== textId || textClosed || text.trim().length === 0) {
-          throw new CommandCodeProtocolError(
-            "Invalid CommandCode text-end lifecycle",
-          );
-        }
-        textClosed = true;
-        break;
-      case "finish":
-        finish = event;
-        break;
-      case "error": {
-        const detail = isRecord(event.error) ? event.error.message : undefined;
-        const message =
-          typeof detail === "string" ? detail : "CommandCode emitted a stream error";
-        if (event.isRetryable === true) throw new RetryableAttemptError(message);
-        throw new CommandCodeProtocolError(message);
-      }
-      case "abort":
-        throw new CommandCodeProtocolError("CommandCode emitted a wire abort");
-      default:
-        throw new CommandCodeProtocolError(
-          `Unsupported CommandCode event: ${event.type}`,
-        );
-    }
-  }
-
-  if (finish === undefined) {
-    throw new RetryableAttemptError("CommandCode response ended without finish");
-  }
-  if (!textClosed) {
-    throw new CommandCodeProtocolError(
-      "CommandCode finish arrived with an incomplete text block",
-    );
-  }
-  if (finish.rawFinishReason === "pause_turn") {
-    throw new CommandCodeProtocolError("CommandCode pause_turn is unsupported");
-  }
-  if (finish.finishReason !== "stop") {
-    throw new CommandCodeProtocolError(
-      `Unsupported CommandCode finish reason: ${String(finish.finishReason)}`,
-    );
-  }
-  const totalUsage = finish.totalUsage;
-  if (!isRecord(totalUsage)) {
-    throw new CommandCodeProtocolError(
-      "CommandCode finish must include totalUsage",
-    );
-  }
-  return {
-    text,
-    inputTokens: requireNonNegativeInteger(totalUsage.inputTokens, "inputTokens"),
-    outputTokens: requireNonNegativeInteger(
-      totalUsage.outputTokens,
-      "outputTokens",
-    ),
-  };
 }
 
 function buildAttemptHeaders(
@@ -475,13 +386,17 @@ async function runAttempt(
         );
       }
       throw new CommandCodeProtocolError(
+        "INVALID_EVENT",
         `CommandCode returned HTTP ${receivedResponse.status}`,
       );
     }
-    const bodyText = await readResponseBody(receivedResponse, scope.signal);
+    const result = await consumeCommandCodeResponse(
+      receivedResponse,
+      scope.signal,
+    );
     bodyConsumed = true;
     scope.signal.throwIfAborted();
-    return parseCommandCodeTextResult(bodyText);
+    return result;
   } finally {
     if ((!bodyConsumed || scope.signal.aborted) && response?.body !== null) {
       try {
@@ -524,11 +439,14 @@ export async function executeCommandCodeAttempts(
       if (prepared.signal.aborted) {
         throw abortReason(prepared.signal, "CommandCode invocation was cancelled");
       }
-      if (!(error instanceof RetryableAttemptError) || retryIndex >= controls.maxRetries) {
+      const retryable =
+        error instanceof RetryableAttemptError ||
+        isRetryableCommandCodeResponseError(error);
+      if (!retryable || retryIndex >= controls.maxRetries) {
         throw error;
       }
       const delayMs = resolveCommandCodeRetryDelayMs(
-        error.headers,
+        error instanceof RetryableAttemptError ? error.headers : undefined,
         retryIndex,
         controls.maxRetryDelayMs,
         dependencies.now(),

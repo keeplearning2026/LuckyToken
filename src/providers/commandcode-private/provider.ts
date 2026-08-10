@@ -999,12 +999,20 @@ function createCommandCodeStream(
             ...(sleep === undefined ? {} : { sleep }),
           },
         );
+        const resultText = result.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("");
         const usage = applyCapturedPricing(responseAuthority, {
-          input: result.inputTokens,
-          output: result.outputTokens,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: result.inputTokens + result.outputTokens,
+          input: result.usage.inputTokens,
+          output: result.usage.outputTokens,
+          cacheRead: result.usage.cacheReadTokens,
+          cacheWrite: result.usage.cacheWriteTokens,
+          totalTokens:
+            result.usage.inputTokens +
+            result.usage.outputTokens +
+            result.usage.cacheReadTokens +
+            result.usage.cacheWriteTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         });
         const start = createMessage(
@@ -1015,14 +1023,14 @@ function createCommandCodeStream(
         );
         const complete = createMessage(
           responseAuthority,
-          result.text,
+          resultText,
           usage,
           "stop",
         );
         stream.push({ type: "start", partial: start });
         stream.push({ type: "text_start", contentIndex: 0, partial: start });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: result.text, partial: complete });
-        stream.push({ type: "text_end", contentIndex: 0, content: result.text, partial: complete });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: resultText, partial: complete });
+        stream.push({ type: "text_end", contentIndex: 0, content: resultText, partial: complete });
         stream.push({ type: "done", reason: "stop", message: complete });
         stream.end(complete);
       } catch (error) {
