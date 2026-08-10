@@ -1,4 +1,4 @@
-# CommandCode Private Protocol v1.0
+# CommandCode Private Protocol v1.3
 
 > 兼容目标：`command-code@1.9.0` 的 gateway generate protocol  
 > 实现语言：TypeScript / Node.js 22+  
@@ -79,7 +79,7 @@ npm install @opentelemetry/api@1.9.0
 | Package/API | 用途 | 是否必需 |
 |---|---|---:|
 | `@sindresorhus/slugify@2.2.1` | 计算 `x-project-slug` | yes |
-| `zod@4.1.5` | 验证 body `threadId` 是否为 UUID | recommended |
+| `zod@4.1.5` | 验证并统一 body `threadId` 与 header `x-session-id` | yes |
 | `node:crypto` | `x-session-id`、trace ID、span ID | built-in |
 | `node:fs/promises` | `config.structure` | built-in |
 | `node:child_process` | Git fields | built-in |
@@ -124,46 +124,44 @@ Router SHOULD 把 `baseUrl` 作为显式 deployment config，并固定 path `/al
 export interface CommandCodeHeaderInput {
   apiKey?: string;
   cliEnvironment?: string;
-  cwd: string;
-  sessionId: string;
+  cwd?: string;
+  identity: CommandCodeSessionIdentity;
   traceparent?: string;
   tasteLearning?: boolean;
   coFlag?: boolean;
   ossPrimaryProvider?: string;
-  zeroDataRetention?: boolean;
-  oauthToken?: string;
-  oauthProvider?: string;
 }
 ~~~
 
 | Header | 计算规则 |
 |---|---|
 | `Content-Type` | fixed `application/json` |
-| `Accept` | explicit `*/*`，或 omission 让 Node Fetch/Undici 自动添加 |
+| `Accept` | explicit `*/*` |
 | `User-Agent` | fixed `cli` |
 | `x-command-code-version` | fixed `1.9.0` |
 | `x-cli-environment` | `prod` 转成 `production`；其他 string 原样使用；默认 `production` |
-| `x-project-slug` | `slugify(cwd) || "root"` |
+| `x-project-slug` | 知道工作目录就`slugify(cwd) || "root"`，不知道工作目录就"root" |
 | `x-taste-learning` | boolean 转 lowercase string；默认 `false` |
 | `x-co-flag` | boolean 转 lowercase string；默认 `false` |
-| `x-session-id` | logical session UUID；默认 `crypto.randomUUID()` |
+| `x-session-id` | 与 body `threadId` 相同的 authoritative logical UUID；缺失或无效 caller value 被随机 UUID 替换 |
 | `Authorization` | 有 CommandCode API key 时为 `Bearer <key>`，否则 omission |
 | `traceparent` | valid chat span 时发送；否则 omission |
-| `x-oss-primary-provider` | 有 selected OSS provider 时发送 |
-| `x-cmd-zdr` | zero-data-retention 启用时发送 string `1` |
-| `x-oauth-token` | 有 provider OAuth token 时发送 |
-| `x-oauth-provider` | 与 provider OAuth token 配套的 provider identifier |
+| `x-oss-primary-provider` | 有 selected OSS provider 时发送，否则 omission |
+| `x-cmd-zdr` | fixed string `1`；当前 profile 总是发送 |
 
 `Host`、`Connection`、`Content-Length`、`Accept-Encoding` 等 transport headers 由 HTTP runtime 计算，application code MUST NOT 手工计算 `Content-Length`。
+
+当前 profile MUST NOT 发送 `x-oauth-token` 或 `x-oauth-provider`。OAuth credential 不属于这个 wire contract。
 
 ### 3.3.1 `x-project-slug`
 
 ~~~ts
 import slugify from "@sindresorhus/slugify";
 
-export function buildProjectSlug(cwd: string): string {
+export function buildProjectSlug(cwd?: string): string {
+  if (cwd === undefined || cwd === "") return "root";
   if (typeof cwd !== "string") {
-    throw new TypeError("cwd must be a string");
+    throw new TypeError("cwd must be a string or undefined");
   }
   return slugify(cwd) || "root";
 }
@@ -173,14 +171,13 @@ export function buildProjectSlug(cwd: string): string {
 
 ### 3.3.2 `x-session-id` 与 `threadId`
 
-两者是独立字段：
+两者来自同一个 authoritative logical identity：
 
-- `x-session-id` 是 transport/session identity。
-- `threadId` 是 request body identity，只在 valid UUID 时发送。
-- 普通 session 可以让二者使用同一个 UUID，这是推荐的简单实现。
-- child/custom-agent flow 可以让二者不同。
-- receiver 不应要求二者相等。
-- `pause_turn` continuation 必须复用二者。
+- `x-session-id` 是 header representation。
+- `threadId` 是 request body representation。
+- caller 提供 valid UUID 时原样使用。
+- caller 未提供或提供 invalid UUID 时生成一个 random UUID。
+- 两个 wire field MUST 使用同一个 UUID，不能分别生成或覆盖。
 
 ~~~ts
 import { randomUUID } from "node:crypto";
@@ -188,20 +185,33 @@ import { z } from "zod";
 
 export function createSessionIdentity(
   threadId?: string,
-): { sessionId: string; threadId?: string } {
-  const sessionId = randomUUID();
-  const candidate = threadId ?? sessionId;
+): CommandCodeSessionIdentity {
+  const id = z.uuid().safeParse(threadId).success
+    ? threadId!
+    : randomUUID();
+  return { sessionId: id, threadId: id };
+}
 
-  return {
-    sessionId,
-    threadId: z.uuid().safeParse(candidate).success
-      ? candidate
-      : undefined,
-  };
+export interface CommandCodeSessionIdentity {
+  sessionId: string;
+  threadId: string;
+}
+
+export function assertSessionIdentity(
+  identity: CommandCodeSessionIdentity,
+): void {
+  if (
+    identity.sessionId !== identity.threadId
+    || !z.uuid().safeParse(identity.sessionId).success
+  ) {
+    throw new TypeError(
+      "sessionId and threadId must be the same valid UUID",
+    );
+  }
 }
 ~~~
 
-如果 caller 显式提供已有 `sessionId`，必须验证它是 non-empty string；协议兼容实现最好使用 UUID v4。
+Application 必须调用一次 `createSessionIdentity()`，把同一个 result 交给 header builder 和 request builder。Builder 对已 resolved identity 再执行 defensive assertion，防止 application 在两个阶段分别改值。
 
 ### 3.3.3 `traceparent`
 
@@ -218,7 +228,6 @@ Wire format：
 - flags 固定 `01`。
 - 一个 logical turn 可以复用 trace ID。
 - 每次新的 complete attempt 使用新的 span ID。
-- 同一次 complete 内的 `pause_turn` continuation 复用完整 `traceparent`。
 - outer retry SHOULD 创建新 span ID；若仍在同一 logical turn，可保留 trace ID。
 - 没有 valid context 时 omission，不能发送 malformed value。
 
@@ -292,6 +301,7 @@ export function normalizeCliEnvironment(
 export function buildCommandCodeHeaders(
   input: CommandCodeHeaderInput,
 ): Headers {
+  assertSessionIdentity(input.identity);
   const headers = new Headers({
     "content-type": "application/json",
     accept: "*/*",
@@ -303,7 +313,8 @@ export function buildCommandCodeHeaders(
     "x-project-slug": buildProjectSlug(input.cwd),
     "x-taste-learning": String(input.tasteLearning ?? false),
     "x-co-flag": String(input.coFlag ?? false),
-    "x-session-id": input.sessionId,
+    "x-session-id": input.identity.sessionId,
+    "x-cmd-zdr": "1",
   });
 
   if (input.apiKey) {
@@ -321,16 +332,6 @@ export function buildCommandCodeHeaders(
       input.ossPrimaryProvider,
     );
   }
-  if (input.zeroDataRetention) {
-    headers.set("x-cmd-zdr", "1");
-  }
-  if (input.oauthToken) {
-    headers.set("x-oauth-token", input.oauthToken);
-  }
-  if (input.oauthProvider) {
-    headers.set("x-oauth-provider", input.oauthProvider);
-  }
-
   return headers;
 }
 ~~~
@@ -355,56 +356,15 @@ export type PermissionMode =
   | "plan"
   | "auto-accept";
 
-export interface WireTextBlock {
-  type: "text";
-  text: string;
-}
+export type ReasoningEffort =
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
-export interface WireReasoningBlock {
-  type: "reasoning";
-  text: string;
-}
-
-export interface WireImageBlock {
-  type: "image";
-  image: string;
-  mimeType: string;
-}
-
-export interface WireToolCallBlock {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-}
-
-export interface WireToolResultBlock {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: "";
-  output: {
-    type: "text";
-    value: string;
-  };
-}
-
-export type WireMessage =
-  | {
-      role: "user";
-      content: Array<WireTextBlock | WireImageBlock>;
-    }
-  | {
-      role: "assistant";
-      content: Array<
-        | WireTextBlock
-        | WireReasoningBlock
-        | WireToolCallBlock
-      >;
-    }
-  | {
-      role: "tool";
-      content: WireToolResultBlock[];
-    };
+// WireMessage and its block types are defined authoritatively
+// in section 5.2 and are not duplicated here.
 
 export interface WireTool {
   name: string;
@@ -420,7 +380,7 @@ export interface GenerateParams {
   max_tokens: number;
   stream: true;
   temperature?: number;
-  reasoning_effort?: string;
+  reasoning_effort?: ReasoningEffort;
 }
 
 export interface GenerateRequest {
@@ -429,7 +389,7 @@ export interface GenerateRequest {
   taste: null;
   skills: null;
   permissionMode: PermissionMode;
-  threadId?: string;
+  threadId: string;
   mode?: string;
   params: GenerateParams;
 }
@@ -443,8 +403,8 @@ export interface GenerateRequest {
 | `memory` | fixed `null` |
 | `taste` | fixed `null` |
 | `skills` | fixed `null` |
-| `permissionMode` | 用下方 mapping 计算 |
-| `threadId` | valid UUID 时发送，否则 omission |
+| `permissionMode` | caller 提供可用 mapping 时计算，否则默认 `standard` |
+| `threadId` | 与 `x-session-id` 相同；caller value 缺失或无效时使用同一个随机 UUID |
 | `mode` | caller 提供 non-empty string 时发送，否则 omission |
 | `params` | 按第 5 章构造 |
 
@@ -470,15 +430,31 @@ export function toWirePermissionMode(
 
 # 4. `config` 的完整计算方法
 
+`config` 只有在 caller 提供 non-empty cwd 时才读取 filesystem/Git。未知 cwd 时返回类型稳定的 empty config，不使用 `process.cwd()` 作为隐式替代，也不执行任何 filesystem/Git command。
+
+~~~json
+{
+  "workingDir": "",
+  "date": "",
+  "environment": "",
+  "structure": [],
+  "isGitRepo": false,
+  "currentBranch": "",
+  "mainBranch": "",
+  "gitStatus": "",
+  "recentCommits": []
+}
+~~~
+
 ## 4.1 `workingDir`、`date`、`environment`
 
 ~~~text
-workingDir  = process.cwd()，保留原始 path string
+workingDir  = caller 提供的 cwd，保留原始 path string
 date        = new Date().toISOString().split("T")[0]
 environment = process.platform，例如 win32、linux、darwin
 ~~~
 
-`date` 使用 UTC date，不是 local date。
+`date` 使用 UTC date，不是 local date。只有 project-bound config 计算 date；empty config 的 `date` 固定为 `""`。
 
 ## 4.2 `structure`
 
@@ -515,14 +491,15 @@ git status --porcelain
 git log --oneline -3
 ~~~
 
-任何 Git command failure、non-zero exit 或 exception 都转成 empty string。
+每条 Git command 必须区分 successful empty output 与 failure。Failure、non-zero exit 或 exception 使用 `{ok:false}` 表示，不能与 `{ok:true, output:""}` 合并。
 
 `mainBranch`：
 
-1. remote HEAD non-empty：删除开头 `origin/`。
-2. 否则 remote branches string 包含 `origin/main`：使用 `main`。
-3. 否则包含 `origin/master`：使用 `master`。
-4. 否则使用 `main`。
+1. remote HEAD command 成功且 output non-empty：删除开头 `origin/`。
+2. 否则执行 remote branches command；成功且包含 `origin/main`：使用 `main`。
+3. 成功且包含 `origin/master`：使用 `master`。
+4. remote branches command 成功但没有已知 branch：使用 `main`。
+5. remote HEAD 与 remote branches 都失败：使用 empty string。
 
 Non-Git repository：
 
@@ -536,7 +513,7 @@ Non-Git repository：
 }
 ~~~
 
-Git working tree clean 时 `gitStatus` 为 fixed string `Working tree clean`。
+只有 `git status --porcelain` 成功且 stdout empty 时，`gitStatus` 才是 fixed string `Working tree clean`。Command failure 时 `gitStatus` 为 empty string。
 
 ## 4.4 TypeScript implementation
 
@@ -548,6 +525,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+type GitOutput =
+  | { ok: true; output: string }
+  | { ok: false };
 
 const STRUCTURE_EXCLUSIONS = new Set([
   "node_modules",
@@ -618,16 +599,16 @@ async function readStructure(input: {
 async function gitOutput(
   cwd: string,
   args: string[],
-): Promise<string> {
+): Promise<GitOutput> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       encoding: "utf8",
       windowsHide: true,
     });
-    return stdout.trim();
+    return { ok: true, output: stdout.trim() };
   } catch {
-    return "";
+    return { ok: false };
   }
 }
 
@@ -639,17 +620,36 @@ async function resolveMainBranch(
     "--short",
     "refs/remotes/origin/HEAD",
   ]);
-  if (remoteHead) {
-    return remoteHead.replace(/^origin\//, "");
+  if (remoteHead.ok && remoteHead.output) {
+    return remoteHead.output.replace(/^origin\//, "");
   }
 
   const remoteBranches = await gitOutput(cwd, [
     "branch",
     "-r",
   ]);
-  if (remoteBranches.includes("origin/main")) return "main";
-  if (remoteBranches.includes("origin/master")) return "master";
+  if (!remoteBranches.ok) return "";
+  if (remoteBranches.output.includes("origin/main")) {
+    return "main";
+  }
+  if (remoteBranches.output.includes("origin/master")) {
+    return "master";
+  }
   return "main";
+}
+
+function createEmptyServerConfig(): ServerConfig {
+  return {
+    workingDir: "",
+    date: "",
+    environment: "",
+    structure: [],
+    isGitRepo: false,
+    currentBranch: "",
+    mainBranch: "",
+    gitStatus: "",
+    recentCommits: [],
+  };
 }
 
 export async function buildServerConfig(input: {
@@ -658,7 +658,9 @@ export async function buildServerConfig(input: {
   platform?: string;
   workspaceRoots?: string[];
 } = {}): Promise<ServerConfig> {
-  const cwd = input.cwd ?? process.cwd();
+  if (!input.cwd) return createEmptyServerConfig();
+
+  const cwd = input.cwd;
   const home = input.home
     ?? process.env.HOME
     ?? process.env.USERPROFILE
@@ -677,7 +679,7 @@ export async function buildServerConfig(input: {
     "--git-dir",
   ]);
 
-  if (!gitDir) {
+  if (!gitDir.ok) {
     return {
       workingDir: cwd,
       date,
@@ -691,16 +693,16 @@ export async function buildServerConfig(input: {
     };
   }
 
-  const currentBranch = await gitOutput(cwd, [
+  const currentBranchResult = await gitOutput(cwd, [
     "branch",
     "--show-current",
   ]);
   const mainBranch = await resolveMainBranch(cwd);
-  const rawGitStatus = await gitOutput(cwd, [
+  const gitStatusResult = await gitOutput(cwd, [
     "status",
     "--porcelain",
   ]);
-  const rawRecentCommits = await gitOutput(cwd, [
+  const recentCommitsResult = await gitOutput(cwd, [
     "log",
     "--oneline",
     "-3",
@@ -712,19 +714,24 @@ export async function buildServerConfig(input: {
     environment: platform,
     structure,
     isGitRepo: true,
-    currentBranch,
+    currentBranch: currentBranchResult.ok
+      ? currentBranchResult.output
+      : "",
     mainBranch,
-    gitStatus: rawGitStatus || "Working tree clean",
-    recentCommits: rawRecentCommits
-      ? rawRecentCommits.split("\n")
-      : [],
+    gitStatus: gitStatusResult.ok
+      ? gitStatusResult.output || "Working tree clean"
+      : "",
+    recentCommits:
+      recentCommitsResult.ok && recentCommitsResult.output
+        ? recentCommitsResult.output.split("\n")
+        : [],
   };
 }
 ~~~
 
 Additional workspace roots 必须与 cwd/home 使用一致的 path representation。上述 `formatScopeDir` 用 literal `/` 做 prefix comparison；普通单-root router 直接使用 `workspaceRoots:[cwd]` 即可。
 
-推荐每个 logical completion 计算一次 `config`，并在所有 `pause_turn` continuation 中复用。是否跨多个用户 turn cache 是 client policy，不改变 wire schema。
+推荐每个 logical completion 计算一次 `config`。是否跨多个用户 turn cache 是 client policy，不改变 wire schema。
 
 ---
 
@@ -741,9 +748,9 @@ Additional workspace roots 必须与 cwd/home 使用一致的 path representatio
 | `max_tokens` | caller override，否则 fixed default `64000` |
 | `stream` | literal `true`，不可设置为 false |
 | `temperature` | number 时发送，包括 `0`；`undefined` 时 omission |
-| `reasoning_effort` | selected model 支持且 caller 指定时发送，否则 omission |
+| `reasoning_effort` | caller 指定时先 normalize；未知 non-empty value 使用 `max`；normalized value 只有在 selected model capability 支持时才发送 |
 
-`reasoning_effort` 已知值至少有 `low`、`medium`、`high`、`xhigh`、`max`，但每个 model 只支持 subset。Router MUST 用 model capability table 决定是否发送，不能对所有 model 强加同一 value。
+`reasoning_effort` 的已知值为 `low`、`medium`、`high`、`xhigh`、`max`，但每个 model 只支持 subset。Router MUST 用 model capability table 决定是否发送，不能对所有 model 强加同一 value。Caller omission 始终保持 omission；只有 caller 提供 non-empty unknown value 时才 normalize 为 `max`。
 
 ~~~ts
 export function buildGenerateParams(input: {
@@ -754,7 +761,7 @@ export function buildGenerateParams(input: {
   maxTokens?: number;
   temperature?: number;
   reasoningEffort?: string;
-  modelSupportsReasoningEffort?: boolean;
+  supportedReasoningEfforts?: readonly ReasoningEffort[];
 }): GenerateParams {
   const params: GenerateParams = {
     model: input.model,
@@ -770,67 +777,349 @@ export function buildGenerateParams(input: {
   if (input.temperature !== undefined) {
     params.temperature = input.temperature;
   }
-  if (
-    input.modelSupportsReasoningEffort
-    && input.reasoningEffort
-  ) {
-    params.reasoning_effort = input.reasoningEffort;
+  if (input.reasoningEffort) {
+    const known = new Set<ReasoningEffort>([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    const normalized: ReasoningEffort = known.has(
+      input.reasoningEffort as ReasoningEffort,
+    )
+      ? input.reasoningEffort as ReasoningEffort
+      : "max";
+
+    if (input.supportedReasoningEfforts?.includes(normalized)) {
+      params.reasoning_effort = normalized;
+    }
   }
 
   return params;
 }
 ~~~
 
-## 5.2 Message block rules
+## 5.2 Message Spec
 
-Assistant：
+### 1. 总览
 
-~~~text
-text       → {type:"text", text}
-reasoning  → {type:"reasoning", text}
-tool call  → {type:"tool-call", toolCallId, toolName, input}
-~~~
+`params.messages` 是发送给 `/alpha/generate` 的消息数组。每个元素是一个 wire message，只有三种 role：
 
-User：
+| role        | 含义                                    | content 里允许的 block           |
+| ----------- | --------------------------------------- | -------------------------------- |
+| `user`      | 用户内容                                | `text`、`image`                  |
+| `assistant` | 模型回复                                | `text`、`reasoning`、`tool-call` |
+| `tool`      | 工具结果（回应 assistant 的 tool-call） | `tool-result`                    |
 
-~~~text
-text  → {type:"text", text}
-image → {
-          type:"image",
-          image:"data:<mime>;base64,<base64-data>",
-          mimeType:"<mime>"
-        }
-~~~
+### 2. Wire 类型定义
 
-Tool result request：
+```ts
+export type WireMessage =
+  | UserMessage
+  | AssistantMessage
+  | ToolMessage;
 
-~~~ts
-export function createToolResultMessage(input: {
-  toolCallId: string;
-  textParts: string[];
-}): WireMessage {
-  return {
-    role: "tool",
-    content: [
-      {
-        type: "tool-result",
-        toolCallId: input.toolCallId,
-        toolName: "",
-        output: {
-          type: "text",
-          value: input.textParts.join("\n"),
-        },
-      },
-    ],
-  };
+// ── role: "user" ─────────────────────────────────────────────
+export type UserMessage = {
+  role: "user";
+  content: (
+    | { type: "text";  text: string }
+    | { type: "image"; image: string; mimeType: string }
+  )[];
+};
+
+// ── role: "assistant" ────────────────────────────────────────
+export type AssistantMessage = {
+  role: "assistant";
+  content: (
+    | { type: "text";      text: string }
+    | { type: "reasoning"; text: string }
+    | { type: "tool-call"; toolCallId: string; toolName: string; input: Record<string, unknown> }
+  )[];
+};
+
+// ── role: "tool" ─────────────────────────────────────────────
+export type ToolMessage = {
+  role: "tool";
+  content: {
+    type: "tool-result";
+    toolCallId: string;
+    toolName: string;
+    output: { type: "text" | "error-text"; value: string };
+  }[];
+};
+```
+
+### 3. 字段格式与语义
+
+#### 3.1 `user` 消息
+
+**`text` block**
+
+```json
+{ "type": "text", "text": "hello" }
+```
+
+- `text: string`：消息文本。空字符串、纯空白（`"   "`、`"\n"`）、空 `content` 数组服务端均接受（线上实测）；CLI 规范会在发送前清理空 text block，但服务端不强制。
+
+**`image` block**
+
+```json
+{ "type": "image", "image": "data:image/png;base64,iVBORw0KGgo...", "mimeType": "image/png" }
+```
+
+- `image: string`：完整 data URL，形态 `data:<mime>;base64,<base64 数据>`。不是裸 base64、不是文件路径、不是 http URL。
+- `mimeType: string`：图片 MIME 类型，与 data URL 里的 MIME 段一致。
+
+#### 3.2 `assistant` 消息
+
+**`text` block**
+
+```json
+{ "type": "text", "text": "我来看一下" }
+```
+
+- `text: string`：模型回复文本。
+
+**`reasoning` block**
+
+```json
+{ "type": "reasoning", "text": "用户要读文件，我调用 read_file。" }
+```
+
+- `text: string`：模型的思考/推理内容。不要用 `thinking` / `redacted_thinking`（服务端拒绝）。
+
+**`tool-call` block**
+
+```json
+{ "type": "tool-call", "toolCallId": "call_1", "toolName": "read_file", "input": { "file_path": "/tmp/a.txt" } }
+```
+
+- `toolCallId: string`：本次调用的唯一 ID，后续 `tool-result` 用它配对。
+- `toolName: string`：工具名。Historical `tool-call` 只保留原始名称，不要求该名称仍存在于当前请求的 `tools` 数组。
+- `input: Record<string, unknown>`：传给工具的 JSON object，可以有多个键值对（键=参数名，值=参数值）。本协议层不根据工具的 `input_schema` 校验键名、值类型或必填字段；空对象 `{}` 合法。
+- **字段名必须是 `input`**。用 `arguments` 或缺少该字段会被服务端拒绝（`missing field 'input'`）。
+
+多参数示例：
+
+```json
+{
+  "type": "tool-call",
+  "toolCallId": "call_1",
+  "toolName": "read_file",
+  "input": { "file_path": "/tmp/a.txt", "offset": 100, "limit": 50 }
 }
-~~~
+```
 
-`toolName:""` 只属于下一次 request 中的 request-side `tool-result`。它不表示 response SSE 的 `tool-call.toolName` 为空。Response tool name 来自 `tool-input-start.toolName` 或 final `tool-call.toolName`。
+#### 3.3 `tool` 消息
 
-一个 prepared internal user message 同时包含 tool results 和普通 user content 时，应拆成两个 wire message，顺序为 `role:"tool"` 后 `role:"user"`。
+**`tool-result` block**
 
-空 text block、orphan tool result、provider-executed replay 和 internal metadata 应在进入 wire encoder 前清理。它们属于 application history preparation，不属于 HTTP framing。
+```json
+{ "type": "tool-result", "toolCallId": "call_1", "toolName": "", "output": { "type": "text", "value": "1: hello world" } }
+```
+
+- `toolCallId: string`：必须与配对的 `tool-call.toolCallId` 相同。
+- `toolName: string`：规范发 `""`；非空也被接受。
+- `output.type: "text"`：工具成功输出；`"error-text"`：工具失败/被拒/中断。
+- `output.value: string`：工具输出纯文本。多行以 `\n` 连接（多行/长文本均接受）。结构化数据（JSON）应转成字符串。
+- `output` 必须是单个对象 `{type, value}`。数组、裸字符串、缺失均被拒绝。
+- "多个输出"在 wire 层体现为**多个 `tool-result` block**：一个 `tool` 消息的 `content` 可含多个 `tool-result`（各自配对不同的 `toolCallId`）。
+
+**synthetic `tool-result`（占位结果）**
+
+当 `tool-call` 没有对应的真实结果时（工具被中断/丢失），补一个占位 `tool-result`。wire 形态与普通 `tool-result` 相同，仅 `output.value` 固定：
+
+```json
+{
+  "type": "tool-result",
+  "toolCallId": "call_1",
+  "toolName": "",
+  "output": {
+    "type": "text",
+    "value": "No result — the tool call did not complete (interrupted or lost)."
+  }
+}
+```
+
+- `toolCallId`：与被补的 `tool-call.toolCallId` 相同（保证配对）。
+- `output.type`：`"text"`（不是 `error-text`）。
+
+### 4. 禁止类型（服务端拒绝）
+
+| 类型                            | 位置              | 结果                  |
+| ------------------------------- | ----------------- | --------------------- |
+| `thinking`                      | assistant content | 拒绝（schema 不匹配） |
+| `redacted_thinking`             | assistant content | 拒绝（schema 不匹配） |
+| `tool_use`（Anthropic 风格）    | assistant content | 拒绝（schema 不匹配） |
+| `tool_result`（Anthropic 风格） | user content      | 拒绝（schema 不匹配） |
+
+### 5. 硬规则（服务端强制，违反即拒绝）
+
+| #    | 规则                                                         | 违反时的表现                                                 |
+| ---- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| 1    | `role` 只能是 `user` / `assistant` / `tool`                  | HTTP 400 `BAD_REQUEST`（`system`）                           |
+| 2    | 每个 `tool-call` 必须有配对的 `tool-result`（同 `toolCallId`，且紧跟其 assistant，见 §6） | 流内 `error`：`Tool result is missing for tool call <id>.`   |
+| 3    | 每个 `tool-result` 必须有配对的 `tool-call`（即 `tool` 消息必须回应某个 assistant 的 tool-call） | 流内 `error`：`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'` |
+| 4    | 每个含 `tool-call` 的 `assistant` 后面必须紧跟 `tool` 消息（见 §6） | 流内 `error`：`An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'` |
+| 5    | `tool-call` 的参数字段名必须是 `input`（对象）               | 流内 `error`：`missing field 'input'`（用 `arguments` 或缺字段时） |
+| 6    | `tool-result.output` 必须是对象 `{ type: "text"\|"error-text", value: string }` | 流内 `error`：schema 不匹配（数组/裸字符串/缺失时）          |
+| 7    | content block 必须用 wire 命名（`tool-call`/`tool-result`/`text`/`image`/`reasoning`） | 流内 `error`：schema 不匹配（`tool_use`/`tool_result` 等内部命名） |
+
+#### 5.1 空 block 与空 content（router 不过滤）
+
+**决策：router 不做 CLI 的过滤清理，空 block / 空 content 原样发送。** 服务端全部接受（线上实测）：
+
+| 场景                                              | 线上实测 |
+| ------------------------------------------------- | -------- |
+| 空 text block（`""`、`"   "`、`"\n"`）            | ✅ 接受   |
+| 空 reasoning block（`""`、`"   "`）               | ✅ 接受   |
+| 空 `content: []`（user 或 assistant，含夹在中间） | ✅ 接受   |
+
+CLI 源码（`prepareForSend` / `cleanContent` / `isEmptyText`）会在发送前过滤空 text、删除空 content 消息，但那是 CLI 的规范行为，**不是服务端要求**。router 可以直接发送，无需实现过滤。
+
+唯一仍需遵守的是 §5 的配对规则（服务端强制）：每个含 `tool-call` 的 assistant 后必须紧跟覆盖其全部 call 的 tool 消息（见 §6）。
+
+### 6. 消息顺序约束
+
+| 规则                                                         | 结果                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| 首条可以是 `user` 或 `assistant`（text）                     | ✅ 接受                                                       |
+| 首条不能是 `tool`                                            | ❌ 拒绝                                                       |
+| **每个含 `tool-call` 的 `assistant`，其后面必须紧跟 `tool` 消息，且这些 tool 消息的 `toolCallId` 必须覆盖该 assistant 的所有 `tool-call`** | 强制。`assistant(call) → user` 报 `Tool result is missing for tool call <id>.`；`assistant(call) → assistant(...)` 报 `An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'`；无前置 assistant 的 `tool` 报 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'` |
+| 相邻同 role：`user,user`                                     | ✅ 接受                                                       |
+| 相邻同 role：`assistant,assistant`                           | ✅ 接受（仅当 assistant 不含 tool-call；含 tool-call 的 assistant 后紧跟 assistant 必拒） |
+| 相邻同 role：`tool,tool`                                     | ✅ 接受（前提：这些 tool 消息都紧跟覆盖其 tool-call 的 assistant，如 `asst(c1+c2), tool(c1), tool(c2)`） |
+| `tool` 后跟 `user` 或 `assistant`（text）                    | ✅ 接受                                                       |
+| `tool` 后跟 `assistant`（tool-call）                         | ✅ 接受（但该 assistant 后仍须紧跟其自己的 tool 消息）        |
+| 多轮 `assistant → tool → assistant → tool ...` 交替          | ✅ 接受                                                       |
+
+#### 6.1 一个 assistant 带多个 tool-call 的两种合法写法
+
+一个 assistant 含多个 `tool-call` 时，其后的 `tool` 结果**可以拆成多个 `tool` 消息，也可以合并成一个 `tool` 消息**（均线上实测接受）：
+
+**写法 A：拆成多个 tool 消息（每个含一个 tool-result）**
+
+```json
+{
+  "role": "assistant",
+  "content": [
+    { "type": "tool-call", "toolCallId": "call_00", "toolName": "shell_command", "input": { "command": "Get-Content README.md" } },
+    { "type": "tool-call", "toolCallId": "call_01", "toolName": "shell_command", "input": { "command": "Get-ChildItem" } }
+  ]
+},
+{
+  "role": "tool",
+  "content": [
+    { "type": "tool-result", "toolCallId": "call_00", "toolName": "", "output": { "type": "text", "value": "..." } }
+  ]
+},
+{
+  "role": "tool",
+  "content": [
+    { "type": "tool-result", "toolCallId": "call_01", "toolName": "", "output": { "type": "text", "value": "..." } }
+  ]
+}
+```
+
+**写法 B：合并成一个 tool 消息（含多个 tool-result block）**
+
+```json
+{
+  "role": "assistant",
+  "content": [
+    { "type": "tool-call", "toolCallId": "call_00", "toolName": "shell_command", "input": { "command": "Get-Content README.md" } },
+    { "type": "tool-call", "toolCallId": "call_01", "toolName": "shell_command", "input": { "command": "Get-ChildItem" } }
+  ]
+},
+{
+  "role": "tool",
+  "content": [
+    { "type": "tool-result", "toolCallId": "call_00", "toolName": "", "output": { "type": "text", "value": "..." } },
+    { "type": "tool-result", "toolCallId": "call_01", "toolName": "", "output": { "type": "text", "value": "..." } }
+  ]
+}
+```
+
+两种写法都必须满足 §6 核心规则：tool 消息紧跟该 assistant，且 toolCallId 集合恰好覆盖其所有 tool-call。`toolName` 用非空值（如 `"shell_command"`）也可接受（见 §7）。
+
+### 7. 服务端宽容项（接受，但 CLI 规范会避免）
+
+| 项                                                           | 说明                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| 带 `meta` 字段                                               | 接受（忽略）                                                 |
+| `tool-result.toolName` 非空                                  | 接受                                                         |
+| 相邻同 role（`user,user`、`assistant,assistant`、`tool,tool`） | 接受（前提是每个含 tool-call 的 assistant 后仍紧跟覆盖其 call 的 tool 消息，见 §6） |
+| assistant 混合 `text` + `tool-call`                          | 接受                                                         |
+| 空 `input`（`{}`）                                           | 接受                                                         |
+
+### 8. 错误返回的两种形态
+
+| 形态                                  | 触发                                 | 处理建议                                                     |
+| ------------------------------------- | ------------------------------------ | ------------------------------------------------------------ |
+| HTTP 400 JSON（`code:"BAD_REQUEST"`） | role 枚举错、schema 反序列化失败     | 修复请求后重发                                               |
+| HTTP 200 + 流内 `error` 事件          | 配对错误、ModelMessage schema 不匹配 | 读 `error.error.message`；`statusCode=400`、`isRetryable=false`，不要重试 |
+
+### 9. 完整示例（一轮工具调用）
+
+```json
+{
+  "params": {
+    "model": "deepseek/deepseek-v4-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [{ "type": "text", "text": "读取 /tmp/a.txt" }]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          { "type": "reasoning", "text": "用户要读文件，我调用 read_file。" },
+          {
+            "type": "tool-call",
+            "toolCallId": "call_1",
+            "toolName": "read_file",
+            "input": { "file_path": "/tmp/a.txt", "offset": 1, "limit": 100 }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "toolCallId": "call_1",
+            "toolName": "",
+            "output": { "type": "text", "value": "1: hello world" }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [{ "type": "text", "text": "继续" }]
+      }
+    ],
+    "tools": [
+      {
+        "name": "read_file",
+        "description": "Read a file with optional offset and limit.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "file_path": { "type": "string" },
+            "offset": { "type": "integer" },
+            "limit": { "type": "integer" }
+          },
+          "required": ["file_path"]
+        }
+      }
+    ],
+    "max_tokens": 64000,
+    "stream": true
+  }
+}
+```
 
 ## 5.3 Tool definition
 
@@ -855,7 +1144,7 @@ export function createToolResultMessage(input: {
 export interface BuildGenerateRequestInput {
   config: ServerConfig;
   permissionMode?: string;
-  threadId?: string;
+  identity: CommandCodeSessionIdentity;
   mode?: string;
   params: GenerateParams;
 }
@@ -863,6 +1152,7 @@ export interface BuildGenerateRequestInput {
 export function buildGenerateRequest(
   input: BuildGenerateRequestInput,
 ): GenerateRequest {
+  assertSessionIdentity(input.identity);
   const body: GenerateRequest = {
     config: input.config,
     memory: null,
@@ -871,15 +1161,10 @@ export function buildGenerateRequest(
     permissionMode: toWirePermissionMode(
       input.permissionMode,
     ),
+    threadId: input.identity.threadId,
     params: input.params,
   };
 
-  if (
-    input.threadId
-    && z.uuid().safeParse(input.threadId).success
-  ) {
-    body.threadId = input.threadId;
-  }
   if (input.mode) body.mode = input.mode;
   return body;
 }
@@ -934,12 +1219,14 @@ Non-2xx response：读取完整 body 并作为 HTTP error 处理。Retry classif
 | Failure | retryable |
 |---|---:|
 | network exception | true |
-| HTTP 429 | true，除非 application 识别为不可重试的 plan-window limit |
+| HTTP 429 | true |
 | HTTP 500–599 | true |
 | other non-2xx | false |
 | 2xx but response body missing | true |
-| EOF without `finish` or `abort` | true |
+| physical EOF with neither `finish` nor `abort` | true（`CommandCodeTransportError`：status 502、midStream true） |
 | stream `error` event | 使用 event.isRetryable；缺失时 false |
+| unknown/malformed/lifecycle error | false |
+| `abort` / final `pause_turn` | false |
 
 ## 6.2 Physical line decoder
 
@@ -1003,7 +1290,9 @@ Rules：
 - `tool-input-delta.delta` 只保存为 raw input preview。
 - `tool-input-end` 只结束 input delta lifecycle，不 materialize tool block。
 - final `tool-call.toolCallId` 应与前述 `id` 相同。
+- final `tool-call.toolName` 是 authoritative value，无条件覆盖 matching `tool-input-start.toolName`。
 - `tool-call.input ?? tool-call.args ?? {}` 是 authoritative final input。
+- Response consumer 按 Source 行为保留该 final input，不验证它是否为 object；因此 response-side `ContentBlockA.input` 保持 `unknown`。这不会放宽第 5.2 节的 request-side object contract。
 
 ### Metadata and terminal events
 
@@ -1072,13 +1361,15 @@ Other events：
 | `provider-metadata` | raw preserve，semantic ignore |
 | `finish-step` | raw preserve，semantic ignore；不是 final usage source |
 | response-side `tool-result` | raw preserve，推荐 content ignore |
-| unknown event | raw preserve，semantic ignore |
+| unknown event | raw preserve 后抛 non-retryable protocol error；不得推测 semantics |
 
-Final usage 以最后一个实际出现的 `finish.totalUsage` 为准。`finish-step.usage` 可以有更多 provider metadata，但不能取代 final `finish.totalUsage`。
+Final usage 只取自最后一个 `finish` event。若最后一个 finish 缺少 `totalUsage`，raw usage 为 missing、normalized usage 为四个零；不能沿用更早 finish 的 usage。`finish-step.usage` 可以有更多 provider metadata，但不能取代 final `finish.totalUsage`。
 
 ---
 
 # 7. 推荐的 Atomic ID-indexed Ordered Block Assembler
+
+我们的主要目的就是通过event组装得到有特定顺序内容的content数组，还有finish.
 
 ## 7.1 Invariants
 
@@ -1090,25 +1381,30 @@ rawEvents[]
 textById       Map<string, TextSlot>
 reasoningById  Map<string, ReasoningSlot>
 toolById       Map<string, ToolSlot>
-slots[]        first-appearance order
+slots[]        start-event arrival order
 ~~~
 
 必须满足：
 
 1. Map key 直接使用 event `id`；三个 content type 使用三个 Map，不需要复合 key。
-2. block 第一次出现时 push 一个 slot，此后永不移动。
-3. 最终 `content[] A` 的 order 等于各 block 第一个相关 wire event 的到达顺序。
-4. `tool-input-start` 创建 invisible placeholder；只有 final `tool-call` 才填充并关闭。
-5. response-side `tool-result` 不进入 content。
-6. `finish` 只记录 terminal metadata；仍需等 physical EOF。
-7. `finish + EOF` 才 commit。
-8. `abort` 立即 rollback 当前 response 的 semantic slots、finish 和 usage，然后 cancel/drain body；返回 `content:[]`、`committed:false`、`aborted:true`。
-9. `error` 立即失败，不 commit。
-10. malformed/unknown line 保存在 `rawEvents`/warnings，不得修改 semantic state。
+2. 只有 `text-start`、`reasoning-start`、`tool-input-start` 可以 push slot；此后永不移动。
+3. 最终 `content[] A` 的 order 等于各 block start event 的到达 sequence；不使用 wall-clock timestamp。
+4. Delta/end/final tool-call 找不到对应 open start 时是 protocol error，不能创建 placeholder 或修改 order。
+5. `tool-input-start` 创建 invisible placeholder；只有 matching final `tool-call` 才填充并关闭。
+6. `text-end` / `reasoning-end` 关闭的 block 若 trim 后为空，抛 `EMPTY_CONTENT_BLOCK` protocol error；不能 omission 或伪造内容。
+7. response-side `tool-result` 不进入 content。
+8. 每个 `finish` 完整覆盖之前的 finish/usage/systemPromptTokens；仍需等 physical EOF。
+9. `abort` 立即 rollback，然后抛 typed abort error 并取消 body；不返回 result。
+10. `error` 立即失败，不返回 result。
+11. malformed/unknown event 保存在 `rawEvents` 后抛 non-retryable protocol error，不得修改 semantic state。
+12. EOF 时若没有 `finish`（也没有已经触发异常的 `abort`），先 rollback 并抛 `CommandCodeTransportError`；即使存在 unfinished block 也以该 transport error 为准。
+13. EOF 时已有 `finish` 但仍存在 unfinished block 是 protocol error；不能猜测 completion、自动 close 或 materialize incomplete tool。
+14. EOF 时所有 block 已关闭，但 final finish 的 effective raw reason 为 `pause_turn`，则 rollback 并抛 typed pause-turn error。
+15. 只有 closed blocks + final non-pause `finish` + physical EOF 才返回 successful `CommandCodeResult`。
 
 Buffered router MUST 在 assembler commit 前不向 Protocol B client 发送任何 semantic bytes。这是 abort 能真正 rollback 的前提。
 
-## 7.2 Result model
+## 7.2 Result model参考
 
 ~~~ts
 export interface NormalizedUsage {
@@ -1159,42 +1455,42 @@ export interface ProtocolWarning {
 
 export interface CommandCodeResult {
   content: ContentBlockA[];
-  finish?: FinishEvent;
+  finish: FinishEvent;
   rawUsage?: CommandCodeUsage;
   usage: NormalizedUsage;
   systemPromptTokens?: number;
-  committed: boolean;
-  aborted: boolean;
   rawEvents: RawEventRecord[];
   warnings: ProtocolWarning[];
 }
 ~~~
 
-`content[]` 只保存 model semantic blocks。Finish、usage、abort、provider metadata、warnings 均为 response-level state。
+`content[]` 只保存 model semantic blocks。Successful result 中的 finish、usage、provider metadata 和 warnings 是 response-level state；abort/pause/protocol/transport failure 只存在于 typed error path，不进入 `CommandCodeResult`。
 
 ## 7.3 Reducer table
 
 | Event | Action |
 |---|---|
 | `text-start(id)` | reserve text slot |
-| `text-delta(id)` | missing 时 reserve；append text |
-| `text-end(id)` | close text slot |
+| `text-delta(id)` | require open text start；append text |
+| `text-end(id)` | require non-empty text；close text slot |
 | `reasoning-start(id)` | reserve reasoning slot |
-| `reasoning-delta(id)` | missing 时 reserve；append text |
-| `reasoning-end(id)` | close reasoning slot |
+| `reasoning-delta(id)` | require open reasoning start；append text |
+| `reasoning-end(id)` | require non-empty reasoning；close reasoning slot |
 | `tool-input-start(id)` | reserve tool placeholder；保存 toolName |
-| `tool-input-delta(id)` | append raw input preview |
-| `tool-input-end(id)` | set `inputStreamEnded=true` |
-| `tool-call(toolCallId)` | find/create placeholder；写 authoritative input；close |
+| `tool-input-delta(id)` | require open tool start；append raw input preview |
+| `tool-input-end(id)` | require open tool start；set `inputStreamEnded=true` |
+| `tool-call(toolCallId)` | require open, input-ended tool start；用 final toolName 无条件覆盖 start toolName；写 authoritative input；close |
 | `tool-result` | raw only |
-| `finish` | update finish/usage；continue reading |
-| `abort` | rollback；cancel/drain；no commit |
+| `finish` | replace finish/usage/systemPromptTokens；continue reading |
+| `abort` | rollback；throw typed abort error；no result |
 | `error` | throw；no commit |
-| EOF | close unfinished text/reasoning with warning；omit unfinished tool；要求已有 finish |
+| unknown/malformed | raw preserve；throw typed protocol error |
+| EOF without `finish`/`abort` | rollback；throw `CommandCodeTransportError`（status 502、retryable true、midStream true）；即使有 open block 也相同 |
+| EOF after final `finish` | require all blocks closed；`pause_turn` throws；otherwise return success |
 
-Closed id 后又来的 start/delta SHOULD 被 ignore 并记录 `EVENT_AFTER_END`，不要为 malformed stream 引入 occurrence key 或重排已有 slot。
+Duplicate start、closed id 后又来的 start/delta/end、以及 end without open block 都是 protocol error。实现不能为 malformed stream 引入 occurrence key、自动修复 lifecycle 或重排 slot。
 
-## 7.4 TypeScript reference implementation
+## 7.4 TypeScript reference implementation参考
 
 ~~~ts
 type UnknownRecord = Record<string, unknown>;
@@ -1206,8 +1502,7 @@ export interface CommandCodeEvent extends UnknownRecord {
 type CloseReason =
   | "text-end"
   | "reasoning-end"
-  | "tool-call"
-  | "eof";
+  | "tool-call";
 
 interface BaseSlot {
   id: string;
@@ -1263,6 +1558,73 @@ function normalizeUsage(
   };
 }
 
+const ZERO_USAGE: NormalizedUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
+export type CommandCodeProtocolErrorCode =
+  | "NON_JSON_LINE"
+  | "INVALID_EVENT"
+  | "UNKNOWN_EVENT"
+  | "INVALID_EVENT_FIELD"
+  | "INVALID_BLOCK_LIFECYCLE"
+  | "EMPTY_CONTENT_BLOCK";
+
+export class CommandCodeProtocolError extends Error {
+  constructor(
+    readonly code: CommandCodeProtocolErrorCode,
+    message: string,
+    readonly rawEvents: RawEventRecord[],
+    readonly warnings: ProtocolWarning[],
+    readonly retryable = false,
+  ) {
+    super(message);
+    this.name = "CommandCodeProtocolError";
+  }
+}
+
+export class CommandCodeTransportError extends Error {
+  readonly status = 502;
+  readonly retryable = true;
+  readonly midStream = true;
+
+  constructor(
+    readonly rawEvents: RawEventRecord[],
+    readonly warnings: ProtocolWarning[],
+  ) {
+    super("CommandCode transport ended without finish or abort");
+    this.name = "CommandCodeTransportError";
+  }
+}
+
+export class CommandCodeAbortError extends Error {
+  readonly retryable = false;
+
+  constructor(
+    readonly rawEvents: RawEventRecord[],
+    readonly warnings: ProtocolWarning[],
+  ) {
+    super("CommandCode response emitted abort");
+    this.name = "CommandCodeAbortError";
+  }
+}
+
+export class CommandCodePauseTurnError extends Error {
+  readonly retryable = false;
+
+  constructor(
+    readonly finish: FinishEvent,
+    readonly rawEvents: RawEventRecord[],
+    readonly warnings: ProtocolWarning[],
+  ) {
+    super("CommandCode pause_turn is unsupported");
+    this.name = "CommandCodePauseTurnError";
+  }
+}
+
 export class CommandCodeStreamError extends Error {
   constructor(
     message: string,
@@ -1287,22 +1649,12 @@ export class CommandCodeContentAssembler {
 
   private finishEvent: FinishEvent | undefined;
   private rawUsageValue: CommandCodeUsage | undefined;
-  private normalizedUsage: NormalizedUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-  };
+  private normalizedUsage: NormalizedUsage = { ...ZERO_USAGE };
   private systemPromptTokenCount: number | undefined;
-  private sawAbort = false;
   private finalized = false;
 
   readonly rawEvents: RawEventRecord[] = [];
   readonly warnings: ProtocolWarning[] = [];
-
-  get aborted(): boolean {
-    return this.sawAbort;
-  }
 
   consumeRawLine(rawLine: string): void {
     const line = rawLine.trim();
@@ -1317,22 +1669,29 @@ export class CommandCodeContentAssembler {
         ? cause.message
         : String(cause);
       this.rawEvents.push({ sequence, rawLine, parseError });
-      this.warn(sequence, "NON_JSON_LINE", parseError);
-      return;
+      this.failProtocol(
+        sequence,
+        "NON_JSON_LINE",
+        parseError,
+      );
     }
 
-    if (!isRecord(parsed) || typeof parsed.type !== "string") {
+    if (
+      !isRecord(parsed)
+      || typeof parsed.type !== "string"
+      || parsed.type.length === 0
+    ) {
+      const message = "JSON value is not an event object";
       this.rawEvents.push({
         sequence,
         rawLine,
-        parseError: "JSON value is not an event object",
+        parseError: message,
       });
-      this.warn(
+      this.failProtocol(
         sequence,
         "INVALID_EVENT",
-        "JSON value is not an event object",
+        message,
       );
-      return;
     }
 
     const event = parsed as CommandCodeEvent;
@@ -1346,69 +1705,56 @@ export class CommandCodeContentAssembler {
     }
     this.finalized = true;
 
-    if (this.sawAbort) {
-      return {
-        content: [],
-        usage: {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-        committed: false,
-        aborted: true,
-        rawEvents: [...this.rawEvents],
-        warnings: [...this.warnings],
-      };
-    }
-
-    for (const slot of this.slots) {
-      if (slot.state === "closed") continue;
-      if (slot.kind === "tool") {
-        this.warn(
-          slot.lastSequence,
-          "INCOMPLETE_TOOL_CALL",
-          "tool input ended without final tool-call",
-          "tool-call",
-          slot.id,
-        );
-        continue;
-      }
-      slot.state = "closed";
-      slot.closedBy = "eof";
-      this.warn(
-        slot.lastSequence,
-        "BLOCK_CLOSED_BY_EOF",
-        "Block had no matching end event",
-        slot.kind,
-        slot.id,
+    const finalFinish = this.finishEvent;
+    if (!finalFinish) {
+      this.rollbackStagedSemanticState();
+      throw new CommandCodeTransportError(
+        [...this.rawEvents],
+        [...this.warnings],
       );
     }
 
-    if (!this.finishEvent) {
-      throw new Error("Stream ended without finish or abort");
+    const incomplete = this.slots.find(
+      (slot) => slot.state === "open",
+    );
+    if (incomplete) {
+      this.failProtocol(
+        incomplete.lastSequence,
+        "INVALID_BLOCK_LIFECYCLE",
+        `Block ${incomplete.id} was still open at EOF`,
+        incomplete.kind,
+        incomplete.id,
+      );
+    }
+
+    const effectiveRawReason =
+      finalFinish.rawFinishReason
+      ?? finalFinish.finishReason;
+    if (effectiveRawReason === "pause_turn") {
+      this.rollbackStagedSemanticState();
+      throw new CommandCodePauseTurnError(
+        finalFinish,
+        [...this.rawEvents],
+        [...this.warnings],
+      );
     }
 
     const content: ContentBlockA[] = [];
     for (const slot of this.slots) {
       if (slot.kind === "text") {
-        if (slot.text) {
-          content.push({
-            type: "text",
-            id: slot.id,
-            text: slot.text,
-          });
-        }
+        content.push({
+          type: "text",
+          id: slot.id,
+          text: slot.text,
+        });
         continue;
       }
       if (slot.kind === "reasoning") {
-        if (slot.text) {
-          content.push({
-            type: "reasoning",
-            id: slot.id,
-            text: slot.text,
-          });
-        }
+        content.push({
+          type: "reasoning",
+          id: slot.id,
+          text: slot.text,
+        });
         continue;
       }
       if (slot.state === "closed") {
@@ -1423,12 +1769,10 @@ export class CommandCodeContentAssembler {
 
     return {
       content,
-      finish: this.finishEvent,
+      finish: finalFinish,
       rawUsage: this.rawUsageValue,
       usage: this.normalizedUsage,
       systemPromptTokens: this.systemPromptTokenCount,
-      committed: true,
-      aborted: false,
       rawEvents: [...this.rawEvents],
       warnings: [...this.warnings],
     };
@@ -1438,106 +1782,127 @@ export class CommandCodeContentAssembler {
     event: CommandCodeEvent,
     sequence: number,
   ): void {
-    if (this.sawAbort) {
-      this.warn(
-        sequence,
-        "EVENT_AFTER_ABORT",
-        "Semantic event ignored after abort rollback",
-        event.type,
-      );
-      return;
-    }
-
     switch (event.type) {
       case "text-start": {
         const id = this.requireId(event, "id", sequence);
-        if (id) this.reserveText(id, sequence, event.type);
+        this.reserveText(id, sequence, event.type);
         return;
       }
       case "text-delta": {
         const id = this.requireId(event, "id", sequence);
-        if (!id) return;
-        const slot = this.reserveText(id, sequence, event.type);
-        if (!slot) return;
-        slot.text += asString(event.text) ?? "";
+        const text = this.requireString(
+          event,
+          "text",
+          sequence,
+        );
+        const slot = this.requireOpen(
+          this.textById,
+          id,
+          sequence,
+          event.type,
+        );
+        slot.text += text;
         slot.lastSequence = sequence;
         return;
       }
       case "text-end": {
         const id = this.requireId(event, "id", sequence);
-        if (id) {
-          this.close(
-            this.textById,
-            id,
-            sequence,
-            "text-end",
-            event.type,
-          );
-        }
+        this.close(
+          this.textById,
+          id,
+          sequence,
+          "text-end",
+          event.type,
+        );
         return;
       }
       case "reasoning-start": {
         const id = this.requireId(event, "id", sequence);
-        if (id) this.reserveReasoning(id, sequence, event.type);
+        this.reserveReasoning(id, sequence, event.type);
         return;
       }
       case "reasoning-delta": {
         const id = this.requireId(event, "id", sequence);
-        if (!id) return;
-        const slot = this.reserveReasoning(
+        const text = this.requireString(
+          event,
+          "text",
+          sequence,
+        );
+        const slot = this.requireOpen(
+          this.reasoningById,
           id,
           sequence,
           event.type,
         );
-        if (!slot) return;
-        slot.text += asString(event.text) ?? "";
+        slot.text += text;
         slot.lastSequence = sequence;
         return;
       }
       case "reasoning-end": {
         const id = this.requireId(event, "id", sequence);
-        if (id) {
-          this.close(
-            this.reasoningById,
-            id,
-            sequence,
-            "reasoning-end",
-            event.type,
-          );
-        }
+        this.close(
+          this.reasoningById,
+          id,
+          sequence,
+          "reasoning-end",
+          event.type,
+        );
         return;
       }
       case "tool-input-start": {
         const id = this.requireId(event, "id", sequence);
-        if (!id) return;
+        const toolName = this.requireString(
+          event,
+          "toolName",
+          sequence,
+          true,
+        );
         const slot = this.reserveTool(id, sequence, event.type);
-        if (!slot) return;
-        slot.toolName = asString(event.toolName)
-          ?? slot.toolName;
+        slot.toolName = toolName;
         return;
       }
       case "tool-input-delta": {
         const id = this.requireId(event, "id", sequence);
-        if (!id) return;
-        const slot = this.reserveTool(id, sequence, event.type);
-        if (!slot) return;
-        slot.rawInput += asString(event.delta) ?? "";
+        const delta = this.requireString(
+          event,
+          "delta",
+          sequence,
+        );
+        const slot = this.requireOpen(
+          this.toolById,
+          id,
+          sequence,
+          event.type,
+        );
+        if (slot.inputStreamEnded) {
+          this.failProtocol(
+            sequence,
+            "INVALID_BLOCK_LIFECYCLE",
+            "tool-input-delta arrived after tool-input-end",
+            event.type,
+            id,
+          );
+        }
+        slot.rawInput += delta;
         slot.lastSequence = sequence;
         return;
       }
       case "tool-input-end": {
         const id = this.requireId(event, "id", sequence);
-        if (!id) return;
-        const slot = this.toolById.get(id);
-        if (!slot || slot.state === "closed") {
-          this.warn(
+        const slot = this.requireOpen(
+          this.toolById,
+          id,
+          sequence,
+          event.type,
+        );
+        if (slot.inputStreamEnded) {
+          this.failProtocol(
             sequence,
-            "END_WITHOUT_OPEN_BLOCK",
-            "tool-input-end has no open placeholder",
+            "INVALID_BLOCK_LIFECYCLE",
+            "tool-input-end was repeated",
             event.type,
             id,
           );
-          return;
         }
         slot.inputStreamEnded = true;
         slot.lastSequence = sequence;
@@ -1549,11 +1914,28 @@ export class CommandCodeContentAssembler {
           "toolCallId",
           sequence,
         );
-        if (!id) return;
-        const slot = this.reserveTool(id, sequence, event.type);
-        if (!slot) return;
-        slot.toolName = asString(event.toolName)
-          ?? slot.toolName;
+        const toolName = this.requireString(
+          event,
+          "toolName",
+          sequence,
+          true,
+        );
+        const slot = this.requireOpen(
+          this.toolById,
+          id,
+          sequence,
+          event.type,
+        );
+        if (!slot.inputStreamEnded) {
+          this.failProtocol(
+            sequence,
+            "INVALID_BLOCK_LIFECYCLE",
+            "tool-call arrived before tool-input-end",
+            event.type,
+            id,
+          );
+        }
+        slot.toolName = toolName;
         slot.input = event.input ?? event.args ?? {};
         slot.state = "closed";
         slot.closedBy = "tool-call";
@@ -1570,33 +1952,75 @@ export class CommandCodeContentAssembler {
         );
         return;
       case "finish": {
+        this.validateFinishEvent(event, sequence);
         const finish = event as FinishEvent;
         this.finishEvent = finish;
-        if (isRecord(finish.totalUsage)) {
+        if (finish.totalUsage !== undefined) {
           this.rawUsageValue = finish.totalUsage;
           this.normalizedUsage = normalizeUsage(
             finish.totalUsage,
           );
+        } else {
+          this.rawUsageValue = undefined;
+          this.normalizedUsage = { ...ZERO_USAGE };
         }
-        if (typeof finish.systemPromptTokens === "number") {
-          this.systemPromptTokenCount =
-            finish.systemPromptTokens;
-        }
+        this.systemPromptTokenCount =
+          finish.systemPromptTokens;
         return;
       }
-      case "abort":
-        this.sawAbort = true;
+      case "abort": {
         this.rollbackStagedSemanticState();
-        this.warn(
-          sequence,
-          "ATOMIC_RESPONSE_ABORT",
-          "Response-local semantic state was rolled back",
-          event.type,
+        throw new CommandCodeAbortError(
+          [...this.rawEvents],
+          [...this.warnings],
         );
-        return;
+      }
       case "error": {
         const detail = event.error;
+        if (!isRecord(detail) && typeof detail !== "string") {
+          this.failProtocol(
+            sequence,
+            "INVALID_EVENT_FIELD",
+            "error event requires string or object error",
+            event.type,
+          );
+        }
         const objectDetail = isRecord(detail) ? detail : undefined;
+        if (objectDetail) {
+          if (
+            objectDetail.message !== undefined
+            && typeof objectDetail.message !== "string"
+          ) {
+            this.failProtocol(
+              sequence,
+              "INVALID_EVENT_FIELD",
+              "error.message must be a string when present",
+              event.type,
+            );
+          }
+          if (
+            objectDetail.statusCode !== undefined
+            && typeof objectDetail.statusCode !== "number"
+          ) {
+            this.failProtocol(
+              sequence,
+              "INVALID_EVENT_FIELD",
+              "error.statusCode must be a number when present",
+              event.type,
+            );
+          }
+          if (
+            objectDetail.isRetryable !== undefined
+            && typeof objectDetail.isRetryable !== "boolean"
+          ) {
+            this.failProtocol(
+              sequence,
+              "INVALID_EVENT_FIELD",
+              "error.isRetryable must be boolean when present",
+              event.type,
+            );
+          }
+        }
         const message = objectDetail
           ? asString(objectDetail.message) ?? "Stream error"
           : asString(detail) ?? "Stream error";
@@ -1611,8 +2035,18 @@ export class CommandCodeContentAssembler {
             : 500,
         );
       }
-      default:
+      case "start":
+      case "start-step":
+      case "provider-metadata":
+      case "finish-step":
         return;
+      default:
+        this.failProtocol(
+          sequence,
+          "UNKNOWN_EVENT",
+          `Unknown CommandCode event: ${event.type}`,
+          event.type,
+        );
     }
   }
 
@@ -1620,7 +2054,7 @@ export class CommandCodeContentAssembler {
     id: string,
     sequence: number,
     eventType: string,
-  ): TextSlot | undefined {
+  ): TextSlot {
     return this.reserve(
       this.textById,
       id,
@@ -1642,7 +2076,7 @@ export class CommandCodeContentAssembler {
     id: string,
     sequence: number,
     eventType: string,
-  ): ReasoningSlot | undefined {
+  ): ReasoningSlot {
     return this.reserve(
       this.reasoningById,
       id,
@@ -1664,7 +2098,7 @@ export class CommandCodeContentAssembler {
     id: string,
     sequence: number,
     eventType: string,
-  ): ToolSlot | undefined {
+  ): ToolSlot {
     return this.reserve(
       this.toolById,
       id,
@@ -1690,21 +2124,16 @@ export class CommandCodeContentAssembler {
     sequence: number,
     eventType: string,
     create: (order: number) => T,
-  ): T | undefined {
+  ): T {
     const existing = map.get(id);
     if (existing) {
-      if (existing.state === "closed") {
-        this.warn(
-          sequence,
-          "EVENT_AFTER_END",
-          "Event arrived after block was closed",
-          eventType,
-          id,
-        );
-        return undefined;
-      }
-      existing.lastSequence = sequence;
-      return existing;
+      this.failProtocol(
+        sequence,
+        "INVALID_BLOCK_LIFECYCLE",
+        "Duplicate start event for block",
+        eventType,
+        id,
+      );
     }
 
     const slot = create(this.slots.length);
@@ -1720,16 +2149,23 @@ export class CommandCodeContentAssembler {
     closedBy: CloseReason,
     eventType: string,
   ): void {
-    const slot = map.get(id);
-    if (!slot || slot.state === "closed") {
-      this.warn(
+    const slot = this.requireOpen(
+      map,
+      id,
+      sequence,
+      eventType,
+    );
+    if (
+      (slot.kind === "text" || slot.kind === "reasoning")
+      && slot.text.trim() === ""
+    ) {
+      this.failProtocol(
         sequence,
-        "END_WITHOUT_OPEN_BLOCK",
-        "End event has no open block",
+        "EMPTY_CONTENT_BLOCK",
+        `${slot.kind} block must contain non-whitespace text`,
         eventType,
         id,
       );
-      return;
     }
     slot.state = "closed";
     slot.closedBy = closedBy;
@@ -1743,12 +2179,7 @@ export class CommandCodeContentAssembler {
     this.toolById.clear();
     this.finishEvent = undefined;
     this.rawUsageValue = undefined;
-    this.normalizedUsage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    };
+    this.normalizedUsage = { ...ZERO_USAGE };
     this.systemPromptTokenCount = undefined;
   }
 
@@ -1756,16 +2187,197 @@ export class CommandCodeContentAssembler {
     event: CommandCodeEvent,
     field: "id" | "toolCallId",
     sequence: number,
-  ): string | undefined {
+  ): string {
     const id = asString(event[field]);
     if (id) return id;
-    this.warn(
+    this.failProtocol(
       sequence,
-      "MISSING_ID",
+      "INVALID_EVENT_FIELD",
       `Event is missing ${field}`,
       event.type,
     );
-    return undefined;
+  }
+
+  private requireString(
+    event: CommandCodeEvent,
+    field: string,
+    sequence: number,
+    nonEmpty = false,
+  ): string {
+    const value = asString(event[field]);
+    if (value !== undefined && (!nonEmpty || value.length > 0)) {
+      return value;
+    }
+    this.failProtocol(
+      sequence,
+      "INVALID_EVENT_FIELD",
+      `Event has invalid ${field}`,
+      event.type,
+      asString(event.id) ?? asString(event.toolCallId),
+    );
+  }
+
+  private requireOpen<T extends InternalSlot>(
+    map: Map<string, T>,
+    id: string,
+    sequence: number,
+    eventType: string,
+  ): T {
+    const slot = map.get(id);
+    if (!slot || slot.state !== "open") {
+      this.failProtocol(
+        sequence,
+        "INVALID_BLOCK_LIFECYCLE",
+        "Event has no matching open start",
+        eventType,
+        id,
+      );
+    }
+    return slot;
+  }
+
+  private validateFinishEvent(
+    event: CommandCodeEvent,
+    sequence: number,
+  ): void {
+    if (
+      event.finishReason !== undefined
+      && typeof event.finishReason !== "string"
+    ) {
+      this.failProtocol(
+        sequence,
+        "INVALID_EVENT_FIELD",
+        "finishReason must be a string when present",
+        event.type,
+      );
+    }
+    if (
+      event.rawFinishReason !== undefined
+      && typeof event.rawFinishReason !== "string"
+    ) {
+      this.failProtocol(
+        sequence,
+        "INVALID_EVENT_FIELD",
+        "rawFinishReason must be a string when present",
+        event.type,
+      );
+    }
+    if (
+      event.totalUsage !== undefined
+      && !isRecord(event.totalUsage)
+    ) {
+      this.failProtocol(
+        sequence,
+        "INVALID_EVENT_FIELD",
+        "totalUsage must be an object when present",
+        event.type,
+      );
+    }
+    if (isRecord(event.totalUsage)) {
+      this.validateUsage(event.totalUsage, sequence);
+    }
+    if (
+      event.systemPromptTokens !== undefined
+      && (
+        typeof event.systemPromptTokens !== "number"
+        || !Number.isFinite(event.systemPromptTokens)
+      )
+    ) {
+      this.failProtocol(
+        sequence,
+        "INVALID_EVENT_FIELD",
+        "systemPromptTokens must be a number when present",
+        event.type,
+      );
+    }
+  }
+
+  private validateUsage(
+    usage: UnknownRecord,
+    sequence: number,
+  ): void {
+    for (const field of [
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "reasoningTokens",
+      "cachedInputTokens",
+    ]) {
+      this.validateOptionalFiniteNumber(
+        usage,
+        field,
+        sequence,
+        "finish",
+      );
+    }
+
+    for (const [field, numericFields] of [
+      [
+        "inputTokenDetails",
+        ["noCacheTokens", "cacheReadTokens", "cacheWriteTokens"],
+      ],
+      [
+        "outputTokenDetails",
+        ["textTokens", "reasoningTokens"],
+      ],
+    ] as const) {
+      const details = usage[field];
+      if (details === undefined) continue;
+      if (!isRecord(details)) {
+        this.failProtocol(
+          sequence,
+          "INVALID_EVENT_FIELD",
+          `${field} must be an object when present`,
+          "finish",
+        );
+      }
+      for (const numericField of numericFields) {
+        this.validateOptionalFiniteNumber(
+          details,
+          numericField,
+          sequence,
+          "finish",
+        );
+      }
+    }
+  }
+
+  private validateOptionalFiniteNumber(
+    record: UnknownRecord,
+    field: string,
+    sequence: number,
+    eventType: string,
+  ): void {
+    const value = record[field];
+    if (
+      value !== undefined
+      && (typeof value !== "number" || !Number.isFinite(value))
+    ) {
+      this.failProtocol(
+        sequence,
+        "INVALID_EVENT_FIELD",
+        `${field} must be a finite number when present`,
+        eventType,
+      );
+    }
+  }
+
+  private failProtocol(
+    sequence: number,
+    code: CommandCodeProtocolErrorCode,
+    message: string,
+    eventType?: string,
+    id?: string,
+    retryable = false,
+  ): never {
+    this.warn(sequence, code, message, eventType, id);
+    throw new CommandCodeProtocolError(
+      code,
+      message,
+      [...this.rawEvents],
+      [...this.warnings],
+      retryable,
+    );
   }
 
   private warn(
@@ -1786,7 +2398,7 @@ export class CommandCodeContentAssembler {
 }
 ~~~
 
-## 7.5 HTTP body consumer
+## 7.5 HTTP body consumer参考
 
 ~~~ts
 export class CommandCodeHttpError extends Error {
@@ -1804,7 +2416,10 @@ export class CommandCodeHttpError extends Error {
 }
 
 function isRetryableHttpStatus(status: number): boolean {
-  return status === 429 || status >= 500;
+  return (
+    status === 429
+    || (status >= 500 && status <= 599)
+  );
 }
 
 export async function consumeCommandCodeResponse(
@@ -1845,17 +2460,6 @@ export async function consumeCommandCodeResponse(
 
         assembler.consumeRawLine(buffer.slice(0, lf));
         buffer = buffer.slice(lf + 1);
-
-        if (assembler.aborted) {
-          try {
-            await reader.cancel(
-              "CommandCode response emitted abort",
-            );
-          } catch {
-            // Semantic state has already been rolled back.
-          }
-          return assembler.finalizeAfterTransportEnd();
-        }
       }
     }
 
@@ -1875,11 +2479,33 @@ export async function consumeCommandCodeResponse(
 }
 ~~~
 
-收到 `abort` 后取消 reader，rawEvents 会保存到 `abort` 为止。若 debug recorder 必须保留 server 在 `abort` 后仍发送的所有 bytes，必须在独立 recording layer 继续 drain；不能让 recorder 的需求改变 semantic rollback 结果。
+收到 `abort` 时 assembler 先 rollback 并抛 `CommandCodeAbortError`。Consumer 的 catch path 随即取消 reader；error 中的 rawEvents 保存到 `abort` 为止。若 debug recorder 必须保留 server 在 `abort` 后仍发送的 bytes，必须在独立 recording layer drain，不能改变 semantic failure 结果。
+
+Physical EOF 时若既没有 `finish` 也没有 `abort`，assembler 先 rollback，再抛 `CommandCodeTransportError`。该错误固定为 `status: 502`、`retryable: true`、`midStream: true`；缺少 terminal event 的判断先于 open-block 检查，因此存在 unfinished block 时仍抛该 transport error。若已经收到 `finish`，EOF 时的 unfinished block 才按 `INVALID_BLOCK_LIFECYCLE` 处理。
+
+## 7.6 参考代码
+
+如果 application 只需要调用 CommandCode：
+
+~~~ts
+const response = await sendGenerateRequest({
+  baseUrl,
+  headers,
+  body,
+  signal,
+});
+
+const resultA = await consumeCommandCodeResponse(response);
+
+// 最终结果。到这里结束，不需要 adapter 或额外 representation。
+const contentA: ContentBlockA[] = resultA.content;
+~~~
+
+Application 同时保留 `resultA.finish`、`resultA.usage`、`resultA.rawUsage`、`resultA.rawEvents` 即可。它们是 response metadata/debug data，不是另一种 content representation。
 
 ---
 
-# 8. Finish、usage、abort 与 continuation
+# 8. Finish、usage 与 failure
 
 ## 8.1 Finish reason
 
@@ -1911,12 +2537,10 @@ export interface FinishEvent
 
 | Field | Source-side meaning | 收到后的用途 |
 |---|---|---|
-| `finishReason` | CommandCode/gateway 层的 finish category | 用 exact string comparison 计算内部 `stopReason` |
-| `rawFinishReason` | provider/service 保留的 raw reason | 优先作为 diagnostic reason；控制 `pause_turn` continuation |
+| `finishReason` | CommandCode/gateway 层的 finish category | 用 exact string comparison 计算 derived stop reason；协议转换时交给 B-specific mapping |
+| `rawFinishReason` | provider/service 保留的 raw reason | 优先作为 diagnostic reason；exact `pause_turn` 在当前 profile 中是 unsupported error |
 | `totalUsage` | final token usage | 计算 normalized usage；不是 reason field |
 | `systemPromptTokens` | system prompt token count | 单独保存；不是 reason field |
-
-Wire `finish` event **没有** `stopReason` field。`stopReason` 是 CommandCode client 接收 event 后计算出来的内部 field。
 
 `finish-step` event 也可能出现 `finishReason`、`rawFinishReason` 和 `usage`，但 source consumer 完全忽略 `finish-step`。只有 `type:"finish"` 决定 completion、最终 reason 和 final usage。
 
@@ -1924,25 +2548,21 @@ Wire `finish` event **没有** `stopReason` field。`stopReason` 是 CommandCode
 
 `finishReason` 来自统一后的 provider finish category。Defined producer values 为：
 
-| `finishReason` | Unified meaning | CommandCode final internal `stopReason` |
-|---|---|---|
-| `stop` | normal stop / stop sequence | `end_turn` |
-| `length` | maximum output tokens reached | `max_tokens` |
-| `content-filter` | generation stopped by content filter | `end_turn` |
-| `tool-calls` | model emitted tool calls | `tool_use` |
-| `error` | provider represented termination as finish error | `end_turn` |
-| `other` | provider-specific reason not covered above | `end_turn` |
-| missing or future unknown string | tolerant fallback | `end_turn` |
+| `finishReason` | Unified meaning |
+|---|---|
+| `stop` | normal stop / stop sequence |
+| `length` | maximum output tokens reached |
+| `content-filter` | generation stopped by content filter |
+| `tool-calls` | model emitted tool calls |
+| `error` | provider represented termination as finish error |
+| `other` | provider-specific reason not covered above |
+| missing or future unknown string | tolerant fallback |
 
 Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。只有 exact `tool-calls` 和 exact `length` 得到 special normalized result；其余全部 fallback 到 `end_turn`。
 
 `finishReason:"error"` 仍然是一个正常 `type:"finish"` event，source client 不会仅因该 value throw。只有独立的 `type:"error"` event 才进入 stream error path。
 
-`rawFinishReason` 的 producer type 是 `string | undefined`，没有可穷举的 enum。它保留原 provider/service reason。CommandCode client 唯一用于 control flow 的 special value是：
-
-~~~text
-"pause_turn" → send another /alpha/generate request
-~~~
+`rawFinishReason` 的 producer type 是 `string | undefined`，没有可穷举的 enum。它保留原 provider/service reason。
 
 其他 raw value 只被保留和用于 diagnostics/telemetry，不改变 normalized `stopReason`。如果 `rawFinishReason` 缺失，client 使用 `finishReason` 作为 returned raw reason：
 
@@ -1951,176 +2571,51 @@ const returnedRawFinishReason =
   event.rawFinishReason ?? event.finishReason;
 ~~~
 
-### 8.1.3 两阶段归一化
-
-Gateway response 的 source implementation 分两步处理 reason：
-
-~~~ts
-export type StreamStopReason =
-  | "tool_calls"
-  | "max_tokens"
-  | "end_turn";
-
-export type ModelStopReason =
-  | "tool_use"
-  | "max_tokens"
-  | "end_turn";
-
-export interface AcceptedFinishReason {
-  /** rawFinishReason ?? finishReason */
-  rawFinishReason?: string;
-  /** consumeStream() intermediate value */
-  streamStopReason: StreamStopReason;
-  /** createModelClient.complete() return value */
-  stopReason: ModelStopReason;
-  pauseTurn: boolean;
-}
-
-function normalizeStopReason(
-  raw?: string,
-): ModelStopReason {
-  const value = (raw ?? "").toLowerCase();
-
-  if (
-    value === "tool_use"
-    || value === "tool-calls"
-    || value === "tool_calls"
-  ) {
-    return "tool_use";
-  }
-  if (value === "length" || value === "max_tokens") {
-    return "max_tokens";
-  }
-  return "end_turn";
-}
-
-export function acceptFinishReason(
-  event: FinishEvent,
-): AcceptedFinishReason {
-  const rawFinishReason =
-    event.rawFinishReason ?? event.finishReason;
-
-  const streamStopReason: StreamStopReason =
-    event.finishReason === "tool-calls"
-      ? "tool_calls"
-      : event.finishReason === "length"
-        ? "max_tokens"
-        : "end_turn";
-
-  return {
-    rawFinishReason,
-    streamStopReason,
-    stopReason: normalizeStopReason(streamStopReason),
-    pauseTurn: rawFinishReason === "pause_turn",
-  };
-}
-~~~
-
-Exact gateway mapping：
+可能的 mapping example：
 
 ~~~text
-wire finishReason       consumeStream stopReason   complete() stopReason
-──────────────────────  ─────────────────────────  ─────────────────────
-"tool-calls"           "tool_calls"               "tool_use"
-"length"               "max_tokens"               "max_tokens"
-other / missing         "end_turn"                 "end_turn"
+wire finishReason       stopReason
+──────────────────────  ─────────────────────────
+"tool-calls"            "tool_calls"/"tool_use"
+"length"                "max_tokens"
+other / missing          "end_turn"
 ~~~
 
-这里的第一阶段是 exact comparison。虽然通用 `normalizeStopReason()` 能识别 `tool_use`、`tool_calls`、`tool-calls`、`length`、`max_tokens`，但 `/alpha/generate` gateway path 会先把 wire `finishReason` 严格压缩为三种 intermediate value。因此 wire 应使用：
+### 8.1.3 收到后的处理，参考处理
 
-~~~text
-client tool turn: finishReason = "tool-calls"
-length stop:      finishReason = "length"
-~~~
+收到 `finish` 后按以下顺序使用：
 
-Wire `finishReason:"tool_calls"` 或 `finishReason:"tool_use"` 不会在第一阶段被当成 tool finish；它们会落到 `end_turn`。同理，wire `finishReason:"max_tokens"` 不会通过第一阶段的 exact `"length"` check。
-
-`rawFinishReason` 不覆盖 normalized `stopReason`。例如：
-
-~~~json
-{
-  "type": "finish",
-  "finishReason": "stop",
-  "rawFinishReason": "pause_turn"
-}
-~~~
-
-结果是：
-
-~~~text
-rawFinishReason = "pause_turn"
-stopReason      = "end_turn"
-pauseTurn       = true
-~~~
-
-因此 router 必须分别保存 raw reason 和 normalized stop reason，不能用一个 field 代替另一个。
-
-### 8.1.4 Source client 收到后的处理
-
-CommandCode 收到 `finish` 后按以下顺序使用：
-
-1. `consumeStream()` 设置 `sawFinish=true`。
-2. 保存 `rawFinishReason = event.rawFinishReason ?? event.finishReason`。
-3. 只用 `event.finishReason` 计算 intermediate `tool_calls` / `max_tokens` / `end_turn`。
-4. 读取 `totalUsage` 和 `systemPromptTokens`。
-5. 不停止 physical read；继续处理后续 lines，直到 EOF。
-6. 同一 HTTP response 出现多个 `finish` 时，后一个 reason 覆盖前一个；有新 `totalUsage` 时才替换 usage。
-7. EOF 没有 `finish` 或 `abort` 时，作为 truncated response 失败。
-
-`createModelClient.complete()` 随后：
-
-1. 使用 `rawFinishReason === "pause_turn"` 判断是否发送 continuation request。
-2. Continuation 复用相同 request state；content 按 response order concatenate，usage 跨 responses sum。
-3. 最后保存最后一个 response 的 raw reason 与 stop reason。
-4. 对 stop reason 再执行 `normalizeStopReason()`，最终只返回 `tool_use`、`max_tokens` 或 `end_turn`。
-5. Telemetry 的 finish reason 使用 `rawFinishReason ?? stopReason`。
-
-Agent loop 收到 complete result 后：
-
-1. `model_request_end.stopReason` 优先报告 `rawFinishReason`，缺失时才使用 normalized `stopReason`。
-2. Tool 是否执行不是只看 `stopReason`；source 会检查 `content` 中是否存在 non-provider-executed client `tool_use` block，然后执行这些 tools。
-3. 没有 client tool call 时，`stopReason:"max_tokens"` 作为 length recovery/follow-up input；default continuation provider 在已有 visible content 时最多生成 3 次 length-recovery follow-up。其他 normalized reason 按 `end_turn` 处理。
-4. Agent 最终 run-level stop reason 还可能是 `interrupted`、`run_error`、`stop_hook`、`max_turns` 等，它与单次 model response 的 `stopReason` 不是同一层字段。
-
-所以 `finishReason:"tool-calls"` 与 `content` 中的 tool blocks 正常情况下应一致，但 router 仍必须从 `content[] A` 生成 tool events，而不能仅凭 finish reason 伪造 tool call。
-
-按 defined `finishReason` 展开后，source client 的实际行为是：
-
-| Received `finishReason` | Model-client result | Agent-layer behavior |
-|---|---|---|
-| `stop` | `stopReason:"end_turn"` | 有 client tool blocks 就执行 tools；没有则 normal end/stop-hook flow |
-| `length` | `stopReason:"max_tokens"` | 有 client tool blocks 仍先执行 tools；没有时可进入 length-recovery/follow-up |
-| `tool-calls` | `stopReason:"tool_use"` | 只有 `content` 中确实存在 client tool blocks 才执行 tools；reason 本身不创建 tool call |
-| `content-filter` | `stopReason:"end_turn"` | 没有专用 content-filter error path |
-| `error` | `stopReason:"end_turn"` | 不 throw；独立 `type:"error"` event 才 throw |
-| `other` | `stopReason:"end_turn"` | 没有专用分支 |
-| missing/unknown | `stopReason:"end_turn"` | tolerant fallback |
+1. 保存完整 event 作为 current final candidate。
+2. 用该 event 的 `totalUsage`、`systemPromptTokens` 完整替换 current extracted metadata；字段 missing 时分别重置为 missing/zero view。
+3. 不停止 physical read；继续处理后续 lines，直到 EOF。
+4. 同一 HTTP response 出现多个 `finish` 时，后一个 event 完整覆盖前一个，不能混合不同 finish 的字段。
+5. EOF 既没有 `finish` 也没有 `abort` 时，rollback 并抛 `CommandCodeTransportError`（`status: 502`、`retryable: true`、`midStream: true`）；即使存在 open block 也相同。
+6. EOF 已有 `finish` 但仍有 open block 时，抛 `INVALID_BLOCK_LIFECYCLE` protocol error。
+7. 所有 block 已关闭，且 EOF 时最后一个 finish 的 `rawFinishReason ?? finishReason` exact 等于 `pause_turn`，rollback 并抛 `CommandCodePauseTurnError`。
 
 按 `rawFinishReason` 展开：
 
-| Received `rawFinishReason` | Source client behavior |
+| Received `rawFinishReason` | 当前 profile behavior |
 |---|---|
-| `pause_turn` | 发送下一次相同 `/alpha/generate` request；不把 previous content append 到 messages |
-| other non-empty string | 保存到 result，优先用于 telemetry 和 `model_request_end.stopReason` display；不改变 normalized stop reason |
+| `pause_turn` | EOF 后抛 non-retryable `CommandCodePauseTurnError`；不发送 continuation |
+| other non-empty string | 保存到 final `FinishEvent`，交给 diagnostics/B-specific conversion；不改变 derived stop reason |
 | missing | 使用 `finishReason` 作为 returned raw reason |
 
-### 8.1.5 本文实现是否同步 Source client
+### 8.1.4 Current profile boundary
 
-本文实现只同步到 CommandCode model-client response layer，不复制整个 CommandCode agent runtime。
+本文只保留实现当前 wire consumer 所需的 source-compatible behavior；明确列出的 current-profile policy 可以与 Source client 不同，也不复制 CommandCode agent runtime。
 
-必须同步：
+保留的 source-compatible behavior：
 
 | Behavior | Why |
 |---|---|
 | 保存完整 final `FinishEvent` | 后续仍需原始 `finishReason`、`rawFinishReason`、usage |
 | `rawFinishReason = rawFinishReason ?? finishReason` | 与 source result 一致 |
 | exact `tool-calls` / `length` / fallback normalization | 提供 source-compatible derived `stopReason` |
-| `rawFinishReason:"pause_turn"` continuation | 它属于 model-client logical completion |
-| multiple finish 的 last-value behavior | 与 stream reducer 一致 |
-| finish 后读到 physical EOF | 防止漏掉 trailing events 和 truncated response |
-| usage normalization 与 cross-continuation sum | 得到完整 logical usage |
+| finish 后读到 physical EOF | 防止漏掉 trailing events，并确认 response 有 semantic terminal event |
+| final finish usage normalization | 同时提供 raw object 与 normalized view |
 
-不应同步：
+Current-profile policy 与不属于本层的 behavior：
 
 | Behavior | Why |
 |---|---|
@@ -2129,6 +2624,8 @@ Agent loop 收到 complete result 后：
 | stop hooks、follow-up queue、steering | 属于 CommandCode agent runtime |
 | `max_turns`、run-level stop reason | 属于多轮 agent loop，不是单次 model response |
 | CommandCode telemetry/UI event | 不属于 wire protocol output |
+| `pause_turn` continuation | 当前 profile 明确作为 non-retryable error |
+| multiple finish 的 field-by-field carry-forward | 当前 profile 使用 complete last-event replacement，避免混合 metadata |
 
 推荐 result usage：
 
@@ -2138,30 +2635,18 @@ export async function decodeOneCommandCodeResponse(
 ) {
   const resultA = await consumeCommandCodeResponse(response);
 
-  if (!resultA.committed || resultA.aborted || !resultA.finish) {
-    throw new Error("CommandCode response was not committed");
-  }
-
-  const acceptedFinish = acceptFinishReason(resultA.finish);
-
-  if (acceptedFinish.pauseTurn) {
-    throw new Error(
-      "Use completeWithPauseTurn() for pause_turn",
-    );
-  }
-
   // Do not execute tools here. Return content[] A to the caller.
   return {
     content: resultA.content,
     finish: resultA.finish,
-    acceptedFinish,
     usage: resultA.usage,
     rawUsage: resultA.rawUsage,
+    systemPromptTokens: resultA.systemPromptTokens,
   };
 }
 ~~~
 
-`acceptedFinish.stopReason` 是方便 application 模拟 Source client 的 derived view，不应覆盖或删除原始 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`。
+当前 profile 不设置通用 finish-acceptance helper。Application/B-specific adapter 直接读取并保留 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`；若需要 derived stop reason，只能在对应 boundary 按本节 exact mapping 计算，不能覆盖原始字段。
 
 ## 8.2 Usage
 
@@ -2181,6 +2666,8 @@ totalUsage.inputTokenDetails.cacheWriteTokens
   → usage.cacheWriteTokens
 ~~~
 
+注意不同协议以上相同字段名意义不同，不能认为我们的协议的意思就是别的协议的意思。
+
 Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 missing。Raw object 还可能包含：
 
 - `inputTokenDetails.noCacheTokens`
@@ -2193,7 +2680,7 @@ Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 mis
 
 `systemPromptTokens` 位于 finish 顶层，不在 `totalUsage` 内。
 
-同一个 HTTP response 多次出现 `finish` 时：最后一个 finish event 决定 final finish metadata；只有出现新的 `totalUsage` 时才替换 current raw/normalized usage。
+同一个 HTTP response 多次出现 `finish` 时，最后一个 finish event 完整决定 final metadata。最后一个 event 缺少 `totalUsage` 时 `rawUsage` 为 `undefined`、normalized usage 为四个零；缺少 `systemPromptTokens` 时 extracted value 为 `undefined`。
 
 ## 8.3 `abort`
 
@@ -2202,10 +2689,14 @@ Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 mis
 - 不是 request body field。
 - 不是 CommandCode client 发给 upstream 的取消 HTTP request。
 - 表示本 response 被有意终止。
-- Atomic implementation 必须丢弃当前 response 的 staged content、pending tool、finish 与 usage。
+- Atomic implementation 必须丢弃当前 response 的 staged content、pending tool、finish 与 usage，然后抛 `CommandCodeAbortError`。
 - Router 不应把 partial content 转成 Protocol B content。
 
-`AbortController`/`AbortSignal` 是 local HTTP cancellation mechanism，和 wire `abort` event 是不同概念。Downstream client disconnect 或 timeout 时，router SHOULD 通过 signal 取消 upstream fetch，但不需要向 CommandCode 发送额外 JSON request field。
+Consumer 不返回 `{committed:false, aborted:true}` result。`CommandCodeResult` 只表示已经成功提交的 response。
+
+`AbortController`/`AbortSignal` 是 local HTTP cancellation mechanism，和 wire `abort` event 是不同概念。
+
+Downstream client disconnect 或 timeout 时，router SHOULD 通过 signal 取消 upstream fetch. 但不需要向 CommandCode 发送额外 JSON request field。
 
 ## 8.4 `pause_turn`
 
@@ -2220,107 +2711,17 @@ Trigger：
 }
 ~~~
 
-这表示 logical completion 还没有结束。发送下一次 `/alpha/generate` request 时：
-
-- 复用相同 prepared messages。
-- 不把 previous response content append 到 `params.messages`。
-- 复用 tools、system、config、permissionMode、threadId、mode。
-- 复用 resolved auth headers、`x-session-id` 和完整 chat-span `traceparent`。
-- 不需要 continuation backoff。
-- 最多建议 1 initial + 5 continuation = 6 HTTP responses。
-
-推荐 logical atomic wrapper：
-
-~~~ts
-export interface LogicalCommandCodeResult {
-  content: ContentBlockA[];
-  finish: FinishEvent;
-  usage: NormalizedUsage;
-  parts: CommandCodeResult[];
-}
-
-export async function completeWithPauseTurn(
-  sendSamePreparedRequest: () => Promise<Response>,
-  maxResponses = 6,
-): Promise<LogicalCommandCodeResult> {
-  const parts: CommandCodeResult[] = [];
-
-  for (let index = 0; index < maxResponses; index++) {
-    const response = await sendSamePreparedRequest();
-    const part = await consumeCommandCodeResponse(response);
-
-    if (!part.committed || part.aborted || !part.finish) {
-      throw new Error("CommandCode response was not committed");
-    }
-    parts.push(part);
-
-    const rawReason =
-      part.finish.rawFinishReason
-      ?? part.finish.finishReason;
-
-    if (rawReason !== "pause_turn") {
-      return {
-        content: parts.flatMap((item) => item.content),
-        finish: part.finish,
-        usage: parts.reduce<NormalizedUsage>(
-          (sum, item) => ({
-            inputTokens:
-              sum.inputTokens + item.usage.inputTokens,
-            outputTokens:
-              sum.outputTokens + item.usage.outputTokens,
-            cacheReadTokens:
-              sum.cacheReadTokens
-              + item.usage.cacheReadTokens,
-            cacheWriteTokens:
-              sum.cacheWriteTokens
-              + item.usage.cacheWriteTokens,
-          }),
-          {
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-          },
-        ),
-        parts,
-      };
-    }
-  }
-
-  throw new Error("pause_turn continuation limit exceeded");
-}
-~~~
-
-即使每个 part 已在 response-local level commit，router 也必须等最后一个 non-`pause_turn` part 后才向 Protocol B 开始 response。任何 part abort/error 时，整个 logical completion 不发布。
+当前 profile 不实现 continuation。Assembler 仍读到 physical EOF，以最后一个 finish 为准；若 effective raw reason exact 为 `pause_turn`，它 rollback semantic state 并抛 non-retryable `CommandCodePauseTurnError`。Router 不得转换或发布该 response 的 partial content。
 
 ---
 
-# 9. 两种结束方式
+# 9. 协议转换protocol conversion
 
-## 9.1 不需要 protocol conversion
+本部分不属于协议内容，但是可以给你提供协议转换的优雅参考。
 
-如果 application 只需要调用 CommandCode：
+`finish + EOF` 之后，才有资格转换，确认没有问题才开始，否则会污染其他协议接收方。
 
-~~~ts
-const response = await sendGenerateRequest({
-  baseUrl,
-  headers,
-  body,
-  signal,
-});
-
-const resultA = await consumeCommandCodeResponse(response);
-if (!resultA.committed || resultA.aborted) {
-  throw new Error("CommandCode response was not committed");
-}
-
-// 最终结果。到这里结束，不需要 adapter 或额外 representation。
-const contentA: ContentBlockA[] = resultA.content;
-~~~
-
-Application 同时保留 `resultA.finish`、`resultA.usage`、`resultA.rawUsage`、`resultA.rawEvents` 即可。它们是 response metadata/debug data，不是另一种 content representation。
-
-## 9.2 需要 protocol conversion
+## 9.1 以content为主的转换方法
 
 只有在 router 要模拟 Protocol B server 时才执行：
 
@@ -2338,7 +2739,7 @@ content[] B + finish/usage B
     → SSE B
 ~~~
 
-转换规则：
+转换参考规则：
 
 - 直接遍历 `content[] A`，每个 A block 映射成零个、一个或多个 B blocks。
 - 保持 array order，不按 type、ID 或 completion time 重排。
@@ -2353,76 +2754,9 @@ content[] B + finish/usage B
 
 如果 Protocol B 对 tool-call ID 有 prefix、length 或 character set 限制，必须维护 stable bidirectional mapping，并至少保存到下一次 B request-side tool result 转回 A tool result 完成。不能在 response 和下一次 request 中分别随机生成 ID。
 
----
+### 备注
 
-# 10. `content[] A` → `content[] B` → SSE B
-
-## 10.1 Protocol B 必须提供的能力
-
-`content[] B` 不是完整 response。B-specific adapter 还必须构造：
-
-- response/message ID
-- model、role、object fields
-- block index
-- target terminal/completion reason
-- usage
-- provider metadata
-- error schema
-- event lifecycle
-- terminal event
-- HTTP status/headers
-
-推荐接口：
-
-~~~ts
-export interface SseFrame {
-  event?: string;
-  id?: string;
-  retry?: number;
-  data: string;
-}
-
-export interface ProtocolBCodec<
-  BContent,
-  BFinish,
-  BResult,
-  BEvent,
-> {
-  /** Direct content[] A -> content[] B conversion. */
-  convertContent(
-    contentA: readonly ContentBlockA[],
-  ): BContent[];
-
-  /** Direct finish/usage A -> finish/usage B conversion. */
-  convertFinish(input: {
-    finishA: FinishEvent;
-    usageA: NormalizedUsage;
-    rawUsageA?: CommandCodeUsage;
-    systemPromptTokensA?: number;
-    sourceModel?: string;
-  }): BFinish;
-
-  /** Combine content[] B and finish/usage B into a B response. */
-  buildResult(input: {
-    content: BContent[];
-    finish: BFinish;
-  }): BResult;
-
-  /** Must return events in exact Protocol B order. */
-  events(result: BResult): Iterable<BEvent>;
-
-  /** Convert one semantic B event to one SSE frame. */
-  frame(event: BEvent): SseFrame;
-
-  /** Validate before HTTP 200 headers are returned. */
-  validate(result: BResult): void;
-
-  /** B-specific non-stream HTTP error response. */
-  errorResponse(error: unknown): Response;
-}
-~~~
-
-`events(result)` 必须遵守 Protocol B 自己的 lifecycle。本文只要求 `finishReason`、`rawFinishReason` 与 usage 在需要 A → B conversion 时经过 `convertFinish()`；不规定转换结果的字段、取值或发送位置。
+`content[] B` 是协议B中的content，`content[] A`是协议A中的content。先转换content 在使用centent[ ] B发送SSE B, 这种atomic避免了处理 SSE A 转换成SSE B，因为SSE级别可能不是对应的，很难实现转换.。所以转换要选对信息级别，content比sse合适。
 
 B conversion MUST preserve semantic order：
 
@@ -2434,7 +2768,7 @@ content[] A order
 
 一个 source block 映射成多个 target blocks 时，在 source position 原地连续展开。不要把 reasoning 全部移到最前、tool 全部移到最后。若 B schema 强制不同顺序，B adapter 应明确记录 warning 或直接 reject，不能静默重排。
 
-## 10.2 `finishReason`、`rawFinishReason` 与 usage 的直接转换
+## 9.2 `finishReason`、`rawFinishReason` 与 usage 的 SSE 转换
 
 输入来自 CommandCode final `finish` event：
 
@@ -2449,14 +2783,28 @@ resultA.rawUsage              # original totalUsage object
 
 Conversion boundary：
 
-1. 先使用 `acceptFinishReason(finishA)` 完成 CommandCode A 自己的 client-side processing。
-2. `accepted.pauseTurn === true` 时继续请求 A；logical completion 尚未结束，不进入 final B conversion。
-3. Final non-pause response 把原始 `finishA.finishReason`、`finishA.rawFinishReason`、raw/normalized usage 和 `systemPromptTokens` 一起传入 `convertFinish()`。
-4. `convertFinish()` 必须由具体 Protocol B adapter 实现。
-5. 本文不为未知 B 规定任何 reason mapping、token-field mapping、event name、event order 或 unsupported-field policy。
-6. 不得把 CommandCode raw `{"type":"finish",...}` JSON line直接当作 B event；“转换”与“原样转发”是两种不同操作。
+1. `consumeCommandCodeResponse()` 只返回成功的 final A result；abort、pause、unknown、malformed、stream error 和 terminal-missing transport error 已经抛错，不进入 B conversion。
 
-## 10.3 Reasoning policy
+2. 把原始 `finishA.finishReason`、`finishA.rawFinishReason`、raw/normalized usage 和 `systemPromptTokens` 一起传入 `convertFinish()`。
+
+3. `convertFinish()` 必须由具体 Protocol B adapter 实现。
+
+4. 本文不为未知 B 规定任何 reason mapping、token-field mapping、event name、event order 或 unsupported-field policy。
+
+5. 不得把 CommandCode raw `{"type":"finish",...}` JSON line直接当作 B event；“转换”与“原样转发”是两种不同操作。
+
+   mapping example：
+
+   ~~~text
+   wire finishReason       stopReason
+   ──────────────────────  ─────────────────────────
+   "tool-calls"            "tool_calls"/"tool_use"
+   "length"                "max_tokens"
+   other / missing          "end_turn"
+   ~~~
+
+
+## 9.3 Reasoning policy
 
 Protocol B 可能：
 
@@ -2468,7 +2816,7 @@ Protocol B 可能：
 
 不要无条件把 reasoning 拼进 visible assistant text，这会改变 response semantics。
 
-## 10.4 真正 SSE framing
+## 9.4 真正 SSE framing
 
 Protocol B 若使用 conventional SSE，每个 event frame 是：
 
@@ -2547,24 +2895,17 @@ export function createProtocolBSseResponse<
 ): Response {
   // All conversion and serialization errors must happen here,
   // before returning a 200 Response.
-  codec.validate(result);
-  const encoded = Array.from(codec.events(result), (event) =>
-    encodeSseFrame(codec.frame(event)),
-  );
-
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      try {
-        for (const frame of encoded) {
-          controller.enqueue(encoder.encode(frame));
-        }
-        controller.close();
-      } catch (cause) {
-        controller.error(cause);
-      }
+  codec.validateResult(result);
+  const encodedFrames = Array.from(
+    codec.events(result),
+    (event) => {
+      codec.validateEvent(event);
+      return encodeSseFrame(codec.frame(event));
     },
-  });
+  );
+  const body = new TextEncoder().encode(
+    encodedFrames.join(""),
+  );
 
   return new Response(body, {
     status: 200,
@@ -2581,7 +2922,7 @@ Application code 不设置 `Content-Length` 或 `Transfer-Encoding`。某些 ser
 
 `data:[DONE]` 不是 universal SSE rule。只有 Protocol B 的指定 endpoint/version 要求时，B codec 才能发送它。
 
-## 10.5 End-to-end adapter
+## 9.5 End-to-end adapter参考
 
 ~~~ts
 export async function adaptCommandCodeToProtocolB<
@@ -2604,18 +2945,6 @@ export async function adaptCommandCodeToProtocolB<
       input.upstreamResponse,
     );
 
-    if (!resultA.committed || resultA.aborted) {
-      return input.codec.errorResponse(
-        new Error("CommandCode generation aborted"),
-      );
-    }
-
-    if (!resultA.finish) {
-      return input.codec.errorResponse(
-        new Error("CommandCode finish event is missing"),
-      );
-    }
-
     const contentB = input.codec.convertContent(
       resultA.content,
     );
@@ -2637,27 +2966,101 @@ export async function adaptCommandCodeToProtocolB<
 }
 ~~~
 
-若使用 `completeWithPauseTurn`，直接把 logical result 的最终 `content`、`finish` 和 aggregated `usage` 交给同一 B adapter；不能逐 part 开始 B response。
+`adaptCommandCodeToProtocolB()` 只接收一个 physical upstream response。`pause_turn` 不产生 logical parts；它由 A consumer 作为 non-retryable error 交给 `errorResponse()`。
+
+## 9.6 其他
+
+`content[] B` 不是协议B完整 response。B-specific adapter 可能还必须构造：
+
+- response/message ID
+- model、role、object fields
+- block index
+- target terminal/completion reason
+- usage
+- provider metadata
+- error schema
+- event lifecycle
+- terminal event
+- HTTP status/headers
+
+可能接口：
+
+~~~ts
+export interface SseFrame {
+  event?: string;
+  id?: string;
+  retry?: number;
+  data: string;
+}
+
+export interface ProtocolBCodec<
+  BContent,
+  BFinish,
+  BResult,
+  BEvent,
+> {
+  /** Direct content[] A -> content[] B conversion. */
+  convertContent(
+    contentA: readonly ContentBlockA[],
+  ): BContent[];
+
+  /** Direct finish/usage A -> finish/usage B conversion. */
+  convertFinish(input: {
+    finishA: FinishEvent;
+    usageA: NormalizedUsage;
+    rawUsageA?: CommandCodeUsage;
+    systemPromptTokensA?: number;
+    sourceModel?: string;
+  }): BFinish;
+
+  /** Combine content[] B and finish/usage B into a B response. */
+  buildResult(input: {
+    content: BContent[];
+    finish: BFinish;
+  }): BResult;
+
+  /** Must return events in exact Protocol B order. */
+  events(result: BResult): Iterable<BEvent>;
+
+  /** Convert one semantic B event to one SSE frame. */
+  frame(event: BEvent): SseFrame;
+
+  /** Validate the complete B result before event generation. */
+  validateResult(result: BResult): void;
+
+  /** Validate every generated B event before HTTP 200. */
+  validateEvent(event: BEvent): void;
+
+  /** B-specific non-stream HTTP error response. */
+  errorResponse(error: unknown): Response;
+}
+~~~
+
+`events(result)` 必须遵守 Protocol B 自己的 lifecycle。本文只要求 `finishReason`、`rawFinishReason` 与 usage 在需要 A → B conversion 时经过 `convertFinish()`；不规定转换结果的字段、取值或发送位置。
+
+这里只是一些例子，一切以你实际的协议B为准。
 
 ---
 
-# 11. Error、retry 与 cancellation policy
+# 10. Error、retry 与 cancellation policy
 
-## 11.1 Buffered adapter
+## 10.1 Buffered adapter
 
 | Failure point | Protocol B behavior |
 |---|---|
 | A network/HTTP failure，B headers 未发送 | 用 B-specific non-2xx status + JSON error body |
 | A stream `error`，B headers 未发送 | B-specific non-2xx error |
-| A truncated EOF | retry A；exhausted 后 B-specific non-2xx error |
-| A `abort` | rollback A；不要发送 content B；返回 B-specific abort/error |
+| A `CommandCodeTransportError`（EOF 既无 finish 也无 abort） | retry A；exhausted 后 B-specific non-2xx error |
+| A unknown/malformed/lifecycle error | non-retryable B-specific non-2xx error |
+| A `abort` | rollback A；抛 non-retryable abort error；不要发送 content B |
+| A final `pause_turn` | rollback A；抛 non-retryable pause-turn error；不要发送 content B |
 | `content[] A` → `content[] B` conversion failure | B-specific non-2xx error |
 | B result validation/serialization failure | B-specific non-2xx error |
 | downstream disconnect | cancel A fetch signal when possible |
 
 Retry MUST 发生在 B 200 response 开始之前。每次 retry 使用新的 response-local assembler；不能把 failed attempt 的 slots、usage 或 raw terminal state合并到 next attempt。
 
-## 11.2 Live adapter 的限制
+## 10.2 Live adapter 的限制
 
 如果未来实现 live A → B transform，一旦 B bytes 已经发送：
 
@@ -2670,9 +3073,9 @@ Retry MUST 发生在 B 200 response 开始之前。每次 retry 使用新的 res
 
 ---
 
-# 12. Protocol examples
+# 11. Protocol examples
 
-## 12.1 Minimal text request
+## 11.1 Minimal text request
 
 ~~~json
 {
@@ -2710,7 +3113,7 @@ Retry MUST 发生在 B 200 response 开始之前。每次 retry 使用新的 res
 }
 ~~~
 
-## 12.2 Interleaved response and final `content[] A`
+## 11.2 Interleaved response and final `content[] A`
 
 ~~~jsonl
 {"type":"reasoning-start","id":"r1"}
@@ -2726,7 +3129,7 @@ Retry MUST 发生在 B 200 response 开始之前。每次 retry 使用新的 res
 {"type":"finish","finishReason":"tool-calls","totalUsage":{"inputTokens":100,"inputTokenDetails":{"cacheReadTokens":40},"outputTokens":20,"totalTokens":120}}
 ~~~
 
-Result order 由 first appearance 决定，不由 end time 决定：
+Result order 由三个 start event 的 arrival sequence 决定，不由 end time 或 wall-clock timestamp 决定：
 
 ~~~json
 [
@@ -2747,26 +3150,41 @@ Normalized usage：
 }
 ~~~
 
-## 12.3 Next request with tool result
+## 11.3 Next request with tool result
+
+下一次请求的 `params.messages` 必须保留产生该调用的 assistant 消息，再紧跟匹配的 tool result；不能以 `tool` 开头：
 
 ~~~json
-{
-  "role": "tool",
-  "content": [
-    {
-      "type": "tool-result",
-      "toolCallId": "call_1",
-      "toolName": "",
-      "output": {
-        "type": "text",
-        "value": "file contents"
+[
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool-call",
+        "toolCallId": "call_1",
+        "toolName": "read_file",
+        "input": { "path": "a.ts" }
       }
-    }
-  ]
-}
+    ]
+  },
+  {
+    "role": "tool",
+    "content": [
+      {
+        "type": "tool-result",
+        "toolCallId": "call_1",
+        "toolName": "",
+        "output": {
+          "type": "text",
+          "value": "file contents"
+        }
+      }
+    ]
+  }
+]
 ~~~
 
-## 12.4 Abort
+## 11.4 Abort
 
 ~~~jsonl
 {"type":"text-start","id":"t1"}
@@ -2774,27 +3192,21 @@ Normalized usage：
 {"type":"abort"}
 ~~~
 
-Atomic result：
+Thrown error：
 
 ~~~json
 {
-  "content": [],
-  "usage": {
-    "inputTokens": 0,
-    "outputTokens": 0,
-    "cacheReadTokens": 0,
-    "cacheWriteTokens": 0
-  },
-  "committed": false,
-  "aborted": true
+  "name": "CommandCodeAbortError",
+  "message": "CommandCode response emitted abort",
+  "retryable": false
 }
 ~~~
 
-`partial` 不进入最终 `content[] A`。因此需要转换时，它也不会进入 `content[] B` 或 Protocol B SSE。
+Assembler 在抛错前 rollback；不存在 successful `CommandCodeResult`，`partial` 不进入 `content[] A`、`content[] B` 或 Protocol B SSE。Error 的 `rawEvents` 仍保留到 `abort` event。
 
 ---
 
-# 13. AI implementation checklist
+# 12. AI implementation checklist
 
 AI 在生成实现前必须逐项确认：
 
@@ -2803,16 +3215,21 @@ AI 在生成实现前必须逐项确认：
 - [ ] 固定 `POST /alpha/generate`。
 - [ ] `Content-Type: application/json`。
 - [ ] `x-project-slug = slugify(cwd) || "root"`，package pin `2.2.1`。
-- [ ] `x-session-id` 与 `threadId` 独立，但普通 flow 可相同。
-- [ ] `threadId` 无效时 omission，不发送 empty string/null。
-- [ ] `traceparent` 满足 W3C length/non-zero rules；pause continuation 复用。
+- [ ] caller `threadId` 缺失或无效时生成 random UUID。
+- [ ] `x-session-id` 与 body `threadId` 必须使用同一个 resolved UUID。
+- [ ] `x-cmd-zdr` 固定发送 string `1`。
+- [ ] 不发送 `x-oauth-token` 或 `x-oauth-provider`。
+- [ ] `traceparent` 满足 W3C length/non-zero rules。
+- [ ] unknown cwd 使用 typed empty config，不执行 filesystem/Git scan。
 - [ ] `config.structure` 只读取 immediate entries。
-- [ ] Git failures 转 empty values。
+- [ ] Git command result 区分 successful empty 与 failure；只有 successful empty status 表示 clean。
 - [ ] `memory/taste/skills` 明确发送 `null`。
-- [ ] permission mapping 正确。
-- [ ] request-side tool result 固定 `toolName:""`、`output.type:"text"`。
+- [ ] permission mapping 默认 `standard`。
+- [ ] request-side `tool-call.input` 必须是 JSON object，但不按工具 `input_schema` 校验键名、值类型或必填字段。
+- [ ] request-side `tool-result.toolName` 可为空或非空；成功使用 `text`、真实失败使用 `error-text`、synthetic 占位固定使用 `text`。
 - [ ] `max_tokens` 默认 64000。
 - [ ] `stream` 是 literal `true`。
+- [ ] unknown non-empty `reasoning_effort` normalize 为 `max`，仅在 model capability 支持时发送。
 
 ## Response A
 
@@ -2821,14 +3238,18 @@ AI 在生成实现前必须逐项确认：
 - [ ] final unterminated line 在 EOF 时也解析。
 - [ ] 每个 HTTP response 使用新的 assembler。
 - [ ] 三个 Map + 一个 ordered `slots[]`。
-- [ ] slot order 是 first event appearance order。
-- [ ] tool start 占位，final tool-call materialize。
+- [ ] 只有 start event 创建 slot；slot order 是 start-event arrival sequence。
+- [ ] delta/end/tool-call missing start 与 duplicate/closed lifecycle 抛 protocol error；已有 finish 时的 unfinished EOF 也抛 protocol error。
+- [ ] response text/reasoning block trim 后为空时抛 `EMPTY_CONTENT_BLOCK`，不能静默 omission。
+- [ ] non-JSON、invalid event/field 与 unknown type raw preserve 后抛 non-retryable protocol error。
+- [ ] tool start 占位；final tool-call materialize，并用 final toolName 无条件覆盖 start toolName。
 - [ ] response-side tool-result raw preserve、semantic ignore。
 - [ ] finish 后继续读取到 EOF。
-- [ ] finish.totalUsage raw preserve并 normalized。
-- [ ] abort rollback并取消/drain，不 commit partial content。
-- [ ] error/truncated EOF 不 commit。
-- [ ] pause_turn 在 logical level继续请求并最后一次性 publish。
+- [ ] multiple finish 以最后一个完整 event 覆盖 finish/usage/systemPromptTokens。
+- [ ] final finish.totalUsage raw preserve并 normalized。
+- [ ] abort rollback、抛 `CommandCodeAbortError` 并取消 body。
+- [ ] final `pause_turn` 在 EOF 后 rollback 并抛 `CommandCodePauseTurnError`。
+- [ ] stream error 不返回 result；EOF 既无 finish 也无 abort 时 rollback 并抛 `CommandCodeTransportError`（status 502、retryable true、midStream true），即使有 open block 也相同。
 
 ## Conversion and response B
 
@@ -2839,11 +3260,12 @@ AI 在生成实现前必须逐项确认：
 - [ ] tool-call ID 跨 response/request stable。
 - [ ] reasoning 使用 explicit target policy。
 - [ ] 正确读取 A wire `finishReason` 与 `rawFinishReason`；不把内部 `stopReason` 误写成 wire field。
-- [ ] `rawFinishReason A` 先完成 `pause_turn` control flow；pause response 不进入 final B conversion。
+- [ ] A consumer 已拒绝 `pause_turn`；失败 response 不进入 B conversion。
 - [ ] Final `finishReason A`、`rawFinishReason A`、usage 与 `systemPromptTokens` 全部交给 B-specific `convertFinish()`。
 - [ ] 不在通用 adapter 中假定 B 的 reason value、token field、nesting 或 event position。
 - [ ] 不把 CommandCode raw finish JSON line直接当作 B event。
-- [ ] B result 在返回 HTTP 200 前完整 validation/serialization。
+- [ ] B result 与每个 B event 在返回 HTTP 200 前完整 validation。
+- [ ] 所有 SSE frames 在 HTTP 200 前完成 framing 与 UTF-8 encoding。
 - [ ] B codec 生成 B-specific semantic events。
 - [ ] 真 SSE 每个 frame 使用 `data:` 等 field，并以 blank line 结束。
 - [ ] `[DONE]` 只在指定 B endpoint/version 要求时发送。
@@ -2851,7 +3273,7 @@ AI 在生成实现前必须逐项确认：
 
 ---
 
-# 14. 最终推荐
+# 13. 最终推荐
 
 v1.0 推荐唯一主路径：
 
@@ -2859,17 +3281,19 @@ v1.0 推荐唯一主路径：
 1. Build exact CommandCode request.
 2. Send params.stream=true.
 3. Decode bare JSON Lines.
-4. Assemble response-local blocks by event id.
-5. Preserve first-appearance order in slots[].
-6. Commit only on finish + physical EOF.
-7. Roll back the whole response on abort/error.
-8. Produce content[] A plus finish/usage/rawEvents.
-9. If no conversion is required, return content[] A and stop.
-10. If conversion is required, convert content[] A directly to content[] B.
-11. Pass finishReason/rawFinishReason/usage A through B-specific conversion.
-12. Build B events exactly as the selected B protocol defines.
-13. Validate every B event before starting HTTP 200.
-14. Encode Protocol B events with Protocol B's exact SSE framing.
+4. Create slots only from content start events.
+5. Preserve start-event arrival order in slots[].
+6. Reject malformed, unknown, or invalid block lifecycles.
+7. Replace finish metadata atomically on every finish event.
+8. Return success only on final non-pause finish + physical EOF.
+9. Roll back and throw on abort/pause/error or terminal-missing transport failure.
+10. Produce content[] A plus final finish/usage/rawEvents.
+11. If no conversion is required, return content[] A and stop.
+12. If conversion is required, convert content[] A directly to content[] B.
+13. Pass finishReason/rawFinishReason/usage A through B-specific conversion.
+14. Build B events exactly as the selected B protocol defines.
+15. Validate the B result and every B event before HTTP 200.
+16. Frame and UTF-8 encode every B SSE event before HTTP 200.
 ~~~
 
-这套设计把 source wire、最终 `content[] A`、可选的 `content[] B` 和 target wire 分离，但不增加中间 conversion layer。只使用 CommandCode 时，`content[] A` 就是终点；只有 router 需要模拟 Protocol B 时才继续转换。Buffered conversion 的代价是等待完整 upstream response 后再 replay B stream；换来的结果是顺序明确、tool association 稳定、usage/finish 可验证，并且 abort/error 不会污染 downstream client。
+这套设计把 source wire、最终 `content[] A`、可选的 `content[] B` 和 target wire 分离，但不增加中间 conversion layer。只使用 CommandCode 时，`content[] A` 就是终点；只有 router 需要模拟 Protocol B 时才继续转换。Buffered conversion 的代价是等待完整 upstream response 后再 replay B stream；换来的结果是 start-order 明确、tool association 稳定、usage/finish 可验证，并且 abort、pause、protocol/stream/transport error 不会污染 downstream client。
