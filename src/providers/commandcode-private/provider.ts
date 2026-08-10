@@ -1,10 +1,8 @@
 import {
-  calculateCost,
   clampThinkingLevel,
   createAssistantMessageEventStream,
   createProvider,
   getSupportedThinkingLevels,
-  type AssistantMessage,
   type AssistantMessageEventStream,
   type Context,
   type FetchFunction,
@@ -13,7 +11,6 @@ import {
   type Provider,
   type SimpleStreamOptions,
   type StreamFunction,
-  type Usage,
 } from "@earendil-works/pi-ai";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import slugify from "@sindresorhus/slugify";
@@ -32,6 +29,12 @@ import {
   type CommandCodeTraceContextCapability,
   type PreparedCommandCodeRequest,
 } from "./attempts.js";
+import {
+  captureCommandCodeResponseAuthority,
+  convertCommittedCommandCodeResult,
+  createCommandCodeFailureMessage,
+  replayCommandCodeAssistantMessage,
+} from "./semantic.js";
 
 const PROVIDER_ID = "commandcode-private";
 const API_ID = "commandcode-private";
@@ -58,73 +61,6 @@ export interface CommandCodeCompatibilityPolicy {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function emptyUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
-interface ResponseLifetimeAuthority {
-  api: string;
-  provider: string;
-  modelId: string;
-  responseTimestamp: number;
-  pricingModel: Model<typeof API_ID>;
-}
-
-function captureResponseLifetimeAuthority(
-  model: Model<typeof API_ID>,
-  now: () => number,
-): ResponseLifetimeAuthority {
-  const cost = {
-    ...model.cost,
-    ...(model.cost.tiers === undefined
-      ? {}
-      : { tiers: model.cost.tiers.map((tier) => ({ ...tier })) }),
-  };
-  return {
-    api: model.api,
-    provider: model.provider,
-    modelId: model.id,
-    responseTimestamp: now(),
-    pricingModel: { ...model, cost },
-  };
-}
-
-function applyCapturedPricing(
-  authority: ResponseLifetimeAuthority,
-  usage: Usage,
-): Usage {
-  calculateCost(authority.pricingModel, usage);
-  return usage;
-}
-
-function createMessage(
-  authority: ResponseLifetimeAuthority,
-  text: string,
-  usage: Usage,
-  stopReason: "pending" | "stop" | "error" | "aborted",
-  errorMessage?: string,
-): AssistantMessage {
-  const message: AssistantMessage = {
-    role: "assistant",
-    content: text.length === 0 ? [] : [{ type: "text", text }],
-    api: authority.api,
-    provider: authority.provider,
-    model: authority.modelId,
-    usage,
-    stopReason,
-    timestamp: authority.responseTimestamp,
-  };
-  if (errorMessage !== undefined) message.errorMessage = errorMessage;
-  return message;
 }
 
 function cloneLosslessJson(
@@ -971,7 +907,7 @@ function createCommandCodeStream(
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    const responseAuthority = captureResponseLifetimeAuthority(model, now);
+    const responseAuthority = captureCommandCodeResponseAuthority(model, now);
 
     const run = async (): Promise<void> => {
       try {
@@ -999,56 +935,24 @@ function createCommandCodeStream(
             ...(sleep === undefined ? {} : { sleep }),
           },
         );
-        const resultText = result.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("");
-        const usage = applyCapturedPricing(responseAuthority, {
-          input: result.usage.inputTokens,
-          output: result.usage.outputTokens,
-          cacheRead: result.usage.cacheReadTokens,
-          cacheWrite: result.usage.cacheWriteTokens,
-          totalTokens:
-            result.usage.inputTokens +
-            result.usage.outputTokens +
-            result.usage.cacheReadTokens +
-            result.usage.cacheWriteTokens,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        });
-        const start = createMessage(
+        const finalMessage = convertCommittedCommandCodeResult(
+          result,
           responseAuthority,
-          "",
-          emptyUsage(),
-          "pending",
         );
-        const complete = createMessage(
-          responseAuthority,
-          resultText,
-          usage,
-          "stop",
+        replayCommandCodeAssistantMessage(
+          stream,
+          finalMessage,
+          prepared.signal,
         );
-        stream.push({ type: "start", partial: start });
-        stream.push({ type: "text_start", contentIndex: 0, partial: start });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: resultText, partial: complete });
-        stream.push({ type: "text_end", contentIndex: 0, content: resultText, partial: complete });
-        stream.push({ type: "done", reason: "stop", message: complete });
-        stream.end(complete);
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
         const aborted = options?.signal?.aborted === true;
-        const failed = createMessage(
+        const failed = createCommandCodeFailureMessage(
           responseAuthority,
-          "",
-          emptyUsage(),
-          aborted ? "aborted" : "error",
-          detail,
+          error,
+          undefined,
+          aborted,
         );
-        stream.push({
-          type: "error",
-          reason: aborted ? "aborted" : "error",
-          error: failed,
-        });
-        stream.end(failed);
+        replayCommandCodeAssistantMessage(stream, failed, options?.signal);
       }
     };
 
