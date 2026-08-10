@@ -25,26 +25,29 @@ import {
   type ProjectSnapshot,
   type ServerConfig,
 } from "./project.js";
+import {
+  executeCommandCodeAttempts,
+  resolveCommandCodeExecutionControls,
+  resolveLogicalTraceId,
+  type CommandCodeTraceContextCapability,
+  type PreparedCommandCodeRequest,
+} from "./attempts.js";
 
 const PROVIDER_ID = "commandcode-private";
 const API_ID = "commandcode-private";
 const MISSING_TOOL_RESULT =
   "No result — the tool call did not complete (interrupted or lost).";
 
-interface CommandCodeTextResult {
-  text: string;
-  inputTokens: number;
-  outputTokens: number;
-}
-
 export interface CommandCodePrivateProviderOptions {
   apiKey: string;
-  fetch: FetchFunction;
+  fetch?: FetchFunction;
   model: Model<typeof API_ID>;
   now: () => number;
   projectSnapshot: ProjectSnapshot;
   compatibility?: CommandCodeCompatibilityPolicy;
   createSessionId?: () => string;
+  traceContext?: CommandCodeTraceContextCapability;
+  sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
 }
 
 export interface CommandCodeCompatibilityPolicy {
@@ -55,80 +58,6 @@ export interface CommandCodeCompatibilityPolicy {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireNonNegativeInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new Error(`${field} must be a non-negative safe integer`);
-  }
-  return value as number;
-}
-
-async function consumeTextResponse(response: Response): Promise<CommandCodeTextResult> {
-  if (!response.ok) {
-    throw new Error(`CommandCode returned HTTP ${response.status}`);
-  }
-
-  const lines = (await response.text())
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  let textId: string | undefined;
-  let text = "";
-  let textClosed = false;
-  let finish: Record<string, unknown> | undefined;
-
-  for (const line of lines) {
-    const event: unknown = JSON.parse(line);
-    if (!isRecord(event) || typeof event.type !== "string") {
-      throw new Error("CommandCode emitted a malformed event");
-    }
-
-    switch (event.type) {
-      case "text-start":
-        if (typeof event.id !== "string" || textId !== undefined) {
-          throw new Error("Invalid CommandCode text-start lifecycle");
-        }
-        textId = event.id;
-        break;
-      case "text-delta":
-        if (event.id !== textId || textClosed || typeof event.text !== "string") {
-          throw new Error("Invalid CommandCode text-delta lifecycle");
-        }
-        text += event.text;
-        break;
-      case "text-end":
-        if (event.id !== textId || textClosed || text.trim().length === 0) {
-          throw new Error("Invalid CommandCode text-end lifecycle");
-        }
-        textClosed = true;
-        break;
-      case "finish":
-        finish = event;
-        break;
-      default:
-        throw new Error(`Unsupported CommandCode event: ${event.type}`);
-    }
-  }
-
-  if (!textClosed || finish === undefined) {
-    throw new Error("CommandCode ended without a complete text block and finish");
-  }
-  if (finish.finishReason !== "stop") {
-    throw new Error(`Unsupported CommandCode finish reason: ${String(finish.finishReason)}`);
-  }
-
-  const totalUsage = finish.totalUsage;
-  if (!isRecord(totalUsage)) {
-    throw new Error("CommandCode finish must include totalUsage");
-  }
-
-  return {
-    text,
-    inputTokens: requireNonNegativeInteger(totalUsage.inputTokens, "inputTokens"),
-    outputTokens: requireNonNegativeInteger(totalUsage.outputTokens, "outputTokens"),
-  };
 }
 
 function emptyUsage(): Usage {
@@ -181,7 +110,7 @@ function createMessage(
   authority: ResponseLifetimeAuthority,
   text: string,
   usage: Usage,
-  stopReason: "pending" | "stop" | "error",
+  stopReason: "pending" | "stop" | "error" | "aborted",
   errorMessage?: string,
 ): AssistantMessage {
   const message: AssistantMessage = {
@@ -937,19 +866,12 @@ async function racePayloadCallback<T>(
   }
 }
 
-export interface PreparedCommandCodeRequest {
-  readonly endpoint: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly bodyText: string;
-  readonly signal: AbortSignal;
-  readonly fetchImpl: FetchFunction;
-}
-
 export interface CommandCodePreparationDependencies {
-  boundFetch: FetchFunction;
+  boundFetch?: FetchFunction;
   projectSnapshot: ProjectSnapshot;
   compatibility: CommandCodeCompatibilityPolicy;
   createSessionId: () => string;
+  traceContext?: CommandCodeTraceContextCapability;
 }
 
 export async function prepareCommandCodeRequest(
@@ -965,6 +887,10 @@ export async function prepareCommandCodeRequest(
   const invokedModelId = requestModel.id;
   const modelAcceptsImages = requestModel.input.includes("image");
   const endpoint = new URL("/alpha/generate", requestModel.baseUrl).toString();
+  const logicalTraceId = resolveLogicalTraceId(
+    dependencies.traceContext,
+    options?.telemetryContext,
+  );
   const sessionId = resolveProviderSessionId(
     options?.sessionId,
     dependencies.createSessionId,
@@ -1022,22 +948,26 @@ export async function prepareCommandCodeRequest(
     sessionId,
     supportedReasoningEfforts: built.supportedReasoningEfforts,
   });
-
   return Object.freeze({
     endpoint,
     headers: Object.freeze({ ...headers }),
     bodyText: serialized,
     signal,
-    fetchImpl: options?.fetch ?? dependencies.boundFetch,
+    fetchImpl: options?.fetch ?? dependencies.boundFetch ?? globalThis.fetch,
+    ...(logicalTraceId === undefined
+      ? {}
+      : { logicalTraceId }),
   });
 }
 
 function createCommandCodeStream(
-  boundFetch: FetchFunction,
+  boundFetch: FetchFunction | undefined,
   now: () => number,
   projectSnapshot: ProjectSnapshot,
   compatibility: CommandCodeCompatibilityPolicy,
   createSessionId: () => string,
+  traceContext: CommandCodeTraceContextCapability | undefined,
+  sleep: ((delayMs: number, signal: AbortSignal) => Promise<void>) | undefined,
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
@@ -1045,20 +975,30 @@ function createCommandCodeStream(
 
     const run = async (): Promise<void> => {
       try {
+        options?.signal?.throwIfAborted();
+        const controls = resolveCommandCodeExecutionControls(options);
         const prepared = await prepareCommandCodeRequest(
           model,
           context,
           options,
-          { boundFetch, projectSnapshot, compatibility, createSessionId },
+          {
+            ...(boundFetch === undefined ? {} : { boundFetch }),
+            projectSnapshot,
+            compatibility,
+            createSessionId,
+            ...(traceContext === undefined ? {} : { traceContext }),
+          },
         );
-        const requestInit: RequestInit = {
-          method: "POST",
-          headers: prepared.headers,
-          body: prepared.bodyText,
-          signal: prepared.signal,
-        };
-        const response = await prepared.fetchImpl(prepared.endpoint, requestInit);
-        const result = await consumeTextResponse(response);
+        const result = await executeCommandCodeAttempts(
+          prepared,
+          model,
+          controls,
+          {
+            now,
+            ...(traceContext === undefined ? {} : { traceContext }),
+            ...(sleep === undefined ? {} : { sleep }),
+          },
+        );
         const usage = applyCapturedPricing(responseAuthority, {
           input: result.inputTokens,
           output: result.outputTokens,
@@ -1087,14 +1027,19 @@ function createCommandCodeStream(
         stream.end(complete);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
+        const aborted = options?.signal?.aborted === true;
         const failed = createMessage(
           responseAuthority,
           "",
           emptyUsage(),
-          "error",
+          aborted ? "aborted" : "error",
           detail,
         );
-        stream.push({ type: "error", reason: "error", error: failed });
+        stream.push({
+          type: "error",
+          reason: aborted ? "aborted" : "error",
+          error: failed,
+        });
         stream.end(failed);
       }
     };
@@ -1113,6 +1058,8 @@ export function createCommandCodePrivateProvider(
     options.projectSnapshot,
     options.compatibility ?? {},
     options.createSessionId ?? randomUUID,
+    options.traceContext,
+    options.sleep,
   );
   return createProvider({
     id: PROVIDER_ID,

@@ -77,6 +77,21 @@ describe("CommandCode payload serialization boundary", () => {
     expect(new TextEncoder().encode(first)).toEqual(new TextEncoder().encode(second));
   });
 
+  it("resolves global fetch only when request and bound defaults are absent", async () => {
+    const prepared = await prepareCommandCodeRequest(
+      model(),
+      context,
+      baseOptions,
+      {
+        projectSnapshot: dependencies.projectSnapshot,
+        compatibility: {},
+        createSessionId: dependencies.createSessionId,
+      },
+    );
+
+    expect(prepared.fetchImpl).toBe(globalThis.fetch);
+  });
+
   it.each([
     {
       name: "root toJSON changes authority",
