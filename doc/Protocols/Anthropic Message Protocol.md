@@ -1,9 +1,10 @@
-# Anthropic Messages API Protocol Specification
+# Anthropic Messages API Protocol Specification v0.2
 
-**Protocol:** Anthropic Messages API
-**Primary Endpoint:** `POST /v1/messages`
-**Transport:** HTTP + JSON / Server-Sent Events (SSE)
-**Reference Date:** 2026-08-09
+**Protocol:** Anthropic Messages API  
+**Version:** v0.2  
+**Primary Endpoint:** `POST /v1/messages`  
+**Transport:** HTTP + JSON / Server-Sent Events (SSE)  
+**Reference Date:** 2026-08-10
 
 本文描述 Anthropic Messages API 的实际 wire protocol、数据结构、字段语义、stream lifecycle 与 protocol invariants。
 
@@ -28,9 +29,16 @@ Anthropic request 长什么样？
 哪些字段由 server 生成？
 哪些字段 optional / nullable / model-dependent？
 
+哪些 request semantics 位于 JSON body？
+哪些 request semantics 位于 protocol-defined HTTP headers？
+
 Message / Content Block 如何组织？
 
 Tool Use 如何建立跨 turn identity？
+
+ToolResult 的不同 wire representation
+哪些 equivalence 已被 source protocol 明确建立？
+哪些仍不能从 union shape 推断？
 
 Streaming event 如何组成完整 Message？
 
@@ -38,10 +46,10 @@ Streaming event 如何组成完整 Message？
 什么情况意味着失败？
 
 哪些结构是 stable core？
-哪些是 model-dependent / extension？
+哪些是 model-dependent / beta / extension？
 ```
 
-本文不描述任何其他协议。
+本文不描述 Pi、LuckyToken conversion、Gate C、Provider adaptation 或其他协议。
 
 ------
 
@@ -69,6 +77,8 @@ https://api.anthropic.com/v1/messages
 
 Messages API 是 stateless request protocol：每次请求通过 `messages` 提供需要的 conversation history，由 server 生成下一条 assistant `Message`。
 
+如果第三方anthropic endpoint的可能不同endpoint，但是协议protocol是一样的。
+
 ------
 
 ## 1.2 Top-Level Protocol Hierarchy
@@ -79,6 +89,18 @@ Anthropic Messages API
 ├── HTTP Request
 │   │
 │   ├── Headers
+│   │   │
+│   │   ├── Authentication
+│   │   │   ├── x-api-key
+│   │   │   └── Authorization
+│   │   │
+│   │   ├── Protocol Profile
+│   │   │   ├── anthropic-version
+│   │   │   └── anthropic-beta?
+│   │   │
+│   │   └── Request Semantics
+│   │       ├── anthropic-user-profile-id?
+│   │       └── future protocol-defined semantic headers
 │   │
 │   └── MessageRequest
 │       │
@@ -126,6 +148,10 @@ Anthropic Messages API
             └── message_stop
 ```
 
+关键点：
+
+> **Anthropic request semantics 不一定全部位于 JSON body。Protocol-defined HTTP header 也可以承载 request semantics。**
+
 ------
 
 ## 1.3 Representation Style
@@ -141,7 +167,7 @@ Anthropic 大量使用 tagged union。
 }
 ```
 
-这里：
+其中：
 
 ```text
 type
@@ -162,14 +188,16 @@ Error
 
 通常都应该先根据 `type` 判断具体 variant，再验证该 variant 的字段。
 
-Anthropic 的版本策略明确允许未来增加：
+Anthropic 的版本策略允许未来增加：
 
 - optional input fields；
 - output fields；
 - enum-like values；
-- streaming event variants。
+- streaming event variants；
+- beta capabilities；
+- protocol-defined request semantics。
 
-因此 protocol enum 不能被假定永远封闭。
+因此 protocol enum / semantic surface 不能被假定永远封闭。
 
 ------
 
@@ -195,9 +223,9 @@ content-type: application/json
 
 ------
 
-## 2.2 Authentication and Required Headers
+## 2.2 Authentication and Baseline Required Headers
 
-Direct Claude API 当前支持两种 authentication mechanism：
+Direct Claude API 当前支持 authentication mechanism，例如：
 
 ```text
 API Key
@@ -205,16 +233,16 @@ or
 Workload Identity Federation Bearer Token
 ```
 
-Header contract：
+Baseline header contract：
 
-| Header              | Presence              | Format              | Meaning                            |
-| ------------------- | --------------------- | ------------------- | ---------------------------------- |
-| `x-api-key`         | authentication choice | API key string      | static Claude API credential       |
-| `Authorization`     | authentication choice | `Bearer <token>`    | short-lived federated access token |
-| `anthropic-version` | required              | date-version string | API contract version               |
-| `content-type`      | required              | `application/json`  | JSON request body                  |
+| Header | Presence | Format | Meaning |
+|---|---|---|---|
+| `x-api-key` | authentication choice | API key string | static Claude API credential |
+| `Authorization` | authentication choice | `Bearer <token>` | short-lived federated access token |
+| `anthropic-version` | required | date-version string | API contract version |
+| `content-type` | required | `application/json` | JSON request body |
 
-必须提供 `x-api-key` 或 `Authorization` 其中一种。
+必须提供满足当前 authentication contract 的 credential form。
 
 典型 API-key request：
 
@@ -224,6 +252,10 @@ content-type: application/json
 x-api-key: <api-key>
 anthropic-version: 2023-06-01
 ```
+
+> **本表描述 authentication 与 baseline required headers，不代表 Messages request 的完整 semantic-header surface。**
+
+Request-semantic headers 见 §2.5。
 
 ------
 
@@ -241,7 +273,7 @@ string
 2023-06-01
 ```
 
-它描述的是：
+它描述：
 
 ```text
 API contract version
@@ -267,27 +299,155 @@ anthropic-beta: <feature-name>
 
 启用。
 
-多个 beta：
+多个 beta 可以通过 header 中的 beta list 激活。
 
-```http
-anthropic-beta: feature-a,feature-b
-```
-
-Beta 名称通常采用：
+Beta name 通常包含 feature identity 与 date/version，例如：
 
 ```text
 feature-name-YYYY-MM-DD
 ```
 
-格式。
+Beta feature 不属于稳定协议保证，可以发生 breaking change、deprecation 或 removal。
 
-Beta feature 不属于稳定协议保证，可以发生 breaking change、deprecated 或 removal。
+Beta activation 可以改变：
+
+```text
+request-valid field/header surface
+content variants
+server-tool families
+runtime behavior
+other experimental semantics
+```
+
+因此 source validity 不能脱离当前 active beta profile 单独判断。
 
 ------
 
-## 2.5 API Versioning Rule
+## 2.5 Request-Semantic Headers
 
-对于一个固定 API version，Anthropic 承诺保留已有 input/output parameters，但可能增加新的 optional fields、output values 和 enum/event variants。
+HTTP header 不只承载 transport、authentication 与 version negotiation。
+
+某些 Anthropic-defined headers 本身具有 request semantics。
+
+当前 `POST /v1/messages` API 包含：
+
+```text
+anthropic-user-profile-id?: string
+```
+
+### 2.5.1 `anthropic-user-profile-id`
+
+Meaning：
+
+```text
+the user profile ID
+to attribute this request to
+```
+
+Use case：
+
+```text
+act on behalf of a party
+other than your organization
+```
+
+该 semantic 与具体 credential mechanism 无关；它不应被定义成只针对 API-key authentication。
+
+Availability：
+
+```text
+requires the user-profiles beta
+```
+
+当前 user-profile beta family 的官方 beta identifier 包括：
+
+```text
+user-profiles-2026-03-24
+```
+
+其 exact identifier 属于 beta/versioned protocol surface，不应被假定永久稳定。
+
+### 2.5.2 Distinction from `metadata.user_id`
+
+`anthropic-user-profile-id` 与 body：
+
+```text
+metadata.user_id
+```
+
+不是同一个 protocol fact。
+
+```text
+anthropic-user-profile-id
+→ references / attributes request to an Anthropic User Profile
+→ beta-gated request-semantic header
+```
+
+而：
+
+```text
+metadata.user_id
+→ application-supplied opaque user identity metadata
+→ body field
+```
+
+Protocol consumers MUST NOT silently collapse these two concepts.
+
+### 2.5.3 Semantic Header Extensibility
+
+由于 Anthropic protocol 会演化：
+
+```text
+current semantic headers
++
+future protocol-defined semantic headers
+```
+
+应被视为 request semantic surface 的一部分。
+
+一个 header 是否属于 protocol semantics，取决于 Anthropic protocol definition，而不是它“位于 HTTP header”这一 transport location。
+
+------
+
+## 2.6 API Versioning Rule
+
+对于一个固定 Messages API version，Anthropic 当前明确承诺保留：
+
+```text
+existing input parameters
+existing output parameters
+```
+
+同时可能：
+
+```text
+add additional optional inputs
+add additional values to output
+change conditions for specific error types
+add new variants to enum-like output values
+```
+
+其中官方把 streaming event types 作为 enum-like output variant 的例子。
+
+因此，固定 API-version compatibility guarantee 不应被扩写成未经明确承诺的 transport-location guarantee。
+
+Separately：
+
+```text
+beta capabilities
+newly documented protocol inputs
+protocol-defined request-semantic headers
+```
+
+也可以使 Anthropic 的整体 request semantic surface 演化。
+
+但这种更广泛的 protocol evolution 与：
+
+```text
+fixed-version compatibility guarantee
+```
+
+是不同的事实，不应混成同一个承诺。
 
 特别是 `2023-06-01` streaming format：
 
@@ -297,7 +457,7 @@ named SSE events
 incremental deltas
 ```
 
-并且已经移除旧的：
+并且移除了旧的：
 
 ```text
 data: [DONE]
@@ -305,15 +465,19 @@ data: [DONE]
 
 sentinel。
 
-因此当前 Messages streaming protocol：
+因此：
 
-> **没有 `[DONE]` 作为正常终止标记。**
+> **当前 Messages streaming protocol 没有 `[DONE]` 作为正常终止标记。**
 
 ------
 
 # 3. Request Protocol
 
 ## 3.1 MessageRequest Hierarchy
+
+`MessageRequest` 描述 JSON body。
+
+完整 Anthropic HTTP request 还包括 §2 中的 protocol-defined headers。
 
 ```text
 MessageRequest
@@ -355,34 +519,42 @@ MessageRequest
     └── metadata?
 ```
 
-当前官方 OpenAPI-derived request type 将 `model`、`max_tokens`、`messages` 定义为核心 required fields；其余为 optional controls。
+当前官方 OpenAPI-derived request type 将：
+
+```text
+model
+max_tokens
+messages
+```
+
+定义为核心 required body fields；其余为 optional controls。
 
 ------
 
 ## 3.2 Top-Level Field Contract
 
-| Field            | Type                 | Presence | Value Source | Meaning                       |
-| ---------------- | -------------------- | -------- | ------------ | ----------------------------- |
-| `model`          | string               | required | client       | target model                  |
-| `max_tokens`     | integer              | required | client       | maximum generated output      |
-| `messages`       | array                | required | client       | conversation history          |
-| `system`         | string / text blocks | optional | client       | top-level system instructions |
-| `tools`          | array                | optional | client       | tools available to Claude     |
-| `tool_choice`    | tagged object        | optional | client       | tool-use policy               |
-| `thinking`       | tagged object        | optional | client       | thinking configuration        |
-| `output_config`  | object               | optional | client       | output/effort configuration   |
-| `stop_sequences` | string[]             | optional | client       | custom stop strings           |
-| `temperature`    | number               | optional | client       | sampling control              |
-| `top_p`          | number               | optional | client       | nucleus sampling              |
-| `top_k`          | integer              | optional | client       | top-k sampling                |
-| `stream`         | boolean              | optional | client       | JSON vs SSE response          |
-| `cache_control`  | object               | optional | client       | prompt caching                |
-| `container`      | string               | optional | client       | reusable container identity   |
-| `inference_geo`  | string               | optional | client       | inference geography           |
-| `service_tier`   | enum                 | optional | client       | requested service tier        |
-| `metadata`       | object               | optional | client       | request metadata              |
+| Field | Type | Presence | Value Source | Meaning |
+|---|---|---|---|---|
+| `model` | string | required | client | target model |
+| `max_tokens` | integer | required | client | maximum generated output |
+| `messages` | array | required | client | conversation history |
+| `system` | string / text blocks | optional | client | top-level system instructions |
+| `tools` | array | optional | client | tools available to Claude |
+| `tool_choice` | tagged object | optional | client | tool-use policy |
+| `thinking` | tagged object | optional | client | thinking configuration |
+| `output_config` | object | optional | client | output/effort configuration |
+| `stop_sequences` | string[] | optional | client | custom stop strings |
+| `temperature` | number | optional | client | sampling control |
+| `top_p` | number | optional | client | nucleus sampling |
+| `top_k` | integer | optional | client | top-k sampling |
+| `stream` | boolean | optional | client | JSON vs SSE response |
+| `cache_control` | object | optional | client | prompt caching |
+| `container` | string | optional | client | reusable container identity |
+| `inference_geo` | string | optional | client | inference geography |
+| `service_tier` | enum | optional | client | requested service tier |
+| `metadata` | object | optional | client | request metadata |
 
-Not every model supports every optional generation capability; structural existence and model availability are different concepts.
+Not every model supports every optional generation capability; structural existence and concrete model availability are different concepts.
 
 ------
 
@@ -431,7 +603,7 @@ on generated output tokens
 
 Claude may stop before reaching it.
 
-Current API also gives `0` a defined use:
+Current API also gives：
 
 ```json
 {
@@ -439,7 +611,9 @@ Current API also gives `0` a defined use:
 }
 ```
 
-can populate prompt cache without ordinary output generation. Model-specific maximums differ.
+a defined use for prompt-cache population without ordinary output generation.
+
+Model-specific maxima differ.
 
 ------
 
@@ -460,21 +634,17 @@ Conversation
     └── assistant
 ```
 
-Messages API normally operates on alternating user/assistant conversational turns. Consecutive `user` or consecutive `assistant` turns can be combined by Anthropic.
+Messages API normally operates on alternating user/assistant conversational turns.
 
-A newer, model-dependent extension additionally permits mid-conversation:
+Consecutive `user` or consecutive `assistant` turns can be combined by Anthropic.
 
-```text
-role = "system"
-```
-
-messages. This extension is described separately in Appendix A because it is not universally supported.
+A model-dependent extension for mid-conversation system messages is described in Appendix A.
 
 ------
 
 ## 3.5.2 `system`
 
-Top-level `system` supplies instructions that apply at system/operator authority.
+Top-level `system` supplies instructions at system/operator authority.
 
 Forms：
 
@@ -484,7 +654,7 @@ system
 └── TextBlock[]
 ```
 
-Simple example：
+Example：
 
 ```json
 {
@@ -505,7 +675,7 @@ Structured form：
 }
 ```
 
-Current generated OpenAPI request type expresses this field as:
+Current generated OpenAPI request type expresses this field as：
 
 ```text
 string | TextBlock[]
@@ -524,15 +694,9 @@ interface MessageParam {
 }
 ```
 
-However, current Anthropic OpenAPI-derived SDK types also contain:
+The project protocol evidence also tracks a model-dependent mid-conversation-system extension separately.
 
-```text
-role = "system"
-```
-
-to support the model-dependent mid-conversation-system feature.
-
-Therefore the correct interpretation is:
+The correct conceptual distinction remains：
 
 ```text
 Universal conversation baseline
@@ -543,13 +707,11 @@ Model-dependent extension
 └── system
 ```
 
-rather than treating `system` either as universally forbidden or universally supported.
-
 ------
 
-## 3.5.4 String Content Shorthand
+## 3.5.4 Normal Message String Content Shorthand
 
-For normal message input:
+For ordinary input messages：
 
 ```json
 {
@@ -558,7 +720,7 @@ For normal message input:
 }
 ```
 
-is shorthand for:
+Anthropic explicitly defines the string form as shorthand for：
 
 ```json
 {
@@ -572,11 +734,15 @@ is shorthand for:
 }
 ```
 
+Therefore these two ordinary-message representations are protocol-defined equivalents.
+
+This equivalence is explicit protocol authority; it is not inferred merely from a union type.
+
 ------
 
 ## 3.5.5 Final Assistant Prefill
 
-If the final input message has:
+If the final input message has：
 
 ```text
 role = "assistant"
@@ -584,7 +750,7 @@ role = "assistant"
 
 the generated response continues directly from that assistant content.
 
-Example:
+Example：
 
 ```json
 [
@@ -599,7 +765,7 @@ Example:
 ]
 ```
 
-The new response continues from `"The answer is "`.
+The new response continues from the provided assistant prefix.
 
 ------
 
@@ -607,7 +773,7 @@ The new response continues from `"The answer is "`.
 
 ## 3.6.1 Content Hierarchy
 
-Current request-side OpenAPI union includes a broad family of blocks. The main semantic families are:
+Current request-side OpenAPI union includes：
 
 ```text
 ContentBlockParam
@@ -633,17 +799,15 @@ ContentBlockParam
 └── Extensions
     ├── container_upload
     ├── tool_search result
-    ├── mid-conversation system blocks
+    ├── mid-conversation system-related content
     └── future variants
 ```
 
-The current official generated SDK shows this as an extensible union rather than only text/image.
+The union is extensible and must not be reduced conceptually to only text/image.
 
 ------
 
 ## 3.6.2 TextBlock
-
-Tree：
 
 ```text
 TextBlock
@@ -653,14 +817,12 @@ TextBlock
 └── cache_control?
 ```
 
-Field contract：
-
-| Field           | Type     | Presence | Kind                 |
-| --------------- | -------- | -------- | -------------------- |
-| `type`          | `"text"` | required | literal              |
-| `text`          | string   | required | content              |
-| `citations`     | array    | optional | citation information |
-| `cache_control` | object   | optional | cache marker         |
+| Field | Type | Presence | Kind |
+|---|---|---|---|
+| `type` | `"text"` | required | literal |
+| `text` | string | required | content |
+| `citations` | array | optional | citation information |
+| `cache_control` | object | optional | cache marker |
 
 Example：
 
@@ -675,8 +837,6 @@ Example：
 
 ## 3.6.3 ImageBlock
 
-Tree：
-
 ```text
 ImageBlock
 ├── type = "image"
@@ -686,7 +846,7 @@ ImageBlock
 └── cache_control?
 ```
 
-### Base64 Source
+Base64：
 
 ```text
 Base64ImageSource
@@ -695,20 +855,7 @@ Base64ImageSource
 └── data
 ```
 
-Example：
-
-```json
-{
-  "type": "image",
-  "source": {
-    "type": "base64",
-    "media_type": "image/png",
-    "data": "<base64-image-data>"
-  }
-}
-```
-
-Current base64 image media types include:
+Current base64 image media types include：
 
 ```text
 image/jpeg
@@ -717,27 +864,18 @@ image/gif
 image/webp
 ```
 
-### URL Source
+URL source uses：
 
-Conceptual form：
-
-```json
-{
-  "type": "image",
-  "source": {
-    "type": "url",
-    "url": "https://example.com/image.png"
-  }
-}
+```text
+type = "url"
+url = ...
 ```
 
-The source discriminator determines how the image payload is interpreted.
+The source discriminator determines how image payload is interpreted.
 
 ------
 
 ## 3.6.4 DocumentBlock
-
-Hierarchy：
 
 ```text
 DocumentBlock
@@ -753,26 +891,11 @@ DocumentBlock
 └── cache_control?
 ```
 
-Typical PDF form：
-
-```json
-{
-  "type": "document",
-  "source": {
-    "type": "base64",
-    "media_type": "application/pdf",
-    "data": "<base64>"
-  }
-}
-```
-
-Current official API types expose documents as their own structured content family rather than treating them as text or image blocks.
+Documents remain their own structured content family.
 
 ------
 
 ## 3.6.5 SearchResultBlock
-
-Conceptual hierarchy：
 
 ```text
 SearchResultBlock
@@ -784,7 +907,7 @@ SearchResultBlock
 └── cache_control?
 ```
 
-Search-result content is represented structurally so citation metadata and source identity can survive as part of the request.
+Search-result structure preserves source/citation information rather than flattening it into ordinary text.
 
 ------
 
@@ -792,7 +915,7 @@ Search-result content is represented structurally so citation metadata and sourc
 
 ## 3.7.1 Configuration Hierarchy
 
-Current protocol structurally supports:
+Current protocol structurally tracks：
 
 ```text
 thinking
@@ -810,7 +933,7 @@ thinking
     └── display?
 ```
 
-Actual support differs substantially by model.
+Actual availability is model-dependent.
 
 ------
 
@@ -824,9 +947,7 @@ Actual support differs substantially by model.
 }
 ```
 
-This explicitly disables thinking where the selected model supports disabling it.
-
-Some models do not permit disabled mode, so validity is model-dependent.
+This explicitly disables thinking where permitted by the selected model.
 
 ------
 
@@ -840,24 +961,11 @@ Some models do not permit disabled mode, so validity is model-dependent.
 }
 ```
 
-Optional display：
-
-```json
-{
-  "thinking": {
-    "type": "adaptive",
-    "display": "summarized"
-  }
-}
-```
-
-`adaptive` lets Claude decide whether and how much to think according to request complexity.
+Where supported, `display` can further control thinking visibility.
 
 ------
 
 ## 3.7.4 Manual Thinking
-
-Shape：
 
 ```json
 {
@@ -868,55 +976,24 @@ Shape：
 }
 ```
 
-`budget_tokens` is a token budget for manual extended thinking.
-
-Current manual-thinking contract requires a minimum budget of:
-
-```text
-1024
-```
-
-and this budget participates in the request's output-token constraint. Newer models increasingly prefer or require adaptive mode.
+The current manual-thinking contract uses a token budget and has model-dependent validity.
 
 ------
 
 ## 3.7.5 Thinking Display
 
-Where supported:
+Conceptual values：
 
 ```text
-display
-├── summarized
-└── omitted
+summarized
+omitted
 ```
 
-`"summarized"`:
-
-```text
-returns readable summarized thinking
-```
-
-`"omitted"`:
-
-```text
-returns a thinking block
-with empty thinking text
-while preserving its signature
-```
-
-`omitted` therefore does **not** mean:
-
-```text
-redacted_thinking
-```
-
-They are distinct protocol concepts.
+`omitted` visible thinking is distinct from a `redacted_thinking` block.
 
 ------
 
 # 3.8 Output Configuration
-
-## 3.8.1 Hierarchy
 
 ```text
 output_config
@@ -924,11 +1001,9 @@ output_config
 └── format?
 ```
 
-------
+## 3.8.1 `effort`
 
-## 3.8.2 `effort`
-
-Current effort semantic values:
+Current semantic values tracked by this spec：
 
 ```text
 low
@@ -938,56 +1013,13 @@ xhigh
 max
 ```
 
-Example：
+Model support differs.
 
-```json
-{
-  "output_config": {
-    "effort": "medium"
-  }
-}
-```
+## 3.8.2 Structured Output Format
 
-`high` is the current default behavior when effort is supported.
+`output_config.format` can describe structured output using JSON Schema.
 
-Effort is a behavioral control affecting overall response work, including text, tool calls, and thinking. It is not a strict token budget. Model support differs by level.
-
-------
-
-## 3.8.3 Structured Output Format
-
-Current structured-output form uses:
-
-```text
-output_config.format
-```
-
-with a JSON Schema configuration.
-
-Conceptually：
-
-```json
-{
-  "output_config": {
-    "format": {
-      "type": "json_schema",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "answer": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "answer"
-        ]
-      }
-    }
-  }
-}
-```
-
-`format` controls output representation rather than conversation role or message structure.
+This controls output representation, not conversation role.
 
 ------
 
@@ -995,30 +1027,16 @@ Conceptually：
 
 ## 3.9.1 `stop_sequences`
 
-Type：
-
 ```text
 string[]
 ```
 
-Example：
-
-```json
-{
-  "stop_sequences": [
-    "</answer>"
-  ]
-}
-```
-
-If Claude emits one of these sequences:
+A matched stop sequence produces：
 
 ```text
 stop_reason = "stop_sequence"
 stop_sequence = matched value
 ```
-
-------
 
 ## 3.9.2 `temperature`
 
@@ -1028,59 +1046,23 @@ Type：
 number
 ```
 
-Historical/general API range:
-
-```text
-0.0 – 1.0
-```
-
-The general request schema documents default:
-
-```text
-1.0
-```
-
-but model support must be checked independently; newer model families do not necessarily permit custom sampling controls.
-
-------
+The general request schema exposes this control, while concrete model support may differ.
 
 ## 3.9.3 `top_p`
 
-Type：
-
-```text
-number
-```
-
-Represents nucleus sampling.
-
-------
+Nucleus sampling control.
 
 ## 3.9.4 `top_k`
 
-Type：
+Top-K sampling control.
 
-```text
-integer
-```
-
-Limits sampling to the top-K candidate tokens.
-
-`temperature`, `top_p`, and `top_k` belong to the Messages request schema, but support is model-dependent rather than a universal model capability.
+Field existence in request schema does not imply every model accepts every non-default value.
 
 ------
 
 # 3.10 Runtime and Metadata Fields
 
 ## 3.10.1 `stream`
-
-Type：
-
-```text
-boolean
-```
-
-Behavior：
 
 ```text
 false / omitted
@@ -1090,11 +1072,9 @@ true
 → SSE response
 ```
 
-------
-
 ## 3.10.2 `cache_control`
 
-Cache-control shape：
+Conceptual shape：
 
 ```text
 CacheControl
@@ -1104,75 +1084,28 @@ CacheControl
     └── "1h"
 ```
 
-Default TTL when omitted:
-
-```text
-5m
-```
-
-A top-level `cache_control` applies automatic caching to the last eligible cacheable block. Individual content blocks can also carry cache-control markers.
-
-------
+The documented default TTL is `5m` when the cache-control object is present and TTL is omitted.
 
 ## 3.10.3 `container`
 
-Type：
-
-```text
-string?
-```
-
-Identifies a reusable execution container where a supported server-side feature uses one.
-
-------
+Reusable execution container identity where supported.
 
 ## 3.10.4 `inference_geo`
 
-Type：
-
-```text
-string?
-```
-
-Requests a geographic region for inference where supported.
-
-If omitted, the workspace's configured default can apply.
-
-------
+Requested inference geography where supported.
 
 ## 3.10.5 `service_tier`
 
-Request values:
-
-```text
-auto
-standard_only
-```
-
-This is the requested capacity policy.
-
-It should not be confused with the response's actual `usage.service_tier`, whose current values are:
-
-```text
-standard
-priority
-batch
-```
-
-------
+Request-side capacity policy; distinct from response-side actual usage service tier.
 
 ## 3.10.6 `metadata`
-
-Conceptually：
 
 ```text
 metadata
 └── user_id?
 ```
 
-`user_id` is application-supplied opaque user identity metadata.
-
-Anthropic recommends using a non-identifying opaque value rather than direct PII.
+`user_id` is application-supplied opaque metadata and is distinct from `anthropic-user-profile-id`.
 
 ------
 
@@ -1180,7 +1113,7 @@ Anthropic recommends using a non-identifying opaque value rather than direct PII
 
 ## 4.1 Message Hierarchy
 
-A successful non-streaming call returns one assistant `Message`:
+A successful non-streaming call returns one assistant `Message`：
 
 ```text
 Message
@@ -1206,26 +1139,24 @@ Message
     └── container?
 ```
 
-The current generated OpenAPI `Message` type defines this structure directly.
-
 ------
 
 ## 4.2 Message Field Contract
 
-| Field           | Type          | Presence                     | Source / Kind                      |
-| --------------- | ------------- | ---------------------------- | ---------------------------------- |
-| `id`            | string        | required                     | server-generated opaque identifier |
-| `type`          | `"message"`   | required                     | literal                            |
-| `role`          | `"assistant"` | required                     | literal                            |
-| `model`         | string        | required                     | server-reported model              |
-| `content`       | array         | required                     | server-generated                   |
-| `stop_reason`   | enum/string   | required non-stream terminal | server-generated                   |
-| `stop_sequence` | string/null   | required                     | server-generated                   |
-| `stop_details`  | object/null   | feature-dependent            | server-generated                   |
-| `usage`         | object        | required                     | server-generated                   |
-| `container`     | object/null   | feature-dependent            | server-generated                   |
+| Field | Type | Presence | Source / Kind |
+|---|---|---|---|
+| `id` | string | required | server-generated opaque identifier |
+| `type` | `"message"` | required | literal |
+| `role` | `"assistant"` | required | literal |
+| `model` | string | required | server-reported model |
+| `content` | array | required | server-generated |
+| `stop_reason` | enum/string | required non-stream terminal | server-generated |
+| `stop_sequence` | string/null | required | server-generated |
+| `stop_details` | object/null | feature-dependent | server-generated |
+| `usage` | object | required | server-generated |
+| `container` | object/null | feature-dependent | server-generated |
 
-Message IDs are opaque. Anthropic explicitly states that their format and length can change.
+Message IDs are opaque.
 
 ------
 
@@ -1256,28 +1187,25 @@ Message IDs are opaque. Anthropic explicitly states that their format and length
 
 # 4.4 Response Content Blocks
 
-## 4.4.1 Main Response Hierarchy
-
-The current output-side content union includes:
+Current output-side content union includes：
 
 ```text
 Message.content[]
-│
 ├── text
 ├── thinking
 ├── redacted_thinking
 ├── tool_use
 ├── server_tool_use
 ├── specialized server-tool results
-├── container/tool extension blocks
+├── container/tool extensions
 └── future variants
 ```
 
-Ordinary input `image` and `document` blocks are not simply symmetric assistant-output variants; server-tool output can instead expose its own specialized result structures.
+Input image/document variants are not simply symmetric output variants.
 
 ------
 
-## 4.4.2 TextBlock
+## 4.4.1 TextBlock
 
 ```json
 {
@@ -1286,13 +1214,7 @@ Ordinary input `image` and `document` blocks are not simply symmetric assistant-
 }
 ```
 
-Possible accompanying fields include citation information.
-
-------
-
-## 4.4.3 ThinkingBlock
-
-Tree：
+## 4.4.2 ThinkingBlock
 
 ```text
 ThinkingBlock
@@ -1301,66 +1223,20 @@ ThinkingBlock
 └── signature
 ```
 
-Field contract：
+`signature` is opaque continuity data.
 
-| Field       | Type         | Presence | Kind                                        |
-| ----------- | ------------ | -------- | ------------------------------------------- |
-| `type`      | `"thinking"` | required | literal                                     |
-| `thinking`  | string       | required | summarized/visible thinking, possibly empty |
-| `signature` | string       | required | opaque server-generated continuity data     |
+## 4.4.3 Omitted Thinking
 
-Example：
-
-```json
-{
-  "type": "thinking",
-  "thinking": "...",
-  "signature": "..."
-}
-```
-
-The signature is opaque and should not be interpreted or parsed.
-
-------
-
-## 4.4.4 Omitted Thinking
-
-With:
-
-```json
-{
-  "thinking": {
-    "type": "adaptive",
-    "display": "omitted"
-  }
-}
-```
-
-a thinking block still exists:
-
-```json
-{
-  "type": "thinking",
-  "thinking": "",
-  "signature": "<opaque>"
-}
-```
-
-Therefore:
+A normal thinking block can have：
 
 ```text
-empty thinking
-+
-valid signature
+thinking = ""
+signature = <opaque>
 ```
 
-can be a normal `thinking` block.
+when visible thinking is omitted.
 
-------
-
-## 4.4.5 RedactedThinkingBlock
-
-Separate structure：
+## 4.4.4 RedactedThinkingBlock
 
 ```text
 RedactedThinkingBlock
@@ -1368,31 +1244,13 @@ RedactedThinkingBlock
 └── data
 ```
 
-Example：
-
-```json
-{
-  "type": "redacted_thinking",
-  "data": "<opaque>"
-}
-```
-
-It is semantically distinct from:
-
-```text
-ThinkingBlock {
-  thinking: "",
-  signature: ...
-}
-```
+It is semantically distinct from a normal thinking block whose visible text is empty.
 
 ------
 
 # 4.5 Usage
 
 ## 4.5.1 Usage Hierarchy
-
-Current response usage structure includes:
 
 ```text
 Usage
@@ -1416,74 +1274,15 @@ Usage
     └── service_tier?
 ```
 
-------
+`message_delta.usage` is cumulative.
 
-## 4.5.2 Field Contract
-
-| Field                         | Type     | Meaning                          |
-| ----------------------------- | -------- | -------------------------------- |
-| `input_tokens`                | integer  | uncached/ordinary input tokens   |
-| `output_tokens`               | integer  | inclusive output-token total     |
-| `cache_creation_input_tokens` | integer? | tokens written into prompt cache |
-| `cache_read_input_tokens`     | integer? | tokens read from cache           |
-| `cache_creation`              | object?  | TTL-specific write breakdown     |
-| `output_tokens_details`       | object?  | output category breakdown        |
-| `server_tool_use`             | object?  | server-tool usage counts         |
-| `inference_geo`               | string?  | actual inference region          |
-| `service_tier`                | enum?    | actual service tier              |
-
-------
-
-## 4.5.3 Input Token Accounting
-
-When cache fields are present, total processed input is conceptually split among:
-
-```text
-input_tokens
-+
-cache_creation_input_tokens
-+
-cache_read_input_tokens
-```
-
-They represent different input accounting categories.
-
-------
-
-## 4.5.4 Thinking Tokens
-
-Where returned:
-
-```text
-output_tokens_details.thinking_tokens
-```
-
-is a decomposition of:
-
-```text
-output_tokens
-```
-
-not an additional token amount.
-
-Therefore:
-
-```text
-WRONG:
-output_tokens + thinking_tokens
-```
-
-would double-count reasoning.
-
-The OpenAPI definition explicitly states `output_tokens` remains the inclusive authoritative total.
+`thinking_tokens`, where present as a breakdown, are included within authoritative `output_tokens` rather than added on top.
 
 ------
 
 # 5. Tool Protocol
 
 ## 5.1 Tool Families
-
-Anthropic distinguishes primarily by **where the operation executes**:
 
 ```text
 Tools
@@ -1500,11 +1299,7 @@ Tools
     └── other Anthropic server tools
 ```
 
-Client tools are executed by the caller.
-
-Server tools are executed by Anthropic infrastructure.
-
-These are different lifecycle contracts and must not be collapsed into one generic `tool_result` loop.
+Client and server tool loops are different protocol lifecycles and should not be collapsed.
 
 ------
 
@@ -1540,13 +1335,9 @@ Example：
 }
 ```
 
-`input_schema` uses JSON Schema and describes the object Claude should place in the eventual `tool_use.input`.
-
-------
-
 ## 5.2.2 Additional Tool Controls
 
-Current tool definitions may also include feature-dependent fields such as:
+Feature-dependent fields can include：
 
 ```text
 type
@@ -1558,52 +1349,25 @@ eager_input_streaming
 input_examples
 ```
 
-These extend the tool definition but do not change the fundamental client-tool identity contract.
-
-Anthropic-provided tools additionally use versioned `type` values such as specific web-search or code-execution tool versions.
+These do not change the basic client-tool identity contract.
 
 ------
 
 # 5.3 `tool_choice`
 
-## 5.3.1 Hierarchy
-
 ```text
 tool_choice
-│
 ├── auto
-│   ├── type = "auto"
-│   └── disable_parallel_tool_use?
-│
 ├── any
-│   ├── type = "any"
-│   └── disable_parallel_tool_use?
-│
 ├── tool
-│   ├── type = "tool"
-│   ├── name
-│   └── disable_parallel_tool_use?
-│
 └── none
-    └── type = "none"
 ```
 
-Semantics：
-
-| Type   | Meaning                               |
-| ------ | ------------------------------------- |
-| `auto` | Claude decides whether to call a tool |
-| `any`  | Claude must choose an available tool  |
-| `tool` | Claude must use the named tool        |
-| `none` | Claude must not use a tool            |
-
-`disable_parallel_tool_use` restricts multiple tool calls where applicable.
+With optional controls such as `disable_parallel_tool_use` where defined.
 
 ------
 
 # 5.4 Client ToolUseBlock
-
-## 5.4.1 Structure
 
 ```text
 ToolUseBlock
@@ -1627,15 +1391,6 @@ Example：
 }
 ```
 
-Field contract：
-
-| Field   | Type         | Presence | Source                           |
-| ------- | ------------ | -------- | -------------------------------- |
-| `type`  | `"tool_use"` | required | literal                          |
-| `id`    | string       | required | server-generated opaque ID       |
-| `name`  | string       | required | model selects a defined tool     |
-| `input` | object       | required | server/model-generated arguments |
-
 The final non-streaming `input` is a JSON object.
 
 ------
@@ -1653,7 +1408,7 @@ ToolResultBlock
 └── cache_control?
 ```
 
-Exact core fields in the current OpenAPI-derived type:
+Current OpenAPI-derived shape：
 
 ```text
 tool_use_id: string
@@ -1687,24 +1442,233 @@ Example：
 
 ------
 
-# 5.6 Client Tool Identity
+## 5.5.2 `content` Representation Family
 
-The central identity invariant is:
+Current official Tool Use documentation accepts：
+
+```text
+content omitted
+```
+
+or：
+
+```text
+content = string
+```
+
+or：
+
+```text
+content = nested content-block list
+```
+
+Examples shown by the official docs include：
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01",
+  "content": "15 degrees"
+}
+```
+
+and：
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01",
+  "content": [
+    {
+      "type": "text",
+      "text": "15 degrees"
+    }
+  ]
+}
+```
+
+The nested content list is itself structured：
+
+```text
+ToolResultBlock.content[]
+│
+├── Ordinary Result Content
+│   ├── text
+│   ├── image
+│   ├── document
+│   └── search_result
+│
+└── Feature-Dependent Result Content
+    └── tool_reference
+        └── tool-search semantics
+```
+
+`tool_reference` is not merely an OpenAPI-union artifact.
+
+Anthropic's Tool Search protocol explicitly uses a standard client：
+
+```text
+tool_result
+```
+
+whose `content` array contains：
+
+```text
+tool_reference
+```
+
+blocks for custom client-side tool-search implementations.
+
+Conceptual example：
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_your_tool_id",
+  "content": [
+    {
+      "type": "tool_reference",
+      "tool_name": "discovered_tool_name"
+    }
+  ]
+}
+```
+
+This must remain distinct from Anthropic's server-side：
+
+```text
+tool_search_tool_result
+```
+
+block family.
+
+The two structures participate in different tool lifecycles.
+
+------
+
+## 5.5.3 String vs Single Text Block — Evidence Boundary
+
+For normal `MessageParam.content`, Anthropic explicitly documents：
+
+```text
+string S
+=
+shorthand for
+[TextBlock(S)]
+```
+
+and calls the two representations equivalent.
+
+For `ToolResultBlock.content`, the reviewed official material clearly permits both：
+
+```text
+string
+```
+
+and：
+
+```text
+nested content blocks
+```
+
+but the reviewed source does **not** contain the same explicit normative statement that：
+
+```text
+tool_result.content = string S
+```
+
+is necessarily semantically equivalent to：
+
+```text
+tool_result.content = [
+  {
+    type: "text",
+    text: S
+  }
+]
+```
+
+Therefore this protocol specification records the following boundary：
+
+> **The union shape alone does not establish string ↔ single-TextBlock semantic equivalence for `ToolResultBlock.content`.**
+
+Until stronger source evidence or conformance establishes that equivalence for a selected source profile, it MUST NOT be inferred merely from structural similarity.
+
+------
+
+## 5.5.4 Omission, Empty String, and Explicit Empty Array
+
+The following are distinct wire representations：
+
+```text
+content omitted
+```
+
+```json
+{
+  "content": ""
+}
+```
+
+```json
+{
+  "content": []
+}
+```
+
+Current reviewed source establishes：
+
+```text
+content is optional
+content can be string
+content can be an array
+```
+
+but the evidence reviewed for v0.2 does not establish a general protocol equivalence：
+
+```text
+omitted
+≡
+""
+≡
+[]
+```
+
+Therefore：
+
+> **No equivalence among omission, explicit empty string, and explicit empty array is asserted by this specification unless the selected source profile or stronger protocol evidence explicitly establishes it.**
+
+The existence of an array branch in the schema is not, by itself, proof that an empty array is source-valid or omission-equivalent.
+
+------
+
+## 5.5.5 `is_error`
+
+```text
+is_error?: boolean
+```
+
+marks a tool execution result as an error when `true`.
+
+Its omission/default behavior is a source-protocol semantic and should be distinguished from the presence of an explicit `true`.
+
+------
+
+# 5.6 Client Tool Identity
 
 ```text
 Assistant
 └── tool_use
     └── id = X
 
-        │
-        ▼
+        ↓
 
 User
 └── tool_result
     └── tool_use_id = X
 ```
 
-Therefore:
+Therefore：
 
 ```text
 tool_use.id
@@ -1721,104 +1685,67 @@ The ID, not array position or tool name, identifies the invocation.
 Canonical client-tool lifecycle：
 
 ```text
-Request 1
 user request
 ↓
 assistant tool_use
 ↓
 caller executes tool
 ↓
-Request 2
+next request
 user tool_result
 ↓
 assistant continuation
 ```
 
-For the next request, tool results must immediately follow the assistant tool-use turn. Anthropic reports request errors when tool-use IDs do not have corresponding `tool_result` blocks immediately afterward.
+Tool results must immediately follow their corresponding tool-use turn.
 
-Inside that user message:
+Within the user message：
 
 ```text
-tool_result blocks
-must precede
-ordinary text
+tool_result*
+before
+ordinary text*
 ```
-
-For example:
-
-```json
-{
-  "role": "user",
-  "content": [
-    {
-      "type": "tool_result",
-      "tool_use_id": "toolu_01",
-      "content": "result"
-    },
-    {
-      "type": "text",
-      "text": "Continue."
-    }
-  ]
-}
-```
-
-is the valid ordering pattern.
 
 ------
 
 # 5.8 Parallel Client Tool Calls
 
-One assistant response can contain multiple:
+One assistant response can contain multiple `tool_use` blocks.
+
+Correlation remains ID-based：
 
 ```text
-tool_use
+tool_use(id=A)
+tool_use(id=B)
+
+↓
+
+tool_result(tool_use_id=A)
+tool_result(tool_use_id=B)
 ```
-
-blocks.
-
-Example lifecycle：
-
-```text
-AssistantMessage
-├── tool_use(id=A)
-├── tool_use(id=B)
-└── tool_use(id=C)
-
-        ↓
-
-UserMessage
-├── tool_result(tool_use_id=A)
-├── tool_result(tool_use_id=B)
-└── tool_result(tool_use_id=C)
-```
-
-Correlation remains ID-based.
 
 ------
 
 # 5.9 Server Tools
 
-Server tools follow a different contract:
+Server tools use a distinct lifecycle：
 
 ```text
 Claude
 ↓
 server_tool_use
 ↓
-Anthropic infrastructure executes tool
+Anthropic infrastructure executes
 ↓
 specialized server-tool result block
 ↓
 Claude continues
 ```
 
-Normally the caller does **not** manufacture ordinary `tool_result` blocks for server tools.
-
-Examples of server-tool block families include:
+Examples include：
 
 ```text
-server_tool_use
 web_search_tool_result
 web_fetch_tool_result
 code_execution_tool_result
@@ -1826,7 +1753,7 @@ tool_search_tool_result
 ...
 ```
 
-Their exact result schemas are tool-specific and versioned.
+Their schemas are tool-specific and versioned.
 
 ------
 
@@ -1834,7 +1761,7 @@ Their exact result schemas are tool-specific and versioned.
 
 ## 6.1 Transport
 
-When:
+When：
 
 ```json
 {
@@ -1842,23 +1769,16 @@ When:
 }
 ```
 
-the Messages response is transmitted using Server-Sent Events.
+Messages response uses Server-Sent Events.
 
-Frames use:
+Frames：
 
 ```text
 event: <event-name>
 data: <JSON>
 ```
 
-The JSON object also includes its own `type` discriminator.
-
-Example：
-
-```text
-event: message_stop
-data: {"type":"message_stop"}
-```
+The JSON object also contains its own `type` discriminator.
 
 ------
 
@@ -1870,9 +1790,7 @@ Anthropic Message Stream
 ├── message_start
 │
 ├── ContentBlock[index]*
-│   │
 │   ├── content_block_start
-│   │
 │   ├── content_block_delta*
 │   │   ├── text_delta
 │   │   ├── input_json_delta
@@ -1880,7 +1798,6 @@ Anthropic Message Stream
 │   │   ├── signature_delta
 │   │   ├── citations_delta
 │   │   └── future delta variants
-│   │
 │   └── content_block_stop
 │
 ├── message_delta+
@@ -1894,13 +1811,11 @@ Failure
 └── error
 ```
 
-This is the core documented SSE lifecycle.
-
 ------
 
 # 6.3 `message_start`
 
-## 6.3.1 Structure
+Begins an incomplete partial Message：
 
 ```text
 message_start
@@ -1915,61 +1830,11 @@ message_start
     └── usage
 ```
 
-Example shape：
-
-```text
-event: message_start
-data: {
-  "type": "message_start",
-  "message": {
-    "id": "msg_01...",
-    "type": "message",
-    "role": "assistant",
-    "content": [],
-    "model": "claude-opus-5",
-    "stop_reason": null,
-    "stop_sequence": null,
-    "usage": {
-      "input_tokens": 25,
-      "output_tokens": 1
-    }
-  }
-}
-```
-
-The message begins incomplete; content is added through later content-block events.
-
 ------
 
 # 6.4 Content Block Lifecycle
 
-## 6.4.1 Lifecycle
-
-Each streamed block uses an integer:
-
-```text
-index
-```
-
-and follows:
-
-```text
-ContentBlock[index]
-│
-├── content_block_start
-├── content_block_delta*
-└── content_block_stop
-```
-
-`index` corresponds to:
-
-```text
-final Message.content[index]
-```
-
-------
-
-## 6.4.2 State Machine
+Each block is keyed by integer `index`：
 
 ```text
 NOT_STARTED
@@ -1985,41 +1850,26 @@ OPEN
 COMPLETE
 ```
 
-A normal parser should track lifecycle state by `index`.
+`index` corresponds to final `Message.content[index]`.
 
 ------
 
 # 6.5 `content_block_start`
 
-Structure：
+Contains：
 
 ```text
-content_block_start
-├── index
-└── content_block
+index
+content_block
 ```
 
-Text example：
-
-```text
-event: content_block_start
-data: {
-  "type": "content_block_start",
-  "index": 0,
-  "content_block": {
-    "type": "text",
-    "text": ""
-  }
-}
-```
-
-The block's `type` determines which subsequent delta variants make semantic sense.
+The block discriminator determines which delta variants are semantically valid.
 
 ------
 
 # 6.6 `content_block_delta`
 
-General shape：
+General：
 
 ```text
 content_block_delta
@@ -2029,212 +1879,69 @@ content_block_delta
     └── type-specific fields
 ```
 
-------
-
 ## 6.6.1 Text Delta
 
-```json
-{
-  "type": "content_block_delta",
-  "index": 0,
-  "delta": {
-    "type": "text_delta",
-    "text": "Hello"
-  }
-}
-```
-
-Meaning：
-
-```text
-append delta.text
-to the text block at index
-```
-
-Text is incremental, not cumulative.
-
-------
+`text_delta.text` is incremental, not cumulative.
 
 ## 6.6.2 Tool Input JSON Delta
 
-Structure：
-
 ```text
-input_json_delta
-├── type = "input_json_delta"
-└── partial_json
+input_json_delta.partial_json
 ```
 
-Example：
+is partial serialized JSON syntax.
 
-```json
-{
-  "type": "content_block_delta",
-  "index": 1,
-  "delta": {
-    "type": "input_json_delta",
-    "partial_json": "{\"location\":\"San Fra"
-  }
-}
-```
+It is not the completed semantic tool input.
 
-Critical semantic distinction：
-
-```text
-partial_json
-=
-serialized JSON fragment
-
-tool_use.input
-=
-completed JSON object
-```
-
-Therefore:
-
-```text
-partial_json
-≠
-completed tool input
-```
-
-Fragments should be accumulated for the corresponding block and parsed as the object becomes complete; the final `tool_use.input` is always object-shaped.
-
-------
+Final `tool_use.input` is an object.
 
 ## 6.6.3 Thinking Delta
 
-```json
-{
-  "type": "content_block_delta",
-  "index": 0,
-  "delta": {
-    "type": "thinking_delta",
-    "thinking": "..."
-  }
-}
-```
-
-`thinking` is incremental thinking text.
-
-------
+Incremental thinking text.
 
 ## 6.6.4 Signature Delta
 
-Thinking blocks also have:
-
-```text
-signature_delta
-```
-
-Example：
-
-```json
-{
-  "type": "content_block_delta",
-  "index": 0,
-  "delta": {
-    "type": "signature_delta",
-    "signature": "<opaque>"
-  }
-}
-```
-
-The signature normally arrives shortly before the thinking content block closes.
-
-------
+Carries opaque thinking signature data.
 
 ## 6.6.5 Citation Delta
 
-Text output can also receive citation updates through:
-
-```text
-citations_delta
-```
-
-These modify citation state rather than text itself.
-
-The official SDK stream accumulator treats citation, text, thinking, signature, and input JSON as distinct delta variants.
+Updates citation state separately from ordinary text content.
 
 ------
 
 # 6.7 Text Streaming Lifecycle
 
 ```text
-content_block_start
-└── TextBlock(index)
-
-        ↓
-
-text_delta(index)*
-
-        ↓
-
-content_block_stop(index)
+content_block_start(text)
+↓
+text_delta*
+↓
+content_block_stop
 ```
 
-Completed text is the ordered concatenation of `text_delta.text` values for that block.
+Completed text is the ordered concatenation of text deltas for that block.
 
 ------
 
 # 6.8 Tool-Use Streaming Lifecycle
 
-## 6.8.1 Hierarchy
-
 ```text
-ToolUseBlock[index]
-│
-├── content_block_start
-│   └── tool_use
-│       ├── id
-│       ├── name
-│       └── input = {}
-│
-├── content_block_delta*
-│   └── input_json_delta
-│       └── partial_json
-│
-└── content_block_stop
-    ↓
+content_block_start(tool_use)
+↓
+input_json_delta*
+↓
+content_block_stop
+↓
 completed tool_use.input
 ```
 
-------
-
-## 6.8.2 Partial Input Rule
-
-During streaming:
-
-```text
-partial JSON syntax
-```
-
-is temporary state.
-
-It should not be confused with:
-
-```text
-completed semantic tool invocation
-```
-
-The final semantic structure remains:
-
-```json
-{
-  "type": "tool_use",
-  "id": "...",
-  "name": "...",
-  "input": {
-    "...": "..."
-  }
-}
-```
+Partial JSON fragments are temporary transport/parser state, not completed tool calls.
 
 ------
 
 # 6.9 Thinking Streaming Lifecycle
 
-Normal thinking:
+Normal：
 
 ```text
 content_block_start(thinking)
@@ -2246,116 +1953,38 @@ signature_delta
 content_block_stop
 ```
 
-For `display: "omitted"`:
-
-```text
-content_block_start(thinking)
-↓
-signature_delta
-↓
-content_block_stop
-```
-
-No `thinking_delta` is emitted, but the block remains a normal `thinking` block.
+For omitted display, thinking text deltas may be absent while signature continuity remains.
 
 ------
 
 # 6.10 `content_block_stop`
 
-Structure：
-
-```json
-{
-  "type": "content_block_stop",
-  "index": 0
-}
-```
-
-It closes the content block identified by the index.
-
-The final block representation is now complete for normal lifecycle purposes.
+Closes the block at the given `index`.
 
 ------
 
 # 6.11 `message_delta`
 
-## 6.11.1 Hierarchy
+Can update message-level termination information and cumulative usage.
 
-```text
-message_delta
-├── delta
-│   ├── stop_reason?
-│   ├── stop_sequence?
-│   └── other message-level updates
-│
-└── usage
-```
-
-Example：
-
-```text
-event: message_delta
-data: {
-  "type": "message_delta",
-  "delta": {
-    "stop_reason": "end_turn",
-    "stop_sequence": null
-  },
-  "usage": {
-    "output_tokens": 15
-  }
-}
-```
-
-------
-
-## 6.11.2 Usage Is Cumulative
-
-Usage contained in `message_delta` is cumulative.
-
-Therefore:
-
-```text
-message_delta #1 output_tokens = 10
-message_delta #2 output_tokens = 20
-```
-
-means final current count is:
-
-```text
-20
-```
-
-not:
-
-```text
-10 + 20 = 30
-```
+Usage values are cumulative rather than independent increments.
 
 ------
 
 # 6.12 `ping`
 
-Shape：
+Auxiliary event.
 
-```text
-event: ping
-data: {"type":"ping"}
-```
-
-Zero or more `ping` events can appear during the stream.
-
-They do not mutate Message content.
+Does not mutate Message content.
 
 ------
 
 # 6.13 `message_stop`
 
-Successful terminal event：
+Normal successful semantic terminal：
 
 ```text
-event: message_stop
-data: {"type":"message_stop"}
+message_stop
 ```
 
 Canonical successful lifecycle：
@@ -2370,34 +1999,15 @@ message_delta+
 message_stop
 ```
 
-Therefore:
-
-> **`message_stop` is the normal semantic completion boundary of the current Anthropic Messages SSE protocol.**
-
 There is no trailing `[DONE]` requirement.
 
 ------
 
 # 6.14 Stream Error
 
-A streaming HTTP response can fail after the server has already returned HTTP `200`.
+A streaming HTTP response can fail after HTTP `200`.
 
-Example shape：
-
-```text
-event: error
-data: {
-  "type": "error",
-  "error": {
-    "type": "overloaded_error",
-    "message": "Overloaded"
-  }
-}
-```
-
-A corresponding non-streaming overload might have been HTTP `529`, but once SSE has begun, the failure is represented inside the stream.
-
-Therefore:
+Therefore：
 
 ```text
 HTTP 200
@@ -2405,168 +2015,67 @@ HTTP 200
 guaranteed successful Message completion
 ```
 
+An SSE `error` event is a stream failure, not successful terminal completion.
+
 ------
 
 # 7. Termination and Error Protocol
 
 ## 7.1 Successful Message Termination
 
-A successfully produced `Message` carries:
+Current documented stop-reason family tracked by this spec：
 
 ```text
-stop_reason
+end_turn
+max_tokens
+stop_sequence
+tool_use
+pause_turn
+refusal
+model_context_window_exceeded
 ```
 
-which describes why generation stopped.
-
-Current documented reasons:
-
-```text
-stop_reason
-├── end_turn
-├── max_tokens
-├── stop_sequence
-├── tool_use
-├── pause_turn
-├── refusal
-└── model_context_window_exceeded
-```
+These are Message termination semantics, not all HTTP error classes.
 
 ------
 
 ## 7.2 `end_turn`
 
-Meaning：
-
-```text
-Claude reached a natural completion point
-```
-
-This is the normal ordinary-answer termination.
-
-------
+Natural completion.
 
 ## 7.3 `max_tokens`
 
-Meaning：
-
-```text
-requested max_tokens
-or model output maximum
-was reached
-```
-
-The response itself is still a valid successful API Message, but its content is truncated by the output limit.
-
-------
+Requested/model output limit reached.
 
 ## 7.4 `stop_sequence`
 
-Meaning：
-
-```text
-one configured stop_sequences value matched
-```
-
-Then:
-
-```text
-stop_sequence
-```
-
-contains the matched sequence.
-
-------
+Configured custom stop sequence matched.
 
 ## 7.5 `tool_use`
 
-Meaning：
-
-```text
-Claude produced one or more client tool invocations
-and expects tool results
-```
-
-This is a valid Message outcome, not an API failure.
-
-The caller normally executes the tools and continues the conversation with corresponding `tool_result` blocks.
-
-------
+Claude emitted one or more client tool calls and expects tool results.
 
 ## 7.6 `pause_turn`
 
-Used by server-tool workflows when the server-side execution loop pauses before completing the whole logical turn.
-
-Correct continuation is to send the assistant response back as conversation history so the server-side process can continue.
-
-It differs from client `tool_use`:
-
-```text
-tool_use
-→ caller must execute client tool
-
-pause_turn
-→ server-side tool process needs another Messages turn
-```
-
-------
+Server-tool workflow paused and requires continuation in another Messages turn.
 
 ## 7.7 `refusal`
 
-A refusal is normally a **valid successful HTTP Message response**:
-
-```text
-HTTP success
-+
-stop_reason = "refusal"
-```
-
-rather than an HTTP protocol error.
-
-`stop_details`, when available, can carry structured refusal information.
-
-------
+A refusal is normally a valid successful Message response with refusal termination semantics.
 
 ## 7.8 `model_context_window_exceeded`
 
-Meaning：
-
-```text
-generation reached the model's context-window limit
-before ordinary completion
-```
-
-The returned Message is valid but truncated by context capacity.
-
-------
+Generation reached the model context capacity before ordinary completion.
 
 ## 7.9 `stop_sequence`
 
-Type：
-
-```text
-string | null
-```
-
-If:
-
-```text
-stop_reason = "stop_sequence"
-```
-
-it contains the matched custom sequence.
-
-Otherwise normally:
-
-```text
-null
-```
+`string | null`; contains the matched sequence when appropriate.
 
 ------
 
 # 7.10 HTTP Error Response
 
-Canonical structure：
+Conceptual：
 
 ```text
 ErrorResponse
@@ -2577,74 +2086,43 @@ ErrorResponse
 └── request_id
 ```
 
-Example：
+Current error families include：
 
-```json
-{
-  "type": "error",
-  "error": {
-    "type": "not_found_error",
-    "message": "The requested resource could not be found."
-  },
-  "request_id": "req_..."
-}
-```
+| HTTP | `error.type` |
+|---|---|
+| 400 | `invalid_request_error` |
+| 401 | `authentication_error` |
+| 402 | `billing_error` |
+| 403 | `permission_error` |
+| 404 | `not_found_error` |
+| 409 | `conflict_error` |
+| 413 | `request_too_large` |
+| 429 | `rate_limit_error` |
+| 500 | `api_error` |
+| 504 | `timeout_error` |
+| 529 | `overloaded_error` |
 
-------
-
-## 7.11 Current HTTP Error Families
-
-| HTTP | `error.type`            |
-| ---- | ----------------------- |
-| 400  | `invalid_request_error` |
-| 401  | `authentication_error`  |
-| 402  | `billing_error`         |
-| 403  | `permission_error`      |
-| 404  | `not_found_error`       |
-| 409  | `conflict_error`        |
-| 413  | `request_too_large`     |
-| 429  | `rate_limit_error`      |
-| 500  | `api_error`             |
-| 504  | `timeout_error`         |
-| 529  | `overloaded_error`      |
-
-Anthropic may add new error types in accordance with its API versioning policy.
+Anthropic may add new error types under its versioning policy.
 
 ------
 
-## 7.12 Request Size
+## 7.11 Request Size
 
-Current Messages API maximum request size:
+Current Messages request-size limit tracked by this spec：
 
 ```text
 32 MB
 ```
 
-Exceeding it produces:
-
-```text
-413 request_too_large
-```
+Oversized requests produce `413 request_too_large`.
 
 ------
 
-## 7.13 Request ID
+## 7.12 Request ID
 
-Every API response contains:
+Responses carry opaque request identity for diagnostics.
 
-```http
-request-id: ...
-```
-
-For error responses, the same logical identifier is also returned as:
-
-```json
-{
-  "request_id": "req_..."
-}
-```
-
-The ID should be treated as opaque diagnostic identity.
+It must not be interpreted as conversational semantic state.
 
 ------
 
@@ -2652,29 +2130,17 @@ The ID should be treated as opaque diagnostic identity.
 
 ## 8.1 Message Ordering
 
-```text
-messages[]
-```
+`messages[]` is ordered conversation history.
 
-is ordered conversation history.
-
-Turn order is semantically meaningful.
-
-Consecutive ordinary user/assistant turns may be combined by Anthropic, but callers should not arbitrarily reorder conversation history.
+Turn order is semantic.
 
 ------
 
 ## 8.2 Content Ordering
 
-```text
-Message.content[]
-```
+`Message.content[]` is ordered.
 
-is ordered.
-
-Text, thinking, tool calls and extension blocks preserve their relative semantic sequence.
-
-For streaming:
+For streaming：
 
 ```text
 content_block index
@@ -2686,21 +2152,17 @@ final content[] index
 
 ## 8.3 Tool Identity
 
-For client tools:
-
 ```text
 tool_use.id
 =
 tool_result.tool_use_id
 ```
 
-This cross-turn relationship must be preserved.
+This cross-turn identity must be preserved.
 
 ------
 
 ## 8.4 Tool Result Placement
-
-Client-tool result lifecycle requires:
 
 ```text
 assistant tool_use
@@ -2710,7 +2172,7 @@ immediately following user message
 matching tool_result
 ```
 
-Within the user message:
+Inside the user message：
 
 ```text
 tool_result*
@@ -2722,60 +2184,23 @@ ordinary text*
 
 ## 8.5 Partial Tool Input Is Not Complete Input
 
-Streaming:
-
 ```text
 input_json_delta.partial_json
-```
-
-is serialized partial syntax.
-
-Final:
-
-```text
-tool_use.input
-```
-
-is a JSON object.
-
-Therefore:
-
-```text
-partial_json
 ≠
-completed tool call input
+completed tool_use.input
 ```
 
 ------
 
 ## 8.6 Thinking Signature Is Opaque
 
-`ThinkingBlock.signature` exists to preserve thinking continuity/integrity.
-
-It must be treated as opaque data.
-
-It should not be parsed or regenerated by a client implementation.
+Do not parse or regenerate opaque continuity signatures.
 
 ------
 
 ## 8.7 Omitted and Redacted Thinking Are Different
 
-```text
-ThinkingBlock
-├── type = "thinking"
-├── thinking = ""
-└── signature = ...
-```
-
-can represent intentionally omitted visible thinking.
-
-It is not equivalent to:
-
-```text
-RedactedThinkingBlock
-├── type = "redacted_thinking"
-└── data = ...
-```
+A normal thinking block with empty visible thinking plus signature is not a `redacted_thinking` block.
 
 ------
 
@@ -2783,94 +2208,123 @@ RedactedThinkingBlock
 
 `message_delta.usage` is cumulative.
 
-Do not sum consecutive streaming usage objects as independent increments.
-
-Similarly:
-
-```text
-output_tokens_details.thinking_tokens
-```
-
-is included within:
-
-```text
-output_tokens
-```
-
-and must not be added again.
+Thinking-token breakdown does not add on top of authoritative output-token total.
 
 ------
 
 ## 8.9 Streaming Success Terminal
 
-The current successful stream ends with:
+Normal semantic completion requires：
 
 ```text
 message_stop
 ```
 
-There is no `[DONE]`.
-
-Consequently, for a protocol consumer:
-
-```text
-physical EOF before message_stop
-```
-
-does not provide the documented semantic success terminal.
-
-It should therefore be regarded as an incomplete stream rather than silently promoted to a completed Message. This is a direct consumer-side consequence of the documented SSE lifecycle.
+Physical EOF before `message_stop` does not establish documented success.
 
 ------
 
 ## 8.10 HTTP 200 Is Not Stream Success
 
-For `stream=true`:
+HTTP success only establishes transition into streaming transport.
 
-```text
-HTTP 200
-↓
-SSE begins
-↓
-error event can still occur
-```
-
-Therefore HTTP status only establishes successful transition into streaming transport; final Message success still depends on the stream lifecycle.
+Final semantic success depends on the SSE lifecycle.
 
 ------
 
 ## 8.11 Unknown vs Malformed
 
-Anthropic's versioning policy explicitly allows future event/enum variants.
-
-Therefore implementations should distinguish:
+Distinguish：
 
 ```text
 unknown future variant
 ```
 
-from:
+from：
 
 ```text
 known variant
-with invalid required structure
+with malformed required structure
 ```
 
-A robust parser can tolerate or preserve a future unknown variant while still treating malformed known structures as protocol errors.
+Protocol extensibility does not make malformed known variants valid.
+
+------
+
+## 8.12 Request-Semantic Headers Are Protocol Inputs
+
+A Messages request may carry Anthropic semantics outside the JSON body.
+
+Therefore：
+
+> **Protocol-defined semantic headers are part of the source request semantic surface and must not be treated as arbitrary HTTP transport metadata.**
+
+Current example：
+
+```text
+anthropic-user-profile-id
+```
+
+which affects request attribution and is beta-gated.
+
+This invariant does not imply every HTTP header is semantic.
+
+------
+
+## 8.13 Alternate Representations Require Protocol Authority
+
+A union type alone does not prove semantic equivalence between its branches.
+
+Example：
+
+```text
+string | ContentBlock[]
+```
+
+does not by itself imply：
+
+```text
+string S
+≡
+[TextBlock(S)]
+```
+
+For ordinary message content, Anthropic explicitly provides that equivalence.
+
+For `ToolResultBlock.content`, v0.2 records both accepted representation families but does not infer the same equivalence without stronger source authority.
+
+------
+
+## 8.14 Omission and Explicit Presence Are Distinct Unless Defined Otherwise
+
+Protocol consumers should distinguish：
+
+```text
+field omitted
+```
+
+from explicit values such as：
+
+```text
+""
+[]
+false
+0
+```
+
+unless the protocol explicitly defines an equivalence/default relationship.
+
+This is especially relevant to `ToolResultBlock.content`.
 
 ------
 
 # Appendix A. Model-Dependent Protocol Features
 
-This appendix contains wire structures whose **availability or default behavior depends on the selected model**.
-
-The structures themselves are protocol concepts; their support is not universal.
-
-------
+This appendix records structures whose availability/default behavior depends on selected model.
 
 ## A.1 Mid-Conversation System Messages
 
-The traditional Messages API model is:
+The stable baseline is：
 
 ```text
 top-level system
@@ -2878,157 +2332,31 @@ top-level system
 messages[user|assistant]
 ```
 
-and the main Create Message reference still describes this baseline.
+The project source evidence also tracks model-dependent mid-conversation system-message support.
 
-Anthropic has subsequently introduced generally available **mid-conversation system messages** on specific models:
-
-```json
-{
-  "role": "system",
-  "content": "New operator instruction."
-}
-```
-
-Current OpenAPI-derived `MessageParam` accordingly includes:
-
-```text
-"user" | "assistant" | "system"
-```
-
-as its role union.
-
-This is model-dependent rather than universally supported.
-
-### Placement Rules
-
-A mid-conversation `system` message:
-
-- cannot be the first `messages[]` entry;
-- must follow an appropriate preceding turn;
-- must either be final or be followed by an assistant turn;
-- cannot be inserted between a client `tool_use` and its corresponding `tool_result`;
-- can appear consecutively with other system messages under the documented placement rules.
-
-Therefore the current protocol is best understood as:
-
-```text
-Stable baseline roles
-├── user
-└── assistant
-
-Model-dependent role extension
-└── system
-```
-
-------
+Its placement and availability are model-dependent and should not be assumed universal.
 
 ## A.2 Thinking Modes
 
-Current structural modes:
-
-```text
-disabled
-adaptive
-enabled + budget_tokens
-```
-
-but model support differs considerably.
-
-Some newer models require or default to adaptive thinking, some reject manual thinking, while older thinking-capable models can require the manual `enabled` form.
-
-Therefore:
-
-```text
-ThinkingConfig shape
-```
-
-and:
-
-```text
-Selected model's thinking capability
-```
-
-must be treated as separate facts.
-
-------
+Structural modes and actual selected-model capability are separate facts.
 
 ## A.3 Thinking Display Defaults
 
-`display` values:
-
-```text
-summarized
-omitted
-```
-
-are stable concepts, but the **default** differs by model.
-
-Some newer models default to:
-
-```text
-omitted
-```
-
-while earlier Claude 4 variants commonly default to:
-
-```text
-summarized
-```
-
-------
+Display defaults can differ by model.
 
 ## A.4 Effort Levels
 
-The protocol currently defines:
-
-```text
-low
-medium
-high
-xhigh
-max
-```
-
-but not every effort-capable model supports every level.
-
-For example, `xhigh` is supported by a narrower model set than `max`.
-
-Therefore:
-
-```text
-valid effort enum
-≠
-supported effort levels of every model
-```
-
-------
+Not every effort-capable model supports every level.
 
 ## A.5 Sampling Controls
 
-The request schema contains:
-
-```text
-temperature
-top_p
-top_k
-```
-
-but support is model-dependent.
-
-An implementation must not infer:
-
-```text
-field exists in MessageRequest schema
-→ every Claude model accepts non-default value
-```
-
-Model capability information remains authoritative for concrete availability.
+Field existence does not imply universal model support.
 
 ------
 
 # Appendix B. Extension Content Families
 
-The Messages protocol is larger than the minimal:
+The current request/response protocol is broader than：
 
 ```text
 text
@@ -3038,106 +2366,93 @@ tool_use
 tool_result
 ```
 
-model.
-
-The current official OpenAPI-derived types include additional families such as:
+Families include：
 
 ```text
-Documents
-├── document
-
-Search
-├── search_result
-
-Server Tools
-├── server_tool_use
-├── web_search_tool_result
-├── web_fetch_tool_result
-├── code_execution_tool_result
-├── bash_code_execution_tool_result
-├── text_editor_code_execution_tool_result
-└── tool_search_tool_result
-
-Runtime / Container
-└── container_upload
-
-Thinking
-├── thinking
-└── redacted_thinking
-
-Mid-Conversation Extensions
-└── mid-conversation system-related blocks
+document
+search_result
+server_tool_use
+web-search results
+web-fetch results
+code-execution results
+tool-search results
+container/tool extensions
+thinking/redacted-thinking
+future variants
 ```
 
-These blocks should remain distinct tagged variants because their fields and lifecycles differ.
-
-A parser should not flatten all of them into ordinary text.
+These remain distinct tagged variants.
 
 ------
 
 # Appendix C. Complete Request Tree
 
 ```text
-MessageRequest
+Anthropic HTTP Request
 │
-├── model
-├── max_tokens
-│
-├── Conversation
+├── Headers
 │   │
-│   ├── system?
+│   ├── Authentication
+│   │   ├── x-api-key
+│   │   └── Authorization
 │   │
-│   └── messages[]
-│       │
-│       ├── role
-│       │   ├── user
-│       │   ├── assistant
-│       │   └── system*      # model-dependent extension
-│       │
-│       └── content
-│           ├── string
-│           └── ContentBlockParam[]
-│               │
-│               ├── text
-│               ├── image
-│               ├── document
-│               ├── search_result
-│               ├── thinking
-│               ├── redacted_thinking
-│               ├── tool_use
-│               ├── tool_result
-│               ├── server_tool_use
-│               └── extension blocks
+│   ├── Protocol Profile
+│   │   ├── anthropic-version
+│   │   └── anthropic-beta?
+│   │
+│   └── Request Semantics
+│       ├── anthropic-user-profile-id?
+│       └── future protocol-defined semantic headers
 │
-├── Tools
-│   ├── tools[]?
-│   └── tool_choice?
-│
-├── Thinking
-│   └── thinking?
-│       ├── disabled
-│       ├── adaptive
-│       └── enabled
-│           └── budget_tokens
-│
-├── Output
-│   └── output_config?
-│       ├── effort?
-│       └── format?
-│
-├── Sampling / Stop
-│   ├── stop_sequences?
-│   ├── temperature?
-│   ├── top_p?
-│   └── top_k?
-│
-└── Runtime
-    ├── stream?
-    ├── cache_control?
-    ├── container?
-    ├── inference_geo?
-    ├── service_tier?
-    └── metadata?
+└── MessageRequest
+    │
+    ├── model
+    ├── max_tokens
+    │
+    ├── Conversation
+    │   ├── system?
+    │   └── messages[]
+    │       ├── role
+    │       │   ├── user
+    │       │   ├── assistant
+    │       │   └── system*      # model-dependent extension
+    │       └── content
+    │           ├── string
+    │           └── ContentBlockParam[]
+    │               ├── text
+    │               ├── image
+    │               ├── document
+    │               ├── search_result
+    │               ├── thinking
+    │               ├── redacted_thinking
+    │               ├── tool_use
+    │               ├── tool_result
+    │               ├── server_tool_use
+    │               └── extension blocks
+    │
+    ├── Tools
+    │   ├── tools[]?
+    │   └── tool_choice?
+    │
+    ├── Thinking
+    │   └── thinking?
+    │
+    ├── Output
+    │   └── output_config?
+    │
+    ├── Sampling / Stop
+    │   ├── stop_sequences?
+    │   ├── temperature?
+    │   ├── top_p?
+    │   └── top_k?
+    │
+    └── Runtime / Metadata
+        ├── stream?
+        ├── cache_control?
+        ├── container?
+        ├── inference_geo?
+        ├── service_tier?
+        └── metadata?
 ```
 
 ------
@@ -3154,21 +2469,10 @@ Message
 │   └── model
 │
 ├── content[]
-│   │
 │   ├── TextBlock
-│   │
 │   ├── ThinkingBlock
-│   │   ├── thinking
-│   │   └── signature
-│   │
 │   ├── RedactedThinkingBlock
-│   │   └── data
-│   │
 │   ├── ToolUseBlock
-│   │   ├── id
-│   │   ├── name
-│   │   └── input
-│   │
 │   ├── ServerToolUseBlock
 │   └── ExtensionBlock
 │
@@ -3202,26 +2506,14 @@ Anthropic SSE Message Stream
 │   └── partial Message
 │
 ├── ContentBlock[index]*
-│   │
 │   ├── content_block_start
-│   │
 │   ├── content_block_delta*
-│   │   │
 │   │   ├── text_delta
-│   │   │   └── text
-│   │   │
 │   │   ├── input_json_delta
-│   │   │   └── partial_json
-│   │   │
 │   │   ├── thinking_delta
-│   │   │   └── thinking
-│   │   │
 │   │   ├── signature_delta
-│   │   │   └── signature
-│   │   │
 │   │   ├── citations_delta
 │   │   └── future delta variants
-│   │
 │   └── content_block_stop
 │
 ├── message_delta+
@@ -3238,14 +2530,84 @@ Failure
 └── error
 ```
 
-The normal semantic terminal is:
+Normal semantic terminal：
 
 ```text
 message_stop
 ```
 
-not:
+not：
 
 ```text
 [DONE]
 ```
+
+------
+
+# Appendix F. v0.2 Evidence Boundaries
+
+This appendix records places where the source structure is established but semantic equivalence is intentionally not inferred.
+
+## F.1 `ToolResultBlock.content`
+
+Established by current reviewed official documentation：
+
+```text
+content is optional
+
+content may be string
+
+content may be a nested content-block list
+```
+
+Not established by the reviewed material as an explicit normative equivalence：
+
+```text
+string S
+≡
+[TextBlock(S)]
+```
+
+for `ToolResultBlock.content`.
+
+Therefore v0.2 does not assert it.
+
+## F.2 Explicit Empty ToolResult Array
+
+Current source evidence is stronger than the bare union shape.
+
+Anthropic's official `claude-quickstarts` computer-use demo constructs a beta `tool_result` with：
+
+```text
+content: []
+```
+
+when a tool execution produces neither textual output nor an image.
+
+Therefore the reviewed evidence establishes at least：
+
+```text
+explicit [] is used by an official Anthropic client example
+in at least one beta tool-result path
+```
+
+However, that example does **not** by itself establish：
+
+```text
+1. universal source-validity of []
+   across every Messages source profile
+
+or
+
+2. semantic equivalence:
+   content: []
+   ≡
+   content omitted
+```
+
+Therefore v0.2 records explicit `[]` as an evidenced representation in at least one beta path, while leaving its universal validity and omission-equivalence profile-dependent until stronger protocol authority establishes them.
+
+
+## F.3 Protocol Evolution
+
+If later authoritative source evidence establishes either equivalence, this Protocol Spec should be updated at the protocol layer before downstream conversion specs rely on it as source truth.
