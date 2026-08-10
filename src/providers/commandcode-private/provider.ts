@@ -1,4 +1,5 @@
 import {
+  calculateCost,
   clampThinkingLevel,
   createAssistantMessageEventStream,
   createProvider,
@@ -141,23 +142,57 @@ function emptyUsage(): Usage {
   };
 }
 
-function createMessage(
+interface ResponseLifetimeAuthority {
+  api: string;
+  provider: string;
+  modelId: string;
+  responseTimestamp: number;
+  pricingModel: Model<typeof API_ID>;
+}
+
+function captureResponseLifetimeAuthority(
   model: Model<typeof API_ID>,
+  now: () => number,
+): ResponseLifetimeAuthority {
+  const cost = {
+    ...model.cost,
+    ...(model.cost.tiers === undefined
+      ? {}
+      : { tiers: model.cost.tiers.map((tier) => ({ ...tier })) }),
+  };
+  return {
+    api: model.api,
+    provider: model.provider,
+    modelId: model.id,
+    responseTimestamp: now(),
+    pricingModel: { ...model, cost },
+  };
+}
+
+function applyCapturedPricing(
+  authority: ResponseLifetimeAuthority,
+  usage: Usage,
+): Usage {
+  calculateCost(authority.pricingModel, usage);
+  return usage;
+}
+
+function createMessage(
+  authority: ResponseLifetimeAuthority,
   text: string,
   usage: Usage,
   stopReason: "pending" | "stop" | "error",
-  now: () => number,
   errorMessage?: string,
 ): AssistantMessage {
   const message: AssistantMessage = {
     role: "assistant",
     content: text.length === 0 ? [] : [{ type: "text", text }],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
+    api: authority.api,
+    provider: authority.provider,
+    model: authority.modelId,
     usage,
     stopReason,
-    timestamp: now(),
+    timestamp: authority.responseTimestamp,
   };
   if (errorMessage !== undefined) message.errorMessage = errorMessage;
   return message;
@@ -840,6 +875,163 @@ export function buildCommandCodeBody(
   };
 }
 
+function cloneServerConfig(config: ServerConfig): ServerConfig {
+  return {
+    workingDir: config.workingDir,
+    date: config.date,
+    environment: config.environment,
+    structure: [...config.structure],
+    isGitRepo: config.isGitRepo,
+    currentBranch: config.currentBranch,
+    mainBranch: config.mainBranch,
+    gitStatus: config.gitStatus,
+    recentCommits: [...config.recentCommits],
+  };
+}
+
+function snapshotRequestModel(
+  model: Model<typeof API_ID>,
+): Model<typeof API_ID> {
+  return {
+    ...model,
+    input: [...model.input],
+    cost: {
+      ...model.cost,
+      ...(model.cost.tiers === undefined
+        ? {}
+        : { tiers: model.cost.tiers.map((tier) => ({ ...tier })) }),
+    },
+    ...(model.thinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap: { ...model.thinkingLevelMap } }),
+  };
+}
+
+async function racePayloadCallback<T>(
+  callbackPromise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    void callbackPromise.catch(() => undefined);
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("CommandCode payload preparation was aborted");
+  }
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () =>
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("CommandCode payload preparation was aborted"),
+      );
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([callbackPromise, aborted]);
+  } catch (error) {
+    if (signal.aborted) void callbackPromise.catch(() => undefined);
+    throw error;
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+export interface PreparedCommandCodeRequest {
+  readonly endpoint: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly bodyText: string;
+  readonly signal: AbortSignal;
+  readonly fetchImpl: FetchFunction;
+}
+
+export interface CommandCodePreparationDependencies {
+  boundFetch: FetchFunction;
+  projectSnapshot: ProjectSnapshot;
+  compatibility: CommandCodeCompatibilityPolicy;
+  createSessionId: () => string;
+}
+
+export async function prepareCommandCodeRequest(
+  model: Model<typeof API_ID>,
+  context: Context,
+  options: SimpleStreamOptions | undefined,
+  dependencies: CommandCodePreparationDependencies,
+): Promise<PreparedCommandCodeRequest> {
+  const signal = options?.signal ?? new AbortController().signal;
+  signal.throwIfAborted();
+
+  const requestModel = snapshotRequestModel(model);
+  const invokedModelId = requestModel.id;
+  const modelAcceptsImages = requestModel.input.includes("image");
+  const endpoint = new URL("/alpha/generate", requestModel.baseUrl).toString();
+  const sessionId = resolveProviderSessionId(
+    options?.sessionId,
+    dependencies.createSessionId,
+  );
+  const permissionMode = resolvePermissionMode(
+    dependencies.compatibility.permissionMode,
+  );
+  const projectDir = classifyProjectDir(options?.metadata);
+  const snapshot =
+    projectDir === undefined
+      ? createEmptyServerConfig()
+      : await dependencies.projectSnapshot.snapshot({ projectDir, signal });
+  signal.throwIfAborted();
+
+  const authoritativeConfig = cloneServerConfig(snapshot);
+  const callbackConfig = cloneServerConfig(authoritativeConfig);
+  const projectSlug =
+    projectDir === undefined ? undefined : slugify(projectDir) || "root";
+  const headers = buildCommandCodeHeaders(
+    options,
+    sessionId,
+    projectSlug,
+    dependencies.compatibility,
+  );
+  const built = buildCommandCodeBody(
+    requestModel,
+    context,
+    options,
+    callbackConfig,
+    sessionId,
+    dependencies.compatibility,
+  );
+
+  let effectivePayload: unknown = built.body;
+  if (options?.onPayload !== undefined) {
+    const callbackPromise = Promise.resolve().then(() =>
+      options.onPayload?.(built.body, model),
+    );
+    const replacement = await racePayloadCallback(callbackPromise, signal);
+    if (replacement !== undefined) effectivePayload = replacement;
+  }
+  signal.throwIfAborted();
+
+  const serialized = JSON.stringify(effectivePayload);
+  if (serialized === undefined) {
+    throw new Error("CommandCode payload serialization produced no request body");
+  }
+  signal.throwIfAborted();
+  const validationValue: unknown = JSON.parse(serialized);
+  validateCommandCodeRequest(validationValue, {
+    config: authoritativeConfig,
+    modelId: invokedModelId,
+    modelAcceptsImages,
+    permissionMode,
+    sessionId,
+    supportedReasoningEfforts: built.supportedReasoningEfforts,
+  });
+
+  return Object.freeze({
+    endpoint,
+    headers: Object.freeze({ ...headers }),
+    bodyText: serialized,
+    signal,
+    fetchImpl: options?.fetch ?? dependencies.boundFetch,
+  });
+}
+
 function createCommandCodeStream(
   boundFetch: FetchFunction,
   now: () => number,
@@ -849,66 +1041,44 @@ function createCommandCodeStream(
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
+    const responseAuthority = captureResponseLifetimeAuthority(model, now);
 
     const run = async (): Promise<void> => {
       try {
-        const sessionId = resolveProviderSessionId(
-          options?.sessionId,
-          createSessionId,
-        );
-        const signal = options?.signal ?? new AbortController().signal;
-        signal.throwIfAborted();
-        const endpoint = new URL("/alpha/generate", model.baseUrl);
-        const projectDir = classifyProjectDir(options?.metadata);
-        const projectConfig =
-          projectDir === undefined
-            ? createEmptyServerConfig()
-            : await projectSnapshot.snapshot({ projectDir, signal });
-        signal.throwIfAborted();
-        const projectSlug =
-          projectDir === undefined ? undefined : slugify(projectDir) || "root";
-        const headers = buildCommandCodeHeaders(
-          options,
-          sessionId,
-          projectSlug,
-          compatibility,
-        );
-        const built = buildCommandCodeBody(
+        const prepared = await prepareCommandCodeRequest(
           model,
           context,
           options,
-          projectConfig,
-          sessionId,
-          compatibility,
+          { boundFetch, projectSnapshot, compatibility, createSessionId },
         );
-        const bodyText = JSON.stringify(built.body);
-        const validationValue: unknown = JSON.parse(bodyText);
-        validateCommandCodeRequest(validationValue, {
-          config: projectConfig,
-          modelId: model.id,
-          modelAcceptsImages: model.input.includes("image"),
-          permissionMode: resolvePermissionMode(compatibility.permissionMode),
-          sessionId,
-          supportedReasoningEfforts: built.supportedReasoningEfforts,
-        });
         const requestInit: RequestInit = {
           method: "POST",
-          headers,
-          body: bodyText,
+          headers: prepared.headers,
+          body: prepared.bodyText,
+          signal: prepared.signal,
         };
-        if (options?.signal !== undefined) requestInit.signal = options.signal;
-        const response = await (options?.fetch ?? boundFetch)(endpoint, requestInit);
+        const response = await prepared.fetchImpl(prepared.endpoint, requestInit);
         const result = await consumeTextResponse(response);
-        const usage: Usage = {
+        const usage = applyCapturedPricing(responseAuthority, {
           input: result.inputTokens,
           output: result.outputTokens,
           cacheRead: 0,
           cacheWrite: 0,
           totalTokens: result.inputTokens + result.outputTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-        const start = createMessage(model, "", emptyUsage(), "pending", now);
-        const complete = createMessage(model, result.text, usage, "stop", now);
+        });
+        const start = createMessage(
+          responseAuthority,
+          "",
+          emptyUsage(),
+          "pending",
+        );
+        const complete = createMessage(
+          responseAuthority,
+          result.text,
+          usage,
+          "stop",
+        );
         stream.push({ type: "start", partial: start });
         stream.push({ type: "text_start", contentIndex: 0, partial: start });
         stream.push({ type: "text_delta", contentIndex: 0, delta: result.text, partial: complete });
@@ -917,7 +1087,13 @@ function createCommandCodeStream(
         stream.end(complete);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        const failed = createMessage(model, "", emptyUsage(), "error", now, detail);
+        const failed = createMessage(
+          responseAuthority,
+          "",
+          emptyUsage(),
+          "error",
+          detail,
+        );
         stream.push({ type: "error", reason: "error", error: failed });
         stream.end(failed);
       }
