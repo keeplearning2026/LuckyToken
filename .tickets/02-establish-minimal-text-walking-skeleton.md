@@ -4,12 +4,11 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] A minimal valid `POST /v1/messages` request produces one schema-valid Anthropic assistant text response.
-- [ ] Startup creates Pi Models, registers the CommandCode Private Provider through the Pi public contract, and exposes only the runtime dependencies needed by request handling.
-- [ ] The request path uses Pi `Model`, `Context`, `ModelsSimpleStreamOptions`, `AssistantMessageEventStream`, and `AssistantMessage` directly; no parallel LuckyToken request/message/response IR is introduced.
-- [ ] The fixture upstream crosses the real Provider contract and emits a valid CommandCode text lifecycle rather than bypassing Provider conversion.
-- [ ] The HTTP response is not written until Pi success has been atomically committed and the complete Anthropic body has serialized.
-- [ ] Type-check and test commands are documented and run successfully from a clean checkout.
-
+- [x] A minimal valid `POST /v1/messages` request produces one schema-valid Anthropic assistant text response.
+- [x] Startup creates Pi Models, registers the CommandCode Private Provider through the Pi public contract, and exposes only the runtime dependencies needed by request handling.
+- [x] The request path uses Pi `Model`, `Context`, `ModelsSimpleStreamOptions`, `AssistantMessageEventStream`, and `AssistantMessage` directly; no parallel LuckyToken request/message/response IR is introduced.
+- [x] The fixture upstream crosses the real Provider contract and emits a valid CommandCode text lifecycle rather than bypassing Provider conversion.
+- [x] The HTTP response is not written until Pi success has been atomically committed and the complete Anthropic body has serialized.
+- [x] Type-check and test commands are documented and run successfully from a clean checkout.

@@ -1,0 +1,28 @@
+{
+  "name": "luckytoken",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "test": "npm run test:certification && vitest run",
+    "test:certification": "node --test test/certification/*.test.mjs",
+    "test:unit": "vitest run test/unit --passWithNoTests",
+    "test:integration": "vitest run test/integration"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.84.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "eslint": "10.8.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
+  }
+}
