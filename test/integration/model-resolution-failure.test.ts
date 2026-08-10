@@ -33,6 +33,6 @@ it("keeps model-resolution failure outside conversion classification", async () 
 
   expect(response.status).toBe(404);
   await expect(response.json()).resolves.toMatchObject({
-    error: { type: "model_resolution_error" },
+    error: { type: "not_found_error" },
   });
 });

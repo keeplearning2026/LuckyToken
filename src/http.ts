@@ -21,6 +21,11 @@ import {
   type AnthropicModelValidityPolicy,
 } from "./protocols/anthropic/representability.js";
 import { renderAnthropicTextMessage } from "./protocols/anthropic/response.js";
+import {
+  renderAnthropicError,
+  renderAnthropicJsonSuccess,
+  type PreparedHttpResponse,
+} from "./protocols/anthropic/wire.js";
 
 export class HttpRequestAbortedError extends Error {
   readonly reason: unknown;
@@ -47,6 +52,7 @@ export interface HttpBoundaryDependencies {
 interface RequestLifecycle {
   readonly signal: AbortSignal;
   isWritable(): boolean;
+  markDelivered(): void;
   dispose(): void;
 }
 
@@ -57,6 +63,7 @@ function createRequestLifecycle(
 ): RequestLifecycle {
   const controller = new AbortController();
   let writable = true;
+  let delivered = false;
   const removers: Array<() => void> = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -82,7 +89,13 @@ function createRequestLifecycle(
 
   return {
     signal: controller.signal,
-    isWritable: () => writable && !controller.signal.aborted,
+    isWritable: () => writable && !controller.signal.aborted && !delivered,
+    markDelivered: () => {
+      if (!writable || controller.signal.aborted || delivered) {
+        throw new HttpRequestAbortedError(controller.signal.reason);
+      }
+      delivered = true;
+    },
     dispose: () => {
       if (timer !== undefined) clearTimeout(timer);
       for (const remove of removers) remove();
@@ -96,18 +109,18 @@ function assertWritable(lifecycle: RequestLifecycle): void {
   }
 }
 
-function jsonResponse(
+function deliverHttpResponse(
   lifecycle: RequestLifecycle,
-  status: number,
-  body: unknown,
+  prepared: PreparedHttpResponse,
 ): Response {
   assertWritable(lifecycle);
-  const bodyText = JSON.stringify(body);
-  assertWritable(lifecycle);
-  return new Response(bodyText, {
-    status,
-    headers: { "content-type": "application/json" },
+  const response = new Response(prepared.body, {
+    status: prepared.status,
+    headers: { "content-type": prepared.contentType },
   });
+  assertWritable(lifecycle);
+  lifecycle.markDelivered();
+  return response;
 }
 
 async function raceWithRequestSignal<T>(
@@ -163,16 +176,20 @@ export async function handleHttpRequest(
     const receivedAt = dependencies.now();
     const url = new URL(request.url);
     if (request.method !== "POST" || url.pathname !== "/v1/messages") {
-      return jsonResponse(lifecycle, 404, {
-        type: "error",
-        error: { type: "not_found_error" },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(404, "not_found_error", "Route not found"),
+      );
     }
     if (!hasJsonContentType(request.headers)) {
-      return jsonResponse(lifecycle, 415, {
-        type: "error",
-        error: { type: "invalid_request_error" },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(
+          415,
+          "invalid_request_error",
+          "Content-Type must be application/json",
+        ),
+      );
     }
 
     const authResult = await raceWithRequestSignal(
@@ -180,10 +197,14 @@ export async function handleHttpRequest(
       lifecycle.signal,
     );
     if (!authResult.authorized) {
-      return jsonResponse(lifecycle, 401, {
-        type: "error",
-        error: { type: "authentication_error" },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(
+          401,
+          "authentication_error",
+          "Invalid authorization credentials",
+        ),
+      );
     }
 
     const sourceProfile = resolveAnthropicSourceProfile(request.headers);
@@ -194,10 +215,14 @@ export async function handleHttpRequest(
       dependencies.maxRequestBytes,
     );
     if (rawBody === undefined) {
-      return jsonResponse(lifecycle, 413, {
-        type: "error",
-        error: { type: "request_too_large" },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(
+          413,
+          "request_too_large",
+          "Request exceeds the configured maximum size",
+        ),
+      );
     }
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
@@ -240,38 +265,53 @@ export async function handleHttpRequest(
       invocation.renderState.clientModel,
       dependencies.createMessageId(),
     );
-    return jsonResponse(lifecycle, 200, target);
+    const prepared = renderAnthropicJsonSuccess(target);
+    return deliverHttpResponse(lifecycle, prepared);
   } catch (error) {
     if (
       lifecycle.signal.aborted ||
-      error instanceof HttpRequestAbortedError ||
-      error instanceof ExecutionAbortedError
+      error instanceof HttpRequestAbortedError
     ) {
       throw new HttpRequestAbortedError(lifecycle.signal.reason);
     }
-    if (error instanceof InvalidRequest || error instanceof SyntaxError) {
-      return jsonResponse(lifecycle, 400, {
-        type: "error",
-        error: { type: "invalid_request_error", message: error.message },
-      });
+    if (error instanceof ExecutionAbortedError) {
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(500, "api_error", "Model execution was aborted"),
+      );
+    }
+    if (error instanceof SyntaxError) {
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(
+          400,
+          "invalid_request_error",
+          "Request body is not valid JSON",
+        ),
+      );
+    }
+    if (error instanceof InvalidRequest) {
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(400, "invalid_request_error", error.message),
+      );
     }
     if (error instanceof UnsupportedFeature) {
-      return jsonResponse(lifecycle, 400, {
-        type: "error",
-        error: { type: "unsupported_feature", message: error.message },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(400, "invalid_request_error", error.message),
+      );
     }
     if (error instanceof ModelResolutionFailure) {
-      return jsonResponse(lifecycle, 404, {
-        type: "error",
-        error: { type: "model_resolution_error", message: error.message },
-      });
+      return deliverHttpResponse(
+        lifecycle,
+        renderAnthropicError(404, "not_found_error", error.message),
+      );
     }
-    const detail = error instanceof Error ? error.message : String(error);
-    return jsonResponse(lifecycle, 500, {
-      type: "error",
-      error: { type: "api_error", message: detail },
-    });
+    return deliverHttpResponse(
+      lifecycle,
+      renderAnthropicError(500, "api_error", "Internal server error"),
+    );
   } finally {
     lifecycle.dispose();
   }

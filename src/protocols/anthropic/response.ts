@@ -1,5 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
+export class OutboundResponseFidelityFailure extends Error {
+  readonly kind = "OutboundResponseFidelityFailure";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OutboundResponseFidelityFailure";
+  }
+}
+
 export interface AnthropicTextBlock {
   citations: null;
   text: string;
@@ -91,7 +100,9 @@ function assertAllowedFields(
 ): void {
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
   if (unknown !== undefined) {
-    throw new Error(`${field} contains an unclassified field: ${unknown}`);
+    throw new OutboundResponseFidelityFailure(
+      `${field} contains an unclassified field: ${unknown}`,
+    );
   }
 }
 
@@ -105,14 +116,20 @@ function copyJsonValue(
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value) || Object.is(value, -0)) {
-      throw new Error(`${field} contains a non-lossless JSON number`);
+      throw new OutboundResponseFidelityFailure(
+        `${field} contains a non-lossless JSON number`,
+      );
     }
     return value;
   }
   if (typeof value !== "object") {
-    throw new Error(`${field} contains a non-JSON value`);
+    throw new OutboundResponseFidelityFailure(
+      `${field} contains a non-JSON value`,
+    );
   }
-  if (ancestors.has(value)) throw new Error(`${field} contains a cycle`);
+  if (ancestors.has(value)) {
+    throw new OutboundResponseFidelityFailure(`${field} contains a cycle`);
+  }
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
@@ -122,7 +139,9 @@ function copyJsonValue(
         keys.some((key, index) => key !== String(index)) ||
         Object.getOwnPropertySymbols(value).length > 0
       ) {
-        throw new Error(`${field} contains a sparse or extended array`);
+        throw new OutboundResponseFidelityFailure(
+          `${field} contains a sparse or extended array`,
+        );
       }
       return value.map((entry, index) =>
         copyJsonValue(entry, ancestors, `${field}[${index}]`),
@@ -130,17 +149,23 @@ function copyJsonValue(
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new Error(`${field} contains a non-semantic JSON object`);
+      throw new OutboundResponseFidelityFailure(
+        `${field} contains a non-semantic JSON object`,
+      );
     }
     const keys = Object.keys(value);
     if (Reflect.ownKeys(value).length !== keys.length) {
-      throw new Error(`${field} contains non-JSON object properties`);
+      throw new OutboundResponseFidelityFailure(
+        `${field} contains non-JSON object properties`,
+      );
     }
     const copied: Record<string, JsonValue> = {};
     for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor)) {
-        throw new Error(`${field} contains an accessor or custom serialization`);
+        throw new OutboundResponseFidelityFailure(
+          `${field} contains an accessor or custom serialization`,
+        );
       }
       copied[key] = copyJsonValue(
         descriptor.value,
@@ -156,25 +181,33 @@ function copyJsonValue(
 
 function copyToolInput(value: unknown, field: string): Record<string, JsonValue> {
   if (!isRecord(value)) {
-    throw new Error(`${field} must be a non-null, non-array JSON object`);
+    throw new OutboundResponseFidelityFailure(
+      `${field} must be a non-null, non-array JSON object`,
+    );
   }
   const copied = copyJsonValue(value, new Set(), field);
   if (!isRecord(copied)) {
-    throw new Error(`${field} must remain an object after validation`);
+    throw new OutboundResponseFidelityFailure(
+      `${field} must remain an object after validation`,
+    );
   }
   return copied as Record<string, JsonValue>;
 }
 
 function requireCount(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new Error(`${field} must be a non-negative safe integer`);
+    throw new OutboundResponseFidelityFailure(
+      `${field} must be a non-negative safe integer`,
+    );
   }
   return value as number;
 }
 
 function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
   const usage = message.usage as unknown;
-  if (!isRecord(usage)) throw new Error("Pi usage must be an object");
+  if (!isRecord(usage)) {
+    throw new OutboundResponseFidelityFailure("Pi usage must be an object");
+  }
   assertAllowedFields(usage, USAGE_FIELDS, "Pi usage");
   const input = requireCount(usage.input, "usage.input");
   const output = requireCount(usage.output, "usage.output");
@@ -185,7 +218,9 @@ function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
   if (usage.reasoning !== undefined) {
     const reasoning = requireCount(usage.reasoning, "usage.reasoning");
     if (reasoning > output) {
-      throw new Error("usage.reasoning must be a subset of usage.output");
+      throw new OutboundResponseFidelityFailure(
+        "usage.reasoning must be a subset of usage.output",
+      );
     }
     outputDetails = { thinking_tokens: reasoning };
   }
@@ -197,7 +232,9 @@ function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
       "usage.cacheWrite1h",
     );
     if (cacheWrite1h > cacheWrite) {
-      throw new Error("usage.cacheWrite1h must be a subset of usage.cacheWrite");
+      throw new OutboundResponseFidelityFailure(
+        "usage.cacheWrite1h must be a subset of usage.cacheWrite",
+      );
     }
     cacheCreation = {
       ephemeral_1h_input_tokens: cacheWrite1h,
@@ -224,10 +261,12 @@ function convertContent(
   return message.content.map((block, index) => {
     const raw = block as unknown;
     if (!isRecord(raw) || typeof raw.type !== "string") {
-      throw new Error(`Pi content[${index}] must be a tagged object`);
+      throw new OutboundResponseFidelityFailure(
+        `Pi content[${index}] must be a tagged object`,
+      );
     }
     if (raw.type === "thinking") {
-      throw new Error(
+      throw new OutboundResponseFidelityFailure(
         "ThinkingContent is outside the certified Anthropic v1 response path",
       );
     }
@@ -238,12 +277,16 @@ function convertContent(
         `Pi content[${index}]`,
       );
       if (typeof raw.text !== "string") {
-        throw new Error(`Pi content[${index}].text must be a string`);
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}].text must be a string`,
+        );
       }
       return { citations: null, text: raw.text, type: "text" };
     }
     if (raw.type !== "toolCall") {
-      throw new Error(`Unsupported Pi assistant content: ${raw.type}`);
+      throw new OutboundResponseFidelityFailure(
+        `Unsupported Pi assistant content: ${raw.type}`,
+      );
     }
     assertAllowedFields(
       raw,
@@ -263,7 +306,7 @@ function convertContent(
       typeof raw.name !== "string" ||
       raw.name.length === 0
     ) {
-      throw new Error(
+      throw new OutboundResponseFidelityFailure(
         `Pi content[${index}] tool identity must be non-empty strings`,
       );
     }
@@ -283,21 +326,33 @@ function convertStopReason(
   if (stopReason === "stop") return "end_turn";
   if (stopReason === "length") return "max_tokens";
   if (stopReason === "toolUse") return "tool_use";
-  throw new Error(`Unsupported committed Pi stop reason: ${stopReason}`);
+  throw new OutboundResponseFidelityFailure(
+    `Unsupported committed Pi stop reason: ${stopReason}`,
+  );
 }
 
 function assertMessageEnvelope(message: AssistantMessage): void {
   const raw = message as unknown;
-  if (!isRecord(raw)) throw new Error("Committed Pi message must be an object");
+  if (!isRecord(raw)) {
+    throw new OutboundResponseFidelityFailure(
+      "Committed Pi message must be an object",
+    );
+  }
   assertAllowedFields(raw, ASSISTANT_MESSAGE_FIELDS, "Committed Pi message");
   if (raw.role !== "assistant") {
-    throw new Error("Committed Pi message must have assistant role");
+    throw new OutboundResponseFidelityFailure(
+      "Committed Pi message must have assistant role",
+    );
   }
   if (!Array.isArray(raw.content)) {
-    throw new Error("Committed Pi message content must be an array");
+    throw new OutboundResponseFidelityFailure(
+      "Committed Pi message content must be an array",
+    );
   }
   if (raw.deferred !== undefined) {
-    throw new Error("Deferred Pi state is outside the Anthropic v1 renderer");
+    throw new OutboundResponseFidelityFailure(
+      "Deferred Pi state is outside the Anthropic v1 renderer",
+    );
   }
   convertStopReason(message.stopReason);
 }
@@ -319,7 +374,9 @@ export function convertAssistantMessageToAnthropic(
     typeof messageId !== "string" ||
     messageId.length === 0
   ) {
-    throw new Error("Anthropic response identity must be non-empty strings");
+    throw new OutboundResponseFidelityFailure(
+      "Anthropic response identity must be non-empty strings",
+    );
   }
   assertMessageEnvelope(message);
   const content = convertContent(message);

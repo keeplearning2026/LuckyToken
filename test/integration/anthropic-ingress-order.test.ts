@@ -68,7 +68,7 @@ describe("Anthropic ingress failure order", () => {
       }),
     );
     await expect(unsupported.json()).resolves.toMatchObject({
-      error: { type: "unsupported_feature" },
+      error: { type: "invalid_request_error" },
     });
   });
 });
