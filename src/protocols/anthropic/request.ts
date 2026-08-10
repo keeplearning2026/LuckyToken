@@ -3,6 +3,7 @@ import type {
   Context,
   ImageContent,
   Message,
+  ModelsSimpleStreamOptions,
   TextContent,
   ToolCall,
   ToolResultMessage,
@@ -19,9 +20,10 @@ import {
 export interface AnthropicInvocation {
   selector: string;
   context: Context;
-  maxTokens: number;
+  options: ModelsSimpleStreamOptions;
   renderState: {
     clientModel: string;
+    stream: boolean;
   };
 }
 
@@ -31,6 +33,9 @@ export interface ValidatedAnthropicSourceRequest {
   messages: Array<Record<string, unknown>>;
   hasImages: boolean;
   finalAssistantPrefill: boolean;
+  stream: boolean;
+  temperature?: number;
+  metadataUserId?: string;
   systemPrompt?: string;
   tools?: ValidatedAnthropicTool[];
 }
@@ -118,13 +123,21 @@ function validateOptionalFieldShapes(
   }
   for (const name of KNOWN_TOP_LEVEL_FIELDS) {
     if (
-      !["model", "max_tokens", "messages", "stream", "system", "tools"].includes(name) &&
+      ![
+        "model",
+        "max_tokens",
+        "messages",
+        "stream",
+        "system",
+        "tools",
+        "temperature",
+        "metadata",
+      ].includes(name) &&
       value[name] !== undefined
     ) {
       unsupported.push(`unsupported top-level field: ${name}`);
     }
   }
-  if (value.stream === true) unsupported.push("stream=true rendering");
 }
 
 function validateContentBlock(
@@ -267,6 +280,24 @@ function validateSystem(
   return text;
 }
 
+function validateMetadata(
+  value: unknown,
+  unsupported: string[],
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new InvalidRequest("metadata must be an object when present");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "user_id") unsupported.push(`unsupported metadata field: ${key}`);
+  }
+  if (value.user_id === undefined) return undefined;
+  if (typeof value.user_id !== "string") {
+    throw new InvalidRequest("metadata.user_id must be a string when present");
+  }
+  return value.user_id;
+}
+
 function validateMessages(
   messages: unknown,
   unsupported: string[],
@@ -405,6 +436,7 @@ export function validateAnthropicSourceRequest(
   validateToolTurnLifecycle(messageFacts.messages);
   const tools = validateAnthropicTools(value.tools, unsupported);
   const systemPrompt = validateSystem(value.system, unsupported);
+  const metadataUserId = validateMetadata(value.metadata, unsupported);
   if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
 
   if (unclassifiedAnthropicHeaders.length > 0) {
@@ -421,11 +453,16 @@ export function validateAnthropicSourceRequest(
     maxTokens: maxTokens as number,
     messages: messageFacts.messages,
     hasImages: messageFacts.hasImages,
+    stream: value.stream === true,
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
   };
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
   if (tools !== undefined) validated.tools = tools;
+  if (value.temperature !== undefined) {
+    validated.temperature = value.temperature as number;
+  }
+  if (metadataUserId !== undefined) validated.metadataUserId = metadataUserId;
   return validated;
 }
 
@@ -630,11 +667,19 @@ export function convertValidatedAnthropicRequest(
   const tools = convertAnthropicTools(request.tools);
   if (tools !== undefined) context.tools = tools;
 
+  const options: ModelsSimpleStreamOptions = { maxTokens: request.maxTokens };
+  if (request.temperature !== undefined) {
+    options.temperature = request.temperature;
+  }
+  if (request.metadataUserId !== undefined) {
+    options.metadata = { user_id: request.metadataUserId };
+  }
+
   return {
     selector: request.selector,
     context,
-    maxTokens: request.maxTokens,
-    renderState: { clientModel: request.selector },
+    options,
+    renderState: { clientModel: request.selector, stream: request.stream },
   };
 }
 

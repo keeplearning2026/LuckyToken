@@ -20,6 +20,7 @@ import {
   defaultAnthropicModelValidityPolicy,
   type AnthropicModelValidityPolicy,
 } from "./protocols/anthropic/representability.js";
+import type { RouterOptionDefaults } from "./options.js";
 
 export interface LuckyTokenRuntime {
   handle(request: Request): Promise<Response>;
@@ -39,6 +40,7 @@ export interface LuckyTokenRuntimeOptions {
   maxRequestBytes?: number;
   requestTimeoutMs?: number;
   shutdownSignal?: AbortSignal;
+  routerDefaults?: RouterOptionDefaults;
   anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
 }
@@ -91,6 +93,7 @@ export function createLuckyTokenRuntime(
     maxRequestBytes: options.maxRequestBytes ?? 1_048_576,
     requestTimeoutMs: options.requestTimeoutMs,
     shutdownSignal: options.shutdownSignal,
+    routerDefaults: options.routerDefaults ?? {},
     now,
   };
 

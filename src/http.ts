@@ -6,6 +6,7 @@ import {
   ModelResolutionFailure,
   resolveModel,
 } from "./model-resolution.js";
+import { composeOptions, type RouterOptionDefaults } from "./options.js";
 import { InvalidRequest, UnsupportedFeature } from "./protocols/anthropic/failures.js";
 import {
   assertImplementedAnthropicProfile,
@@ -39,6 +40,7 @@ export interface HttpBoundaryDependencies {
   maxRequestBytes: number;
   requestTimeoutMs: number | undefined;
   shutdownSignal: AbortSignal | undefined;
+  routerDefaults: RouterOptionDefaults;
   now: () => number;
 }
 
@@ -215,14 +217,17 @@ export async function handleHttpRequest(
       receivedAt,
     );
 
-    const piOptions = {
-      maxTokens: invocation.maxTokens,
-      sessionId: authResult.sessionId,
-      signal: lifecycle.signal,
-      ...(authResult.projectDir === undefined
-        ? {}
-        : { metadata: { projectDir: authResult.projectDir } }),
-    };
+    const piOptions = composeOptions(
+      invocation.options,
+      {
+        sessionId: authResult.sessionId,
+        signal: lifecycle.signal,
+        ...(authResult.projectDir === undefined
+          ? {}
+          : { projectDir: authResult.projectDir }),
+      },
+      dependencies.routerDefaults,
+    );
     const message = await execute(
       dependencies.models,
       model,
