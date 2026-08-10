@@ -2,8 +2,8 @@
 
 **Specification:** FROZEN — Combined Conversion Contract  
 **Capability Baseline:** v1  
-**Protocol Dependency:** Anthropic Messages API Protocol Specification v0.3  
-**Reviewed Protocol Document SHA-256:** `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992`  
+**Protocol Dependency:** Anthropic Messages API Protocol Specification v0.4
+**Reviewed Protocol Document SHA-256:** `efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918`
 **Pi Contract Evidence:** Pi AI IR Protocol v0.9.2  
 **Pi Reference Commit:** `eb3c46d6ce28cb87147bb0d05645ebae28524713`  
 **Pi Reference Package:** `@earendil-works/pi-ai 0.84.1`  
@@ -114,10 +114,10 @@ Specification:
 FROZEN — Combined Conversion Contract
 
 Anthropic Protocol Dependency:
-Anthropic Messages API Protocol Specification v0.3
+Anthropic Messages API Protocol Specification v0.4
 
 Reviewed Anthropic Protocol SHA-256:
-0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 
 Pi Contract Evidence Basis:
 Pi AI IR Protocol v0.9.2
@@ -126,7 +126,7 @@ Reference Package = @earendil-works/pi-ai 0.84.1
 Protocol Blob SHA = a3dc09b846f2e49f73480d5e33c63aa009ff9a51
 
 Protocol Dependency Synchronization:
-REQUIRED BEFORE CERTIFICATION
+SYNCHRONIZED
 
 Runtime Certification:
 PENDING | FAILED | CERTIFIED
@@ -142,7 +142,7 @@ Protocol Dependency synchronized
 Runtime Certification CERTIFIED
 ```
 
-当前 reviewed local Protocol v0.3 已包含 request/response wire structures、semantic-header surface、ToolResult representation evidence boundaries、response Message/Usage/SSE shapes，但与本 Method 的 request-side source-validity contract 仍有两个已知同步缺口：
+当前 reviewed local Protocol v0.4 已包含 request/response wire structures、semantic-header surface、ToolResult representation evidence boundaries、response Message/Usage/SSE shapes，以及本 Method 所需的两个 request-side source-validity facts：
 
 ```text
 model-dependent final-assistant prefill rejection
@@ -150,7 +150,7 @@ model-dependent final-assistant prefill rejection
 strict:true request-wide 20 / 24 / 16 hard limits
 ```
 
-因此当前 v0.3 artifact 可以作为 reviewed dependency identity，但 MUST NOT 作为最终 `CERTIFIED` protocol dependency，直到同步后的 immutable revision 被绑定进 certification manifest。
+因此当前 v0.4 artifact 是 synchronized reviewed dependency identity，可以由 certification manifest 绑定；这只关闭 protocol-dependency gap，不改变 v1 capability baseline，也不提前把 Runtime Certification 标记为 `CERTIFIED`。
 
 Pi runtime certification failure does not automatically modify this specification。只有证据证明本 Method 的 semantic mapping / ownership contract 本身错误时，才需要重新打开对应 contract。
 
@@ -171,11 +171,11 @@ Conversion Method v1.1
 │   └── v0.3
 │
 ├── Protocol Dependency
-│   ├── Anthropic Messages API Protocol Specification v0.3
+│   ├── Anthropic Messages API Protocol Specification v0.4
 │   ├── reviewed document SHA-256
-│   │   └── 0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
-│   └── synchronized immutable revision required
-│       before Runtime Certification = CERTIFIED
+│   │   └── efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
+│   └── synchronized immutable revision available
+│       for Runtime Certification binding
 │
 └── Runtime Certifications
     ├── runtime A
@@ -200,19 +200,19 @@ Specification:
 FROZEN — Combined Conversion Contract
 
 Protocol Dependency:
-Anthropic Messages API Protocol Specification v0.3
+Anthropic Messages API Protocol Specification v0.4
 
 Reviewed Protocol Document SHA-256:
-0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 
 Protocol Dependency Synchronization:
-REQUIRED BEFORE CERTIFICATION
+SYNCHRONIZED
 
 Runtime Certification:
 PENDING
 ```
 
-The reviewed local Anthropic Protocol v0.3 covers the semantic-header surface used here, including `anthropic-user-profile-id`, and preserves two ToolResult evidence boundaries：
+The reviewed local Anthropic Protocol v0.4 covers the semantic-header surface used here, including `anthropic-user-profile-id`, and preserves two ToolResult evidence boundaries：
 
 ```text
 1. tool_result.content = string
@@ -250,7 +250,7 @@ ordinary message.content = []
 → UnsupportedFeature
 ```
 
-The local Protocol v0.3 still requires targeted synchronization before certification with：
+The synchronized Protocol v0.4 now owns：
 
 ```text
 model-dependent final-assistant prefill rejection
@@ -258,13 +258,17 @@ model-dependent final-assistant prefill rejection
 documented strict:true request-wide 20 / 24 / 16 hard limits
 ```
 
-The reviewed local Protocol v0.3 document SHA-256：
+The reviewed local Protocol v0.4 document SHA-256：
 
 ```text
-0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 ```
 
-MUST NOT be the final `CERTIFIED` Protocol dependency unless/until its content is updated in a new immutable synchronized revision containing those request-side source-validity facts.
+is the synchronized immutable dependency eligible for binding by Runtime Certification.
+
+The previous reviewed Protocol v0.3 artifact with SHA-256
+`0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992`
+MUST NOT be used for `CERTIFIED` status because it omits those owning facts.
 
 Normal next work：
 
@@ -308,18 +312,18 @@ The converter MUST NOT use an outdated Protocol Spec omission as permission to i
 #### Reviewed Local Protocol Dependency
 
 
-At the v1 review point, the local Protocol document is：
+At the synchronized v1.1 review point, the local Protocol document is：
 
 ```text
-Anthropic Messages API Protocol Specification v0.3
+Anthropic Messages API Protocol Specification v0.4
 
 document SHA-256:
-0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 ```
 
 That revision covers the semantic-header surface, including `anthropic-user-profile-id`; records the ToolResult string / explicit-`[]` evidence boundaries; and defines the current response Message、Usage、Content Block 与 SSE structures used by the response-side Method。
 
-However, comparison against the request-side source-validity contract frozen by this Method shows two facts that are still not fully represented in the local Protocol v0.3 artifact：
+The synchronized Protocol v0.4 additionally owns the two request-side source-validity facts required by this Method：
 
 ```text
 1. model-dependent final-assistant prefill rejection;
@@ -332,7 +336,7 @@ However, comparison against the request-side source-validity contract frozen by 
 
 Therefore：
 
-> **The reviewed v0.3 document SHA above identifies the current local Protocol artifact, but it is not eligible as the final `CERTIFIED` protocol dependency until a synchronized immutable revision includes those request-side facts.**
+> **The reviewed v0.4 document SHA above identifies the synchronized immutable Protocol artifact eligible for certification binding. Protocol v0.3 / SHA-256 `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992` remains ineligible for `CERTIFIED` status.**
 
 Protocol drift detection is a specification/conformance responsibility, not a claim that runtime code can discover arbitrary future semantics automatically。
 
@@ -1826,7 +1830,7 @@ Preserve exact parsed string value.
 ###### Ordinary `message.content: []`
 
 
-The reviewed Protocol v0.3 / current evidence establishes the array branch but does not establish a normative validity/equivalence rule for an explicit empty ordinary message-content array.
+The reviewed Protocol v0.4 / current evidence establishes the array branch but does not establish a normative validity/equivalence rule for an explicit empty ordinary message-content array.
 
 Therefore current v1 MUST detect this wire representation before ordinary canonical conversion can erase its presence：
 
@@ -2006,7 +2010,7 @@ function convertToolResultContent(
   }
 
   if (source.length === 0) {
-    // Current v0.3-backed no-beta v1 profile rejects this before conversion.
+    // Current v0.4-backed no-beta v1 profile rejects this before conversion.
     // A future profile may authorize it explicitly.
     assertToolResultEmptyArrayAuthorized(
       sourceProfile,
@@ -2104,7 +2108,7 @@ string S
 
 This equivalence belongs to the resolved source protocol profile.
 
-The current project Anthropic Protocol Spec v0.3 establishes that ToolResult string syntax is accepted by the source protocol, but explicitly does **not** establish normative string→single-TextBlock equivalence.
+The current project Anthropic Protocol Spec v0.4 establishes that ToolResult string syntax is accepted by the source protocol, but explicitly does **not** establish normative string→single-TextBlock equivalence.
 
 Therefore current v1 behavior is frozen：
 
@@ -2186,7 +2190,7 @@ It is source-authorized shorthand canonicalization.
 **Explicit `tool_result.content: []` — Current v1 Policy**
 
 
-The project Anthropic Protocol Spec v0.3 establishes that：
+The project Anthropic Protocol Spec v0.4 establishes that：
 
 ```text
 content is optional
@@ -2202,7 +2206,7 @@ and records explicit：
 
 as an evidenced representation in at least one official beta-path example.
 
-However, v0.3 does **not** establish universal validity for explicit `[]` under the supported no-beta v1 profile, and does not establish omission-equivalence.
+However, v0.4 does **not** establish universal validity for explicit `[]` under the supported no-beta v1 profile, and does not establish omission-equivalence.
 
 Therefore v1 freezes one executable policy for the current supported profile：
 
@@ -2381,11 +2385,14 @@ Model-Dependent Source Validation
         │
         ├── selected source model forbids assistant prefill
         │      → InvalidRequest
-        │
-        └── source model/profile permits assistant prefill
+        ├── source model/profile permits assistant prefill
                ↓
         Static v1 Semantic Support
                → UnsupportedFeature
+        │
+        └── source validity is unknown
+               → UnsupportedFeature
+               → never guessed valid or invalid
 ```
 
 Current official Anthropic source evidence explicitly places Claude 4.6 and later models and Claude Mythos Preview in the first branch: these models reject prefill with HTTP 400 `invalid_request_error`.
@@ -4314,7 +4321,7 @@ interface TextContent {
 }
 ```
 
-Anthropic v0.3 output：
+Anthropic v0.4 output：
 
 ```ts
 {
@@ -4408,7 +4415,7 @@ ToolCall
 └── namespace?
 ```
 
-Anthropic v0.3 direct client tool result block：
+Anthropic v0.4 direct client tool result block：
 
 ```text
 ToolUseBlock
@@ -4685,7 +4692,7 @@ usage
 └── cost
 ```
 
-Anthropic Message Protocol v0.3 final `Usage`：
+Anthropic Message Protocol v0.4 final `Usage`：
 
 ```text
 Usage
@@ -5186,7 +5193,7 @@ message.deferred absent
 ##### Target Message Baseline
 
 
-Anthropic Message Protocol v0.3 defines the current target Message shape：
+Anthropic Message Protocol v0.4 defines the current target Message shape：
 
 ```text
 Anthropic Message
@@ -5705,7 +5712,7 @@ Those belong to a future round-trip-supported extension.
 ##### 6.3.1.3. message_delta
 
 
-Anthropic Message Protocol v0.3 requires the delta object to carry the full required-nullable shape：
+Anthropic Message Protocol v0.4 requires the delta object to carry the full required-nullable shape：
 
 ```text
 delta
@@ -5766,7 +5773,7 @@ No target semantic frames follow.
 ##### Atomic SSE Usage Contract
 
 
-v0.3 does **not** freeze an unverified synthetic algorithm such as：
+v0.4 does **not** freeze an unverified synthetic algorithm such as：
 
 ```text
 message_start.output_tokens = 0
@@ -5841,7 +5848,7 @@ function encodeSse(
 #### 6.3.4. Protocol Reference Accumulator
 
 
-Semantic correctness should be tested against a small protocol-owned reference accumulator derived from Anthropic Message Protocol v0.3：
+Semantic correctness should be tested against a small protocol-owned reference accumulator derived from Anthropic Message Protocol v0.4：
 
 ```text
 Atomic SSE
@@ -7416,7 +7423,7 @@ Implement JSON serializer
 
 6.
 Implement Atomic SSE serializer
-with complete v0.3 frame shapes
+with complete v0.4 frame shapes
 
 7.
 Implement protocol reference accumulator
@@ -7562,7 +7569,7 @@ Success Commit Boundary:
 FROZEN
 
 Target Protocol:
-Anthropic Messages API Protocol Specification v0.3
+Anthropic Messages API Protocol Specification v0.4
 
 AssistantMessage
 → Anthropic Message:
@@ -7956,13 +7963,18 @@ tool_result.content: []
 Protocol dependency synchronization：
 
 ```text
-current reviewed local Protocol v0.3 document SHA-256 `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992`
-missing model-dependent prefill rejection
-or documented strict hard limits
-→ cannot be bound to CERTIFIED manifest
+current synchronized local Protocol v0.4
+SHA-256 `efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918`
+includes model-dependent prefill source validity
+and documented strict hard limits
+→ eligible for binding to the certification manifest
+
+previous Protocol v0.3
+SHA-256 `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992`
+→ not eligible for CERTIFIED status
 ```
 
-A future synchronized Protocol revision that resolves these boundaries must update conversion conformance before behavior changes.
+A future Protocol revision that changes these boundaries must update conversion conformance before behavior changes.
 
 ### 11.3. Message Conversion Tests
 
@@ -8031,6 +8043,14 @@ final assistant
 source model/profile permits prefill
 → Source Valid
 → UnsupportedFeature v1
+```
+
+```text
+final assistant
++
+source validity classifier returns unknown
+→ UnsupportedFeature at model-dependent source validation
+→ never guessed InvalidRequest or allowed
 ```
 
 Deterministic converter test：
@@ -9273,10 +9293,10 @@ Capability Baseline:
 v1
 
 Anthropic Protocol Spec:
-Anthropic Messages API Protocol Specification v0.3
+Anthropic Messages API Protocol Specification v0.4
 
 Reviewed Protocol Document SHA-256:
-0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 
 Pi Contract Evidence Basis:
 Pi AI IR Protocol v0.9.2
@@ -9322,7 +9342,7 @@ Conformance Revision:
 <immutable revision>
 ```
 
-The current reviewed Protocol v0.3 SHA above MUST NOT be used for `CERTIFIED` until a synchronized immutable Protocol revision includes the request-side source-validity facts required by v1, including model-dependent final-assistant prefill rejection and the documented strict 20 / 24 / 16 hard limits.
+The synchronized Protocol v0.4 SHA above is eligible for certification binding because it includes the request-side source-validity facts required by v1. The previous Protocol v0.3 SHA-256 `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992` MUST NOT be used for `CERTIFIED`.
 
 Optional non-authoritative diagnostics may derive the semantic-header/source-grammar support matrix from the bound Specification + Protocol revision; they do not redefine it.
 
@@ -9484,8 +9504,8 @@ This closure performs targeted publication / identity repair only：
 
 ```text
 combined Method identity → v1
-current reviewed Protocol dependency → v0.3
-Protocol document SHA-256 → 0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992
+current reviewed Protocol dependency → v0.4
+Protocol document SHA-256 → efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 Runtime Certification → PENDING
 legacy numeric cross-references → named references
 historical flat/nested heading numbers → removed
@@ -9555,4 +9575,3 @@ Models wrapper
 The governing rule remains：
 
 > **Fix source/failure authority at the existing boundaries; do not introduce new architecture.**
-

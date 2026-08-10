@@ -1,7 +1,7 @@
-# Anthropic Messages API Protocol Specification v0.3
+# Anthropic Messages API Protocol Specification v0.4
 
 **Protocol:** Anthropic Messages API  
-**Version:** v0.3  
+**Version:** v0.4
 **Primary Endpoint:** `POST /v1/messages`  
 **Transport:** HTTP + JSON / Server-Sent Events (SSE)  
 **Reference Date:** 2026-08-10
@@ -764,6 +764,36 @@ Example：
 ```
 
 The new response continues from the provided assistant prefix.
+
+Final-assistant prefill source validity is model-dependent. The authoritative
+classification for a selected source profile and model is a narrow,
+evidence-bound policy with exactly these outcomes：
+
+```text
+allowed | forbidden | unknown
+```
+
+Their protocol meaning is：
+
+```text
+forbidden → source-invalid
+            the request is rejected as invalid_request_error
+
+allowed → source-valid
+          generation continues from the assistant prefix
+
+unknown → validity is not guessed
+          neither model-name matching nor family inference may classify it
+```
+
+This source-validity decision is distinct from an implementation's feature
+support. A source-valid prefill may still be unsupported by a converter or
+runtime. An `unknown` outcome likewise remains unresolved rather than being
+guessed valid or invalid.
+
+The policy revision and its evidence must be immutable for certification.
+Protocol consumers MUST NOT derive this decision from model-name substrings,
+marketing families, catalog order, or provider fallback behavior.
 
 ------
 
@@ -1560,6 +1590,31 @@ input_examples
 ```
 
 These do not change the basic client-tool identity contract.
+
+## 5.2.3 Strict Tool Source Validity
+
+`strict:true` client tools participate in Anthropic's structured-schema
+grammar-compilation path. The documented deterministic request-wide limits
+are：
+
+```text
+strict:true tools per request <= 20
+optional parameters total     <= 24
+union-type parameters total   <= 16
+```
+
+These are request-wide source-validity constraints, not per-tool limits. The
+optional-parameter and union-parameter counters are accumulated across all
+participating strict schemas in the request.
+
+Exceeding any documented limit makes the source request invalid. This
+classification occurs before any downstream converter-specific schema subset
+or runtime capability check.
+
+Anthropic may also enforce internal compiled-grammar complexity or compilation
+timeout limits whose complete predicates are not publicly specified. Those
+unknown predicates are not permission for a protocol consumer to invent local
+source-invalidity rules.
 
 ------
 
@@ -2622,7 +2677,7 @@ string S
 
 For ordinary message content, Anthropic explicitly provides that equivalence.
 
-For `ToolResultBlock.content`, v0.3 records both accepted representation families but does not infer the same equivalence without stronger source authority.
+For `ToolResultBlock.content`, v0.4 records both accepted representation families but does not infer the same equivalence without stronger source authority.
 
 ------
 
@@ -2952,7 +3007,7 @@ not:
 
 ------
 
-# Appendix F. v0.3 Evidence Boundaries
+# Appendix F. v0.4 Evidence Boundaries
 
 This appendix records places where the source structure is established but semantic equivalence is intentionally not inferred.
 
@@ -2978,7 +3033,7 @@ string S
 
 for `ToolResultBlock.content`.
 
-Therefore v0.3 does not assert it.
+Therefore v0.4 does not assert it.
 
 ## F.2 Explicit Empty ToolResult Array
 
@@ -3013,7 +3068,7 @@ or
    content omitted
 ```
 
-Therefore v0.3 records explicit `[]` as an evidenced representation in at least one beta path, while leaving its universal validity and omission-equivalence profile-dependent until stronger protocol authority establishes them.
+Therefore v0.4 records explicit `[]` as an evidenced representation in at least one beta path, while leaving its universal validity and omission-equivalence profile-dependent until stronger protocol authority establishes them.
 
 
 ## F.3 Protocol Evolution

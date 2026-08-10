@@ -1,0 +1,63 @@
+{
+  "protocolVersion": "v0.4",
+  "capabilityBaseline": "v1",
+  "cases": [
+    {
+      "id": "final-assistant-prefill-forbidden",
+      "fact": "final-assistant-prefill",
+      "policy": "forbidden",
+      "gate": "model-dependent-source-validity",
+      "expected": "InvalidRequest"
+    },
+    {
+      "id": "final-assistant-prefill-allowed",
+      "fact": "final-assistant-prefill",
+      "policy": "allowed",
+      "gate": "static-v1-support",
+      "expected": "UnsupportedFeature"
+    },
+    {
+      "id": "final-assistant-prefill-unknown",
+      "fact": "final-assistant-prefill",
+      "policy": "unknown",
+      "gate": "model-dependent-source-validity",
+      "expected": "UnsupportedFeature"
+    },
+    {
+      "id": "strict-tool-count-21",
+      "fact": "strict-tool-count",
+      "value": 21,
+      "maximum": 20,
+      "gate": "source-validity",
+      "expected": "InvalidRequest"
+    },
+    {
+      "id": "strict-optional-parameter-count-25",
+      "fact": "strict-optional-parameter-count",
+      "value": 25,
+      "maximum": 24,
+      "gate": "source-validity",
+      "expected": "InvalidRequest"
+    },
+    {
+      "id": "strict-union-parameter-count-17",
+      "fact": "strict-union-parameter-count",
+      "value": 17,
+      "maximum": 16,
+      "gate": "source-validity",
+      "expected": "InvalidRequest"
+    },
+    {
+      "id": "tool-result-string-no-equivalence-claim",
+      "fact": "tool-result-string",
+      "gate": "static-v1-support",
+      "expected": "UnsupportedFeature"
+    },
+    {
+      "id": "tool-result-explicit-empty-array-no-equivalence-claim",
+      "fact": "tool-result-explicit-empty-array",
+      "gate": "source-grammar-coverage",
+      "expected": "UnsupportedFeature"
+    }
+  ]
+}
