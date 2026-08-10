@@ -12,7 +12,7 @@ import {
   resolveAnthropicSourceProfile,
 } from "./protocols/anthropic/profile.js";
 import {
-  convertValidatedAnthropicTextRequest,
+  convertValidatedAnthropicRequest,
   validateAnthropicSourceRequest,
 } from "./protocols/anthropic/request.js";
 import {
@@ -158,6 +158,7 @@ export async function handleHttpRequest(
 
   try {
     assertWritable(lifecycle);
+    const receivedAt = dependencies.now();
     const url = new URL(request.url);
     if (request.method !== "POST" || url.pathname !== "/v1/messages") {
       return jsonResponse(lifecycle, 404, {
@@ -209,9 +210,9 @@ export async function handleHttpRequest(
       sourceProfile,
       dependencies.modelValidityPolicy,
     );
-    const invocation = convertValidatedAnthropicTextRequest(
+    const invocation = convertValidatedAnthropicRequest(
       validatedRequest,
-      dependencies.now(),
+      receivedAt,
     );
 
     const piOptions = {

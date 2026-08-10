@@ -31,6 +31,7 @@ export interface LuckyTokenRuntimeOptions {
   commandCodeBaseUrl: string;
   fetch: FetchFunction;
   modelId: string;
+  modelInput?: Array<"text" | "image">;
   createMessageId?: () => string;
   createSessionId?: () => string;
   projectDir?: string;
@@ -53,7 +54,7 @@ export function createLuckyTokenRuntime(
     provider: commandCodePrivateProviderId,
     baseUrl: options.commandCodeBaseUrl,
     reasoning: false,
-    input: ["text"],
+    input: [...(options.modelInput ?? ["text"])],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 64_000,

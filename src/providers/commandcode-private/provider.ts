@@ -155,23 +155,52 @@ function buildCommandCodeBody(
   config: ServerConfig,
 ): Record<string, unknown> {
   const messages = context.messages.map((message) => {
-    if (message.role !== "user") {
-      throw new Error("The walking skeleton supports only user messages");
+    if (message.role === "user") {
+      const content =
+        typeof message.content === "string"
+          ? [{ type: "text" as const, text: message.content }]
+          : message.content.map((block) => {
+              if (block.type === "text") {
+                return { type: "text" as const, text: block.text };
+              }
+              if (!model.input.includes("image")) {
+                throw new Error("Resolved model does not accept image input");
+              }
+              return {
+                type: "image" as const,
+                image: `data:${block.mimeType};base64,${block.data}`,
+                mimeType: block.mimeType,
+              };
+            });
+      return { role: "user", content };
     }
-    const content =
-      typeof message.content === "string"
-        ? [{ type: "text" as const, text: message.content }]
-        : message.content.map((block) => {
-            if (block.type !== "text") {
-              throw new Error("The walking skeleton supports only text content");
-            }
-            return { type: "text" as const, text: block.text };
-          });
-    return {
-      role: "user",
-      content,
-    };
+    if (message.role === "assistant") {
+      if (
+        message.stopReason !== "stop" &&
+        message.stopReason !== "length" &&
+        message.stopReason !== "toolUse"
+      ) {
+        throw new Error(`Unsupported historical stop state: ${message.stopReason}`);
+      }
+      const content = message.content.map((block) => {
+        if (block.type !== "text") {
+          throw new Error("The current history path supports assistant text only");
+        }
+        return { type: "text" as const, text: block.text };
+      });
+      return { role: "assistant", content };
+    }
+    throw new Error("Tool results are not yet supported by this ticket");
   });
+
+  const params: Record<string, unknown> = {
+    model: model.id,
+    messages,
+    tools: [],
+    max_tokens: options?.maxTokens ?? model.maxTokens,
+    stream: true,
+  };
+  if (context.systemPrompt !== undefined) params.system = context.systemPrompt;
 
   return {
     config,
@@ -180,13 +209,7 @@ function buildCommandCodeBody(
     skills: null,
     permissionMode: "standard",
     threadId: options?.sessionId,
-    params: {
-      model: model.id,
-      messages,
-      tools: [],
-      max_tokens: options?.maxTokens ?? model.maxTokens,
-      stream: true,
-    },
+    params,
   };
 }
 
