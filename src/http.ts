@@ -198,11 +198,20 @@ export async function handleHttpRequest(
       });
     }
 
-    const message = await execute(dependencies.models, model, invocation.context, {
+    const piOptions = {
       maxTokens: invocation.maxTokens,
       sessionId: authResult.sessionId,
       signal: lifecycle.signal,
-    });
+      ...(authResult.projectDir === undefined
+        ? {}
+        : { metadata: { projectDir: authResult.projectDir } }),
+    };
+    const message = await execute(
+      dependencies.models,
+      model,
+      invocation.context,
+      piOptions,
+    );
     assertWritable(lifecycle);
     const target = renderAnthropicTextMessage(
       message,

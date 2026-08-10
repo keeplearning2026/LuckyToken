@@ -11,6 +11,14 @@ import {
   type StreamFunction,
   type Usage,
 } from "@earendil-works/pi-ai";
+import slugify from "@sindresorhus/slugify";
+
+import {
+  classifyProjectDir,
+  createEmptyServerConfig,
+  type ProjectSnapshot,
+  type ServerConfig,
+} from "./project.js";
 
 const PROVIDER_ID = "commandcode-private";
 const API_ID = "commandcode-private";
@@ -26,6 +34,7 @@ export interface CommandCodePrivateProviderOptions {
   fetch: FetchFunction;
   model: Model<typeof API_ID>;
   now: () => number;
+  projectSnapshot: ProjectSnapshot;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,6 +152,7 @@ function buildCommandCodeBody(
   model: Model<typeof API_ID>,
   context: Context,
   options: SimpleStreamOptions | undefined,
+  config: ServerConfig,
 ): Record<string, unknown> {
   const messages = context.messages.map((message) => {
     if (message.role !== "user") {
@@ -164,17 +174,7 @@ function buildCommandCodeBody(
   });
 
   return {
-    config: {
-      workingDir: "",
-      date: "",
-      environment: "",
-      structure: [],
-      isGitRepo: false,
-      currentBranch: "",
-      mainBranch: "",
-      gitStatus: "",
-      recentCommits: [],
-    },
+    config,
     memory: null,
     taste: null,
     skills: null,
@@ -193,6 +193,7 @@ function buildCommandCodeBody(
 function createCommandCodeStream(
   boundFetch: FetchFunction,
   now: () => number,
+  projectSnapshot: ProjectSnapshot,
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
@@ -203,23 +204,37 @@ function createCommandCodeStream(
         if (typeof sessionId !== "string" || sessionId.length === 0) {
           throw new Error("CommandCode requires one resolved sessionId");
         }
+        const signal = options?.signal ?? new AbortController().signal;
+        signal.throwIfAborted();
+        const projectDir = classifyProjectDir(options?.metadata);
+        const projectConfig =
+          projectDir === undefined
+            ? createEmptyServerConfig()
+            : await projectSnapshot.snapshot({ projectDir, signal });
+        signal.throwIfAborted();
+        const projectSlug =
+          projectDir === undefined ? undefined : slugify(projectDir) || "root";
         const endpoint = new URL("/alpha/generate", model.baseUrl);
+        const headers: Record<string, string> = {
+          accept: "*/*",
+          authorization: `Bearer ${options?.apiKey ?? ""}`,
+          "content-type": "application/json",
+          "user-agent": "cli",
+          "x-cli-environment": "production",
+          "x-cmd-zdr": "1",
+          "x-co-flag": "false",
+          "x-command-code-version": "1.9.0",
+          "x-session-id": sessionId,
+          "x-taste-learning": "false",
+        };
+        // Core v5.5 makes project-less identity explicit by omitting this wire fact.
+        if (projectSlug !== undefined) headers["x-project-slug"] = projectSlug;
         const requestInit: RequestInit = {
           method: "POST",
-          headers: {
-            accept: "*/*",
-            authorization: `Bearer ${options?.apiKey ?? ""}`,
-            "content-type": "application/json",
-            "user-agent": "cli",
-            "x-cli-environment": "production",
-            "x-cmd-zdr": "1",
-            "x-co-flag": "false",
-            "x-command-code-version": "1.9.0",
-            "x-project-slug": "root",
-            "x-session-id": sessionId,
-            "x-taste-learning": "false",
-          },
-          body: JSON.stringify(buildCommandCodeBody(model, context, options)),
+          headers,
+          body: JSON.stringify(
+            buildCommandCodeBody(model, context, options, projectConfig),
+          ),
         };
         if (options?.signal !== undefined) requestInit.signal = options.signal;
         const response = await (options?.fetch ?? boundFetch)(endpoint, requestInit);
@@ -256,7 +271,11 @@ function createCommandCodeStream(
 export function createCommandCodePrivateProvider(
   options: CommandCodePrivateProviderOptions,
 ): Provider<typeof API_ID> {
-  const streams = createCommandCodeStream(options.fetch, options.now);
+  const streams = createCommandCodeStream(
+    options.fetch,
+    options.now,
+    options.projectSnapshot,
+  );
   return createProvider({
     id: PROVIDER_ID,
     name: "CommandCode Private",

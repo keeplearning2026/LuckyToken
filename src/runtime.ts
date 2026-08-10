@@ -12,6 +12,10 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "./providers/commandcode-private/provider.js";
+import {
+  createNodeProjectSnapshot,
+  type ProjectSnapshot,
+} from "./providers/commandcode-private/project.js";
 
 export interface LuckyTokenRuntime {
   handle(request: Request): Promise<Response>;
@@ -26,6 +30,7 @@ export interface LuckyTokenRuntimeOptions {
   createMessageId?: () => string;
   createSessionId?: () => string;
   projectDir?: string;
+  projectSnapshot?: ProjectSnapshot;
   maxRequestBytes?: number;
   requestTimeoutMs?: number;
   shutdownSignal?: AbortSignal;
@@ -56,6 +61,7 @@ export function createLuckyTokenRuntime(
       fetch: options.fetch,
       model,
       now,
+      projectSnapshot: options.projectSnapshot ?? createNodeProjectSnapshot(),
     }),
   );
 
