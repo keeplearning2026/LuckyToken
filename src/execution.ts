@@ -17,23 +17,62 @@ export async function execute(
   const signal = options.signal;
 
   while (true) {
-    const next = await nextWithAbort(iterator, signal);
+    let next: IteratorResult<Awaited<ReturnType<typeof iterator.next>>["value"]>;
+    try {
+      next = await nextWithAbort(iterator, signal);
+    } catch (error) {
+      if (signal?.aborted === true) {
+        throw new ExecutionAbortedError(signal.reason);
+      }
+      throw new ExecutionFailure("Pi execution stream failed", error);
+    }
+    if (signal?.aborted === true) {
+      throw new ExecutionAbortedError(signal.reason);
+    }
     if (next.done) {
-      throw new Error("Pi execution ended without a terminal event");
+      throw new MalformedExecutionStreamError(
+        "Pi execution ended without a semantic terminal event",
+      );
     }
     const event = next.value;
     if (event.type === "error") {
-      if (signal?.aborted === true || event.reason === "aborted") {
+      if (event.reason === "aborted") {
         throw new ExecutionAbortedError(signal?.reason);
       }
-      throw new Error(event.error.errorMessage ?? "Pi execution failed");
+      if (event.reason !== "error") {
+        throw new MalformedExecutionStreamError(
+          `Pi error terminal used unsupported reason: ${String(event.reason)}`,
+        );
+      }
+      if (event.error.stopReason !== "error") {
+        throw new MalformedExecutionStreamError(
+          "Pi error terminal reason did not match its AssistantMessage",
+        );
+      }
+      throw new ExecutionFailure(
+        "Pi execution reported an error",
+        event.error.errorMessage,
+      );
     }
     if (event.type === "done") {
-      if (event.reason === "deferred" || event.message.stopReason !== event.reason) {
-        throw new Error("Pi terminal did not contain a supported consistent message");
+      if (event.reason === "deferred") {
+        throw new UnsupportedExecutionOutcomeError(
+          "Pi deferred completion is outside LuckyToken Core v1",
+        );
       }
-      if (signal?.aborted === true) {
-        throw new ExecutionAbortedError(signal.reason);
+      if (
+        event.reason !== "stop" &&
+        event.reason !== "length" &&
+        event.reason !== "toolUse"
+      ) {
+        throw new MalformedExecutionStreamError(
+          `Pi done terminal used unsupported reason: ${String(event.reason)}`,
+        );
+      }
+      if (event.message.stopReason !== event.reason) {
+        throw new MalformedExecutionStreamError(
+          "Pi done terminal reason did not match its AssistantMessage",
+        );
       }
       return event.message;
     }
@@ -47,6 +86,31 @@ export class ExecutionAbortedError extends Error {
     super("Pi execution was aborted");
     this.name = "ExecutionAbortedError";
     this.reason = reason;
+  }
+}
+
+export class ExecutionFailure extends Error {
+  readonly reason = "error";
+  readonly diagnostic: unknown;
+
+  constructor(message: string, diagnostic?: unknown) {
+    super(message, diagnostic instanceof Error ? { cause: diagnostic } : undefined);
+    this.name = "ExecutionFailure";
+    this.diagnostic = diagnostic;
+  }
+}
+
+export class UnsupportedExecutionOutcomeError extends ExecutionFailure {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnsupportedExecutionOutcomeError";
+  }
+}
+
+export class MalformedExecutionStreamError extends ExecutionFailure {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedExecutionStreamError";
   }
 }
 
