@@ -11,6 +11,14 @@ export interface AnthropicTextInvocation {
   };
 }
 
+export interface ValidatedAnthropicSourceRequest {
+  selector: string;
+  maxTokens: number;
+  messages: Array<Record<string, unknown>>;
+  hasImages: boolean;
+  finalAssistantPrefill: boolean;
+}
+
 const KNOWN_TOP_LEVEL_FIELDS = new Set([
   "model",
   "max_tokens",
@@ -103,6 +111,7 @@ function validateOptionalFieldShapes(
 function validateContentBlock(
   block: unknown,
   unsupported: string[],
+  facts: { hasImages: boolean },
 ): void {
   if (!isRecord(block) || typeof block.type !== "string") {
     throw new InvalidRequest("message content blocks must be tagged objects");
@@ -120,7 +129,7 @@ function validateContentBlock(
       if (!isRecord(block.source) || typeof block.source.type !== "string") {
         throw new InvalidRequest("image blocks require a source object");
       }
-      unsupported.push("image content");
+      facts.hasImages = true;
       return;
     case "tool_use":
       if (
@@ -162,10 +171,11 @@ function validateContentBlock(
 function validateMessages(
   messages: unknown,
   unsupported: string[],
-): asserts messages is Array<Record<string, unknown>> {
+): { messages: Array<Record<string, unknown>>; hasImages: boolean } {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new InvalidRequest("messages must be a non-empty array");
   }
+  const facts = { hasImages: false };
   for (const message of messages) {
     if (
       !isRecord(message) ||
@@ -183,15 +193,17 @@ function validateMessages(
     if (message.content.length === 0) {
       unsupported.push("explicit empty ordinary message content array");
     }
-    for (const block of message.content) validateContentBlock(block, unsupported);
+    for (const block of message.content) {
+      validateContentBlock(block, unsupported, facts);
+    }
   }
+  return { messages, hasImages: facts.hasImages };
 }
 
-export function parseAnthropicTextInvocation(
+export function validateAnthropicSourceRequest(
   value: unknown,
-  receivedAt: number,
   unclassifiedAnthropicHeaders: readonly string[] = [],
-): AnthropicTextInvocation {
+): ValidatedAnthropicSourceRequest {
   if (!isRecord(value)) {
     throw new InvalidRequest("Request body must be a JSON object");
   }
@@ -209,7 +221,7 @@ export function parseAnthropicTextInvocation(
     if (!KNOWN_TOP_LEVEL_FIELDS.has(name)) unsupported.push(`unknown body field: ${name}`);
   }
   validateOptionalFieldShapes(value, unsupported);
-  validateMessages(messages, unsupported);
+  const messageFacts = validateMessages(messages, unsupported);
   if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
 
   if (unclassifiedAnthropicHeaders.length > 0) {
@@ -220,6 +232,22 @@ export function parseAnthropicTextInvocation(
   if (unsupported.length > 0) {
     throw new UnsupportedFeature(unsupported[0] ?? "Unsupported Anthropic semantic");
   }
+
+  return {
+    selector: model,
+    maxTokens: maxTokens as number,
+    messages: messageFacts.messages,
+    hasImages: messageFacts.hasImages,
+    finalAssistantPrefill:
+      messageFacts.messages.at(-1)?.role === "assistant",
+  };
+}
+
+export function convertValidatedAnthropicTextRequest(
+  request: ValidatedAnthropicSourceRequest,
+  receivedAt: number,
+): AnthropicTextInvocation {
+  const { messages } = request;
   if (
     messages.length !== 1 ||
     messages[0]?.role !== "user" ||
@@ -229,7 +257,7 @@ export function parseAnthropicTextInvocation(
   }
 
   return {
-    selector: model,
+    selector: request.selector,
     context: {
       messages: [
         {
@@ -239,7 +267,18 @@ export function parseAnthropicTextInvocation(
         },
       ],
     },
-    maxTokens: maxTokens as number,
-    renderState: { clientModel: model },
+    maxTokens: request.maxTokens,
+    renderState: { clientModel: request.selector },
   };
+}
+
+export function parseAnthropicTextInvocation(
+  value: unknown,
+  receivedAt: number,
+  unclassifiedAnthropicHeaders: readonly string[] = [],
+): AnthropicTextInvocation {
+  return convertValidatedAnthropicTextRequest(
+    validateAnthropicSourceRequest(value, unclassifiedAnthropicHeaders),
+    receivedAt,
+  );
 }

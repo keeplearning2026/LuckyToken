@@ -16,6 +16,10 @@ import {
   createNodeProjectSnapshot,
   type ProjectSnapshot,
 } from "./providers/commandcode-private/project.js";
+import {
+  defaultAnthropicModelValidityPolicy,
+  type AnthropicModelValidityPolicy,
+} from "./protocols/anthropic/representability.js";
 
 export interface LuckyTokenRuntime {
   handle(request: Request): Promise<Response>;
@@ -34,6 +38,7 @@ export interface LuckyTokenRuntimeOptions {
   maxRequestBytes?: number;
   requestTimeoutMs?: number;
   shutdownSignal?: AbortSignal;
+  anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
 }
 
@@ -77,8 +82,10 @@ export function createLuckyTokenRuntime(
 
   const dependencies = {
     models,
-    providerId: commandCodePrivateProviderId,
     auth,
+    modelValidityPolicy:
+      options.anthropicModelValidityPolicy ??
+      defaultAnthropicModelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     maxRequestBytes: options.maxRequestBytes ?? 1_048_576,
     requestTimeoutMs: options.requestTimeoutMs,

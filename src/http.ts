@@ -2,14 +2,23 @@ import type { Models } from "@earendil-works/pi-ai";
 
 import type { Auth } from "./auth.js";
 import { execute, ExecutionAbortedError } from "./execution.js";
+import {
+  ModelResolutionFailure,
+  resolveModel,
+} from "./model-resolution.js";
 import { InvalidRequest, UnsupportedFeature } from "./protocols/anthropic/failures.js";
 import {
   assertImplementedAnthropicProfile,
   resolveAnthropicSourceProfile,
 } from "./protocols/anthropic/profile.js";
 import {
-  parseAnthropicTextInvocation,
+  convertValidatedAnthropicTextRequest,
+  validateAnthropicSourceRequest,
 } from "./protocols/anthropic/request.js";
+import {
+  assertAnthropicModelAwareValidity,
+  type AnthropicModelValidityPolicy,
+} from "./protocols/anthropic/representability.js";
 import { renderAnthropicTextMessage } from "./protocols/anthropic/response.js";
 
 export class HttpRequestAbortedError extends Error {
@@ -24,8 +33,8 @@ export class HttpRequestAbortedError extends Error {
 
 export interface HttpBoundaryDependencies {
   models: Models;
-  providerId: string;
   auth: Auth;
+  modelValidityPolicy: AnthropicModelValidityPolicy;
   createMessageId: () => string;
   maxRequestBytes: number;
   requestTimeoutMs: number | undefined;
@@ -189,18 +198,21 @@ export async function handleHttpRequest(
     }
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
-    const invocation = parseAnthropicTextInvocation(
+    const validatedRequest = validateAnthropicSourceRequest(
       body,
-      dependencies.now(),
       sourceProfile.unclassifiedAnthropicHeaders,
     );
-    const model = dependencies.models.getModel(dependencies.providerId, invocation.selector);
-    if (!model) {
-      return jsonResponse(lifecycle, 404, {
-        type: "error",
-        error: { type: "not_found_error" },
-      });
-    }
+    const model = resolveModel(dependencies.models, validatedRequest.selector);
+    assertAnthropicModelAwareValidity(
+      validatedRequest,
+      model,
+      sourceProfile,
+      dependencies.modelValidityPolicy,
+    );
+    const invocation = convertValidatedAnthropicTextRequest(
+      validatedRequest,
+      dependencies.now(),
+    );
 
     const piOptions = {
       maxTokens: invocation.maxTokens,
@@ -241,6 +253,12 @@ export async function handleHttpRequest(
       return jsonResponse(lifecycle, 400, {
         type: "error",
         error: { type: "unsupported_feature", message: error.message },
+      });
+    }
+    if (error instanceof ModelResolutionFailure) {
+      return jsonResponse(lifecycle, 404, {
+        type: "error",
+        error: { type: "model_resolution_error", message: error.message },
       });
     }
     const detail = error instanceof Error ? error.message : String(error);
