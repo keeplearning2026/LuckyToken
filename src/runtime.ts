@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
+import { createAuth } from "./auth.js";
 import { handleHttpRequest } from "./http.js";
 import {
   commandCodePrivateApiId,
@@ -24,6 +25,10 @@ export interface LuckyTokenRuntimeOptions {
   modelId: string;
   createMessageId?: () => string;
   createSessionId?: () => string;
+  projectDir?: string;
+  maxRequestBytes?: number;
+  requestTimeoutMs?: number;
+  shutdownSignal?: AbortSignal;
   now?: () => number;
 }
 
@@ -54,12 +59,24 @@ export function createLuckyTokenRuntime(
     }),
   );
 
+  const auth = createAuth({
+    authorizeToken: async (token) => {
+      if (token !== options.clientApiKey) return undefined;
+      return options.projectDir === undefined
+        ? {}
+        : { projectDir: options.projectDir };
+    },
+    createFallbackSessionId: options.createSessionId ?? randomUUID,
+  });
+
   const dependencies = {
     models,
     providerId: commandCodePrivateProviderId,
-    clientApiKey: options.clientApiKey,
+    auth,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
-    createSessionId: options.createSessionId ?? randomUUID,
+    maxRequestBytes: options.maxRequestBytes ?? 1_048_576,
+    requestTimeoutMs: options.requestTimeoutMs,
+    shutdownSignal: options.shutdownSignal,
     now,
   };
 
