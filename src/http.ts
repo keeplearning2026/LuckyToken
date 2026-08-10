@@ -21,6 +21,7 @@ import {
   type AnthropicModelValidityPolicy,
 } from "./protocols/anthropic/representability.js";
 import { renderAnthropicTextMessage } from "./protocols/anthropic/response.js";
+import { renderAnthropicAtomicSse } from "./protocols/anthropic/sse.js";
 import {
   renderAnthropicError,
   renderAnthropicJsonSuccess,
@@ -265,7 +266,9 @@ export async function handleHttpRequest(
       invocation.renderState.clientModel,
       dependencies.createMessageId(),
     );
-    const prepared = renderAnthropicJsonSuccess(target);
+    const prepared = invocation.renderState.stream
+      ? renderAnthropicAtomicSse(target)
+      : renderAnthropicJsonSuccess(target);
     return deliverHttpResponse(lifecycle, prepared);
   } catch (error) {
     if (

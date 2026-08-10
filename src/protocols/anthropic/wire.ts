@@ -120,7 +120,9 @@ function assertJsonValue(
   }
 }
 
-function assertTargetSchema(target: AnthropicResponseMessage): void {
+export function assertAnthropicTargetSchema(
+  target: AnthropicResponseMessage,
+): void {
   const raw = target as unknown;
   if (!isRecord(raw)) fail("Anthropic target Message must be an object");
   assertExactFields(raw, MESSAGE_FIELDS, "Anthropic target Message");
@@ -251,7 +253,7 @@ function encodeJson(value: unknown): Uint8Array<ArrayBuffer> {
 export function renderAnthropicJsonSuccess(
   target: AnthropicResponseMessage,
 ): PreparedHttpResponse {
-  assertTargetSchema(target);
+  assertAnthropicTargetSchema(target);
   return {
     status: 200,
     contentType: "application/json",
