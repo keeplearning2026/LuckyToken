@@ -22,6 +22,8 @@ import {
 
 const PROVIDER_ID = "commandcode-private";
 const API_ID = "commandcode-private";
+const MISSING_TOOL_RESULT =
+  "No result — the tool call did not complete (interrupted or lost).";
 
 interface CommandCodeTextResult {
   text: string;
@@ -148,13 +150,127 @@ function createMessage(
   return message;
 }
 
-function buildCommandCodeBody(
+function cloneLosslessJson(
+  value: unknown,
+  ancestors: Set<object> = new Set(),
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new Error("ToolCall arguments contain a non-lossless JSON number");
+    }
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new Error("ToolCall arguments contain a non-JSON value");
+  }
+  if (ancestors.has(value)) {
+    throw new Error("ToolCall arguments contain a cycle");
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const keys = Object.keys(value);
+      if (
+        keys.length !== value.length ||
+        keys.some((key, index) => key !== String(index)) ||
+        Object.getOwnPropertySymbols(value).length > 0
+      ) {
+        throw new Error("ToolCall argument arrays must be dense JSON arrays");
+      }
+      return value.map((item) => cloneLosslessJson(item, ancestors));
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("ToolCall arguments require plain JSON objects");
+    }
+    const keys = Object.keys(value);
+    if (Reflect.ownKeys(value).length !== keys.length) {
+      throw new Error("ToolCall arguments contain non-JSON object properties");
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new Error("ToolCall arguments cannot use custom serialization");
+      }
+      result[key] = cloneLosslessJson(descriptor.value, ancestors);
+    }
+    return result;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+interface PendingToolCall {
+  id: string;
+  name: string;
+}
+
+function missingToolResult(call: PendingToolCall): Record<string, unknown> {
+  return {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: call.id,
+        toolName: "",
+        output: { type: "text", value: MISSING_TOOL_RESULT },
+      },
+    ],
+  };
+}
+
+export function convertCommandCodeMessages(
   model: Model<typeof API_ID>,
   context: Context,
-  options: SimpleStreamOptions | undefined,
-  config: ServerConfig,
-): Record<string, unknown> {
-  const messages = context.messages.map((message) => {
+): Array<Record<string, unknown>> {
+  const converted: Array<Record<string, unknown>> = [];
+  let pending = new Map<string, PendingToolCall>();
+
+  const flushMissingResults = (): void => {
+    for (const call of pending.values()) converted.push(missingToolResult(call));
+    pending = new Map();
+  };
+
+  for (const message of context.messages) {
+    if (message.role === "toolResult") {
+      const call = pending.get(message.toolCallId);
+      if (call === undefined) {
+        throw new Error(`Orphan or duplicate Pi ToolResult: ${message.toolCallId}`);
+      }
+      if (message.toolName !== call.name) {
+        throw new Error(`Pi ToolResult name does not match ToolCall: ${message.toolCallId}`);
+      }
+      const textParts = message.content.map((block) => {
+        if (block.type !== "text") {
+          throw new Error("CommandCode tool results do not support image content");
+        }
+        return block.text;
+      });
+      converted.push({
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: message.toolCallId,
+            toolName: "",
+            output: {
+              type: message.isError ? "error-text" : "text",
+              value: textParts.join("\n"),
+            },
+          },
+        ],
+      });
+      pending.delete(message.toolCallId);
+      continue;
+    }
+
+    flushMissingResults();
+
     if (message.role === "user") {
       const content =
         typeof message.content === "string"
@@ -172,26 +288,68 @@ function buildCommandCodeBody(
                 mimeType: block.mimeType,
               };
             });
-      return { role: "user", content };
+      converted.push({ role: "user", content });
+      continue;
     }
-    if (message.role === "assistant") {
-      if (
-        message.stopReason !== "stop" &&
-        message.stopReason !== "length" &&
-        message.stopReason !== "toolUse"
-      ) {
-        throw new Error(`Unsupported historical stop state: ${message.stopReason}`);
-      }
-      const content = message.content.map((block) => {
-        if (block.type !== "text") {
-          throw new Error("The current history path supports assistant text only");
-        }
+
+    if (
+      message.stopReason !== "stop" &&
+      message.stopReason !== "length" &&
+      message.stopReason !== "toolUse"
+    ) {
+      throw new Error(`Unsupported historical stop state: ${message.stopReason}`);
+    }
+    const sameTarget =
+      message.api === model.api &&
+      message.provider === model.provider &&
+      message.model === model.id;
+    const calls: PendingToolCall[] = [];
+    const seenCallIds = new Set<string>();
+    const content = message.content.map((block) => {
+      if (block.type === "text") {
         return { type: "text" as const, text: block.text };
-      });
-      return { role: "assistant", content };
-    }
-    throw new Error("Tool results are not yet supported by this ticket");
-  });
+      }
+      if (block.type === "thinking") {
+        throw new Error("CommandCode assistant thinking is not supported yet");
+      }
+      const extended = block as typeof block & { namespace?: unknown };
+      if (extended.namespace !== undefined) {
+        throw new Error("CommandCode cannot map a ToolCall namespace");
+      }
+      if (sameTarget && (block.thoughtSignature?.length ?? 0) > 0) {
+        throw new Error("CommandCode cannot preserve same-target ToolCall continuity");
+      }
+      if (seenCallIds.has(block.id)) {
+        throw new Error(`Duplicate Pi ToolCall id in one turn: ${block.id}`);
+      }
+      seenCallIds.add(block.id);
+      const input = cloneLosslessJson(block.arguments);
+      if (!isRecord(input)) {
+        throw new Error("ToolCall arguments must be a non-null, non-array object");
+      }
+      calls.push({ id: block.id, name: block.name });
+      return {
+        type: "tool-call" as const,
+        toolCallId: block.id,
+        toolName: block.name,
+        input,
+      };
+    });
+    converted.push({ role: "assistant", content });
+    pending = new Map(calls.map((call) => [call.id, call]));
+  }
+
+  flushMissingResults();
+  return converted;
+}
+
+function buildCommandCodeBody(
+  model: Model<typeof API_ID>,
+  context: Context,
+  options: SimpleStreamOptions | undefined,
+  config: ServerConfig,
+): Record<string, unknown> {
+  const messages = convertCommandCodeMessages(model, context);
 
   const params: Record<string, unknown> = {
     model: model.id,

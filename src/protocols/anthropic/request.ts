@@ -4,6 +4,8 @@ import type {
   ImageContent,
   Message,
   TextContent,
+  ToolCall,
+  ToolResultMessage,
   Usage,
 } from "@earendil-works/pi-ai";
 
@@ -169,16 +171,29 @@ function validateContentBlock(
     case "tool_use":
       if (
         typeof block.id !== "string" ||
+        block.id.length === 0 ||
         typeof block.name !== "string" ||
+        block.name.length === 0 ||
         !isRecord(block.input)
       ) {
-        throw new InvalidRequest("tool_use requires id, name, and object input");
+        throw new InvalidRequest(
+          "tool_use requires non-empty id and name strings and object input",
+        );
       }
-      unsupported.push("tool_use content");
+      if (
+        Object.keys(block).some(
+          (name) => !["type", "id", "name", "input"].includes(name),
+        )
+      ) {
+        unsupported.push("unknown tool_use field");
+      }
       return;
     case "tool_result": {
-      if (typeof block.tool_use_id !== "string") {
-        throw new InvalidRequest("tool_result requires tool_use_id");
+      if (
+        typeof block.tool_use_id !== "string" ||
+        block.tool_use_id.length === 0
+      ) {
+        throw new InvalidRequest("tool_result requires a non-empty tool_use_id");
       }
       if (block.is_error !== undefined && typeof block.is_error !== "boolean") {
         throw new InvalidRequest("tool_result.is_error must be boolean");
@@ -193,8 +208,28 @@ function validateContentBlock(
       }
       if (Array.isArray(content) && content.length === 0) {
         unsupported.push("explicit empty tool_result content array");
-      } else {
-        unsupported.push("tool_result content");
+      } else if (typeof content === "string") {
+        unsupported.push("string tool_result content");
+      } else if (Array.isArray(content)) {
+        for (const nestedBlock of content) {
+          if (
+            !isRecord(nestedBlock) ||
+            (nestedBlock.type !== "text" && nestedBlock.type !== "image")
+          ) {
+            throw new InvalidRequest(
+              "tool_result block-list content supports text and image blocks only",
+            );
+          }
+          validateContentBlock(nestedBlock, unsupported, facts);
+        }
+      }
+      if (
+        Object.keys(block).some(
+          (name) =>
+            !["type", "tool_use_id", "content", "is_error"].includes(name),
+        )
+      ) {
+        unsupported.push("unknown tool_result field");
       }
       return;
     }
@@ -258,6 +293,87 @@ function validateMessages(
   return { messages, hasImages: facts.hasImages };
 }
 
+interface SourceTurn {
+  role: "user" | "assistant";
+  content: Array<Record<string, unknown>>;
+}
+
+function sourceTurns(messages: Array<Record<string, unknown>>): SourceTurn[] {
+  const turns: SourceTurn[] = [];
+  for (const message of messages) {
+    const content =
+      typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : (message.content as Array<Record<string, unknown>>);
+    const role = message.role as SourceTurn["role"];
+    const previous = turns.at(-1);
+    if (previous?.role === role) previous.content.push(...content);
+    else turns.push({ role, content: [...content] });
+  }
+  return turns;
+}
+
+function validateToolTurnLifecycle(
+  messages: Array<Record<string, unknown>>,
+): void {
+  let pending: Map<string, string> | undefined;
+
+  for (const turn of sourceTurns(messages)) {
+    if (turn.role === "assistant") {
+      if (pending !== undefined && pending.size > 0) {
+        throw new InvalidRequest(
+          "Every tool_use must be resolved in the immediately following user turn",
+        );
+      }
+      const calls = new Map<string, string>();
+      for (const block of turn.content) {
+        if (block.type === "tool_result") {
+          throw new InvalidRequest("tool_result is not valid in an assistant turn");
+        }
+        if (block.type !== "tool_use") continue;
+        const id = block.id as string;
+        if (calls.has(id)) {
+          throw new InvalidRequest(`Duplicate tool_use id in one turn: ${id}`);
+        }
+        calls.set(id, block.name as string);
+      }
+      pending = calls.size === 0 ? undefined : calls;
+      continue;
+    }
+
+    let sawOrdinaryContent = false;
+    for (const block of turn.content) {
+      if (block.type === "tool_use") {
+        throw new InvalidRequest("tool_use is not valid in a user turn");
+      }
+      if (block.type !== "tool_result") {
+        sawOrdinaryContent = true;
+        continue;
+      }
+      if (sawOrdinaryContent) {
+        throw new InvalidRequest(
+          "tool_result blocks must precede ordinary user content",
+        );
+      }
+      const id = block.tool_use_id as string;
+      if (pending === undefined || !pending.has(id)) {
+        throw new InvalidRequest(`Orphan or duplicate tool_result id: ${id}`);
+      }
+      pending.delete(id);
+    }
+    if (pending !== undefined && pending.size > 0) {
+      throw new InvalidRequest(
+        "Every tool_use must be resolved in the immediately following user turn",
+      );
+    }
+    pending = undefined;
+  }
+
+  if (pending !== undefined && pending.size > 0) {
+    throw new InvalidRequest("The final assistant tool turn has unresolved tool_use IDs");
+  }
+}
+
 export function validateAnthropicSourceRequest(
   value: unknown,
   unclassifiedAnthropicHeaders: readonly string[] = [],
@@ -280,6 +396,7 @@ export function validateAnthropicSourceRequest(
   }
   validateOptionalFieldShapes(value, unsupported);
   const messageFacts = validateMessages(messages, unsupported);
+  validateToolTurnLifecycle(messageFacts.messages);
   const systemPrompt = validateSystem(value.system, unsupported);
   if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
 
@@ -304,7 +421,25 @@ export function validateAnthropicSourceRequest(
   return validated;
 }
 
-type CanonicalContent = TextContent | ImageContent;
+interface CanonicalToolUse {
+  type: "toolUse";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface CanonicalToolResult {
+  type: "toolResult";
+  toolUseId: string;
+  content: Array<TextContent | ImageContent>;
+  isError: boolean;
+}
+
+type CanonicalContent =
+  | TextContent
+  | ImageContent
+  | CanonicalToolUse
+  | CanonicalToolResult;
 
 interface CanonicalMessage {
   role: "user" | "assistant";
@@ -312,15 +447,54 @@ interface CanonicalMessage {
 }
 
 function convertPortableBlock(block: Record<string, unknown>): CanonicalContent {
-  if (block.type === "text") {
-    return { type: "text", text: block.text as string };
+  switch (block.type) {
+    case "text":
+      return { type: "text", text: block.text as string };
+    case "image": {
+      const source = block.source as Record<string, unknown>;
+      return {
+        type: "image",
+        mimeType: source.media_type as string,
+        data: source.data as string,
+      };
+    }
+    case "tool_use":
+      return {
+        type: "toolUse",
+        id: block.id as string,
+        name: block.name as string,
+        input: block.input as Record<string, unknown>,
+      };
+    case "tool_result": {
+      const rawContent = block.content;
+      if (rawContent === undefined) {
+        return {
+          type: "toolResult",
+          toolUseId: block.tool_use_id as string,
+          content: [],
+          isError: block.is_error === true,
+        };
+      }
+      if (!Array.isArray(rawContent) || rawContent.length === 0) {
+        throw new Error("Unsupported tool_result content reached conversion");
+      }
+      const content = rawContent.map((nestedBlock) => {
+        const converted = convertPortableBlock(nestedBlock as Record<string, unknown>);
+        if (converted.type !== "text" && converted.type !== "image") {
+          throw new Error("Invalid nested tool_result content reached conversion");
+        }
+        return converted;
+      });
+      return {
+        type: "toolResult",
+        toolUseId: block.tool_use_id as string,
+        content,
+        isError: block.is_error === true,
+      };
+    }
+    default:
+      throw new Error("Unsupported source block reached conversion");
   }
-  const source = block.source as Record<string, unknown>;
-  return {
-    type: "image",
-    mimeType: source.media_type as string,
-    data: source.data as string,
-  };
 }
 
 function canonicalizeMessages(
@@ -358,11 +532,20 @@ function convertHistoricalAssistant(
   clientModel: string,
   receivedAt: number,
 ): AssistantMessage {
-  const content: TextContent[] = message.content.map((block) => {
-    if (block.type !== "text") {
+  const content: Array<TextContent | ToolCall> = message.content.map((block) => {
+    if (block.type === "text") return block;
+    if (block.type === "toolUse") {
+      return {
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        arguments: block.input,
+      };
+    }
+    if (block.type === "image") {
       throw new UnsupportedFeature("Historical assistant images are unsupported");
     }
-    return block;
+    throw new Error("tool_result reached an assistant conversion invariant");
   });
   return {
     role: "assistant",
@@ -371,7 +554,9 @@ function convertHistoricalAssistant(
     model: clientModel,
     content,
     usage: emptyUsage(),
-    stopReason: "stop",
+    stopReason: content.some((block) => block.type === "toolCall")
+      ? "toolUse"
+      : "stop",
     timestamp: receivedAt,
   };
 }
@@ -383,16 +568,52 @@ export function convertValidatedAnthropicRequest(
   if (request.finalAssistantPrefill) {
     throw new Error("Model-aware prefill validity must complete before conversion");
   }
-  const messages: Message[] = canonicalizeMessages(request.messages).map(
-    (message) =>
-      message.role === "user"
-        ? {
-            role: "user",
-            content: message.content,
-            timestamp: receivedAt,
-          }
-        : convertHistoricalAssistant(message, request.selector, receivedAt),
-  );
+  const messages: Message[] = [];
+  let pending = new Map<string, string>();
+
+  for (const message of canonicalizeMessages(request.messages)) {
+    if (message.role === "assistant") {
+      const assistant = convertHistoricalAssistant(
+        message,
+        request.selector,
+        receivedAt,
+      );
+      messages.push(assistant);
+      pending = new Map(
+        assistant.content
+          .filter((block): block is ToolCall => block.type === "toolCall")
+          .map((block) => [block.id, block.name]),
+      );
+      continue;
+    }
+
+    const ordinary: Array<TextContent | ImageContent> = [];
+    for (const block of message.content) {
+      if (block.type === "toolResult") {
+        const toolName = pending.get(block.toolUseId);
+        if (toolName === undefined) {
+          throw new Error("Validated tool_result correlation was lost");
+        }
+        const result: ToolResultMessage = {
+          role: "toolResult",
+          toolCallId: block.toolUseId,
+          toolName,
+          content: block.content,
+          isError: block.isError,
+          timestamp: receivedAt,
+        };
+        messages.push(result);
+        pending.delete(block.toolUseId);
+      } else if (block.type === "toolUse") {
+        throw new Error("tool_use reached a user conversion invariant");
+      } else {
+        ordinary.push(block);
+      }
+    }
+    if (ordinary.length > 0) {
+      messages.push({ role: "user", content: ordinary, timestamp: receivedAt });
+    }
+  }
 
   const context: Context = { messages };
   if (request.systemPrompt !== undefined) {
