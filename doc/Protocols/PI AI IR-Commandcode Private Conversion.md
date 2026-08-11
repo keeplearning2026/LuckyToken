@@ -795,7 +795,7 @@ interface GenerateParams {
 - `max_tokens` required；caller 未提供 override 时，CommandCode default 为 `64000`。
 - `stream` required，并且必须为 literal `true`。
 - `temperature` optional；不存在时 omission。
-- `reasoning_effort` optional；只有请求指定 reasoning 且转换后的 effort 被 selected model capability 支持时才发送。
+- `reasoning_effort` optional；当 Pi reasoning resolution 得到 non-off effective thinking level 时发送对应的 CommandCode effort。
 
 ### 5.2 Source
 
@@ -803,7 +803,9 @@ interface GenerateParams {
 
 ```text
 Model
-└── id: string
+├── id: string
+├── reasoning: boolean
+└── thinkingLevelMap?: ThinkingLevelMap
 
 Context
 └── systemPrompt?: string
@@ -811,8 +813,7 @@ Context
 SimpleStreamOptions
 ├── maxTokens?: number
 ├── temperature?: number
-├── reasoning?: ThinkingLevel
-└── deferred?: boolean | { window?: "15m" | "1h" | "24h" }
+└── reasoning?: ThinkingLevel
 ```
 
 其中：
@@ -827,29 +828,32 @@ ThinkingLevel
 └── max
 ```
 
-`reasoning_effort` 的 value source 是：
 
-```text
+
+reasoning_effort` construction 使用：
+
 options.reasoning
-```
++
+selected Pi Model
 
-它的最终发送 eligibility 还依赖 selected CommandCode model 的 bound capability：
+其中 Pi Model 的 reasoning capability 由：
 
-```text
-supportedReasoningEfforts
-```
+model.reasoning
+model.thinkingLevelMap?
 
-该 capability 属于 Target-side model capability，不从 Pi `Model.thinkingLevelMap` 二次推导。
+表达。
 
-另外：
+Pi 提供：
 
-```text
-options.deferred
-```
+getSupportedThinkingLevels(model)
+clampThinkingLevel(model, level)
 
-不提供任何 Target wire value，但会决定普通 CommandCode request 是否能够忠实构造，因此属于 construction condition Source。
+负责根据 selected model capability 解析 effective thinking level。
 
-`stream` 不需要 Source。
+CommandCode conversion 只负责把 effective Pi thinking level
+映射为 CommandCode `reasoning_effort`。
+
+**`stream` 不需要 Source。**
 
 ### 5.3 Construction Method
 
@@ -963,20 +967,42 @@ reasoning_effort?
 └── max
 ```
 
-Value Source：
+Source：
 
 ```text
 options.reasoning?
+selected Model
 ```
 
-Target capability dependency：
+Construction：
 
 ```text
-selected CommandCode model
-└── supportedReasoningEfforts
+options.reasoning
+│
+├── absent
+│   → omit params.reasoning_effort
+│
+└── present
+    ↓
+    clampThinkingLevel(model, options.reasoning)
+    │
+    ├── "off"
+    │   → omit params.reasoning_effort
+    │
+    └── effectiveLevel
+        ↓
+        map to CommandCode effort
+        ↓
+        params.reasoning_effort
 ```
 
-首先把 Pi reasoning level 转换成 CommandCode reasoning effort：
+Mapping 优先使用 selected model 的 explicit Pi mapping：
+
+```text
+model.thinkingLevelMap?.[effectiveLevel]
+```
+
+不存在 explicit mapping 时使用：
 
 ```text
 minimal → low
@@ -987,44 +1013,19 @@ xhigh   → xhigh
 max     → max
 ```
 
-然后根据 selected CommandCode model 的 Target capability 判断该 effort 是否能够发送：
+不创建额外：
 
 ```text
-options.reasoning
-│
-├── absent
-│   → omit params.reasoning_effort
-│
-└── present
-    ↓
-    convert to CommandCode effort
-    ↓
-    check supportedReasoningEfforts
-    │
-    ├── supported
-    │   → params.reasoning_effort = converted effort
-    │
-    └── unsupported
-        → omit params.reasoning_effort
+supportedReasoningEfforts
 ```
 
-不读取：
-
-```text
-Model.thinkingLevelMap
-```
-
-来重新映射 Target effort，也不调用：
+reasoning capability 由 selected Pi `Model` 表达，并使用 Pi 的：
 
 ```text
 clampThinkingLevel()
 ```
 
-把 caller 请求改成另一个较高或较低的 reasoning level。
-
-这里的 capability check 只决定 Target field 是否能够发送，不修改 caller 请求的 reasoning semantic。
-
-
+解析当前 model 的 effective reasoning level。
 
 ## 6. `Params`- UserMessage
 
@@ -2163,21 +2164,6 @@ Target TextBlock.text
 ← TextContent.text
 ```
 
-`thoughtSignature` 不提供 CommandCode ToolCallBlock 所需的信息，因此不进入这一局部 conversion state。
-
-`namespace` 不提供 Target wire value，但 Pi 会将其作为 namespaced tool-call semantic 在支持的 replay path 中保留。CommandCode ToolCallBlock 没有对应 representation，因此 `namespace` 属于 construction condition Source：
-
-```text
-ToolCall.namespace
-├── absent
-│   → continue construction
-└── present
-    → CommandCode cannot faithfully represent it
-    → error
-```
-
-不能把 `namespace` 静默删除，也不能将其拼接进 `toolName`。
-
 ------
 
 #### ReasoningBlock source
@@ -2316,7 +2302,26 @@ ToolCall.arguments
 
 构造 Target `input` 还需要确认该 object 能够作为 CommandCode JSON request 的 object 被无损表示。
 
-`thoughtSignature` 和 `namespace` 不提供 CommandCode ToolCallBlock 所需的信息，因此不进入这一局部 conversion state。
+`thoughtSignature` 不提供 CommandCode `ToolCallBlock` 所需的信息，因此不读取。
+
+`namespace` 不提供 Target wire value，但会决定当前 `ToolCall` 是否能够忠实构造为 CommandCode `ToolCallBlock`，因此属于 construction condition Source：
+
+```text
+ToolCall.namespace
+├── absent
+│   → continue ToolCallBlock construction
+└── present
+    → no faithful Target representation
+    → error
+```
+
+不能：
+
+```text
+drop namespace
+merge namespace into toolName
+guess an equivalent CommandCode tool identity
+```
 
 ------
 
@@ -2419,30 +2424,21 @@ TextBlock
 └── text
 ```
 
-##### `namespace`
+##### Construction eligibility
 
-首先检查 Source ToolCall 是否包含 namespace：
+CommandCode `ToolCallBlock` 没有 `namespace` representation。
+
+因此：
 
 ```text
 ToolCall.namespace
-│
 ├── absent
-│   → continue ToolCallBlock construction
-│
+│   → continue construction
 └── present
-    → Target has no namespace representation
     → error
 ```
 
-这里不能：
-
-```text
-drop namespace
-merge namespace into toolName
-guess an equivalent CommandCode tool identity
-```
-
-因为这些行为都会改变 Source tool-call semantic。
+不能静默删除 `namespace`，也不能将其合并进 `toolName`。
 
 ##### `type`
 
@@ -3611,419 +3607,9 @@ Source-derived values
 
 ------
 
+## 9. Message Sequence constraint
 
-
-## 9. Message Sequence Construction
-
-前面的章节分别定义了单条：
-
-```text
-UserMessage
-AssistantMessage
-ToolMessage
-```
-
-如何从 Pi message 构造。
-
-但 CommandCode：
-
-```ts
-params.messages: WireMessage[]
-```
-
-除了要求每个 message 本身符合 wire schema，还对：
-
-```text
-assistant tool-call
-↔
-following tool-result
-```
-
-存在跨 message sequence constraint。
-
-因此：
-
-```text
-Context.messages[]
-→ CommandCode params.messages[]
-```
-
-不能只对每个 Source message 独立执行 conversion。
-
-构造过程还必须保证最终 `messages[]` 中所有 tool-call / tool-result relationship 满足 CommandCode Target contract。
-
-------
-
-### 9.1 Target
-
-CommandCode：
-
-```ts
-type WireMessage =
-  | UserMessage
-  | AssistantMessage
-  | ToolMessage;
-
-interface GenerateParams {
-  messages: WireMessage[];
-  // ...
-}
-```
-
-自然结构只有：
-
-```text
-params.messages[]
-├── UserMessage
-├── AssistantMessage
-└── ToolMessage
-```
-
-CommandCode 不定义额外的 tool conversation wrapper。
-
-------
-
-#### Message ordering
-
-`messages[]` 是有序数组。
-
-普通 message role 不要求严格交替。
-
-以下 sequence 可以合法存在：
-
-```text
-UserMessage
-→ UserMessage
-AssistantMessage
-→ AssistantMessage
-```
-
-前提是前一个 AssistantMessage 没有仍需紧接 tool result 的 `tool-call`。
-
-以下也可以合法存在：
-
-```text
-ToolMessage
-→ ToolMessage
-```
-
-只要这些 ToolMessage 都是在满足 preceding AssistantMessage 的 tool-call/result relationship。
-
-CommandCode 因此不存在统一的：
-
-```text
-user
-→ assistant
-→ user
-→ assistant
-```
-
-role alternation requirement。
-
-真正需要额外 sequence construction 的，是包含 `tool-call` 的 AssistantMessage。
-
-------
-
-#### AssistantMessage with tool-call
-
-如果一个 AssistantMessage 包含：
-
-```text
-tool-call
-```
-
-则后续 message 必须立即提供与这些 calls 对应的 ToolMessage。
-
-例如：
-
-```text
-AssistantMessage
-└── tool-call A
-
-ToolMessage
-└── tool-result A
-```
-
-合法。
-
-如果一个 AssistantMessage 包含多个 tool-call：
-
-```text
-AssistantMessage
-├── tool-call A
-├── tool-call B
-└── tool-call C
-```
-
-则紧随其后的 ToolMessage 中：
-
-```text
-tool-result.toolCallId
-```
-
-必须完整覆盖：
-
-```text
-A
-B
-C
-```
-
-即：
-
-```text
-required toolCallId set
-=
-result toolCallId set
-```
-
-Correlation authority 是：
-
-```text
-toolCallId
-```
-
-而不是：
-
-```text
-toolName
-```
-
-CommandCode 明确要求含 tool-call 的 AssistantMessage 后必须紧跟覆盖全部 call 的 tool messages。
-
-------
-
-#### Multiple ToolMessage representations
-
-一个 AssistantMessage 有多个 tool-call 时，CommandCode 接受：
-
-```text
-Assistant(A, B)
-Tool(A)
-Tool(B)
-```
-
-也接受：
-
-```text
-Assistant(A, B)
-Tool(A, B)
-```
-
-即多个 ToolResultBlock 可以：
-
-```text
-split across ToolMessages
-```
-
-或者：
-
-```text
-combined into one ToolMessage
-```
-
-两种都是合法 Target representation。
-
-本 conversion 不主动 aggregate Pi ToolResultMessage。
-
-因此通常保持：
-
-```text
-one Pi ToolResultMessage
-→ one CommandCode ToolMessage
-```
-
-这样可以保留 Source message granularity 和 ordering，并避免额外 grouping state。
-
-------
-
-#### Missing tool result
-
-如果 AssistantMessage 包含一个 tool-call，但 Source 中没有可以提供对应 Target ToolResultBlock 的真实 result，则 CommandCode 定义 synthetic result representation。
-
-固定结构：
-
-```ts
-{
-  role: "tool",
-  content: [
-    {
-      type: "tool-result",
-      toolCallId: missingToolCallId,
-      toolName: "",
-      output: {
-        type: "text",
-        value:
-          "No result — the tool call did not complete (interrupted or lost).",
-      },
-    },
-  ],
-}
-```
-
-其中：
-
-```text
-role
-→ fixed "tool"
-
-type
-→ fixed "tool-result"
-
-toolCallId
-→ missing call ID
-
-toolName
-→ fixed ""
-
-output.type
-→ fixed "text"
-
-output.value
-→ fixed synthetic-result text
-```
-
-因此 missing result 属于 Target-defined generation case。
-
-------
-
-#### Orphan ToolMessage
-
-ToolMessage 不能独立出现。
-
-它必须属于当前 Assistant tool turn 的 immediately-following ToolMessage run，并回应该 AssistantMessage 中尚未被覆盖的 `tool-call`。
-
-自然结构：
-
-```text
-AssistantMessage
-└── tool-call A / B
-    ↓
-immediately-following ToolMessage run
-├── ToolMessage(A)
-└── ToolMessage(B)
-```
-
-因此，如果 ToolMessage 不存在当前 turn 尚未覆盖的 `toolCallId`：
-
-```text
-→ invalid Target sequence
-```
-
-
-
-
-
-------
-
-### 9.2 Source
-
-Source message sequence 来自：
-
-```ts
-interface Context {
-  systemPrompt?: string;
-  messages: Message[];
-  tools?: Tool[];
-}
-```
-
-本章使用：
-
-```text
-Context.messages[]
-```
-
-作为有序 Source message sequence。
-
-Pi Message union：
-
-```ts
-type Message =
-  | UserMessage
-  | AssistantMessage
-  | ToolResultMessage;
-```
-
-本章不重新定义各 message 的字段 conversion。
-
-UserMessage、AssistantMessage、ToolResultMessage 的局部转换分别由前面的章节负责。
-
-对于 sequence construction，本章额外需要的 Source information只有 tool-call/result identity relationship。
-
-------
-
-#### Assistant tool-call identity
-
-Pi AssistantMessage：
-
-```text
-AssistantMessage
-└── content[]
-    └── ToolCall
-        └── id: string
-```
-
-需要：
-
-```text
-ToolCall.id
-```
-
-用于确定 Target AssistantMessage 中哪些：
-
-```text
-toolCallId
-```
-
-必须被后续 ToolMessage 覆盖。
-
-------
-
-#### Tool result identity
-
-Pi ToolResultMessage：
-
-```text
-ToolResultMessage
-└── toolCallId: string
-```
-
-需要：
-
-```text
-ToolResultMessage.toolCallId
-```
-
-用于确定该 Source result 是否对应当前尚未被覆盖的 Target tool-call。
-
-Pi 本身定义的 semantic relationship 是：
-
-```text
-ToolCall.id
-        ↕
-ToolResultMessage.toolCallId
-```
-
-该 equality 是 semantic relationship，而不是单纯由 TypeScript field type 自动保证。
-
-------
-
-### 9.3 Construction Method
-
-`Context.messages[]` 按 Source order 线性读取。
-
-Converter 不通过：
-
-```text
-sorting
-lookahead reordering
-message relocation
-```
-
-改变 Source message order。
-
-单条 message 按对应章节构造：
+前面的章节已经定义单条 message conversion：
 
 ```text
 UserMessage
@@ -4036,503 +3622,142 @@ ToolResultMessage
 → Chapter 8
 ```
 
-为了满足跨 message tool-call/result constraint，conversion 只维护一个 request-local temporary state：
+本章只负责：
 
 ```text
-unresolvedToolCallIds
-```
-
-它表示：
-
-> preceding Target AssistantMessage 中仍然需要对应 ToolResultBlock 的 toolCallId。
-
-该 state 只在当前 sequence construction 中存在。
-
-它不是新的 protocol structure。
-
-------
-
-#### Initial state
-
-开始时：
-
-```text
-unresolvedToolCallIds = []
-```
-
-表示当前没有尚待覆盖的 tool-call。
-
-------
-
-#### UserMessage
-
-当：
-
-```text
-unresolvedToolCallIds = []
-```
-
-遇到 Pi UserMessage：
-
-```text
-Source UserMessage
+Context.messages[]
 ↓
-Chapter 6
-↓
-Target UserMessage
-↓
-append to messages[]
+CommandCode params.messages[]
 ```
 
-UserMessage 本身不会创建 unresolved tool-call state。
+中的跨 message tool-call / tool-result sequence constraint。
 
 ------
 
-如果：
+### 9.1 Target
 
-```text
-unresolvedToolCallIds ≠ []
-```
+CommandCode `params.messages[]` 保持 message 顺序。
 
-却遇到下一条 Pi UserMessage，则说明 preceding AssistantMessage 的部分 tool-call 没有真实 Source result。
+普通 message role 不要求交替。
 
-Target 不允许直接构造：
-
-```text
-Assistant(tool-call)
-→ UserMessage
-```
-
-因此必须先为所有 remaining IDs 构造 synthetic ToolMessage。
-
-完成后：
-
-```text
-unresolvedToolCallIds = []
-```
-
-再正常转换并 append 当前 UserMessage。
-
-------
-
-#### AssistantMessage without tool-call
-
-先按 Chapter 7 构造 Target AssistantMessage。
-
-如果：
-
-```text
-content[]
-```
-
-中不存在：
-
-```text
-type: "tool-call"
-```
-
-则在：
-
-```text
-unresolvedToolCallIds = []
-```
-
-时直接 append。
-
-该 AssistantMessage 不创建额外 sequence state。
-
-------
-
-如果 preceding AssistantMessage 尚有 unresolved IDs，而 Source 中已经出现下一条 AssistantMessage：
-
-```text
-unresolvedToolCallIds ≠ []
-+
-next AssistantMessage
-```
-
-则必须先生成所有 missing synthetic results。
-
-然后：
-
-```text
-unresolvedToolCallIds = []
-```
-
-再处理新的 AssistantMessage。
-
-------
-
-#### AssistantMessage with tool-call
-
-先按 Chapter 7 构造完整 Target AssistantMessage。
-
-然后从构造完成的 Target：
-
-```text
-AssistantMessage.content[]
-```
-
-读取所有：
-
-```text
-ToolCallBlock.toolCallId
-```
-
-按照 content 中的原始顺序记录：
-
-```text
-unresolvedToolCallIds
-=
-[
-  toolCallId A,
-  toolCallId B,
-  ...
-]
-```
-
-例如：
+额外 sequence constraint 只有包含 `tool-call` 的 AssistantMessage：
 
 ```text
 AssistantMessage
-└── content
-    ├── reasoning
-    ├── tool-call A
-    ├── text
-    └── tool-call B
+└── tool-call IDs
+    ↓
+immediately-following ToolMessage run
+└── must cover every tool-call ID
 ```
 
-产生：
-
-```text
-unresolvedToolCallIds = [A, B]
-```
-
-是否需要后续 ToolMessage，完全由已经构造出的 Target AssistantMessage 决定。
-
-不读取：
-
-```text
-Pi AssistantMessage.stopReason
-```
-
-来推断这件事。
-
-------
-
-#### Matching ToolResultMessage
-
-当：
-
-```text
-unresolvedToolCallIds ≠ []
-```
-
-遇到 Pi ToolResultMessage，先读取：
-
-```text
-source.toolCallId
-```
-
-如果：
-
-```text
-source.toolCallId
-∈
-unresolvedToolCallIds
-```
-
-则这是当前 preceding AssistantMessage 的合法 candidate result。
-
-随后按 Chapter 8 执行完整转换：
-
-```text
-Pi ToolResultMessage
-↓
-Chapter 8
-↓
-CommandCode ToolMessage
-```
-
-转换成功：
-
-```text
-append Target ToolMessage
-↓
-remove source.toolCallId
-from unresolvedToolCallIds
-```
-
-例如：
-
-```text
-unresolved = [A, B, C]
-
-Source result B
-↓
-append Tool(B)
-↓
-unresolved = [A, C]
-```
-
-------
-
-#### Real result ordering
-
-真实 ToolResultMessage 按 Source order处理。
-
-例如 Source：
-
-```text
-Assistant calls:
-A, B, C
-
-ToolResult B
-ToolResult A
-ToolResult C
-```
-
-Target 保持：
-
-```text
-Assistant(A, B, C)
-Tool(B)
-Tool(A)
-Tool(C)
-```
-
-不主动重排为：
-
-```text
-Tool(A)
-Tool(B)
-Tool(C)
-```
-
-因为 correlation authority 是：
+Correlation authority 是：
 
 ```text
 toolCallId
 ```
 
-而 CommandCode Target requirement 是完整 coverage，不要求 result 顺序必须与 call block 顺序相同。
-
-------
-
-#### Present but unconvertible ToolResultMessage
-
-如果：
+不是：
 
 ```text
-source.toolCallId
-∈
-unresolvedToolCallIds
+toolName
 ```
-
-说明真实 Source result 存在。
-
-此时 Chapter 8 如果无法忠实构造 Target ToolMessage：
-
-```text
-Source exists
-+
-cannot faithfully convert
-→ error
-```
-
-不能把这个状态当成：
-
-```text
-Source result absent
-```
-
-然后生成 synthetic result。
 
 因此：
 
 ```text
-missing Source result
-→ synthetic generation
-```
-
-与：
-
-```text
-present but unconvertible Source result
-→ error
-```
-
-必须严格区分。
-
-------
-
-#### Non-matching ToolResultMessage
-
-如果：
-
-```text
-unresolvedToolCallIds ≠ []
-```
-
-但：
-
-```text
-source.toolCallId
-∉
-unresolvedToolCallIds
-```
-
-则当前 Source ToolResultMessage 无法构造成合法的 following Target ToolMessage。
-
-结果：
-
-```text
-→ error
-```
-
-不继续读取其其它 fields。
-
-这覆盖：
-
-```text
-unknown result ID
-
-duplicate result for an already-covered call
-
-result belonging to another historical assistant
-```
-
-------
-
-#### Orphan ToolResultMessage
-
-如果：
-
-```text
-unresolvedToolCallIds = []
-```
-
-时遇到 Pi ToolResultMessage：
-
-```text
-Source ToolResultMessage
-+
-no unresolved Target tool-call
-→ no legal Target correlation
-→ error
-```
-
-不能：
-
-```text
-drop it
-move it
-attach it to an earlier assistant
-guess correlation
-```
-
-------
-
-#### Missing real result before UserMessage or AssistantMessage
-
-例如：
-
-```text
-Assistant
-├── call A
-└── call B
-
-ToolResult A
-
-UserMessage
-```
-
-在处理 UserMessage 前：
-
-```text
-unresolvedToolCallIds = [B]
-```
-
-Target sequence 不能直接变成：
-
-```text
 Assistant(A, B)
 Tool(A)
-User
-```
-
-因此生成：
-
-```text
-Synthetic Tool(B)
-```
-
-最终：
-
-```text
-Assistant(A, B)
-Tool(A)
-Synthetic Tool(B)
-User
-```
-
-然后：
-
-```text
-unresolvedToolCallIds = []
-```
-
-继续正常处理 UserMessage。
-
-遇到下一条 AssistantMessage 时采用完全相同的规则。
-
-------
-
-#### Missing real result at end of messages
-
-如果 Source sequence 结束时：
-
-```text
-unresolvedToolCallIds ≠ []
-```
-
-则为所有 remaining IDs 生成 synthetic ToolMessage。
-
-例如：
-
-```text
-Assistant
-├── call A
-├── call B
-└── call C
-
-ToolResult B
-
-EOF
-```
-
-生成：
-
-```text
-Assistant(A, B, C)
 Tool(B)
-Synthetic Tool(A)
-Synthetic Tool(C)
 ```
 
-然后清空 temporary state。
+合法。
+
+如果真实 Source result 缺失，则使用 CommandCode 定义的 synthetic ToolMessage 补齐。
+
+Orphan、duplicate、late 或不属于当前 preceding AssistantMessage 的 ToolResultMessage 不能形成合法 Target sequence：
+
+```text
+→ error
+```
 
 ------
 
-#### Synthetic result construction
+### 9.2 Source
 
-对于每个 remaining：
+Source 是有序的：
 
 ```text
-toolCallId
+Context.messages[]
 ```
 
-直接按照 CommandCode Target generation rule 构造：
+其中单条 message 的字段 conversion 已由 Chapters 6–8 定义，本章不重复读取这些字段。
+
+Sequence construction 额外需要读取的 Source information只有：
+
+```text
+ToolResultMessage.toolCallId
+```
+
+用于判断一个真实 ToolResultMessage 是否属于当前尚未完成的 Target assistant tool turn。
+
+Assistant tool-call IDs 不需要从 Pi AssistantMessage 再读取一遍。
+
+它们直接来自已经由 Chapter 7 构造完成的：
+
+```text
+Target AssistantMessage.content[]
+└── ToolCallBlock.toolCallId
+```
+
+Pi `AssistantMessage.stopReason` 不提供任何 CommandCode message-sequence Target 所需的信息：
+
+```text
+→ do not read
+```
+
+------
+
+### 9.3 Construction Method
+
+按 Source order 线性处理：
+
+```text
+Context.messages[]
+```
+
+只维护一个 request-local temporary state：
+
+```text
+unresolvedToolCallIds: string[]
+```
+
+它表示：
+
+> 当前 preceding Target AssistantMessage 中尚未被真实或 synthetic ToolMessage 覆盖的 tool-call IDs。
+
+初始：
+
+```text
+unresolvedToolCallIds = []
+```
+
+#### Flush missing results
+
+定义一个局部操作：
+
+```text
+flushMissingResults()
+```
+
+如果：
+
+```text
+unresolvedToolCallIds = []
+```
+
+则什么都不做。
+
+否则按照 remaining IDs 的原始 tool-call 顺序，为每个 ID append：
 
 ```ts
 {
@@ -4552,114 +3777,142 @@ toolCallId
 }
 ```
 
-这里没有对应 Pi ToolResultMessage Source。
-
-construction dependency 只有：
-
-```text
-missing required Target toolCallId
-+
-CommandCode synthetic-result rule
-```
-
-因此这是：
-
-```text
-Target-defined generation
-```
-
-不是 Chapter 8 的 Source conversion。
-
-------
-
-#### Multiple synthetic results
-
-当多个 tool-call 缺少真实 Source result时，synthetic ToolMessage 按 originating AssistantMessage 中 `tool-call` 的顺序生成。
-
-例如：
-
-```text
-Assistant calls:
-A, B, C, D
-
-real results:
-B, D
-```
-
-remaining state 保持：
-
-```text
-[A, C]
-```
-
-因此生成：
-
-```text
-Synthetic Tool(A)
-Synthetic Tool(C)
-```
-
-不执行额外 sorting。
-
-------
-
-#### Late ToolResultMessage
-
-例如 Source：
-
-```text
-Assistant(call A)
-UserMessage
-ToolResultMessage(A)
-```
-
-处理 UserMessage 前：
-
-```text
-unresolved = [A]
-```
-
-因此必须先生成：
-
-```text
-Synthetic Tool(A)
-```
-
-得到：
-
-```text
-Assistant(A)
-Synthetic Tool(A)
-User
-```
-
-随后 Source 中真实：
-
-```text
-ToolResultMessage(A)
-```
-
-出现时：
+然后：
 
 ```text
 unresolvedToolCallIds = []
 ```
 
-所以该 result 已经没有合法 Target correlation：
+这是 CommandCode Target-defined generation，不调用 Chapter 8。
+
+------
+
+#### UserMessage
+
+遇到 Source UserMessage：
+
+```text
+flushMissingResults()
+↓
+Chapter 6
+↓
+append Target UserMessage
+```
+
+------
+
+#### AssistantMessage
+
+遇到 Source AssistantMessage：
+
+```text
+flushMissingResults()
+↓
+Chapter 7
+↓
+Target AssistantMessage
+↓
+append
+```
+
+然后从已经构造完成的 Target：
+
+```text
+AssistantMessage.content[]
+```
+
+按 content order 收集：
+
+```text
+ToolCallBlock.toolCallId
+```
+
+成为新的：
+
+```text
+unresolvedToolCallIds
+```
+
+如果没有 ToolCallBlock：
+
+```text
+unresolvedToolCallIds = []
+```
+
+不读取 `AssistantMessage.stopReason` 判断是否需要 tool result。
+
+------
+
+#### ToolResultMessage
+
+遇到 Source ToolResultMessage 时，先只读取：
+
+```text
+source.toolCallId
+```
+
+判断：
+
+```text
+unresolvedToolCallIds
+│
+├── does not contain source.toolCallId
+│   → error
+│
+└── contains source.toolCallId
+    ↓
+    Chapter 8
+    ↓
+    append Target ToolMessage
+    ↓
+    remove source.toolCallId
+    from unresolvedToolCallIds
+```
+
+因此自然覆盖：
+
+```text
+orphan result
+duplicate result
+late result
+result belonging to another assistant
+```
+
+它们都会因为：
+
+```text
+toolCallId ∉ unresolvedToolCallIds
+```
+
+而失败。
+
+如果 matching ToolResultMessage 存在，但 Chapter 8 无法忠实转换：
 
 ```text
 → error
 ```
 
-Converter 不通过 lookahead 把该 result 移到 UserMessage 前面。
+不能把它当成 missing result 并生成 synthetic replacement。
 
-Source message order保持不变。
+真实 ToolResultMessage 按 Source order append，不重新排序。
 
 ------
 
-### 9.4 Sequence Invariants
+#### End of messages
 
-最终构造出的：
+Source sequence结束后：
+
+```text
+flushMissingResults()
+```
+
+完成最终 Target sequence。
+
+------
+
+### 9.4 Invariants
+
+最终：
 
 ```text
 params.messages[]
@@ -4668,58 +3921,33 @@ params.messages[]
 必须满足：
 
 ```text
-1.
-Message order preserves Source order,
-except Target-defined synthetic messages
-may be inserted where required.
+1. Source message order is preserved.
 
-2.
-Every ToolMessage must belong to the
-immediately-following ToolMessage run of
-the current AssistantMessage and consume
-one of that AssistantMessage's unresolved
-tool-call IDs.
+2. Synthetic ToolMessages are inserted only
+   to complete missing tool results.
 
+3. Every ToolMessage consumes a toolCallId
+   from the current unresolvedToolCallIds.
 
-3.
-Correlation uses toolCallId.
+4. All unresolved tool calls are completed
+   before the next UserMessage or AssistantMessage,
+   or before end of messages.
 
-4.
-All tool-call IDs from an AssistantMessage
-must be covered before the sequence proceeds
-to the next UserMessage or AssistantMessage.
+5. Correlation uses toolCallId only.
 
-5.
-Real ToolResultMessage order is preserved.
+6. Real matching result
+   → Chapter 8 conversion.
 
-6.
-Missing Source result
-→ generate synthetic ToolMessage.
+7. Missing result
+   → synthetic ToolMessage.
 
-7.
-Present but unconvertible Source result
-→ error.
-
-8.
-Orphan, late, non-matching,
-or duplicate result
-→ error.
-
-9.
-Synthetic results are generated
-in originating tool-call order.
-
-10.
-No Source message is reordered,
-silently deleted,
-or reassigned to another assistant.
+8. Non-matching / orphan / duplicate / late result
+   → error.
 ```
 
-Pi 的 shared `transformMessages()` 不作为这一 conversion 的 mandatory preprocessing。
+No additional repaired Pi message representation is constructed.
 
-它包含自己的 Pi-native sequence repair，以及 failed-turn filtering、cross-model normalization 等额外行为；其 synthetic result representation 也不同于 CommandCode Target-defined synthetic representation。
 
-因此这里直接按照 CommandCode `messages[]` Target contract完成 sequence construction，而不先把 Pi history 转换成另一份 repaired Pi history。
 
 ## 10. Tools
 
@@ -5306,276 +4534,132 @@ grammar-specific parameter-shape restrictions
 
 ------
 
+## 11. Final Request Assembly and Serialization
 
+前面的章节已经分别完成 CommandCode request 各 Target subtree 的 construction。
 
-## 11. Final Request Assembly and Validation
+本章不重新解释这些 Target values 如何从 Pi Source 构造，也不重新读取 Pi Source 做第二次 semantic conversion。
 
-前面的章节已经分别完成 CommandCode Request 各 Target subtree 的 construction。
-
-第 11 章不重新解释这些字段如何从 Pi Source 构造，也不重新读取 Source 做第二次 semantic conversion。
-
-它只负责：
+本章只负责：
 
 ```text
-resolved Target subtrees
+resolved CommandCode Target subtrees
 ↓
-final request assembly
+GenerateRequest assembly
 ↓
-target-native payload transformation
+onPayload
 ↓
-JSON wire representation
+JSON serialization
 ↓
-strict Target validation
-↓
-valid CommandCode request
+Prepared CommandCode Request
 ```
-
-因此本章定义的是整个：
-
-```text
-Pi AI IR
-→
-CommandCode Request
-```
-
-conversion 的最终 assembly boundary 和 completion criterion。
 
 ------
 
-### 11.1 Final Target
+### 11.1 Final Assembly
 
-最终需要构造的 CommandCode HTTP Request：
-
-```text
-CommandCode HTTP Request
-├── Method
-│   └── POST
-│
-├── Endpoint
-│   └── <baseUrl>/alpha/generate
-│
-├── Headers
-│
-└── Body
-    └── GenerateRequest
-        ├── config
-        ├── memory
-        ├── taste
-        ├── skills
-        ├── permissionMode
-        ├── threadId
-        ├── mode?
-        │
-        └── params
-            ├── model
-            ├── messages
-            ├── tools
-            ├── system?
-            ├── max_tokens
-            ├── stream
-            ├── temperature?
-            └── reasoning_effort?
-```
-
-这些 subtree 的 construction authority 仍然属于前面的章节。
-
-本章不重新决定：
+前面的章节已经得到：
 
 ```text
-model 从哪里来
-messages 如何转换
-tools 如何转换
-max_tokens 如何 default
-reasoning_effort 如何 normalize
-headers 如何构造
-config 如何计算
-```
-
-而只组合已经完成 construction 的 Target values。
-
-------
-
-### 11.2 Final Assembly
-
-Final assembly 接收前面各 conversion stage 已经解析完成的 Target-native values：
-
-```text
-HTTP method
-+
 resolved endpoint
-+
 resolved headers
-+
-resolved config
-+
-resolved GenerateRequest top-level fields
-+
-resolved params scalar controls
-+
-constructed messages[]
-+
-constructed tools[]
-↓
-complete CommandCode request
+
+GenerateRequest
+├── config
+├── memory
+├── taste
+├── skills
+├── permissionMode
+├── threadId
+├── mode?
+└── params
+    ├── model
+    ├── messages
+    ├── tools
+    ├── system?
+    ├── max_tokens
+    ├── stream
+    ├── temperature?
+    └── reasoning_effort?
 ```
+
+这些 Target values 的 construction authority 属于前面的对应章节。
+
+Final assembly 只组合这些已经构造完成的 values。
 
 信息流：
 
 ```text
-Source information
+Pi Source
 ↓
 local Target construction
 ↓
-resolved Target subtree
+resolved Target subtrees
 ↓
-final assembly
+GenerateRequest
 ```
 
-Final assembly 不重新回到原始 Pi Source 获取同一个事实。
-
-例如：
+本章不重新：
 
 ```text
-Pi Model.id
-↓
-Chapter 5
-↓
-params.model
+read Model
+read Context.messages
+read Context.tools
+
+convert messages
+convert tools
+
+resolve reasoning
+repair tool sequence
+calculate config
+resolve session identity
 ```
 
-到了本章以后使用的是：
-
-```text
-params.model
-```
-
-而不是再次读取：
-
-```text
-Model.id
-```
-
-同样：
-
-```text
-Context.messages[]
-↓
-Chapters 6–9
-↓
-Target messages[]
-```
-
-到了本章只 assembly：
-
-```text
-messages[]
-```
-
-而不重新执行 message conversion。
-
-这样可以保证每项 information 只有一个明确的 conversion owner。
+如果 assembly 阶段仍然需要重新读取 Pi Source 才能决定某个 Target value，则该 information 的 conversion ownership 应回到前面的对应章节解决。
 
 ------
 
-### 11.3 Shared Authoritative Values
+### 11.2 Semantic Conversion Completion
 
-某些 Target fields 位于不同 request subtree，但必须来自同一个 authoritative value。
-
-当前最重要的是 session identity：
+Pi → CommandCode request semantic conversion 完成于：
 
 ```text
-CommandCodeSessionIdentity
-├── Header: x-session-id
-└── Body: threadId
+Pi AI IR
+↓
+Target-driven construction
+↓
+GenerateRequest
 ```
 
-正确 information flow：
+此时：
 
 ```text
-caller sessionId
-        │
-        ├── valid
-        │   → preserve
-        │
-        └── absent / invalid
-            → generate UUID once
-                    ↓
-          authoritative session identity
-             ├── x-session-id
-             └── threadId
+GenerateRequest
 ```
+
+已经是 CommandCode-native representation。
+
+后续：
+
+```text
+onPayload
+JSON serialization
+HTTP execution
+```
+
+不再属于 Pi Source semantic conversion。
 
 因此：
 
 ```text
-x-session-id
-===
-threadId
-```
-
-是 final request 的 cross-subtree invariant。
-
-不能：
-
-```text
-generate x-session-id separately
-+
-generate threadId separately
-```
-
-即使两者都满足 UUID format，也不是合法 construction。
-
-Shared value 必须：
-
-```text
-resolve once
-→ reuse
-```
-
-而不是：
-
-```text
-derive independently
-→ compare afterwards
+semantic conversion completion
+≠
+HTTP request execution
 ```
 
 ------
 
-### 11.4 Assembly Must Not Introduce New Semantics
-
-Final assembly 只负责组合已经完成的 Target subtree。
-
-它不能在这个阶段：
-
-```text
-drop messages
-
-reorder messages
-
-rename tools
-
-normalize tool-call IDs
-
-repair tool results
-
-change max_tokens
-
-infer reasoning effort
-
-recompute project config
-
-replace model identity
-
-derive new Source defaults
-```
-
-如果 assembly 阶段发现仍然需要重新读取某个 Source field 才能决定一个 Target value，说明该字段的 conversion ownership 尚未在前面的章节完成。
-
-应回到相应 Target subtree 修正，而不是把新的 conversion rule 放进 final assembly。
-
-------
-
-### 11.5 Target-Native Payload Transformation
+### 11.3 `onPayload`
 
 Pi request options 提供：
 
@@ -5589,44 +4673,31 @@ onPayload?: (
   | Promise<unknown | undefined>;
 ```
 
-这里的 callback-visible payload 是：
+传给 callback 的 payload 是已经构造完成的：
 
 ```text
 GenerateRequest
 ```
 
-即 CommandCode HTTP body。
+即 CommandCode HTTP body object。
 
-它不是：
+它不包括：
 
 ```text
 HTTP method
 endpoint
 headers
-complete HTTP Request
 ```
 
-Pi → CommandCode semantic field conversion 在进入 `onPayload` 前已经完成：
+调用顺序：
 
 ```text
-Pi Source
-↓
-Target-driven semantic conversion
-↓
 GenerateRequest
 ↓
-onPayload
+onPayload(GenerateRequest, model)
+↓
+effectivePayload
 ```
-
-`onPayload` 不负责重新执行：
-
-```text
-Pi Message → WireMessage
-Pi Tool → WireTool
-Pi Model → params.model
-```
-
-#### Result
 
 如果：
 
@@ -5635,721 +4706,299 @@ onPayload(...)
 → undefined
 ```
 
-则继续使用 callback-visible `GenerateRequest`。
+则：
 
-如果返回 replacement：
+```text
+effectivePayload
+=
+original GenerateRequest
+```
+
+如果：
 
 ```text
 onPayload(...)
 → replacement
 ```
 
-则 replacement 成为后续 serialization 和 validation 的 effective payload。
-
-`onPayload` 每个 Provider invocation 最多执行一次。Retry 不重新执行 `onPayload`。
-
-#### Mutation ownership
-
-Subject to final validation，`onPayload` 可以改变 Target-native generation semantics，例如：
+则：
 
 ```text
-params.system
-params.messages
-params.tools
-params.max_tokens
-params.temperature
-params.reasoning_effort
-mode
+effectivePayload
+=
+replacement
 ```
 
-但不能重新定义 Provider-owned facts：
+replacement 是后续 serialization 使用的完整 effective payload。
+
+`onPayload` 不重新执行：
 
 ```text
-threadId / resolved session identity
-params.model / selected model identity
-permissionMode
-config / project snapshot
+Pi Message → CommandCode Message
+
+Pi Tool → CommandCode Tool
+
+Pi reasoning → CommandCode reasoning_effort
 ```
 
-因此：
+这些 conversion 已经在 callback 之前完成。
+
+`onPayload` 是 Target-native payload hook。
+
+如果 callback throw 或返回 rejected Promise：
 
 ```text
-onPayload accepted a value
-≠
-request is valid
+→ request preparation error
+→ do not send request
 ```
 
-callback result 仍必须通过后续 serialization 和 Target validation。
-
-### 11.6 JSON Serialization Boundary
-
-CommandCode HTTP body 最终通过 JSON 发送。
-
-因此实际 wire representation 不是：
+一个 Provider invocation 中：
 
 ```text
-in-memory JavaScript object
+onPayload
 ```
 
-而是：
+只在 request preparation 时执行一次。
 
-```text
-JSON serialization result
-```
-
-正确 boundary：
-
-```text
-Target object
-↓
-JSON.stringify
-↓
-JSON bytes / text
-```
-
-这一区别很重要，因为部分 JavaScript values 在 serialization 时会发生变化。
-
-例如：
-
-```ts
-{
-  field: undefined
-}
-```
-
-serialization 后：
-
-```text
-field omitted
-```
-
-又例如：
-
-```ts
-NaN
-Infinity
--Infinity
-```
-
-在 JSON object value 中会变成：
-
-```json
-null
-```
-
-而：
-
-```ts
-BigInt
-```
-
-无法正常 JSON serialize。
-
-因此：
-
-```text
-valid-looking in-memory object
-```
-
-不自动意味着：
-
-```text
-valid CommandCode wire representation
-```
+HTTP retry 复用已经准备完成的 request payload，不重新运行 semantic conversion 或 `onPayload`。
 
 ------
 
-### 11.7 Serialization Failure
+### 11.4 JSON Serialization
 
-如果 complete Target payload 无法 JSON serialize：
+CommandCode request body 使用 JSON wire representation。
+
+因此：
 
 ```text
+effectivePayload
+↓
 JSON.stringify
-→ failure
+↓
+bodyText
+```
+
+`bodyText` 才是实际发送的 HTTP body。
+
+如果：
+
+```text
+JSON.stringify(effectivePayload)
+```
+
+throw，例如因为：
+
+```text
+BigInt
+circular reference
+other serialization failure
 ```
 
 则：
 
 ```text
-conversion fails
-→ error
+→ request preparation error
+→ do not send request
 ```
 
-不能：
+如果 serialization 没有产生 string，例如：
 
 ```text
-drop invalid subtree
-replace unsupported value
-guess replacement
-continue sending partial request
+JSON.stringify(effectivePayload)
+→ undefined
 ```
 
-除非某个具体 Target contract 已经明确规定对应 normalization。
-
-------
-
-### 11.8 Wire Representation as Validation Authority
-
-最终 validation 应针对实际将发送的 JSON representation。
-
-推荐 boundary：
+同样：
 
 ```text
-complete Target payload
-↓
-onPayload
-↓
+→ request preparation error
+→ do not send request
+```
+
+成功条件：
+
+```text
+typeof bodyText === "string"
+```
+
+本章不执行：
+
+```text
 JSON.stringify
 ↓
 JSON.parse
 ↓
-strict Target validation
+second full Target validation
 ```
 
-即：
+也不在 serialization 后重新执行前面章节已经拥有的：
 
 ```text
-serialized representation
+message conversion
+message sequence construction
+tool conversion
+reasoning resolution
+image capability resolution
+session identity resolution
+config construction
 ```
-
-重新 parse 后的 JSON value，才是 final Target validator 的输入。
-
-原因是：
-
-```text
-pre-serialization object
-```
-
-可能包含最终 wire 中不存在或已经改变的 values。
-
-因此：
-
-> Final request validity 由实际 JSON-representable CommandCode Target 决定，而不是由 serialization 前的 JavaScript object appearance 决定。
 
 ------
 
-### 11.9 Strict Target Validation
+### 11.5 `onPayload` and Target Validity
 
-Source extraction 遵循最小信息原则：
-
-```text
-只读取 Target construction 真正需要的 Source information
-```
-
-但完成 Target construction 后：
-
-```text
-Target validation
-```
-
-必须严格。
-
-可以概括为：
-
-```text
-narrow Source extraction
-+
-strict Target validation
-```
-
-两者并不冲突。
-
-------
-
-#### Structural validation
-
-Post-serialization validation 的直接输入是：
-
-```text
-JSON.parse(bodyText)
-→ GenerateRequest validation value
-```
-
-因此这里验证的是 serialized CommandCode body：
+进入 `onPayload` 前：
 
 ```text
 GenerateRequest
-├── required fields present
-├── optional fields legal when present
-├── no unknown Target fields
-└── valid Target representation
-
-GenerateParams
-├── required fields present
-├── optional fields legal when present
-├── fixed literals correct
-└── field types valid
 ```
 
-HTTP method、endpoint 和 application headers 不属于这个 serialized-body validation view。
+由 Chapters 3–10 按 CommandCode Target contract 构造。
 
-它们分别由前面对应 Target construction stage 保证；`onPayload` 也没有修改它们的 authority。
+如果 `onPayload` 返回 replacement，则该 replacement 是 caller 对 provider-native payload 的显式修改。
 
-#### Fixed body values
-
-固定 body invariants 必须仍然成立：
+因此本 conversion 不为 replacement 建立第二套：
 
 ```text
-params.stream
-= true
-
-memory
-= null
-
-taste
-= null
-
-skills
-= null
+GenerateRequest certification
+provider authority
+captured capability state
 ```
 
-如果 `onPayload` 或 serialization 改变这些 invariant：
+也不通过重新读取 Pi Source 来判断 callback 是否保留了原来的 semantic decisions。
+
+例如本章不 capture 并重新比较：
 
 ```text
-→ validation error
+threadId
+permissionMode
+params.model
+config
+image capability
+reasoning capability
 ```
 
-------
-
-#### Message validation
-
-`params.messages[]` 必须满足前面章节定义的 Target contract：
+`onPayload` replacement 的最终 wire compatibility 由：
 
 ```text
-valid role union
-
-valid content block union
-
-UserMessage block shapes
-
-AssistantMessage block shapes
-
-ToolMessage block shapes
-
-tool-call.input
-is JSON object
-
-tool-result.output
-is valid { type, value }
-
-tool-call / tool-result
-sequence relationship valid
-```
-
-特别是：
-
-```text
-AssistantMessage with tool-call(s)
-↓
-must be immediately followed by ToolMessage(s)
-↓
-all toolCallIds covered
-```
-
-不能因为第 9 章 construction 原本生成过合法 sequence，就跳过 final validation。
-
-`onPayload` 可能已经修改它。
-
-------
-
-#### Tool validation
-
-每个：
-
-```text
-WireTool
-```
-
-必须最终符合：
-
-```text
-{
-  name: string,
-  description: string,
-  input_schema: object
-}
-```
-
-最终 wire 中不能出现 Pi-only or runtime-only fields，例如：
-
-```text
-constrainedSampling
-callback
-permission
-MCP connection
-runtime handler
-application metadata
-```
-
-------
-
-#### Image validation
-
-Final Target image representation 必须满足 CommandCode wire requirement：
-
-```text
-image
-=
-data:<mime>;base64,<base64>
-```
-
-并且：
-
-```text
-image data URL MIME
-=
-mimeType
-```
-
-如果最终 `params.messages` 中存在 ImageBlock，还必须满足：
-
-```text
-captured selected-model image capability
-→ supports image
-```
-
-该 capability 应在进入 `onPayload` 前 capture。
-
-Final validation 不重新读取或重新转换 Pi：
-
-```text
-ImageContent.data
-ImageContent.mimeType
-Model.input
-```
-
-而只验证：
-
-```text
-final Target image representation
-+
-pre-captured selected-model capability
-```
-
-------
-
-### 11.10 Provider-Owned Target Invariants
-
-`onPayload` 可以改变部分 generation semantics，但不能重新定义已经解析完成的 Provider-owned facts。
-
-进入 `onPayload` 前，应 capture 当前 request validation 所需的 authoritative values：
-
-```text
-resolved session identity
-resolved permissionMode
-selected model identity
-authoritative config
-selected-model capabilities needed after callback
-```
-
-Post-serialization validation 要求：
-
-```text
-Body.threadId
-===
-resolved session identity
-Body.permissionMode
-===
-resolved permissionMode
-Body.params.model
-===
-selected model identity
-Body.config
-===
-authoritative config
-```
-
-如果最终存在：
-
-```text
-params.reasoning_effort
-```
-
-还必须属于 callback 前 capture 的 selected-model supported CommandCode effort set。
-
-如果最终存在 ImageBlock，还必须满足 callback 前 capture 的 selected-model image capability。
-
-Header `x-session-id` 不需要在这里重新读取并与 body 比较。
-
-它已经在 Header construction 中由同一个 resolved session identity 构造：
-
-```text
-resolved session identity
-├── Header.x-session-id
-└── Body.threadId
-```
-
-正确 invariant 是：
-
-```text
-resolve once
-→ reuse
-```
-
-而不是：
-
-```text
-construct independently
-→ compare afterwards
-```
-
-Final validation 不借此重新执行 Pi Source semantic analysis。
-
-------
-
-### 11.11 Source Fields Are Not Revalidated Globally
-
-Final Target validation 不重新检查所有 Pi Source information。
-
-例如不因为最终 validation 而重新读取：
-
-```text
-AssistantMessage.timestamp
-
-AssistantMessage.usage
-
-AssistantMessage.stopReason
-
-AssistantMessage.provider
-
-AssistantMessage.model
-
-ThinkingContent.thinkingSignature
-
-TextContent.textSignature
-
-ToolResultMessage.details
-
-ToolResultMessage.usage
-
-ToolResultMessage.timestamp
-```
-
-除非其中某个字段已经在前面的 Target construction 中被证明是当前 Target validity 所需 dependency。
-
-否则这些 Source information 到 final validation 阶段已经没有生命周期。
-
-------
-
-### 11.12 Failure Semantics
-
-以下任一阶段失败：
-
-```text
-Target subtree construction
-
-final assembly
-
-Target-native payload transformation result
-
 JSON serialization
-
-JSON re-parsing
-
-strict Target validation
++
+CommandCode server
 ```
 
-都意味着：
+决定。
 
-```text
-CommandCode Request construction failed
-```
-
-此时：
-
-```text
-do not send request
-```
-
-Converter 不应该：
-
-```text
-silently remove invalid fields
-
-repair unknown Target structures
-
-replace invalid values with guesses
-
-continue with partially valid payload
-```
-
-除非对应 Target contract 明确定义：
-
-```text
-default
-omission
-generation
-normalization
-```
-
-规则。
+Converter 不对 callback result做猜测、修复或 silent normalization。
 
 ------
 
-### 11.13 Semantic Conversion and Request Preparation Completion
+### 11.6 Request Preparation Completion
 
-需要区分两个 completion point。
-
-#### Semantic conversion completion
-
-Pi → CommandCode semantic conversion 完成于：
+完整 request preparation 为：
 
 ```text
-Pi Source
+resolved CommandCode request values
 ↓
-Target-driven subtree construction
-↓
-CommandCode-native request semantics constructed
-```
-
-此时已经完成：
-
-```text
-messages conversion
-tools conversion
-scalar control conversion
-config construction
-identity construction
-header semantic construction
-```
-
-后续 `onPayload` 不再解释 Pi Source。
-
-#### Request preparation completion
-
-完整 request preparation lifecycle 为：
-
-```text
-CommandCode-native GenerateRequest
+GenerateRequest assembly
 ↓
 onPayload
+↓
+effectivePayload
 ↓
 JSON.stringify
 ↓
 bodyText
-↓
-JSON.parse
-↓
-strict body / capability / Provider-authority validation
-↓
-Prepared CommandCode Request
 ```
 
-因此：
-
-```text
-semantic conversion completion
-≠
-request preparation completion
-```
-
-成功 validation 后：
-
-```text
-bodyText
-```
-
-成为当前 Provider invocation 的 authoritative serialized body representation。
-
-Retry 不重新进行 semantic conversion、`onPayload` 或 serialization。
-
-------
-
-### 11.14 Execution Boundary
-
-本 request-conversion/preparation method 到：
+成功后形成：
 
 ```text
 Prepared CommandCode Request
-```
-
-结束。
-
-其稳定 request state 包括概念上的：
-
-```text
-endpoint
-stable application headers
-bodyText
-fetch selection / execution inputs as separately owned runtime state
-logical trace context when available
+├── endpoint
+├── stable application headers
+└── bodyText
 ```
 
 其中：
 
 ```text
+bodyText
+```
+
+是当前 Provider invocation 的 authoritative serialized request body。
+
+到这里 request preparation 完成。
+
+------
+
+### 11.7 Execution Boundary
+
+以下行为属于 provider execution / transport runtime：
+
+```text
+attempt-local headers
+traceparent construction
+HTTP Request creation
+fetch
+timeout
+retry
+connection handling
+response status
+onResponse
+response stream decoding
+response reconstruction
+cancellation
+```
+
+它们不属于 Pi → CommandCode semantic conversion。
+
+尤其：
+
+```text
 traceparent
 ```
 
-是 attempt-owned header，不在 semantic conversion 或 stable body preparation 中完成；每个 HTTP attempt 可根据 logical trace context 构造自己的 span ID。
+是 attempt-owned transport information，不进入 stable semantic request body。
 
-之后发生的：
+------
+
+### 11.8 Final Flow
+
+最终 request path：
 
 ```text
-attempt-local traceparent construction
-HTTP Request creation
-HTTP fetch
-connection establishment
-timeout
-retry
-response headers
-onResponse
-bare JSON Lines decoding
-response lifecycle
-response conversion
-transport cancellation
+Pi AI IR
+↓
+Target-driven conversion
+↓
+CommandCode GenerateRequest
+──────── semantic conversion complete ────────
+onPayload
+↓
+effective payload
+↓
+JSON.stringify
+↓
+bodyText
+──────── request preparation complete ────────
+HTTP execution
 ```
 
-属于：
+本章的核心原则：
 
 ```text
-provider execution / transport / response runtime
-```
+Construct Target once.
 
-而不是 Pi → CommandCode semantic conversion。
+Do not recertify the same semantics
+through a parallel authority model.
 
-### 11.15 Final Principle
+Allow the Pi provider-native payload hook
+to inspect or replace the constructed payload.
 
-整个 conversion 的最终原则可以概括为：
+Serialize the effective payload once.
 
-```text
-Start from Target.
-
-Read only Source information
-needed to construct that Target.
-
-Resolve each fact once.
-
-Keep temporary state short-lived.
-
-Do not introduce parallel semantic models.
-
-Apply Target-defined
-default / omission / generation / normalization.
-
-Preserve Source semantics
-where Target can represent them.
-
-Fail when required semantics
-cannot be represented.
-
-Then apply Target-native payload transformation,
-serialize the GenerateRequest body,
-and validate the actual serialized
-Target body strictly.
-```
-
-最终：
-
-```text
-Source validation
-is intentionally narrow.
-
-Target construction
-is explicit.
-
-Target validation
-is complete and strict.
+If preparation cannot produce a JSON body,
+fail before sending.
 ```
 
 
@@ -6357,6 +5006,8 @@ is complete and strict.
 
 
 # Part II — Response: CommandCode → Pi AI IR
+
+**Target是PI AI IR, source是Commandcode Private**
 
 ## 1. Overall Response Flow
 
