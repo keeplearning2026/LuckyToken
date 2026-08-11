@@ -2660,3 +2660,2012 @@ Anthropic Request
                SimpleStreamOptions
 ```
 
+## 7. Final Request Conversion
+
+除了1-7章中的说明需要转换的字段，其他anthropic request的字段都忽略。
+
+最终输出：
+
+```text
+Anthropic Request
+        ↓
+
+selector
+│
+└── request.model
+
+Context
+├── systemPrompt
+│    └── request.system
+│
+├── messages
+│    └── request.messages
+│
+└── tools
+     └── request.tools
+
+SimpleStreamOptions
+├── maxTokens
+│    └── request.max_tokens
+│
+├── temperature
+│    └── request.temperature
+│
+├── reasoning
+│    └── request.output_config.effort
+│
+└── metadata.user_id
+     └── request.metadata.user_id
+
+AnthropicRenderState
+├── clientModel
+│    └── selector
+```
+
+# Part III — Pi AI IR → Anthropic Response
+
+## 1. Response Conversion Boundary
+
+Response conversion 接收一个已经成功完成并提交的 Pi：
+
+```text
+AssistantMessage
+```
+
+以及 request conversion 保留下来的：
+
+```text
+AnthropicRenderState
+```
+
+Conceptually：
+
+```ts
+interface AnthropicRenderState {
+  clientModel: string;
+  stream: boolean;
+}
+```
+
+Part III 的输入不是：
+
+```text
+AssistantMessageEventStream
+```
+
+也不是：
+
+```text
+provider-native stream events
+```
+
+而是：
+
+```text
+committed AssistantMessage
+```
+
+因此以下 lifecycle：
+
+```text
+Pi stream consumption
+terminal validation
+abort handling
+execution failure
+deferred execution
+semantic commit
+```
+
+均属于 execution/runtime contract，不属于本 Conversion Method。
+
+Response conversion 的整体信息流是：
+
+```text
+committed Pi AssistantMessage
+        +
+AnthropicRenderState
+        ↓
+construct one Anthropic Message
+        ↓
+        M
+       / \
+      /   \
+   JSON   Atomic SSE
+```
+
+JSON 和 SSE 不执行两套独立 semantic conversion。
+
+唯一 authoritative Anthropic response semantic representation 是：
+
+```text
+Anthropic Message
+```
+
+---
+
+## 2. Response Conversion Principles
+
+### 2.1. Target-Driven Projection
+
+Response conversion 以 Anthropic output contract 为 target authority。
+
+Pi `AssistantMessage` 包含的 source information 多于 Anthropic response 所需要的信息。
+
+因此：
+
+```text
+Pi source information
+        │
+        ├── has defined Anthropic target
+        │       → convert
+        │
+        ├── internal / provenance /
+        │   unconsumed information
+        │       → ignore
+        │
+        └── required client-visible semantic
+            cannot form truthful target
+                → OutboundResponseFidelityFailure
+```
+
+Response conversion 不试图暴露 Pi 的完整 runtime state。
+
+---
+
+### 2.2. Source Projection Is Tolerant
+
+Pi source object 中未被 conversion 消费的额外信息：
+
+```text
+→ ignore
+```
+
+例如未来新增一个与 Anthropic response 无关的 optional Pi field，不应仅因为 converter 不认识它而导致失败。
+
+因此：
+
+```text
+unknown extra Pi field
+≠
+response conversion failure
+```
+
+---
+
+### 2.3. Target Construction Is Strict
+
+LuckyToken 自己构造的 Anthropic target 必须符合目标协议。
+
+因此：
+
+```text
+Pi source
+→ tolerant projection
+
+Anthropic target
+→ strict construction
+```
+
+不能通过：
+
+```text
+guessing
+placeholder insertion
+silent coercion
+field omission
+semantic repair
+```
+
+制造一个表面合法但语义错误的 Anthropic response。
+
+---
+
+### 2.4. No Semantic Reconstruction from Provenance
+
+Response conversion 不使用：
+
+```text
+provider
+api
+responseModel
+responseId
+rawStopReason
+endTurn
+diagnostics
+```
+
+反推已经在 Pi normalization 中丢失的 provider-specific semantic。
+
+特别地：
+
+```text
+Pi normalized state
+```
+
+是 Part III 的 source authority。
+
+Part III 不尝试恢复原始 provider wire response。
+
+---
+
+## 3. Anthropic Message Construction
+
+Successful non-streaming Anthropic response 的 target hierarchy 为：
+
+```text
+Message
+│
+├── Identity
+│   ├── id
+│   ├── type
+│   ├── role
+│   └── model
+│
+├── Runtime
+│   └── container
+│
+├── Content
+│   └── content[]
+│
+├── Termination
+│   ├── stop_reason
+│   ├── stop_sequence
+│   └── stop_details
+│
+└── Usage
+    └── usage
+```
+
+Response conversion 先完整构造该 `Message`，之后才决定 JSON 或 SSE rendering。
+
+---
+
+## 3.1. Message Identity and Envelope
+
+### 3.1.1. `id`
+
+LuckyToken 为每个成功 Anthropic response 生成一个新的 opaque message ID：
+
+```text
+generatedMessageId
+→ Message.id
+```
+
+Pi：
+
+```text
+responseId
+```
+
+不自动成为 Anthropic：
+
+```text
+Message.id
+```
+
+因为 Pi `responseId` 属于 upstream/provider provenance，而 Anthropic response ID 属于当前 LuckyToken client protocol response。
+
+一个成功 response 只生成一次 message ID。
+
+JSON 与 Atomic SSE 必须共享同一个 ID。
+
+---
+
+### 3.1.2. `type`
+
+```text
+Message.type
+→ "message"
+```
+
+---
+
+### 3.1.3. `role`
+
+```text
+Message.role
+→ "assistant"
+```
+
+---
+
+### 3.1.4. `model`
+
+Anthropic：
+
+```text
+Message.model
+```
+
+使用 request conversion 保存的：
+
+```text
+renderState.clientModel
+```
+
+即：
+
+```text
+original request.model selector
+```
+
+Mapping：
+
+```text
+renderState.clientModel
+→ Message.model
+```
+
+不得替换为：
+
+```text
+AssistantMessage.model
+AssistantMessage.responseModel
+AssistantMessage.provider
+AssistantMessage.api
+```
+
+这些字段属于 Pi runtime/provider identity，不属于当前 Anthropic client-visible model identity。
+
+---
+
+### 3.1.5. `container`
+
+当前 generic Pi committed response 不提供可转换的 Anthropic container state。
+
+因此：
+
+```text
+Message.container
+→ null
+```
+
+这是 target required-shape projection。
+
+---
+
+## 4. Content Projection
+
+Pi source：
+
+```text
+AssistantMessage.content[]
+├── TextContent
+├── ThinkingContent
+└── ToolCall
+```
+
+转换为 Anthropic：
+
+```text
+Message.content[]
+```
+
+Conversion 遍历 Pi content，并对每个 block 应用对应 mapping。
+
+被明确丢弃的 block 不进入 target content。
+
+Surviving blocks：
+
+```text
+preserve relative order
+```
+
+但 target index 根据转换后的 Anthropic content 重新连续编号。
+
+例如：
+
+```text
+Pi content
+0 Text
+1 Redacted Thinking
+2 ToolCall
+```
+
+转换为：
+
+```text
+Anthropic content
+0 TextBlock
+1 ToolUseBlock
+```
+
+不得保留 source index gap。
+
+---
+
+## 4.1. TextContent → TextBlock
+
+Pi：
+
+```ts
+{
+  type: "text",
+  text: sourceText,
+  textSignature?: ...
+}
+```
+
+转换为：
+
+```ts
+{
+  type: "text",
+  text: sourceText,
+  citations: null,
+}
+```
+
+Mapping：
+
+```text
+TextContent.text
+→ TextBlock.text
+
+TextBlock.type
+→ "text"
+
+TextBlock.citations
+→ null
+```
+
+Pi：
+
+```text
+textSignature
+```
+
+没有当前 Anthropic target mapping：
+
+```text
+→ ignore
+```
+
+Text value 不执行：
+
+```text
+trim
+newline normalization
+semantic rewriting
+```
+
+---
+
+## 4.2. Ordinary ThinkingContent → ThinkingBlock
+
+当：
+
+```text
+ThinkingContent.redacted !== true
+```
+
+时，转换为普通 Anthropic `ThinkingBlock`。
+
+Pi：
+
+```ts
+{
+  type: "thinking",
+  thinking: sourceThinking,
+  thinkingSignature?: sourceSignature,
+}
+```
+
+转换为：
+
+```ts
+{
+  type: "thinking",
+  thinking: sourceThinking,
+  signature: sourceSignature ?? "",
+}
+```
+
+Mapping：
+
+```text
+thinking
+→ thinking
+
+thinkingSignature present
+→ signature exact
+
+thinkingSignature absent
+→ signature = ""
+```
+
+冻结：
+
+```text
+missing Pi thinkingSignature
+does not convert thinking to text
+```
+
+也不删除 thinking block。
+
+---
+
+## 4.3. Redacted ThinkingContent
+
+当：
+
+```text
+ThinkingContent.redacted === true
+```
+
+当前 LuckyToken response contract 明确：
+
+```text
+→ discard
+```
+
+不输出：
+
+```text
+redacted_thinking
+```
+
+也不转换为：
+
+```text
+text
+ordinary thinking
+placeholder
+```
+
+例如：
+
+```text
+Pi:
+[
+  Text("A"),
+  RedactedThinking(...),
+  Text("B")
+]
+```
+
+转换为：
+
+```text
+Anthropic:
+[
+  Text("A"),
+  Text("B")
+]
+```
+
+redacted block 的 information lifetime 在该 projection point 结束。
+
+---
+
+## 4.4. ToolCall → ToolUseBlock
+
+Pi：
+
+```ts
+{
+  type: "toolCall",
+  id: sourceId,
+  name: sourceName,
+  arguments: sourceArguments,
+  thoughtSignature?: ...,
+  namespace?: ...,
+}
+```
+
+转换为：
+
+```ts
+{
+  type: "tool_use",
+  id: sourceId,
+  name: sourceName,
+  input: convertedArguments,
+  caller: {
+    type: "direct",
+  },
+}
+```
+
+Mapping：
+
+```text
+ToolCall.id
+→ ToolUseBlock.id
+
+ToolCall.name
+→ ToolUseBlock.name
+
+ToolCall.arguments
+→ ToolUseBlock.input
+
+ToolUseBlock.type
+→ "tool_use"
+
+ToolUseBlock.caller
+→ { type: "direct" }
+```
+
+Pi：
+
+```text
+thoughtSignature
+namespace
+```
+
+没有当前 Anthropic direct client-tool response mapping：
+
+```text
+→ ignore
+```
+
+---
+
+## 4.5. ToolCall Arguments Contract
+
+Anthropic：
+
+```text
+tool_use.input
+```
+
+必须是一个 JSON object。
+
+因此：
+
+```text
+Pi ToolCall.arguments
+        ↓
+must losslessly represent
+a JSON object tree
+        ↓
+Anthropic ToolUseBlock.input
+```
+
+Root 必须是：
+
+```text
+non-null JSON object
+```
+
+Nested JSON values 可以为：
+
+```text
+null
+string
+boolean
+finite number
+array of JSON values
+JSON object
+```
+
+如果 runtime value 不能忠实表示为 Anthropic JSON object：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+典型 failure 包括：
+
+```text
+non-object root
+undefined
+function
+symbol
+BigInt
+NaN
+Infinity
+-Infinity
+cyclic structure
+```
+
+Conversion 不允许：
+
+```text
+repair malformed arguments
+replace with {}
+drop unsupported properties
+stringify-and-hope
+coerce to another semantic value
+```
+
+Part III 也不重新使用 request-side：
+
+```text
+Tool.input_schema
+```
+
+验证 model-generated arguments。
+
+Response conversion 只判断：
+
+> Can this completed Pi `ToolCall.arguments` be faithfully represented as Anthropic `tool_use.input`?
+
+---
+
+## 4.6. Empty Projected Content
+
+所有 content mappings 完成后：
+
+```text
+Anthropic Message.content.length
+```
+
+必须大于零。
+
+如果：
+
+```text
+content.length === 0
+```
+
+则：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+例如：
+
+```text
+Pi content
+=
+[
+  RedactedThinking(...)
+]
+```
+
+在 redacted thinking 被丢弃后：
+
+```text
+Anthropic content
+=
+[]
+```
+
+该 response 不能作为成功 Anthropic `Message` 返回。
+
+LuckyToken 不通过以下方式补位：
+
+```text
+empty TextBlock
+placeholder text
+"[Reasoning redacted]"
+synthetic tool block
+```
+
+---
+
+## 5. Usage Projection
+
+Pi：
+
+```text
+Usage
+│
+├── input
+├── output
+├── cacheRead
+├── cacheWrite
+├── cacheWrite1h?
+├── reasoning?
+├── totalTokens
+└── cost
+```
+
+转换为 Anthropic final：
+
+```text
+Usage
+│
+├── cache_creation
+├── cache_creation_input_tokens
+├── cache_read_input_tokens
+├── input_tokens
+├── output_tokens
+├── output_tokens_details
+├── server_tool_use
+├── inference_geo
+└── service_tier
+```
+
+---
+
+## 5.1. Direct Token Mapping
+
+```text
+Pi usage.input
+→ Anthropic input_tokens
+
+Pi usage.output
+→ Anthropic output_tokens
+
+Pi usage.cacheRead
+→ Anthropic cache_read_input_tokens
+
+Pi usage.cacheWrite
+→ Anthropic cache_creation_input_tokens
+```
+
+Pi Usage 已经是 normalized numeric state。
+
+因此 numeric：
+
+```text
+0
+```
+
+保持：
+
+```text
+0
+```
+
+而不是重新解释为：
+
+```text
+null
+```
+
+例如：
+
+```text
+cacheRead = 0
+→ cache_read_input_tokens = 0
+```
+
+---
+
+## 5.2. Reasoning Token Breakdown
+
+Pi：
+
+```text
+usage.reasoning?
+```
+
+表示 output token 中的 reasoning/thinking-token subset。
+
+Mapping 以 presence 为准。
+
+如果：
+
+```text
+reasoning === undefined
+```
+
+则：
+
+```text
+output_tokens_details = null
+```
+
+如果：
+
+```text
+reasoning !== undefined
+```
+
+则：
+
+```ts
+output_tokens_details = {
+  thinking_tokens: reasoning,
+};
+```
+
+因此：
+
+```text
+reasoning = 0
+```
+
+仍然转换为：
+
+```json
+{
+  "thinking_tokens": 0
+}
+```
+
+而不是 `null`。
+
+Invariant：
+
+```text
+0 <= reasoning <= output
+```
+
+如果不满足：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+`reasoning` 已经包含在 authoritative：
+
+```text
+output
+```
+
+之内。
+
+不得：
+
+```text
+output_tokens =
+output + reasoning
+```
+
+---
+
+## 5.3. Cache-Creation Breakdown
+
+Pi：
+
+```text
+usage.cacheWrite1h?
+```
+
+表示：
+
+```text
+subset of cacheWrite
+```
+
+如果：
+
+```text
+cacheWrite1h === undefined
+```
+
+则：
+
+```text
+cache_creation = null
+```
+
+如果 present：
+
+```ts
+cache_creation = {
+  ephemeral_1h_input_tokens:
+    cacheWrite1h,
+
+  ephemeral_5m_input_tokens:
+    cacheWrite - cacheWrite1h,
+};
+```
+
+因此：
+
+```text
+cacheWrite1h = 0
+```
+
+仍然是明确 present 的 breakdown：
+
+```text
+ephemeral_1h_input_tokens = 0
+ephemeral_5m_input_tokens = cacheWrite
+```
+
+Invariant：
+
+```text
+0 <= cacheWrite1h <= cacheWrite
+```
+
+否则：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+---
+
+## 5.4. Unavailable Anthropic Usage Fields
+
+当前 generic Pi Usage 没有 corresponding target information：
+
+```text
+server_tool_use
+inference_geo
+service_tier
+```
+
+因此：
+
+```text
+server_tool_use
+→ null
+
+inference_geo
+→ null
+
+service_tier
+→ null
+```
+
+Pi：
+
+```text
+totalTokens
+cost
+```
+
+当前没有 Anthropic response mapping：
+
+```text
+→ ignore
+```
+
+Conversion 不把内部 accounting 写入 model-visible or protocol-visible metadata。
+
+---
+
+## 6. Termination Projection
+
+Part III 只接收：
+
+```text
+successfully committed AssistantMessage
+```
+
+其 successful termination invariant 为：
+
+```text
+stopReason
+∈
+{
+  "stop",
+  "length",
+  "toolUse"
+}
+```
+
+Mapping：
+
+```text
+Pi "stop"
+→ Anthropic "end_turn"
+
+Pi "length"
+→ Anthropic "max_tokens"
+
+Pi "toolUse"
+→ Anthropic "tool_use"
+```
+
+对于当前所有三个 mapped termination：
+
+```text
+stop_sequence = null
+stop_details = null
+```
+
+---
+
+## 6.1. Other Pi Stop Reasons
+
+Pi `StopReason` 还包括：
+
+```text
+pending
+error
+aborted
+deferred
+```
+
+它们不是 Part III successful-response input。
+
+Responsibility：
+
+```text
+pending
+→ incomplete / malformed execution
+
+error
+→ execution failure
+
+aborted
+→ cancellation / abort
+
+deferred
+→ unsupported execution outcome
+```
+
+这些状态必须在 successful response conversion 之前处理。
+
+因此：
+
+```text
+pending
+error
+aborted
+deferred
+```
+
+不得被映射为任何 Anthropic successful：
+
+```text
+stop_reason
+```
+
+特别禁止：
+
+```text
+error
+→ refusal
+
+aborted
+→ end_turn
+
+deferred
+→ pause_turn
+
+pending
+→ null successful response
+```
+
+如果异常情况下这些状态突破 execution boundary 进入 Part III：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+---
+
+## 6.2. No Recovery from `rawStopReason`
+
+Response conversion 不根据：
+
+```text
+rawStopReason
+```
+
+恢复：
+
+```text
+stop_sequence
+pause_turn
+refusal
+model_context_window_exceeded
+future provider stop reasons
+```
+
+因为 generic Pi normalization 可能已经把多个 provider states 合并为同一个 Pi stop state。
+
+例如：
+
+```text
+provider-specific termination
+        ↓
+Pi normalization
+        ↓
+stop
+```
+
+Part III 的 source authority 是：
+
+```text
+Pi stopReason
+```
+
+不是 original provider termination metadata。
+
+---
+
+## 6.3. ToolCall / Termination Consistency
+
+Committed response 必须保持：
+
+```text
+contains ToolCall
+⇔
+stopReason = "toolUse"
+```
+
+因此：
+
+```text
+stopReason = "toolUse"
++
+no surviving ToolCall
+
+→ OutboundResponseFidelityFailure
+```
+
+以及：
+
+```text
+one or more surviving ToolCalls
++
+stopReason = "stop" or "length"
+
+→ OutboundResponseFidelityFailure
+```
+
+Conversion 不猜：
+
+```text
+content
+```
+
+或：
+
+```text
+stopReason
+```
+
+哪一个更权威。
+
+它们必须共同构成 consistent target state。
+
+---
+
+## 7. Complete Anthropic Message
+
+Conceptually：
+
+```ts
+function convertAssistantMessageToAnthropic(
+  message: AssistantMessage,
+  renderState: AnthropicRenderState,
+  generatedMessageId: string,
+): AnthropicMessage {
+  const content =
+    convertContent(message.content);
+
+  if (content.length === 0) {
+    throw new OutboundResponseFidelityFailure(
+      "Projected Anthropic content is empty",
+    );
+  }
+
+  assertToolTerminationConsistency(
+    content,
+    message.stopReason,
+  );
+
+  return {
+    id:
+      generatedMessageId,
+
+    container:
+      null,
+
+    content,
+
+    model:
+      renderState.clientModel,
+
+    role:
+      "assistant",
+
+    stop_details:
+      null,
+
+    stop_reason:
+      convertStopReason(
+        message.stopReason,
+      ),
+
+    stop_sequence:
+      null,
+
+    type:
+      "message",
+
+    usage:
+      convertUsage(
+        message.usage,
+      ),
+  };
+}
+```
+
+该 `AnthropicMessage` 是当前 response conversion 的唯一 authoritative semantic representation。
+
+---
+
+## 8. Response Rendering Selection
+
+Request conversion 保存：
+
+```text
+renderState.stream
+```
+
+Part III 使用它选择 wire representation。
+
+```text
+stream = false
+→ JSON
+
+stream = true
+→ Atomic SSE
+```
+
+`stream` 只选择 rendering mode。
+
+它不改变已经构造完成的 Anthropic Message semantic。
+
+---
+
+## 9. Non-Streaming JSON Rendering
+
+当：
+
+```text
+renderState.stream = false
+```
+
+执行：
+
+```text
+Anthropic Message M
+        ↓
+target validation
+        ↓
+JSON serialization
+        ↓
+HTTP JSON response
+```
+
+JSON renderer 不重新访问：
+
+```text
+Pi AssistantMessage
+```
+
+也不重新执行 content / usage / termination mapping。
+
+Conceptually：
+
+```ts
+renderAnthropicJsonSuccess(M);
+```
+
+---
+
+## 10. Atomic SSE Rendering
+
+当：
+
+```text
+renderState.stream = true
+```
+
+LuckyToken 不转发原始 Pi/provider stream。
+
+而是从已经构造完成的：
+
+```text
+Anthropic Message M
+```
+
+生成一个合法的 Anthropic SSE lifecycle：
+
+```text
+message_start
+        ↓
+ContentBlock[index]*
+│
+├── content_block_start
+├── content_block_delta*
+└── content_block_stop
+        ↓
+message_delta
+        ↓
+message_stop
+```
+
+该模式称为：
+
+```text
+Atomic SSE
+```
+
+Atomic SSE：
+
+```text
+does not reproduce provider chunk timing
+does not reproduce provider chunk boundaries
+does not expose incomplete Pi tool state
+```
+
+它只负责：
+
+> Serialize the already committed Anthropic Message through a legal Anthropic streaming lifecycle.
+
+---
+
+## 10.1. `message_start`
+
+`message_start` 携带一个 incomplete partial Message。
+
+它与最终 Message 使用相同：
+
+```text
+id
+model
+role
+type
+```
+
+Initial message-level state：
+
+```text
+content = []
+
+container = null
+
+stop_reason = null
+stop_sequence = null
+stop_details = null
+```
+
+---
+
+## 10.2. Initial Streaming Usage
+
+`message_start.message.usage` 使用 initial snapshot，而不是最终完整 generation state。
+
+从 final Pi Usage 构造：
+
+```text
+input_tokens
+→ final input
+
+cache_read_input_tokens
+→ final cacheRead
+
+cache_creation_input_tokens
+→ final cacheWrite
+
+cache_creation
+→ final cache breakdown
+
+output_tokens
+→ 0
+
+output_tokens_details
+→ null
+
+server_tool_use
+→ null
+
+inference_geo
+→ null
+
+service_tier
+→ null
+```
+
+该 snapshot 表示：
+
+```text
+request/input accounting known at stream start
++
+no generated output exposed yet
+```
+
+---
+
+## 11. Atomic Content Block Lifecycles
+
+每一个最终：
+
+```text
+Message.content[index]
+```
+
+产生一个对应 SSE block lifecycle。
+
+SSE：
+
+```text
+content_block.index
+=
+final Anthropic Message.content[index]
+```
+
+由于 redacted Pi thinking 已在 Message construction 阶段丢弃，因此 SSE index 使用转换后的 dense target indexing。
+
+---
+
+## 11.1. TextBlock Lifecycle
+
+对于最终：
+
+```ts
+{
+  type: "text",
+  text: finalText,
+  citations: null,
+}
+```
+
+生成：
+
+```text
+content_block_start
+        ↓
+text_delta
+        ↓
+content_block_stop
+```
+
+Start block：
+
+```ts
+{
+  type: "text",
+  text: "",
+  citations: null,
+}
+```
+
+Delta：
+
+```text
+text_delta.text
+=
+full finalText
+```
+
+一个完整 final string 可以作为一个 atomic incremental delta。
+
+无需重新切分 provider chunk。
+
+---
+
+## 11.2. ThinkingBlock Lifecycle
+
+对于最终：
+
+```ts
+{
+  type: "thinking",
+  thinking: finalThinking,
+  signature: finalSignature,
+}
+```
+
+生成：
+
+```text
+content_block_start
+        ↓
+thinking_delta
+        ↓
+signature_delta
+        ↓
+content_block_stop
+```
+
+Start：
+
+```ts
+{
+  type: "thinking",
+  thinking: "",
+  signature: "",
+}
+```
+
+Thinking delta：
+
+```text
+thinking_delta.thinking
+=
+full finalThinking
+```
+
+Signature delta：
+
+```text
+signature_delta.signature
+=
+full finalSignature
+```
+
+如果 Pi source 没有 signature：
+
+```text
+finalSignature = ""
+```
+
+Atomic SSE 仍然使用 target representation 中的 empty signature。
+
+---
+
+## 11.3. Redacted Thinking
+
+Redacted Pi thinking 在构造 Anthropic Message 时已经：
+
+```text
+discarded
+```
+
+因此 Atomic SSE：
+
+```text
+does not generate
+redacted_thinking lifecycle
+```
+
+不存在第二次 redacted-thinking decision。
+
+---
+
+## 11.4. ToolUseBlock Lifecycle
+
+对于最终：
+
+```ts
+{
+  type: "tool_use",
+  id,
+  name,
+  input,
+  caller: {
+    type: "direct",
+  },
+}
+```
+
+生成：
+
+```text
+content_block_start
+        ↓
+input_json_delta
+        ↓
+content_block_stop
+```
+
+Start block：
+
+```text
+same id
+same name
+same caller
+
+input = {}
+```
+
+Delta：
+
+```text
+input_json_delta.partial_json
+=
+JSON.stringify(final input)
+```
+
+一个完整 serialized JSON object 可以作为一个 atomic partial-json delta。
+
+Conversion 不：
+
+```text
+reconstruct original provider fragments
+stream incomplete Pi arguments
+emit partial ToolCall before target input is complete
+```
+
+---
+
+## 12. `message_delta`
+
+完成所有 content block lifecycles 后，Atomic SSE 发送：
+
+```text
+message_delta
+```
+
+用于更新最终 message-level termination state 与 cumulative streaming usage。
+
+---
+
+## 12.1. Termination Delta
+
+```text
+delta.container
+→ null
+
+delta.stop_details
+→ final Message.stop_details
+
+delta.stop_reason
+→ final Message.stop_reason
+
+delta.stop_sequence
+→ final Message.stop_sequence
+```
+
+当前因此为：
+
+```text
+container
+→ null
+
+stop_details
+→ null
+
+stop_sequence
+→ null
+
+stop_reason
+→ end_turn | max_tokens | tool_use
+```
+
+---
+
+## 12.2. Final Cumulative Streaming Usage
+
+`message_delta.usage` 使用 Anthropic streaming-specific usage shape。
+
+Mapping：
+
+```text
+input_tokens
+→ final input
+
+cache_read_input_tokens
+→ final cacheRead
+
+cache_creation_input_tokens
+→ final cacheWrite
+
+output_tokens
+→ final output
+
+output_tokens_details
+→ final reasoning breakdown
+
+server_tool_use
+→ null
+```
+
+这些值是 cumulative。
+
+`MessageDeltaUsage` 不包含 final `Usage` 的全部字段。
+
+因此不添加：
+
+```text
+cache_creation
+inference_geo
+service_tier
+```
+
+---
+
+## 13. `message_stop`
+
+Atomic SSE 最后发送：
+
+```text
+message_stop
+```
+
+它是成功 streaming response 的 semantic terminal。
+
+正常 lifecycle：
+
+```text
+message_start
+        ↓
+content block lifecycle*
+        ↓
+message_delta
+        ↓
+message_stop
+```
+
+LuckyToken 不发送：
+
+```text
+data: [DONE]
+```
+
+作为 Anthropic success terminal。
+
+---
+
+## 14. JSON / Atomic SSE Semantic Equality
+
+JSON 和 Atomic SSE 必须表达同一个：
+
+```text
+Anthropic Message M
+```
+
+Invariant：
+
+```text
+committed AssistantMessage
+        ↓
+construct M once
+        ↓
+        ├── JSON(M)
+        └── AtomicSSE(M)
+```
+
+Accumulating the Atomic SSE lifecycle must reconstruct the same final semantic Message `M`.
+
+因此 JSON 与 SSE 必须保持：
+
+```text
+same message ID
+
+same model
+
+same surviving content
+
+same content order
+
+same text
+
+same thinking
+
+same thinking signatures
+
+same tool-call IDs
+
+same tool names
+
+same tool inputs
+
+same termination
+
+same final usage
+```
+
+Transport fragmentation 不属于 semantic equality requirement。
+
+---
+
+## 15. Ignored Pi State
+
+当前以下 Pi fields 没有 Anthropic response mapping，且不影响 target construction：
+
+```text
+AssistantMessage.api
+AssistantMessage.provider
+AssistantMessage.model
+AssistantMessage.responseModel
+AssistantMessage.responseId
+AssistantMessage.diagnostics
+AssistantMessage.timestamp
+AssistantMessage.rawStopReason
+AssistantMessage.endTurn
+
+TextContent.textSignature
+
+ToolCall.thoughtSignature
+ToolCall.namespace
+
+Usage.totalTokens
+Usage.cost
+```
+
+这些信息：
+
+```text
+→ ignore
+```
+
+不得复制到：
+
+```text
+Anthropic content
+Anthropic metadata
+tool input
+response model
+debug text
+```
+
+Part III 不创建额外 transport metadata 保存它们。
+
+---
+
+## 16. Response Conversion Failure
+
+Part III 不使用 request-side：
+
+```text
+InvalidRequest
+UnsupportedFeature
+```
+
+因为 response conversion 开始时：
+
+```text
+request has already executed
++
+Pi result has already committed
+```
+
+如果 committed Pi result 无法构造 truthful Anthropic response：
+
+```text
+→ OutboundResponseFidelityFailure
+```
+
+典型 cases：
+
+```text
+projected Anthropic content is empty
+
+ToolCall.arguments cannot form
+a faithful JSON object
+
+invalid reasoning/output relationship
+
+invalid cacheWrite1h/cacheWrite relationship
+
+ToolCall / stopReason inconsistency
+
+unexpected Pi stopReason reaches Part III
+
+constructed Anthropic target
+violates required target contract
+
+JSON/SSE target serialization
+cannot preserve Message semantics
+```
+
+Conversion 不通过 semantic guessing 将这些状态变成成功 response。
+
+---
+
+## 17. Response Conversion Summary
+
+完整 response semantic flow：
+
+```text
+committed Pi AssistantMessage
+        │
+        ├── content
+        │   │
+        │   ├── TextContent
+        │   │      → TextBlock
+        │   │
+        │   ├── ordinary ThinkingContent
+        │   │      → ThinkingBlock
+        │   │
+        │   ├── redacted ThinkingContent
+        │   │      → discard
+        │   │
+        │   └── ToolCall
+        │          → ToolUseBlock
+        │
+        ├── usage
+        │      → Anthropic Usage
+        │
+        └── stopReason
+               │
+               ├── stop
+               │     → end_turn
+               │
+               ├── length
+               │     → max_tokens
+               │
+               └── toolUse
+                     → tool_use
+        │
+        ▼
+Anthropic Message M
+        │
+        ├── stream = false
+        │      → JSON(M)
+        │
+        └── stream = true
+               → Atomic SSE(M)
+```
+
+The governing response rule is:
+
+> **Construct one truthful Anthropic Message from the committed Pi AssistantMessage, discard only explicitly irrelevant Pi state, fail rather than invent missing target semantics, and render JSON or Atomic SSE from that same Message.**
