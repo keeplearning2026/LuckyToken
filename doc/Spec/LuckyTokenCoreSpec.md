@@ -1,10 +1,17 @@
-# LuckyToken Core Architecture Specification v5.5
+# LuckyToken Core Architecture Specification v5.6
 
-**Status:** FROZEN — Dependency Semantics Corrected Against Current Pi Runtime
+**Status:** FROZEN — Per-Client-Protocol Auth Isolation Added
 
 本文件描述 LuckyToken 的 Core Architecture。
 
 全文使用中文作为主要说明语言，同时保留关键英文概念、类型名、协议名和 runtime terminology，避免因为翻译造成术语歧义。
+
+本架构同时冻结 capability cohesion 原则：一个 capability 的功能、数据语义、
+持久文件、内存状态、代码模块与测试应由同一个 boundary 拥有。其他模块只接收
+自己消费的窄 facts/operations；不得为了方便把 file schema、mutable store、
+classification state 或完整 config object 作为共享 context 到处传播。一个
+capability 应能通过修改自己的 module/files/tests 与一个 composition binding 被
+替换或删除，而不要求清理 Runtime、Client Protocol、Pi 或 Provider 中的散落知识。
 
 # 1. 目的与核心流程 — Purpose and Core Flow
 
@@ -1429,8 +1436,8 @@ Deployment / Router Configuration
                 ▼
         Startup Composition Root
                 │
-        ├── create Auth
         ├── create Client Protocol implementations
+        │   └── bind one Auth authority per handler
         ├── create Providers
         │
         ├── optionally provide custom Pi stores/context
@@ -1536,8 +1543,8 @@ handleRequest(
 
 ```text
 LuckyToken Runtime
-├── Auth
 ├── Client Protocol implementations
+│   └── handler-bound Auth instances
 ├── Router policy/defaults
 ├── HTTP runtime
 └── Pi Models
@@ -2168,17 +2175,17 @@ Whole-system lifecycle 可以简化为：
 LONG-LIVED
 
 Composition Root
-├── Auth
 ├── Models
 │   └── Providers
 ├── Client Protocol implementations
+│   └── independently bound Auth snapshots
 └── Router / HTTP policy
 
 
 ONE REQUEST
 
-Client Protocol ──► Model / Context / controls
-Auth ─────────────► sessionId / projectDir?
+Selected Client Protocol ──► Model / Context / controls
+Its bound Auth ─────────────► sessionId / projectDir?
 HTTP ─────────────► AbortSignal
 Router ───────────► defaults
                          │
@@ -3903,6 +3910,24 @@ LuckyToken 保留一个始终存在的 `Auth` boundary。
 
 它不是 Provider authentication，也不是 Client Protocol conversion。它位于 request edge，只消费 inbound HTTP headers，并把 header-level credential/session representations 归一化成固定的 request-local contract。
 
+Auth 不负责判断 Client Protocol。HTTP Boundary 先按 method/path 选择
+`ClientProtocolHandler`，每个 handler 在 composition 时绑定自己的通用
+`Auth` instance：
+
+```text
+POST /v1/messages
+→ Anthropic handler
+→ handler-bound Auth snapshot
+
+POST /v1/responses
+→ OpenAI Responses handler
+→ independently bound Auth snapshot
+```
+
+Anthropic 与 OpenAI Responses 不共享 token authority，也不导入、枚举或调用
+对方。通用 Auth contract 不增加 protocol ID、pathname 或 Client Wire 类型。
+只有 composition root 知道 auth file 与 concrete handler 的绑定关系。
+
 Per-request contract 概念上是：
 
 ```ts
@@ -3934,6 +3959,27 @@ structured session-header parsing
 request-local ID fallback generation
 other Router-owned access policy
 ```
+
+当 deployment 选择 current file-backed Auth capability 时，每个 configured
+Client Protocol handler 绑定一个独立 authority snapshot；其 Auth-owned token
+file 只保存 optional global token 与 `projectDir → token` bindings，不重复保存
+protocol marker。Global/project 分类只在 file-backed authority 内存在：
+
+```text
+Auth-owned token file
+→ startup immutable authority snapshot
+→ composition binds the snapshot to one handler
+→ generic Auth.authorizeToken(token)
+→ AuthorizedClient { projectDir? }
+```
+
+Token mutation 是显式、非并发 CLI 管理操作。正在运行的 handler 不 watch 或
+重读文件；create/rotate/remove 后必须重启进程才能建立新的 Auth snapshot。
+因此 request path 没有 filesystem I/O，也不引入 token file lock manager。
+
+Generic Core 冻结的是 per-handler authority isolation、窄 Auth contract 与上述
+information lifecycle；exact JSON fields、CLI spelling 与 filesystem mutation
+mechanics 属于 file-backed Auth capability 自己的 implementation contract。
 
 但这些全部是 Auth implementation details。外部不会知道：
 
@@ -3987,6 +4033,8 @@ Auth 完成后，以下 temporary representations 应结束 lifecycle：
 raw client credential
 token classification
 token/project lookup state
+token file schema / path
+Client Protocol configuration key
 session header aliases / parsing state
 ```
 
@@ -6857,8 +6905,8 @@ Deployment / Router Configuration
                 ▼
         Startup Composition Root
                 │
-        ├── Auth
         ├── Client Protocol implementations
+        │   └── bind one Auth authority per handler
         ├── Providers
         │
         ├── optional Pi customizations
@@ -7357,10 +7405,10 @@ v5.5 的 dependency-semantics corrections 不把 conversion rules 搬进 Archite
 
 ---
 
-### Freeze Candidate Status
+### v5.6 Frozen Status
 
 ```text
-LuckyToken Core Architecture v5.5
+LuckyToken Core Architecture v5.6
         │
         ├── Existing information/data flow
         │      ├── Client ↔ Pi boundary                 preserved
@@ -7370,19 +7418,26 @@ LuckyToken Core Architecture v5.5
         │      ├── atomic downstream commit              preserved
         │      └── CommandCode ownership/carriers        preserved
         │
-        └── Dependency semantics now explicit and corrected
-               ├── Module Contract vs Operation Contract
-               ├── direct Bound Dependencies
-               ├── Owned State authority distinction
-               ├── external Pi Models runtime view
-               ├── Composition Root visibility
-               ├── no undeclared ambient dependencies
-               ├── Fact Flow Contract
-               ├── Transparent Transit
-               └── per-field Semantic Consumer
+        ├── Dependency semantics remain explicit and corrected
+        │      ├── Module Contract vs Operation Contract
+        │      ├── direct Bound Dependencies
+        │      ├── Owned State authority distinction
+        │      ├── external Pi Models runtime view
+        │      ├── Composition Root visibility
+        │      ├── no undeclared ambient dependencies
+        │      ├── Fact Flow Contract
+        │      ├── Transparent Transit
+        │      └── per-field Semantic Consumer
+        │
+        └── Per-Client-Protocol Auth isolation now explicit
+               ├── method/path selects Client Protocol handler
+               ├── one independently bound Auth authority per handler
+               ├── Auth-owned persistence hidden behind startup snapshot
+               ├── no protocol ID/pathname in generic Auth
+               └── only sessionId/projectDir? survive authorization
 ```
 
-本次 assumption change：
+v5.5 保留的 assumption correction：
 
 ```text
 Previous:
@@ -7404,5 +7459,23 @@ Architecture strengthening:
 hidden dependencies are no longer valid by contract.
 ```
 
-如果下一轮 review 没有发现新的 correctness conflict，v5.5 可以作为 Generic Core dependency semantics 的冻结版本。
+v5.6 新增的 assumption correction：
 
+```text
+Previous:
+one long-lived Auth sibling was sufficient in composition maps.
+
+Finding:
+multiple independent Client Protocols require independently bound
+authorization authorities without passing protocol identity through Auth.
+
+Correction:
+route to a handler first; bind one generic Auth authority to that handler;
+end token-file/scope representations before Pi invocation composition.
+
+Required cross-boundary behavior change:
+none for Pi or Providers.
+```
+
+LuckyToken Core Architecture v5.6 冻结 per-handler Auth isolation，同时保留
+v5.5 已冻结的 Generic Core dependency semantics。

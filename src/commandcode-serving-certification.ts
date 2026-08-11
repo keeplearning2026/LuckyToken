@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:7a825f017d6dee774391dc8f88a70018d02f0417e06ea4291d11d1ed35de9dcd";
+  "sha256:b661ac6faa41132fc21ebc024ded09ad8311abc4e511120b8ab7444115b26958";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -44,9 +44,13 @@ export interface ServingCertificationFacts {
     | "bound-injected-project-snapshot-v1";
   readonly projectAuthorizationPolicy:
     | "project-dir-absent-v1"
-    | "fixed-authorized-project-dir-v1";
+    | "fixed-authorized-project-dir-v1"
+    | "per-client-protocol-token-file-v1";
+  readonly clientAuthorityPolicy:
+    | "bound-injected-auth-v1"
+    | "handler-bound-file-snapshot-v1";
   readonly routerDefaults: RouterOptionDefaults;
-  readonly clientApiKeyConfigured: boolean;
+  readonly clientAuthConfigured: boolean;
   readonly providerApiKeyConfigured: boolean;
   readonly providerAuthPolicy:
     | "fixed-api-key-header-v1"
@@ -211,7 +215,7 @@ export function certifyServingComposition(
   if (!facts.fetchBound) {
     failures.push("A bound fetch implementation is required; ambient fetch is prohibited");
   }
-  if (!facts.clientApiKeyConfigured || !facts.providerApiKeyConfigured) {
+  if (!facts.clientAuthConfigured || !facts.providerApiKeyConfigured) {
     failures.push("Both client and Provider authentication must be configured");
   }
   if (Object.keys(facts.routerDefaults).length > 0) {
@@ -244,7 +248,7 @@ export function certifyServingComposition(
     failures,
     identity: {
       core: {
-        specification: "LuckyToken Core Architecture Specification v5.5",
+        specification: "LuckyToken Core Architecture Specification v5.6",
         servingComposition: "luckytoken-serving-composition-v2",
       },
       conversions: {
@@ -308,6 +312,7 @@ export function certifyServingComposition(
       },
       authEndpoint: {
         clientAuth: "x-api-key-or-bearer-token-v1",
+        clientAuthority: facts.clientAuthorityPolicy,
         providerAuth: facts.providerAuthPolicy,
         endpoint: "model-base-url-alpha-generate-v1",
         authSemanticTransform: "inert-v1",
@@ -347,6 +352,9 @@ export function certifyServingComposition(
       localLoopbackHttpBoundary: "verified",
       piConfigurationCredentialCli: "verified",
       realProviderOnlineConformance: "verified",
+      ...(facts.clientAuthorityPolicy === "handler-bound-file-snapshot-v1"
+        ? { perClientProtocolAuthIsolation: "verified" as const }
+        : {}),
     },
     verification: {
       commands: [...VERIFICATION_COMMANDS],

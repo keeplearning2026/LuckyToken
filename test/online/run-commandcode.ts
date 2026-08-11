@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import {
@@ -398,8 +399,21 @@ export async function runCommandCodeOnlineSuite(
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-online-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
   try {
-    const piDirectory = join(directory, "pi");
-    await mkdir(piDirectory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    const projectDirectory = join(directory, "project-auth-evidence");
+    const clientAuthFile = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await mkdir(piDirectory, { recursive: true });
+    await mkdir(projectDirectory);
+    await writeFile(
+      join(projectDirectory, "online-auth-scope.txt"),
+      "controlled online project scope\n",
+      "utf8",
+    );
     await writeFile(
       join(piDirectory, "models.json"),
       JSON.stringify({
@@ -424,13 +438,24 @@ export async function runCommandCodeOnlineSuite(
       }),
       "utf8",
     );
-    const localClientKey = randomUUID();
-    const configPath = join(directory, "luckytoken.config.json");
+    const localGlobalClientKey = randomUUID();
+    const localProjectClientKey = randomUUID();
+    const clientTokenStore = createFileClientTokenStore({ path: clientAuthFile });
+    await clientTokenStore.create({ type: "global" }, localGlobalClientKey);
+    await clientTokenStore.create(
+      { type: "project", projectDir: projectDirectory },
+      localProjectClientKey,
+    );
+    const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         server: { host: "127.0.0.1", port: 0 },
-        client: { apiKey: localClientKey },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,
@@ -457,7 +482,7 @@ export async function runCommandCodeOnlineSuite(
       port: config.server.port,
     });
     const client = new Anthropic({
-      apiKey: localClientKey,
+      apiKey: localGlobalClientKey,
       baseURL: server.origin,
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,
@@ -489,7 +514,7 @@ export async function runCommandCodeOnlineSuite(
       port: config.server.port,
     });
     const conformanceClient = new Anthropic({
-      apiKey: localClientKey,
+      apiKey: localGlobalClientKey,
       baseURL: server.origin,
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,
@@ -499,12 +524,21 @@ export async function runCommandCodeOnlineSuite(
       modelId,
       totalSignal,
       capture.exchanges,
+      {
+        projectClient: new Anthropic({
+          apiKey: localProjectClientKey,
+          baseURL: server.origin,
+          maxRetries: 0,
+          timeout: REQUEST_TIMEOUT_MS,
+        }),
+        projectDir: projectDirectory,
+      },
     );
     const writtenSamplesPath = await writeOnlineConformanceArtifact(
       samplesPath,
       modelId,
       conformanceCases,
-      [apiKey, localClientKey],
+      [apiKey, localGlobalClientKey, localProjectClientKey],
     );
     const report = {
       model: modelId,

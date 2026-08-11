@@ -106,8 +106,9 @@ export function createCommandCodeServingTestComposition(
       options.projectDir === undefined
         ? "project-dir-absent-v1"
         : "fixed-authorized-project-dir-v1",
+    clientAuthorityPolicy: "bound-injected-auth-v1",
     routerDefaults,
-    clientApiKeyConfigured: options.clientApiKey.length > 0,
+    clientAuthConfigured: options.clientApiKey.length > 0,
     providerApiKeyConfigured: options.commandCodeApiKey.length > 0,
     providerAuthPolicy: "fixed-api-key-header-v1",
     providerRegistrationPolicy: "startup-only-mutable-models-v1",

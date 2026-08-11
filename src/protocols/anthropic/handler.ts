@@ -38,6 +38,8 @@ import {
   type PreparedHttpResponse,
 } from "./wire.js";
 
+export const anthropicMessagesProtocolId = "anthropic-messages";
+
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;

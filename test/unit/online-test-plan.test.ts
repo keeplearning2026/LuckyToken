@@ -36,6 +36,8 @@ describe("authorized online test plan", () => {
       "tool-result-omitted",
       "tool-result-text",
       "tool-result-error",
+      "client-auth-global",
+      "client-auth-project",
     ]);
     expect(
       new Set(ONLINE_CONFORMANCE_CASES.flatMap((entry) => entry.covers)),
@@ -48,6 +50,7 @@ describe("authorized online test plan", () => {
         "usage-terminal",
         "json",
         "sse",
+        "client-auth-scopes",
       ]),
     );
     expect(OFFLINE_ONLY_PROTOCOL_CASES).toEqual(

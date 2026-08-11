@@ -1,6 +1,6 @@
 {
   "schemaVersion": "luckytoken-serving-conformance-v1",
-  "scope": "certified-anthropic-v2-commandcode-private-route-pi-config-v1",
+  "scope": "certified-anthropic-v2-commandcode-private-route-client-auth-v2",
   "coverage": [
     {
       "dimension": "inbound-grammar-and-semantics",
@@ -79,6 +79,19 @@
       "dimension": "real-provider-online-conformance",
       "tests": [
         "test/online/plan.ts",
+        "test/online/conformance.ts",
+        "test/online/run-commandcode.ts"
+      ]
+    },
+    {
+      "dimension": "per-client-protocol-auth-isolation",
+      "tests": [
+        "test/unit/client-token-file.test.ts",
+        "test/unit/cli-config.test.ts",
+        "test/integration/client-auth-http.test.ts",
+        "test/integration/configured-composition.test.ts",
+        "test/integration/cli.test.ts",
+        "test/unit/online-test-plan.test.ts",
         "test/online/conformance.ts",
         "test/online/run-commandcode.ts"
       ]

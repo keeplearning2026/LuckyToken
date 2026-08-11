@@ -4,11 +4,12 @@ import {
 } from "@earendil-works/pi-ai";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
 import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
 
@@ -40,11 +41,23 @@ describe("configured serving composition", () => {
 
   async function writeConfiguration(
     providerOverrides: Record<string, unknown> = {},
-  ): Promise<{ configPath: string; piDirectory: string }> {
+    clientScope: "global" | "project" = "global",
+  ): Promise<{
+    configPath: string;
+    piDirectory: string;
+    clientToken: string;
+    projectDir?: string;
+  }> {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-"));
     directories.push(directory);
-    const piDirectory = join(directory, "pi");
-    await mkdir(piDirectory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    const clientAuthPath = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await mkdir(piDirectory, { recursive: true });
     await writeFile(
       join(piDirectory, "models.json"),
       JSON.stringify({
@@ -70,17 +83,38 @@ describe("configured serving composition", () => {
       }),
       "utf8",
     );
-    const configPath = join(directory, "luckytoken.config.json");
+    const projectDir =
+      clientScope === "project" ? join(directory, "workspace") : undefined;
+    if (projectDir !== undefined) await mkdir(projectDir);
+    const clientToken = `local-${clientScope}-token`;
+    await createFileClientTokenStore({
+      path: clientAuthPath,
+    }).create(
+      projectDir === undefined
+        ? { type: "global" }
+        : { type: "project", projectDir },
+      clientToken,
+    );
+    const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         server: { port: 0 },
-        client: { apiKey: "local-client-key" },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
         pi: { directory: "pi" },
       }),
       "utf8",
     );
-    return { configPath, piDirectory };
+    return {
+      configPath,
+      piDirectory,
+      clientToken,
+      ...(projectDir === undefined ? {} : { projectDir }),
+    };
   }
 
   it("turns models.json into a Pi Provider hidden behind one Client Protocol", async () => {
@@ -89,7 +123,7 @@ describe("configured serving composition", () => {
       upstreamRequests.push(new Request(input, init));
       return commandCodeText("configured through Pi");
     };
-    const { configPath, piDirectory } = await writeConfiguration();
+    const { configPath, piDirectory, clientToken } = await writeConfiguration();
     const credentials = new InMemoryCredentialStore();
     await credentials.modify("commandcode-private", async () => ({
       type: "api_key",
@@ -122,7 +156,7 @@ describe("configured serving composition", () => {
       new Request("http://luckytoken.test/v1/messages", {
         method: "POST",
         headers: {
-          authorization: "Bearer local-client-key",
+          authorization: `Bearer ${clientToken}`,
           "content-type": "application/json",
           "anthropic-version": "2023-06-01",
         },
@@ -149,6 +183,62 @@ describe("configured serving composition", () => {
     });
   });
 
+  it("projects one protocol-scoped client token into Pi without exposing Auth state", async () => {
+    const { configPath, clientToken, projectDir } = await writeConfiguration(
+      {},
+      "project",
+    );
+    const projectSnapshot = vi.fn(
+      async (input: { readonly projectDir: string; readonly signal: AbortSignal }) => {
+        input.signal.throwIfAborted();
+        return createEmptyServerConfig();
+      },
+    );
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: "provider-secret",
+    }));
+    const composition = await createConfiguredLuckyTokenComposition({
+      config: await loadLuckyTokenCliConfig(configPath),
+      credentials,
+      fetch: async () => commandCodeText("project authorized"),
+      projectSnapshot: { snapshot: projectSnapshot },
+      createMessageId: () => "msg_project_auth",
+      createSessionId: () => "00000000-0000-4000-8000-000000000251",
+      now: () => 1_786_400_000_000,
+    });
+
+    expect(
+      composition.certification.policies.authEndpoint.projectAuthorization,
+    ).toBe("per-client-protocol-token-file-v1");
+    const response = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${clientToken}`,
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "configured-model",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(projectSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ projectDir }),
+    );
+    const snapshotInput = projectSnapshot.mock.calls[0]?.[0];
+    expect(Object.keys(snapshotInput ?? {}).sort()).toEqual([
+      "projectDir",
+      "signal",
+    ]);
+  });
+
   it("rejects an unregistered API instead of coupling it into Runtime", async () => {
     const { configPath } = await writeConfiguration({
       api: "unknown-private-api",
@@ -160,6 +250,29 @@ describe("configured serving composition", () => {
         fetch: async () => commandCodeText("unused"),
       }),
     ).rejects.toThrow("commandcode-private API");
+  });
+
+  it("rejects an uninstalled Client Protocol only at the composition root", async () => {
+    const { configPath } = await writeConfiguration();
+    const loaded = await loadLuckyTokenCliConfig(configPath);
+    const config = {
+      ...loaded,
+      clientProtocols: Object.freeze({
+        ...loaded.clientProtocols,
+        "future-client-protocol": Object.freeze({
+          authFile: join(dirname(configPath), "client-auth", "future.json"),
+        }),
+      }),
+    };
+
+    await expect(
+      createConfiguredLuckyTokenComposition({
+        config,
+        fetch: async () => commandCodeText("unused"),
+      }),
+    ).rejects.toThrow(
+      "Client Protocol is configured but not installed: future-client-protocol",
+    );
   });
 
   it("rejects CommandCode credentials in static models.json", async () => {

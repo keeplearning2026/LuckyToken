@@ -4,13 +4,17 @@ import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createFileCredentialStore } from "../../src/index.js";
+import {
+  createFileClientTokenStore,
+  loadFileClientTokenAuthority,
+} from "../../src/client-auth/file-token-store.js";
 
 const execFileAsync = promisify(execFile);
 const npmCli =
@@ -119,7 +123,151 @@ describe("LuckyToken CLI", () => {
     expect(result.stdout).toContain("--config <path>");
     expect(result.stdout).toContain("login");
     expect(result.stdout).toContain("logout");
+    expect(result.stdout).toContain("client-token");
     expect(result.stderr).not.toContain("Error");
+  }, 30_000);
+
+  it("creates and lists a token for any configured Client Protocol without protocol branches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-cli-"));
+    directories.push(root);
+    const stateDirectory = join(root, ".luckytoken");
+    await mkdir(stateDirectory);
+    const configPath = join(stateDirectory, "config.json");
+    const authFile = join(
+      stateDirectory,
+      "client-auth",
+      "future-client-protocol.json",
+    );
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        clientProtocols: {
+          "future-client-protocol": {
+            authFile: "client-auth/future-client-protocol.json",
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+
+    const create = startCli([
+      "client-token",
+      "create",
+      "future-client-protocol",
+      "--global",
+      "--config",
+      configPath,
+    ]);
+    children.push(create);
+    const createResult = await captureChild(create).result;
+    expect(createResult.code).toBe(0);
+    const token = createResult.stdout.match(/\b(lt_[A-Za-z0-9_-]{43})\b/u)?.[1];
+    expect(token).toBeDefined();
+    expect(createResult.stdout).toContain("Restart LuckyToken");
+
+    const list = startCli([
+      "client-token",
+      "list",
+      "future-client-protocol",
+      "--config",
+      configPath,
+    ]);
+    children.push(list);
+    const listResult = await captureChild(list).result;
+    expect(listResult.code).toBe(0);
+    expect(listResult.stdout).toContain("global");
+    expect(listResult.stdout).not.toContain(token as string);
+    const authority = await loadFileClientTokenAuthority(authFile);
+    expect(authority.authorize(token as string)).toEqual({});
+  }, 30_000);
+
+  it("creates, rotates, and removes one project token while runtime snapshots stay immutable", async () => {
+    const root = await mkdtemp(join(process.cwd(), ".tmp-client-token-cli-"));
+    directories.push(root);
+    const stateDirectory = join(root, ".luckytoken");
+    const projectDir = join(root, "project");
+    await mkdir(stateDirectory);
+    await mkdir(projectDir);
+    const configPath = join(stateDirectory, "config.json");
+    const authFile = join(stateDirectory, "client-auth", "fixture.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        clientProtocols: {
+          "fixture-client": { authFile: "client-auth/fixture.json" },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const scopeArgs = ["--project", relative(process.cwd(), projectDir)];
+    const run = async (args: readonly string[]) => {
+      const child = startCli(args);
+      children.push(child);
+      return captureChild(child).result;
+    };
+
+    const created = await run([
+      "client-token",
+      "create",
+      "fixture-client",
+      ...scopeArgs,
+      "--token",
+      "manual-project-token",
+      "--config",
+      configPath,
+    ]);
+    expect(created.code).toBe(0);
+    expect(created.stdout).not.toContain("manual-project-token");
+    const store = createFileClientTokenStore({ path: authFile });
+    const oldAuthority = await loadFileClientTokenAuthority(authFile);
+    expect(oldAuthority.authorize("manual-project-token")).toEqual({ projectDir });
+
+    const duplicate = await run([
+      "client-token",
+      "create",
+      "fixture-client",
+      ...scopeArgs,
+      "--token",
+      "unexpected-overwrite",
+      "--config",
+      configPath,
+    ]);
+    expect(duplicate.code).toBe(1);
+    expect(duplicate.stderr).toContain("already has a token");
+
+    const rotated = await run([
+      "client-token",
+      "rotate",
+      "fixture-client",
+      ...scopeArgs,
+      "--token",
+      "rotated-project-token",
+      "--config",
+      configPath,
+    ]);
+    expect(rotated.code).toBe(0);
+    const newAuthority = await loadFileClientTokenAuthority(authFile);
+    expect(oldAuthority.authorize("manual-project-token")).toEqual({ projectDir });
+    expect(oldAuthority.authorize("rotated-project-token")).toBeUndefined();
+    expect(newAuthority.authorize("manual-project-token")).toBeUndefined();
+    expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
+
+    const removed = await run([
+      "client-token",
+      "remove",
+      "fixture-client",
+      ...scopeArgs,
+      "--config",
+      configPath,
+    ]);
+    expect(removed.code).toBe(0);
+    await expect(store.list()).resolves.toEqual([]);
+    await expect(loadFileClientTokenAuthority(authFile)).rejects.toThrow(
+      "must contain at least one token",
+    );
+    expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
   }, 30_000);
 
   it("logs in through Pi, serves the SDK, and shuts down without leaking keys", async () => {
@@ -153,8 +301,9 @@ describe("LuckyToken CLI", () => {
 
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-e2e-"));
     directories.push(directory);
-    const piDirectory = join(directory, "pi");
-    await mkdir(piDirectory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    await mkdir(piDirectory, { recursive: true });
     await writeFile(
       join(piDirectory, "models.json"),
       JSON.stringify({
@@ -179,15 +328,36 @@ describe("LuckyToken CLI", () => {
       }),
       "utf8",
     );
-    const configPath = join(directory, "luckytoken.config.json");
+    const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         server: { host: "127.0.0.1", port: 0 },
-        client: { apiKey: "local-client-secret" },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
         pi: { directory: "pi" },
       }),
       "utf8",
+    );
+
+    const clientToken = startCli([
+      "client-token",
+      "create",
+      "anthropic-messages",
+      "--global",
+      "--token",
+      "local-client-secret",
+      "--config",
+      configPath,
+    ]);
+    children.push(clientToken);
+    const clientTokenResult = await captureChild(clientToken).result;
+    expect(clientTokenResult.code).toBe(0);
+    expect(`${clientTokenResult.stdout}\n${clientTokenResult.stderr}`).not.toContain(
+      "local-client-secret",
     );
 
     const login = startCli([

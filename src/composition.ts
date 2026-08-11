@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { createAuth } from "./auth.js";
+import { loadFileClientTokenAuthority } from "./client-auth/file-token-store.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
 import {
   certifyServingComposition,
@@ -30,7 +31,10 @@ import {
   createNodeProjectSnapshot,
   type ProjectSnapshot,
 } from "./providers/commandcode-private/project.js";
-import { createAnthropicMessagesHandler } from "./protocols/anthropic/handler.js";
+import {
+  anthropicMessagesProtocolId,
+  createAnthropicMessagesHandler,
+} from "./protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "./protocols/anthropic/representability.js";
 import {
   SYNTHETIC_CLIENT_HISTORY_API,
@@ -204,6 +208,28 @@ export async function createConfiguredLuckyTokenComposition(
   options: ConfiguredLuckyTokenCompositionOptions,
 ): Promise<ConfiguredLuckyTokenComposition> {
   const config = options.config;
+  const uninstalledProtocol = Object.keys(config.clientProtocols).find(
+    (protocolId) => protocolId !== anthropicMessagesProtocolId,
+  );
+  if (uninstalledProtocol !== undefined) {
+    throw new Error(
+      `Client Protocol is configured but not installed: ${uninstalledProtocol}`,
+    );
+  }
+  const anthropicConfig = Object.hasOwn(
+    config.clientProtocols,
+    anthropicMessagesProtocolId,
+  )
+    ? config.clientProtocols[anthropicMessagesProtocolId]
+    : undefined;
+  if (anthropicConfig === undefined) {
+    throw new Error(
+      `clientProtocols must configure ${anthropicMessagesProtocolId}`,
+    );
+  }
+  const clientAuthority = await loadFileClientTokenAuthority(
+    anthropicConfig.authFile,
+  );
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const { models, model } = await createConfiguredPiModels({
@@ -228,12 +254,10 @@ export async function createConfiguredLuckyTokenComposition(
       options.projectSnapshot === undefined
         ? "node-project-snapshot-v1"
         : "bound-injected-project-snapshot-v1",
-    projectAuthorizationPolicy:
-      config.client.projectDir === undefined
-        ? "project-dir-absent-v1"
-        : "fixed-authorized-project-dir-v1",
+    projectAuthorizationPolicy: "per-client-protocol-token-file-v1",
+    clientAuthorityPolicy: "handler-bound-file-snapshot-v1",
     routerDefaults: {},
-    clientApiKeyConfigured: config.client.apiKey.length > 0,
+    clientAuthConfigured: true,
     providerApiKeyConfigured: providerAuth !== undefined,
     providerAuthPolicy: "pi-models-credential-store-v1",
     providerRegistrationPolicy: "pi-models-json-startup-registration-v1",
@@ -259,13 +283,8 @@ export async function createConfiguredLuckyTokenComposition(
     throw new ServingCertificationFailure(certification);
   }
 
-  const clientApiKey = config.client.apiKey;
-  const projectDir = config.client.projectDir;
   const auth = createAuth({
-    authorizeToken: async (token) => {
-      if (token !== clientApiKey) return undefined;
-      return projectDir === undefined ? {} : { projectDir };
-    },
+    authorizeToken: (token) => clientAuthority.authorize(token),
     createFallbackSessionId: createSessionId,
   });
   const anthropic = createAnthropicMessagesHandler({

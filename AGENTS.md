@@ -58,6 +58,22 @@ Each module should:
 
 Information should not travel through unrelated modules without a reason.
 
+### Capability cohesion
+
+Keep one capability's behavior, data semantics, persistent files, in-memory
+state, code module, and tests together under one owner.
+
+- Other modules receive only the narrow facts or operations they consume; they
+  do not receive the capability's file schema, mutable store, classification
+  state, or full configuration object.
+- Configuration/composition may locate and bind a capability, but must not copy
+  its business rules into a central switch.
+- A capability should be replaceable or removable by changing its own module,
+  files, tests, and one composition binding, without cleanup across Runtime,
+  Client Protocols, Pi, or Providers.
+- Do not move related information through unrelated modules merely because a
+  shared config/context object is convenient.
+
 ### Pi IR boundary is the first principle
 
 Pi is the single shared semantic boundary between Client Protocols and
@@ -95,6 +111,23 @@ The two conversion directions must remain independent:
 Composition roots and conformance/certification code may see both sides only to
 construct, bind, and verify a concrete route. They must not perform conversion
 or let one side's terminology, state, or policy leak into the other side.
+
+### Client Protocol Auth isolation
+
+Inbound client authorization is isolated per Client Protocol handler.
+
+- Runtime selects a handler by its HTTP method/path; it does not pass protocol
+  identity into Auth.
+- Each handler receives its own generic `Auth` instance and immutable startup
+  token authority. Anthropic, OpenAI Responses, and future Client Protocols do
+  not import, enumerate, or inspect one another.
+- Client token files contain only global/project token scopes. They do not
+  contain Client Protocol wire state, Pi state, Provider state, or a duplicate
+  protocol marker.
+- Only the composition root binds a configured auth file to a concrete handler.
+- After authorization, raw credentials, token scope, file paths, and lookup
+  representation end their lifecycle. Only `sessionId` and `projectDir?` may
+  continue into Pi option composition.
 
 ### Information lifecycle
 

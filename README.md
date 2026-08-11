@@ -24,37 +24,58 @@ npm run build
 The integration suite uses an injected fixture `fetch` implementation. It does
 not call the real CommandCode service or read `CommandcodeAPIKey.txt`.
 
-## Local service configuration and Pi login
+## Local service configuration, client tokens, and Pi login
 
 LuckyToken keeps deployment configuration and Pi runtime state separate:
 
 ```text
-luckytoken.config.json        # listener, inbound client auth, Pi directory, limits
-.luckytoken/pi/
-├── models.json               # static Pi Provider/model configuration
-└── auth.json                 # mutable Provider credentials written by Pi login
+.luckytoken/
+├── config.json                         # listener, protocol auth-file paths, Pi directory, limits
+├── client-auth/
+│   └── anthropic-messages.json         # Anthropic global/project local tokens
+└── pi/
+    ├── models.json                     # static Pi Provider/model configuration
+    └── auth.json                       # mutable Provider credentials written by Pi login
 ```
 
-`models.json` and `auth.json` share one Pi directory but have different owners.
-The model-config loader never reads credentials. Pi `Models`, through its
-injected `CredentialStore`, is the only runtime owner of `auth.json`.
-`luckytoken.config.json`, `.luckytoken/`, and every `auth.json` are ignored by
-Git.
+Each Client Protocol handler has its own Auth file and immutable startup Auth
+snapshot. Runtime selects the handler by HTTP method/path; Auth files contain
+only global/project token scopes and do not identify or inspect another Client
+Protocol. `models.json` and `auth.json` share one Pi directory but have different
+owners. The model-config loader never reads credentials. Pi `Models`, through
+its injected `CredentialStore`, is the only runtime owner of Pi `auth.json`.
+The complete `.luckytoken/` directory and every `auth.json` are ignored by Git.
 
 Create local files from the committed placeholders:
 
 ```powershell
-Copy-Item luckytoken.config.example.json luckytoken.config.json
 New-Item -ItemType Directory -Force .luckytoken\pi
+Copy-Item luckytoken.config.example.json .luckytoken\config.json
 Copy-Item models.example.json .luckytoken\pi\models.json
 ```
+
+Create an Anthropic protocol-global token, or bind one token to one project
+directory. Omit `--token` to generate and print a new opaque token:
+
+```powershell
+npm start -- client-token create anthropic-messages --global --config .luckytoken/config.json
+npm start -- client-token create anthropic-messages --project D:\project\Example --config .luckytoken/config.json
+npm start -- client-token create anthropic-messages --project D:\project\Example --token chosen-token --config .luckytoken/config.json
+```
+
+A global token authorizes only the selected Client Protocol and produces no
+project fact. A project token produces exactly its bound absolute `projectDir`,
+which is mechanically projected to Pi `Options.metadata.projectDir`. Token file
+mutation is a non-concurrent administrative operation. Use `client-token list`,
+`rotate`, or `remove` with the same protocol and scope, then restart LuckyToken
+to load the new Auth snapshot.
 
 Authenticate CommandCode through Pi. The CLI discovers the available methods
 from `Provider.auth`; CommandCode currently advertises only API-key login, not
 subscription/OAuth:
 
 ```powershell
-npm start -- login commandcode-private --config luckytoken.config.json
+npm start -- login commandcode-private --config .luckytoken/config.json
 ```
 
 The key is saved to `.luckytoken/pi/auth.json`. The CommandCode entry in
@@ -64,19 +85,19 @@ resolve the Provider credential.
 Start the local listener:
 
 ```powershell
-npm start -- --config luckytoken.config.json
+npm start -- --config .luckytoken/config.json
 ```
 
 Startup prints the actual endpoint, normally
 `http://127.0.0.1:3000/v1/messages`. Configure an Agent that supports a custom
-Anthropic base URL with `http://127.0.0.1:3000` and the local client key from
-`luckytoken.config.json`. That local key authenticates the Agent to LuckyToken;
-it is unrelated to the CommandCode Provider credential.
+Anthropic base URL with `http://127.0.0.1:3000` and the global/project token
+created for `anthropic-messages`. That local token authenticates the Agent to
+LuckyToken; it is unrelated to the CommandCode Provider credential.
 
 Remove the stored Provider credential with:
 
 ```powershell
-npm start -- logout commandcode-private --config luckytoken.config.json
+npm start -- logout commandcode-private --config .luckytoken/config.json
 ```
 
 `SIGINT` and `SIGTERM` stop new connections, abort active requests, and wait for
@@ -91,7 +112,8 @@ Its stress phase performs 60 Provider requests with concurrency 5: 36 JSON, 14
 Atomic SSE, 5 observed upstream cancellations, and 5 same-session recovery
 calls. A second conformance phase covers request controls, history, thinking
 replay, tool call/result identity, terminal/usage mapping, concurrent isolation,
-and the complete Atomic SSE event lifecycle.
+the complete Atomic SSE event lifecycle, and real global/project Auth scope
+propagation.
 
 ```powershell
 npm run test:online

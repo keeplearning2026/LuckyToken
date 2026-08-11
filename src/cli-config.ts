@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 export interface LuckyTokenCliConfig {
   readonly configPath: string;
   readonly server: { readonly host: string; readonly port: number };
-  readonly client: { readonly apiKey: string; readonly projectDir?: string };
+  readonly clientProtocols: Readonly<
+    Record<string, { readonly authFile: string }>
+  >;
   readonly pi: { readonly directory: string };
   readonly limits: {
     readonly maxRequestBytes: number;
@@ -57,6 +59,22 @@ function fromConfigDirectory(value: string, directory: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(directory, value);
 }
 
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+async function existingFileIdentity(path: string): Promise<string | undefined> {
+  try {
+    const file = await stat(path, { bigint: true });
+    return `${file.dev}:${file.ino}`;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 export async function loadLuckyTokenCliConfig(
   inputPath: string,
 ): Promise<LuckyTokenCliConfig> {
@@ -71,13 +89,16 @@ export async function loadLuckyTokenCliConfig(
     );
   }
   const root = requireRecord(parsed, "LuckyToken config root");
-  assertKeys(root, ["server", "client", "pi", "limits"], "LuckyToken config root");
+  assertKeys(
+    root,
+    ["server", "clientProtocols", "pi", "limits"],
+    "LuckyToken config root",
+  );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
-  const client = requireRecord(root.client, "client");
+  const clientProtocols = requireRecord(root.clientProtocols, "clientProtocols");
   const pi = requireRecord(root.pi, "pi");
   const limits = root.limits === undefined ? {} : requireRecord(root.limits, "limits");
   assertKeys(server, ["host", "port"], "server");
-  assertKeys(client, ["apiKey", "projectDir"], "client");
   assertKeys(pi, ["directory"], "pi");
   assertKeys(limits, ["maxRequestBytes", "requestTimeoutMs"], "limits");
 
@@ -86,19 +107,54 @@ export async function loadLuckyTokenCliConfig(
     : nonEmptyString(server.host, "server.host");
   if (/\s|:\/\//u.test(host)) throw new Error("server.host must be a host name or address");
   const port = safeInteger(server.port, 3000, "server.port", 0, 65_535);
-  const apiKey = nonEmptyString(client.apiKey, "client.apiKey");
   const piDirectoryValue = nonEmptyString(pi.directory, "pi.directory");
   const directory = dirname(configPath);
-  const projectDir = client.projectDir === undefined
-    ? undefined
-    : fromConfigDirectory(nonEmptyString(client.projectDir, "client.projectDir"), directory);
+  if (Object.keys(clientProtocols).length === 0) {
+    throw new Error("clientProtocols must configure at least one Client Protocol");
+  }
+  const resolvedClientProtocols = Object.create(null) as Record<
+    string,
+    { readonly authFile: string }
+  >;
+  const authFiles = new Set<string>();
+  const physicalAuthFiles = new Set<string>();
+  for (const [protocolId, rawProtocol] of Object.entries(clientProtocols)) {
+    nonEmptyString(protocolId, "Client Protocol id");
+    if (/\s/u.test(protocolId)) {
+      throw new Error("Client Protocol id must contain no whitespace");
+    }
+    const protocol = requireRecord(
+      rawProtocol,
+      `clientProtocols.${protocolId}`,
+    );
+    assertKeys(protocol, ["authFile"], `clientProtocols.${protocolId}`);
+    const authFile = fromConfigDirectory(
+      nonEmptyString(
+        protocol.authFile,
+        `clientProtocols.${protocolId}.authFile`,
+      ),
+      directory,
+    );
+    const identity = process.platform === "win32" ? authFile.toLowerCase() : authFile;
+    if (authFiles.has(identity)) {
+      throw new Error("Client Protocol auth files must be unique");
+    }
+    const physicalIdentity = await existingFileIdentity(authFile);
+    if (
+      physicalIdentity !== undefined &&
+      physicalAuthFiles.has(physicalIdentity)
+    ) {
+      throw new Error("Client Protocol auth files must be unique");
+    }
+    authFiles.add(identity);
+    if (physicalIdentity !== undefined) physicalAuthFiles.add(physicalIdentity);
+    resolvedClientProtocols[protocolId] = Object.freeze({ authFile });
+  }
+  Object.freeze(resolvedClientProtocols);
   const result: LuckyTokenCliConfig = {
     configPath,
     server: Object.freeze({ host, port }),
-    client: Object.freeze({
-      apiKey,
-      ...(projectDir === undefined ? {} : { projectDir }),
-    }),
+    clientProtocols: resolvedClientProtocols,
     pi: Object.freeze({
       directory: fromConfigDirectory(piDirectoryValue, directory),
     }),

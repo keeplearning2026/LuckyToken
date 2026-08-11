@@ -14,6 +14,7 @@ import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
+import { runClientTokenCli } from "./client-auth/cli.js";
 import {
   createConfiguredLuckyTokenComposition,
   createConfiguredPiModels,
@@ -26,25 +27,30 @@ Usage:
   luckytoken --config <path>
   luckytoken login [provider] --config <path>
   luckytoken logout [provider] --config <path>
+  luckytoken client-token <create|rotate|remove|list> <protocol> [scope] --config <path>
   luckytoken --help
 
 Commands:
   serve    Start the local Client Protocol service (default)
   login    Authenticate a Provider through Pi Models
   logout   Remove a Provider credential through Pi Models
+  client-token  Manage one Client Protocol's local token file
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
+  --global         Select the protocol-global client token
+  --project <path> Select a project-bound client token
+  --token <value>  Use an explicit token for create/rotate
   --help           Show this help
 `;
 
-type CliCommand = "serve" | "login" | "logout";
-
-interface ParsedCliArguments {
-  readonly command: CliCommand;
-  readonly configPath: string;
-  readonly providerId?: string;
-}
+type ParsedCliArguments =
+  | { readonly command: "serve"; readonly configPath: string }
+  | {
+      readonly command: "login" | "logout";
+      readonly configPath: string;
+      readonly providerId?: string;
+    };
 
 interface LoginChoice {
   readonly provider: Provider;
@@ -73,7 +79,7 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
   }
   if (configPath === undefined) throw new Error("--config <path> is required");
   const first = positional[0];
-  const command: CliCommand =
+  const command: "serve" | "login" | "logout" =
     first === undefined || first === "serve"
       ? "serve"
       : first === "login" || first === "logout"
@@ -317,6 +323,17 @@ async function runServe(
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
+  if (args[0] === "client-token") {
+    await runClientTokenCli(args.slice(1), {
+      resolveAuthFile: async (configPath, protocolId) => {
+        const config = await loadLuckyTokenCliConfig(configPath);
+        return Object.hasOwn(config.clientProtocols, protocolId)
+          ? config.clientProtocols[protocolId]?.authFile
+          : undefined;
+      },
+    });
+    return;
+  }
   const parsed = parseArguments(args);
   if (parsed === undefined) {
     stdout.write(HELP);

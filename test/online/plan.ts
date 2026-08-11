@@ -11,7 +11,8 @@ export type OnlineCoverageDimension =
   | "tools"
   | "usage-terminal"
   | "json"
-  | "sse";
+  | "sse"
+  | "client-auth-scopes";
 
 export interface OnlineConformanceCase {
   readonly id: string;
@@ -56,6 +57,16 @@ export const ONLINE_CONFORMANCE_CASES: readonly OnlineConformanceCase[] =
     conformanceCase("tool-result-omitted", ["messages", "tools", "json"]),
     conformanceCase("tool-result-text", ["messages", "tools", "json"]),
     conformanceCase("tool-result-error", ["messages", "tools", "json"]),
+    conformanceCase("client-auth-global", [
+      "client-auth-scopes",
+      "messages",
+      "json",
+    ]),
+    conformanceCase("client-auth-project", [
+      "client-auth-scopes",
+      "messages",
+      "json",
+    ]),
   ]);
 
 export const OFFLINE_ONLY_PROTOCOL_CASES = Object.freeze([

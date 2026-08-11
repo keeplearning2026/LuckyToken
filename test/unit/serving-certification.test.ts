@@ -40,8 +40,9 @@ function facts(
     fetchBound: true,
     projectSnapshotPolicy: "node-project-snapshot-v1",
     projectAuthorizationPolicy: "project-dir-absent-v1",
+    clientAuthorityPolicy: "handler-bound-file-snapshot-v1",
     routerDefaults: {},
-    clientApiKeyConfigured: true,
+    clientAuthConfigured: true,
     providerApiKeyConfigured: true,
     providerAuthPolicy: "fixed-api-key-header-v1",
     providerRegistrationPolicy: "startup-only-mutable-models-v1",
@@ -75,7 +76,7 @@ describe("serving composition certification", () => {
       failures: [],
       identity: {
         core: {
-          specification: "LuckyToken Core Architecture Specification v5.5",
+          specification: "LuckyToken Core Architecture Specification v5.6",
           servingComposition: "luckytoken-serving-composition-v2",
         },
         conversions: {
@@ -131,6 +132,7 @@ describe("serving composition certification", () => {
         },
         authEndpoint: {
           clientAuth: "x-api-key-or-bearer-token-v1",
+          clientAuthority: "handler-bound-file-snapshot-v1",
           providerAuth: "fixed-api-key-header-v1",
           endpoint: "model-base-url-alpha-generate-v1",
           authSemanticTransform: "inert-v1",
@@ -164,6 +166,7 @@ describe("serving composition certification", () => {
         localLoopbackHttpBoundary: "verified",
         piConfigurationCredentialCli: "verified",
         realProviderOnlineConformance: "verified",
+        perClientProtocolAuthIsolation: "verified",
       },
       verification: {
         commands: [
@@ -193,6 +196,19 @@ describe("serving composition certification", () => {
     );
     expect(manifest.policies.models.providerRegistration).toBe(
       "pi-models-json-startup-registration-v1",
+    );
+  });
+
+  it("does not claim file-snapshot isolation for an injected Auth authority", () => {
+    const manifest = certifyServingComposition(
+      facts({ clientAuthorityPolicy: "bound-injected-auth-v1" }),
+    );
+
+    expect(manifest.policies.authEndpoint.clientAuthority).toBe(
+      "bound-injected-auth-v1",
+    );
+    expect(manifest.coverage).not.toHaveProperty(
+      "perClientProtocolAuthIsolation",
     );
   });
 

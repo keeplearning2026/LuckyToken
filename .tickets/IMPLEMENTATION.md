@@ -1,6 +1,6 @@
 # LuckyToken Core Tickets Implementation Guide
 
-本文说明如何实现 `.tickets` 中的 27 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
+本文说明如何实现 `.tickets` 中的 28 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
 
 ```text
 Protocol Spec
@@ -19,7 +19,7 @@ LuckyToken Core Spec
 
 | Contract | Reviewed baseline |
 | --- | --- |
-| LuckyToken Core | v5.5 |
+| LuckyToken Core | v5.6 |
 | Anthropic Messages Protocol | v0.3，认证前仍需 Ticket 01 同步 |
 | CommandCode Private Protocol | v1.3 / command-code 1.9.0 profile |
 | Pi AI IR Protocol | v0.9.2 |
@@ -116,6 +116,7 @@ test/
 | 15 | 25 | 通过Pi公开认证接口接入登录与持久credential |
 | 16 | 26 | 根据真实Provider证据认证Anthropic与Pi thinking round-trip |
 | 17 | 27 | 独立接入Pi配置、CLI与显式在线测试 |
+| 18 | 28 | 按Client Protocol隔离global/project本地token与Auth snapshot |
 
 依赖图：
 
@@ -172,6 +173,7 @@ flowchart LR
   T24 --> T25["25 Pi login / credentials"]
   T25 --> T26["26 Anthropic / Pi thinking round-trip"]
   T26 --> T27["27 Pi config / CLI / online"]
+  T27 --> T28["28 Per-protocol client Auth"]
 ```
 
 ## 5. 每张 ticket 的实现方法
@@ -388,6 +390,14 @@ flowchart LR
 - 在线测试必须同时保留压力验证与协议判别矩阵；通过官方Client Protocol SDK访问真实loopback listener，并观察真实Provider dispatch/cancellation。
 - 受控线上场景必须产出可追溯样本，包含Client request/result/stream events及Provider request/raw JSONL/physical EOF；认证值不得进入样本。
 - 健康真实Provider无法稳定诱发的malformed event、unknown event、terminal-less EOF、retry、chunk split和capability rejection继续由离线故障注入拥有，不能伪造成线上通过。
+
+### 28 — Per-Client-Protocol local Auth
+
+- HTTP method/path先选择Client Protocol handler；每个handler绑定独立的通用Auth snapshot，Auth不接收protocol ID或pathname。
+- 每个configured Client Protocol使用独立token file；文件只拥有global/project token scope，不保存Client Wire、Pi、Provider或重复protocol marker。
+- Token file与handler的绑定只存在于composition root；Auth成功后只传播`sessionId/projectDir?`。
+- Global token绝不产生project fact；project token只投影为`Options.metadata.projectDir`，不得从cwd/header/request body猜测。
+- Token mutation是非并发CLI管理操作；Runtime启动时读取一次immutable snapshot，修改后必须重启，不增加watcher或file-lock manager。
 
 ## 6. 测试分层
 

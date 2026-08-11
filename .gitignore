@@ -2,7 +2,6 @@ node_modules/
 dist/
 coverage/
 CommandcodeAPIKey.txt
-luckytoken.config.json
 .luckytoken/
 **/auth.json
 .online-artifacts/

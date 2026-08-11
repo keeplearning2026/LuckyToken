@@ -3,7 +3,7 @@ export interface ReadonlyHeaders {
 }
 
 export interface AuthorizedClient {
-  projectDir?: string;
+  readonly projectDir?: string;
 }
 
 export type AuthResult =
