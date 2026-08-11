@@ -10,6 +10,7 @@ export {
   type LuckyTokenRuntime,
   type LuckyTokenRuntimeOptions,
 } from "./runtime.js";
+export { createFileCredentialStore } from "./pi/file-credential-store.js";
 export {
   startLuckyTokenHttpServer,
   type LuckyTokenHttpServerOptions,

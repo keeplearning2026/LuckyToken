@@ -42,7 +42,8 @@ const MISSING_TOOL_RESULT =
   "No result — the tool call did not complete (interrupted or lost).";
 
 export interface CommandCodePrivateProviderOptions {
-  apiKey: string;
+  /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
+  apiKey?: string;
   fetch?: FetchFunction;
   model: Model<typeof API_ID>;
   now: () => number;
@@ -954,7 +955,7 @@ function deepFreezeProviderData<T>(value: T, seen = new Set<object>()): T {
 export function createCommandCodePrivateProvider(
   options: CommandCodePrivateProviderOptions,
 ): Provider<typeof API_ID> {
-  const apiKey = options.apiKey;
+  const configuredApiKey = options.apiKey;
   const model = deepFreezeProviderData(
     structuredClone(options.model) as Model<typeof API_ID>,
   );
@@ -977,10 +978,31 @@ export function createCommandCodePrivateProvider(
     auth: {
       apiKey: {
         name: "CommandCode API key",
-        resolve: async () => ({
-          auth: { apiKey },
-          source: "CommandCode Private provider",
-        }),
+        login: async (interaction) => {
+          interaction.signal.throwIfAborted();
+          const key = await interaction.prompt({
+            type: "secret",
+            message: "Enter the CommandCode API key",
+          });
+          interaction.signal.throwIfAborted();
+          return { type: "api_key", key };
+        },
+        resolve: async ({ credential, signal }) => {
+          signal.throwIfAborted();
+          if (credential?.key) {
+            return {
+              auth: { apiKey: credential.key },
+              ...(credential.env === undefined ? {} : { env: credential.env }),
+              source: "stored credential",
+            };
+          }
+          return configuredApiKey
+            ? {
+                auth: { apiKey: configuredApiKey },
+                source: "configured CommandCode API key",
+              }
+            : undefined;
+        },
       },
     },
     api: {

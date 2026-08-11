@@ -126,6 +126,27 @@ Before implementing model, provider, auth, credential, configuration, streaming,
 
 Reuse mature code when it reduces total complexity.
 
+### Keep the Pi AI package upstream-clean
+
+`pi-agent/packages/ai` is a vendored upstream Pi AI module and must remain
+upstream-clean so that later Pi releases can be audited and synchronized
+without disentangling LuckyToken-specific patches.
+
+- Do not modify `pi-agent/packages/ai` to implement LuckyToken behavior.
+- Consume Pi AI through its public exported contracts, including `Models`,
+  `Provider`, `Provider.auth`, `CredentialStore`, and Pi message/event types.
+- Put LuckyToken-specific Client Protocol adapters, Provider adapters,
+  credential persistence, CLI interaction, configuration, and composition in
+  LuckyToken-owned modules outside the vendored package.
+- Do not copy Pi Coding Agent TUI, session, or command architecture merely to
+  expose a Pi AI capability. Build the smallest LuckyToken-owned shell around
+  the Pi AI public interface.
+- Update the vendored Pi AI module by replacing it with a reviewed upstream
+  revision, not by accumulating local feature patches.
+- If an upstream Pi AI defect makes a required invariant impossible, record
+  the exact contract gap and obtain an explicit architectural decision before
+  carrying any local patch. Never patch it silently.
+
 When extracting code:
 
 1. identify the exact capability needed;

@@ -1,6 +1,6 @@
 # LuckyToken Core Tickets Implementation Guide
 
-本文说明如何实现 `.tickets` 中的 25 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
+本文说明如何实现 `.tickets` 中的 26 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
 
 ```text
 Protocol Spec
@@ -113,7 +113,8 @@ test/
 | 12 | 22 | 在已认证路径上收紧通用 Provider boundary |
 | 13 | 23 | 在Pi IR两侧隔离Client Protocol与Provider |
 | 14 | 24 | 在稳定Runtime route/lifecycle上增加真实listener |
-| 15 | 25 | 独立接入Pi配置、CLI与显式在线测试 |
+| 15 | 25 | 通过Pi公开认证接口接入登录与持久credential |
+| 16 | 26 | 独立接入Pi配置、CLI与显式在线测试 |
 
 依赖图：
 
@@ -167,7 +168,8 @@ flowchart LR
   T21 --> T22["22 Provider boundary"]
   T22 --> T23["23 Client Protocol boundary"]
   T23 --> T24["24 Local HTTP server"]
-  T24 --> T25["25 Pi config / CLI / online"]
+  T24 --> T25["25 Pi login / credentials"]
+  T25 --> T26["26 Pi config / CLI / online"]
 ```
 
 ## 5. 每张 ticket 的实现方法
@@ -359,9 +361,18 @@ flowchart LR
 - 使用真实loopback TCP和官方Anthropic SDK覆盖JSON、Atomic SSE、abort、shutdown与并发隔离。
 - 包根只导出通用Runtime/Auth/Server；concrete Provider使用显式subpath。
 
-### 25 — Pi config, CLI, and online tests
+### 25 — Pi login and persistent credentials
+
+- `pi-agent/packages/ai`保持upstream-clean；只消费Pi公开`Provider.auth`、`Models.login/logout`与`CredentialStore` contract。
+- Persistent credential是Pi Models的可注入store dependency，不进入Runtime、Client Protocol或concrete Provider direct dependencies。
+- API-key与OAuth/subscription选项只来自Provider自己的auth声明；不得由CLI按Provider名字猜测。
+- CommandCode当前profile只声明API-key login，不伪造OAuth/subscription capability。
+- 使用新的store/Models instance验证credential跨进程生命周期，并通过真实Pi dispatch验证effective auth。
+
+### 26 — Pi config, CLI, and online tests
 
 - CLI composition保持server/client配置与Pi Provider/model配置分离；Client Protocol只接收最终`Models`。
+- 一个显式Pi目录统一定位`models.json`与`auth.json`，但两者分别由Pi配置加载器和`CredentialStore`拥有，不互相解析。
 - `models.json`属于Pi配置层，Runtime、Client Protocol与Provider都不解析它。
 - 真实Provider在线测试使用显式命令运行，不进入普通`npm test`。
 
@@ -468,7 +479,7 @@ conversation persistence
 Desktop/CLI/TUI product layer
 generic Provider/Protocol IR
 service locator/dependency bag
-persistent credential/model store
+persistent model catalog store
 universal retry/transport framework
 future Anthropic beta profiles
 server tools/thinking round trip
