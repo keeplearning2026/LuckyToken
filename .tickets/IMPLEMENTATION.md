@@ -1,6 +1,6 @@
 # LuckyToken Core Tickets Implementation Guide
 
-本文说明如何实现 `.tickets` 中的 21 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
+本文说明如何实现 `.tickets` 中的 23 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
 
 ```text
 Protocol Spec
@@ -44,6 +44,7 @@ LuckyToken Core Spec
 9. Required-nullable target fields必须显式出现，不能用 omission 代替 `null`。
 10. Unsupported semantics 必须显式失败，不能丢弃、文本化、猜测或依赖下游 repair。
 11. Pi/Pi Agent reference tree 只用于核对和最小提取；不要引入 Agent、TUI、session、extension 或 tool-execution runtime。
+12. 所有 concrete Provider 只通过 Pi `Provider` contract 接入；LuckyToken Core 只依赖 Pi `Models`，不识别 Provider 类型或配置。
 
 ## 3. 推荐的最小代码布局
 
@@ -51,7 +52,7 @@ Ticket 02 可以根据实际 package tooling 微调名字，但责任边界应�
 
 ```text
 src/
-├── runtime.ts                     # composition root only
+├── runtime.ts                     # Provider-blind request runtime
 ├── router.ts                      # visible request orchestration
 ├── http.ts                        # transport lifecycle and final write
 ├── auth.ts                        # inbound authorization/session/project facts
@@ -109,6 +110,8 @@ test/
 | 9 | 18, 20 | delivery/failure 与 Pi fidelity closure 可并行 |
 | 10 | 19 | 在 target Message 和 HTTP atomicity 上增加 Atomic SSE |
 | 11 | 21 | 全部路径完成后才能认证 |
+| 12 | 22 | 在已认证路径上收紧通用 Provider boundary |
+| 13 | 23 | 在稳定 Runtime boundary 上增加真实 listener 与 CLI |
 
 依赖图：
 
@@ -159,6 +162,8 @@ flowchart LR
   T18 --> T21
   T19 --> T21
   T20 --> T21
+  T21 --> T22["22 Provider boundary"]
+  T22 --> T23["23 Local HTTP server"]
 ```
 
 ## 5. 每张 ticket 的实现方法
@@ -328,6 +333,20 @@ flowchart LR
 - 分别验证 readiness、invocation integrity、request-specific fidelity、execution、outbound fidelity和round trip。
 - 任一 reachable semantic gap使结果为 `FAILED`；只有完整清单通过才能写 `CERTIFIED`。
 - Serving只持有不含 Provider-registration mutation authority的 runtime view。
+
+### 22 — Provider boundary
+
+- Runtime只接收 Pi `Models` 和 LuckyToken `Auth`，不接收 Provider/model配置或credential。
+- Concrete Provider factory owns其config、capability和dependency snapshot；composition root只负责创建与`setProvider(...)`。
+- 使用两个不同fixture Provider证明Core无需识别Provider即可完成model selection和dispatch。
+- 用architecture test禁止Runtime/HTTP/Execution/Anthropic重新导入concrete Provider。
+
+### 23 — Local HTTP server
+
+- Node listener只转换Node HTTP transport与WHATWG `Request`/`Response`，不承担route或Provider语义。
+- CLI composition保持server/client配置与Pi Provider/model配置分离；Runtime只接收最终`Models`。
+- 使用真实loopback TCP和官方Anthropic SDK覆盖JSON、Atomic SSE、abort、shutdown与并发隔离。
+- 真实Provider在线测试使用显式命令运行，不进入普通`npm test`。
 
 ## 6. 测试分层
 

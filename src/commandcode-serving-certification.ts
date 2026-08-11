@@ -1,8 +1,4 @@
-import type {
-  Context,
-  Model,
-  ModelsSimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 
 import type { RouterOptionDefaults } from "./options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
@@ -355,14 +351,4 @@ export class ServingCertificationFailure extends Error {
     this.name = "ServingCertificationFailure";
     this.manifest = manifest;
   }
-}
-
-export function freezeCertifiedInvocation(
-  model: Model<string>,
-  context: Context,
-  options: ModelsSimpleStreamOptions,
-): void {
-  deepFreezePlainData(model);
-  deepFreezePlainData(context);
-  deepFreezePlainData(options);
 }

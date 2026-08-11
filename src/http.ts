@@ -1,8 +1,11 @@
 import type { Models } from "@earendil-works/pi-ai";
 
 import type { Auth } from "./auth.js";
-import { freezeCertifiedInvocation } from "./certification.js";
-import { execute, ExecutionAbortedError } from "./execution.js";
+import {
+  execute,
+  ExecutionAbortedError,
+  freezePiInvocation,
+} from "./execution.js";
 import {
   ModelResolutionFailure,
   resolveModel,
@@ -255,7 +258,7 @@ export async function handleHttpRequest(
       },
       dependencies.routerDefaults,
     );
-    freezeCertifiedInvocation(model, invocation.context, piOptions);
+    freezePiInvocation(model, invocation.context, piOptions);
     const message = await execute(
       dependencies.models,
       model,

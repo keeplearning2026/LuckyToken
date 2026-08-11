@@ -905,28 +905,81 @@ function createCommandCodeStream(
   };
 }
 
+function snapshotCompatibilityPolicy(
+  source: CommandCodeCompatibilityPolicy,
+): CommandCodeCompatibilityPolicy {
+  return Object.freeze({
+    ...(source.cliEnvironment === undefined
+      ? {}
+      : { cliEnvironment: source.cliEnvironment }),
+    ...(source.ossPrimaryProvider === undefined
+      ? {}
+      : { ossPrimaryProvider: source.ossPrimaryProvider }),
+    ...(source.permissionMode === undefined
+      ? {}
+      : { permissionMode: source.permissionMode }),
+  });
+}
+
+function snapshotProjectCapability(source: ProjectSnapshot): ProjectSnapshot {
+  const snapshot = source.snapshot;
+  return Object.freeze({
+    snapshot: (input: Parameters<ProjectSnapshot["snapshot"]>[0]) =>
+      snapshot.call(source, input),
+  });
+}
+
+function snapshotTraceContextCapability(
+  source: CommandCodeTraceContextCapability | undefined,
+): CommandCodeTraceContextCapability | undefined {
+  if (source === undefined) return undefined;
+  const resolveLogicalTraceId = source.resolveLogicalTraceId;
+  const createSpanId = source.createSpanId;
+  return Object.freeze({
+    resolveLogicalTraceId: (telemetryContext: unknown) =>
+      resolveLogicalTraceId.call(source, telemetryContext),
+    createSpanId: () => createSpanId.call(source),
+  });
+}
+
+function deepFreezeProviderData<T>(value: T, seen = new Set<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) {
+    deepFreezeProviderData(nested, seen);
+  }
+  return Object.freeze(value);
+}
+
 export function createCommandCodePrivateProvider(
   options: CommandCodePrivateProviderOptions,
 ): Provider<typeof API_ID> {
+  const apiKey = options.apiKey;
+  const model = deepFreezeProviderData(
+    structuredClone(options.model) as Model<typeof API_ID>,
+  );
+  const compatibility = snapshotCompatibilityPolicy(options.compatibility ?? {});
+  const projectSnapshot = snapshotProjectCapability(options.projectSnapshot);
+  const traceContext = snapshotTraceContextCapability(options.traceContext);
   const streams = createCommandCodeStream(
     options.fetch,
     options.now,
-    options.projectSnapshot,
-    options.compatibility ?? {},
+    projectSnapshot,
+    compatibility,
     options.createSessionId ?? randomUUID,
-    options.traceContext,
+    traceContext,
     options.sleep,
   );
   return createProvider({
     id: PROVIDER_ID,
     name: "CommandCode Private",
-    models: [options.model],
+    models: [model],
     auth: {
       apiKey: {
         name: "CommandCode API key",
         resolve: async () => ({
-          auth: { apiKey: options.apiKey },
-          source: "LuckyToken runtime",
+          auth: { apiKey },
+          source: "CommandCode Private provider",
         }),
       },
     },

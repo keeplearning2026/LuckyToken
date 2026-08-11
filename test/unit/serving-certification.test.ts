@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   certifyServingComposition,
-  freezeCertifiedInvocation,
   type ServingCertificationFacts,
-} from "../../src/certification.js";
+} from "../../src/commandcode-serving-certification.js";
+import { freezePiInvocation } from "../../src/execution.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
@@ -227,7 +227,7 @@ describe("serving composition certification", () => {
       metadata: { user_id: "user", projectDir: "D:/project" },
     };
 
-    freezeCertifiedInvocation(invocationModel, context, options);
+    freezePiInvocation(invocationModel, context, options);
 
     expectDeeplyFrozen(invocationModel);
     expectDeeplyFrozen(context);

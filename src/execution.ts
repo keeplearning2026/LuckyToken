@@ -6,6 +6,34 @@ import type {
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function deepFreezeInvocationData(
+  value: unknown,
+  seen: Set<object> = new Set(),
+): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) return;
+  if (!Array.isArray(value) && !isPlainObject(value)) return;
+  seen.add(value);
+  for (const nested of Object.values(value)) {
+    deepFreezeInvocationData(nested, seen);
+  }
+  Object.freeze(value);
+}
+
+export function freezePiInvocation(
+  model: Model<string>,
+  context: Context,
+  options: ModelsSimpleStreamOptions,
+): void {
+  deepFreezeInvocationData(model);
+  deepFreezeInvocationData(context);
+  deepFreezeInvocationData(options);
+}
+
 export async function execute(
   models: Models,
   model: Model<string>,

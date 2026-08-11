@@ -2,7 +2,7 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
 
 it("preserves accepted conversation semantics on the CommandCode wire", async () => {
   let upstreamRequest: Request | undefined;

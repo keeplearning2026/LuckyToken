@@ -1,13 +1,14 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { ServingCertificationFailure } from "../../src/certification.js";
+import { ServingCertificationFailure } from "../../src/commandcode-serving-certification.js";
 import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntimeOptions,
-} from "../../src/runtime.js";
+  createCommandCodeServingTestComposition,
+  createCommandCodeTestRuntime,
+  type CommandCodeServingTestOptions,
+} from "../support/commandcode-serving.js";
 
 function anthropicRequest(body: Record<string, unknown>): Request {
   return new Request("http://luckytoken.test/v1/messages", {
@@ -37,19 +38,21 @@ function textResponse(text = "done"): Response {
 }
 
 describe("certified serving composition", () => {
-  it("publishes only handle plus its immutable certification", () => {
-    const runtime = createLuckyTokenRuntime({
+  it("publishes a Provider-blind runtime beside its immutable certification", () => {
+    const composition = createCommandCodeServingTestComposition({
       clientApiKey: "client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => textResponse(),
       modelId: "model",
     });
+    const { runtime, certification } = composition;
 
-    expect(Object.keys(runtime).sort()).toEqual(["certification", "handle"]);
-    expect(runtime.certification.result).toBe("CERTIFIED");
-    expect(JSON.stringify(runtime.certification)).not.toContain("client-key");
-    expect(JSON.stringify(runtime.certification)).not.toContain("provider-key");
+    expect(Object.keys(composition).sort()).toEqual(["certification", "runtime"]);
+    expect(Object.keys(runtime)).toEqual(["handle"]);
+    expect(certification.result).toBe("CERTIFIED");
+    expect(JSON.stringify(certification)).not.toContain("client-key");
+    expect(JSON.stringify(certification)).not.toContain("provider-key");
     expect(runtime).not.toHaveProperty("models");
     expect(runtime).not.toHaveProperty("setProvider");
     expect(runtime).not.toHaveProperty("deleteProvider");
@@ -62,7 +65,7 @@ describe("certified serving composition", () => {
   it("fails startup with a FAILED manifest when serving facts are not certifiable", () => {
     let failure: unknown;
     try {
-      createLuckyTokenRuntime({
+      createCommandCodeServingTestComposition({
         clientApiKey: "client-key",
         commandCodeApiKey: "provider-key",
         commandCodeBaseUrl: "https://commandcode.test",
@@ -108,7 +111,7 @@ describe("certified serving composition", () => {
       upstreamRequests.push(new Request(input, init));
       return textResponse();
     };
-    const runtimeOptions: LuckyTokenRuntimeOptions = {
+    const runtimeOptions: CommandCodeServingTestOptions = {
       clientApiKey: "client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.test",
@@ -121,7 +124,8 @@ describe("certified serving composition", () => {
       anthropicModelValidityPolicy: validityPolicy,
       createSessionId: () => "00000000-0000-4000-8000-000000000121",
     };
-    const runtime = createLuckyTokenRuntime(runtimeOptions);
+    const composition = createCommandCodeServingTestComposition(runtimeOptions);
+    const { runtime, certification } = composition;
 
     const handling = runtime.handle(
       anthropicRequest({
@@ -152,9 +156,7 @@ describe("certified serving composition", () => {
 
     const response = await handling;
     expect(response.status).toBe(200);
-    expect(runtime.certification.policies.modelValidity.revision).toBe(
-      "image-policy-v1",
-    );
+    expect(certification.policies.modelValidity.revision).toBe("image-policy-v1");
     expect(upstreamRequests[0]?.headers.get("x-cli-environment")).toBe(
       "production",
     );
@@ -201,7 +203,7 @@ describe("certified serving composition", () => {
       }
       return textResponse("round trip complete");
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createCommandCodeTestRuntime({
       clientApiKey: "client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.test",

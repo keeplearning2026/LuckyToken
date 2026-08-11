@@ -1,7 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
 
 it("carries an accepted Anthropic tool schema unchanged to CommandCode", async () => {
   let upstreamRequest: Request | undefined;

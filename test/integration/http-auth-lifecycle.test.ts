@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { HttpRequestAbortedError } from "../../src/http.js";
 import {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntimeOptions,
-} from "../../src/runtime.js";
+  createCommandCodeTestRuntime as createLuckyTokenRuntime,
+  type CommandCodeServingTestOptions as LuckyTokenRuntimeOptions,
+} from "../support/commandcode-serving.js";
 
 const fallbackSession = "00000000-0000-4000-8000-000000000020";
 const primarySession = "00000000-0000-4000-8000-000000000021";

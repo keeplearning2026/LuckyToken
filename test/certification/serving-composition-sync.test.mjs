@@ -9,7 +9,7 @@ const recordUrl = new URL(
   import.meta.url,
 );
 const certificationSourceUrl = new URL(
-  "../../src/certification.ts",
+  "../../src/commandcode-serving-certification.ts",
   import.meta.url,
 );
 
