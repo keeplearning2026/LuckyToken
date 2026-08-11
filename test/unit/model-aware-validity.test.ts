@@ -11,9 +11,6 @@ import { validateAnthropicSourceRequest } from "../../src/protocols/anthropic/re
 
 const profile: ResolvedAnthropicSourceProfile = {
   version: "2023-06-01",
-  betas: new Set(),
-  userProfileIdPresent: false,
-  unclassifiedAnthropicHeaders: [],
 };
 
 function fixtureModel(

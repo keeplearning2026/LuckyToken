@@ -142,7 +142,7 @@ Protocol Dependency synchronized
 Runtime Certification CERTIFIED
 ```
 
-当前 reviewed local Protocol v0.4 已包含 request/response wire structures、semantic-header surface、ToolResult representation evidence boundaries、response Message/Usage/SSE shapes，以及本 Method 所需的两个 request-side source-validity facts：
+当前 reviewed local Protocol v0.4 已包含 request/response wire structures、ToolResult representation evidence boundaries、response Message/Usage/SSE shapes，以及本 Method 所需的两个 request-side source-validity facts：
 
 ```text
 model-dependent final-assistant prefill rejection
@@ -212,7 +212,7 @@ Runtime Certification:
 PENDING
 ```
 
-The reviewed local Anthropic Protocol v0.4 covers the semantic-header surface used here, including `anthropic-user-profile-id`, and preserves two ToolResult evidence boundaries：
+The reviewed local Anthropic Protocol v0.4 preserves two ToolResult evidence boundaries：
 
 ```text
 1. tool_result.content = string
@@ -240,7 +240,7 @@ tool_result.content = string
 ```text
 tool_result.content = []
 → unresolved Source Grammar Coverage
-  for the supported no-beta profile
+  for the supported version profile
 → UnsupportedFeature
 ```
 
@@ -321,7 +321,7 @@ document SHA-256:
 efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918
 ```
 
-That revision covers the semantic-header surface, including `anthropic-user-profile-id`; records the ToolResult string / explicit-`[]` evidence boundaries; and defines the current response Message、Usage、Content Block 与 SSE structures used by the response-side Method。
+That revision records the ToolResult string / explicit-`[]` evidence boundaries and defines the current response Message、Usage、Content Block 与 SSE structures used by the response-side Method。
 
 The synchronized Protocol v0.4 additionally owns the two request-side source-validity facts required by this Method：
 
@@ -389,9 +389,9 @@ Runtime Certification Pi Revision
 #### Final Principles
 
 
-> **Anthropic source closed-world covers body semantics and protocol-defined request-semantic headers.**
+> **Anthropic source closed-world covers body semantics. The only header interpreted by this conversion is `anthropic-version`.**
 
-> **v1 implements one minimal source grammar: `anthropic-version=2023-06-01` with no beta. Beta-activated grammars fail closed unless a later specification explicitly adds them.**
+> **v1 accepts exactly `anthropic-version=2023-06-01`. `anthropic-beta`, other `anthropic-*`, Agent/SDK, and transport headers are ignored by this conversion: they are not classified, propagated, or used to choose semantics.**
 
 > **Profile-envelope validity and LuckyToken profile/grammar support are different questions. Known invalid profile state is `InvalidRequest`; unimplemented grammar is `UnsupportedFeature`.**
 
@@ -399,7 +399,7 @@ Runtime Certification Pi Revision
 
 > **Within a supported profile/grammar, Source Validity completes before feature-level v1 capability rejection.**
 
-> **Header names are classified case-insensitively; unclassified `anthropic-*` extensions fail closed, while unrelated unknown HTTP headers are not automatically Anthropic semantics.**
+> **`anthropic-version` lookup is case-insensitive through the HTTP header view; no other header enters Anthropic → Pi conversion state.**
 
 > **Client authorization remains separate from Anthropic source validity.**
 
@@ -720,7 +720,7 @@ HTTP Boundary
         ▼                           ▼
 Client Authorization       Anthropic Client Protocol
 ├── authorized?            ├── Source Profile Resolution
-├── sessionId?             ├── Semantic Header Classification
+├── sessionId?             ├── anthropic-version Gate
 └── projectDir?            └── Body Parse / Validation
 ```
 
@@ -771,21 +771,17 @@ projectDir?
 Anthropic Source Profile
 owns:
 anthropic-version
-anthropic-beta
-active protocol grammar identity
 exact v1 profile-support policy
 
 Source Profile / Grammar Coverage
 owns:
-can LuckyToken validate this selected source grammar?
-known/unclassified profile extension support
+can LuckyToken validate the selected body grammar?
 ordinary message content:[] unresolved policy
 current unresolved explicit ToolResult [] policy
 
 Anthropic Client Protocol
 owns:
-known semantic-header classification
-conservative unclassified anthropic-* detection
+anthropic-version gate
 body semantics
 
 Parser / Canonicalizer / Validator
@@ -861,7 +857,7 @@ owns:
 Pi → upstream adaptation
 ```
 
-Semantic Header Policy remains Protocol/Conversion specification authority; Runtime Certification binds the synchronized dependency revision instead of duplicating the policy as a second owner.
+The version-only header policy remains Protocol/Conversion specification authority; Runtime Certification binds the synchronized dependency revision instead of duplicating the policy as a second owner.
 
 ### 2.3. No Parallel LuckyToken IR
 
@@ -889,8 +885,6 @@ AnthropicRenderState
 This list is not an exhaustive ban on ordinary request-local operation state such as：
 
 ```text
-sourceSemanticHeaders classification
-UnclassifiedAnthropicOwnedHeader marker
 turn-scoped PendingToolCall map
 ```
 
@@ -929,20 +923,15 @@ Anthropic Message
 #### Complete Anthropic Source Request Surface
 
 
-Anthropic source semantics can arrive through more than the JSON body.
+LuckyToken's Anthropic → Pi conversion deliberately uses one header gate and the JSON body.
 
 Frozen hierarchy：
 
 ```text
 Anthropic Source Request
 │
-├── Protocol-Profile Headers
-│   ├── anthropic-version
-│   └── anthropic-beta
-│
-├── Request-Semantic Headers
-│   ├── currently classified protocol headers
-│   └── future source-valid semantic headers
+├── Version Gate
+│   └── anthropic-version
 │
 └── MessageRequest Body
     ├── model
@@ -952,229 +941,37 @@ Anthropic Source Request
     └── other request semantics
 ```
 
-Source closed-world applies to the entire hierarchy.
+Source closed-world applies to the body. Other headers are outside this conversion input.
 
 ---
 
 #### 3.1.1. HTTP and Protocol Inputs
 
-##### Request-Semantic Header Classification Boundary
+##### Version-Only Header Boundary
 
-
-A protocol-defined header is a **request-semantic header** when its value can change the semantic meaning, attribution, enabled protocol behavior, or model-visible/upstream request semantics of the Anthropic request rather than merely carrying generic HTTP transport or LuckyToken authorization infrastructure.
-
-HTTP header names are case-insensitive. Classification therefore operates on a normalized lower-case header name while preserving the original header value semantics.
-
-v0.4.9 freezes the following ingress distinction：
+The Client Protocol adapter reads exactly one header：
 
 ```text
-Normalized Header Name
-│
-├── explicitly known Anthropic protocol/profile header
-│   └── classify by this specification
-│
-├── unclassified anthropic-* header
-│   └── preserve as an Anthropic-owned extension marker
-│       for later fail-closed capability rejection
-│
-└── other unknown HTTP header
-    └── not automatically Anthropic semantic input
+headers.get("anthropic-version")
+→ format validation
+→ exact implemented-version check
+→ { version }
 ```
 
-The header classifier MUST NOT silently drop an unclassified `anthropic-*` name.
+The required implemented value is `2023-06-01`. Missing or malformed values are `InvalidRequest`; another well-formed version is `UnsupportedFeature`.
 
-##### 3.1.1.1. Protocol-Profile Headers
-
-###### `user-profiles` Beta
-
-
-The current source protocol defines `anthropic-user-profile-id` behind the `user-profiles` beta family.
-
-v1 may recognize the documented beta/header relationship for failure classification, but the beta-activated profile itself is not in the implemented source grammar：
+All other headers are ignored by Anthropic → Pi conversion, including：
 
 ```text
-2023-06-01
-+
-user-profiles beta active
-→ known beta-activated profile
-→ UnsupportedFeature at Source Profile / Grammar Coverage
-```
-
-Without the required beta, a present `anthropic-user-profile-id` is source-invalid：
-
-```text
-2023-06-01 baseline
-+
-anthropic-user-profile-id
-+
-required beta absent
-→ InvalidRequest
-```
-
-A future specification revision may explicitly add selected beta profiles. No runtime registry is implied.
-
-##### 3.1.1.2. Request-Semantic Headers
-
-###### Known Semantic Header Classification
-
-
-For the exact implemented v1 baseline：
-
-```text
-anthropic-version
-→ Source Profile authority
-→ required implemented value: 2023-06-01
-
 anthropic-beta
-→ Source Profile authority
-→ any beta-activated grammar is outside v1 profile support
+other anthropic-*
+Agent / SDK headers
+transport / proxy / tracing headers
 ```
 
-`anthropic-user-profile-id` is a known request-semantic header with a known beta dependency, but current v1 does not implement the beta-activated source profile required to make that semantic source-valid.
+They are not classified, retained, propagated to body validation, placed in Pi options, or forwarded to a Provider. Body parsing remains closed-world and continues to reject unsupported or unknown body semantics.
 
-Therefore failure authority is exact：
-
-```text
-baseline profile
-+
-anthropic-user-profile-id present
-+
-required user-profiles beta absent
-→ InvalidRequest
-```
-
-```text
-user-profiles beta active
-→ beta-activated source profile
-→ UnsupportedFeature at Source Profile / Grammar Coverage
-```
-
-If a future specification explicitly implements the required beta profile, then the source-valid `anthropic-user-profile-id` semantic remains a separate v1 support question and MUST still be explicitly mapped or rejected; it may never be silently ignored.
-
-Known source legality is a Source Validity concern. LuckyToken profile support and source-valid semantic support are separate later capabilities.
-
-###### Semantic Header Policy Is Specification-Owned
-
-
-Anthropic semantic-header classification belongs to：
-
-```text
-Anthropic Protocol Spec
-+
-this Conversion Specification
-+
-Client Protocol conformance tests
-```
-
-Runtime certification binds：
-
-```text
-Specification Version
-+
-immutable synchronized Anthropic Protocol Spec Revision
-+
-Supported Anthropic Source Profile
-```
-
-and therefore does not duplicate the same header support matrix as an independently authoritative manifest field.
-
-A certification artifact MAY expose a derived informational summary such as：
-
-```text
-Anthropic Semantic Headers:
-<derived from bound Specification + Protocol revision>
-```
-
-for diagnostics, but that summary MUST NOT override or diverge from the frozen specification/protocol dependency.
-
-##### 3.1.1.3. Anthropic-Owned Unknown Extensions
-
-###### Executable Fail-Closed Policy for Anthropic-Owned Headers
-
-
-The converter cannot infer future protocol semantics from arbitrary HTTP header names. v0.4.9 therefore freezes a concrete conservative ingress rule instead of relying on impossible runtime clairvoyance.
-
-```text
-normalize header name to lower-case
-        │
-        ├── known classified Anthropic header
-        │   └── use its frozen classification
-        │
-        ├── name starts with "anthropic-"
-        │   └── UnclassifiedAnthropicOwnedHeader
-        │
-        └── otherwise
-            └── ordinary HTTP/Auth ownership
-                unless the authoritative source protocol
-                explicitly classifies it as Anthropic semantic
-```
-
-`UnclassifiedAnthropicOwnedHeader` is an ingress classification fact, not a new universal IR type requirement.
-
-It MUST be retained until source validity for the known profile/body has completed. Only then：
-
-```text
-unclassified anthropic-* extension present
-→ UnsupportedFeature
-```
-
-This ordering prevents an unsupported extension from masking a malformed/invalid source request.
-
-The conservative rejection does **not** claim that LuckyToken knows the unknown header is source-valid. It only refuses to execute an unclassified Anthropic-owned protocol extension.
-
-Never：
-
-```text
-unclassified anthropic-* header
-→ silently ignore
-```
-
-###### Parser / Header Classification Must Preserve Unknown Semantics
-
-
-Forbidden：
-
-```text
-wire semantic / Anthropic-owned extension
-→ parser/header layer drops it
-→ downstream unknowingly accepts
-```
-
-Body parsing must retain or explicitly detect unknown body semantics.
-
-Header processing must retain：
-
-```text
-known semantic-header classification
-+
-unclassified anthropic-* extension markers
-```
-
-until the appropriate source-validity / representability stage consumes them.
-
-No generic HTTP-header bag needs to enter the converter.
-
-##### 3.1.1.4. Non-Semantic / Unrelated HTTP Headers
-
-###### Non-Semantic and Unrelated HTTP Headers
-
-
-The semantic-header rule does not turn every HTTP header into Client Protocol semantics.
-
-For example：
-
-```text
-connection lifecycle headers
-generic proxy / tracing headers
-generic HTTP transport headers
-LuckyToken client authorization headers
-```
-
-remain under their existing HTTP/Auth ownership unless the authoritative Anthropic source protocol explicitly gives them request semantics.
-
-Therefore an unknown header outside the classified Anthropic-owned namespace is **not** rejected merely for being unknown.
-
-If future authoritative protocol evidence introduces an Anthropic semantic header outside the current conservative namespace, the Protocol Spec and classifier MUST be updated before that semantic is supported. Runtime code is not expected to infer that meaning from an arbitrary header name.
+This is capability locality: Auth and HTTP lifecycle headers remain with their existing owners, while the Anthropic converter receives no generic header bag and creates no header registry. Adding future header semantics requires an explicit new conversion contract; it is not inferred from header names.
 
 ### 3.2. Source Processing and Acceptance
 
@@ -1190,11 +987,10 @@ Then Source Validation has two phases.
 ##### Source Protocol Profile and Exact v1 Profile-Support Authority
 
 
-`ResolvedAnthropicSourceProtocolProfile` is determined by protocol-profile semantics such as：
+`ResolvedAnthropicSourceProtocolProfile` is determined only by：
 
 ```text
 anthropic-version
-anthropic-beta
 ```
 
 Conceptually：
@@ -1202,7 +998,6 @@ Conceptually：
 ```ts
 interface ResolvedAnthropicSourceProtocolProfile {
   version: string;
-  betas: ReadonlySet<string>;
 }
 ```
 
@@ -1211,8 +1006,8 @@ No particular runtime type is required.
 The profile lifecycle has two distinct questions：
 
 ```text
-A. Is the profile envelope / known profile combination source-valid?
-B. Does LuckyToken implement enough grammar/semantics for that profile?
+A. Is the required version header well formed?
+B. Does LuckyToken implement that version?
 ```
 
 They are not the same authority.
@@ -1221,27 +1016,16 @@ They are not the same authority.
 
 
 ```text
-malformed known profile header/value
-or known source-invalid version/beta token/combination
+missing or malformed anthropic-version
 → InvalidRequest / Protocol Failure
 ```
 
-Anthropic's current beta contract requires exact documented beta identifiers; an invalid or unavailable beta produces HTTP 400 `invalid_request_error`.
-
 ```text
-known source-valid beta/profile
-but beta-activated grammar is not implemented by LuckyToken v1
+well-formed version other than 2023-06-01
 → UnsupportedFeature
 ```
 
-For a syntactically plausible but locally unclassified beta/profile extension whose source validity cannot be established from the synchronized Protocol Spec：
-
-```text
-→ conservative UnsupportedFeature
-  at Source Profile / Grammar Coverage
-```
-
-Never call an unknown extension `InvalidRequest` merely because LuckyToken does not understand it.
+No other header participates in profile resolution or failure classification.
 
 ##### Source Validation Is Profile-Relative
 
@@ -1254,8 +1038,6 @@ For a supported profile：
 ResolvedAnthropicSourceProtocolProfile
 +
 selected model semantics
-+
-request-semantic headers
 +
 MessageRequest body
 → Source Validity
@@ -1280,14 +1062,9 @@ v0.4.9 intentionally chooses the smallest implemented source grammar：
 
 ```text
 anthropic-version = "2023-06-01"
-anthropic-beta    = absent / empty set
 ```
 
-This baseline grammar is the only v1 profile for which LuckyToken claims complete local profile-relative Source Validity.
-
-No beta-activated grammar is part of the v1 implemented profile.
-
-This is a simplicity and correctness rule, not a statement that Anthropic betas are invalid.
+This is the only header gate for which LuckyToken claims complete local profile-relative Source Validity. Other headers neither widen nor narrow the accepted body grammar.
 
 ##### Source Closed-World Rule
 
@@ -1336,7 +1113,6 @@ Normal message string shorthand dies during canonicalization.
 
 
 ```text
-semantic-header legality
 body required fields
 field shapes
 tagged unions
@@ -1521,7 +1297,6 @@ content variant
 tool field
 schema semantic
 enum-like value
-request-semantic header
 protocol extension
 ```
 
@@ -1537,13 +1312,6 @@ Known source-invalid：
 → InvalidRequest
 ```
 
-Additionally, an unclassified `anthropic-*` header is conservatively retained as an unsupported Anthropic-owned extension marker. After all known source validity that LuckyToken can establish succeeds：
-
-```text
-unclassified anthropic-* header
-→ UnsupportedFeature
-```
-
 The converter never upgrades “LuckyToken does not understand this source grammar” into a claim that the client sent an invalid Anthropic request.
 
 #### 3.2.7. Accepted / Validated Request State
@@ -1553,7 +1321,7 @@ The converter never upgrades “LuckyToken does not understand this source gramm
 
 Meaning：
 
-> The Anthropic body and request-semantic inputs relevant to this conversion are valid under the resolved source profile and selected model.
+> The Anthropic body is valid under the resolved version profile and selected model.
 
 It does not imply：
 
@@ -1563,7 +1331,7 @@ Pi representable
 runtime certified
 ```
 
-`ValidatedAnthropicRequest` does not need to embed the source profile or semantic-header classification as duplicate state.
+`ValidatedAnthropicRequest` does not need to embed the source profile as duplicate state.
 
 The authoritative request-local facts remain adjacent：
 
@@ -1571,8 +1339,6 @@ The authoritative request-local facts remain adjacent：
 ValidatedAnthropicRequest
 +
 ResolvedAnthropicSourceProtocolProfile
-+
-sourceSemanticHeaders classification
 ```
 
 They are passed explicitly to the later operation that actually needs each fact.
@@ -6219,7 +5985,7 @@ A certification using a different Pi runtime revision MUST either prove the rele
 
 A Protocol revision known to omit v1-required request source-validity facts inherited from the v0.4.9 request contract MUST NOT be used for `CERTIFIED` status.
 
-The converter's semantic-header support policy is frozen by the Specification Version + synchronized Protocol dependency + Client Protocol contract; it is not a second independent runtime-certification authority.
+The converter's version-only header policy is frozen by the Specification Version + synchronized Protocol dependency + Client Protocol contract; it is not a second independent runtime-certification authority.
 
 
 LuckyToken 只维护一个：
@@ -6952,29 +6718,27 @@ Owns：
 
 ```text
 anthropic-version
-anthropic-beta
 source-profile envelope resolution
 exact v1 profile-support / grammar-coverage policy
-protocol semantic-header classification rules
 ```
 
 Frozen v1 support：
 
 ```text
-2023-06-01 + no beta
+2023-06-01
 → implemented source grammar
 
-known source-invalid version/beta
+missing or malformed anthropic-version
 → InvalidRequest
 
-known-valid beta-activated profile
+other well-formed anthropic-version
 → UnsupportedFeature
 
-plausible but unclassified profile extension
-→ conservative UnsupportedFeature
+all other headers
+→ ignored by this conversion
 ```
 
-No runtime beta registry is required.
+No header manager, beta registry, or generic header bag is required.
 
 It does not own Client authorization.
 
@@ -7134,31 +6898,19 @@ if (!auth.authorized) {
   throwClientAuthorizationFailure();
 }
 
-// Known profile-envelope grammar only.
-const sourceProfile = resolveAnthropicSourceProfile({
-  anthropicVersion: headers["anthropic-version"],
-  anthropicBeta: headers["anthropic-beta"],
-});
-// known malformed/source-invalid envelope → InvalidRequest
-
-// Inspection/classification only.
-const sourceSemanticHeaders = classifyAnthropicSemanticHeaders({
-  headers,
-  sourceProfile,
-});
+// The only header interpreted by this conversion.
+const sourceProfile = resolveAnthropicSourceProfile(headers);
+// missing/malformed anthropic-version → InvalidRequest
+// every other header is ignored here
 
 // Profile-independent syntax has independent failure authority.
 const jsonBody = parseJsonRequestBody(body);
 // malformed JSON → InvalidRequest
 
 // Exact v1 implemented profile:
-// version=2023-06-01, no beta.
-requireSupportedAnthropicSourceProfile({
-  sourceProfile,
-  sourceSemanticHeaders,
-});
-// known-valid beta/unimplemented profile or unclassified grammar
-// → UnsupportedFeature
+// Exact v1 implemented version.
+requireSupportedAnthropicSourceProfile(sourceProfile);
+// any other well-formed version → UnsupportedFeature
 
 const parsed = parseAnthropicMessageRequestValue(
   jsonBody,
@@ -7179,7 +6931,6 @@ const canonical = canonicalizeAnthropicRequest(parsed);
 assertModelIndependentSourceValidity({
   canonical,
   sourceProfile,
-  sourceSemanticHeaders,
 });
 // includes tool lifecycle/schema validity and documented strict limits
 // fail → InvalidRequest / Protocol Failure
@@ -7213,7 +6964,6 @@ const request = asValidatedAnthropicRequest(
 assertStaticV1SemanticSupport({
   request,
   sourceProfile,
-  sourceSemanticHeaders,
   model,
 });
 // source-valid final prefill on a model/profile that permits it
@@ -7848,36 +7598,28 @@ in-flight request silently executes
 under different certification-bound semantics
 ```
 
-### 11.1. Profile / Header / JSON Syntax Tests
+### 11.1. Version Header / JSON Syntax Tests
 
-#### Profile, JSON-Ordering, and Semantic Header Tests
+#### Version Gate and Ignored Header Tests
 
 
 Exact v1 baseline：
 
 ```text
 anthropic-version: 2023-06-01
-anthropic-beta: absent
 → implemented profile grammar
 ```
 
-Profile envelope：
+Version envelope：
 
 ```text
-malformed known anthropic-version / beta grammar
+missing or malformed anthropic-version
 → InvalidRequest
 ```
 
 ```text
-known source-valid beta-activated profile
+well-formed unsupported anthropic-version
 → UnsupportedFeature
-```
-
-```text
-syntactically plausible unclassified beta/profile extension
-whose validity is not established locally
-→ conservative UnsupportedFeature
-→ never guessed InvalidRequest
 ```
 
 Raw syntax ordering：
@@ -7885,51 +7627,29 @@ Raw syntax ordering：
 ```text
 malformed JSON
 +
-unsupported/unknown profile grammar
+unsupported anthropic-version
 → InvalidRequest
 ```
 
 because profile-independent JSON syntax is checked before profile grammar coverage.
 
-Known headers：
+Interpreted header：
 
 ```text
 anthropic-version
 → profile resolution
-
-anthropic-beta
-→ profile resolution
 ```
+
+Ignored header regressions：
 
 ```text
-anthropic-user-profile-id
-without required beta
-under implemented baseline profile
-→ InvalidRequest
+anthropic-beta: anything
+anthropic-dangerous-direct-browser-access: true
+x-arbitrary-agent-header: anything
+→ no rejection caused by those headers
 ```
 
-```text
-user-profiles beta active
-→ beta-activated profile not implemented in v1
-→ UnsupportedFeature at profile coverage
-```
-
-Ingress guard：
-
-```text
-X-AnThRoPiC-Future-Control
-→ normalized name anthropic-future-control
-→ retained unclassified Anthropic-owned marker
-→ UnsupportedFeature after known source validity where applicable
-```
-
-Unrelated header：
-
-```text
-x-request-id / traceparent / ordinary proxy header
-→ not automatically Anthropic semantic input
-→ no failure merely because unknown
-```
+The regression also asserts that the resolved profile is exactly `{ version }`, proving ignored headers are neither classified nor propagated.
 
 ### 11.2. Source Grammar / Validation / Model Resolution Tests
 
@@ -8775,8 +8495,9 @@ under an active certification
 | `top_p`                              | —                  | Unsupported                                                  |
 | `top_k`                              | —                  | Unsupported                                                  |
 | server tools                         | —                  | Unsupported                                                  |
-| semantic `anthropic-user-profile-id` | —                  | Unsupported / beta-profile-dependent                         |
-| future semantic header/field         | —                  | Unsupported                                                  |
+| `anthropic-user-profile-id` header   | —                  | Ignored; not a conversion input                              |
+| any other non-version header         | —                  | Ignored; not classified or propagated                        |
+| future body field                    | —                  | Unsupported                                                  |
 
 ### A.2. Invariant Index
 
@@ -8797,12 +8518,12 @@ Independent authority.
 #### I-3 — Exact v1 Source Profile Is Frozen
 
 
-`anthropic-version=2023-06-01` with no beta is the only implemented v1 source grammar.
+`anthropic-version=2023-06-01` is the only implemented v1 version gate; every other header is outside this conversion input.
 
 #### I-4 — Profile Envelope Validity and Profile Support Are Distinct
 
 
-Known source-invalid profile → `InvalidRequest`; valid/unclassified-but-unimplemented profile grammar → `UnsupportedFeature`.
+Missing/malformed version → `InvalidRequest`; another well-formed version → `UnsupportedFeature`.
 
 #### I-5 — Profile-Independent JSON Syntax Has Independent Failure Authority
 
@@ -8824,17 +8545,17 @@ Only claimed for source grammar LuckyToken implements.
 
 Router / Model Resolution contract owns that failure.
 
-#### I-9 — Source Closed World Covers Body and Protocol-Defined Semantic Headers
+#### I-9 — Source Closed World Covers the Body
 
 
 No silent semantic loss.
 
-#### I-10 — Unclassified Anthropic-Owned Headers Fail Closed
+#### I-10 — Non-Version Headers Do Not Enter Conversion State
 
 
-Retain `anthropic-*` extension markers; reject conservatively.
+Do not classify, retain, or propagate them.
 
-#### I-11 — Arbitrary Unknown HTTP Headers Are Not Automatically Anthropic Semantics
+#### I-11 — Every Non-Version Header Is Ignored by Anthropic → Pi Conversion
 
 
 Generic transport/proxy headers remain outside Client Protocol semantics.
@@ -9275,7 +8996,7 @@ Certification Result
 
 `Anthropic Protocol Spec Revision` MUST be immutable and synchronized with the source-validity facts required by this specification. A mutable filename/version label alone is insufficient.
 
-`Semantic Header Policy` is not a separate required identity field because it remains specification/Protocol-owned. A derived diagnostic summary is allowed but non-authoritative.
+`Version Header Policy` is not a separate required identity field because it remains specification/Protocol-owned. A derived diagnostic summary is allowed but non-authoritative.
 
 #### Example Manifest
 
@@ -9313,7 +9034,7 @@ API Path:
 
 Anthropic Source Profile:
 version = 2023-06-01
-betas = []
+other headers = ignored by Anthropic → Pi conversion
 
 Anthropic Model-Validity Policy Revision:
 <immutable revision>
@@ -9339,7 +9060,7 @@ Conformance Revision:
 
 The synchronized Protocol v0.4 SHA above is eligible for certification binding because it includes the request-side source-validity facts required by v1. The previous Protocol v0.3 SHA-256 `0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992` MUST NOT be used for `CERTIFIED`.
 
-Optional non-authoritative diagnostics may derive the semantic-header/source-grammar support matrix from the bound Specification + Protocol revision; they do not redefine it.
+Optional non-authoritative diagnostics may derive the version/body-grammar support matrix from the bound Specification + Protocol revision; they do not redefine it.
 
 #### Runtime Certification Checklist
 
@@ -9362,7 +9083,7 @@ Optional non-authoritative diagnostics may derive the semantic-header/source-gra
 
 [ ] bound Protocol revision includes documented strict request-wide hard limits
 
-[ ] supported source profile is exactly version=2023-06-01, betas=[]
+[ ] supported source profile is exactly version=2023-06-01 and no other header enters conversion state
 
 [ ] profile envelope validity and profile-support failure authority are distinct
 
@@ -9529,8 +9250,8 @@ Targeted changes only：
 
 ```text
 1. freeze the exact v1 implemented source-profile policy:
-   anthropic-version = 2023-06-01
-   anthropic-beta = absent / empty;
+   anthropic-version = 2023-06-01;
+   every other header is outside Anthropic → Pi conversion input;
 
 2. make profile-independent JSON syntax parsing
    precede source-profile grammar coverage;

@@ -809,21 +809,20 @@ Content-Type check
 ## 5.2 Protocol profile — `profile.ts`
 
 > **小白理解：** Profile 是“版本检查员”。Anthropic 请求会声明自己遵循哪个版本、
-> 是否开启实验功能。LuckyToken 只接收自己明确验证过的组合；遇到陌生版本或开关
-> 会拒绝，而不是猜它大概是什么意思。
+> 也可能携带实验或 SDK headers。LuckyToken 这里只核对版本；遇到陌生版本会拒绝，
+> 其他 headers 不分类、不传播，也不影响协议转换。
 
 | 项目 | 内容 |
 | --- | --- |
 | 接口 | `resolveAnthropicSourceProfile(headers)`；`assertImplementedAnthropicProfile(profile)` |
 | 输入 | Anthropic-related header view |
-| 输出 | `{ version, betas, userProfileIdPresent, unclassifiedAnthropicHeaders }` |
-| 当前支持 | `anthropic-version=2023-06-01` 且无 active beta |
+| 输出 | `{ version }` |
+| 当前支持 | `anthropic-version=2023-06-01`；其他 headers 不参与协议转换判断 |
 | 谁使用它 | Anthropic handler/request validator |
 | 它使用谁 | 只使用 Anthropic error classes |
 
-它同时识别 `anthropic-*` 与 `x-anthropic-*` 拼写，并把未知 Anthropic-owned header
-保留下来交给 validation fail closed。普通 transport/auth headers 不会被误归类为
-Anthropic semantic headers。
+它只读取 `anthropic-version`。`anthropic-beta`、其他 `anthropic-*`、Agent/SDK 与
+transport headers 均不分类、不传播，也不参与 Anthropic → Pi 转换判断。
 
 ## 5.3 Request validation/conversion — `request.ts`
 
@@ -834,7 +833,7 @@ Anthropic semantic headers。
 主要接口分成两个阶段：
 
 ```ts
-validateAnthropicSourceRequest(value, unclassifiedHeaders?)
+validateAnthropicSourceRequest(value)
   → ValidatedAnthropicSourceRequest
 
 convertValidatedAnthropicRequest(validated, receivedAt)
@@ -854,7 +853,7 @@ interface AnthropicInvocation {
 
 | 阶段 | 输入 | 输出 | 死亡的信息 |
 | --- | --- | --- | --- |
-| Grammar/source validation | unknown JSON + classified headers | validated Anthropic-owned state | raw JSON shape errors/unsupported list |
+| Grammar/source validation | unknown JSON body | validated Anthropic-owned state | raw JSON shape errors/unsupported list |
 | Canonicalization | string/block message forms | module-private canonical content | shorthand/adjacent same-role wire spelling |
 | Pi conversion | validated supported state | Pi `Context`, protocol-owned options, minimal render state | canonical Anthropic representation |
 

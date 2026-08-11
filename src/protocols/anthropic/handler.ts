@@ -147,10 +147,7 @@ async function handleAnthropicMessages(
     }
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
-    const validatedRequest = validateAnthropicSourceRequest(
-      body,
-      sourceProfile.unclassifiedAnthropicHeaders,
-    );
+    const validatedRequest = validateAnthropicSourceRequest(body);
     const model = resolveModel(dependencies.models, validatedRequest.selector);
     assertAnthropicModelAwareValidity(
       validatedRequest,

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
 
 describe("minimal Anthropic text route", () => {
-  it("crosses HTTP, Pi Models, the CommandCode Provider, execution, and Anthropic rendering", async () => {
+  it("crosses the full route while ignoring non-version client headers", async () => {
     const upstreamRequests: Request[] = [];
     const fixtureFetch: FetchFunction = async (input, init) => {
       upstreamRequests.push(new Request(input, init));
@@ -46,6 +46,9 @@ describe("minimal Anthropic text route", () => {
           authorization: "Bearer fixture-client-key",
           "content-type": "application/json",
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "anything",
+          "anthropic-dangerous-direct-browser-access": "true",
+          "x-arbitrary-agent-header": "anything",
         },
         body: JSON.stringify({
           model: "claude-fixture",
@@ -93,6 +96,11 @@ describe("minimal Anthropic text route", () => {
     expect(upstreamRequest?.headers.get("authorization")).toBe(
       "Bearer fixture-commandcode-key",
     );
+    expect(upstreamRequest?.headers.has("anthropic-beta")).toBe(false);
+    expect(
+      upstreamRequest?.headers.has("anthropic-dangerous-direct-browser-access"),
+    ).toBe(false);
+    expect(upstreamRequest?.headers.has("x-arbitrary-agent-header")).toBe(false);
     expect(upstreamRequest?.headers.get("x-session-id")).toBe(
       "00000000-0000-4000-8000-000000000002",
     );

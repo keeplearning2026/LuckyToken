@@ -484,7 +484,6 @@ function validateToolTurnLifecycle(
 
 export function validateAnthropicSourceRequest(
   value: unknown,
-  unclassifiedAnthropicHeaders: readonly string[] = [],
 ): ValidatedAnthropicSourceRequest {
   if (!isRecord(value)) {
     throw new InvalidRequest("Request body must be a JSON object");
@@ -510,11 +509,6 @@ export function validateAnthropicSourceRequest(
   const metadataUserId = validateMetadata(value.metadata, unsupported);
   if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
 
-  if (unclassifiedAnthropicHeaders.length > 0) {
-    throw new UnsupportedFeature(
-      `Unclassified Anthropic header: ${unclassifiedAnthropicHeaders[0]}`,
-    );
-  }
   if (unsupported.length > 0) {
     throw new UnsupportedFeature(unsupported[0] ?? "Unsupported Anthropic semantic");
   }
@@ -772,10 +766,9 @@ export function convertValidatedAnthropicRequest(
 export function parseAnthropicTextInvocation(
   value: unknown,
   receivedAt: number,
-  unclassifiedAnthropicHeaders: readonly string[] = [],
 ): AnthropicInvocation {
   return convertValidatedAnthropicRequest(
-    validateAnthropicSourceRequest(value, unclassifiedAnthropicHeaders),
+    validateAnthropicSourceRequest(value),
     receivedAt,
   );
 }
