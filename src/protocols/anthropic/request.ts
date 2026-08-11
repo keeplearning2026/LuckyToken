@@ -376,7 +376,9 @@ function validateMessages(
         message.role !== "assistant" &&
         message.role !== "system")
     ) {
-      throw new InvalidRequest("messages require a user or assistant role");
+      throw new InvalidRequest(
+        "messages require a user, assistant, or system role",
+      );
     }
     if (Object.keys(message).some((name) => name !== "role" && name !== "content")) {
       unsupported.push("unknown message field");
