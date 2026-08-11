@@ -1,7 +1,14 @@
 export type CommandCodeContentBlock =
   | { type: "text"; id: string; text: string }
   | { type: "reasoning"; id: string; text: string }
-  | { type: "tool_use"; id: string; toolName: string; input: unknown };
+  | {
+      type: "tool_use";
+      id: string;
+      toolName: string;
+      input: unknown;
+      providerExecuted?: true;
+      dynamic?: true;
+    };
 
 export interface CommandCodeFinishEvent extends Record<string, unknown> {
   type: "finish";
@@ -114,6 +121,8 @@ interface ToolSlot extends BaseSlot {
   inputEnded: boolean;
   finalToolName?: string;
   finalInput?: unknown;
+  providerExecuted: boolean;
+  dynamic: boolean;
 }
 
 type Slot = TextSlot | ReasoningSlot | ToolSlot;
@@ -252,7 +261,9 @@ export class CommandCodeContentAssembler {
         type: "tool_use",
         id: slot.id,
         toolName: slot.finalToolName as string,
-        input: slot.finalInput ?? {},
+        input: slot.finalInput,
+        ...(slot.providerExecuted ? { providerExecuted: true as const } : {}),
+        ...(slot.dynamic ? { dynamic: true as const } : {}),
       };
     });
     const result: CommandCodeResult = {
@@ -319,6 +330,8 @@ export class CommandCodeContentAssembler {
           startToolName: requireString(event, "toolName", true),
           preview: "",
           inputEnded: false,
+          providerExecuted: event.providerExecuted === true,
+          dynamic: event.dynamic === true,
         };
         this.toolById.set(id, slot);
         this.slots.push(slot);
@@ -344,7 +357,12 @@ export class CommandCodeContentAssembler {
         const slot = this.requireOpen(this.toolById, id, event.type);
         if (!slot.inputEnded) this.lifecycle("tool call before input end", id);
         slot.finalToolName = requireString(event, "toolName", true);
-        slot.finalInput = event.input ?? event.args ?? {};
+        slot.finalInput = Object.hasOwn(event, "input")
+          ? event.input
+          : Object.hasOwn(event, "args")
+            ? event.args
+            : {};
+        if (event.providerExecuted === true) slot.providerExecuted = true;
         slot.state = "closed";
         return;
       }

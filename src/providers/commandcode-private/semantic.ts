@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-ai";
 
 import type { CommandCodeResult } from "./assembler.js";
+import { cloneLosslessJsonObject } from "./json.js";
 
 export interface CommandCodeResponseAuthority {
   api: string;
@@ -161,30 +162,52 @@ function convertUsage(
 
 function convertContent(
   result: CommandCodeResult,
+  authority: CommandCodeResponseAuthority,
 ): Array<TextContent | ThinkingContent | ToolCall> {
   return result.content.map((block) => {
     if (block.type === "text") return { type: "text", text: block.text };
     if (block.type === "reasoning") {
+      if (!authority.pricingModel.reasoning) {
+        throw new Error(
+          "CommandCode emitted reasoning for a non-reasoning certified route",
+        );
+      }
       return { type: "thinking", thinking: block.text };
     }
-    if (!isRecord(block.input)) {
+    if (block.providerExecuted === true || block.dynamic === true) {
       throw new Error(
-        `CommandCode ToolUse ${block.id} input is not a non-null object`,
+        `CommandCode ToolUse ${block.id} has unsupported server-owned semantics`,
       );
     }
     return {
       type: "toolCall",
       id: block.id,
       name: block.toolName,
-      arguments: block.input,
+      arguments: cloneLosslessJsonObject(
+        block.input,
+        `CommandCode ToolUse ${block.id} input`,
+      ),
     };
   });
 }
 
 function stopReason(result: CommandCodeResult): Extract<StopReason, "stop" | "length" | "toolUse"> {
+  const raw = result.finish.rawFinishReason;
+  if (
+    raw === "refusal" ||
+    raw === "model_context_window_exceeded" ||
+    raw === "pause_turn"
+  ) {
+    throw new Error(
+      `CommandCode raw finish ${raw} lacks required Anthropic companion state`,
+    );
+  }
   if (result.finish.finishReason === "tool-calls") return "toolUse";
   if (result.finish.finishReason === "length") return "length";
-  return "stop";
+  if (result.finish.finishReason === "stop") return "stop";
+  throw new Error(
+    `CommandCode finish category ${String(result.finish.finishReason)} is not certified for Anthropic success`,
+  );
 }
 
 function baseMessage(
@@ -236,6 +259,15 @@ export function convertCommittedCommandCodeResult(
   result: CommandCodeResult,
   authority: CommandCodeResponseAuthority,
 ): AssistantMessage {
+  let committedStopReason: Extract<StopReason, "stop" | "length" | "toolUse">;
+  try {
+    committedStopReason = stopReason(result);
+  } catch (error) {
+    const failed = createCommandCodeFailureMessage(authority, error);
+    addDiagnostics(failed, result);
+    return failed;
+  }
+
   let trustworthyUsage: Usage;
   try {
     trustworthyUsage = convertUsage(result, authority);
@@ -247,7 +279,7 @@ export function convertCommittedCommandCodeResult(
 
   let content: Array<TextContent | ThinkingContent | ToolCall>;
   try {
-    content = convertContent(result);
+    content = convertContent(result, authority);
   } catch (error) {
     const failed = createCommandCodeFailureMessage(
       authority,
@@ -261,7 +293,7 @@ export function convertCommittedCommandCodeResult(
   const message: AssistantMessage = {
     ...baseMessage(authority, trustworthyUsage),
     content,
-    stopReason: stopReason(result),
+    stopReason: committedStopReason,
   };
   addDiagnostics(message, result);
   return message;

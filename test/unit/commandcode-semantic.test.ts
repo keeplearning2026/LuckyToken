@@ -248,8 +248,6 @@ describe("committed CommandCode to Pi semantics", () => {
   it.each([
     ["length", "length"],
     ["stop", "stop"],
-    ["content-filter", "stop"],
-    ["future-reason", "stop"],
   ])("maps finish %s to %s", (finishReason, expected) => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
@@ -261,6 +259,37 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(message.stopReason).toBe(expected);
     expect(message.rawStopReason).toBe(finishReason);
   });
+
+  it.each(["content-filter", "error", "other", "future-reason", undefined])(
+    "fails unrepresentable finish category %s instead of guessing end_turn",
+    (finishReason) => {
+      const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+      const message = convertCommittedCommandCodeResult(
+        result(undefined, {
+          finish: {
+            type: "finish",
+            ...(finishReason === undefined ? {} : { finishReason }),
+          },
+        }),
+        authority,
+      );
+      expect(message).toMatchObject({ content: [], stopReason: "error" });
+    },
+  );
+
+  it.each(["refusal", "model_context_window_exceeded", "pause_turn"])(
+    "fails raw target termination %s when companion state cannot be preserved",
+    (rawFinishReason) => {
+      const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+      const message = convertCommittedCommandCodeResult(
+        result(undefined, {
+          finish: { type: "finish", finishReason: "stop", rawFinishReason },
+        }),
+        authority,
+      );
+      expect(message).toMatchObject({ content: [], stopReason: "error" });
+    },
+  );
 
   it.each([null, [], "bad", 1])(
     "preserves trustworthy usage when tool input %j is unrepresentable",
@@ -286,6 +315,105 @@ describe("committed CommandCode to Pi semantics", () => {
       });
     },
   );
+
+  it("validates and clones the complete runtime tool argument object tree", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const validInput = { nested: [1, true, null, { text: "exact" }] };
+    const valid = convertCommittedCommandCodeResult(
+      result(
+        { inputTokens: 1, outputTokens: 1 },
+        {
+          content: [
+            {
+              type: "tool_use",
+              id: "call",
+              toolName: "tool",
+              input: validInput,
+            },
+          ],
+          finish: { type: "finish", finishReason: "tool-calls" },
+        },
+      ),
+      authority,
+    );
+    expect(valid.content[0]).toEqual({
+      type: "toolCall",
+      id: "call",
+      name: "tool",
+      arguments: validInput,
+    });
+    expect((valid.content[0] as { arguments: unknown }).arguments).not.toBe(
+      validInput,
+    );
+
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const input of [
+      { nested: undefined },
+      { nested: BigInt(1) },
+      { nested: Number.NaN },
+      { nested: new Date(0) },
+      { nested: { toJSON: () => ({ repaired: true }) } },
+      cycle,
+    ]) {
+      const failed = convertCommittedCommandCodeResult(
+        result(
+          { inputTokens: 4, outputTokens: 2 },
+          {
+            content: [
+              { type: "tool_use", id: "call", toolName: "tool", input },
+            ],
+            finish: { type: "finish", finishReason: "tool-calls" },
+          },
+        ),
+        authority,
+      );
+      expect(failed).toMatchObject({
+        content: [],
+        stopReason: "error",
+        usage: { input: 4, output: 2, totalTokens: 6 },
+      });
+    }
+  });
+
+  it("fails server-owned tool calls and reasoning from a non-reasoning route", () => {
+    const nonReasoning = model();
+    nonReasoning.reasoning = false;
+    const authority = captureCommandCodeResponseAuthority(nonReasoning, () => 10);
+    for (const content of [
+      [
+        {
+          type: "tool_use" as const,
+          id: "call",
+          toolName: "tool",
+          input: {},
+          providerExecuted: true as const,
+        },
+      ],
+      [
+        {
+          type: "tool_use" as const,
+          id: "call",
+          toolName: "tool",
+          input: {},
+          dynamic: true as const,
+        },
+      ],
+      [{ type: "reasoning" as const, id: "r", text: "hidden" }],
+    ]) {
+      const message = convertCommittedCommandCodeResult(
+        result(
+          { inputTokens: 1, outputTokens: 1 },
+          {
+            content,
+            finish: { type: "finish", finishReason: "tool-calls" },
+          },
+        ),
+        authority,
+      );
+      expect(message).toMatchObject({ content: [], stopReason: "error" });
+    }
+  });
 
   it("uses deep pre-hook tier pricing and Pi one-hour cache-write semantics", () => {
     const selected = model();

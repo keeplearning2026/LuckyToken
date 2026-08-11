@@ -70,4 +70,22 @@ describe("CommandCode generation control mapping", () => {
       "temperature",
     );
   });
+
+  it("preserves the accepted max-token value even when a shared estimate would clamp it", () => {
+    const constrainedModel = {
+      ...model,
+      contextWindow: 5,
+      maxTokens: 100,
+    };
+    const value = buildCommandCodeBody(
+      constrainedModel,
+      context,
+      { maxTokens: 20 },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+
+    expect(value.max_tokens).toBe(20);
+  });
 });

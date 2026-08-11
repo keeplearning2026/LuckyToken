@@ -87,6 +87,49 @@ describe("CommandCode atomic content assembler", () => {
       toolName: "final",
       input: {},
     });
+
+    const explicitNull = assemble([
+      { type: "tool-input-start", id: "tool", toolName: "start" },
+      { type: "tool-input-end", id: "tool" },
+      { type: "tool-call", toolCallId: "tool", toolName: "final", input: null },
+      { type: "finish", finishReason: "tool-calls" },
+    ]);
+    expect(explicitNull.content[0]).toEqual({
+      type: "tool_use",
+      id: "tool",
+      toolName: "final",
+      input: null,
+    });
+  });
+
+  it("preserves server-execution and dynamic-tool facts for Stage B", () => {
+    const result = assemble([
+      {
+        type: "tool-input-start",
+        id: "tool",
+        toolName: "start",
+        providerExecuted: true,
+        dynamic: true,
+      },
+      { type: "tool-input-end", id: "tool" },
+      {
+        type: "tool-call",
+        toolCallId: "tool",
+        toolName: "final",
+        input: {},
+        providerExecuted: true,
+      },
+      { type: "finish", finishReason: "tool-calls" },
+    ]);
+
+    expect(result.content[0]).toEqual({
+      type: "tool_use",
+      id: "tool",
+      toolName: "final",
+      input: {},
+      providerExecuted: true,
+      dynamic: true,
+    });
   });
 
   it.each([

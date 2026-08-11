@@ -12,7 +12,6 @@ import {
   type SimpleStreamOptions,
   type StreamFunction,
 } from "@earendil-works/pi-ai";
-import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import slugify from "@sindresorhus/slugify";
 import { randomUUID } from "node:crypto";
 
@@ -35,6 +34,7 @@ import {
   createCommandCodeFailureMessage,
   replayCommandCodeAssistantMessage,
 } from "./semantic.js";
+import { cloneLosslessJsonObject } from "./json.js";
 
 const PROVIDER_ID = "commandcode-private";
 const API_ID = "commandcode-private";
@@ -61,61 +61,6 @@ export interface CommandCodeCompatibilityPolicy {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function cloneLosslessJson(
-  value: unknown,
-  ancestors: Set<object> = new Set(),
-): unknown {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || Object.is(value, -0)) {
-      throw new Error("ToolCall arguments contain a non-lossless JSON number");
-    }
-    return value;
-  }
-  if (typeof value !== "object") {
-    throw new Error("ToolCall arguments contain a non-JSON value");
-  }
-  if (ancestors.has(value)) {
-    throw new Error("ToolCall arguments contain a cycle");
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const keys = Object.keys(value);
-      if (
-        keys.length !== value.length ||
-        keys.some((key, index) => key !== String(index)) ||
-        Object.getOwnPropertySymbols(value).length > 0
-      ) {
-        throw new Error("ToolCall argument arrays must be dense JSON arrays");
-      }
-      return value.map((item) => cloneLosslessJson(item, ancestors));
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new Error("ToolCall arguments require plain JSON objects");
-    }
-    const keys = Object.keys(value);
-    if (Reflect.ownKeys(value).length !== keys.length) {
-      throw new Error("ToolCall arguments contain non-JSON object properties");
-    }
-    const result: Record<string, unknown> = {};
-    for (const key of keys) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !("value" in descriptor)) {
-        throw new Error("ToolCall arguments cannot use custom serialization");
-      }
-      result[key] = cloneLosslessJson(descriptor.value, ancestors);
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
 }
 
 interface PendingToolCall {
@@ -254,10 +199,10 @@ export function convertCommandCodeMessages(
         throw new Error(`Duplicate Pi ToolCall id in one turn: ${block.id}`);
       }
       seenCallIds.add(block.id);
-      const input = cloneLosslessJson(block.arguments);
-      if (!isRecord(input)) {
-        throw new Error("ToolCall arguments must be a non-null, non-array object");
-      }
+      const input = cloneLosslessJsonObject(
+        block.arguments,
+        "ToolCall arguments",
+      );
       calls.push({ id: block.id, name: block.name });
       return {
         type: "tool-call" as const,
@@ -289,10 +234,10 @@ export function convertCommandCodeTools(
         "CommandCode cannot preserve required JSON-schema constrained sampling",
       );
     }
-    const inputSchema = cloneLosslessJson(tool.parameters);
-    if (!isRecord(inputSchema)) {
-      throw new Error("Pi Tool parameters must be an object-shaped JSON schema");
-    }
+    const inputSchema = cloneLosslessJsonObject(
+      tool.parameters,
+      "Pi Tool parameters",
+    );
     return {
       name: tool.name,
       description: tool.description,
@@ -702,7 +647,6 @@ export function buildCommandCodeBody(
   ) {
     throw new Error("CommandCode maxTokens must be a positive safe integer");
   }
-  const maxTokens = clampMaxTokensToContext(model, context, maxTokensCandidate);
   if (
     options?.temperature !== undefined &&
     (typeof options.temperature !== "number" ||
@@ -719,7 +663,7 @@ export function buildCommandCodeBody(
     model: model.id,
     messages,
     tools: convertCommandCodeTools(context.tools),
-    max_tokens: maxTokens,
+    max_tokens: maxTokensCandidate,
     stream: true,
   };
   if (context.systemPrompt !== undefined) params.system = context.systemPrompt;
