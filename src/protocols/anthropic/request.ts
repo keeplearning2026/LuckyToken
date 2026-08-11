@@ -368,17 +368,25 @@ function validateMessages(
     throw new InvalidRequest("messages must be a non-empty array");
   }
   const facts = { hasImages: false, hasThinking: false };
+  const normalized: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     if (
       !isRecord(message) ||
-      (message.role !== "user" && message.role !== "assistant")
+      (message.role !== "user" &&
+        message.role !== "assistant" &&
+        message.role !== "system")
     ) {
       throw new InvalidRequest("messages require a user or assistant role");
     }
     if (Object.keys(message).some((name) => name !== "role" && name !== "content")) {
       unsupported.push("unknown message field");
     }
-    if (typeof message.content === "string") continue;
+    const normalizedRole: "user" | "assistant" =
+      message.role === "system" ? "user" : (message.role as "user" | "assistant");
+    if (typeof message.content === "string") {
+      normalized.push({ role: normalizedRole, content: message.content });
+      continue;
+    }
     if (!Array.isArray(message.content)) {
       throw new InvalidRequest("message.content must be a string or block array");
     }
@@ -390,12 +398,13 @@ function validateMessages(
         block,
         unsupported,
         facts,
-        message.role as "user" | "assistant",
+        normalizedRole,
       );
     }
+    normalized.push({ role: normalizedRole, content: message.content });
   }
   return {
-    messages,
+    messages: normalized,
     hasImages: facts.hasImages,
     hasThinking: facts.hasThinking,
   };

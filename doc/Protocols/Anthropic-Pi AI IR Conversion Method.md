@@ -1649,6 +1649,21 @@ No separator insertion.
 
 ---
 
+##### 3.3.1.4. Messages[].role = system Degradation
+
+Anthropic `messages[].role = system` is not representable as Pi system authority and is intentionally degraded at the Anthropic ingress boundary:
+
+```text
+Anthropic messages[].role = system
+→ Pi user message
+```
+
+Content and relative ordering are preserved. The message is validated under user content rules, and the normalized `user` role participates in the existing same-role coalescing above (adjacent `user + system` coalesce into one Pi user message).
+
+Top-level Anthropic `system` remains mapped to `Context.systemPrompt` (see 3.3.2); it is not affected by this degradation.
+
+---
+
 #### 3.3.2. System → Context.systemPrompt
 
 ##### System
