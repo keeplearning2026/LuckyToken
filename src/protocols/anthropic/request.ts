@@ -31,6 +31,7 @@ export interface AnthropicInvocation {
 export interface ValidatedAnthropicSourceRequest {
   selector: string;
   maxTokens: number;
+  reasoning?: "low" | "medium" | "high" | "xhigh" | "max";
   messages: Array<Record<string, unknown>>;
   hasImages: boolean;
   hasThinking: boolean;
@@ -134,6 +135,7 @@ function validateOptionalFieldShapes(
         "tools",
         "temperature",
         "metadata",
+        "output_config",
       ].includes(name) &&
       value[name] !== undefined
     ) {
@@ -283,10 +285,8 @@ function validateContentBlock(
       ) {
         throw new InvalidRequest("tool_result.content has an invalid shape");
       }
-      if (Array.isArray(content) && content.length === 0) {
-        unsupported.push("explicit empty tool_result content array");
-      } else if (typeof content === "string") {
-        unsupported.push("string tool_result content");
+      if (typeof content === "string") {
+        // Doc §4.2: string tool_result content converts to a single TextContent.
       } else if (Array.isArray(content)) {
         for (const nestedBlock of content) {
           if (
@@ -324,7 +324,7 @@ function validateSystem(
   if (!Array.isArray(value)) {
     throw new InvalidRequest("system must be a string or block array when present");
   }
-  let text: string | undefined;
+  const texts: string[] = [];
   for (const block of value) {
     if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       throw new InvalidRequest("system blocks must be text blocks");
@@ -332,10 +332,37 @@ function validateSystem(
     if (Object.keys(block).some((name) => name !== "type" && name !== "text")) {
       unsupported.push("unsupported system text extension");
     }
-    if (text === undefined) text = block.text;
+    texts.push(block.text);
   }
-  if (value.length !== 1) unsupported.push("multiple system blocks");
-  return text;
+  return texts.join("\n");
+}
+
+const ANTHROPIC_EFFORT_TO_REASONING = new Set([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function validateOutputConfig(
+  value: unknown,
+  unsupported: string[],
+): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new InvalidRequest("output_config must be an object when present");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "effort") unsupported.push(`unsupported output_config field: ${key}`);
+  }
+  const effort = value.effort;
+  if (effort === undefined) return undefined;
+  if (typeof effort !== "string" || !ANTHROPIC_EFFORT_TO_REASONING.has(effort)) {
+    unsupported.push(`unsupported output_config.effort: ${String(effort)}`);
+    return undefined;
+  }
+  return effort as "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 function validateMetadata(
@@ -518,7 +545,7 @@ export function validateAnthropicSourceRequest(
   const tools = validateAnthropicTools(value.tools, unsupported);
   const systemPrompt = validateSystem(value.system, unsupported);
   const metadataUserId = validateMetadata(value.metadata, unsupported);
-  if ((maxTokens as number) === 0) unsupported.push("max_tokens=0");
+  const reasoning = validateOutputConfig(value.output_config, unsupported);
 
   if (unsupported.length > 0) {
     throw new UnsupportedFeature(unsupported[0] ?? "Unsupported Anthropic semantic");
@@ -534,6 +561,7 @@ export function validateAnthropicSourceRequest(
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
   };
+  if (reasoning !== undefined) validated.reasoning = reasoning;
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
   if (tools !== undefined) validated.tools = tools;
   if (value.temperature !== undefined) {
@@ -606,7 +634,15 @@ function convertPortableBlock(block: Record<string, unknown>): CanonicalContent 
           isError: block.is_error === true,
         };
       }
-      if (!Array.isArray(rawContent) || rawContent.length === 0) {
+      if (typeof rawContent === "string") {
+        return {
+          type: "toolResult",
+          toolUseId: block.tool_use_id as string,
+          content: [{ type: "text", text: rawContent }],
+          isError: block.is_error === true,
+        };
+      }
+      if (!Array.isArray(rawContent)) {
         throw new Error("Unsupported tool_result content reached conversion");
       }
       const content = rawContent.map((nestedBlock) => {
@@ -761,6 +797,9 @@ export function convertValidatedAnthropicRequest(
   const options: ModelsSimpleStreamOptions = { maxTokens: request.maxTokens };
   if (request.temperature !== undefined) {
     options.temperature = request.temperature;
+  }
+  if (request.reasoning !== undefined) {
+    options.reasoning = request.reasoning;
   }
   if (request.metadataUserId !== undefined) {
     options.metadata = { user_id: request.metadataUserId };

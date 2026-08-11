@@ -266,7 +266,10 @@ function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
 function convertContent(
   message: AssistantMessage,
 ): Array<AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock> {
-  return message.content.map((block, index) => {
+  const projected: Array<
+    AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock
+  > = [];
+  message.content.forEach((block, index) => {
     const raw = block as unknown;
     if (!isRecord(raw) || typeof raw.type !== "string") {
       throw new OutboundResponseFidelityFailure(
@@ -298,15 +301,15 @@ function convertContent(
         );
       }
       if (raw.redacted === true) {
-        throw new OutboundResponseFidelityFailure(
-          `Pi content[${index}] redacted ThinkingContent is unsupported`,
-        );
+        // Doc §4.3: redacted ThinkingContent is discarded.
+        return;
       }
-      return {
+      projected.push({
         signature: raw.thinkingSignature ?? "",
         thinking: raw.thinking,
         type: "thinking",
-      };
+      });
+      return;
     }
     if (raw.type === "text") {
       assertAllowedFields(
@@ -319,7 +322,8 @@ function convertContent(
           `Pi content[${index}].text must be a string`,
         );
       }
-      return { citations: null, text: raw.text, type: "text" };
+      projected.push({ citations: null, text: raw.text, type: "text" });
+      return;
     }
     if (raw.type !== "toolCall") {
       throw new OutboundResponseFidelityFailure(
@@ -348,14 +352,15 @@ function convertContent(
         `Pi content[${index}] tool identity must be non-empty strings`,
       );
     }
-    return {
+    projected.push({
       id: raw.id,
       caller: { type: "direct" },
       input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
       name: raw.name,
       type: "tool_use",
-    };
+    });
   });
+  return projected;
 }
 
 function convertStopReason(
@@ -418,6 +423,11 @@ export function convertAssistantMessageToAnthropic(
   }
   assertMessageEnvelope(message);
   const content = convertContent(message);
+  if (content.length === 0) {
+    throw new OutboundResponseFidelityFailure(
+      "Projected Anthropic content is empty",
+    );
+  }
   const stopReason = convertStopReason(message.stopReason);
   const usage = convertUsage(message);
   return {

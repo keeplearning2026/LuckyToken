@@ -6,8 +6,6 @@ export type CommandCodeContentBlock =
       id: string;
       toolName: string;
       input: unknown;
-      providerExecuted?: true;
-      dynamic?: true;
     };
 
 export interface CommandCodeFinishEvent extends Record<string, unknown> {
@@ -121,8 +119,6 @@ interface ToolSlot extends BaseSlot {
   inputEnded: boolean;
   finalToolName?: string;
   finalInput?: unknown;
-  providerExecuted: boolean;
-  dynamic: boolean;
 }
 
 type Slot = TextSlot | ReasoningSlot | ToolSlot;
@@ -175,18 +171,6 @@ function requireString(
     );
   }
   return value;
-}
-
-function validateOptionalBoolean(
-  event: Record<string, unknown>,
-  field: string,
-): void {
-  if (event[field] !== undefined && typeof event[field] !== "boolean") {
-    throw new CommandCodeProtocolError(
-      "INVALID_EVENT_FIELD",
-      `${event.type as string}.${field} must be boolean when present`,
-    );
-  }
 }
 
 export class CommandCodeContentAssembler {
@@ -262,8 +246,6 @@ export class CommandCodeContentAssembler {
         id: slot.id,
         toolName: slot.finalToolName as string,
         input: slot.finalInput,
-        ...(slot.providerExecuted ? { providerExecuted: true as const } : {}),
-        ...(slot.dynamic ? { dynamic: true as const } : {}),
       };
     });
     const result: CommandCodeResult = {
@@ -319,8 +301,6 @@ export class CommandCodeContentAssembler {
         );
         return;
       case "tool-input-start": {
-        validateOptionalBoolean(event, "providerExecuted");
-        validateOptionalBoolean(event, "dynamic");
         const id = requireString(event, "id", true);
         if (this.toolById.has(id)) this.duplicateStart("tool", id);
         const slot: ToolSlot = {
@@ -330,8 +310,6 @@ export class CommandCodeContentAssembler {
           startToolName: requireString(event, "toolName", true),
           preview: "",
           inputEnded: false,
-          providerExecuted: event.providerExecuted === true,
-          dynamic: event.dynamic === true,
         };
         this.toolById.set(id, slot);
         this.slots.push(slot);
@@ -352,7 +330,6 @@ export class CommandCodeContentAssembler {
         return;
       }
       case "tool-call": {
-        validateOptionalBoolean(event, "providerExecuted");
         const id = requireString(event, "toolCallId", true);
         const slot = this.requireOpen(this.toolById, id, event.type);
         if (!slot.inputEnded) this.lifecycle("tool call before input end", id);
@@ -362,7 +339,6 @@ export class CommandCodeContentAssembler {
           : Object.hasOwn(event, "args")
             ? event.args
             : {};
-        if (event.providerExecuted === true) slot.providerExecuted = true;
         slot.state = "closed";
         return;
       }
@@ -443,7 +419,6 @@ export class CommandCodeContentAssembler {
       case "start-step":
       case "provider-metadata":
       case "finish-step":
-      case "tool-result":
         return;
       default:
         this.rollback();

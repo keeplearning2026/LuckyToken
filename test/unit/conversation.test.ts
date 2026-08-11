@@ -45,7 +45,7 @@ describe("Anthropic conversation conversion", () => {
     );
     expect(blockSystem.context.systemPrompt).toBe("");
 
-    expect(() =>
+    const multiBlockSystem = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
         model: "client-model",
         max_tokens: 32,
@@ -55,7 +55,9 @@ describe("Anthropic conversation conversion", () => {
         ],
         messages: [{ role: "user", content: "hello" }],
       }),
-    ).toThrow(UnsupportedFeature);
+      100,
+    );
+    expect(multiBlockSystem.context.systemPrompt).toBe("one\ntwo");
   });
 
   it("preserves exact text and coalesces only adjacent same-role turns", () => {

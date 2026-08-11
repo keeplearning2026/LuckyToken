@@ -745,7 +745,7 @@ Additional workspace roots 必须与 cwd/home 使用一致的 path representatio
 | `messages` | 已转换的 CommandCode wire messages；required，可为空但不推荐 |
 | `tools` | 当前可用 tool definitions；required；没有 tool 时为 `[]` |
 | `system` | caller 提供 string 时发送；`undefined` 时 omission |
-| `max_tokens` | caller override，否则 fixed default `64000` |
+| `max_tokens` | caller提供 |
 | `stream` | literal `true`，不可设置为 false |
 | `temperature` | number 时发送，包括 `0`；`undefined` 时 omission |
 | `reasoning_effort` | caller 指定时先 normalize；未知 non-empty value 使用 `max`；normalized value 只有在 selected model capability 支持时才发送 |

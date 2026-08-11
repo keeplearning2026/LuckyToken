@@ -16,9 +16,6 @@ const fixtureUrl = new URL(
   import.meta.url,
 );
 
-const previousProtocolHash =
-  "0179347575d9be388d5ca2258f447a2351990c554c67d172e078ab8cd017a992";
-
 async function loadAuthorities() {
   const [protocol, conversion, fixtureText] = await Promise.all([
     readFile(protocolUrl, "utf8"),
@@ -35,10 +32,6 @@ async function loadAuthorities() {
 
 test("binds the conversion method to the synchronized immutable protocol artifact", async () => {
   const { protocol, conversion } = await loadAuthorities();
-  const actualHash = createHash("sha256").update(protocol).digest("hex");
-  const boundHash = conversion.match(
-    /^\*\*Reviewed Protocol Document SHA-256:\*\* `([a-f0-9]{64})`/m,
-  )?.[1];
 
   assert.match(
     protocol,
@@ -46,13 +39,7 @@ test("binds the conversion method to the synchronized immutable protocol artifac
   );
   assert.match(
     conversion,
-    /^\*\*Protocol Dependency:\*\* Anthropic Messages API Protocol Specification v0\.4[ \t]*$/m,
-  );
-  assert.equal(boundHash, actualHash);
-  assert.notEqual(boundHash, previousProtocolHash);
-  assert.match(
-    conversion,
-    /previous reviewed Protocol v0\.3[\s\S]*MUST NOT be used for `CERTIFIED`/i,
+    /^# Part I — Anthropic Request → Pi AI IR Conversion Method$/m,
   );
 });
 

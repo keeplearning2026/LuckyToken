@@ -147,18 +147,6 @@ describe("committed CommandCode to Pi semantics", () => {
 
   it.each([
     {
-      name: "inconsistent explicit partition",
-      raw: {
-        inputTokens: 11,
-        inputTokenDetails: {
-          noCacheTokens: 5,
-          cacheReadTokens: 3,
-          cacheWriteTokens: 2,
-        },
-        outputTokens: 1,
-      },
-    },
-    {
       name: "cached tokens exceed total",
       raw: {
         inputTokens: 2,
@@ -171,7 +159,7 @@ describe("committed CommandCode to Pi semantics", () => {
       raw: {
         inputTokens: 1,
         outputTokens: 2,
-        reasoningTokens: 3,
+        outputTokenDetails: { reasoningTokens: 3 },
       },
     },
     {
@@ -197,6 +185,42 @@ describe("committed CommandCode to Pi semantics", () => {
         totalTokens: 0,
       },
     });
+  });
+
+  it("ignores raw inputTokens when an explicit noCache partition is present", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const message = convertCommittedCommandCodeResult(
+      result({
+        inputTokens: 11,
+        inputTokenDetails: {
+          noCacheTokens: 5,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+        },
+        outputTokens: 1,
+      }),
+      authority,
+    );
+    expect(message.usage).toMatchObject({
+      input: 5,
+      cacheRead: 3,
+      cacheWrite: 2,
+      output: 1,
+    });
+    expect(message.stopReason).toBe("stop");
+  });
+
+  it("does not read top-level reasoningTokens as an alias", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const message = convertCommittedCommandCodeResult(
+      result({
+        inputTokens: 1,
+        outputTokens: 2,
+        reasoningTokens: 3,
+      }),
+      authority,
+    );
+    expect(message.usage.reasoning).toBeUndefined();
   });
 
   it("preserves ordered content and finish diagnostics without signatures", () => {
@@ -261,7 +285,7 @@ describe("committed CommandCode to Pi semantics", () => {
   });
 
   it.each(["content-filter", "error", "other", "future-reason", undefined])(
-    "fails unrepresentable finish category %s instead of guessing end_turn",
+    "maps unknown or missing finish category %s to ordinary end_turn",
     (finishReason) => {
       const authority = captureCommandCodeResponseAuthority(model(), () => 10);
       const message = convertCommittedCommandCodeResult(
@@ -273,12 +297,12 @@ describe("committed CommandCode to Pi semantics", () => {
         }),
         authority,
       );
-      expect(message).toMatchObject({ content: [], stopReason: "error" });
+      expect(message.stopReason).toBe("stop");
     },
   );
 
-  it.each(["refusal", "model_context_window_exceeded", "pause_turn"])(
-    "fails raw target termination %s when companion state cannot be preserved",
+  it.each(["refusal", "model_context_window_exceeded", "pause_turn", "raw-tool"])(
+    "does not read rawFinishReason for terminal classification",
     (rawFinishReason) => {
       const authority = captureCommandCodeResponseAuthority(model(), () => 10);
       const message = convertCommittedCommandCodeResult(
@@ -287,7 +311,8 @@ describe("committed CommandCode to Pi semantics", () => {
         }),
         authority,
       );
-      expect(message).toMatchObject({ content: [], stopReason: "error" });
+      expect(message.stopReason).toBe("stop");
+      expect(message.rawStopReason).toBe(rawFinishReason);
     },
   );
 
@@ -376,43 +401,45 @@ describe("committed CommandCode to Pi semantics", () => {
     }
   });
 
-  it("fails server-owned tool calls and reasoning from a non-reasoning route", () => {
+  it("fails reasoning from a non-reasoning route and converts ordinary tool calls", () => {
     const nonReasoning = model();
     nonReasoning.reasoning = false;
     const authority = captureCommandCodeResponseAuthority(nonReasoning, () => 10);
-    for (const content of [
-      [
+    const failed = convertCommittedCommandCodeResult(
+      result(
+        { inputTokens: 1, outputTokens: 1 },
         {
-          type: "tool_use" as const,
-          id: "call",
-          toolName: "tool",
-          input: {},
-          providerExecuted: true as const,
+          content: [{ type: "reasoning" as const, id: "r", text: "hidden" }],
+          finish: { type: "finish", finishReason: "stop" },
         },
-      ],
-      [
+      ),
+      authority,
+    );
+    expect(failed).toMatchObject({ content: [], stopReason: "error" });
+
+    const tool = convertCommittedCommandCodeResult(
+      result(
+        { inputTokens: 1, outputTokens: 1 },
         {
-          type: "tool_use" as const,
-          id: "call",
-          toolName: "tool",
-          input: {},
-          dynamic: true as const,
+          content: [
+            {
+              type: "tool_use" as const,
+              id: "call",
+              toolName: "tool",
+              input: {},
+            },
+          ],
+          finish: { type: "finish", finishReason: "tool-calls" },
         },
+      ),
+      authority,
+    );
+    expect(tool).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "call", name: "tool", arguments: {} },
       ],
-      [{ type: "reasoning" as const, id: "r", text: "hidden" }],
-    ]) {
-      const message = convertCommittedCommandCodeResult(
-        result(
-          { inputTokens: 1, outputTokens: 1 },
-          {
-            content,
-            finish: { type: "finish", finishReason: "tool-calls" },
-          },
-        ),
-        authority,
-      );
-      expect(message).toMatchObject({ content: [], stopReason: "error" });
-    }
+    });
   });
 
   it("uses deep pre-hook tier pricing and Pi one-hour cache-write semantics", () => {

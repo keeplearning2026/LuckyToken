@@ -91,7 +91,7 @@ test("binds the installed Pi runtime and every governing specification revision"
       ),
       readFile(
         new URL(
-          "../../doc/Protocols/LuckyToken CommandCode Private Provider Conversion Method.md",
+          "../../doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
           import.meta.url,
         ),
         "utf8",
@@ -117,13 +117,13 @@ test("binds the installed Pi runtime and every governing specification revision"
     ],
     [
       anthropicPi,
-      "# Anthropic ↔ Pi AI IR Conversion Method v1.2",
-      "Anthropic-Pi AI IR Conversion Method v1.2 / capability v2",
+      "# Part I — Anthropic Request → Pi AI IR Conversion Method",
+      "Anthropic-Pi AI IR Conversion Method (Part I/II/III)",
     ],
     [
       piCommandCode,
-      "**Version:** 0.20",
-      "LuckyToken CommandCode Private Provider Conversion Method v0.20",
+      "# PART I: PI AI IR Request -> Commandcode Private Request",
+      "PI AI IR-Commandcode Private Conversion (Part I/II)",
     ],
   ]) {
     assert.ok(

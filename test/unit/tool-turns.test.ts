@@ -143,9 +143,9 @@ describe("Anthropic tool turns", () => {
     ]);
   });
 
-  it("keeps string and explicit-empty-array ToolResult policies distinct", () => {
+  it("converts string and explicit-empty-array ToolResult content per the conversion method", () => {
     for (const content of ["", " ", "text"]) {
-      expect(() =>
+      const conversion = convertValidatedAnthropicRequest(
         validateAnthropicSourceRequest(
           request([
             { role: "user", content: "run" },
@@ -159,10 +159,15 @@ describe("Anthropic tool turns", () => {
             },
           ]),
         ),
-      ).toThrow(UnsupportedFeature);
+        1,
+      );
+      const resultA = conversion.context.messages.find(
+        (m) => m.role === "toolResult" && m.toolCallId === "call_a",
+      );
+      expect(resultA?.content).toEqual([{ type: "text", text: content }]);
     }
 
-    expect(() =>
+    const emptyArray = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([
           { role: "user", content: "run" },
@@ -176,7 +181,12 @@ describe("Anthropic tool turns", () => {
           },
         ]),
       ),
-    ).toThrow(UnsupportedFeature);
+      1,
+    );
+    const resultA = emptyArray.context.messages.find(
+      (m) => m.role === "toolResult" && m.toolCallId === "call_a",
+    );
+    expect(resultA?.content).toEqual([]);
   });
 
   it("accepts grouped parallel results and maps explicit false deterministically", () => {

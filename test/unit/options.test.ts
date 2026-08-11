@@ -69,6 +69,24 @@ describe("closed-world Pi option composition", () => {
     ).not.toHaveProperty("temperature");
   });
 
+  it("composes protocol-owned reasoning and rejects unknown levels", () => {
+    const signal = new AbortController().signal;
+    expect(
+      composeOptions(
+        { maxTokens: 12, reasoning: "high" },
+        { sessionId, signal },
+        {},
+      ),
+    ).toEqual({ maxTokens: 12, reasoning: "high", sessionId, signal });
+    expect(() =>
+      composeOptions(
+        { maxTokens: 12, reasoning: "super" } as unknown as ModelsSimpleStreamOptions,
+        { sessionId, signal },
+        {},
+      ),
+    ).toThrow(InvocationCompositionFailure);
+  });
+
   it.each([
     ["reserved user id", { metadata: { user_id: "default" } }],
     ["reserved project", { metadata: { projectDir: "D:/other" } }],

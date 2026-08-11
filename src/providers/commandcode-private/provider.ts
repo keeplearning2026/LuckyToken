@@ -101,9 +101,6 @@ export function convertCommandCodeMessages(
       if (call === undefined) {
         throw new Error(`Orphan or duplicate Pi ToolResult: ${message.toolCallId}`);
       }
-      if (message.toolName !== call.name) {
-        throw new Error(`Pi ToolResult name does not match ToolCall: ${message.toolCallId}`);
-      }
       const textParts = message.content.map((block) => {
         if (block.type !== "text") {
           throw new Error("CommandCode tool results do not support image content");
@@ -175,17 +172,13 @@ export function convertCommandCodeMessages(
         return { type: "text" as const, text: block.text };
       }
       if (block.type === "thinking") {
-        if (sameTarget) {
-          if (block.redacted === true) {
-            throw new Error("CommandCode cannot replay same-target redacted thinking");
-          }
-          if ((block.thinkingSignature?.length ?? 0) > 0) {
-            throw new Error(
-              "CommandCode cannot preserve same-target thinking continuity",
-            );
-          }
-        } else if (block.redacted === true) {
-          return undefined;
+        if (block.redacted === true) {
+          throw new Error("CommandCode cannot represent redacted thinking");
+        }
+        if (sameTarget && (block.thinkingSignature?.length ?? 0) > 0) {
+          throw new Error(
+            "CommandCode cannot preserve same-target thinking continuity",
+          );
         }
         return { type: "reasoning" as const, text: block.thinking };
       }
@@ -211,7 +204,7 @@ export function convertCommandCodeMessages(
         toolName: block.name,
         input,
       };
-    }).filter((block) => block !== undefined);
+    });
     converted.push({ role: "assistant", content });
     pending = new Map(calls.map((call) => [call.id, call]));
   }

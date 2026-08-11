@@ -23,6 +23,7 @@ describe("Anthropic Pi invocation controls", () => {
           temperature: 0,
           stream: true,
           metadata: { user_id: "exact-user" },
+          output_config: { effort: "high" },
         }),
       ),
       1,
@@ -32,6 +33,7 @@ describe("Anthropic Pi invocation controls", () => {
       maxTokens: 32,
       temperature: 0,
       metadata: { user_id: "exact-user" },
+      reasoning: "high",
     });
     expect(invocation.renderState).toEqual({
       stream: true,
@@ -58,7 +60,8 @@ describe("Anthropic Pi invocation controls", () => {
     ["top k", { top_k: 1 }, UnsupportedFeature],
     ["stop sequences", { stop_sequences: ["stop"] }, UnsupportedFeature],
     ["thinking", { thinking: { type: "enabled" } }, UnsupportedFeature],
-    ["output controls", { output_config: { effort: "high" } }, UnsupportedFeature],
+    ["unknown output effort", { output_config: { effort: "super" } }, UnsupportedFeature],
+    ["unknown output field", { output_config: { format: "text" } }, UnsupportedFeature],
   ])("rejects unsupported or malformed control: %s", (_name, extras, failure) => {
     expect(() => validateAnthropicSourceRequest(request(extras))).toThrow(failure);
   });

@@ -125,7 +125,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
     ]);
   });
 
-  it("rejects mismatched result identity and duplicate call IDs", () => {
+  it("rejects duplicate call IDs and correlates results by toolCallId only", () => {
     const assistant = {
       role: "assistant" as const,
       api: "luckytoken-client-history",
@@ -141,21 +141,30 @@ describe("CommandCode Pi tool-turn conversion", () => {
     ).toThrow("Duplicate Pi ToolCall id");
 
     assistant.content = [toolCall("same", "alpha", {})];
-    expect(() =>
-      convertCommandCodeMessages(model, {
-        messages: [
-          assistant,
-          {
-            role: "toolResult",
-            toolCallId: "same",
-            toolName: "wrong",
-            content: [],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      }),
-    ).toThrow("name does not match");
+    const converted = convertCommandCodeMessages(model, {
+      messages: [
+        assistant,
+        {
+          role: "toolResult",
+          toolCallId: "same",
+          toolName: "wrong",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    });
+    expect(converted[1]).toEqual({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "same",
+          toolName: "",
+          output: { type: "text", value: "ok" },
+        },
+      ],
+    });
   });
 
   it("rejects non-lossless arguments, namespaces, and required opaque continuity", () => {
@@ -187,5 +196,34 @@ describe("CommandCode Pi tool-turn conversion", () => {
         true,
       ),
     ).toThrow("continuity");
+  });
+
+  it("rejects redacted thinking regardless of target identity", () => {
+    const convertThinking = (sameTarget: boolean): (() => unknown) => () =>
+      convertCommandCodeMessages(model, {
+        messages: [
+          {
+            role: "assistant",
+            api: sameTarget ? model.api : "luckytoken-client-history",
+            provider: sameTarget ? model.provider : "luckytoken-client",
+            model: sameTarget ? model.id : "client-model",
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "redacted-payload",
+                redacted: true,
+              },
+              { type: "text", text: "answer" },
+            ],
+            usage,
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        ],
+      });
+
+    expect(convertThinking(true)).toThrow("redacted");
+    expect(convertThinking(false)).toThrow("redacted");
   });
 });

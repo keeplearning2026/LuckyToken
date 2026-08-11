@@ -108,12 +108,6 @@ function convertUsage(
   let input: number;
   if (noCachePresent) {
     input = requireCount(inputDetails?.noCacheTokens, "noCacheTokens");
-    if (rawInputPresent && cacheReadPresent && cacheWritePresent) {
-      const totalInput = requireCount(raw?.inputTokens, "inputTokens");
-      if (totalInput !== input + cacheRead + cacheWrite) {
-        throw new Error("Explicit CommandCode input token partition is inconsistent");
-      }
-    }
   } else {
     const totalInput = requireCount(
       rawInputPresent ? raw?.inputTokens : result.usage.inputTokens,
@@ -133,13 +127,9 @@ function convertUsage(
   );
   const outputReasoningPresent =
     outputDetails !== undefined && Object.hasOwn(outputDetails, "reasoningTokens");
-  const rawReasoningPresent =
-    raw !== undefined && Object.hasOwn(raw, "reasoningTokens");
   const reasoningCandidate = outputReasoningPresent
     ? outputDetails.reasoningTokens
-    : rawReasoningPresent
-      ? raw.reasoningTokens
-      : undefined;
+    : undefined;
   let reasoning: number | undefined;
   if (reasoningCandidate !== undefined) {
     reasoning = requireCount(reasoningCandidate, "reasoningTokens");
@@ -174,11 +164,6 @@ function convertContent(
       }
       return { type: "thinking", thinking: block.text };
     }
-    if (block.providerExecuted === true || block.dynamic === true) {
-      throw new Error(
-        `CommandCode ToolUse ${block.id} has unsupported server-owned semantics`,
-      );
-    }
     return {
       type: "toolCall",
       id: block.id,
@@ -192,22 +177,9 @@ function convertContent(
 }
 
 function stopReason(result: CommandCodeResult): Extract<StopReason, "stop" | "length" | "toolUse"> {
-  const raw = result.finish.rawFinishReason;
-  if (
-    raw === "refusal" ||
-    raw === "model_context_window_exceeded" ||
-    raw === "pause_turn"
-  ) {
-    throw new Error(
-      `CommandCode raw finish ${raw} lacks a lossless Pi terminal representation`,
-    );
-  }
   if (result.finish.finishReason === "tool-calls") return "toolUse";
   if (result.finish.finishReason === "length") return "length";
-  if (result.finish.finishReason === "stop") return "stop";
-  throw new Error(
-    `CommandCode finish category ${String(result.finish.finishReason)} is not a supported Pi success terminal`,
-  );
+  return "stop";
 }
 
 function baseMessage(

@@ -17,7 +17,12 @@ export interface InvocationInfrastructureFacts {
 
 export type RouterOptionDefaults = Readonly<Record<string, unknown>>;
 
-const PROTOCOL_OPTION_KEYS = new Set(["maxTokens", "temperature", "metadata"]);
+const PROTOCOL_OPTION_KEYS = new Set([
+  "maxTokens",
+  "temperature",
+  "reasoning",
+  "metadata",
+]);
 const PROTOCOL_METADATA_KEYS = new Set(["user_id"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +52,14 @@ function validateProtocolOptions(options: ModelsSimpleStreamOptions): void {
   ) {
     throw new InvocationCompositionFailure(
       "Anthropic protocol temperature must remain finite",
+    );
+  }
+  if (
+    options.reasoning !== undefined &&
+    !["low", "medium", "high", "xhigh", "max"].includes(options.reasoning)
+  ) {
+    throw new InvocationCompositionFailure(
+      "Anthropic protocol reasoning must be a known thinking level",
     );
   }
   if (options.metadata !== undefined) {
@@ -107,6 +120,9 @@ export function composeOptions(
   };
   if (protocolOptions.temperature !== undefined) {
     effective.temperature = protocolOptions.temperature;
+  }
+  if (protocolOptions.reasoning !== undefined) {
+    effective.reasoning = protocolOptions.reasoning;
   }
 
   const metadata: Record<string, unknown> = {};

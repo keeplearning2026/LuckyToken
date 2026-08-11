@@ -31,7 +31,6 @@ const KNOWN_COMMANDCODE_EVENTS = new Set([
   "start-step",
   "provider-metadata",
   "finish-step",
-  "tool-result",
 ]);
 
 export interface CapturedCommandCodeExchange {

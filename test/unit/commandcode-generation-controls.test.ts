@@ -88,4 +88,109 @@ describe("CommandCode generation control mapping", () => {
 
     expect(value.max_tokens).toBe(20);
   });
+
+  it("falls back to model.maxTokens when maxTokens is absent", () => {
+    const value = params({});
+    expect(value.max_tokens).toBe(100);
+  });
+
+  it("does not invent a fixed default when model.maxTokens is absent", () => {
+    const customModel = { ...model, maxTokens: 100 };
+    const value = buildCommandCodeBody(
+      customModel,
+      context,
+      {},
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value.max_tokens).toBe(100);
+  });
+
+  it.each([
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+  ] as const)(
+    "maps default reasoning level %s to CommandCode effort %s",
+    (level, effort) => {
+      const reasoningModel = {
+        ...model,
+        reasoning: true,
+      };
+      const value = buildCommandCodeBody(
+        reasoningModel,
+        context,
+        { maxTokens: 20, reasoning: level },
+        createEmptyServerConfig(),
+        sessionId,
+        {},
+      ).body.params as Record<string, unknown>;
+      expect(value.reasoning_effort).toBe(effort);
+    },
+  );
+
+  it.each([
+    ["xhigh", "xhigh"],
+    ["max", "max"],
+  ] as const)(
+    "maps model-declared reasoning level %s to CommandCode effort %s",
+    (level, effort) => {
+      const reasoningModel = {
+        ...model,
+        reasoning: true,
+        thinkingLevelMap: { [level]: level },
+      };
+      const value = buildCommandCodeBody(
+        reasoningModel,
+        context,
+        { maxTokens: 20, reasoning: level },
+        createEmptyServerConfig(),
+        sessionId,
+        {},
+      ).body.params as Record<string, unknown>;
+      expect(value.reasoning_effort).toBe(effort);
+    },
+  );
+
+  it("uses the explicit model thinkingLevelMap when present", () => {
+    const mappedModel = {
+      ...model,
+      reasoning: true,
+      thinkingLevelMap: { high: "xhigh" },
+    };
+    const value = buildCommandCodeBody(
+      mappedModel,
+      context,
+      { maxTokens: 20, reasoning: "high" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value.reasoning_effort).toBe("xhigh");
+  });
+
+  it("omits reasoning_effort when reasoning is absent or clamps to off", () => {
+    const reasoningModel = { ...model, reasoning: false };
+    const absent = buildCommandCodeBody(
+      reasoningModel,
+      context,
+      { maxTokens: 20 },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(absent).not.toHaveProperty("reasoning_effort");
+
+    const off = buildCommandCodeBody(
+      reasoningModel,
+      context,
+      { maxTokens: 20, reasoning: "high" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(off).not.toHaveProperty("reasoning_effort");
+  });
 });

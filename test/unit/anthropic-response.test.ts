@@ -327,7 +327,30 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(JSON.parse(wire)).toEqual(target);
   });
 
-  it("fails redacted content, deferred state, and unclassified future fields", () => {
+  it("discards redacted thinking and preserves surviving content order", () => {
+    const target = convertAssistantMessageToAnthropic(
+      message({
+        content: [
+          { type: "text", text: "A" },
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "redacted-payload",
+            redacted: true,
+          },
+          { type: "text", text: "B" },
+        ],
+      }),
+      "client-selector",
+      "opaque-id",
+    );
+    expect(target.content).toEqual([
+      { citations: null, text: "A", type: "text" },
+      { citations: null, text: "B", type: "text" },
+    ]);
+  });
+
+  it("fails when discarding redacted thinking leaves empty projected content", () => {
     expect(() =>
       convertAssistantMessageToAnthropic(
         message({
@@ -343,7 +366,10 @@ describe("schema-complete Anthropic JSON response", () => {
         "client-selector",
         "opaque-id",
       ),
-    ).toThrow("redacted");
+    ).toThrow("empty");
+  });
+
+  it("fails deferred state and unclassified future fields", () => {
     expect(() =>
       assertOutboundResponseFidelity(
         message({

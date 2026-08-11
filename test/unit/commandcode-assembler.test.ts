@@ -102,14 +102,12 @@ describe("CommandCode atomic content assembler", () => {
     });
   });
 
-  it("preserves server-execution and dynamic-tool facts for Stage B", () => {
+  it("does not preserve server-execution and dynamic-tool facts in the committed response", () => {
     const result = assemble([
       {
         type: "tool-input-start",
         id: "tool",
         toolName: "start",
-        providerExecuted: true,
-        dynamic: true,
       },
       { type: "tool-input-end", id: "tool" },
       {
@@ -117,7 +115,6 @@ describe("CommandCode atomic content assembler", () => {
         toolCallId: "tool",
         toolName: "final",
         input: {},
-        providerExecuted: true,
       },
       { type: "finish", finishReason: "tool-calls" },
     ]);
@@ -127,8 +124,6 @@ describe("CommandCode atomic content assembler", () => {
       id: "tool",
       toolName: "final",
       input: {},
-      providerExecuted: true,
-      dynamic: true,
     });
   });
 
@@ -207,13 +202,13 @@ describe("CommandCode atomic content assembler", () => {
         { type: "start-step" },
         { type: "provider-metadata", provider: "x" },
         { type: "finish-step", usage: { ignored: true } },
-        { type: "tool-result", toolCallId: "ignored" },
         { type: "finish", finishReason: "stop" },
       ]).content,
     ).toEqual([]);
 
     for (const raw of [
       line({ type: "future-event" }),
+      line({ type: "tool-result", toolCallId: "ignored" }),
       line({ type: "text-start" }),
       line({ type: "finish", totalUsage: [] }),
       "data: {}",
