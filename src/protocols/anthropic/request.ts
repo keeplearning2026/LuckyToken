@@ -5,6 +5,7 @@ import type {
   Message,
   ModelsSimpleStreamOptions,
   TextContent,
+  ThinkingContent,
   ToolCall,
   ToolResultMessage,
   Usage,
@@ -32,6 +33,7 @@ export interface ValidatedAnthropicSourceRequest {
   maxTokens: number;
   messages: Array<Record<string, unknown>>;
   hasImages: boolean;
+  hasThinking: boolean;
   finalAssistantPrefill: boolean;
   stream: boolean;
   temperature?: number;
@@ -143,7 +145,8 @@ function validateOptionalFieldShapes(
 function validateContentBlock(
   block: unknown,
   unsupported: string[],
-  facts: { hasImages: boolean },
+  facts: { hasImages: boolean; hasThinking: boolean },
+  role: "user" | "assistant",
 ): void {
   if (!isRecord(block) || typeof block.type !== "string") {
     throw new InvalidRequest("message content blocks must be tagged objects");
@@ -153,9 +156,53 @@ function validateContentBlock(
       if (typeof block.text !== "string") {
         throw new InvalidRequest("text blocks require string text");
       }
-      if (Object.keys(block).some((name) => name !== "type" && name !== "text")) {
+      if (block.citations !== undefined) {
+        if (role !== "assistant" || block.citations !== null) {
+          unsupported.push("unsupported text citations");
+        }
+      }
+      if (
+        Object.keys(block).some(
+          (name) => !["type", "text", "citations"].includes(name),
+        )
+      ) {
         unsupported.push("unknown text block field");
       }
+      return;
+    case "thinking":
+      if (
+        typeof block.thinking !== "string" ||
+        typeof block.signature !== "string"
+      ) {
+        throw new InvalidRequest(
+          "thinking blocks require string thinking and signature fields",
+        );
+      }
+      if (role !== "assistant") {
+        throw new InvalidRequest("thinking is valid only in an assistant turn");
+      }
+      if (
+        Object.keys(block).some(
+          (name) => !["type", "thinking", "signature"].includes(name),
+        )
+      ) {
+        unsupported.push("unknown thinking block field");
+      }
+      facts.hasThinking = true;
+      return;
+    case "redacted_thinking":
+      if (typeof block.data !== "string") {
+        throw new InvalidRequest("redacted_thinking requires string data");
+      }
+      if (role !== "assistant") {
+        throw new InvalidRequest(
+          "redacted_thinking is valid only in an assistant turn",
+        );
+      }
+      if (Object.keys(block).some((name) => !["type", "data"].includes(name))) {
+        unsupported.push("unknown redacted_thinking block field");
+      }
+      unsupported.push("redacted thinking");
       return;
     case "image":
       if (!isRecord(block.source) || typeof block.source.type !== "string") {
@@ -250,7 +297,7 @@ function validateContentBlock(
               "tool_result block-list content supports text and image blocks only",
             );
           }
-          validateContentBlock(nestedBlock, unsupported, facts);
+          validateContentBlock(nestedBlock, unsupported, facts, "user");
         }
       }
       if (
@@ -312,11 +359,15 @@ function validateMetadata(
 function validateMessages(
   messages: unknown,
   unsupported: string[],
-): { messages: Array<Record<string, unknown>>; hasImages: boolean } {
+): {
+  messages: Array<Record<string, unknown>>;
+  hasImages: boolean;
+  hasThinking: boolean;
+} {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new InvalidRequest("messages must be a non-empty array");
   }
-  const facts = { hasImages: false };
+  const facts = { hasImages: false, hasThinking: false };
   for (const message of messages) {
     if (
       !isRecord(message) ||
@@ -335,10 +386,19 @@ function validateMessages(
       unsupported.push("explicit empty ordinary message content array");
     }
     for (const block of message.content) {
-      validateContentBlock(block, unsupported, facts);
+      validateContentBlock(
+        block,
+        unsupported,
+        facts,
+        message.role as "user" | "assistant",
+      );
     }
   }
-  return { messages, hasImages: facts.hasImages };
+  return {
+    messages,
+    hasImages: facts.hasImages,
+    hasThinking: facts.hasThinking,
+  };
 }
 
 interface SourceTurn {
@@ -464,6 +524,7 @@ export function validateAnthropicSourceRequest(
     maxTokens: maxTokens as number,
     messages: messageFacts.messages,
     hasImages: messageFacts.hasImages,
+    hasThinking: messageFacts.hasThinking,
     stream: value.stream === true,
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
@@ -493,6 +554,7 @@ interface CanonicalToolResult {
 
 type CanonicalContent =
   | TextContent
+  | ThinkingContent
   | ImageContent
   | CanonicalToolUse
   | CanonicalToolResult;
@@ -506,6 +568,14 @@ function convertPortableBlock(block: Record<string, unknown>): CanonicalContent 
   switch (block.type) {
     case "text":
       return { type: "text", text: block.text as string };
+    case "thinking": {
+      const signature = block.signature as string;
+      return {
+        type: "thinking",
+        thinking: block.thinking as string,
+        ...(signature.length > 0 ? { thinkingSignature: signature } : {}),
+      };
+    }
     case "image": {
       const source = block.source as Record<string, unknown>;
       return {
@@ -588,21 +658,24 @@ function convertHistoricalAssistant(
   clientModel: string,
   receivedAt: number,
 ): AssistantMessage {
-  const content: Array<TextContent | ToolCall> = message.content.map((block) => {
-    if (block.type === "text") return block;
-    if (block.type === "toolUse") {
-      return {
-        type: "toolCall",
-        id: block.id,
-        name: block.name,
-        arguments: block.input,
-      };
-    }
-    if (block.type === "image") {
-      throw new UnsupportedFeature("Historical assistant images are unsupported");
-    }
-    throw new Error("tool_result reached an assistant conversion invariant");
-  });
+  const content: Array<TextContent | ThinkingContent | ToolCall> =
+    message.content.map((block) => {
+      if (block.type === "text" || block.type === "thinking") return block;
+      if (block.type === "toolUse") {
+        return {
+          type: "toolCall",
+          id: block.id,
+          name: block.name,
+          arguments: block.input,
+        };
+      }
+      if (block.type === "image") {
+        throw new UnsupportedFeature(
+          "Historical assistant images are unsupported",
+        );
+      }
+      throw new Error("tool_result reached an assistant conversion invariant");
+    });
   return {
     role: "assistant",
     api: SYNTHETIC_CLIENT_HISTORY_API,
@@ -662,6 +735,8 @@ export function convertValidatedAnthropicRequest(
         pending.delete(block.toolUseId);
       } else if (block.type === "toolUse") {
         throw new Error("tool_use reached a user conversion invariant");
+      } else if (block.type === "thinking") {
+        throw new Error("thinking reached a user conversion invariant");
       } else {
         ordinary.push(block);
       }

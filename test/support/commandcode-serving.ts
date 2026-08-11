@@ -42,6 +42,7 @@ export interface CommandCodeServingTestOptions {
   fetch: FetchFunction;
   modelId: string;
   modelInput?: Array<"text" | "image">;
+  modelReasoning?: boolean;
   commandCodeCompatibility?: CommandCodeCompatibilityPolicy;
   createMessageId?: () => string;
   createSessionId?: () => string;
@@ -69,7 +70,7 @@ function createModel(
     api: commandCodePrivateApiId,
     provider: commandCodePrivateProviderId,
     baseUrl: options.commandCodeBaseUrl,
-    reasoning: false,
+    reasoning: options.modelReasoning ?? false,
     input: [...(options.modelInput ?? ["text"])],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,

@@ -21,6 +21,11 @@ function target(): AnthropicResponseMessage {
     content: [
       { type: "text", text: "" },
       {
+        type: "thinking",
+        thinking: "private reasoning",
+        thinkingSignature: "opaque-signature",
+      },
+      {
         type: "toolCall",
         id: "call_exact",
         name: "tool_exact",
@@ -88,6 +93,16 @@ function accumulate(events: AnthropicAtomicSseEvent[]): AnthropicResponseMessage
       if (event.delta.type === "text_delta" && block?.type === "text") {
         block.text += event.delta.text;
       } else if (
+        event.delta.type === "thinking_delta" &&
+        block?.type === "thinking"
+      ) {
+        block.thinking += event.delta.thinking;
+      } else if (
+        event.delta.type === "signature_delta" &&
+        block?.type === "thinking"
+      ) {
+        block.signature += event.delta.signature;
+      } else if (
         event.delta.type === "input_json_delta" &&
         block?.type === "tool_use"
       ) {
@@ -126,6 +141,10 @@ describe("verifiable Anthropic Atomic SSE", () => {
       "content_block_stop",
       "content_block_start",
       "content_block_delta",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
       "content_block_stop",
       "content_block_start",
       "content_block_delta",
@@ -138,11 +157,21 @@ describe("verifiable Anthropic Atomic SSE", () => {
       index: 0,
       delta: { type: "text_delta", text: "" },
     });
-    const tool = message.content[1];
-    if (tool?.type !== "tool_use") throw new Error("invalid tool fixture");
     expect(events[5]).toEqual({
       type: "content_block_delta",
       index: 1,
+      delta: { type: "thinking_delta", thinking: "private reasoning" },
+    });
+    expect(events[6]).toEqual({
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "signature_delta", signature: "opaque-signature" },
+    });
+    const tool = message.content[2];
+    if (tool?.type !== "tool_use") throw new Error("invalid tool fixture");
+    expect(events[9]).toEqual({
+      type: "content_block_delta",
+      index: 2,
       delta: {
         type: "input_json_delta",
         partial_json: JSON.stringify(tool.input),

@@ -15,6 +15,12 @@ export interface AnthropicTextBlock {
   type: "text";
 }
 
+export interface AnthropicThinkingBlock {
+  signature: string;
+  thinking: string;
+  type: "thinking";
+}
+
 export interface AnthropicToolUseBlock {
   id: string;
   caller: { type: "direct" };
@@ -49,7 +55,9 @@ export interface AnthropicResponseUsage {
 export interface AnthropicResponseMessage {
   id: string;
   container: null;
-  content: Array<AnthropicTextBlock | AnthropicToolUseBlock>;
+  content: Array<
+    AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock
+  >;
   model: string;
   role: "assistant";
   stop_details: null;
@@ -257,7 +265,7 @@ function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
 
 function convertContent(
   message: AssistantMessage,
-): Array<AnthropicTextBlock | AnthropicToolUseBlock> {
+): Array<AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock> {
   return message.content.map((block, index) => {
     const raw = block as unknown;
     if (!isRecord(raw) || typeof raw.type !== "string") {
@@ -266,9 +274,39 @@ function convertContent(
       );
     }
     if (raw.type === "thinking") {
-      throw new OutboundResponseFidelityFailure(
-        "ThinkingContent is outside the certified Anthropic v1 response path",
+      assertAllowedFields(
+        raw,
+        new Set(["type", "thinking", "thinkingSignature", "redacted"]),
+        `Pi content[${index}]`,
       );
+      if (typeof raw.thinking !== "string") {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}].thinking must be a string`,
+        );
+      }
+      if (
+        raw.thinkingSignature !== undefined &&
+        typeof raw.thinkingSignature !== "string"
+      ) {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}].thinkingSignature must be a string when present`,
+        );
+      }
+      if (raw.redacted !== undefined && typeof raw.redacted !== "boolean") {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}].redacted must be a boolean when present`,
+        );
+      }
+      if (raw.redacted === true) {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}] redacted ThinkingContent is unsupported`,
+        );
+      }
+      return {
+        signature: raw.thinkingSignature ?? "",
+        thinking: raw.thinking,
+        type: "thinking",
+      };
     }
     if (raw.type === "text") {
       assertAllowedFields(

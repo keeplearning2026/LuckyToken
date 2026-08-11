@@ -16,14 +16,17 @@ const profile: ResolvedAnthropicSourceProfile = {
   unclassifiedAnthropicHeaders: [],
 };
 
-function fixtureModel(input: Array<"text" | "image"> = ["text"]): Model<string> {
+function fixtureModel(
+  input: Array<"text" | "image"> = ["text"],
+  reasoning = false,
+): Model<string> {
   return {
     id: "name-that-must-not-drive-policy",
     name: "fixture",
     api: "fixture",
     provider: "fixture",
     baseUrl: "https://fixture.test",
-    reasoning: false,
+    reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1000,
@@ -43,6 +46,41 @@ function policy(
 }
 
 describe("Anthropic model-aware validity", () => {
+  it("requires a reasoning-capable model for historical thinking", () => {
+    const request = validateAnthropicSourceRequest({
+      model: "model",
+      max_tokens: 32,
+      messages: [
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "reasoning", signature: "opaque" },
+            { type: "text", text: "answer" },
+          ],
+        },
+        { role: "user", content: "follow up" },
+      ],
+    });
+
+    expect(() =>
+      assertAnthropicModelAwareValidity(
+        request,
+        fixtureModel(["text"], false),
+        profile,
+        policy("unknown", false),
+      ),
+    ).toThrow(UnsupportedFeature);
+    expect(() =>
+      assertAnthropicModelAwareValidity(
+        request,
+        fixtureModel(["text"], true),
+        profile,
+        policy("unknown", false),
+      ),
+    ).not.toThrow();
+  });
+
   it("requires both model image input capability and a certified fidelity path", () => {
     const request = validateAnthropicSourceRequest({
       model: "model",

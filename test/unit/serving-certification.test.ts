@@ -77,7 +77,7 @@ describe("serving composition certification", () => {
           servingComposition: "luckytoken-serving-composition-v1",
         },
         conversions: {
-          anthropicPi: "Anthropic-Pi AI IR Conversion Method v1.1 / capability v1",
+          anthropicPi: "Anthropic-Pi AI IR Conversion Method v1.2 / capability v2",
           piCommandCode:
             "LuckyToken CommandCode Private Provider Conversion Method v0.20",
         },

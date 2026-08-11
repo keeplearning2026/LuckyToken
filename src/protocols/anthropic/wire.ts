@@ -157,6 +157,20 @@ export function assertAnthropicTargetSchema(
       }
       return;
     }
+    if (block.type === "thinking") {
+      assertExactFields(
+        block,
+        new Set(["signature", "thinking", "type"]),
+        `Anthropic content[${index}]`,
+      );
+      if (
+        typeof block.thinking !== "string" ||
+        typeof block.signature !== "string"
+      ) {
+        fail(`Anthropic content[${index}] ThinkingBlock is malformed`);
+      }
+      return;
+    }
     if (block.type !== "tool_use") {
       fail(`Anthropic content[${index}] has an unsupported type`);
     }

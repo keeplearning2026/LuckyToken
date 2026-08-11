@@ -1,11 +1,12 @@
 {
   "schemaVersion": "luckytoken-serving-conformance-v1",
-  "scope": "certified-anthropic-v1-commandcode-private-route",
+  "scope": "certified-anthropic-v2-commandcode-private-route",
   "coverage": [
     {
       "dimension": "inbound-grammar-and-semantics",
       "tests": [
         "test/unit/anthropic-ingress.test.ts",
+        "test/unit/conversation.test.ts",
         "test/unit/model-aware-validity.test.ts"
       ]
     },
@@ -34,13 +35,16 @@
       "dimension": "outbound-json-and-atomic-sse",
       "tests": [
         "test/integration/http-atomic-delivery.test.ts",
-        "test/integration/anthropic-atomic-sse.test.ts"
+        "test/integration/anthropic-atomic-sse.test.ts",
+        "test/unit/anthropic-response.test.ts",
+        "test/unit/anthropic-sse.test.ts"
       ]
     },
     {
       "dimension": "next-turn-round-trip",
       "tests": [
-        "test/integration/serving-certification.test.ts"
+        "test/integration/serving-certification.test.ts",
+        "test/integration/anthropic-thinking-round-trip.test.ts"
       ]
     },
     {
@@ -55,7 +59,8 @@
       "dimension": "local-loopback-http-boundary",
       "tests": [
         "test/unit/auth.test.ts",
-        "test/integration/local-http-server.test.ts"
+        "test/integration/local-http-server.test.ts",
+        "test/integration/anthropic-thinking-round-trip.test.ts"
       ]
     }
   ],

@@ -1,6 +1,7 @@
 import {
   type AnthropicResponseMessage,
   type AnthropicResponseUsage,
+  type AnthropicThinkingBlock,
   type AnthropicTextBlock,
   type AnthropicToolUseBlock,
   OutboundResponseFidelityFailure,
@@ -37,13 +38,18 @@ export type AnthropicAtomicSseEvent =
   | {
       type: "content_block_start";
       index: number;
-      content_block: AnthropicTextBlock | AnthropicToolUseBlock;
+      content_block:
+        | AnthropicTextBlock
+        | AnthropicThinkingBlock
+        | AnthropicToolUseBlock;
     }
   | {
       type: "content_block_delta";
       index: number;
       delta:
         | { type: "text_delta"; text: string }
+        | { type: "thinking_delta"; thinking: string }
+        | { type: "signature_delta"; signature: string }
         | { type: "input_json_delta"; partial_json: string };
     }
   | { type: "content_block_stop"; index: number }
@@ -201,6 +207,20 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
       }
       return;
     }
+    if (event.content_block.type === "thinking") {
+      assertFields(
+        block,
+        ["signature", "thinking", "type"],
+        "Anthropic streaming ThinkingBlock",
+      );
+      if (
+        event.content_block.thinking !== "" ||
+        event.content_block.signature !== ""
+      ) {
+        fail("Anthropic streaming ThinkingBlock start is malformed");
+      }
+      return;
+    }
     assertFields(
       block,
       ["id", "caller", "input", "name", "type"],
@@ -228,6 +248,20 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     if (event.delta.type === "text_delta") {
       assertFields(delta, ["type", "text"], "Anthropic text_delta");
       if (typeof event.delta.text !== "string") fail("Anthropic text_delta is malformed");
+      return;
+    }
+    if (event.delta.type === "thinking_delta") {
+      assertFields(delta, ["type", "thinking"], "Anthropic thinking_delta");
+      if (typeof event.delta.thinking !== "string") {
+        fail("Anthropic thinking_delta is malformed");
+      }
+      return;
+    }
+    if (event.delta.type === "signature_delta") {
+      assertFields(delta, ["type", "signature"], "Anthropic signature_delta");
+      if (typeof event.delta.signature !== "string") {
+        fail("Anthropic signature_delta is malformed");
+      }
       return;
     }
     assertFields(
@@ -302,6 +336,27 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_delta",
           index,
           delta: { type: "text_delta", text: block.text },
+        },
+        { type: "content_block_stop", index },
+      );
+      return;
+    }
+    if (block.type === "thinking") {
+      events.push(
+        {
+          type: "content_block_start",
+          index,
+          content_block: { type: "thinking", thinking: "", signature: "" },
+        },
+        {
+          type: "content_block_delta",
+          index,
+          delta: { type: "thinking_delta", thinking: block.thinking },
+        },
+        {
+          type: "content_block_delta",
+          index,
+          delta: { type: "signature_delta", signature: block.signature },
         },
         { type: "content_block_stop", index },
       );

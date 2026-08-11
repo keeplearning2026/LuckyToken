@@ -104,8 +104,8 @@ test("binds the installed Pi runtime and every governing specification revision"
     ],
     [
       anthropicPi,
-      "# Anthropic ↔ Pi AI IR Conversion Method v1.1",
-      "Anthropic-Pi AI IR Conversion Method v1.1 / capability v1",
+      "# Anthropic ↔ Pi AI IR Conversion Method v1.2",
+      "Anthropic-Pi AI IR Conversion Method v1.2 / capability v2",
     ],
     [
       piCommandCode,

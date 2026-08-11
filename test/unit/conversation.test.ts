@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
+import {
+  InvalidRequest,
+  UnsupportedFeature,
+} from "../../src/protocols/anthropic/failures.js";
 import {
   convertValidatedAnthropicRequest,
   SYNTHETIC_CLIENT_HISTORY_API,
@@ -119,6 +122,78 @@ describe("Anthropic conversation conversion", () => {
     ]);
   });
 
+  it("replays ordinary assistant thinking through Pi without interpreting signatures", () => {
+    const receivedAt = 1_786_400_000_123;
+    const validated = validateAnthropicSourceRequest({
+      model: "client-model",
+      max_tokens: 32,
+      messages: [
+        { role: "user", content: "question" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "reasoning one",
+              signature: "opaque-signature",
+            },
+            { type: "thinking", thinking: "reasoning two", signature: "" },
+            { type: "text", text: "answer", citations: null },
+          ],
+        },
+        { role: "user", content: "follow up" },
+      ],
+    });
+
+    expect(validated.hasThinking).toBe(true);
+    const conversion = convertValidatedAnthropicRequest(validated, receivedAt);
+    expect(conversion.context.messages[1]).toMatchObject({
+      role: "assistant",
+      api: SYNTHETIC_CLIENT_HISTORY_API,
+      provider: SYNTHETIC_CLIENT_HISTORY_PROVIDER,
+      content: [
+        {
+          type: "thinking",
+          thinking: "reasoning one",
+          thinkingSignature: "opaque-signature",
+        },
+        { type: "thinking", thinking: "reasoning two" },
+        { type: "text", text: "answer" },
+      ],
+    });
+    expect(conversion.context.messages[1]).not.toHaveProperty(
+      "content.1.thinkingSignature",
+    );
+  });
+
+  it("rejects malformed, user-role, and redacted thinking independently", () => {
+    const request = (block: Record<string, unknown>, role = "assistant") => ({
+      model: "client-model",
+      max_tokens: 32,
+      messages: [
+        { role: "user", content: "question" },
+        { role, content: [block] },
+        ...(role === "assistant" ? [{ role: "user", content: "tail" }] : []),
+      ],
+    });
+
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request({ type: "thinking", thinking: "ok", signature: 1 }),
+      ),
+    ).toThrow(InvalidRequest);
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request({ type: "thinking", thinking: "ok", signature: "sig" }, "user"),
+      ),
+    ).toThrow(InvalidRequest);
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request({ type: "redacted_thinking", data: "opaque" }),
+      ),
+    ).toThrow(UnsupportedFeature);
+  });
+
   it("preserves supported base64 image MIME and payload and rejects opaque/remote variants", () => {
     const conversion = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
@@ -160,19 +235,6 @@ describe("Anthropic conversation conversion", () => {
               { type: "image", source: { type: "url", url: "https://example.test/a.png" } },
             ],
           },
-        ],
-      }),
-    ).toThrow(UnsupportedFeature);
-    expect(() =>
-      validateAnthropicSourceRequest({
-        model: "client-model",
-        max_tokens: 32,
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "opaque", signature: "secret" }],
-          },
-          { role: "user", content: "tail" },
         ],
       }),
     ).toThrow(UnsupportedFeature);

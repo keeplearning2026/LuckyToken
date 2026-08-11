@@ -82,6 +82,68 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(target.stop_reason).toBe("tool_use");
   });
 
+  it("preserves ordinary thinking and its opaque signature in content order", () => {
+    const target = convertAssistantMessageToAnthropic(
+      message({
+        content: [
+          { type: "text", text: "before" },
+          {
+            type: "thinking",
+            thinking: "private reasoning",
+            thinkingSignature: "opaque-signature",
+          },
+          { type: "thinking", thinking: "unsigned reasoning" },
+          { type: "text", text: "after" },
+        ],
+      }),
+      "client-selector",
+      "opaque-id",
+    );
+
+    expect(target.content).toEqual([
+      { citations: null, text: "before", type: "text" },
+      {
+        type: "thinking",
+        thinking: "private reasoning",
+        signature: "opaque-signature",
+      },
+      {
+        type: "thinking",
+        thinking: "unsigned reasoning",
+        signature: "",
+      },
+      { citations: null, text: "after", type: "text" },
+    ]);
+  });
+
+  it.each([
+    ["non-string thinking", { type: "thinking", thinking: 1 }],
+    [
+      "non-string signature",
+      { type: "thinking", thinking: "reasoning", thinkingSignature: 1 },
+    ],
+    [
+      "non-boolean redacted marker",
+      { type: "thinking", thinking: "reasoning", redacted: "yes" },
+    ],
+    [
+      "unknown thinking state",
+      { type: "thinking", thinking: "reasoning", futureState: true },
+    ],
+  ])("rejects malformed Pi thinking: %s", (_name, block) => {
+    expect(() =>
+      convertAssistantMessageToAnthropic(
+        message({
+          content: [
+            block as unknown as AssistantMessage["content"][number],
+          ],
+        }),
+        "client-selector",
+        "opaque-id",
+      ),
+    ).toThrow();
+  });
+
   it("rejects non-object roots and every non-JSON nested semantic", () => {
     const invalid: unknown[] = [
       null,
@@ -265,14 +327,23 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(JSON.parse(wire)).toEqual(target);
   });
 
-  it("fails unsupported content, deferred state, and unclassified future fields", () => {
+  it("fails redacted content, deferred state, and unclassified future fields", () => {
     expect(() =>
       convertAssistantMessageToAnthropic(
-        message({ content: [{ type: "thinking", thinking: "not text" }] }),
+        message({
+          content: [
+            {
+              type: "thinking",
+              thinking: "",
+              thinkingSignature: "redacted-payload",
+              redacted: true,
+            },
+          ],
+        }),
         "client-selector",
         "opaque-id",
       ),
-    ).toThrow("ThinkingContent");
+    ).toThrow("redacted");
     expect(() =>
       assertOutboundResponseFidelity(
         message({

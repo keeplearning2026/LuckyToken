@@ -1,6 +1,6 @@
 # LuckyToken Core Tickets Implementation Guide
 
-本文说明如何实现 `.tickets` 中的 26 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
+本文说明如何实现 `.tickets` 中的 27 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
 
 ```text
 Protocol Spec
@@ -23,7 +23,7 @@ LuckyToken Core Spec
 | Anthropic Messages Protocol | v0.3，认证前仍需 Ticket 01 同步 |
 | CommandCode Private Protocol | v1.3 / command-code 1.9.0 profile |
 | Pi AI IR Protocol | v0.9.2 |
-| Anthropic ↔ Pi Conversion | v1.1 / capability baseline v1 |
+| Anthropic ↔ Pi Conversion | v1.2 / capability baseline v2 |
 | Pi ↔ CommandCode Conversion | v0.20 |
 | Pi reference package | `@earendil-works/pi-ai` 0.84.1 |
 
@@ -114,7 +114,8 @@ test/
 | 13 | 23 | 在Pi IR两侧隔离Client Protocol与Provider |
 | 14 | 24 | 在稳定Runtime route/lifecycle上增加真实listener |
 | 15 | 25 | 通过Pi公开认证接口接入登录与持久credential |
-| 16 | 26 | 独立接入Pi配置、CLI与显式在线测试 |
+| 16 | 26 | 根据真实Provider证据认证Anthropic与Pi thinking round-trip |
+| 17 | 27 | 独立接入Pi配置、CLI与显式在线测试 |
 
 依赖图：
 
@@ -169,7 +170,8 @@ flowchart LR
   T22 --> T23["23 Client Protocol boundary"]
   T23 --> T24["24 Local HTTP server"]
   T24 --> T25["25 Pi login / credentials"]
-  T25 --> T26["26 Pi config / CLI / online"]
+  T25 --> T26["26 Anthropic / Pi thinking round-trip"]
+  T26 --> T27["27 Pi config / CLI / online"]
 ```
 
 ## 5. 每张 ticket 的实现方法
@@ -369,7 +371,15 @@ flowchart LR
 - CommandCode当前profile只声明API-key login，不伪造OAuth/subscription capability。
 - 使用新的store/Models instance验证credential跨进程生命周期，并通过真实Pi dispatch验证effective auth。
 
-### 26 — Pi config, CLI, and online tests
+### 26 — Anthropic and Pi thinking round-trip
+
+- 先更新Anthropic ↔ Pi conversion authority，再实现ordinary thinking的response、Atomic SSE与next-turn replay。
+- Pi `ThinkingContent`是唯一跨Client Protocol/Provider的semantic representation；两侧不得直接依赖对方wire types。
+- Absent Pi signature使用一个deterministic Anthropic representation并在next request恢复为absent；opaque non-empty signature精确保留。
+- Redacted thinking、malformed state与显式source thinking control维持独立的unsupported/invalid policy。
+- reasoning model与non-reasoning model capability必须truthful；不能为了通过online test丢弃或textify reasoning。
+
+### 27 — Pi config, CLI, and online tests
 
 - CLI composition保持server/client配置与Pi Provider/model配置分离；Client Protocol只接收最终`Models`。
 - 一个显式Pi目录统一定位`models.json`与`auth.json`，但两者分别由Pi配置加载器和`CredentialStore`拥有，不互相解析。
@@ -482,7 +492,7 @@ service locator/dependency bag
 persistent model catalog store
 universal retry/transport framework
 future Anthropic beta profiles
-server tools/thinking round trip
+server tools/redacted-thinking round trip
 ```
 
 ## 9. 开始方式

@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:f0d0c8274e4e5f7ebc61990bf8c1aa3e26ff595782c79ae48f22ec2bce8d1713";
+  "sha256:2343d6a9208f14a36390ad68c5d2c1ed027ee4a899440ad2b902fea8ed174642";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -169,9 +169,6 @@ function validateModel(model: Model<string>, failures: string[]): void {
   if (model.id.length === 0 || model.name !== model.id) {
     failures.push("Model identity must be one non-empty exact id/name pair");
   }
-  if (model.reasoning) {
-    failures.push("The certified CommandCode route is non-reasoning");
-  }
   if (
     !model.input.includes("text") ||
     new Set(model.input).size !== model.input.length ||
@@ -245,7 +242,7 @@ export function certifyServingComposition(
       },
       conversions: {
         anthropicPi:
-          "Anthropic-Pi AI IR Conversion Method v1.1 / capability v1",
+          "Anthropic-Pi AI IR Conversion Method v1.2 / capability v2",
         piCommandCode:
           "LuckyToken CommandCode Private Provider Conversion Method v0.20",
       },

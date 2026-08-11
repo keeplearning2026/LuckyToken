@@ -1,7 +1,7 @@
-# Anthropic ↔ Pi AI IR Conversion Method v1.1
+# Anthropic ↔ Pi AI IR Conversion Method v1.2
 
 **Specification:** FROZEN — Combined Conversion Contract  
-**Capability Baseline:** v1  
+**Capability Baseline:** v2
 **Protocol Dependency:** Anthropic Messages API Protocol Specification v0.4
 **Reviewed Protocol Document SHA-256:** `efe2fd39c66a089137c983c1d1f8a6a32a032ccc775fc634b2a7ca90a412e918`
 **Pi Contract Evidence:** Pi AI IR Protocol v0.9.2  
@@ -89,7 +89,7 @@ Outbound Response Fidelity Failure
 #### Combined Specification Status
 
 
-Anthropic ↔ Pi AI IR Conversion Method v1.1 是合并后的双向 conversion contract，并保持 v1 capability baseline 不变。
+Anthropic ↔ Pi AI IR Conversion Method v1.2 是合并后的双向 conversion contract。它继承 v1 capability baseline，并以 capability baseline v2 增加 ordinary thinking 的双向 round-trip 支持。
 
 它继承：
 
@@ -101,14 +101,14 @@ Response conversion lineage:
 Pi AI IR → Anthropic Response Conversion Method v0.3
 ```
 
-从 v1 开始，认证与发布身份使用一个统一的 combined Method version；v1.1 是 contract-completeness closure，不扩大 v1 capability baseline：
+从 v1 开始，认证与发布身份使用一个统一的 combined Method version；v1.2 是一个严格、窄范围的 capability extension：
 
 ```text
 Method Version:
-v1.1
+v1.2
 
 Capability Baseline:
-v1
+v2
 
 Specification:
 FROZEN — Combined Conversion Contract
@@ -150,7 +150,7 @@ model-dependent final-assistant prefill rejection
 strict:true request-wide 20 / 24 / 16 hard limits
 ```
 
-因此当前 v0.4 artifact 是 synchronized reviewed dependency identity，可以由 certification manifest 绑定；这只关闭 protocol-dependency gap，不改变 v1 capability baseline，也不提前把 Runtime Certification 标记为 `CERTIFIED`。
+因此当前 v0.4 artifact 是 synchronized reviewed dependency identity，可以由 certification manifest 绑定；Protocol dependency 本身不改变 capability baseline，也不提前把 Runtime Certification 标记为 `CERTIFIED`。
 
 Pi runtime certification failure does not automatically modify this specification。只有证据证明本 Method 的 semantic mapping / ownership contract 本身错误时，才需要重新打开对应 contract。
 
@@ -159,7 +159,7 @@ Pi runtime certification failure does not automatically modify this specificatio
 
 ```text
 Anthropic ↔ Pi AI IR
-Conversion Method v1.1
+Conversion Method v1.2
 │
 ├── Specification
 │   └── FROZEN — Combined Conversion Contract
@@ -191,10 +191,10 @@ Conversion Method v1.1
 
 ```text
 Method Version:
-v1.1
+v1.2
 
 Capability Baseline:
-v1
+v2
 
 Specification:
 FROZEN — Combined Conversion Contract
@@ -312,7 +312,7 @@ The converter MUST NOT use an outdated Protocol Spec omission as permission to i
 #### Reviewed Local Protocol Dependency
 
 
-At the synchronized v1.1 review point, the local Protocol document is：
+At the synchronized v1.2 review point, the local Protocol document is：
 
 ```text
 Anthropic Messages API Protocol Specification v0.4
@@ -2354,22 +2354,46 @@ Source validation guarantees `tool_result` blocks precede ordinary user content;
 ##### Historical Assistant Variants and Model-Dependent Final Prefill
 
 
-Portable **historical** assistant content in v1：
+Portable **historical** assistant content in capability baseline v2：
 
 ```text
 text
+thinking
 tool_use
 ```
 
 Unsupported historical content：
 
 ```text
-thinking
 redacted_thinking
 opaque continuation
 server-tool families
 future extensions
 ```
+
+An ordinary source `thinking` block is valid only on an assistant turn and has the exact known shape：
+
+```ts
+{
+  type: "thinking";
+  thinking: string;
+  signature: string;
+}
+```
+
+It maps to Pi without textification or Provider knowledge：
+
+```ts
+{
+  type: "thinking";
+  thinking: source.thinking;
+  ...(source.signature.length > 0
+    ? { thinkingSignature: source.signature }
+    : {});
+}
+```
+
+The signature is opaque. Client Protocol code may validate, preserve, and replay it, but MUST NOT interpret it. An empty Anthropic signature is the canonical projection for absent Pi signature state and maps back to absence. `redacted_thinking` remains a separate unsupported source feature after its known source shape has been validated.
 
 A separate turn-level rule applies before ordinary historical conversion.
 
@@ -2414,6 +2438,8 @@ Text：
   text: source.text,
 }
 ```
+
+When a prior LuckyToken response is replayed, its historical assistant TextBlock also carries the deterministic required-shape projection `citations:null`. Capability baseline v2 accepts that exact value on an assistant turn and discards only the projection while constructing Pi. Non-null citation semantics, user-turn citations, and additional citation state remain unsupported; they are never guessed or passed through Pi as unrelated metadata.
 
 ToolUse：
 
@@ -4270,18 +4296,15 @@ AssistantMessage.content[]
 └── ToolCall
 ```
 
-Current Anthropic v1 response path supports：
+Current Anthropic capability baseline v2 response path supports：
 
 ```text
 TextContent
+ThinkingContent (ordinary, non-redacted)
 ToolCall
 ```
 
-Current v1 certified path MUST guarantee：
-
-```text
-ThinkingContent absent
-```
+The selected model MUST truthfully advertise `reasoning: true` before historical or produced `ThinkingContent` is representable on the route. Model capability is checked outside the deterministic converter.
 
 ---
 
@@ -4610,66 +4633,38 @@ Renderer does not guess.
 
 #### 5.5.4. ThinkingContent
 
-##### 5.5.4.1. Current v1 Exclusion
+##### 5.5.4.1. Ordinary Thinking Mapping
 
-###### ThinkingContent — Current v1 Policy
+Capability baseline v2 supports only ordinary, non-redacted Pi thinking：
 
-
-Current v1 Anthropic request conversion does not faithfully replay historical：
-
-```text
-thinking
-redacted_thinking
+```ts
+interface ThinkingContent {
+  type: "thinking";
+  thinking: string;
+  thinkingSignature?: string;
+  redacted?: boolean;
+}
 ```
 
-Therefore current response contract freezes：
+The deterministic response mapping is：
 
-> **A certified v1 Anthropic path MUST NOT produce `ThinkingContent` in the committed Pi `AssistantMessage`.**
-
-If it does：
-
-```text
-→ Runtime / Outbound Fidelity Failure
+```ts
+{
+  type: "thinking",
+  thinking: pi.thinking,
+  signature: pi.thinkingSignature ?? "",
+}
 ```
 
-Do not render it as：
+`thinking` and a present `thinkingSignature` MUST be strings. `redacted:true` is not silently treated as ordinary thinking; it reaches Outbound Response Fidelity Failure. The empty target signature is the single canonical representation of absent Pi signature state. Non-empty signatures remain opaque and exact.
 
-```text
-text
-```
-
-and do not silently drop it.
+Do not render thinking as text and do not silently drop it.
 
 ---
 
-##### 5.5.4.2. Future Round-Trip Extension Boundary
+##### 5.5.4.2. Redacted Thinking Boundary
 
-###### Future Thinking Extension
-
-
-A future version may support exact mappings：
-
-```text
-ThinkingContent
-→ thinking
-
-ThinkingContent(redacted)
-→ redacted_thinking
-```
-
-only after：
-
-```text
-response mapping
-+
-next-request replay mapping
-+
-opaque signature continuity
-```
-
-are all certified.
-
-No current v1 implementation should depend on these future mappings.
+`redacted_thinking` and `ThinkingContent(redacted:true)` remain outside capability baseline v2. Supporting them requires an independently specified Pi representation and exact response plus next-request replay mapping. Their exclusion MUST NOT weaken ordinary thinking support.
 
 ---
 
@@ -5686,26 +5681,24 @@ Conformance test must validate this against the protocol reference accumulator a
 
 ---
 
-###### 6.3.1.2.3. Thinking Block Exclusion in v1
+###### 6.3.1.2.3. Atomic Thinking Block Lifecycle
 
-**Thinking SSE Is Not Current v1**
-
-
-Current v1 serializer MUST NOT receive：
+For every ordinary target `thinking` block, Atomic SSE emits in order：
 
 ```text
-ThinkingContent
+content_block_start
+  content_block = { type:"thinking", thinking:"", signature:"" }
+
+content_block_delta
+  delta = { type:"thinking_delta", thinking:<complete thinking string> }
+
+content_block_delta
+  delta = { type:"signature_delta", signature:<complete opaque signature> }
+
+content_block_stop
 ```
 
-Therefore no current certified SSE path generates：
-
-```text
-thinking_delta
-signature_delta
-redacted_thinking
-```
-
-Those belong to a future round-trip-supported extension.
+Both deltas are emitted even when their value is empty. Accumulating the lifecycle MUST yield the exact JSON target block. `redacted_thinking` has no certified SSE lifecycle in capability baseline v2.
 
 ---
 
@@ -6129,27 +6122,37 @@ Required continuation semantics must survive.
 
 ---
 
-### 7.2. Current v1 Round-Trip Surface
+### 7.2. Current v2 Round-Trip Surface
 
 #### Current Round-Trip Supported Content
 
 
-Current v1 baseline：
+Current capability baseline v2：
 
 ```text
 TextContent
+ThinkingContent (ordinary, non-redacted)
 ToolCall
 ```
 
 subject to opaque/provenance-state certification.
 
-Current v1 excludes：
+Current v2 excludes：
 
 ```text
-ThinkingContent
+redacted ThinkingContent
 ```
 
-because request-side replay is not yet supported.
+Ordinary thinking is certified only as one complete chain：
+
+```text
+Pi ThinkingContent
+→ Anthropic JSON / Atomic SSE thinking
+→ next Anthropic request history
+→ Pi ThinkingContent
+```
+
+The Client Protocol and Provider adapters meet only through Pi; the round trip does not authorize either side to consume the other side's wire types.
 
 ---
 
@@ -6458,7 +6461,7 @@ ToolCall
 → exact client-visible tool_use semantics
 
 ThinkingContent
-→ unreachable on current v1
+→ exact ordinary thinking and opaque-signature semantics
 ```
 
 It must additionally establish：
@@ -8364,22 +8367,14 @@ before HTTP write.
 
 ---
 
-##### Thinking Test
+##### Thinking Tests
 
 
-Committed：
+Verify committed ordinary `ThinkingContent` produces JSON and Atomic SSE with identical `thinking` and opaque `signature`, and verify the resulting historical block maps back to the same Pi semantics on the next request.
 
-```text
-ThinkingContent
-```
+Verify absent Pi signature projects to `signature:""` and replays to absent signature state.
 
-under current v1：
-
-```text
-→ Runtime / Outbound Fidelity Failure
-```
-
-No successful JSON or SSE response.
+Reject malformed fields, `redacted:true`, and ordinary thinking on a model without `reasoning:true`; do not textify or omit them.
 
 ---
 
@@ -9174,10 +9169,10 @@ Only valid while non-direct caller semantics are unreachable.
 
 Presence alone does not prove failure; semantic relevance decides.
 
-#### R-19 — Thinking Is Unsupported on Current v1 Certified Response Path
+#### R-19 — Ordinary Thinking Is an Exact v2 Round-Trip Semantic
 
 
-Certified execution must guarantee it absent.
+Certified execution preserves ordinary thinking and opaque signatures through JSON、Atomic SSE and next-turn replay. Redacted thinking remains fail-closed.
 
 #### R-20 — Usage Is Schema-Complete and Mapped, Not Recomputed
 
@@ -9287,10 +9282,10 @@ Certification Result
 
 ```text
 Specification:
-Anthropic ↔ Pi AI IR Conversion Method v1.1
+Anthropic ↔ Pi AI IR Conversion Method v1.2
 
 Capability Baseline:
-v1
+v2
 
 Anthropic Protocol Spec:
 Anthropic Messages API Protocol Specification v0.4
@@ -9481,6 +9476,16 @@ Optional non-authoritative diagnostics may derive the semantic-header/source-gra
 Semantic-header and source-grammar support rows are specification/conformance facts and are not duplicated as independent runtime-manifest authority.
 
 ### A.4. Revision Notes and Evidence Boundaries
+
+### v1.2 Ordinary Thinking Round-Trip Extension
+
+v1.2 introduces capability baseline v2 while preserving every inherited v1 rule. The only capability expansion is ordinary, non-redacted thinking：
+
+```text
+Anthropic historical thinking ↔ Pi ThinkingContent ↔ Anthropic JSON / Atomic SSE thinking
+```
+
+The extension freezes opaque non-empty signature preservation, the empty-signature projection for absent Pi state, model-aware reasoning representability, and fail-closed redacted handling. Explicit source thinking controls remain unsupported. No Provider wire type or Provider policy enters the Client Protocol contract.
 
 ### v1.1 Final Contract Completeness Closure
 

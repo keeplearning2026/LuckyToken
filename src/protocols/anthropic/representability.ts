@@ -57,4 +57,10 @@ export function assertAnthropicModelAwareValidity(
       "Final-assistant prefill source validity is unknown for the resolved model",
     );
   }
+
+  if (request.hasThinking && !model.reasoning) {
+    throw new UnsupportedFeature(
+      "Historical thinking requires a reasoning-capable model",
+    );
+  }
 }

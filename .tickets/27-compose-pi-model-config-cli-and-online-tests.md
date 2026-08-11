@@ -1,8 +1,8 @@
-# 26 — Compose Pi model configuration, CLI, and online tests
+# 27 — Compose Pi model configuration, CLI, and online tests
 
 **What to build:** Add the Pi-owned Provider/model configuration input and use it from a thin CLI composition root to start the certified local service and run explicitly authorized real-provider verification.
 
-**Blocked by:** 25 — Integrate Pi login and persistent credentials.
+**Blocked by:** 26 — Certify Anthropic and Pi thinking round-trip.
 
 **Status:** pending
 
