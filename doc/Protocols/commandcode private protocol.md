@@ -1395,7 +1395,7 @@ slots[]        start-event arrival order
 7. response-side `tool-result` 不进入 content。
 8. 每个 `finish` 完整覆盖之前的 finish/usage/systemPromptTokens；仍需等 physical EOF。
 9. `abort` 立即 rollback，然后抛 typed abort error 并取消 body；不返回 result。
-10. `error` 立即失败，不返回 result。
+10. `error` 立即失败，不返回 result。**另外未知type都error,这样简洁一些。**
 11. malformed/unknown event 保存在 `rawEvents` 后抛 non-retryable protocol error，不得修改 semantic state。
 12. EOF 时若没有 `finish`（也没有已经触发异常的 `abort`），先 rollback 并抛 `CommandCodeTransportError`；即使存在 unfinished block 也以该 transport error 为准。
 13. EOF 时已有 `finish` 但仍存在 unfinished block 是 protocol error；不能猜测 completion、自动 close 或 materialize incomplete tool。

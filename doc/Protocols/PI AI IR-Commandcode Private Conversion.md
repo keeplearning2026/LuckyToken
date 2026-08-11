@@ -6470,6 +6470,12 @@ done / error
 
 Pi Event Emission 不再解释 CommandCode response semantics，也不重新执行 CommandCode → Pi conversion。
 
+Provider 使用 Pi 提供的：
+
+createAssistantMessageEventStream()
+
+创建返回给 Pi runtime 的 event stream。
+
 ------
 
 ### 1.4 Atomicity Boundary
@@ -6504,14 +6510,14 @@ Pi content events
 
 ## 2. CommandCode Response Reconstruction
 
-CommandCode response reconstruction 负责把一个 HTTP response 的物理 JSONL event stream 重建为一个完整、合法、可提交的 CommandCode response state。
+CommandCode response reconstruction 负责把一个 HTTP response 的物理 JSONL stream 重建为一个完整、合法、可提交的 CommandCode response。
 
 ```text
 CommandCode HTTP Response
 ↓
-physical stream decoding
+physical JSONL decoding
 ↓
-CommandCode events
+accepted CommandCode events
 ↓
 content lifecycle reconstruction
 ↓
@@ -6520,23 +6526,23 @@ finish / EOF validation
 Committed CommandCode Response
 ```
 
-本章只定义 CommandCode Source protocol 的 reconstruction。
+本章只负责 CommandCode response reconstruction。
 
-它不构造 Pi `AssistantMessage`，也不执行 Pi event emission。
+它不构造 Pi `AssistantMessage`。
 
-每个 HTTP attempt 拥有独立 reconstruction state。只有 successfully committed response 才能进入后续 semantic conversion。
+只有成功 committed 的 CommandCode response 才进入后续 Pi semantic conversion。
 
 ------
 
 ### 2.1 HTTP Response
 
-对于 successful HTTP response：
+Successful response：
 
 ```text
 2xx
 +
 readable response body
-→ consume CommandCode response stream
+→ consume response stream
 ```
 
 如果：
@@ -6547,35 +6553,35 @@ readable response body
 response body missing
 ```
 
-则当前 attempt 无法形成完整 Source response：
+则：
 
 ```text
 → transport failure
 ```
 
-对于 non-2xx：
+Non-2xx：
 
 ```text
 → HTTP failure
 ```
 
-其 body 不作为 successful CommandCode event stream reconstruction。
+其 body 不进入 successful response reconstruction。
 
-CommandCode success parsing 不以 `Content-Type` 为 gate。
+CommandCode successful response parsing 不以 `Content-Type` 为 gate。
 
-即使 response 声明：
+即使 response header 为：
 
 ```http
 Content-Type: text/event-stream
 ```
 
-实际 body framing 仍按 CommandCode bare JSONL protocol 处理。
+body 仍按 CommandCode bare JSONL 处理。
 
 ------
 
 ### 2.2 Physical Stream Decoding
 
-CommandCode response body 是：
+CommandCode response framing：
 
 ```text
 JSON object
@@ -6587,40 +6593,40 @@ LF
 
 不是 conventional SSE。
 
-因此 decoder 不处理：
+因此不处理：
 
 ```text
 data:
 event:
 id:
 retry:
-blank-line SSE framing
+blank-line framing
 [DONE]
 ```
 
-Network chunk 没有 semantic boundary。
+Network chunk 不具有 event semantic。
 
-正确 physical decoding：
+Decoding：
 
 ```text
 ReadableStream<Uint8Array>
 ↓
 TextDecoder.decode(chunk, { stream: true })
 ↓
-append decoded text to line buffer
+append to line buffer
 ↓
 split complete LF-delimited lines
 ↓
 trim framing whitespace
 ↓
-ignore empty lines
+skip empty lines
 ↓
 JSON.parse(whole line)
 ↓
 CommandCode event
 ```
 
-在 physical EOF：
+Physical EOF：
 
 ```text
 flush TextDecoder
@@ -6631,72 +6637,99 @@ if final non-empty unterminated line exists
     parse it as one final JSON line
 ```
 
-一个 HTTP chunk：
+因此：
 
 ```text
-≠ one event
-≠ one JSON line
+HTTP chunk
+≠ JSON line
+≠ CommandCode event
 ```
 
-一个 JSON line 也可能跨多个 network chunks。
+一个 JSON line 可以跨多个 network chunks。
 
 ------
 
-### 2.3 Event Model
+### 2.3 Accepted Event Types
 
-Reconstruction 只识别 CommandCode-defined event types。
+LuckyToken response reconstruction 只接受当前 supported CommandCode response lifecycle 所需要的 event types：
 
 ```text
-CommandCode Event
-│
-├── Content Lifecycle
-│   │
-│   ├── Text
-│   │   ├── text-start
-│   │   ├── text-delta
-│   │   └── text-end
-│   │
-│   ├── Reasoning
-│   │   ├── reasoning-start
-│   │   ├── reasoning-delta
-│   │   └── reasoning-end
-│   │
-│   └── Tool
-│       ├── tool-input-start
-│       ├── tool-input-delta
-│       ├── tool-input-end
-│       └── tool-call
-│
-├── Known Non-Content
-│   ├── start
-│   ├── start-step
-│   ├── provider-metadata
-│   ├── finish-step
-│   └── response-side tool-result
-│
-└── Control
-    ├── finish
-    ├── error
-    └── abort
+start
+start-step
+
+reasoning-start
+reasoning-delta
+reasoning-end
+
+text-start
+text-delta
+text-end
+
+tool-input-start
+tool-input-delta
+tool-input-end
+tool-call
+
+finish-step
+finish
+provider-metadata
+
+error
 ```
 
-每个 parsed event 必须是 object，并具有合法 non-empty string `type`。
+每个 parsed JSON value 必须满足：
 
-未知 event type：
+```text
+object
++
+non-empty string type
+```
+
+否则：
 
 ```text
 → protocol error
+→ no committed response
 ```
 
-Known non-content event 和 unknown event 不等价。
+以下 events 被接受但不改变 reconstruction state：
 
-Known non-content event 可以合法出现在 stream 中，但不会自动成为 model content。
+```text
+start
+start-step
+finish-step
+provider-metadata
+```
+
+即：
+
+```text
+accepted
+→ no-op
+```
+
+Explicit CommandCode error：
+
+```text
+type = "error"
+→ immediate response failure
+→ no committed response
+```
+
+任何不在上述 whitelist 中的 event type：
+
+```text
+→ protocol error
+→ no committed response
+```
+
+因此当前 reconstruction 不维护额外 unknown / ignored event taxonomy。
 
 ------
 
 ### 2.4 Ordered Content Reconstruction
 
-CommandCode content 是一个 ordered block sequence：
+Committed CommandCode content 是一个 ordered block sequence：
 
 ```text
 content[]
@@ -6705,7 +6738,7 @@ content[]
 └── ToolUse
 ```
 
-Content block 的顺序由其 **start event 到达顺序** 决定：
+新的 content position 只由：
 
 ```text
 text-start
@@ -6713,29 +6746,9 @@ reasoning-start
 tool-input-start
 ```
 
-只有这三类 event 可以创建新的 content position。
+创建。
 
-Conceptual reconstruction state：
-
-```text
-Response Reconstruction State
-│
-├── slots[]
-│
-├── textById
-├── reasoningById
-└── toolById
-```
-
-其中：
-
-```text
-slots[]
-```
-
-保存 content-start event arrival order。
-
-因此：
+Content order：
 
 ```text
 content order
@@ -6746,15 +6759,28 @@ content-start event arrival order
 而不是：
 
 ```text
-content completion order
+completion order
 content type
-ID lexical order
-wall-clock timestamp
+ID order
+timestamp
 ```
 
-Content lifecycles 可以 overlap。
+Reconstruction state：
 
-例如以下 sequence 合法：
+```text
+Response Reconstruction State
+├── slots[]
+├── textById
+├── reasoningById
+├── toolById
+└── finishCandidate?
+```
+
+`slots[]` 保存 start-event arrival order。
+
+不同 content lifecycle 可以 overlap。
+
+例如：
 
 ```text
 reasoning-start A
@@ -6765,7 +6791,7 @@ text-end B
 ...
 ```
 
-最终 content order 仍然是：
+最终 order：
 
 ```text
 A
@@ -6773,13 +6799,11 @@ B
 C
 ```
 
-即使 A、B、C 的 completion order 不同。
-
 ------
 
 #### ID namespaces
 
-Text、Reasoning、Tool 分别使用自己的 ID-indexed state：
+Text、Reasoning、Tool 使用独立 ID namespaces：
 
 ```text
 textById
@@ -6787,28 +6811,47 @@ reasoningById
 toolById
 ```
 
-同一 content kind 中 duplicate active/start ID：
+同一个 ID 可以同时存在于不同 content kinds。
+
+例如：
+
+```text
+Text id = "0"
+Reasoning id = "0"
+```
+
+不冲突。
+
+但同一 content kind 中 duplicate start ID：
 
 ```text
 → protocol error
 ```
 
-Delta、end 或 final ToolCall 找不到 matching open lifecycle：
+任何：
+
+```text
+delta
+end
+final tool-call
+```
+
+如果找不到 matching open lifecycle：
 
 ```text
 → protocol error
 ```
+
+Closed lifecycle 不再接受新的 lifecycle event。
 
 不能：
 
 ```text
 create placeholder
-guess lifecycle
-generate synthetic occurrence ID
-reorder content
+guess correlation
+generate replacement ID
+reorder slots
 ```
-
-Closed block 不再接受新的 lifecycle event。
 
 ------
 
@@ -6829,44 +6872,65 @@ text-end(id)
 `text-start`：
 
 ```text
-→ reserve content position
-→ create open Text slot
+validate id
+↓
+reserve ordered content slot
+↓
+create open Text state
 ```
 
-每个 `text-delta`：
+`text-delta`：
 
 ```text
-require matching open Text slot
+require matching open Text
 ↓
-append delta.text exactly
+require text string
+↓
+append text exactly
 ```
 
 `text-end`：
 
 ```text
-require matching open Text slot
+require matching open Text
 ↓
-validate completed text
+require completed text is non-empty after trim
 ↓
-close slot
+close Text
 ```
 
-Completed text 必须满足：
+Validation：
 
 ```text
 trim(reconstructedText).length > 0
 ```
 
-这里 `trim()` 只用于 Source protocol validity check。
+`trim()` 只用于 validity check。
 
-不得修改最终 reconstructed text：
+Stored content 不被 trim：
 
 ```text
 validate with trim
-≠ store trimmed text
+≠
+store trimmed text
 ```
 
-不能在 EOF 自动 close incomplete Text block。
+完成后：
+
+```text
+Text.id
+```
+
+不再具有 downstream semantic用途。
+
+最终 committed Text：
+
+```text
+{
+  type: "text",
+  text
+}
+```
 
 ------
 
@@ -6882,7 +6946,7 @@ reasoning-delta(id)*
 reasoning-end(id)
 ```
 
-其 reconstruction rules 与 Text 相同：
+规则与 Text 相同：
 
 ```text
 start
@@ -6896,15 +6960,34 @@ end
 → close
 ```
 
-`reasoning-start.providerMetadata` 不属于 reasoning text 本身。
+`reasoning-start.providerMetadata` 不参与当前 committed response construction。
 
-是否保留其中某个具体 metadata fact，必须由后续 Target construction 建立实际 dependency；不能因为 metadata 存在就整体进入 semantic conversion state。
+因此不保存。
+
+完成后：
+
+```text
+Reasoning.id
+```
+
+同样只完成 reconstruction correlation 生命周期。
+
+最终 committed Reasoning：
+
+```text
+{
+  type: "reasoning",
+  text
+}
+```
+
+EOF 不能自动 close incomplete Text 或 Reasoning block。
 
 ------
 
 ### 2.6 Tool Lifecycle
 
-一个 ordinary CommandCode ToolUse 由完整 lifecycle 构成：
+CommandCode ToolUse lifecycle：
 
 ```text
 tool-input-start
@@ -6916,78 +6999,59 @@ tool-input-end
 tool-call
 ```
 
-这一 lifecycle 使用一套稳定 Source identity。
-
-字段名称在 final event 中发生变化：
+Correlation identity：
 
 ```text
 tool-input-start.id
+=
 tool-input-delta.id
+=
 tool-input-end.id
-tool-call.toolCallId
-```
-
-但它们表示同一个 Tool lifecycle ID。
-
-Matching invariant：
-
-```text
-start.id
-=
-every delta.id
-=
-end.id
 =
 tool-call.toolCallId
 ```
 
-因此 Tool reconstruction 可以直接使用：
+因此：
 
 ```text
-Tool Slot key = tool-input-start.id
+Tool slot key
+=
+tool-input-start.id
 ```
 
-不需要生成额外 internal tool identity。
+不生成额外 internal Tool identity。
 
 ------
 
 #### `tool-input-start`
 
-Required information：
+Required fields：
 
 ```text
 id
 toolName
 ```
 
-Optional execution semantics：
+处理：
 
 ```text
-providerExecuted?
-dynamic?
+validate id
+validate toolName
+↓
+reserve ordered Tool slot
+↓
+create open Tool lifecycle
 ```
 
-Start event：
+Start `toolName` 只需要满足 Source event validity。
+
+Final ToolUse name 由后续：
 
 ```text
-→ reserve Tool content position
-→ create open Tool slot
+tool-call.toolName
 ```
 
-`id` 成为整个 Tool lifecycle correlation ID。
-
-Start `toolName` 属于 lifecycle state，但不是 final ToolUse name authority。
-
-如果 downstream semantic construction 需要：
-
-```text
-providerExecuted
-dynamic
-```
-
-判断 ToolUse representability，则这些 semantics 必须 survive reconstruction。
-
-特别是 `dynamic` 可以只出现在 `tool-input-start`，不能因为 final `tool-call` 没有重复它就丢失。
+提供，因此 start `toolName` 不需要保存为第二个 name representation。
 
 ------
 
@@ -6996,45 +7060,34 @@ dynamic
 每个 delta 必须：
 
 ```text
-have matching open Tool slot
+have matching open Tool
 +
 occur before tool-input-end
 +
 delta is string
 ```
 
-其 `delta` 可以组成 streamed input preview。
+`delta` 只属于 streamed input lifecycle。
 
-但：
+Final ToolUse input 不由这些 deltas构造。
 
-```text
-tool-input-delta*
-```
-
-不是 final ToolUse input authority。
-
-即使：
+因此 reconstruction：
 
 ```text
-JSON.parse(concatenated preview)
-==
-final tool-call.input
+validate delta
+↓
+discard delta value
 ```
 
-也不能依赖这种相等关系作为 protocol construction rule。
-
-因此：
+不积累：
 
 ```text
-tool-input-delta
-→ lifecycle / preview information
+preview
+partial JSON
+raw input buffer
 ```
 
-而不是：
-
-```text
-→ final ToolUse.input
-```
+也不使用 streamed delta 修补 final ToolCall input。
 
 ------
 
@@ -7044,12 +7097,12 @@ tool-input-delta
 tool-input-end(id)
 ```
 
-要求 matching open Tool slot。
-
-它只表示：
+要求：
 
 ```text
-streamed input lifecycle completed
+matching open Tool
++
+input not already ended
 ```
 
 然后：
@@ -7058,24 +7111,24 @@ streamed input lifecycle completed
 inputEnded = true
 ```
 
-Repeated end：
+Repeated `tool-input-end`：
 
 ```text
 → protocol error
 ```
 
-`tool-input-end` 本身不 materialize final ToolUse。
+它本身不 materialize ToolUse。
 
 ------
 
 #### `tool-call`
 
-Final ToolCall 必须：
+Final `tool-call` 必须：
 
 ```text
-have matching Tool slot
+have matching open Tool
 +
-toolCallId == slot.id
+toolCallId matches lifecycle id
 +
 input lifecycle already ended
 ```
@@ -7095,99 +7148,90 @@ input
    ?? {}
 ```
 
-Final `tool-call.toolName` 是 authoritative ToolUse name。
+Final `tool-call.toolName` 是唯一 committed ToolUse name authority。
 
-因此：
-
-```text
-start.toolName != final.toolName
-```
-
-本身不构成 protocol error。
-
-Final value 覆盖 start value。
-
-Tool input 同样只使用 final ToolCall representation：
+不比较：
 
 ```text
-input ?? args ?? {}
+tool-input-start.toolName
+vs
+tool-call.toolName
 ```
 
-不能使用 accumulated preview 修补缺失或 malformed final state。
+来制造额外 consistency requirement。
+
+Final input 同样只来自 final `tool-call`。
+
+不能使用 earlier `tool-input-delta` 内容修补：
+
+```text
+missing input
+malformed input
+null input
+```
+
+Nullish fallback：
+
+```text
+input
+?? args
+?? {}
+```
+
+完成后关闭 Tool lifecycle。
+
+最终 committed ToolUse：
+
+```text
+{
+  type: "tool_use",
+  id,
+  toolName,
+  input
+}
+```
+
+不保存：
+
+```text
+providerExecuted
+dynamic
+tool input preview
+start toolName
+```
+
+因为后续 Pi Target construction 不需要这些 information。
 
 ------
 
-#### Execution semantics
-
-Reconstructed ToolUse 必须能够保留后续 construction 真正需要的 execution semantics：
-
-```text
-providerExecuted?
-dynamic?
-```
-
-`dynamic` 来自 Tool lifecycle start semantics。
-
-`providerExecuted` 如果在 lifecycle 中出现 positive execution evidence，则不得在 reconstruction 中丢失。
-
-完成 ToolCall 后关闭 Tool slot。
-
-Closed Tool slot 不再接受：
-
-```text
-delta
-end
-tool-call
-```
-
-------
-
-### 2.7 Known Non-Content and Control Events
-
-#### Known non-content
-
-以下 event 可以合法出现，但不构造 model content block：
-
-```text
-start
-start-step
-provider-metadata
-finish-step
-response-side tool-result
-```
-
-它们不影响：
-
-```text
-content slot order
-content text
-ToolCall identity
-```
-
-除非后续某个 Target field 明确建立对其中某项 information 的 construction dependency，否则这些 metadata 不进入 semantic conversion state。
-
-特别不能因为：
-
-```text
-finish-step
-provider-metadata
-```
-
-包含大量 response/provider information，就整体复制进 committed semantic model。
-
-------
+### 2.7 Finish, Error, EOF and Commit
 
 #### `finish`
 
-`finish` 表示当前 final response candidate：
+`finish` 是当前 final response candidate。
+
+当前后续 Pi conversion 只需要：
 
 ```text
-finish
+finishReason?
+totalUsage?
+```
+
+但 reconstruction 在 commit 前还需要：
+
+```text
+rawFinishReason?
+```
+
+判断 `pause_turn`。
+
+因此 attempt-local finish candidate 可以包含：
+
+```text
+finishCandidate
 ├── finishReason?
 ├── rawFinishReason?
-├── totalUsage?
-├── systemPromptTokens?
-└── other Source fields
+└── totalUsage?
 ```
 
 每个新的 `finish`：
@@ -7196,37 +7240,45 @@ finish
 → completely replaces previous finish candidate
 ```
 
-不能把 earlier finish 中缺失于 later finish 的 fields carry forward。
+不能把 earlier finish 的 fields carry forward。
 
 例如：
 
 ```text
-finish #1.totalUsage exists
-finish #2.totalUsage absent
+finish #1
+└── totalUsage exists
+
+finish #2
+└── totalUsage absent
 ```
 
 最终：
 
 ```text
-totalUsage
-→ absent
+totalUsage absent
 ```
-
-不能沿用 #1。
 
 ------
 
-#### `finish` does not terminate transport
+#### `finish` does not commit
 
-收到 `finish` 后：
+收到：
 
 ```text
-MUST continue reading response body
+finish
 ```
 
-因为合法 CommandCode events 可以继续出现。
+后仍然继续读取 body。
 
-Observed legal sequence includes：
+因为：
+
+```text
+finish
+≠ physical EOF
+≠ commit
+```
+
+例如合法 transport sequence 可以是：
 
 ```text
 finish-step
@@ -7238,83 +7290,80 @@ provider-metadata
 physical EOF
 ```
 
-因此：
+所以：
 
 ```text
 finish
-≠ physical EOF
-≠ stream commit
+→ update finish candidate
+→ continue reading
 ```
 
-Consumer 在 `finish` 后不得：
-
-```text
-stop reader
-commit response
-emit Pi semantic result
-```
-
-真正的 commit evaluation 发生在 physical EOF。
+不能在收到 finish 时提前开始 Pi semantic conversion。
 
 ------
 
 #### `error`
 
-Stream `error` event：
-
 ```text
-→ immediate response failure
+event.type = "error"
 ```
 
-不返回 committed response。
-
-Retryability 等 failure classification 属于 error contract / attempt execution。
-
-------
-
-#### `abort`
-
-Wire-level：
+立即：
 
 ```text
-{ type: "abort" }
-```
-
-表示当前 CommandCode response 被 abort。
-
-它：
-
-```text
-→ abandons current reconstruction state
+→ response failure
 → no committed response
 ```
 
-Wire `abort` 与 caller `AbortSignal` 是不同来源的 cancellation，不应自动混为同一 event semantic。
+Error details 可以用于上层 error reporting / retry decision。
+
+它不进入 committed semantic state。
 
 ------
 
-### 2.8 Physical EOF and Commit
+#### Unsupported event
 
-Physical EOF 是 response reconstruction 的 commit boundary。
-
-#### EOF without final `finish`
-
-如果 physical EOF 到达时没有 final `finish`：
+任何 whitelist 之外的 event：
 
 ```text
-→ incomplete / truncated transport
-→ no commit
+→ protocol error
+→ no committed response
 ```
 
-即使同时存在 unfinished content slot，也首先说明 response 未形成 required terminal finish。
+例如当前：
 
-不能把 EOF 当成 implicit successful finish。
+```text
+abort
+tool-result
+future unknown event
+```
+
+都不具有单独 reconstruction semantic。
+
+------
+
+#### EOF without finish
+
+Physical EOF 时如果：
+
+```text
+finishCandidate absent
+```
+
+则：
+
+```text
+→ incomplete / truncated response
+→ no committed response
+```
+
+EOF 不能作为 implicit successful finish。
 
 ------
 
 #### EOF with open content
 
-如果已经存在 final `finish`，但 EOF 时仍有：
+如果 final finish 已存在，但 EOF 时仍存在：
 
 ```text
 open Text
@@ -7326,85 +7375,83 @@ open Tool
 
 ```text
 → protocol error
-→ no commit
+→ no committed response
 ```
 
 不能：
 
 ```text
 auto-close
-drop incomplete block
-materialize partial ToolCall
-guess missing event
+drop incomplete content
+materialize partial ToolUse
+guess missing lifecycle event
 ```
 
 ------
 
-#### Final `pause_turn`
+#### `pause_turn`
 
-当前 CommandCode handling 对 final effective raw reason：
-
-```text
-rawFinishReason ?? finishReason
-```
-
-为：
+在 EOF commit evaluation 时：
 
 ```text
-pause_turn
+effectiveRawReason
+=
+rawFinishReason
+?? finishReason
 ```
 
-时不产生 committed response。
+如果：
 
 ```text
-→ typed non-retryable failure
+effectiveRawReason === "pause_turn"
 ```
 
-这一 ownership 仍需在后续 Stop Reason chapter 中重新检查：
+则：
 
 ```text
-Source reconstruction failure
-vs
-valid committed Source but Pi Target unrepresentable
+→ response failure
+→ no committed response
 ```
 
-在该问题正式重新裁决前，保持当前 behavior。
+`pause_turn` 到此处理结束。
+
+它不会进入后续 `stopReason` conversion。
 
 ------
 
-#### Commit condition
+#### Commit
 
-只有同时满足：
+只有：
 
 ```text
 physical EOF
 +
 final finish exists
 +
-all content slots closed
+all content lifecycles closed
 +
-no stream error
+no explicit error
 +
-no wire abort
+no unsupported event
 +
-no malformed / unknown event
+no malformed event
 +
-no content lifecycle violation
+no lifecycle violation
 +
-accepted final terminal condition
+final effective reason != "pause_turn"
 ```
 
-才产生：
+才：
 
 ```text
-Committed CommandCode Response
+→ commit
 ```
 
 ------
 
-### 2.9 Committed CommandCode Response
+### 2.8 Committed CommandCode Response
 
-Base committed semantic representation 应保持 Source-shaped 并尽量最小：
+成功 commit 后，只保留后续 Pi Target construction 真正需要的信息：
 
 ```text
 Committed CommandCode Response
@@ -7413,141 +7460,111 @@ Committed CommandCode Response
 │   │
 │   ├── Text
 │   │   ├── type = "text"
-│   │   ├── id
 │   │   └── text
 │   │
 │   ├── Reasoning
 │   │   ├── type = "reasoning"
-│   │   ├── id
 │   │   └── text
 │   │
 │   └── ToolUse
 │       ├── type = "tool_use"
 │       ├── id
 │       ├── toolName
-│       ├── input
-│       ├── providerExecuted?
-│       └── dynamic?
+│       └── input
 │
 └── finish
     ├── finishReason?
-    ├── rawFinishReason?
-    ├── totalUsage?
-    └── systemPromptTokens?
+    └── totalUsage?
 ```
 
-Reconstruction 不应同时创建：
+对应 downstream dependencies：
 
 ```text
-finish.totalUsage
-+
-rawUsage
-+
-NormalizedUsage
+content[]
+→ Chapter 4
+
+finish.totalUsage?
+→ Chapter 5
+
+finish.finishReason?
+→ Chapter 6
 ```
 
-作为三个 parallel representations。
-
-Usage normalization 属于后续 Pi `Usage` Target construction。
-
-同样：
+以下 information 在 commit 前已经完成生命周期，不进入 committed response：
 
 ```text
-finish.systemPromptTokens
+Text.id
+Reasoning.id
+
+tool input deltas
+start toolName
+
+rawFinishReason
 ```
 
-已经存在时，不需要再复制为 response-level duplicate field。
-
-------
-
-#### Response metadata retention
-
-真实 CommandCode stream 还可能包含：
+当前 downstream Pi Target construction 也不需要：
 
 ```text
-finish-step.response
-providerMetadata.gateway
+providerExecuted
+dynamic
+systemPromptTokens
+finish-step
+provider-metadata
 response headers
-generation identity
-reported cost
+gateway cost metadata
 ```
 
-但这些 information 不自动进入 committed semantic state。
+因此不保存。
 
-规则是：
+Reconstruction 同样不创建：
 
 ```text
-later Pi Target field
-↓
-proves specific construction dependency
-↓
-retain exactly that committed Source fact
+RawUsage
+NormalizedUsage
+response-level usage copy
 ```
 
-而不是：
+Usage 保持为：
 
 ```text
-Source metadata exists
-↓
-retain entire finish-step / providerMetadata
+finish.totalUsage?
 ```
 
-因此本章暂不提前决定：
-
-```text
-responseId
-responseModel
-timestamp
-usage.cost
-```
-
-应该使用哪一个 CommandCode metadata representation。
-
-这些 decisions 由对应 Target chapter 决定后，再反向要求 reconstruction 保留最小 necessary Source fact。
+直到 Chapter 5 直接构造 Pi `Usage`。
 
 ------
 
-### 2.10 Attempt Isolation and Atomicity
+#### Attempt isolation
 
-每个 physical HTTP attempt 拥有独立：
+每个 HTTP attempt 拥有独立 reconstruction state。
 
 ```text
-decoder state
-line buffer
-content slots
-ID maps
-finish candidate
-temporary metadata
+Attempt A
+├── decoder
+├── buffer
+├── content lifecycle state
+└── finish candidate
+
+Attempt B
+└── fresh independent state
 ```
 
 Failed attempt：
 
 ```text
-→ discard entire attempt-local reconstruction state
+→ discard reconstruction state
 ```
 
 Retry：
 
 ```text
-→ create fresh reconstruction state
+→ start fresh reconstruction state
 ```
 
-不能把：
+Atomic boundary：
 
 ```text
-partial text
-partial reasoning
-partial tool input
-finish candidate
-metadata
-```
-
-泄漏到下一 attempt。
-
-Atomicity boundary：
-
-```text
-physical response
+physical CommandCode response
 ↓
 attempt-local reconstruction
 ↓
@@ -7555,20 +7572,10 @@ attempt-local reconstruction
 ↓
 Committed CommandCode Response
 ↓
-semantic conversion
+Pi semantic conversion
 ```
 
-在 commit 前：
-
-```text
-no Pi AssistantMessage content
-no Pi ToolCall
-no Pi terminal event
-```
-
-被视为 committed semantic output。
-
-因此 malformed stream、transport truncation、retry、abort 或 incomplete Tool lifecycle 都可以安全丢弃当前 attempt state，而不会把 partial Source state 泄漏到 Pi protocol。
+Commit 前不产生 committed Pi semantic state。
 
 ## 3. Pi AssistantMessage Top-Level Fields
 
