@@ -1,6 +1,6 @@
 # LuckyToken Core Tickets Implementation Guide
 
-本文说明如何实现 `.tickets` 中的 23 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
+本文说明如何实现 `.tickets` 中的 25 张 ticket。它不是新的 Architecture、Protocol 或 Conversion Spec；发生冲突时，权威顺序仍是：
 
 ```text
 Protocol Spec
@@ -111,7 +111,9 @@ test/
 | 10 | 19 | 在 target Message 和 HTTP atomicity 上增加 Atomic SSE |
 | 11 | 21 | 全部路径完成后才能认证 |
 | 12 | 22 | 在已认证路径上收紧通用 Provider boundary |
-| 13 | 23 | 在稳定 Runtime boundary 上增加真实 listener 与 CLI |
+| 13 | 23 | 在Pi IR两侧隔离Client Protocol与Provider |
+| 14 | 24 | 在稳定Runtime route/lifecycle上增加真实listener |
+| 15 | 25 | 独立接入Pi配置、CLI与显式在线测试 |
 
 依赖图：
 
@@ -163,7 +165,9 @@ flowchart LR
   T19 --> T21
   T20 --> T21
   T21 --> T22["22 Provider boundary"]
-  T22 --> T23["23 Local HTTP server"]
+  T22 --> T23["23 Client Protocol boundary"]
+  T23 --> T24["24 Local HTTP server"]
+  T24 --> T25["25 Pi config / CLI / online"]
 ```
 
 ## 5. 每张 ticket 的实现方法
@@ -341,11 +345,24 @@ flowchart LR
 - 使用两个不同fixture Provider证明Core无需识别Provider即可完成model selection和dispatch。
 - 用architecture test禁止Runtime/HTTP/Execution/Anthropic重新导入concrete Provider。
 
-### 23 — Local HTTP server
+### 23 — Client Protocol boundary
+
+- Pi是Client Protocol与Provider之间唯一共享的semantic contract；两条conversion direction绝不互相依赖。
+- Runtime/HTTP只持有route与request lifecycle；每个Client Protocol handler独立拥有自己的wire parsing、Pi conversion与rendering。
+- Concrete Provider只转换Pi与自己的upstream wire，不包含Anthropic、OpenAI Responses或其他Client Protocol词汇与policy。
+- 增加或删除Client Protocol不修改Provider；增加或删除Provider不修改Client Protocol。
+- Composition/certification可以同时观察两侧用于装配和验证，但不参与跨侧conversion。
+
+### 24 — Local HTTP server
 
 - Node listener只转换Node HTTP transport与WHATWG `Request`/`Response`，不承担route或Provider语义。
-- CLI composition保持server/client配置与Pi Provider/model配置分离；Runtime只接收最终`Models`。
 - 使用真实loopback TCP和官方Anthropic SDK覆盖JSON、Atomic SSE、abort、shutdown与并发隔离。
+- 包根只导出通用Runtime/Auth/Server；concrete Provider使用显式subpath。
+
+### 25 — Pi config, CLI, and online tests
+
+- CLI composition保持server/client配置与Pi Provider/model配置分离；Client Protocol只接收最终`Models`。
+- `models.json`属于Pi配置层，Runtime、Client Protocol与Provider都不解析它。
 - 真实Provider在线测试使用显式命令运行，不进入普通`npm test`。
 
 ## 6. 测试分层

@@ -1,6 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 
-import type { RouterOptionDefaults } from "./options.js";
+import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =

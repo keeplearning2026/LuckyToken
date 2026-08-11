@@ -7,8 +7,10 @@ const coreModules = [
   "http.ts",
   "execution.ts",
   "model-resolution.ts",
-  "options.ts",
+  "protocols/anthropic/options.ts",
   "protocols/anthropic/failures.ts",
+  "protocols/anthropic/handler.ts",
+  "protocols/anthropic/options.ts",
   "protocols/anthropic/profile.ts",
   "protocols/anthropic/representability.ts",
   "protocols/anthropic/request.ts",
@@ -16,6 +18,22 @@ const coreModules = [
   "protocols/anthropic/sse.ts",
   "protocols/anthropic/tools.ts",
   "protocols/anthropic/wire.ts",
+] as const;
+
+const genericRuntimeModules = [
+  "runtime.ts",
+  "http.ts",
+  "execution.ts",
+  "model-resolution.ts",
+] as const;
+
+const commandCodeProviderModules = [
+  "providers/commandcode-private/assembler.ts",
+  "providers/commandcode-private/attempts.ts",
+  "providers/commandcode-private/json.ts",
+  "providers/commandcode-private/project.ts",
+  "providers/commandcode-private/provider.ts",
+  "providers/commandcode-private/semantic.ts",
 ] as const;
 
 describe("Provider architecture boundary", () => {
@@ -33,5 +51,19 @@ describe("Provider architecture boundary", () => {
       "utf8",
     );
     expect(source).not.toMatch(/from ["']\.\/certification\.js["']/u);
+  });
+
+  it("keeps generic Runtime independent of every Client Protocol", async () => {
+    for (const module of genericRuntimeModules) {
+      const source = await readFile(new URL(`../../src/${module}`, import.meta.url), "utf8");
+      expect(source, module).not.toMatch(/protocols\/anthropic|Anthropic|anthropic/u);
+    }
+  });
+
+  it("keeps Providers independent of Client Protocol semantics", async () => {
+    for (const module of commandCodeProviderModules) {
+      const source = await readFile(new URL(`../../src/${module}`, import.meta.url), "utf8");
+      expect(source, module).not.toMatch(/Anthropic|anthropic/u);
+    }
   });
 });

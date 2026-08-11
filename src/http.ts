@@ -1,36 +1,14 @@
-import type { Models } from "@earendil-works/pi-ai";
+export interface ClientProtocolHandler {
+  readonly method: string;
+  readonly pathname: string;
+  handle(request: Request): Promise<Response>;
+}
 
-import type { Auth } from "./auth.js";
-import {
-  execute,
-  ExecutionAbortedError,
-  freezePiInvocation,
-} from "./execution.js";
-import {
-  ModelResolutionFailure,
-  resolveModel,
-} from "./model-resolution.js";
-import { composeOptions, type RouterOptionDefaults } from "./options.js";
-import { InvalidRequest, UnsupportedFeature } from "./protocols/anthropic/failures.js";
-import {
-  assertImplementedAnthropicProfile,
-  resolveAnthropicSourceProfile,
-} from "./protocols/anthropic/profile.js";
-import {
-  convertValidatedAnthropicRequest,
-  validateAnthropicSourceRequest,
-} from "./protocols/anthropic/request.js";
-import {
-  assertAnthropicModelAwareValidity,
-  type AnthropicModelValidityPolicy,
-} from "./protocols/anthropic/representability.js";
-import { renderAnthropicTextMessage } from "./protocols/anthropic/response.js";
-import { renderAnthropicAtomicSse } from "./protocols/anthropic/sse.js";
-import {
-  renderAnthropicError,
-  renderAnthropicJsonSuccess,
-  type PreparedHttpResponse,
-} from "./protocols/anthropic/wire.js";
+export interface HttpBoundaryDependencies {
+  readonly clientProtocols: readonly ClientProtocolHandler[];
+  readonly requestTimeoutMs: number | undefined;
+  readonly shutdownSignal: AbortSignal | undefined;
+}
 
 export class HttpRequestAbortedError extends Error {
   readonly reason: unknown;
@@ -40,18 +18,6 @@ export class HttpRequestAbortedError extends Error {
     this.name = "HttpRequestAbortedError";
     this.reason = reason;
   }
-}
-
-export interface HttpBoundaryDependencies {
-  models: Models;
-  auth: Auth;
-  modelValidityPolicy: AnthropicModelValidityPolicy;
-  createMessageId: () => string;
-  maxRequestBytes: number;
-  requestTimeoutMs: number | undefined;
-  shutdownSignal: AbortSignal | undefined;
-  routerDefaults: RouterOptionDefaults;
-  now: () => number;
 }
 
 interface RequestLifecycle {
@@ -114,20 +80,6 @@ function assertWritable(lifecycle: RequestLifecycle): void {
   }
 }
 
-function deliverHttpResponse(
-  lifecycle: RequestLifecycle,
-  prepared: PreparedHttpResponse,
-): Response {
-  assertWritable(lifecycle);
-  const response = new Response(prepared.body, {
-    status: prepared.status,
-    headers: { "content-type": prepared.contentType },
-  });
-  assertWritable(lifecycle);
-  lifecycle.markDelivered();
-  return response;
-}
-
 async function raceWithRequestSignal<T>(
   value: Promise<T>,
   signal: AbortSignal,
@@ -145,25 +97,14 @@ async function raceWithRequestSignal<T>(
   }
 }
 
-function hasJsonContentType(headers: Headers): boolean {
-  const contentType = headers.get("content-type");
-  return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
-}
-
-async function readRawBody(
+function selectClientProtocol(
+  protocols: readonly ClientProtocolHandler[],
   request: Request,
-  lifecycle: RequestLifecycle,
-  maximumBytes: number,
-): Promise<string | undefined> {
-  const declaredLength = request.headers.get("content-length");
-  if (/^[0-9]+$/u.test(declaredLength ?? "") && Number(declaredLength) > maximumBytes) {
-    return undefined;
-  }
-
-  const rawBody = await raceWithRequestSignal(request.text(), lifecycle.signal);
-  return new TextEncoder().encode(rawBody).byteLength <= maximumBytes
-    ? rawBody
-    : undefined;
+): ClientProtocolHandler | undefined {
+  const pathname = new URL(request.url).pathname;
+  return protocols.find(
+    (protocol) => protocol.method === request.method && protocol.pathname === pathname,
+  );
 }
 
 export async function handleHttpRequest(
@@ -178,148 +119,24 @@ export async function handleHttpRequest(
 
   try {
     assertWritable(lifecycle);
-    const receivedAt = dependencies.now();
-    const url = new URL(request.url);
-    if (request.method !== "POST" || url.pathname !== "/v1/messages") {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(404, "not_found_error", "Route not found"),
-      );
+    const protocol = selectClientProtocol(dependencies.clientProtocols, request);
+    if (protocol === undefined) {
+      lifecycle.markDelivered();
+      return new Response(null, { status: 404 });
     }
-    if (!hasJsonContentType(request.headers)) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(
-          415,
-          "invalid_request_error",
-          "Content-Type must be application/json",
-        ),
-      );
-    }
-
-    const authResult = await raceWithRequestSignal(
-      dependencies.auth.resolve(request.headers),
+    const routedRequest = new Request(request, { signal: lifecycle.signal });
+    const response = await raceWithRequestSignal(
+      protocol.handle(routedRequest),
       lifecycle.signal,
     );
-    if (!authResult.authorized) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(
-          401,
-          "authentication_error",
-          "Invalid authorization credentials",
-        ),
-      );
-    }
-
-    const sourceProfile = resolveAnthropicSourceProfile(request.headers);
-
-    const rawBody = await readRawBody(
-      request,
-      lifecycle,
-      dependencies.maxRequestBytes,
-    );
-    if (rawBody === undefined) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(
-          413,
-          "request_too_large",
-          "Request exceeds the configured maximum size",
-        ),
-      );
-    }
-    const body: unknown = JSON.parse(rawBody);
-    assertImplementedAnthropicProfile(sourceProfile);
-    const validatedRequest = validateAnthropicSourceRequest(
-      body,
-      sourceProfile.unclassifiedAnthropicHeaders,
-    );
-    const model = resolveModel(dependencies.models, validatedRequest.selector);
-    assertAnthropicModelAwareValidity(
-      validatedRequest,
-      model,
-      sourceProfile,
-      dependencies.modelValidityPolicy,
-    );
-    const invocation = convertValidatedAnthropicRequest(
-      validatedRequest,
-      receivedAt,
-    );
-
-    const piOptions = composeOptions(
-      invocation.options,
-      {
-        sessionId: authResult.sessionId,
-        signal: lifecycle.signal,
-        ...(authResult.projectDir === undefined
-          ? {}
-          : { projectDir: authResult.projectDir }),
-      },
-      dependencies.routerDefaults,
-    );
-    freezePiInvocation(model, invocation.context, piOptions);
-    const message = await execute(
-      dependencies.models,
-      model,
-      invocation.context,
-      piOptions,
-    );
     assertWritable(lifecycle);
-    const target = renderAnthropicTextMessage(
-      message,
-      invocation.renderState.clientModel,
-      dependencies.createMessageId(),
-    );
-    const prepared = invocation.renderState.stream
-      ? renderAnthropicAtomicSse(target)
-      : renderAnthropicJsonSuccess(target);
-    return deliverHttpResponse(lifecycle, prepared);
+    lifecycle.markDelivered();
+    return response;
   } catch (error) {
-    if (
-      lifecycle.signal.aborted ||
-      error instanceof HttpRequestAbortedError
-    ) {
+    if (lifecycle.signal.aborted || error instanceof HttpRequestAbortedError) {
       throw new HttpRequestAbortedError(lifecycle.signal.reason);
     }
-    if (error instanceof ExecutionAbortedError) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(500, "api_error", "Model execution was aborted"),
-      );
-    }
-    if (error instanceof SyntaxError) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(
-          400,
-          "invalid_request_error",
-          "Request body is not valid JSON",
-        ),
-      );
-    }
-    if (error instanceof InvalidRequest) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(400, "invalid_request_error", error.message),
-      );
-    }
-    if (error instanceof UnsupportedFeature) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(400, "invalid_request_error", error.message),
-      );
-    }
-    if (error instanceof ModelResolutionFailure) {
-      return deliverHttpResponse(
-        lifecycle,
-        renderAnthropicError(404, "not_found_error", error.message),
-      );
-    }
-    return deliverHttpResponse(
-      lifecycle,
-      renderAnthropicError(500, "api_error", "Internal server error"),
-    );
+    return new Response(null, { status: 500 });
   } finally {
     lifecycle.dispose();
   }

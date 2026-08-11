@@ -13,6 +13,10 @@ import {
   HttpRequestAbortedError,
   type HttpBoundaryDependencies,
 } from "../../src/http.js";
+import {
+  createAnthropicMessagesHandler,
+  type AnthropicMessagesHandlerOptions,
+} from "../../src/protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 
 const model: Model<string> = {
@@ -88,7 +92,7 @@ function request(
 
 function dependencies(
   streamFactory: () => AssistantMessageEventStream,
-  overrides: Partial<HttpBoundaryDependencies> = {},
+  overrides: Partial<AnthropicMessagesHandlerOptions> = {},
 ): HttpBoundaryDependencies {
   const auth: Auth = {
     resolve: async () => ({ authorized: true, sessionId: "session" }),
@@ -97,17 +101,20 @@ function dependencies(
     getModels: () => [model],
     streamSimple: vi.fn(streamFactory),
   } as unknown as Models;
-  return {
+  const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
     modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,
-    requestTimeoutMs: undefined,
-    shutdownSignal: undefined,
     routerDefaults: {},
     now: () => 1,
     ...overrides,
+  });
+  return {
+    clientProtocols: [anthropic],
+    requestTimeoutMs: undefined,
+    shutdownSignal: undefined,
   };
 }
 

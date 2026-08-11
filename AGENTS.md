@@ -58,6 +58,44 @@ Each module should:
 
 Information should not travel through unrelated modules without a reason.
 
+### Pi IR boundary is the first principle
+
+Pi is the single shared semantic boundary between Client Protocols and
+Providers. Treat it like a compiler IR that shields both sides:
+
+```text
+Client Wire
+    ↕
+Client Protocol adapter
+    ↕
+Pi runtime contracts / Models
+    ↕
+Provider adapter
+    ↕
+Upstream Wire
+```
+
+The two conversion directions must remain independent:
+
+- A Client Protocol adapter owns only its Client Wire ↔ Pi conversion. It may
+  use Pi contracts, but must not import, inspect, name, or make decisions from
+  any concrete Provider or upstream protocol.
+- A Provider adapter owns only its Pi ↔ Upstream conversion. It may implement
+  Pi Provider contracts, but must not import, inspect, name, or make decisions
+  from Anthropic, OpenAI Responses, or any other Client Protocol.
+- Runtime and HTTP routing may coordinate Client Protocol handlers with Pi,
+  but must not absorb a concrete Client Protocol's semantic policy or a
+  concrete Provider's configuration.
+- Adding, replacing, or removing a Client Protocol must not require Provider
+  changes. Adding, replacing, or removing a Provider must not require Client
+  Protocol changes.
+- Do not create a cross-side conversion, shared protocol DTO, or second IR to
+  bypass Pi.
+
+Composition roots and conformance/certification code may see both sides only to
+construct, bind, and verify a concrete route. They must not perform conversion
+or let one side's terminology, state, or policy leak into the other side.
+
 ### Information lifecycle
 
 For important state, understand:

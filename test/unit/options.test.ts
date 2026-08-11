@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   InvocationCompositionFailure,
   composeOptions,
-} from "../../src/options.js";
+} from "../../src/protocols/anthropic/options.js";
 
 const sessionId = "00000000-0000-4000-8000-000000000070";
 

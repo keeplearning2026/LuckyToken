@@ -1,70 +1,51 @@
-import type { Models } from "@earendil-works/pi-ai";
-import { randomUUID } from "node:crypto";
-
-import type { Auth } from "./auth.js";
 import {
   handleHttpRequest,
+  type ClientProtocolHandler,
   type HttpBoundaryDependencies,
 } from "./http.js";
-import {
-  defaultAnthropicModelValidityPolicy,
-  type AnthropicModelValidityPolicy,
-} from "./protocols/anthropic/representability.js";
-import type { RouterOptionDefaults } from "./options.js";
 
 export interface LuckyTokenRuntime {
   handle(request: Request): Promise<Response>;
 }
 
 export interface LuckyTokenRuntimeOptions {
-  models: Models;
-  auth: Auth;
-  createMessageId?: () => string;
-  maxRequestBytes?: number;
-  requestTimeoutMs?: number;
-  shutdownSignal?: AbortSignal;
-  routerDefaults?: RouterOptionDefaults;
-  anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
-  now?: () => number;
+  readonly clientProtocols: readonly ClientProtocolHandler[];
+  readonly requestTimeoutMs?: number;
+  readonly shutdownSignal?: AbortSignal;
+}
+
+function snapshotClientProtocol(
+  protocol: ClientProtocolHandler,
+): ClientProtocolHandler {
+  const method = protocol.method;
+  const pathname = protocol.pathname;
+  const handle = protocol.handle;
+  if (method.length === 0 || pathname.length === 0 || !pathname.startsWith("/")) {
+    throw new Error("Client Protocol route must have a method and absolute pathname");
+  }
+  return Object.freeze({
+    method,
+    pathname,
+    handle: (request: Request) => handle.call(protocol, request),
+  });
 }
 
 export function createLuckyTokenRuntime(
   options: LuckyTokenRuntimeOptions,
 ): LuckyTokenRuntime {
-  const now = options.now ?? Date.now;
-  const validityPolicySource =
-    options.anthropicModelValidityPolicy ?? defaultAnthropicModelValidityPolicy;
-  const classifyFinalAssistantPrefill =
-    validityPolicySource.classifyFinalAssistantPrefill;
-  const hasCertifiedImageFidelity =
-    validityPolicySource.hasCertifiedImageFidelity;
-  const modelValidityPolicySnapshot: AnthropicModelValidityPolicy = {
-    revision: validityPolicySource.revision,
-    classifyFinalAssistantPrefill: (model, profile) =>
-      classifyFinalAssistantPrefill(model, profile),
-    hasCertifiedImageFidelity: (model) => hasCertifiedImageFidelity(model),
-  };
-  const modelValidityPolicy = Object.freeze(modelValidityPolicySnapshot);
-  const createMessageId = options.createMessageId ?? (() => `msg_${randomUUID()}`);
-  const maxRequestBytes = options.maxRequestBytes ?? 1_048_576;
-  const requestTimeoutMs = options.requestTimeoutMs;
-  const shutdownSignal = options.shutdownSignal;
-  const routerDefaults = options.routerDefaults ?? {};
-
-  const dependencies: HttpBoundaryDependencies = {
-    models: options.models,
-    auth: options.auth,
-    modelValidityPolicy,
-    createMessageId,
-    maxRequestBytes,
-    requestTimeoutMs,
-    shutdownSignal,
-    routerDefaults: Object.freeze({ ...routerDefaults }),
-    now,
-  };
-
-  const runtime: LuckyTokenRuntime = {
-    handle: (request) => handleHttpRequest(dependencies, request),
-  };
-  return Object.freeze(runtime);
+  const clientProtocols = options.clientProtocols.map(snapshotClientProtocol);
+  const routeKeys = new Set<string>();
+  for (const protocol of clientProtocols) {
+    const key = `${protocol.method} ${protocol.pathname}`;
+    if (routeKeys.has(key)) throw new Error(`Duplicate Client Protocol route: ${key}`);
+    routeKeys.add(key);
+  }
+  const dependencies: HttpBoundaryDependencies = Object.freeze({
+    clientProtocols: Object.freeze(clientProtocols),
+    requestTimeoutMs: options.requestTimeoutMs,
+    shutdownSignal: options.shutdownSignal,
+  });
+  return Object.freeze({
+    handle: (request: Request) => handleHttpRequest(dependencies, request),
+  });
 }

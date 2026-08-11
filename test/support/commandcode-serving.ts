@@ -12,7 +12,7 @@ import {
   ServingCertificationFailure,
   type ServingCertificationManifest,
 } from "../../src/commandcode-serving-certification.js";
-import type { RouterOptionDefaults } from "../../src/options.js";
+import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
@@ -25,6 +25,7 @@ import {
 } from "../../src/providers/commandcode-private/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
+import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import {
   SYNTHETIC_CLIENT_HISTORY_API,
   SYNTHETIC_CLIENT_HISTORY_PROVIDER,
@@ -151,24 +152,27 @@ export function createCommandCodeServingTestComposition(
     },
     createFallbackSessionId: createSessionId,
   });
-  const runtime = createLuckyTokenRuntime({
+  const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
     ...(options.anthropicModelValidityPolicy === undefined
       ? {}
-      : { anthropicModelValidityPolicy: options.anthropicModelValidityPolicy }),
+      : { modelValidityPolicy: options.anthropicModelValidityPolicy }),
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),
     maxRequestBytes,
+    routerDefaults,
+    now,
+  });
+  const runtime = createLuckyTokenRuntime({
+    clientProtocols: [anthropic],
     ...(options.requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs: options.requestTimeoutMs }),
     ...(options.shutdownSignal === undefined
       ? {}
       : { shutdownSignal: options.shutdownSignal }),
-    routerDefaults,
-    now,
   });
   return Object.freeze({ runtime, certification });
 }

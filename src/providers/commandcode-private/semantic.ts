@@ -199,14 +199,14 @@ function stopReason(result: CommandCodeResult): Extract<StopReason, "stop" | "le
     raw === "pause_turn"
   ) {
     throw new Error(
-      `CommandCode raw finish ${raw} lacks required Anthropic companion state`,
+      `CommandCode raw finish ${raw} lacks a lossless Pi terminal representation`,
     );
   }
   if (result.finish.finishReason === "tool-calls") return "toolUse";
   if (result.finish.finishReason === "length") return "length";
   if (result.finish.finishReason === "stop") return "stop";
   throw new Error(
-    `CommandCode finish category ${String(result.finish.finishReason)} is not certified for Anthropic success`,
+    `CommandCode finish category ${String(result.finish.finishReason)} is not a supported Pi success terminal`,
   );
 }
 
