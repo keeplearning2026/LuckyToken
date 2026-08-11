@@ -385,6 +385,9 @@ flowchart LR
 - 一个显式Pi目录统一定位`models.json`与`auth.json`，但两者分别由Pi配置加载器和`CredentialStore`拥有，不互相解析。
 - `models.json`属于Pi配置层，Runtime、Client Protocol与Provider都不解析它。
 - 真实Provider在线测试使用显式命令运行，不进入普通`npm test`。
+- 在线测试必须同时保留压力验证与协议判别矩阵；通过官方Client Protocol SDK访问真实loopback listener，并观察真实Provider dispatch/cancellation。
+- 受控线上场景必须产出可追溯样本，包含Client request/result/stream events及Provider request/raw JSONL/physical EOF；认证值不得进入样本。
+- 健康真实Provider无法稳定诱发的malformed event、unknown event、terminal-less EOF、retry、chunk split和capability rejection继续由离线故障注入拥有，不能伪造成线上通过。
 
 ## 6. 测试分层
 

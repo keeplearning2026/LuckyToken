@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:2343d6a9208f14a36390ad68c5d2c1ed027ee4a899440ad2b902fea8ed174642";
+  "sha256:7a825f017d6dee774391dc8f88a70018d02f0417e06ea4291d11d1ed35de9dcd";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -31,6 +31,7 @@ const VERIFICATION_COMMANDS = [
   "npm run lint",
   "npm run build",
   "git diff --check",
+  "npm run test:online",
 ] as const;
 
 export interface ServingCertificationFacts {
@@ -47,6 +48,12 @@ export interface ServingCertificationFacts {
   readonly routerDefaults: RouterOptionDefaults;
   readonly clientApiKeyConfigured: boolean;
   readonly providerApiKeyConfigured: boolean;
+  readonly providerAuthPolicy:
+    | "fixed-api-key-header-v1"
+    | "pi-models-credential-store-v1";
+  readonly providerRegistrationPolicy:
+    | "startup-only-mutable-models-v1"
+    | "pi-models-json-startup-registration-v1";
   readonly maxRequestBytes: number;
   readonly requestTimeoutMs: number | null;
   readonly shutdownSignalBound: boolean;
@@ -238,7 +245,7 @@ export function certifyServingComposition(
     identity: {
       core: {
         specification: "LuckyToken Core Architecture Specification v5.5",
-        servingComposition: "luckytoken-serving-composition-v1",
+        servingComposition: "luckytoken-serving-composition-v2",
       },
       conversions: {
         anthropicPi:
@@ -301,7 +308,7 @@ export function certifyServingComposition(
       },
       authEndpoint: {
         clientAuth: "x-api-key-or-bearer-token-v1",
-        providerAuth: "fixed-api-key-header-v1",
+        providerAuth: facts.providerAuthPolicy,
         endpoint: "model-base-url-alpha-generate-v1",
         authSemanticTransform: "inert-v1",
         projectAuthorization: facts.projectAuthorizationPolicy,
@@ -324,7 +331,7 @@ export function certifyServingComposition(
         clock: facts.clockPolicy,
       },
       models: {
-        providerRegistration: "startup-only-mutable-models-v1",
+        providerRegistration: facts.providerRegistrationPolicy,
         servingOperations: "unexposed-static-provider-v1",
         inFlight: "deep-frozen-invocation-and-bound-dependencies-v1",
       },
@@ -338,6 +345,8 @@ export function certifyServingComposition(
       nextTurnRoundTrip: "verified",
       servingReadinessAndIsolation: "verified",
       localLoopbackHttpBoundary: "verified",
+      piConfigurationCredentialCli: "verified",
+      realProviderOnlineConformance: "verified",
     },
     verification: {
       commands: [...VERIFICATION_COMMANDS],

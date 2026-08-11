@@ -36,6 +36,7 @@ test("binds the serving manifest to the immutable conformance record", async () 
     "npm run lint",
     "npm run build",
     "git diff --check",
+    "npm run test:online",
   ]);
 });
 
@@ -52,8 +53,19 @@ test("the conformance record covers the complete serving route with real tests",
       "next-turn-round-trip",
       "serving-readiness-and-isolation",
       "local-loopback-http-boundary",
+      "pi-configuration-credential-cli",
+      "real-provider-online-conformance",
     ],
   );
+
+  const onlineCoverage = record.coverage.find(
+    ({ dimension }) => dimension === "real-provider-online-conformance",
+  );
+  assert.deepEqual(onlineCoverage?.tests, [
+    "test/online/plan.ts",
+    "test/online/conformance.ts",
+    "test/online/run-commandcode.ts",
+  ]);
 
   await Promise.all(
     record.coverage.flatMap(({ tests }) =>

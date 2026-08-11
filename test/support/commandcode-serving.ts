@@ -109,6 +109,8 @@ export function createCommandCodeServingTestComposition(
     routerDefaults,
     clientApiKeyConfigured: options.clientApiKey.length > 0,
     providerApiKeyConfigured: options.commandCodeApiKey.length > 0,
+    providerAuthPolicy: "fixed-api-key-header-v1",
+    providerRegistrationPolicy: "startup-only-mutable-models-v1",
     maxRequestBytes,
     requestTimeoutMs: options.requestTimeoutMs ?? null,
     shutdownSignalBound: options.shutdownSignal !== undefined,

@@ -43,6 +43,8 @@ function facts(
     routerDefaults: {},
     clientApiKeyConfigured: true,
     providerApiKeyConfigured: true,
+    providerAuthPolicy: "fixed-api-key-header-v1",
+    providerRegistrationPolicy: "startup-only-mutable-models-v1",
     maxRequestBytes: 1_048_576,
     requestTimeoutMs: null,
     shutdownSignalBound: false,
@@ -74,7 +76,7 @@ describe("serving composition certification", () => {
       identity: {
         core: {
           specification: "LuckyToken Core Architecture Specification v5.5",
-          servingComposition: "luckytoken-serving-composition-v1",
+          servingComposition: "luckytoken-serving-composition-v2",
         },
         conversions: {
           anthropicPi: "Anthropic-Pi AI IR Conversion Method v1.2 / capability v2",
@@ -160,6 +162,8 @@ describe("serving composition certification", () => {
         nextTurnRoundTrip: "verified",
         servingReadinessAndIsolation: "verified",
         localLoopbackHttpBoundary: "verified",
+        piConfigurationCredentialCli: "verified",
+        realProviderOnlineConformance: "verified",
       },
       verification: {
         commands: [
@@ -168,11 +172,28 @@ describe("serving composition certification", () => {
           "npm run lint",
           "npm run build",
           "git diff --check",
+          "npm run test:online",
         ],
         result: "CERTIFIED",
       },
     });
     expectDeeplyFrozen(manifest);
+  });
+
+  it("publishes Pi config and credential ownership only when those facts are bound", () => {
+    const manifest = certifyServingComposition(
+      facts({
+        providerAuthPolicy: "pi-models-credential-store-v1",
+        providerRegistrationPolicy: "pi-models-json-startup-registration-v1",
+      }),
+    );
+
+    expect(manifest.policies.authEndpoint.providerAuth).toBe(
+      "pi-models-credential-store-v1",
+    );
+    expect(manifest.policies.models.providerRegistration).toBe(
+      "pi-models-json-startup-registration-v1",
+    );
   });
 
   it.each([

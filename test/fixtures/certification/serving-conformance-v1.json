@@ -1,6 +1,6 @@
 {
   "schemaVersion": "luckytoken-serving-conformance-v1",
-  "scope": "certified-anthropic-v2-commandcode-private-route",
+  "scope": "certified-anthropic-v2-commandcode-private-route-pi-config-v1",
   "coverage": [
     {
       "dimension": "inbound-grammar-and-semantics",
@@ -62,6 +62,26 @@
         "test/integration/local-http-server.test.ts",
         "test/integration/anthropic-thinking-round-trip.test.ts"
       ]
+    },
+    {
+      "dimension": "pi-configuration-credential-cli",
+      "tests": [
+        "test/unit/pi-model-config.test.ts",
+        "test/unit/cli-config.test.ts",
+        "test/unit/online-test-plan.test.ts",
+        "test/integration/pi-credential-login.test.ts",
+        "test/integration/configured-composition.test.ts",
+        "test/integration/cli.test.ts",
+        "test/online/run-commandcode.ts"
+      ]
+    },
+    {
+      "dimension": "real-provider-online-conformance",
+      "tests": [
+        "test/online/plan.ts",
+        "test/online/conformance.ts",
+        "test/online/run-commandcode.ts"
+      ]
     }
   ],
   "commands": [
@@ -69,7 +89,8 @@
     "npm run typecheck",
     "npm run lint",
     "npm run build",
-    "git diff --check"
+    "git diff --check",
+    "npm run test:online"
   ],
   "result": "CERTIFIED"
 }

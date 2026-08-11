@@ -263,6 +263,42 @@ describe("Pi persistent credential login", () => {
     );
   });
 
+  it("rejects an empty CommandCode login before persisting it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-empty-auth-"));
+    temporaryDirectories.push(directory);
+    const authPath = join(directory, "auth.json");
+    const commandCodeModel: Model<typeof commandCodePrivateApiId> = {
+      id: "commandcode-model",
+      name: "commandcode-model",
+      api: commandCodePrivateApiId,
+      provider: commandCodePrivateProviderId,
+      baseUrl: "https://commandcode.fixture.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    };
+    const store = createFileCredentialStore(authPath);
+    const models = createModels({ credentials: store });
+    models.setProvider(
+      createCommandCodePrivateProvider({
+        fetch: async () => new Response(),
+        model: commandCodeModel,
+        now: () => 1,
+        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      }),
+    );
+
+    await expect(
+      models.login(commandCodePrivateProviderId, "api_key", {
+        prompt: async () => "   ",
+        notify: () => {},
+      }),
+    ).rejects.toThrow("non-empty");
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
   it("serializes auth.json mutations between independent processes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-auth-lock-"));
     temporaryDirectories.push(directory);

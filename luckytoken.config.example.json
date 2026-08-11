@@ -1,0 +1,16 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3000
+  },
+  "client": {
+    "apiKey": "replace-with-a-local-agent-key"
+  },
+  "pi": {
+    "directory": ".luckytoken/pi"
+  },
+  "limits": {
+    "maxRequestBytes": 1048576,
+    "requestTimeoutMs": 120000
+  }
+}

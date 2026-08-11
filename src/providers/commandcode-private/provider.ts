@@ -955,7 +955,10 @@ function deepFreezeProviderData<T>(value: T, seen = new Set<object>()): T {
 export function createCommandCodePrivateProvider(
   options: CommandCodePrivateProviderOptions,
 ): Provider<typeof API_ID> {
-  const configuredApiKey = options.apiKey;
+  const configuredApiKey = options.apiKey?.trim();
+  if (options.apiKey !== undefined && configuredApiKey?.length === 0) {
+    throw new Error("CommandCode API key must be non-empty");
+  }
   const model = deepFreezeProviderData(
     structuredClone(options.model) as Model<typeof API_ID>,
   );
@@ -980,18 +983,24 @@ export function createCommandCodePrivateProvider(
         name: "CommandCode API key",
         login: async (interaction) => {
           interaction.signal.throwIfAborted();
-          const key = await interaction.prompt({
-            type: "secret",
-            message: "Enter the CommandCode API key",
-          });
+          const key = (
+            await interaction.prompt({
+              type: "secret",
+              message: "Enter the CommandCode API key",
+            })
+          ).trim();
           interaction.signal.throwIfAborted();
+          if (key.length === 0) {
+            throw new Error("CommandCode API key must be non-empty");
+          }
           return { type: "api_key", key };
         },
         resolve: async ({ credential, signal }) => {
           signal.throwIfAborted();
-          if (credential?.key) {
+          const storedApiKey = credential?.key?.trim();
+          if (storedApiKey && credential !== undefined) {
             return {
-              auth: { apiKey: credential.key },
+              auth: { apiKey: storedApiKey },
               ...(credential.env === undefined ? {} : { env: credential.env }),
               source: "stored credential",
             };

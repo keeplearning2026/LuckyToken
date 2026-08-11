@@ -27,10 +27,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "start": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
     "test": "npm run test:certification && vitest run",
+    "test:online": "tsx test/online/run-commandcode.ts",
     "test:certification": "node --test test/certification/*.test.mjs",
     "test:unit": "vitest run test/unit --passWithNoTests",
     "test:integration": "vitest run test/integration"
@@ -45,6 +47,7 @@
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "eslint": "10.8.1",
+    "tsx": "4.23.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.67.0",
     "vitest": "4.1.10"
