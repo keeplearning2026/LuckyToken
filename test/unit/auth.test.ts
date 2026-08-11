@@ -48,6 +48,39 @@ describe("Auth.resolve", () => {
     expect(result).not.toHaveProperty("sessionSource");
   });
 
+  it("accepts the official Anthropic SDK x-api-key credential form", async () => {
+    const authorizeToken = vi.fn(async (token: string) =>
+      token === "valid-client-token" ? {} : undefined,
+    );
+    const auth = createAuth({
+      authorizeToken,
+      createFallbackSessionId: () => fallbackSession,
+    });
+
+    await expect(
+      auth.resolve(new Headers({ "x-api-key": "valid-client-token" })),
+    ).resolves.toEqual({ authorized: true, sessionId: fallbackSession });
+    expect(authorizeToken).toHaveBeenCalledWith("valid-client-token");
+  });
+
+  it("rejects conflicting bearer and x-api-key credentials", async () => {
+    const authorizeToken = vi.fn(async () => ({}));
+    const auth = createAuth({
+      authorizeToken,
+      createFallbackSessionId: () => fallbackSession,
+    });
+
+    await expect(
+      auth.resolve(
+        new Headers({
+          authorization: "Bearer first-client-token",
+          "x-api-key": "second-client-token",
+        }),
+      ),
+    ).resolves.toEqual({ authorized: false });
+    expect(authorizeToken).not.toHaveBeenCalled();
+  });
+
   it("uses the documented session-header precedence when aliases conflict", async () => {
     const createFallbackSessionId = vi.fn(() => fallbackSession);
     const auth = createAuth({

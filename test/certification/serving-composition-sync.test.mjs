@@ -51,6 +51,7 @@ test("the conformance record covers the complete serving route with real tests",
       "outbound-json-and-atomic-sse",
       "next-turn-round-trip",
       "serving-readiness-and-isolation",
+      "local-loopback-http-boundary",
     ],
   );
 

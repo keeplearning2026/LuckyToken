@@ -120,8 +120,15 @@ describe("serving composition certification", () => {
       policies: {
         sourceProfile: { version: "2023-06-01", betas: [] },
         modelValidity: { revision: "fixture-model-validity-v1" },
+        inboundBoundary: {
+          runtime: "whatwg-request-response-v1",
+          listener: "node-http-adapter-v1",
+          urlAuthority: "bound-origin-ignore-client-host-v1",
+          cancellation: "disconnect-and-shutdown-abort-v1",
+          responseTransfer: "status-headers-complete-bytes-v1",
+        },
         authEndpoint: {
-          clientAuth: "fixed-bearer-token-v1",
+          clientAuth: "x-api-key-or-bearer-token-v1",
           providerAuth: "fixed-api-key-header-v1",
           endpoint: "model-base-url-alpha-generate-v1",
           authSemanticTransform: "inert-v1",
@@ -152,6 +159,7 @@ describe("serving composition certification", () => {
         outboundJsonAndAtomicSse: "verified",
         nextTurnRoundTrip: "verified",
         servingReadinessAndIsolation: "verified",
+        localLoopbackHttpBoundary: "verified",
       },
       verification: {
         commands: [

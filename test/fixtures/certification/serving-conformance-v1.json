@@ -47,7 +47,15 @@
       "dimension": "serving-readiness-and-isolation",
       "tests": [
         "test/unit/serving-certification.test.ts",
-        "test/integration/serving-certification.test.ts"
+        "test/integration/serving-certification.test.ts",
+        "test/integration/provider-boundary.test.ts"
+      ]
+    },
+    {
+      "dimension": "local-loopback-http-boundary",
+      "tests": [
+        "test/unit/auth.test.ts",
+        "test/integration/local-http-server.test.ts"
       ]
     }
   ],

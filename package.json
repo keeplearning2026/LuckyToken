@@ -3,6 +3,26 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./protocols/anthropic": {
+      "types": "./dist/protocols/anthropic/index.d.ts",
+      "import": "./dist/protocols/anthropic/index.js"
+    },
+    "./providers/commandcode-private": {
+      "types": "./dist/providers/commandcode-private/provider.d.ts",
+      "import": "./dist/providers/commandcode-private/provider.js"
+    },
+    "./providers/commandcode-private/project": {
+      "types": "./dist/providers/commandcode-private/project.d.ts",
+      "import": "./dist/providers/commandcode-private/project.js"
+    }
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -20,6 +40,7 @@
     "@sindresorhus/slugify": "2.2.1"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "0.91.1",
     "@types/node": "24.12.4",
     "eslint": "10.8.1",
     "typescript": "6.0.3",

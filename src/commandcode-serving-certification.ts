@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:6c4c5aa4482ea42ef7d7778d5d4f287faa7215b549d770ae41d06a241690ad0c";
+  "sha256:f0d0c8274e4e5f7ebc61990bf8c1aa3e26ff595782c79ae48f22ec2bce8d1713";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -77,6 +77,7 @@ export interface ServingCertificationManifest {
       readonly betas: readonly string[];
     };
     readonly modelValidity: { readonly revision: string };
+    readonly inboundBoundary: Readonly<Record<string, string>>;
     readonly authEndpoint: Readonly<Record<string, string>>;
     readonly toolId: string;
     readonly transformHeaders: string;
@@ -294,8 +295,15 @@ export function certifyServingComposition(
     policies: {
       sourceProfile: { version: "2023-06-01", betas: [] },
       modelValidity: { revision: facts.modelValidityPolicyRevision },
+      inboundBoundary: {
+        runtime: "whatwg-request-response-v1",
+        listener: "node-http-adapter-v1",
+        urlAuthority: "bound-origin-ignore-client-host-v1",
+        cancellation: "disconnect-and-shutdown-abort-v1",
+        responseTransfer: "status-headers-complete-bytes-v1",
+      },
       authEndpoint: {
-        clientAuth: "fixed-bearer-token-v1",
+        clientAuth: "x-api-key-or-bearer-token-v1",
         providerAuth: "fixed-api-key-header-v1",
         endpoint: "model-base-url-alpha-generate-v1",
         authSemanticTransform: "inert-v1",
@@ -332,6 +340,7 @@ export function certifyServingComposition(
       outboundJsonAndAtomicSse: "verified",
       nextTurnRoundTrip: "verified",
       servingReadinessAndIsolation: "verified",
+      localLoopbackHttpBoundary: "verified",
     },
     verification: {
       commands: [...VERIFICATION_COMMANDS],
