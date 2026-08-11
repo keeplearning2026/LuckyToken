@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "luckytoken-serving-conformance-v1",
+  "scope": "certified-anthropic-v1-commandcode-private-route",
+  "coverage": [
+    {
+      "dimension": "inbound-grammar-and-semantics",
+      "tests": [
+        "test/unit/anthropic-ingress.test.ts",
+        "test/unit/model-aware-validity.test.ts"
+      ]
+    },
+    {
+      "dimension": "pi-invocation-integrity",
+      "tests": [
+        "test/unit/invocation-options.test.ts",
+        "test/integration/pi-runtime-fidelity.test.ts"
+      ]
+    },
+    {
+      "dimension": "provider-request-and-response-conversion",
+      "tests": [
+        "test/integration/commandcode-golden-request.test.ts",
+        "test/integration/commandcode-response-lifecycle.test.ts"
+      ]
+    },
+    {
+      "dimension": "cancellation-and-terminal-consistency",
+      "tests": [
+        "test/integration/commandcode-attempts.test.ts",
+        "test/unit/execution.test.ts"
+      ]
+    },
+    {
+      "dimension": "outbound-json-and-atomic-sse",
+      "tests": [
+        "test/integration/http-atomic-delivery.test.ts",
+        "test/integration/anthropic-atomic-sse.test.ts"
+      ]
+    },
+    {
+      "dimension": "next-turn-round-trip",
+      "tests": [
+        "test/integration/serving-certification.test.ts"
+      ]
+    },
+    {
+      "dimension": "serving-readiness-and-isolation",
+      "tests": [
+        "test/unit/serving-certification.test.ts",
+        "test/integration/serving-certification.test.ts"
+      ]
+    }
+  ],
+  "commands": [
+    "npm test",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run build",
+    "git diff --check"
+  ],
+  "result": "CERTIFIED"
+}

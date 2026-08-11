@@ -199,9 +199,20 @@ function validateContentBlock(
           "tool_use requires non-empty id and name strings and object input",
         );
       }
+      if (block.caller !== undefined) {
+        if (!isRecord(block.caller) || typeof block.caller.type !== "string") {
+          throw new InvalidRequest("tool_use.caller must be a tagged object");
+        }
+        if (block.caller.type !== "direct") {
+          unsupported.push(`unsupported tool_use caller: ${block.caller.type}`);
+        }
+        if (Object.keys(block.caller).some((name) => name !== "type")) {
+          unsupported.push("unknown tool_use caller field");
+        }
+      }
       if (
         Object.keys(block).some(
-          (name) => !["type", "id", "name", "input"].includes(name),
+          (name) => !["type", "id", "name", "input", "caller"].includes(name),
         )
       ) {
         unsupported.push("unknown tool_use field");

@@ -19,6 +19,66 @@ const parallelCalls = {
 };
 
 describe("Anthropic tool turns", () => {
+  it("accepts the direct caller projection on replay and discards no tool semantic", () => {
+    const conversion = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "call",
+                name: "lookup",
+                input: { q: "x" },
+                caller: { type: "direct" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call" }],
+          },
+        ]),
+      ),
+      1,
+    );
+
+    expect(conversion.context.messages[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call", name: "lookup", arguments: { q: "x" } },
+      ],
+    });
+  });
+
+  it("keeps malformed and unsupported caller forms distinct", () => {
+    const withCaller = (caller: unknown) =>
+      request([
+        { role: "user", content: "run" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call", name: "lookup", input: {}, caller },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call" }],
+        },
+      ]);
+
+    expect(() => validateAnthropicSourceRequest(withCaller({}))).toThrow(
+      InvalidRequest,
+    );
+    expect(() =>
+      validateAnthropicSourceRequest(
+        withCaller({ type: "server_tool", tool_name: "lookup" }),
+      ),
+    ).toThrow(UnsupportedFeature);
+  });
+
   it("correlates parallel results by ID and expands results before ordinary user content", () => {
     const receivedAt = 1234;
     const conversion = convertValidatedAnthropicRequest(
