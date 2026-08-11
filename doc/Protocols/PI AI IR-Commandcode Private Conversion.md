@@ -8149,6 +8149,8 @@ CommandCode response metadata
     → does not enter conversion state
 ```
 
+
+
 ## 4. `content[]`
 
 本章构造 Pi `AssistantMessage.content`。
@@ -8159,24 +8161,14 @@ Pi Target：
 content: (TextContent | ThinkingContent | ToolCall)[];
 ```
 
-自然结构：
-
-```text
-AssistantMessage
-└── content[]
-    ├── TextContent
-    ├── ThinkingContent
-    └── ToolCall
-```
-
 本章输入不是 CommandCode raw event stream。
 
 第二章已经完成：
 
 ```text
-raw CommandCode events
+CommandCode events
 ↓
-lifecycle reconstruction
+content lifecycle reconstruction
 ↓
 ordering
 ↓
@@ -8199,256 +8191,65 @@ Pi AssistantMessage.content[]
 
 Pi `content` 是 required ordered array：
 
-```ts
-(TextContent | ThinkingContent | ToolCall)[]
+```text
+content[]
+├── TextContent
+├── ThinkingContent
+└── ToolCall
 ```
 
-Target type 本身没有规定数组必须 non-empty，因此：
+Target type 允许：
 
 ```text
 content = []
 ```
 
-是合法 Target representation。
-
-数组中每个 element 必须是三个 discriminated variants 之一：
+当前 conversion 需要构造的 fields：
 
 ```text
-content[]
-│
-├── TextContent
-│   ├── type = "text"
-│   ├── text
-│   └── textSignature?
-│
-├── ThinkingContent
-│   ├── type = "thinking"
-│   ├── thinking
-│   ├── thinkingSignature?
-│   └── redacted?
-│
-└── ToolCall
-    ├── type = "toolCall"
-    ├── id
-    ├── name
-    ├── arguments
-    ├── thoughtSignature?
-    └── namespace?
+TextContent
+├── type = "text"
+└── text
+
+ThinkingContent
+├── type = "thinking"
+└── thinking
+
+ToolCall
+├── type = "toolCall"
+├── id
+├── name
+└── arguments
 ```
 
-Array order具有 semantic meaning。
-
-Conversion 必须保持 Source committed content order。
-
-------
-
-### 4.2 `TextContent`
-
-Target：
-
-```ts
-interface TextContent {
-  type: "text";
-  text: string;
-  textSignature?: string;
-}
-```
-
-#### `type`
-
-Required discriminant：
+Pi 还允许以下 optional fields：
 
 ```text
-type = "text"
+TextContent.textSignature?
+
+ThinkingContent.thinkingSignature?
+ThinkingContent.redacted?
+
+ToolCall.thoughtSignature?
+ToolCall.namespace?
 ```
 
-Target-defined fixed value。
-
-#### `text`
-
-Required string。
-
-表示 assistant-visible text content。
-
-#### `textSignature`
-
-Optional provider-specific continuity metadata。
-
-当前 CommandCode → Pi conversion 不要求保存该 metadata。
-
-因此：
+当前 conversion 不需要这些 optional metadata，因此：
 
 ```text
 textSignature
-→ omit
-```
-
-既然 Target 当前允许 omission，就不需要研究或读取任何 CommandCode metadata 来尝试构造它。
-
-------
-
-### 4.3 `ThinkingContent`
-
-Target：
-
-```ts
-interface ThinkingContent {
-  type: "thinking";
-  thinking: string;
-  thinkingSignature?: string;
-  redacted?: boolean;
-}
-```
-
-#### `type`
-
-Required discriminant：
-
-```text
-type = "thinking"
-```
-
-#### `thinking`
-
-Required string。
-
-表示 Pi 中的 reasoning / thinking content。
-
-#### `thinkingSignature`
-
-Optional provider-specific continuity information。
-
-当前 conversion：
-
-```text
 thinkingSignature
-→ omit
-```
-
-#### `redacted`
-
-Optional。
-
-表示 thinking content 是被 provider safety mechanism redacted 的 representation。
-
-当前 CommandCode committed Reasoning block 没有本 Target construction 所需的 redaction semantic。
-
-因此：
-
-```text
 redacted
-→ omit
-```
-
-不从：
-
-```text
-empty reasoning
-provider metadata
-model capability
-finish reason
-```
-
-推断该值。
-
-------
-
-### 4.4 `ToolCall`
-
-Target：
-
-```ts
-interface ToolCall {
-  type: "toolCall";
-  id: string;
-  name: string;
-  arguments: Record<string, any>;
-  thoughtSignature?: string;
-  namespace?: string;
-}
-```
-
-自然结构：
-
-```text
-ToolCall
-├── type
-├── id
-├── name
-├── arguments
-├── thoughtSignature?
-└── namespace?
-```
-
-#### `type`
-
-Required discriminant：
-
-```text
-type = "toolCall"
-```
-
-#### `id`
-
-Required。
-
-它保存 ToolCall identity，并用于后续 ToolResult 与该 ToolCall 的关联。
-
-因此必须保留 Source ToolUse identity。
-
-#### `name`
-
-Required。
-
-表示被调用的 tool name。
-
-#### `arguments`
-
-Required object。
-
-它表示完整 ToolCall arguments：
-
-```text
-Record<string, any>
-```
-
-因此 Target construction 至少要求：
-
-```text
-non-null
-non-array
-object
-```
-
-#### `thoughtSignature`
-
-Optional Google-specific metadata。
-
-当前 conversion 不需要：
-
-```text
 thoughtSignature
-→ omit
-```
-
-#### `namespace`
-
-Optional namespaced/dynamically-loaded tool metadata used by providers such as OpenAI Responses。
-
-当前 CommandCode conversion 不构造 Pi namespace semantic：
-
-```text
 namespace
 → omit
 ```
 
-不能仅因为 Source 中存在名为 `dynamic` 的 boolean，就把它转换成 `namespace`。
-
-这两个字段不是同一种 representation。
+不为这些 fields 继续读取或研究 CommandCode metadata。
 
 ------
 
-## 4.5 Source
+### 4.2 Source
 
 本章只读取：
 
@@ -8457,7 +8258,7 @@ Committed CommandCode Response
 └── content[]
 ```
 
-其 relevant Source subtree：
+Relevant Source subtree：
 
 ```text
 content[]
@@ -8474,110 +8275,42 @@ content[]
     ├── type = "tool_use"
     ├── id
     ├── toolName
-    ├── input
-    ├── providerExecuted?
-    └── dynamic?
+    └── input
 ```
 
-第二章 reconstructed representation 中还可以存在：
+其中：
+
+```text
+block.type
+```
+
+决定构造哪个 Pi content variant。
+
+其余 fields 直接提供对应 Target values。
+
+本章不需要读取：
 
 ```text
 Text.id
 Reasoning.id
 ```
 
-但 Pi corresponding Target blocks：
+因为对应 Pi `TextContent` 和 `ThinkingContent` 没有 block ID。
+
+同样不需要读取：
 
 ```text
-TextContent
-ThinkingContent
+ToolUse.providerExecuted
+ToolUse.dynamic
 ```
 
-没有 block ID。
-
-因此：
-
-```text
-Text.id
-Reasoning.id
-```
-
-不参与本章 Target construction。
-
-它们的生命周期已经在第二章结束。
+因为当前 Pi required `ToolCall` construction 不依赖这些 fields。
 
 ------
 
-### Source roles
+### 4.3 Construction Method
 
-#### Structural Source
-
-```text
-Source block.type
-```
-
-决定构造哪个 Target variant：
-
-```text
-"text"
-→ TextContent
-
-"reasoning"
-→ ThinkingContent
-
-"tool_use"
-→ ToolCall
-```
-
-#### Value Source
-
-```text
-Text.text
-Reasoning.text
-
-ToolUse.id
-ToolUse.toolName
-ToolUse.input
-```
-
-直接提供 Target values。
-
-#### Condition Source
-
-对于 ToolUse：
-
-```text
-providerExecuted?
-dynamic?
-```
-
-不直接出现在普通 Pi `ToolCall` wire representation 中。
-
-但它们会影响：
-
-```text
-是否可以忠实构造 ordinary Pi ToolCall
-```
-
-因此只有在 ToolUse conversion locality 中读取。
-
-------
-
-## 4.6 Whole `content[]` Construction
-
-如果 Source：
-
-```text
-content = []
-```
-
-则：
-
-```text
-Pi content = []
-```
-
-否则按 committed Source array 顺序逐项转换：
+保持 committed Source array order，逐项转换：
 
 ```text
 Source content[0]
@@ -8592,33 +8325,29 @@ Source content[n]
 → Target content[n]
 ```
 
-必须保持：
+因此：
 
 ```text
-same order
-+
-one Source block
-→ one Target block
+Pi content[] order
+=
+Committed CommandCode content[] order
 ```
 
-不能：
+不执行：
 
 ```text
-merge adjacent Text
-merge adjacent Thinking
-split block
-group ToolCalls
-reorder by type
-drop representable block
+sorting
+grouping by type
+merging adjacent blocks
+splitting blocks
+dropping representable blocks
 ```
-
-第二章已经确定 Source committed order，因此本章不重新计算 content order。
 
 ------
 
-## 4.7 Text Construction
+#### Text
 
-Source locality：
+Source：
 
 ```text
 Text
@@ -8630,8 +8359,7 @@ Target：
 ```text
 TextContent
 ├── type
-├── text
-└── textSignature?
+└── text
 ```
 
 Construction：
@@ -8642,12 +8370,9 @@ type
 
 text
 ← Source.text
-
-textSignature
-→ omit
 ```
 
-即：
+最终：
 
 ```ts
 {
@@ -8658,30 +8383,11 @@ textSignature
 
 Source text 原值保留。
 
-不执行：
-
-```text
-trim
-normalize whitespace
-sanitize text
-merge neighboring text blocks
-```
-
-第二章已经负责 completed Text block validity。
-
-本章不再次读取：
-
-```text
-Text.id
-```
-
-也不重复执行 empty-content validation。
-
 ------
 
-## 4.8 Thinking Construction
+#### Reasoning
 
-Source locality：
+Source：
 
 ```text
 Reasoning
@@ -8693,9 +8399,7 @@ Target：
 ```text
 ThinkingContent
 ├── type
-├── thinking
-├── thinkingSignature?
-└── redacted?
+└── thinking
 ```
 
 Construction：
@@ -8706,15 +8410,9 @@ type
 
 thinking
 ← Source.text
-
-thinkingSignature
-→ omit
-
-redacted
-→ omit
 ```
 
-即：
+最终：
 
 ```ts
 {
@@ -8723,73 +8421,25 @@ redacted
 }
 ```
 
-Preserve reasoning text exactly。
-
-不执行：
-
-```text
-trim
-summarize
-hide
-merge
-normalize
-```
-
-------
-
-### Model reasoning capability does not participate
-
-Pi `ThinkingContent` Target 本身可以表示 thinking content。
-
-构造它只需要：
-
-```text
-Source Reasoning.text
-```
-
-因此本章不需要读取：
+不需要读取：
 
 ```text
 model.reasoning
 ```
 
-来决定一个已经 committed 的 Reasoning block 是否允许转换。
-
-信息流应该是：
-
-```text
-Reasoning block exists
-+
-Target ThinkingContent can represent it
-↓
-construct ThinkingContent
-```
-
-而不是：
-
-```text
-Reasoning block
-↓
-read model capability again
-↓
-possibly reject representable Target content
-```
-
-Request-side historical reasoning validity 是另一个 conversion contract，不属于本章。
+来重新判断已经 committed 的 Reasoning block 是否可以构造为 Pi `ThinkingContent`。
 
 ------
 
-## 4.9 ToolCall Construction
+#### ToolUse
 
-Source locality：
+Source：
 
 ```text
 ToolUse
 ├── id
 ├── toolName
-├── input
-├── providerExecuted?
-└── dynamic?
+└── input
 ```
 
 Target：
@@ -8799,396 +8449,119 @@ ToolCall
 ├── type
 ├── id
 ├── name
-├── arguments
-├── thoughtSignature?
-└── namespace?
+└── arguments
 ```
-
-Construction 分两步：
-
-```text
-1. determine whether ordinary Pi ToolCall can represent this ToolUse
-2. construct required Target fields
-```
-
-------
-
-### 4.9.1 Execution-semantic condition
-
-普通 Pi `ToolCall` 表示一个由 Pi tool execution flow 继续处理的 ToolCall。
-
-它没有 Target fields 用于保存：
-
-```text
-providerExecuted = true
-```
-
-或 CommandCode：
-
-```text
-dynamic = true
-```
-
-所表达的额外 execution semantics。
-
-因此当前 conversion contract：
-
-```text
-providerExecuted === true
-→ ordinary Pi ToolCall cannot faithfully preserve Source semantics
-→ error
-```
-
-以及：
-
-```text
-dynamic === true
-→ ordinary Pi ToolCall cannot faithfully preserve Source semantics
-→ error
-```
-
-只有：
-
-```text
-providerExecuted !== true
-and
-dynamic !== true
-```
-
-才继续 ordinary `ToolCall` construction。
-
-这两个 Source facts 只作为当前 ToolCall construction 的 Condition Source。
-
-它们不会进入最终 Pi ToolCall object。
-
-------
-
-### 4.9.2 `id`
 
 Construction：
 
 ```text
-ToolCall.id
-← ToolUse.id
+type
+→ "toolCall"
+
+id
+← Source.id
+
+name
+← Source.toolName
 ```
 
-Preserve exactly。
+`arguments` 的 Target type 为：
 
-不能：
-
-```text
-generate new ID
-prefix
-suffix
-normalize
-hash
+```ts
+Record<string, any>
 ```
 
-这一 ID 已经是 Source Tool lifecycle 的 authoritative identity。
-
-------
-
-### 4.9.3 `name`
-
-Construction：
-
-```text
-ToolCall.name
-← ToolUse.toolName
-```
-
-Preserve exactly。
-
-不执行：
-
-```text
-lookup current tool registry
-rename
-case normalization
-alias resolution
-```
-
-第二章已经确定 committed `toolName` 来自 final authoritative ToolCall lifecycle state。
-
-------
-
-### 4.9.4 `arguments`
-
-Construction dependency：
-
-```text
-ToolCall.arguments
-← ToolUse.input
-```
-
-Pi Target requires object-shaped arguments。
-
-因此检查：
+因此 Source `input` 必须具有 top-level object shape：
 
 ```text
 typeof input === "object"
-and
-input !== null
-and
-!Array.isArray(input)
+&& input !== null
+&& !Array.isArray(input)
 ```
 
 如果成立：
 
 ```text
 arguments
-← input structure and values
+← Source.input
 ```
 
-否则：
+最终：
 
-```text
-→ error
+```ts
+{
+  type: "toolCall",
+  id: source.id,
+  name: source.toolName,
+  arguments: source.input
+}
 ```
 
-具体：
-
-```text
-{}
-→ valid
-
-{ q: "x" }
-→ valid
-
-{ nested: [1, true, null] }
-→ valid
-```
-
-而：
+如果 `input` 是：
 
 ```text
 null
-[]
-"text"
-123
-true
+array
+string
+number
+boolean
 ```
 
-不能构造：
-
-```text
-Record<string, any>
-```
-
-因此 conversion failure。
-
-------
-
-### No second tool-schema validation
-
-本章不读取：
-
-```text
-Context.tools
-tool registry
-tool parameter schema
-```
-
-也不验证：
-
-```text
-arguments 是否符合某个 Tool.parameters schema
-```
-
-因为 Pi `ToolCall` Target construction 本身不需要这些 information。
-
-本章也不为了未来可能再次把该 ToolCall 发送给某个 provider，而提前执行 request-side representability validation。
-
-因此：
-
-```text
-future request conversion requirements
-```
-
-不进入当前 response conversion state。
-
-------
-
-### No target-required deep normalization
-
-ToolUse 来源于已经解析并 committed 的 CommandCode response。
-
-本章只需要满足 Pi：
+则不能构造 Pi required：
 
 ```text
 arguments: Record<string, any>
 ```
 
-因此除了 required top-level object shape 外，不增加：
+因此 conversion error。
+
+本章不执行额外：
 
 ```text
+tool registry lookup
+tool schema validation
 deep clone requirement
-custom serializer checks
-runtime prototype policy
-future JSON replay validation
-schema repair
+custom serialization validation
 argument normalization
+future request replay validation
 ```
 
-是否复制 object ownership 是实现细节，不是本 conversion contract 的额外 semantic transformation。
+这些 information 不属于当前 Pi `ToolCall` construction dependency。
 
 ------
 
-### Optional ToolCall metadata
+### 4.4 Information Boundary
+
+进入本章 conversion state：
 
 ```text
-thoughtSignature
-→ omit
-
-namespace
-→ omit
-```
-
-不从：
-
-```text
-ToolUse.id
-ToolUse.dynamic
-toolName
-provider metadata
-```
-
-推导这些 optional Target fields。
-
-------
-
-## 4.10 Content Conversion Failure
-
-`content[]` 是一个完整 Target subtree。
-
-如果其中任一 Source block不能构造合法 Target block：
-
-```text
-Source content[]
-↓
-conversion failure
-```
-
-不能返回：
-
-```text
-successful blocks before failure
-```
-
-作为最终 committed Pi content。
-
-例如：
-
-```text
-Source
-├── Text      → representable
-├── Thinking  → representable
-└── ToolUse   → invalid arguments
-```
-
-不能产生：
-
-```text
-Pi content
-├── TextContent
-└── ThinkingContent
-```
-
-并假装 conversion success。
-
-而是：
-
-```text
-whole AssistantMessage success conversion
-→ fail
-```
-
-Failure Message construction 属于 failure path，而不是本章通过丢弃 Source block 来修复。
-
-------
-
-## 4.11 Final Construction
-
-完整信息流：
-
-```text
-Committed CommandCode content[]
-↓
-iterate in committed order
-│
-├── Text
-│   └── text
-│       ↓
-│   TextContent
-│
-├── Reasoning
-│   └── text
-│       ↓
-│   ThinkingContent
-│
+Committed content[]
+├── block order
+├── block type
+├── Text.text
+├── Reasoning.text
 └── ToolUse
-    ├── providerExecuted / dynamic
-    │   ↓
-    │   representability condition
-    │
     ├── id
     ├── toolName
     └── input
-        ↓
-    ToolCall
-↓
-Pi AssistantMessage.content[]
 ```
 
-Target mapping：
+不进入本章：
 
 ```text
-Text
-↓
-{
-  type: "text",
-  text
-}
-Reasoning
-↓
-{
-  type: "thinking",
-  thinking: text
-}
-ordinary representable ToolUse
-↓
-{
-  type: "toolCall",
-  id,
-  name: toolName,
-  arguments: input
-}
+Text.id
+Reasoning.id
+
+ToolUse.providerExecuted
+ToolUse.dynamic
+
+model reasoning capability
+tool definitions
+provider metadata
+CommandCode raw content deltas
 ```
 
-Information boundary：
-
-```text
-Committed content subtree
-│
-├── required by Pi content construction
-│   ├── block order
-│   ├── block type
-│   ├── Text.text
-│   ├── Reasoning.text
-│   ├── ToolUse.id
-│   ├── ToolUse.toolName
-│   ├── ToolUse.input
-│   ├── ToolUse.providerExecuted?
-│   └── ToolUse.dynamic?
-│
-└── not required
-    ├── Text.id
-    └── Reasoning.id
-        ↓
-    does not enter conversion state
-```
-
-Optional Pi fields currently not required：
+Optional Pi fields：
 
 ```text
 textSignature
@@ -9198,21 +8571,44 @@ thoughtSignature
 namespace
 ```
 
-因此：
+当前全部：
 
 ```text
 omit
-↓
-do not search Source for substitutes
 ```
 
+最终 information flow：
 
+```text
+Committed CommandCode content[]
+↓
+preserve order
+↓
+map each block
+
+Text.text
+→ TextContent.text
+
+Reasoning.text
+→ ThinkingContent.thinking
+
+ToolUse.id
+→ ToolCall.id
+
+ToolUse.toolName
+→ ToolCall.name
+
+ToolUse.input
+→ ToolCall.arguments
+↓
+Pi AssistantMessage.content[]
+```
 
 ## 5. `usage`
 
 本章构造 Pi `AssistantMessage.usage`。
 
-Target：
+Pi Target：
 
 ```ts
 interface Usage {
@@ -9253,30 +8649,27 @@ AssistantMessage
         └── total
 ```
 
-本章只读取构造这些 Target fields 真正需要的 CommandCode usage information。
+本章直接从 final CommandCode `finish.totalUsage` 构造 Pi `Usage`。
+
+不创建额外：
+
+```text
+RawUsage
+NormalizedUsage
+```
+
+作为中间 semantic representation。
 
 ------
 
 ### 5.1 Target
 
-Pi `Usage` 将 token accounting 分成明确的 categories。
-
-#### Input side
+Pi 将 input-side token accounting 分为：
 
 ```text
 input
 cacheRead
 cacheWrite
-```
-
-三者共同构成完整 input-side accounting：
-
-```text
-total input side
-=
-input
-+ cacheRead
-+ cacheWrite
 ```
 
 其中：
@@ -9285,21 +8678,54 @@ input
 input
 ```
 
-表示普通、非 cache-read、非 cache-write 的 input tokens。
+表示普通 input tokens，不包含：
 
 ```text
 cacheRead
-```
-
-表示从 prompt cache 读取的 input tokens。
-
-```text
 cacheWrite
 ```
 
-表示写入 prompt cache 的 input tokens。
+因此完整 input-side token count 为：
 
-它们是互斥 accounting categories，不能重复计数。
+```text
+input
++ cacheRead
++ cacheWrite
+```
+
+------
+
+#### `output`
+
+```ts
+output: number
+```
+
+表示完整 model output token count。
+
+------
+
+#### `reasoning`
+
+```ts
+reasoning?: number
+```
+
+Optional。
+
+当 provider 提供 reasoning token breakdown 时，它表示：
+
+```text
+reasoning
+⊆
+output
+```
+
+它不是额外 output token category，因此不再次加入：
+
+```text
+totalTokens
+```
 
 ------
 
@@ -9311,53 +8737,26 @@ cacheWrite1h?: number
 
 Optional。
 
-它是 `cacheWrite` 的 subset：
+它表示：
 
 ```text
-cacheWrite1h
-⊆
 cacheWrite
 ```
 
-因此不能再次加入 `totalTokens`。
+中的 1-hour retention subset。
 
-------
-
-#### Output side
-
-```ts
-output: number
-```
-
-表示完整 model output token count。
-
-如果 provider 提供 reasoning breakdown：
-
-```ts
-reasoning?: number
-```
-
-则：
+当前 CommandCode usage 不提供本 Target construction 所需的该 breakdown，因此当前 conversion：
 
 ```text
-reasoning
-⊆
-output
+cacheWrite1h
+→ omit
 ```
-
-因此必须满足：
-
-```text
-0 <= reasoning <= output
-```
-
-`reasoning` 不额外加入 `totalTokens`。
 
 ------
 
 #### `totalTokens`
 
-Pi Target relationship：
+当前 Target 使用：
 
 ```text
 totalTokens
@@ -9368,25 +8767,16 @@ input
 + output
 ```
 
-不额外加入：
+不另外加入：
 
 ```text
 reasoning
 cacheWrite1h
 ```
 
-因为它们已经分别包含在：
-
-```text
-reasoning ⊆ output
-cacheWrite1h ⊆ cacheWrite
-```
-
 ------
 
 #### `cost`
-
-`cost` 是 required derived subtree：
 
 ```text
 cost
@@ -9397,21 +8787,23 @@ cost
 └── total
 ```
 
-它由：
+是 Pi `Usage` 的 required subtree。
 
-```text
-constructed Pi Usage token categories
-+
-bound Pi model pricing
+LuckyToken 不重新定义 Pi pricing algorithm。
+
+Cost 使用 Pi AI 提供的：
+
+```ts
+calculateCost(model, usage)
 ```
 
-共同构造。
+构造。
 
 ------
 
 ## 5.2 Source
 
-本章所需 CommandCode Source 只来自 committed：
+本章只读取：
 
 ```text
 Committed CommandCode Response
@@ -9419,10 +8811,10 @@ Committed CommandCode Response
     └── totalUsage?
 ```
 
-只有构造 Pi Usage 所需要的局部 Source fields进入 conversion state：
+当前 Target construction 所需的 Source subtree：
 
 ```text
-totalUsage
+totalUsage?
 │
 ├── inputTokens?
 │
@@ -9433,122 +8825,75 @@ totalUsage
 │
 ├── outputTokens?
 │
-├── outputTokenDetails?
-│   └── reasoningTokens?
-│
-└── reasoningTokens?
+└── outputTokenDetails?
+    └── reasoningTokens?
 ```
 
-本章不读取仅因为 Source 中存在、但 Pi Target construction 不需要的 fields。
+这些 fields 分别参与：
 
-例如：
+```text
+noCacheTokens
+→ input
+
+inputTokens
+→ input fallback
+
+cacheReadTokens
+→ cacheRead
+
+cacheWriteTokens
+→ cacheWrite
+
+outputTokens
+→ output
+
+outputTokenDetails.reasoningTokens
+→ reasoning
+```
+
+如果：
+
+```text
+totalUsage
+```
+
+absent，则等价于上述 Target dependencies 全部 absent。
+
+各 required Pi usage categories 按下面的 construction rules 得到其 fallback values。
+
+------
+
+### Source information not required
+
+本章不读取：
 
 ```text
 totalUsage.totalTokens
 totalUsage.cachedInputTokens
+totalUsage.reasoningTokens
 outputTokenDetails.textTokens
 ```
 
-都不进入 conversion state。
+因为当前 Target construction 已经有其他直接 dependency。
 
-同样，本章不读取：
+同样不读取：
 
 ```text
 finish-step.usage
 finish-step.usage.raw
-providerMetadata.gateway.cost
-providerMetadata.gateway.marketCost
-providerMetadata.gateway.inferenceCost
-providerMetadata.gateway.inputInferenceCost
-providerMetadata.gateway.outputInferenceCost
+
+providerMetadata
+gateway cost metadata
+provider billing metadata
 ```
 
-因为 Pi Usage construction 不需要这些 parallel accounting representations。
+这些 information 不参与当前 Pi `Usage` construction。
 
 ------
 
-## 5.3 Missing `totalUsage`
+## 5.3 Construction Method
 
-Pi `AssistantMessage.usage` 是 required。
-
-CommandCode final `finish.totalUsage` 可以 absent。
-
-当整个 `totalUsage` absent 时，构造 zero usage：
-
-```text
-input      = 0
-output     = 0
-cacheRead  = 0
-cacheWrite = 0
-totalTokens = 0
-```
-
-并：
-
-```text
-cacheWrite1h
-→ omit
-
-reasoning
-→ omit
-```
-
-随后使用这些 zero token categories 构造 zero cost。
-
-因此：
-
-```text
-totalUsage absent
-```
-
-不是 response conversion failure。
-
-------
-
-## 5.4 Token Count Validity
-
-任何真正进入 Target construction 的 Source token count，在 present 时必须是：
-
-```text
-non-negative safe integer
-```
-
-即：
-
-```text
-Number.isSafeInteger(value)
-&&
-value >= 0
-```
-
-Source absent 与 present-invalid 必须区分：
-
-```text
-absent
-→ use Target construction fallback / default
-
-present but invalid
-→ error
-```
-
-不能把：
-
-```text
-null
-negative number
-fraction
-NaN
-Infinity
-unsafe integer
-```
-
-当成 absent 再 silently 变成 `0`。
-
-只验证实际被当前 Target construction读取的 Source fields。
-
-------
-
-## 5.5 `cacheRead`
+### `cacheRead`
 
 Target：
 
@@ -9556,7 +8901,7 @@ Target：
 cacheRead: number
 ```
 
-Source dependency：
+Source：
 
 ```text
 inputTokenDetails.cacheReadTokens
@@ -9565,11 +8910,11 @@ inputTokenDetails.cacheReadTokens
 Construction：
 
 ```text
+cacheReadTokens present
+→ cacheRead = cacheReadTokens
+
 cacheReadTokens absent
 → cacheRead = 0
-cacheReadTokens present
-→ require valid token count
-→ cacheRead = cacheReadTokens
 ```
 
 不读取：
@@ -9578,13 +8923,11 @@ cacheReadTokens present
 cachedInputTokens
 ```
 
-作为额外 alias 或 consistency check。
-
-Pi `cacheRead` 已经有直接 Source representation，因此没有必要引入第二套 Source authority。
+作为第二个 representation。
 
 ------
 
-## 5.6 `cacheWrite`
+### `cacheWrite`
 
 Target：
 
@@ -9592,7 +8935,7 @@ Target：
 cacheWrite: number
 ```
 
-Source dependency：
+Source：
 
 ```text
 inputTokenDetails.cacheWriteTokens
@@ -9601,16 +8944,16 @@ inputTokenDetails.cacheWriteTokens
 Construction：
 
 ```text
+cacheWriteTokens present
+→ cacheWrite = cacheWriteTokens
+
 cacheWriteTokens absent
 → cacheWrite = 0
-cacheWriteTokens present
-→ require valid token count
-→ cacheWrite = cacheWriteTokens
 ```
 
 ------
 
-## 5.7 `input`
+### `input`
 
 Target：
 
@@ -9618,54 +8961,50 @@ Target：
 input: number
 ```
 
-Pi `input` 表示：
+Pi `input` 不包含 cache-read 或 cache-write tokens。
 
-```text
-non-cache-read
-non-cache-write
-input tokens
-```
-
-最直接的 Source representation 是：
+最直接 Source：
 
 ```text
 inputTokenDetails.noCacheTokens
 ```
 
-因此首先：
+如果 present：
 
 ```text
-noCacheTokens present
-→ require valid token count
-→ input = noCacheTokens
-```
-
-此时 `inputTokens` 不需要为了计算 `input` 再被读取。
-
-------
-
-### `noCacheTokens` absent
-
-只有当：
-
-```text
+input
+=
 noCacheTokens
 ```
 
-absent 时，才需要 aggregate input count：
+到此完成 `input` construction。
+
+不再为了该 Target field读取：
 
 ```text
 inputTokens
 ```
 
-Construction：
+------
+
+如果：
 
 ```text
-inputTokens absent
-→ totalInput = 0
-inputTokens present
-→ require valid token count
-→ totalInput = inputTokens
+noCacheTokens
+```
+
+absent，则读取 aggregate：
+
+```text
+inputTokens
+```
+
+并构造：
+
+```text
+totalInput
+=
+inputTokens ?? 0
 ```
 
 然后：
@@ -9678,59 +9017,23 @@ totalInput
 - cacheWrite
 ```
 
-必须满足：
+如果该计算无法形成合法的 non-negative input token count，则：
 
 ```text
-totalInput >= cacheRead + cacheWrite
+→ conversion error
 ```
 
-否则：
+不使用：
 
 ```text
-→ error
+cachedInputTokens
 ```
 
-因为无法构造合法的 Pi input partition。
+或其他 alias 来修补结果。
 
 ------
 
-### Explicit complete partition consistency
-
-如果为了当前 construction 已经同时读取了：
-
-```text
-inputTokens
-noCacheTokens
-cacheReadTokens
-cacheWriteTokens
-```
-
-并且四个 values 都显式存在，则它们描述同一个 input partition。
-
-必须满足：
-
-```text
-inputTokens
-=
-noCacheTokens
-+ cacheReadTokens
-+ cacheWriteTokens
-```
-
-否则：
-
-```text
-→ inconsistent Source accounting
-→ error
-```
-
-这个检查只发生在这些 fields 本身已经作为当前 Target construction dependencies 被读取时。
-
-它不是一次 generic `totalUsage` consistency scan。
-
-------
-
-## 5.8 `output`
+### `output`
 
 Target：
 
@@ -9738,7 +9041,7 @@ Target：
 output: number
 ```
 
-Source dependency：
+Source：
 
 ```text
 totalUsage.outputTokens
@@ -9747,26 +9050,22 @@ totalUsage.outputTokens
 Construction：
 
 ```text
+outputTokens present
+→ output = outputTokens
+
 outputTokens absent
 → output = 0
-outputTokens present
-→ require valid token count
-→ output = outputTokens
 ```
 
-不使用：
+不通过：
 
 ```text
-textTokens + reasoningTokens
+textTokens
++
+reasoningTokens
 ```
 
 反推 output。
-
-因为 Target 已经有直接 Source：
-
-```text
-outputTokens
-```
 
 因此：
 
@@ -9774,11 +9073,11 @@ outputTokens
 outputTokenDetails.textTokens
 ```
 
-不需要进入 conversion state。
+不进入 conversion state。
 
 ------
 
-## 5.9 `reasoning`
+### `reasoning`
 
 Target：
 
@@ -9786,96 +9085,44 @@ Target：
 reasoning?: number
 ```
 
-Optional。
-
-首先读取更具体的 output breakdown：
+当前使用：
 
 ```text
 outputTokenDetails.reasoningTokens
 ```
 
-如果 present：
-
-```text
-require valid token count
-↓
-reasoning
-← outputTokenDetails.reasoningTokens
-```
-
-并停止寻找其他 reasoning representation。
-
-------
-
-如果 nested reasoning field absent，再读取：
-
-```text
-totalUsage.reasoningTokens
-```
+作为 Source。
 
 如果 present：
 
 ```text
-require valid token count
-↓
 reasoning
-← totalUsage.reasoningTokens
+=
+outputTokenDetails.reasoningTokens
 ```
 
-如果两者都 absent：
+如果 absent：
 
 ```text
 reasoning
 → omit
 ```
 
-------
-
-### Target relationship validation
-
-如果构造了 `reasoning`：
+不继续读取：
 
 ```text
-reasoning <= output
+totalUsage.reasoningTokens
 ```
 
-必须成立。
+作为第二个 alias。
 
-否则：
-
-```text
-→ error
-```
-
-因为 Pi Target 明确定义：
-
-```text
-reasoning
-⊆
-output
-```
-
-不需要检查多个 Source reasoning aliases 是否互相相等。
-
-一旦更高优先级 representation 已经足够构造 Target，低优先级 representation 不再读取。
+当前 conversion 不维护 reasoning token source precedence 或 consistency checks。
 
 ------
 
-## 5.10 `cacheWrite1h`
+### `cacheWrite1h`
 
-Target：
-
-```ts
-cacheWrite1h?: number
-```
-
-构造它需要：
-
-```text
-1-hour cache-write token count
-```
-
-当前 CommandCode committed usage 没有该 Target dependency。
+当前 CommandCode usage 没有构造该 Target field 所需的 1-hour cache-write breakdown。
 
 因此：
 
@@ -9886,31 +9133,15 @@ cacheWrite1h
 
 到此停止。
 
-不继续读取或研究：
-
-```text
-request cache policy
-provider metadata
-gateway metadata
-model provider
-HTTP headers
-```
-
-来猜测 retention split。
+不继续读取其他 metadata 来推断 retention duration。
 
 ------
 
-## 5.11 `totalTokens`
+### `totalTokens`
 
-Target：
+不需要额外 CommandCode Source。
 
-```ts
-totalTokens: number
-```
-
-不需要额外 Source。
-
-它由已经构造完成的 Pi accounting categories计算：
+直接使用已经构造完成的 Pi token categories：
 
 ```text
 totalTokens
@@ -9921,276 +9152,75 @@ input
 + output
 ```
 
-因此：
+因此不读取：
 
 ```text
-CommandCode totalUsage.totalTokens
+totalUsage.totalTokens
 ```
 
-不进入 conversion state。
-
-也不需要拿它做 consistency validation。
-
-同样：
-
-```text
-reasoning
-cacheWrite1h
-```
-
-不再次加入计算。
+也不拿 Source `totalTokens` 做额外 consistency validation。
 
 ------
 
-## 5.12 `cost`
+### `cost`
 
-Pi `Usage.cost` 是 required。
-
-Target：
+先构造 Pi `Usage` token fields：
 
 ```text
-cost
+usage
 ├── input
 ├── output
 ├── cacheRead
 ├── cacheWrite
-└── total
+├── cacheWrite1h → omit
+├── reasoning?
+├── totalTokens
+└── cost
 ```
 
-Construction dependencies：
+初始化 required cost subtree，然后使用当前 invocation 的 Pi model：
 
 ```text
-constructed Pi token categories
+model
 +
-bound invocation model pricing
-```
-
-不需要 CommandCode cost metadata。
-
-------
-
-### Pricing authority
-
-当前 logical response 使用 invocation 开始时 capture 的 Pi pricing model。
-
-```text
-selected Pi model
+usage
 ↓
-capture pricing data once
+Pi calculateCost(model, usage)
 ↓
-response pricing authority
+usage.cost
 ```
 
-这样 callback 或其他 runtime mutation 不能在 response lifetime 中改变同一 response 的 pricing semantics。
+具体 pricing tier、cache pricing 和 cost calculation semantics 由 Pi AI `calculateCost()` 定义。
 
-Cost construction不重新查询 model registry，也不读取 gateway-reported billing metadata。
+LuckyToken 不复制这些算法到 conversion contract，也不根据 CommandCode gateway billing metadata重新计算另一套 cost。
 
 ------
 
-### Pricing tier
-
-Pi pricing tier 使用完整 input-side token count：
-
-```text
-pricingInputTokens
-=
-input
-+ cacheRead
-+ cacheWrite
-```
-
-从：
-
-```text
-model.cost
-model.cost.tiers?
-```
-
-选择 effective rates。
-
-Base：
-
-```text
-rates = model.cost
-```
-
-对于每个 tier：
-
-```text
-pricingInputTokens > tier.inputTokensAbove
-```
-
-时，该 tier 可以匹配。
-
-如果多个 tier 匹配，选择：
-
-```text
-inputTokensAbove
-```
-
-最大的匹配 tier。
-
-------
-
-### Input cost
-
-```text
-cost.input
-=
-rates.input
-× input
-÷ 1_000_000
-```
-
-------
-
-### Output cost
-
-```text
-cost.output
-=
-rates.output
-× output
-÷ 1_000_000
-```
-
-------
-
-### Cache-read cost
-
-```text
-cost.cacheRead
-=
-rates.cacheRead
-× cacheRead
-÷ 1_000_000
-```
-
-------
-
-### Cache-write cost
-
-Pi generic pricing支持：
-
-```text
-longWrite
-=
-cacheWrite1h ?? 0
-shortWrite
-=
-cacheWrite - longWrite
-```
-
-然后：
-
-```text
-cost.cacheWrite
-=
-(
-  rates.cacheWrite × shortWrite
-  +
-  rates.input × 2 × longWrite
-)
-÷ 1_000_000
-```
-
-当前 CommandCode construction：
-
-```text
-cacheWrite1h
-→ omit
-```
-
-因此：
-
-```text
-longWrite = 0
-shortWrite = cacheWrite
-```
-
-当前结果简化为：
-
-```text
-cost.cacheWrite
-=
-rates.cacheWrite
-× cacheWrite
-÷ 1_000_000
-```
-
-------
-
-### Total cost
-
-```text
-cost.total
-=
-cost.input
-+ cost.output
-+ cost.cacheRead
-+ cost.cacheWrite
-```
-
-------
-
-### CommandCode-reported cost does not enter conversion state
-
-真实 CommandCode responses 可以包含 gateway billing information。
-
-但当前 Pi Target construction已经由：
-
-```text
-Pi token categories
-+
-Pi model pricing
-```
-
-完整定义。
-
-因此不需要读取：
-
-```text
-gateway cost
-market cost
-inference cost
-input inference cost
-output inference cost
-surcharge cost
-```
-
-也不需要比较 local Pi cost 与 gateway-reported cost。
-
-这些是另一套 infrastructure / billing information，不参与当前 Pi Usage semantic construction。
-
-------
-
-## 5.13 Final Usage Construction
+## 5.4 Complete Construction
 
 完整信息流：
 
 ```text
-Pi Usage Target
+finish.totalUsage
 ↓
-determine required token categories
-↓
-read only necessary finish.totalUsage fields
+read only fields required by Pi Usage
 ↓
 construct
 │
-├── input
 ├── cacheRead
 ├── cacheWrite
+├── input
 ├── output
 └── reasoning?
 ↓
-omit
-└── cacheWrite1h
+cacheWrite1h
+→ omit
 ↓
-calculate
-└── totalTokens
+totalTokens
+=
+input + cacheRead + cacheWrite + output
 ↓
-apply bound Pi model pricing
-└── cost
+Pi calculateCost(model, usage)
 ↓
 Pi Usage
 ```
@@ -10216,9 +9246,9 @@ Usage
 
 ------
 
-## 5.14 Information Boundary
+## 5.5 Information Boundary
 
-进入本章 conversion state 的 Source information：
+进入本章 conversion state：
 
 ```text
 finish.totalUsage
@@ -10228,148 +9258,108 @@ finish.totalUsage
 │   ├── cacheReadTokens?
 │   └── cacheWriteTokens?
 ├── outputTokens?
-├── outputTokenDetails?
-│   └── reasoningTokens?
-└── reasoningTokens?
-```
-
-不进入本章 conversion state：
-
-```text
-totalUsage.totalTokens
-totalUsage.cachedInputTokens
-outputTokenDetails.textTokens
-
-finish-step.usage
-finish-step.usage.raw
-
-gateway-reported cost metadata
-provider billing metadata
+└── outputTokenDetails?
+    └── reasoningTokens?
 ```
 
 Bound dependency：
 
 ```text
-captured Pi model pricing
+invoked Pi model
 ```
 
-Construction 不创建额外 parallel semantic representations：
+仅用于：
+
+```text
+calculateCost(model, usage)
+```
+
+不进入本章：
+
+```text
+totalUsage.totalTokens
+totalUsage.cachedInputTokens
+totalUsage.reasoningTokens
+outputTokenDetails.textTokens
+
+finish-step.usage
+finish-step.usage.raw
+
+gateway-reported cost
+provider billing metadata
+```
+
+本章不创建：
 
 ```text
 RawUsage
 NormalizedUsage
-PiUsage
+PricingAuthority
+UsageConsistencyState
 ```
 
-正确 lifecycle：
+正确 information lifecycle：
 
 ```text
-finish.totalUsage
+CommandCode finish.totalUsage
 ↓
-direct Target-driven construction
+Pi Usage token construction
 ↓
-Pi Usage
+Pi calculateCost()
+↓
+complete Pi Usage
 ```
 
-因此 committed CommandCode response 不需要另外保存：
-
-```text
-rawUsage
-normalized usage
-response-level usage copy
-```
-
-来表达同一个 accounting fact。
+构造完成后，CommandCode usage representation 不再需要继续存在于后续 Pi semantic conversion state。
 
 ## 6. `stopReason`
 
 本章构造 Pi `AssistantMessage.stopReason`。
 
-Pi Target：
-
-```ts
-type StopReason =
-  | "pending"
-  | "stop"
-  | "length"
-  | "toolUse"
-  | "error"
-  | "aborted"
-  | "deferred";
-```
-
-`stopReason` 是 required。
-
-不同 StopReason 属于不同 lifecycle：
+进入本章的 Source 已经是：
 
 ```text
-StopReason
-│
-├── successful completion
-│   ├── stop
-│   ├── length
-│   └── toolUse
-│
-├── failure / cancellation
-│   ├── error
-│   └── aborted
-│
-├── streaming transient
-│   └── pending
-│
-└── deferred execution
-    └── deferred
+Committed CommandCode Response
 ```
 
-因此不能把所有 Pi StopReason 都视为 CommandCode `finishReason` 的直接 mapping。
+CommandCode response reconstruction 已经负责处理 response error、abort、protocol failure 和 `pause_turn`。
 
-------
+因此本章只处理 successful committed response 的 terminal reason conversion。
 
 ### 6.1 Target
 
-#### `"stop"`
-
-表示 model 正常结束当前 turn。
-
-对于 CommandCode，除明确具有其他 Pi semantic 的 terminal category 外，普通 end-turn semantic 构造为：
+当前 successful CommandCode response 需要构造的 Pi `stopReason` 只有：
 
 ```text
-stopReason = "stop"
+stop
+length
+toolUse
 ```
 
-------
-
-#### `"length"`
-
-表示 response 因 output token limit 截断。
+其中：
 
 ```text
-stopReason = "length"
+"stop"
+→ normal end-turn
+
+"length"
+→ output token limit
+
+"toolUse"
+→ model emitted tool calls
 ```
 
-------
-
-#### `"toolUse"`
-
-表示 model 已产生 ToolCall，当前 response 因 tool-use terminal condition 结束。
-
-```text
-stopReason = "toolUse"
-```
-
-------
-
-#### `"error"`、`"aborted"`、`"pending"、`"deferred"`这几种情况不用考虑`
+Pi 其他 `StopReason` variants 不属于本章 construction。
 
 ### 6.2 `rawStopReason`
 
-Pi Target 还允许：
+Pi Target 允许：
 
 ```ts
 rawStopReason?: string;
 ```
 
-当前 LuckyToken CommandCode conversion 不要求保存 provider-specific raw terminal reason。
+当前 CommandCode conversion 不需要保存 provider-specific raw terminal reason。
 
 因此：
 
@@ -10378,1641 +9368,176 @@ rawStopReason
 → omit
 ```
 
-到此停止。
+不读取 `rawFinishReason` 来构造其他 Target field。
 
-不因为 CommandCode 提供：
+### 6.3 Source
 
-```text
-rawFinishReason
-```
-
-就自动把它复制进 Pi AssistantMessage。
-
-但某个 raw Source value仍然可以作为构造 `stopReason` 所需的 Condition Source。
-
-当前唯一需要读取的特殊 raw terminal semantic 是：
-
-```text
-pause_turn
-```
-
-------
-
-## 6.3 Source
-
-对于 successful committed CommandCode response，本章只需要：
+本章只读取：
 
 ```text
 Committed CommandCode Response
 └── finish
-    ├── finishReason?
-    └── rawFinishReason?
+    └── finishReason?: string
 ```
 
-其中：
+`finishReason` 是本章唯一 Source dependency。
+
+CommandCode terminal normalization：
 
 ```text
 finishReason
+├── "tool-calls"
+│   → tool-use termination
+│
+├── "length"
+│   → token-limit termination
+│
+└── other string / missing
+    → ordinary end-turn
 ```
 
-提供 ordinary terminal category。
+其中 `other` 包括任何不是：
 
 ```text
-rawFinishReason
+"tool-calls"
+"length"
 ```
 
-只在判断是否为：
+的 value。
+
+例如：
 
 ```text
-pause_turn
+"stop"
+"error"
+future provider-specific string
 ```
 
-时进入 conversion state。
+都属于 ordinary end-turn fallback。
 
-本章不读取：
+这里的：
 
 ```text
-content
-usage
-systemPromptTokens
-finish-step
-providerMetadata
-response metadata
-HTTP headers
+finishReason = "error"
 ```
 
-来构造 `stopReason`。
+只是 `finish` event 中的一个 reason value。
 
-------
-
-### CommandCode terminal semantics
-
-当前 CommandCode Source contract：
-
-| `finishReason`      | Semantic                                        |
-| ------------------- | ----------------------------------------------- |
-| `"stop"`            | 正常结束                                        |
-| `"tool-calls"`      | model 请求调用工具                              |
-| `"length"`          | 达到 output token limit                         |
-| 其他 present string | Source normalized fallback 为 ordinary end-turn |
-
-另外：
+它不同于：
 
 ```text
-rawFinishReason = "pause_turn"
+event.type = "error"
 ```
 
-表示 Source 原本要求暂停当前 turn 并继续 continuation。
+后者已经由 CommandCode response reconstruction 作为 response failure 处理，不会产生 committed response。
 
-LuckyToken 当前不实现该 continuation semantic，并直接报错error, 意味接收reasponse失败。因此它不是 successful end-turn。
+### 6.4 Construction Method
 
-------
-
-## 6.4 Construction Method
-
-Successful committed-response construction 的顺序是：
-
-```text
-finish
-↓
-check pause_turn
-↓
-construct successful stopReason
-```
-
-必须先处理 `pause_turn`，再解释 ordinary `finishReason`。
-
-------
-
-### 6.4.1 `pause_turn`
-
-读取：
-
-```text
-finish.rawFinishReason
-```
-
-如果：
-
-```text
-rawFinishReason === "pause_turn"
-```
-
-则：
-
-```text
-CommandCode pause-turn semantic
-↓
-requires continuation
-↓
-LuckyToken does not implement continuation
-↓
-cannot construct faithful successful Pi terminal state
-↓
-conversion failure
-```
-
-最终进入 failure path：
-
-```text
-AssistantMessage.stopReason = "error"
-```
-
-因此：
-
-```text
-pause_turn
-→ error
-```
-
-它不能映射为：
-
-```text
-stop
-length
-toolUse
-aborted
-```
-
-也不能 silently 当作 ordinary end-turn。
-
-------
-
-### 6.4.2 `"tool-calls"`
-
-如果不是 `pause_turn`，并且：
+Construction 只需要三个 branch：
 
 ```text
 finishReason === "tool-calls"
-```
+→ stopReason = "toolUse"
 
-则：
-
-```text
-stopReason
-→ "toolUse"
-```
-
-Construction：
-
-```text
-CommandCode "tool-calls"
-↓
-Pi "toolUse"
-```
-
-不需要为了构造本字段再次检查：
-
-```text
-content[] 是否包含 ToolCall
-```
-
-`finishReason` 已经提供当前 terminal semantic。
-
-Content representability 由 Chapter 4 独立负责。
-
-------
-
-### 6.4.3 `"length"`
-
-如果：
-
-```text
 finishReason === "length"
-```
+→ stopReason = "length"
 
-则：
-
-```text
-stopReason
-→ "length"
-```
-
-Construction：
-
-```text
-CommandCode token-limit termination
-↓
-Pi length
-```
-
-------
-
-### 6.4.4 Ordinary end-turn
-
-如果 `finishReason` 是其他 present string：
-
-```text
-finishReason
-!= "tool-calls"
-and
-finishReason != "length"
-```
-
-则按照 CommandCode Source 的 normalized terminal semantic：
-
-```text
-stopReason
-→ "stop"
-```
-
-因此：
-
-```text
-"stop"
-→ "stop"
-```
-
-其他 future / provider-specific present terminal strings，在 Source 已将它们归入 ordinary end-turn semantic 时，同样：
-
-```text
-other present string
-→ "stop"
-```
-
-LuckyToken 不维护 provider-specific finish-reason whitelist。
-
-不能因为遇到一个此前没见过的 present string 就自动产生：
-
-```text
-stopReason = "error"
-```
-
-只要 Source contract 对该 category 的 normalized semantic 仍然是 ordinary end-turn。
-
-------
-
-### 6.4.5 Missing `finishReason`
-
-如果：
-
-```text
-finishReason
-```
-
-absent：
-
-```text
-→ cannot construct required successful Pi stopReason
-→ conversion failure
-```
-
-最终进入：
-
-```text
-stopReason = "error"
-```
-
-这里必须区分：
-
-```text
-unknown present string
-```
-
-与：
-
-```text
-missing finishReason
-```
-
-前者仍然具有 Source terminal category，并按 Source fallback 表达 ordinary end-turn。
-
-后者缺少构造 required Target field 所需的信息。
-
-因此不能把两者合并处理。
-
-------
-
-## 6.5 No Raw-Reason Enumeration
-
-除：
-
-```text
-pause_turn
-```
-
-之外，本章不维护：
-
-```text
-refusal
-model_context_window_exceeded
-content_filter
-provider-specific reason
-future raw reason
-```
-
-等 raw reason whitelist。
-
-如果某个 future raw terminal reason 后续被证明具有无法通过普通 Pi `stopReason` 保存的重要 lifecycle semantic，再为那个具体 Target construction增加 Condition Source。
-
-在没有这种证据前：
-
-```text
-do not classify
-do not reject
-do not create conversion rule
-```
-
-特别是：
-
-```text
-rawFinishReason = "refusal"
-```
-
-或：
-
-```text
-rawFinishReason = "model_context_window_exceeded"
-```
-
-本身不导致 conversion failure。
-
-只有已经确认具有 continuation semantic 的：
-
-```text
-pause_turn
-```
-
-当前需要特殊处理。
-
-------
-
-## 6.10 Final Construction
-
-对于 successfully committed CommandCode response：
-
-```text
-finish
-↓
-rawFinishReason === "pause_turn" ?
-│
-├── yes
-│   ↓
-│   conversion failure
-│   ↓
-│   stopReason = "error"
-│
-└── no
-    ↓
-    finishReason present?
-    │
-    ├── no
-    │   ↓
-    │   conversion failure
-    │   ↓
-    │   stopReason = "error"
-    │
-    └── yes
-        ↓
-        finishReason
-        │
-        ├── "tool-calls"
-        │   → "toolUse"
-        │
-        ├── "length"
-        │   → "length"
-        │
-        └── other present string
-            → "stop"
-```
-
-因此 successful mapping 可以概括为：
-
-```text
-CommandCode
-              Pi
-────────────────────────
-tool-calls → toolUse
-length     → length
-other      → stop
-```
-
-其中：
-
-```text
-pause_turn
-```
-
-在进入该 ordinary mapping 前已经被截获：
-
-```text
-pause_turn
-→ error path
-```
-
-------
-
-## 6.11 Information Boundary
-
-进入 successful terminal construction state 的 Source information：
-
-```text
-finish
-├── finishReason
-└── rawFinishReason
-    └── only inspect for pause_turn
-```
-
-其中：
-
-```text
-finishReason
-→ Value / Structural Source
-rawFinishReason
-→ Condition Source
-```
-
-最终 Pi success message只保存：
-
-```text
-stopReason
-```
-
-当前不保存：
-
-```text
-rawStopReason
-```
-
-因此：
-
-```text
-rawFinishReason
-```
-
-完成 `pause_turn` condition evaluation 后即可结束其 information lifetime。
-
-本章最终 information flow：
-
-```text
-Pi stopReason Target
-↓
-identify required terminal semantic
-↓
-read minimum CommandCode finish information
-↓
-exclude unsupported pause_turn
-↓
-map ordinary finish category
-↓
-Pi stopReason
-```
-
-而不是：
-
-```text
-enumerate every CommandCode raw reason
-↓
-classify all provider terminal strings
-↓
-maintain conversion whitelist
-↓
-map to Pi
-```
-
-## 7. Pi `AssistantMessage` Event Emission
-
-本章将已经完成构造的 Pi `AssistantMessage` 表示为 Pi `AssistantMessageEventStream`。
-
-本章不再读取 CommandCode response。
-
-边界：
-
-```text
-CommandCode Response
-↓
-reconstruction
-↓
-semantic conversion
-↓
-Complete Pi AssistantMessage
-
-──────── PI MESSAGE BOUNDARY ────────
-
-Complete Pi AssistantMessage
-↓
-Event Emission
-↓
-AssistantMessageEventStream
-```
-
-因此本章不是：
-
-```text
-CommandCode event
-→ Pi event
-```
-
-而是：
-
-```text
-Pi AssistantMessage
-→ Pi event lifecycle
-```
-
-CommandCode reconstruction期间使用的：
-
-```text
-raw text deltas
-raw reasoning deltas
-tool-input deltas
-CommandCode content IDs
-finish events
-provider metadata
-```
-
-到本章都已经结束其 information lifetime。
-
-------
-
-### 7.1 Target
-
-Pi `AssistantMessageEventStream` 由 `AssistantMessageEvent` 构成。
-
-自然结构：
-
-```text
-AssistantMessageEventStream
-│
-├── Start
-│   └── start
-│
-├── Content Lifecycle
-│   │
-│   ├── Text
-│   │   ├── text_start
-│   │   ├── text_delta
-│   │   └── text_end
-│   │
-│   ├── Thinking
-│   │   ├── thinking_start
-│   │   ├── thinking_delta
-│   │   └── thinking_end
-│   │
-│   └── ToolCall
-│       ├── toolcall_start
-│       ├── toolcall_delta
-│       └── toolcall_end
-│
-└── Terminal
-    ├── done
-    └── error
-```
-
-Pi event contract定义：
-
-```ts
-type AssistantMessageEvent =
-  | { type: "start"; partial: AssistantMessage }
-
-  | {
-      type: "text_start";
-      contentIndex: number;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "text_delta";
-      contentIndex: number;
-      delta: string;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "text_end";
-      contentIndex: number;
-      content: string;
-      partial: AssistantMessage;
-    }
-
-  | {
-      type: "thinking_start";
-      contentIndex: number;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "thinking_delta";
-      contentIndex: number;
-      delta: string;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "thinking_end";
-      contentIndex: number;
-      content: string;
-      partial: AssistantMessage;
-    }
-
-  | {
-      type: "toolcall_start";
-      contentIndex: number;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "toolcall_delta";
-      contentIndex: number;
-      delta: string;
-      partial: AssistantMessage;
-    }
-  | {
-      type: "toolcall_end";
-      contentIndex: number;
-      toolCall: ToolCall;
-      partial: AssistantMessage;
-    }
-
-  | {
-      type: "done";
-      reason: "stop" | "length" | "toolUse" | "deferred";
-      message: AssistantMessage;
-    }
-
-  | {
-      type: "error";
-      reason: "error" | "aborted";
-      error: AssistantMessage;
-    };
-```
-
-Pi 明确规定：
-
-```text
-start
-→ partial updates
-→ done | error
-```
-
-`done` 和 `error` 是 terminal events。
-
-------
-
-### 7.2 Terminal Authority
-
-`AssistantMessageEventStream` 将：
-
-```text
-done
-or
-error
-```
-
-视为 stream completion。
-
-对于：
-
-```text
-done
-```
-
-最终 result 为：
-
-```text
-event.message
-```
-
-对于：
-
-```text
-error
-```
-
-最终 result 为：
-
-```text
-event.error
-```
-
-因此：
-
-```text
-done.message
-or
-error.error
-```
-
-是该 Pi stream 的 authoritative final `AssistantMessage`。
-
-Pi `Models.complete()` 和 `completeSimple()` 也是直接取得：
-
-```text
-stream.result()
-```
-
-作为最终 `AssistantMessage`。
-
-因此本章的 terminal invariant：
-
-```text
-successful stream
-→ final result = done.message
-
-failed / aborted stream
-→ final result = error.error
-```
-
-`stream.end()` 是 stream implementation operation，不是 Pi semantic event，也不是本章 protocol lifecycle 的额外 terminal state。
-
-------
-
-## 7.3 Source
-
-本章 Source 只有：
-
-```text
-Complete Pi AssistantMessage
-```
-
-Relevant subtree：
-
-```text
-AssistantMessage
-├── content[]
-│   ├── TextContent
-│   ├── ThinkingContent
-│   └── ToolCall
-│
-├── usage
-├── stopReason
-└── already-constructed top-level fields
-```
-
-本章不重新读取或转换：
-
-```text
-CommandCode content
-CommandCode finish
-CommandCode usage
-CommandCode raw deltas
-CommandCode IDs
-```
-
-所有 semantic authority 已经位于 Pi `AssistantMessage`。
-
-------
-
-## 7.4 Successful Event Lifecycle
-
-当前 CommandCode conversion 可产生的 successful Pi stop reasons：
-
-```text
-stop
-length
-toolUse
-```
-
-对于这些 complete messages，event lifecycle：
-
-```text
-Complete AssistantMessage
-↓
-create emission partial
-↓
-start
-↓
-emit content lifecycle in content[] order
-↓
-done
+otherwise
+→ stopReason = "stop"
 ```
 
 即：
 
 ```text
-start
-→ content events*
-→ done
+CommandCode finishReason     Pi stopReason
+──────────────────────────────────────────
+"tool-calls"              → "toolUse"
+"length"                  → "length"
+other string              → "stop"
+missing                   → "stop"
 ```
 
-------
+不维护 CommandCode finish-reason whitelist。
 
-### 7.4.1 Initial `partial`
+不因为 unknown or future string 报错。
 
-Event emission创建一个 temporary Pi `AssistantMessage` construction state。
+不因为 `finishReason` missing 报错。
 
-它继承 final message 的 stable top-level identity：
+### 6.5 Information Boundary
 
-```text
-role
-api
-provider
-model
-timestamp
-```
-
-但尚未 replay final semantic result：
-
-```text
-content = []
-usage = zero usage
-stopReason = "pending"
-```
-
-即概念上：
-
-```text
-partial
-├── role        ← final message
-├── content     = []
-├── api         ← final message
-├── provider    ← final message
-├── model       ← final message
-├── usage       = zero
-├── stopReason  = "pending"
-└── timestamp   ← final message
-```
-
-随后：
-
-```text
-emit start {
-  partial
-}
-```
-
-Pi provider implementations同样使用 `stopReason = "pending"` 的 mutable AssistantMessage 作为 streaming construction state，并将其作为 event `partial`。
-
-------
-
-### `partial` ownership
-
-`partial` 不是第二个 authoritative semantic model。
-
-它只是：
-
-```text
-current event-emission position
-↓
-temporary AssistantMessage view
-```
-
-生命周期：
-
-```text
-create
-↓
-start
-↓
-content lifecycle
-↓
-terminal
-↓
-discard
-```
-
-最终 semantic authority仍然是：
-
-```text
-done.message
-```
-
-而不是某个 intermediate `partial`。
-
-------
-
-## 7.5 Content Order
-
-按 final：
-
-```text
-AssistantMessage.content[]
-```
-
-顺序逐项 emit。
-
-必须满足：
-
-```text
-event content order
-=
-AssistantMessage.content[] order
-```
-
-因此：
-
-```text
-content[0]
-→ contentIndex = 0
-
-content[1]
-→ contentIndex = 1
-
-...
-
-content[n]
-→ contentIndex = n
-```
-
-不重新：
-
-```text
-group by type
-sort by ID
-sort by completion time
-recover CommandCode start time
-```
-
-Chapter 4 已经建立最终 Pi semantic order。
-
-------
-
-## 7.6 Text Event Emission
-
-Source locality：
-
-```text
-TextContent
-└── text
-```
-
-Target lifecycle：
-
-```text
-text_start
-→ text_delta
-→ text_end
-```
-
-Construction：
-
-### `text_start`
-
-首先在 partial 中创建对应 block：
-
-```text
-partial.content[contentIndex]
-=
-{
-  type: "text",
-  text: ""
-}
-```
-
-然后 emit：
-
-```text
-text_start {
-  contentIndex,
-  partial
-}
-```
-
-------
-
-### `text_delta`
-
-本章不保留原始 CommandCode token boundaries。
-
-因此一个完整 `TextContent.text` 使用一个 Pi delta：
-
-```text
-partial.content[contentIndex].text
-← final TextContent.text
-```
-
-然后：
-
-```text
-text_delta {
-  contentIndex,
-  delta: finalText,
-  partial
-}
-```
-
-即：
-
-```text
-complete TextContent
-→ one complete text_delta
-```
-
-不执行：
-
-```text
-split into tokens
-split into characters
-recover original CommandCode deltas
-```
-
-------
-
-### `text_end`
-
-最后：
-
-```text
-text_end {
-  contentIndex,
-  content: finalText,
-  partial
-}
-```
-
-完整 lifecycle：
-
-```text
-TextContent
-↓
-text_start
-↓
-text_delta(full text)
-↓
-text_end
-```
-
-------
-
-## 7.7 Thinking Event Emission
-
-Source locality：
-
-```text
-ThinkingContent
-└── thinking
-```
-
-与 Text 使用相同结构。
-
-首先：
-
-```text
-partial.content[contentIndex]
-=
-{
-  type: "thinking",
-  thinking: ""
-}
-```
-
-然后：
-
-```text
-thinking_start
-↓
-thinking_delta(full thinking)
-↓
-thinking_end
-```
-
-Construction：
-
-```text
-thinking_delta.delta
-=
-final ThinkingContent.thinking
-```
-
-以及：
-
-```text
-thinking_end.content
-=
-final ThinkingContent.thinking
-```
-
-不恢复原始 CommandCode reasoning deltas。
-
-Pi Anthropic provider同样通过 `thinking_start → thinking_delta* → thinking_end` 更新同一个 AssistantMessage construction state。
-
-------
-
-## 7.8 ToolCall Event Emission
-
-Source locality：
-
-```text
-ToolCall
-├── id
-├── name
-├── arguments
-├── thoughtSignature?
-└── namespace?
-```
-
-Target lifecycle支持：
-
-```text
-toolcall_start
-→ toolcall_delta*
-→ toolcall_end
-```
-
-其中：
-
-```text
-toolcall_delta*
-```
-
-允许 zero or more intermediate deltas。
-
-------
-
-### 7.8.1 `toolcall_start`
-
-在 partial 中创建 initial ToolCall：
-
-```text
-partial.content[contentIndex]
-=
-{
-  type: "toolCall",
-  id: finalToolCall.id,
-  name: finalToolCall.name,
-  arguments: {}
-}
-```
-
-然后：
-
-```text
-toolcall_start {
-  contentIndex,
-  partial
-}
-```
-
-Pi `pi-messages` adapter也使用：
-
-```text
-id
-name
-arguments = {}
-```
-
-建立 ToolCall streaming state。
-
-------
-
-### 7.8.2 No synthetic `toolcall_delta`
-
-Pi native providers使用 `toolcall_delta` 表示 provider 实际产生的 serialized tool-input fragments。
-
-例如 Anthropic：
-
-```text
-input_json_delta
-↓
-append partial JSON
-↓
-update arguments
-↓
-toolcall_delta
-```
-
-但本章 Source 已经只有：
-
-```text
-ToolCall.arguments
-```
-
-完整 object。
-
-原始 CommandCode：
-
-```text
-tool-input-delta
-```
-
-已经在 Chapter 2 reconstruction 后结束其生命周期。
-
-因此本章不执行：
-
-```text
-JSON.stringify(arguments)
-↓
-synthetic toolcall_delta
-```
-
-也不读取已经死亡的 CommandCode tool-input preview state。
-
-当前 construction：
-
-```text
-toolcall_delta
-→ emit zero times
-```
-
-------
-
-### 7.8.3 `toolcall_end`
-
-将 partial 对应位置更新为完整 final ToolCall：
-
-```text
-partial.content[contentIndex]
-← final ToolCall
-```
-
-然后：
-
-```text
-toolcall_end {
-  contentIndex,
-  toolCall: finalToolCall,
-  partial
-}
-```
-
-完整 lifecycle：
-
-```text
-ToolCall
-↓
-toolcall_start
-↓
-toolcall_end
-```
-
-不需要 synthetic delta。
-
-------
-
-## 7.9 Successful Terminal
-
-所有 `content[]` blocks replay 完成后，final message 已经由 Chapter 3–6 完整构造。
-
-如果：
-
-```text
-message.stopReason
-=
-"stop"
-| "length"
-| "toolUse"
-```
-
-则 emit：
-
-```text
-done {
-  reason: message.stopReason,
-  message
-}
-```
-
-其中：
-
-```text
-done.reason
-=
-done.message.stopReason
-```
-
-且：
-
-```text
-done.message
-```
-
-就是进入本章的 authoritative complete Pi `AssistantMessage`。
-
-Event emission不重新构造或修改：
-
-```text
-message.content
-message.usage
-message.stopReason
-message.timestamp
-```
-
-Pi provider implementations同样最终通过：
-
-```text
-done {
-  reason: output.stopReason,
-  message: output
-}
-```
-
-结束 successful stream。
-
-------
-
-## 7.10 Error Terminal
-
-如果进入 Event Emission 的 final Pi message：
-
-```text
-stopReason = "error"
-```
-
-则不 replay successful lifecycle。
-
-直接 emit：
-
-```text
-error {
-  reason: "error",
-  error: message
-}
-```
-
-即：
-
-```text
-error AssistantMessage
-↓
-error terminal
-```
-
-不需要先 emit：
-
-```text
-start
-text events
-thinking events
-tool events
-done
-```
-
-Pi stream contract允许 request / runtime failure直接产生 `error` terminal，`pi-messages` adapter也会直接构造 error AssistantMessage 并 emit `error` event。
-
-因此 Chapter 6：
-
-```text
-pause_turn
-→ stopReason = "error"
-```
-
-进入本章后只表现为：
-
-```text
-AssistantMessage.stopReason = "error"
-↓
-error event
-```
-
-本章不需要再次知道：
-
-```text
-pause_turn
-```
-
-------
-
-## 7.11 Aborted Terminal
-
-如果 final Pi message：
-
-```text
-stopReason = "aborted"
-```
-
-则：
-
-```text
-emit {
-  type: "error",
-  reason: "aborted",
-  error: message
-}
-```
-
-注意：
-
-```text
-event.type = "error"
-```
-
-与：
-
-```text
-message.stopReason = "error"
-```
-
-不是同一个概念。
-
-Pi terminal关系是：
-
-```text
-event.type = "done"
-├── stop
-├── length
-├── toolUse
-└── deferred
-
-event.type = "error"
-├── error
-└── aborted
-```
-
-------
-
-## 7.12 Cancellation Before Replay
-
-如果 caller cancellation 在 successful message replay 开始之前已经发生：
-
-```text
-signal.aborted = true
-```
-
-则不得开始 successful event lifecycle。
-
-不 emit：
-
-```text
-start
-content events
-done
-```
-
-而是构造 / 使用 aborted Pi terminal state，并 emit：
-
-```text
-error {
-  reason: "aborted",
-  error: abortedMessage
-}
-```
-
-当前 replay 是 synchronous presentation：
-
-```text
-complete message
-→ push finite event sequence
-```
-
-因此不需要设计额外的 asynchronous mid-replay cancellation state machine。
-
-------
-
-## 7.13 Event-Time `partial`
-
-Pi native providers通常维护一个 mutable `AssistantMessage`，更新后直接作为 `partial` 放入 event。
-
-但是 LuckyToken replay 的 event sequence 可以在 consumer读取前同步进入 stream queue。
-
-Pi `EventStream` queue 保存 event objects；如果多个 queued events共享同一个 mutable `partial` reference，后续 mutation 会改变 earlier queued events观察到的状态。
-
-因此 LuckyToken implementation 可以在 push event 时保存当前 event-time partial view。
-
-这是 replay implementation requirement：
-
-```text
-mutable replay state
-↓
-capture event-time view
-↓
-event.partial
-```
-
-其目的只是：
-
-```text
-earlier queued event
-→ observes state belonging to that event
-```
-
-它不创建第二套 authoritative semantic model。
-
-Protocol-level authority仍然只有：
-
-```text
-final AssistantMessage
-```
-
-------
-
-## 7.14 Final Lifecycle
-
-Successful message：
-
-```text
-Complete Pi AssistantMessage
-│
-│ stopReason = stop | length | toolUse
-│
-↓
-create temporary partial
-│
-├── content = []
-├── usage = zero
-└── stopReason = pending
-│
-↓
-start
-│
-↓
-for each content[] in order
-│
-├── TextContent
-│   ↓
-│   text_start
-│   ↓
-│   text_delta(full text)
-│   ↓
-│   text_end
-│
-├── ThinkingContent
-│   ↓
-│   thinking_start
-│   ↓
-│   thinking_delta(full thinking)
-│   ↓
-│   thinking_end
-│
-└── ToolCall
-    ↓
-    toolcall_start
-    ↓
-    toolcall_end
-│
-↓
-done {
-  reason: finalMessage.stopReason,
-  message: finalMessage
-}
-```
-
-Error message：
-
-```text
-AssistantMessage
-└── stopReason = error
-
-↓
-error {
-  reason: "error",
-  error: message
-}
-```
-
-Aborted message：
-
-```text
-AssistantMessage
-└── stopReason = aborted
-
-↓
-error {
-  reason: "aborted",
-  error: message
-}
-```
-
-------
-
-## 7.15 Information Boundary
-
-进入本章的信息：
-
-```text
-Pi AssistantMessage
-├── content[]
-├── stopReason
-├── required top-level fields
-└── final usage
-```
-
-Content-local dependencies：
-
-```text
-TextContent.text
-→ Text events
-
-ThinkingContent.thinking
-→ Thinking events
-
-ToolCall
-→ ToolCall events
-```
-
-Terminal dependency：
+进入本章 conversion state：
 
 ```text
-AssistantMessage.stopReason
-→ done | error
+finish.finishReason?
 ```
 
 不进入本章：
 
 ```text
-CommandCode raw events
-CommandCode content IDs
-CommandCode text deltas
-CommandCode reasoning deltas
-CommandCode tool-input deltas
-CommandCode finish reasons
-CommandCode provider metadata
+finish.rawFinishReason
+content
+usage
+provider metadata
+finish-step
+HTTP metadata
 ```
 
-因此完整 information flow：
+最终信息流：
 
 ```text
-Complete Pi AssistantMessage
+Committed CommandCode Response
 ↓
-temporary Pi partial state
+finish.finishReason
 ↓
-Pi content lifecycle
+exact "tool-calls" ?
+├── yes → "toolUse"
+└── no
+    ↓
+    exact "length" ?
+    ├── yes → "length"
+    └── no  → "stop"
 ↓
-Pi terminal event
+Pi AssistantMessage.stopReason
 ```
 
-而不是：
+## 7. Pi Event Stream API Integration
 
-```text
-CommandCode events
-↓
-replay Source streaming details
-↓
-Pi events
-```
+CommandCode → Pi conversion 在完整 `AssistantMessage`
+构造完成后结束。
 
-本章只负责将已经完成的 Pi semantic state表示为合法的 Pi event lifecycle，不重新解释任何 CommandCode semantics。
+Provider 使用 Pi 提供的：
+
+createAssistantMessageEventStream()
+
+创建返回给 Pi runtime 的 event stream。
+
+由于 CommandCode response 在 commit 后才转换为完整
+AssistantMessage，LuckyToken 将完整 message replay 为 Pi
+events：
+
+Successful AssistantMessage
+↓
+start
+↓
+for each content[] in order
+├── Text
+│   → text_start
+│   → text_delta(full text)
+│   → text_end
+├── Thinking
+│   → thinking_start
+│   → thinking_delta(full thinking)
+│   → thinking_end
+└── ToolCall
+    → toolcall_start
+    → toolcall_end
+↓
+done {
+  reason: message.stopReason,
+  message
+}
+
+原始 CommandCode deltas 不参与 replay。
+
+ToolCall 已经只有完整 arguments，因此不制造
+synthetic toolcall_delta。
