@@ -69,4 +69,26 @@ describe("OpenAI Responses model discovery", () => {
     expect(id?.slice(0, slashIndex)).toBe("commandcode-private");
     expect(id?.slice(slashIndex + 1)).toBe("deepseek/deepseek-v4-flash");
   });
+
+  it("filters to the configured provider set when requested", () => {
+    const list = renderResponsesModelsList(
+      {
+        getModels: () => [
+          model("deepseek/deepseek-v4-flash", "commandcode-private"),
+          model("claude-sonnet-5", "anthropic"),
+          model("gpt-5.6-luna", "openai"),
+        ],
+      },
+      0,
+      new Set(["commandcode-private"]),
+    );
+    expect(list.data).toEqual([
+      {
+        id: "commandcode-private/deepseek/deepseek-v4-flash",
+        object: "model",
+        created: 0,
+        owned_by: "commandcode-private",
+      },
+    ]);
+  });
 });

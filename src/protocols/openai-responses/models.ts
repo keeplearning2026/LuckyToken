@@ -23,13 +23,20 @@ export interface ResponsesModelsList {
 export function renderResponsesModelsList(
   models: Pick<Models, "getModels">,
   created: number,
+  filterProviders?: ReadonlySet<string>,
 ): ResponsesModelsList {
-  const data = models.getModels().map((model) => ({
-    id: `${model.provider}/${model.id}`,
-    object: "model" as const,
-    created,
-    owned_by: model.provider,
-  }));
+  const data = models
+    .getModels()
+    .filter(
+      (model) =>
+        filterProviders === undefined || filterProviders.has(model.provider),
+    )
+    .map((model) => ({
+      id: `${model.provider}/${model.id}`,
+      object: "model" as const,
+      created,
+      owned_by: model.provider,
+    }));
   return Object.freeze({
     object: "list" as const,
     data: Object.freeze(data),
