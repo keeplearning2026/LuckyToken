@@ -1,6 +1,6 @@
 # LuckyToken 项目交接说明
 
-**交接基线：** `d25e3c8`（`feat: limit /v1/models discovery to LuckyToken-owned providers`）<br>
+**交接基线：** `ac9fa9a`（`fix: record tool-call ids when appending to an existing assistant turn`）<br>
 **记录日期：** 2026-08-12<br>
 **用途：** 让新的维护者或 Agent 不依赖先前对话，也能从当前实现继续工作。
 
@@ -27,7 +27,18 @@
   - `ca2c009` test: 真实 Provider 线上套件
   - `8cb1bd5` feat: GET /v1/models 模型发现
   - `d25e3c8` feat: /v1/models 只暴露 LuckyToken 自有 provider
+  - `9ee6f26` docs: 交接文档
+  - `b657378` fix: 启动打印全部注册路由（runtime 暴露 `routes`）
+  - `4949e51` fix: 兼容 Codex 客户端工具形状（parameters 归一化、跳过
+    OpenAI 托管工具、custom/namespace 展平）
+  - `e1e9d78` docs: README 增加 Codex CLI 接入章节
+  - `ac9fa9a` fix: 追加到已有 assistant 的 function_call 也记录 call_id 索引
 - 工作树未跟踪文件（用户所有，勿动）：`codex 配置方法.md`、`,temp/`。
+- **Codex CLI 已真实接入并验证**：`codex -p luckytoken` 通过本地
+  `/v1/responses` 用 `commandcode-private/deepseek/deepseek-v4-flash` 完成真实
+  对话。Codex 侧配置在 `~/.codex/`（config.toml 的 `[model_providers.luckytoken]`、
+  `luckytoken.config.toml` profile、`luckytoken-catalog.json` 模型元数据），
+  详见 README「Using the OpenAI Responses endpoint from the Codex CLI」。
 
 ## 2. 首先阅读的权威资料
 
@@ -115,6 +126,16 @@ npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
   `DISCOVERED_PROVIDERS` 即可；若要"只暴露已配置凭据的 provider"（方案 C），需要
   在 discovery handler 中查询 `CredentialStore`，当前未实现。
 - `store:false` 被无条件忽略（本地代理缓存语义，与 OpenAI 服务器存储无关）。
+- **Codex 客户端工具形状兼容**（真实 Codex CLI 暴露，已修复）：`tools[].parameters`
+  缺失/非对象时归一化为 JSON Schema 对象；OpenAI 托管工具（`web_search`、
+  `image_generation`）跳过（本地 Provider 无法执行）；`custom` freeform 工具转成
+  单 `input` 参数的 function；`namespace` 组展平；追加到已有 assistant 的
+  `function_call` 必须同步记录 call_id → tool_name 索引（否则后续
+  `function_call_output` 报 unknown tool call id）。
+- **Codex 模型元数据**：`model_catalog_json` 是 Codex **根级**字段（`--strict-config`
+  拒绝放在 `[model_providers]` 里），所以 catalog 通过独立 profile 提供；
+  `env_key` 让 Codex 从环境变量读 LuckyToken token，不触碰 `auth.json` 的
+  OpenAI key。
 - 单实例假设：快照不做跨进程锁；多实例共享历史是后续分布式问题。
 - SSE 为原子合成序列，首版不做逐 delta 流式。
 - opencodex 的重量级设施（spill、加密 payload、compaction 缓存、metrics）未移植，
@@ -137,6 +158,10 @@ npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
   `/v1/responses` 增量续会话）；
 - 若需要，把 OpenAI Responses 纳入 serving certification 范围（当前不在）；
 - 方案 C（按已配置凭据过滤模型）若用户提出再实现。
+- **与 opencodex 的全面对比**（用户已发起）：把本仓库的 Responses adapter 与
+  `D:\project\opencodex` 的 `src/responses/state.ts`、`parser.ts`、
+  `src/adapters/openai-responses.ts`、`src/server/responses/*` 做逐项对比
+  （会话状态、展开语义、wire 映射、SSE、错误、认证、持久化取舍）。
 
 ## 8. Suggested skills
 
