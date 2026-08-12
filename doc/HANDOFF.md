@@ -1,41 +1,49 @@
 # LuckyToken 项目交接说明
 
-**交接基线：** `46db639`（`feat: isolate client tokens by protocol`）<br>
-**记录日期：** 2026-08-11<br>
+**交接基线：** `d25e3c8`（`feat: limit /v1/models discovery to LuckyToken-owned providers`）<br>
+**记录日期：** 2026-08-12<br>
 **用途：** 让新的维护者或 Agent 不依赖先前对话，也能从当前实现继续工作。
 
 ## 1. 当前状态
 
-- `.tickets/` 中 Ticket 01–28 的 acceptance criteria 均已勾选完成；提交历史按 ticket
-  保留，当前 HEAD 是 Ticket 28。
-- 当前生产组合提供本地 Anthropic Messages HTTP endpoint，经 Pi 公共接口调用
-  CommandCode Private Provider；Provider 与 Client Protocol 不直接依赖。
-- Client Protocol 本地认证已经按协议文件隔离，并支持 protocol-global token 与
-  project-bound token；Provider 凭证继续由 Pi `CredentialStore` 独立管理。
-- 本轮新增的 [实现架构说明](./LuckyTokenArchitecture.md) 是源码基线 `46db639` 的维护者
-  地图，包含开发者层和零编程经验阅读层。模块、接口、数据生命周期、文件归属、测试
-  与扩展边界请直接查该文档，本交接文件不重复抄写。
-- 当前工作树中的文档尚未提交。交接时预期未跟踪文件为：
-
-  ```text
-  doc/LuckyTokenArchitecture.md
-  doc/HANDOFF.md
-  ```
+- 生产组合现在提供 **两个 Client Protocol** + 一个共享模型发现端点：
+  - `POST /v1/messages`（Anthropic Messages，既有）
+  - `POST /v1/responses`（OpenAI Responses，新增，Codex 客户端）
+  - `GET /v1/models`（无认证的跨协议模型发现，新增，只暴露 LuckyToken 自有 provider）
+- OpenAI Responses adapter 支持 Codex 的「增量请求 + `previous_response_id` 历史拼接」：
+  会话历史**持久化到磁盘**（`stateFile`，默认 `<config-dir>/state/openai-responses.json`），
+  重启后 Codex 续会话不丢。Provider 只看到展开后的完整 Pi 历史。
+- 会话状态语义（grilling 已确认）：无条件保存（忽略 `store:false`）、fail-open 展开、
+  展开失败的那一轮不保存（反污染）、1000 条 FIFO 上限、32MB 快照解析上限、无 TTL、
+  2s 防抖原子写（tmp+rename）、损坏快照备份 `.corrupt` 后空启动、孤儿 tmp 清理、
+  shutdown flush。
+- 新增真实 Provider 线上套件 `npm run test:online-responses`（`test/online/run-openai-responses.ts`），
+  覆盖：36 JSON + 14 SSE + 5 取消（并发 5）+ 链式展开 + 重启恢复 + 工具轮次 +
+  store:false + 认证隔离 + 模型发现。真实 CommandCode 上游，全绿。
+- 新增共享 `src/protocols/options.ts`（中立 composeOptions，两个协议共用）与
+  `src/protocols/upstream-failure.ts`（中立上游 HTTP 失败映射），消除跨协议 import。
+- 当前分支 `codex/openai-responses-protocol`，提交历史：
+  - `2ade5f0` feat: OpenAI Responses Client Protocol adapter（+ spec + tickets）
+  - `ca2c009` test: 真实 Provider 线上套件
+  - `8cb1bd5` feat: GET /v1/models 模型发现
+  - `d25e3c8` feat: /v1/models 只暴露 LuckyToken 自有 provider
+- 工作树未跟踪文件（用户所有，勿动）：`codex 配置方法.md`、`,temp/`。
 
 ## 2. 首先阅读的权威资料
 
 按以下顺序建立上下文：
 
 1. [仓库工作原则](../AGENTS.md)；
-2. [实现架构说明](./LuckyTokenArchitecture.md)，先看各章 `X.0 小白导读`，再按任务深入；
-3. [LuckyToken Core Spec](./Spec/LuckyTokenCoreSpec.md)，它拥有 architecture/ownership；
-4. [Ticket 实施指南](../.tickets/IMPLEMENTATION.md) 与当前任务对应的 ticket；
-5. 涉及协议时才读取 [Protocols 目录](./Protocols/) 中对应的 Protocol Spec 和相邻
-   Conversion Method；
-6. [README](../README.md) 获取当前安装、配置、登录和运行命令。
+2. [OpenAI Responses Client Protocol Spec](./Protocols/OpenAI Responses Client Protocol.md)
+   （v0.1.0，含决策记录 D1–D12）；
+3. [opencodex 调研报告](./OpenAIResponsesAdapter-Research.md)（参考语义来源）；
+4. [LuckyToken Core Spec](./Spec/LuckyTokenCoreSpec.md)（architecture/ownership）；
+5. [OpenAI Responses tickets](../.tickets/openai-responses-2026-08/INDEX.md)（01–05，
+   均已实现）；
+6. [README](../README.md)（安装、配置、登录、运行、在线测试命令）。
 
-不要用本交接文件替代上述规范。若文档与代码出现冲突，先定位冲突属于 Protocol、
-Conversion 还是 Architecture，再在 owning authority 修复，不能在不相关模块加补丁。
+不要用本交接文件替代上述规范。若文档与代码冲突，先定位冲突属于 Protocol、Conversion
+还是 Architecture，再在 owning authority 修复。
 
 ## 3. 不可破坏的核心边界
 
@@ -43,28 +51,31 @@ Conversion 还是 Architecture，再在 owning authority 修复，不能在不�
 Client Wire ↔ Client Protocol ↔ Pi public contracts ↔ Provider ↔ Provider Wire
 ```
 
-- Client Protocol 只拥有 Client Wire ↔ Pi；Provider 只拥有 Pi ↔ 自己的 upstream wire。
-- Runtime/HTTP 只拥有 route、WHATWG `Request`/`Response` 和取消生命周期。
-- `composition.ts` 可以同时看见具体两侧以便构造、注入和认证，但不能承担转换语义。
-- Pi 生产依赖是 `@earendil-works/pi-ai@0.84.1`；整个 `pi-agent/` 树是不可修改的
-  参考/审查源（AGENTS.md 硬约束），LuckyToken 只通过 Pi 公共接口消费，上游更新
-  整体替换。
-- Deployment config、Client Protocol token、Pi model catalog、Pi Provider credential
-  分属不同 owner 和生命周期，不应重新合并成一个大配置或通用 Auth store。
-- 半成品 stream/tool state、raw token、wire-specific representation 都必须在 owner
-  边界内死亡；EOF 不是 semantic success。
-
-详尽证据和例外见[架构审计章节](./LuckyTokenArchitecture.md#11-对-agentsmd-设计原则的审计)。
+- OpenAI Responses Client Protocol 只拥有 Responses Wire ↔ Pi 转换 + 自己的会话状态；
+  绝不 import 任何具体 Provider（adapter 目录内无 commandcode/anthropic 引用，已用
+  rg 验证）。
+- 历史拼接（`previous_response_id` 展开）是 **Client Protocol adapter 的职责**，
+  Provider 只看到完整历史；不引入第二 IR。
+- `GET /v1/models` 是**无认证**的跨协议元数据端点（`src/models-discovery.ts`），不绑定
+  任何 Client Protocol 的 Auth；wire 格式（Responses list shape）由
+  `src/protocols/openai-responses/models.ts` 拥有，`models-discovery.ts` 持有
+  暴露策略（`DISCOVERED_PROVIDERS = {"commandcode-private"}`）。
+- 每个 Client Protocol 有独立 Auth 实例 + 独立 token 文件（AGENTS.md 硬约束）；
+  只有 `sessionId`/`projectDir` 能进入 Pi option composition。
+- `pi-agent/` 整棵树不可修改；`@earendil-works/pi-ai@0.84.1` 是生产依赖。
+- 认证隔离已被测试锁定：anthropic token 打 `/v1/responses` → 401，反之亦然。
 
 ## 4. 工作区与敏感资料
 
 - `.luckytoken/`、所有 `auth.json`、`CommandcodeAPIKey.txt`、`.online-artifacts/` 均被
   `.gitignore` 排除。
-- 不要读取、复制、打印或提交真实 API key。在线 runner 只应在内存中读取 key；任何
-  evidence artifact 必须继续拒绝或替换认证值。
-- 不要把本地 `.luckytoken/` 内容当作仓库默认配置；只提交现有 example 中的占位符。
-- 开始修改前运行 `git status --short`。用户已有改动属于用户，不要重置、覆盖或顺手
-  清理无关文件。
+- 不要读取、复制、打印或提交真实 API key（包括 `.luckytoken/pi/auth.json` 与
+  `CommandcodeAPIKey.txt` 里的值）。线上 runner 只在内存中读 key。
+- 本地 `.luckytoken/config.json` 已手动加入 `openai-responses` 条目（authFile +
+  stateFile）并创建了 global token；这些是本地运行状态，不提交。仓库只保留
+  `luckytoken.config.example.json` 占位符。
+- 开始修改前运行 `git status --short`。用户已有改动（`codex 配置方法.md`、`,temp/`）
+  属于用户，不要重置、覆盖或清理。
 
 ## 5. 验证与完成标准
 
@@ -78,57 +89,64 @@ npm run build
 git diff --check
 ```
 
-真实在线 gate 只在任务明确需要且已获授权时运行：
+当前离线测试 **479 个全绿**（certification 6 + vitest 479）。
+
+真实在线 gate（需授权 + 真实 key，产生真实调用与费用）：
 
 ```powershell
-npm run test:online
+npm run test:online            # Anthropic 通道线上套件（既有）
+npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
 ```
 
-它会产生真实外部调用与费用，且依赖被忽略的本地 key。普通 `npm test` 不访问真实
-CommandCode。协议、模型/endpoint、认证政策、Pi revision 或 serving boundary 变化时，
-还必须更新对应 certification record 与 immutable hash；具体 ownership 见
-[测试与证据章节](./LuckyTokenArchitecture.md#10-测试certification-与真实证据)。
+`npm test` 不访问真实 CommandCode。涉及协议、Pi revision 或 serving boundary 变化时，
+还要更新 certification record 与 immutable hash（`src/commandcode-serving-certification.ts`
+与 `test/fixtures/certification/serving-conformance-v1.json` 目前未包含 OpenAI Responses
+——openai-responses 不在 certified 范围内，若未来纳入需同步）。
 
-本轮只改 Markdown。已对架构文档执行相对链接、章节导读、代码围栏、Mermaid 围栏和
-`git diff --check` 检查；没有因为纯文档增补重新运行 TypeScript 测试套件。
+## 6. 已知设计取舍与未决事项
 
-## 6. 已知设计取舍
+不要把已记录取舍误判为可顺手修复的问题：
 
-不要把以下已记录取舍误判为可在任意层顺手修复的问题：
-
-- Anthropic SSE 当前是完整 Pi 结果 commit 后生成的 Atomic SSE，不是实时 token
-  forwarding。
-- 当前 concrete composition 只安装 `anthropic-messages` 和一个 certified
-  `commandcode-private` model。
-- Client token 管理是非并发 CLI 操作，Runtime 使用启动时不可变 snapshot；修改后
-  需要重启。
-- CommandCode 当前不能无损保证某些 Pi 语义，例如 required strict constrained
-  sampling；无法认证的路径必须 fail closed。
-- Certified composition 显式绑定 fetch；程序化 Provider seam 的 ambient fallback
-  不应成为新 production path 的默认依赖。
-
-完整说明见[边界压力章节](./LuckyTokenArchitecture.md#113-需要持续关注的边界压力)。
+- **Anthropic SSE 与 Responses SSE 都是 Atomic**：Pi 结果完整 commit 后生成
+  事件序列，不是实时 token forwarding。Responses SSE 序列为
+  `response.created → output_item.done ×N → response.completed → data: [DONE]`。
+- **`/v1/models` 只暴露 `commandcode-private` provider**（用户已确认方案 B）。
+  若未来需要暴露其他已配置 provider，修改 `models-discovery.ts` 的
+  `DISCOVERED_PROVIDERS` 即可；若要"只暴露已配置凭据的 provider"（方案 C），需要
+  在 discovery handler 中查询 `CredentialStore`，当前未实现。
+- `store:false` 被无条件忽略（本地代理缓存语义，与 OpenAI 服务器存储无关）。
+- 单实例假设：快照不做跨进程锁；多实例共享历史是后续分布式问题。
+- SSE 为原子合成序列，首版不做逐 delta 流式。
+- opencodex 的重量级设施（spill、加密 payload、compaction 缓存、metrics）未移植，
+  有意为之。
 
 ## 7. 下一项工作的推荐流程
 
-1. 先确认用户目标是否已有 ticket/spec authority；没有时先形成窄 ticket，不直接扩大
-   Core 或某个协议的职责。
-2. 沿[推荐阅读顺序](./LuckyTokenArchitecture.md#13-阅读顺序)读取完整调用链和 owning tests。
+1. 先确认用户目标是否已有 ticket/spec authority；没有时先形成窄 ticket。
+2. 沿上文阅读顺序读取完整调用链和 owning tests。
 3. 明确新信息的 producer、carrier、semantic consumer 和 death point。
-4. 用最小垂直切片执行 red → green → refactor；协议故障要分别覆盖 malformed、
-   unsupported、abort 和 terminal consistency。
-5. 只在对应 owner 内修改，并用 import-boundary 测试防止 Client Protocol 与 Provider
+4. 用最小垂直切片执行 red → green → refactor；协议故障覆盖 malformed、unsupported、
+   abort 和 terminal consistency。
+5. 只在对应 owner 内修改，用 import-boundary 测试防止 Client Protocol 与 Provider
    越过 Pi 耦合。
-6. 运行与风险相称的验证；若改动属于 ticket，单独提交并更新 ticket 状态/认证证据。
+6. 运行与风险相称的验证；按 ticket 单独提交并更新 ticket 状态/认证证据。
+
+**候选下一步**：
+
+- 用真实 Codex CLI 指向 `http://127.0.0.1:3000` 做端到端验证（`/v1/models` 发现 +
+  `/v1/responses` 增量续会话）；
+- 若需要，把 OpenAI Responses 纳入 serving certification 范围（当前不在）；
+- 方案 C（按已配置凭据过滤模型）若用户提出再实现。
 
 ## 8. Suggested skills
 
-- `$tdd`：实现或修复协议、生命周期、取消、配置与集成行为时使用，保持一次一个
-  red→green 垂直切片。
+- `$tdd`：实现或修复协议、生命周期、取消、配置与集成行为时使用，一次一个 red→green
+  垂直切片。
 - `$code-review`：提交前按仓库规范与 ticket/spec 两条轴审查变更，尤其检查边界 import
   和信息生命周期。
-- `$implement`：处理新的明确 ticket 时使用；先读 `.tickets/IMPLEMENTATION.md`、Core
-  Spec 和当前 ticket，再按依赖顺序持续实施与独立提交。
+- `$implement`：处理新的明确 ticket 时使用；先读 spec 和当前 ticket，再按依赖顺序
+  实施与独立提交。
+- `$grilling` / `$grill-me`：对未决设计点先质询需求再动手，不要盲从既有默认。
 - `$handoff`：下一次跨会话转交时更新此文件中的基线、工作树、验证结果和未完成事项；
   不复制已经写入 spec、ticket、架构文档或 commit 的内容。
 
@@ -139,8 +157,9 @@ CommandCode。协议、模型/endpoint、认证政策、Pi revision 或 serving 
 ```powershell
 git status --short
 git diff --check
+git log --oneline -5
 ```
 
-然后阅读两份未提交文档，确认它们与当前 HEAD 一致。若任务只是接收本轮文档，可将
-`doc/LuckyTokenArchitecture.md` 与 `doc/HANDOFF.md` 作为一个 documentation commit；
-若源码已经前进，应先重新核对文档中的 commit 基线、模块表和验证陈述再提交。
+然后确认：分支 `codex/openai-responses-protocol` 上的四个提交（adapter / 线上套件 /
+模型发现 / 模型范围过滤）与本文基线一致；本地 `.luckytoken/` 的运行配置与 token
+不属于仓库内容；`/v1/models` 范围已定（方案 B），若用户后续要求方案 C 再扩展。
