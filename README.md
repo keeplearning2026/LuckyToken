@@ -103,11 +103,18 @@ Start the local listener:
 npm start -- --config .luckytoken/config.json
 ```
 
-Startup prints the actual endpoint, normally
-`http://127.0.0.1:3000/v1/messages`. Configure an Agent that supports a custom
-Anthropic base URL with `http://127.0.0.1:3000` and the global/project token
-created for `anthropic-messages`. That local token authenticates the Agent to
-LuckyToken; it is unrelated to the CommandCode Provider credential.
+Startup prints every served route, normally:
+
+```text
+LuckyToken POST http://127.0.0.1:3000/v1/messages
+LuckyToken GET http://127.0.0.1:3000/v1/models
+LuckyToken POST http://127.0.0.1:3000/v1/responses
+```
+
+Configure an Agent that supports a custom Anthropic base URL with
+`http://127.0.0.1:3000` and the global/project token created for
+`anthropic-messages`. That local token authenticates the Agent to LuckyToken;
+it is unrelated to the CommandCode Provider credential.
 
 Remove the stored Provider credential with:
 
@@ -117,6 +124,102 @@ npm start -- logout commandcode-private --config .luckytoken/config.json
 
 `SIGINT` and `SIGTERM` stop new connections, abort active requests, and wait for
 the listener to close.
+
+## Using the OpenAI Responses endpoint from the Codex CLI
+
+Codex CLI can route through LuckyToken's `POST /v1/responses` endpoint
+(`wire_api = "responses"`) so the local CommandCode provider serves the Codex
+client. The integration is a Codex-side configuration that coexists with any
+existing provider (e.g. opencodex): default `codex` runs unchanged, and
+`codex -p luckytoken` switches to the local bridge.
+
+### One-time Codex setup (user home, not this repo)
+
+Three files under `~/.codex/`:
+
+1. `config.toml` — defines the provider (the `[model_providers.luckytoken]`
+   table). It points at the local base URL, selects the Responses wire API,
+   and reads the client token from an environment variable so the existing
+   `auth.json` is untouched:
+
+   ```toml
+   [model_providers.luckytoken]
+   name = "LuckyToken"
+   base_url = "http://127.0.0.1:3000/v1"
+   wire_api = "responses"
+   requires_openai_auth = true
+   env_key = "LUCKYTOKEN_API_KEY"
+   ```
+
+2. `luckytoken.config.toml` — an isolated Codex profile that selects the
+   provider and pins the model, so the default config stays unchanged:
+
+   ```toml
+   model_provider = "luckytoken"
+   model = "commandcode-private/deepseek/deepseek-v4-flash"
+   model_catalog_json = "C:\\Users\\huich\\.codex\\luckytoken-catalog.json"
+   ```
+
+3. `luckytoken-catalog.json` — model metadata (context window, reasoning
+   levels, tool capabilities). Without a catalog entry Codex falls back to
+   generic metadata and warns; the catalog makes the model fully usable.
+
+   Note: `model_catalog_json` is a root-level Codex field, not a per-provider
+   field (`--strict-config` rejects it inside `[model_providers]`), which is
+   why the profile carries it instead of the provider table.
+
+### Daily use
+
+```powershell
+# 1. Start the local service (port 3000)
+cd D:\project\LuckyToken
+npm start -- --config .luckytoken/config.json
+
+# 2. Provide the client token for this terminal (or persist with setx)
+$env:LUCKYTOKEN_API_KEY = "<your openai-responses global token>"
+
+# 3. Run Codex through LuckyToken (interactive)
+codex -p luckytoken
+
+# or one-shot
+codex exec -p luckytoken "your prompt"
+```
+
+The session header shows `provider: luckytoken` and
+`model: commandcode-private/deepseek/deepseek-v4-flash` when the profile is
+active. Plain `codex` (no `-p`) keeps using the default provider.
+
+### How it works
+
+```text
+Codex CLI
+   │  Responses wire (incremental + previous_response_id, store:false)
+   ▼
+LuckyToken POST /v1/responses   (Bearer: LUCKYTOKEN_API_KEY)
+   │  expand previous_response_id from the durable snapshot
+   │  convert wire → Pi IR
+   ▼
+CommandCode Private Provider (real upstream)
+```
+
+- Codex sends incremental turns with `previous_response_id`; LuckyToken
+  expands them from the on-disk session snapshot and the Provider sees the
+  full history.
+- Codex's tool shapes are normalized by the adapter: OpenAI-hosted tools
+  (`web_search`, `image_generation`) are skipped, freeform `custom` tools are
+  exposed as single-input functions, `namespace` groups are flattened, and
+  non-object tool `parameters` are wrapped in a JSON Schema object.
+- Persist the token with `setx LUCKYTOKEN_API_KEY "<token>"` so every new
+  terminal is ready; otherwise set it per terminal as shown above.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Connection refused` | local service not running | `npm start -- --config .luckytoken/config.json` |
+| `401 authentication_error` | token env var missing | `$env:LUCKYTOKEN_API_KEY = "<token>"` |
+| header shows `provider: openai` | profile not selected | add `-p luckytoken` |
+| `Unknown model ... fallback metadata` | catalog not loaded | check `luckytoken-catalog.json` path in the profile |
 
 ## Explicit online verification
 
