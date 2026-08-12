@@ -48,10 +48,12 @@
 2. [OpenAI Responses Client Protocol Spec](./Protocols/OpenAI Responses Client Protocol.md)
    （v0.1.0，含决策记录 D1–D12）；
 3. [opencodex 调研报告](./OpenAIResponsesAdapter-Research.md)（参考语义来源）；
-4. [LuckyToken Core Spec](./Spec/LuckyTokenCoreSpec.md)（architecture/ownership）；
-5. [OpenAI Responses tickets](../.tickets/openai-responses-2026-08/INDEX.md)（01–05，
+4. [LuckyToken × opencodex 对比报告](./OpenAIResponses-vs-opencodex-Comparison.md)
+   （8 维度逐项对比 + 双向借鉴点 + 风险清单）；
+5. [LuckyToken Core Spec](./Spec/LuckyTokenCoreSpec.md)（architecture/ownership）；
+6. [OpenAI Responses tickets](../.tickets/openai-responses-2026-08/INDEX.md)（01–05，
    均已实现）；
-6. [README](../README.md)（安装、配置、登录、运行、在线测试命令）。
+7. [README](../README.md)（安装、配置、登录、运行、在线测试命令）。
 
 不要用本交接文件替代上述规范。若文档与代码冲突，先定位冲突属于 Protocol、Conversion
 还是 Architecture，再在 owning authority 修复。
@@ -158,10 +160,11 @@ npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
   `/v1/responses` 增量续会话）；
 - 若需要，把 OpenAI Responses 纳入 serving certification 范围（当前不在）；
 - 方案 C（按已配置凭据过滤模型）若用户提出再实现。
-- **与 opencodex 的全面对比**（用户已发起）：把本仓库的 Responses adapter 与
-  `D:\project\opencodex` 的 `src/responses/state.ts`、`parser.ts`、
-  `src/adapters/openai-responses.ts`、`src/server/responses/*` 做逐项对比
-  （会话状态、展开语义、wire 映射、SSE、错误、认证、持久化取舍）。
+- **与 opencodex 的全面对比已完成**（交付物
+  `doc/OpenAIResponses-vs-opencodex-Comparison.md`）：8 维度逐项对比，结论是
+  LuckyToken 为最小化、边界收紧的重写；报告末尾列出 LuckyToken 可借鉴
+  opencodex 的 6 个改进点与风险清单（如快照单条/总量裁剪、miss 可观测性、
+  symlink 目录清扫等），可作为后续迭代的输入。
 
 ## 8. Suggested skills
 
