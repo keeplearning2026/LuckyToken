@@ -17,6 +17,7 @@ import {
 } from "./commandcode-serving-certification.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import {
+  commandCodePrivateProviderId,
   registerLuckyTokenProviders,
   type ProjectSnapshot,
 } from "./providers/catalog.js";
@@ -132,9 +133,15 @@ export async function createConfiguredLuckyTokenComposition(
     now,
   });
   const providers = models.getProviders();
-  const certifiedProvider = providers[0];
+  const certifiedProvider = providers.find(
+    (provider) => provider.id === commandCodePrivateProviderId,
+  );
   if (certifiedProvider === undefined) {
-    throw new Error("No LuckyToken built-in Provider is registered");
+    throw new Error(
+      `Registered Providers do not include the certified Provider ` +
+        `"${commandCodePrivateProviderId}" (found: ` +
+        `${providers.map((provider) => provider.id).join(", ") || "none"})`,
+    );
   }
   const certifiedModel = models
     .getModels()

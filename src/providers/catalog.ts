@@ -10,6 +10,7 @@ import {
 
 export type { ProjectSnapshot } from "./commandcode-private/project.js";
 export type { CommandCodeCompatibilityPolicy } from "./commandcode-private/provider.js";
+export { commandCodePrivateProviderId } from "./commandcode-private/provider.js";
 
 /**
  * LuckyToken built-in provider catalog.
