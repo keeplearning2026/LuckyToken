@@ -294,7 +294,11 @@ async function runServe(
     host: config.server.host,
     port: config.server.port,
   });
-  stdout.write(`LuckyToken listening on ${server.origin}/v1/messages\n`);
+  for (const route of composition.runtime.routes) {
+    stdout.write(
+      `LuckyToken ${route.method} ${server.origin}${route.pathname}\n`,
+    );
+  }
 
   await new Promise<void>((resolvePromise) => {
     let closing: Promise<void> | undefined;

@@ -39,7 +39,11 @@ describe("Client Protocol boundary", () => {
       protocol: "openai-responses-fixture",
       requestPath: "/v1/responses",
     });
-    expect(Object.keys(runtime)).toEqual(["handle"]);
+    expect(Object.keys(runtime).sort()).toEqual(["handle", "routes"]);
+    expect(runtime.routes).toEqual([
+      { method: "POST", pathname: "/v1/messages" },
+      { method: "POST", pathname: "/v1/responses" },
+    ]);
     expect(runtime).not.toHaveProperty("clientProtocols");
   });
 

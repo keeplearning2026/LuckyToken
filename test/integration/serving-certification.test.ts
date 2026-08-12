@@ -49,7 +49,7 @@ describe("certified serving composition", () => {
     const { runtime, certification } = composition;
 
     expect(Object.keys(composition).sort()).toEqual(["certification", "runtime"]);
-    expect(Object.keys(runtime)).toEqual(["handle"]);
+    expect(Object.keys(runtime).sort()).toEqual(["handle", "routes"]);
     expect(certification.result).toBe("CERTIFIED");
     expect(JSON.stringify(certification)).not.toContain("client-key");
     expect(JSON.stringify(certification)).not.toContain("provider-key");

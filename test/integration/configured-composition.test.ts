@@ -121,7 +121,11 @@ describe("configured serving composition", () => {
     });
 
     expect(Object.keys(composition).sort()).toEqual(["certification", "runtime"]);
-    expect(Object.keys(composition.runtime)).toEqual(["handle"]);
+    expect(Object.keys(composition.runtime).sort()).toEqual(["handle", "routes"]);
+    expect(composition.runtime.routes).toEqual([
+      { method: "POST", pathname: "/v1/messages" },
+      { method: "GET", pathname: "/v1/models" },
+    ]);
     expect(composition.certification.result).toBe("CERTIFIED");
     expect(composition.certification.policies.authEndpoint.providerAuth).toBe(
       "pi-models-credential-store-v1",

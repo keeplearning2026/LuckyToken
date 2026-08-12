@@ -6,6 +6,8 @@ import {
 
 export interface LuckyTokenRuntime {
   handle(request: Request): Promise<Response>;
+  /** Registered routes (method + pathname), for startup reporting and tests. */
+  readonly routes: ReadonlyArray<Readonly<{ method: string; pathname: string }>>;
 }
 
 export interface LuckyTokenRuntimeOptions {
@@ -47,5 +49,13 @@ export function createLuckyTokenRuntime(
   });
   return Object.freeze({
     handle: (request: Request) => handleHttpRequest(dependencies, request),
+    routes: Object.freeze(
+      clientProtocols.map((protocol) =>
+        Object.freeze({
+          method: protocol.method,
+          pathname: protocol.pathname,
+        }),
+      ),
+    ),
   });
 }

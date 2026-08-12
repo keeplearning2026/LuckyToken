@@ -48,6 +48,7 @@ describe("local Anthropic HTTP server", () => {
           },
         });
       },
+      routes: [],
     };
     server = await startLuckyTokenHttpServer({ runtime, port: 0 });
 

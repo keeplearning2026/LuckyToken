@@ -127,7 +127,7 @@ describe("Pi Models provider boundary", () => {
     });
     const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
 
-    expect(Object.keys(runtime)).toEqual(["handle"]);
+    expect(Object.keys(runtime).sort()).toEqual(["handle", "routes"]);
 
     const first = await runtime.handle(request("model-one"));
     expect(first.status).toBe(200);
@@ -207,7 +207,7 @@ describe("Pi Models provider boundary", () => {
       provider: commandCodePrivateProviderId,
       api: commandCodePrivateApiId,
     });
-    expect(Object.keys(runtime)).toEqual(["handle"]);
+    expect(Object.keys(runtime).sort()).toEqual(["handle", "routes"]);
     expect(runtime).not.toHaveProperty("models");
     expect(runtime).not.toHaveProperty("provider");
     expect(runtime).not.toHaveProperty("setProvider");
