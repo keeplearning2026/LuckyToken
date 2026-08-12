@@ -6,6 +6,10 @@
   "clientProtocols": {
     "anthropic-messages": {
       "authFile": "client-auth/anthropic-messages.json"
+    },
+    "openai-responses": {
+      "authFile": "client-auth/openai-responses.json",
+      "stateFile": "state/openai-responses.json"
     }
   },
   "pi": {

@@ -5,7 +5,14 @@ export interface LuckyTokenCliConfig {
   readonly configPath: string;
   readonly server: { readonly host: string; readonly port: number };
   readonly clientProtocols: Readonly<
-    Record<string, { readonly authFile: string }>
+    Record<
+      string,
+      {
+        readonly authFile: string;
+        /** Optional session-state snapshot path (OpenAI Responses protocol). */
+        readonly stateFile?: string;
+      }
+    >
   >;
   readonly pi: {
     readonly directory: string;
@@ -122,7 +129,10 @@ export async function loadLuckyTokenCliConfig(
   }
   const resolvedClientProtocols = Object.create(null) as Record<
     string,
-    { readonly authFile: string }
+    {
+      readonly authFile: string;
+      readonly stateFile?: string;
+    }
   >;
   const authFiles = new Set<string>();
   const physicalAuthFiles = new Set<string>();
@@ -135,7 +145,11 @@ export async function loadLuckyTokenCliConfig(
       rawProtocol,
       `clientProtocols.${protocolId}`,
     );
-    assertKeys(protocol, ["authFile"], `clientProtocols.${protocolId}`);
+    assertKeys(
+      protocol,
+      ["authFile", "stateFile"],
+      `clientProtocols.${protocolId}`,
+    );
     const authFile = fromConfigDirectory(
       nonEmptyString(
         protocol.authFile,
@@ -156,7 +170,20 @@ export async function loadLuckyTokenCliConfig(
     }
     authFiles.add(identity);
     if (physicalIdentity !== undefined) physicalAuthFiles.add(physicalIdentity);
-    resolvedClientProtocols[protocolId] = Object.freeze({ authFile });
+    const stateFile =
+      protocol.stateFile === undefined
+        ? undefined
+        : fromConfigDirectory(
+            nonEmptyString(
+              protocol.stateFile,
+              `clientProtocols.${protocolId}.stateFile`,
+            ),
+            directory,
+          );
+    resolvedClientProtocols[protocolId] = Object.freeze({
+      authFile,
+      ...(stateFile === undefined ? {} : { stateFile }),
+    });
   }
   Object.freeze(resolvedClientProtocols);
   const result: LuckyTokenCliConfig = {

@@ -5,7 +5,7 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { createAuth } from "./auth.js";
 import { loadFileClientTokenAuthority } from "./client-auth/file-token-store.js";
@@ -16,6 +16,7 @@ import {
   type ServingCertificationManifest,
 } from "./commandcode-serving-certification.js";
 import { HttpObserver } from "./http-observer.js";
+import type { ClientProtocolHandler } from "./http.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import { loadModelsJson } from "./providers/models-json.js";
 import {
@@ -33,6 +34,10 @@ import {
   SYNTHETIC_CLIENT_HISTORY_API,
   SYNTHETIC_CLIENT_HISTORY_PROVIDER,
 } from "./protocols/anthropic/request.js";
+import {
+  createOpenAIResponsesHandler,
+  openaiResponsesProtocolId,
+} from "./protocols/openai-responses/handler.js";
 import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
@@ -103,7 +108,9 @@ export async function createConfiguredLuckyTokenComposition(
 ): Promise<ConfiguredLuckyTokenComposition> {
   const config = options.config;
   const uninstalledProtocol = Object.keys(config.clientProtocols).find(
-    (protocolId) => protocolId !== anthropicMessagesProtocolId,
+    (protocolId) =>
+      protocolId !== anthropicMessagesProtocolId &&
+      protocolId !== openaiResponsesProtocolId,
   );
   if (uninstalledProtocol !== undefined) {
     throw new Error(
@@ -217,8 +224,39 @@ export async function createConfiguredLuckyTokenComposition(
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
   });
+  const openaiResponsesConfig = Object.hasOwn(
+    config.clientProtocols,
+    openaiResponsesProtocolId,
+  )
+    ? config.clientProtocols[openaiResponsesProtocolId]
+    : undefined;
+  const clientProtocols: ClientProtocolHandler[] = [anthropic];
+  if (openaiResponsesConfig !== undefined) {
+    const responsesAuthority = await loadFileClientTokenAuthority(
+      openaiResponsesConfig.authFile,
+    );
+    const responsesAuth = createAuth({
+      authorizeToken: (token) => responsesAuthority.authorize(token),
+      createFallbackSessionId: createSessionId,
+    });
+    const stateFile =
+      openaiResponsesConfig.stateFile ??
+      join(dirname(config.configPath), "state", "openai-responses.json");
+    const responses = createOpenAIResponsesHandler({
+      models,
+      auth: responsesAuth,
+      stateFile,
+      httpObserver,
+      maxRequestBytes: config.limits.maxRequestBytes,
+      ...(options.shutdownSignal === undefined
+        ? {}
+        : { shutdownSignal: options.shutdownSignal }),
+      now,
+    });
+    clientProtocols.push(responses);
+  }
   const runtime = createLuckyTokenRuntime({
-    clientProtocols: [anthropic],
+    clientProtocols,
     requestTimeoutMs: config.limits.requestTimeoutMs,
     ...(options.shutdownSignal === undefined
       ? {}

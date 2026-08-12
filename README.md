@@ -32,7 +32,10 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
 .luckytoken/
 ├── config.json                         # listener, protocol auth-file paths, Pi directory, limits
 ├── client-auth/
-│   └── anthropic-messages.json         # Anthropic global/project local tokens
+│   ├── anthropic-messages.json         # Anthropic global/project local tokens
+│   └── openai-responses.json           # OpenAI Responses global/project local tokens
+├── state/
+│   └── openai-responses.json           # durable Responses session history snapshot
 └── pi/
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
@@ -53,6 +56,17 @@ Create local files from the committed placeholders:
 ```powershell
 New-Item -ItemType Directory -Force .luckytoken\pi
 Copy-Item luckytoken.config.example.json .luckytoken\config.json
+```
+
+The `openai-responses` Client Protocol is optional: it is served on
+`POST /v1/responses` only when listed in `clientProtocols`. Its `stateFile`
+(default `state/openai-responses.json` relative to the config directory)
+persists the `previous_response_id` conversation history across restarts, so
+Codex clients can continue an incremental session even after LuckyToken
+restarts. Create its token file with the same `client-token` command:
+
+```powershell
+npm start -- client-token create openai-responses --global --config .luckytoken/config.json
 ```
 
 Create an Anthropic protocol-global token, or bind one token to one project

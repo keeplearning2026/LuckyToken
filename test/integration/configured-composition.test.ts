@@ -281,4 +281,127 @@ describe("configured serving composition", () => {
     );
   });
 
+  it("registers the optional OpenAI Responses protocol with its own auth and state file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-responses-"));
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    await mkdir(piDirectory, { recursive: true });
+    const anthropicAuthPath = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    const responsesAuthPath = join(
+      stateDirectory,
+      "client-auth",
+      "openai-responses.json",
+    );
+    await createFileClientTokenStore({
+      path: anthropicAuthPath,
+    }).create({ type: "global" }, "anthropic-token");
+    await createFileClientTokenStore({
+      path: responsesAuthPath,
+    }).create({ type: "global" }, "responses-token");
+    const configPath = join(stateDirectory, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        server: { port: 0 },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+          "openai-responses": {
+            authFile: "client-auth/openai-responses.json",
+            stateFile: "state/openai-responses.json",
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: "provider-secret",
+    }));
+    const composition = await createConfiguredLuckyTokenComposition({
+      config: await loadLuckyTokenCliConfig(configPath),
+      credentials,
+      fetch: async () => commandCodeText("responses served"),
+      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      createMessageId: () => "msg_anthropic",
+      createSessionId: () => "00000000-0000-4000-8000-000000000251",
+      now: () => 1_786_400_000_000,
+    });
+
+    // Anthropic token works on the Anthropic route only.
+    const anthropic = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer anthropic-token",
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      }),
+    );
+    expect(anthropic.status).toBe(200);
+    // Anthropic token must NOT work on the Responses route.
+    const forbidden = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer anthropic-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        }),
+      }),
+    );
+    expect(forbidden.status).toBe(401);
+    // Responses token works on the Responses route.
+    const responses = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer responses-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        }),
+      }),
+    );
+    expect(responses.status).toBe(200);
+    const responsesJson = await responses.json();
+    expect(responsesJson.output[0].content[0].text).toBe("responses served");
+    // Responses token must NOT work on the Anthropic route.
+    const forbiddenAnthropic = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer responses-token",
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      }),
+    );
+    expect(forbiddenAnthropic.status).toBe(401);
+  });
+
 });

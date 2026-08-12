@@ -14,6 +14,10 @@
       "types": "./dist/protocols/anthropic/index.d.ts",
       "import": "./dist/protocols/anthropic/index.js"
     },
+    "./protocols/openai-responses": {
+      "types": "./dist/protocols/openai-responses/index.d.ts",
+      "import": "./dist/protocols/openai-responses/index.js"
+    },
     "./providers/commandcode-private": {
       "types": "./dist/providers/commandcode-private/provider.d.ts",
       "import": "./dist/providers/commandcode-private/provider.js"
