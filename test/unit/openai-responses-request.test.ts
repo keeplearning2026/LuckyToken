@@ -265,4 +265,65 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       }),
     ).toThrow("reasoning.effort is not a known thinking level");
   });
+
+  it("skips OpenAI-hosted tools and normalizes Codex tool shapes", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [
+          { type: "web_search", name: "web_search" },
+          { type: "function", name: "shell_command", parameters: "not-an-object" },
+          { type: "custom", name: "apply_patch" },
+          {
+            type: "namespace",
+            name: "mcp",
+            tools: [
+              {
+                type: "function",
+                name: "inner_tool",
+                description: "inner",
+                parameters: { type: "object", properties: {} },
+              },
+            ],
+          },
+        ],
+      },
+      1,
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "shell_command",
+      "apply_patch",
+      "inner_tool",
+    ]);
+    const shell = invocation.context.tools?.[0];
+    expect(shell?.parameters).toMatchObject({ type: "object" });
+    const applyPatch = invocation.context.tools?.[1];
+    expect(applyPatch?.parameters).toMatchObject({
+      type: "object",
+      properties: { input: { type: "string" } },
+    });
+  });
+
+  it("preserves strict on function tools", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [
+          {
+            type: "function",
+            name: "strict_tool",
+            parameters: { type: "object", properties: {} },
+            strict: true,
+          },
+        ],
+      },
+      1,
+    );
+    expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "require",
+    });
+  });
 });

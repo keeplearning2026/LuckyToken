@@ -142,35 +142,86 @@ function convertTools(value: unknown): Tool[] | undefined {
   }
   const tools: Tool[] = [];
   const names = new Set<string>();
+
+  const pushFunction = (
+    name: string,
+    description: string,
+    rawParameters: unknown,
+    strict?: unknown,
+  ): void => {
+    if (names.has(name)) return;
+    names.add(name);
+    // Codex clients may send tool definitions whose `parameters` is absent,
+    // non-object, or missing the `type` marker (e.g. built-in shell/apply
+    // tools). Normalize the same way opencodex does: wrap non-objects in a
+    // JSON Schema object and force `type: "object"` so the Pi Tool contract
+    // is always satisfied without rejecting the official client.
+    const normalizedParameters: Record<string, unknown> = {
+      ...(isRecord(rawParameters) ? rawParameters : {}),
+      type: "object",
+    };
+    const tool: Tool = {
+      name,
+      description,
+      parameters: normalizedParameters,
+    };
+    if (strict === true) {
+      tool.constrainedSampling = { type: "json_schema", strict: "require" };
+    }
+    tools.push(tool);
+  };
+
   for (const [index, candidate] of value.entries()) {
     if (!isRecord(candidate)) {
       throw new InvalidRequest(`tools[${index}] must be an object`);
     }
-    const name = nonEmptyString(candidate.name, `tools[${index}].name`);
-    if (names.has(name)) {
-      throw new InvalidRequest(`Duplicate tool name: ${name}`);
-    }
-    names.add(name);
+    const type = candidate.type;
+    const name = candidate.name;
     const description =
-      candidate.description === undefined
-        ? ""
-        : typeof candidate.description === "string"
-          ? candidate.description
-          : (() => {
-              throw new InvalidRequest(`tools[${index}].description must be a string`);
-            })();
-    if (!isRecord(candidate.parameters)) {
-      throw new InvalidRequest(`tools[${index}].parameters must be an object`);
+      typeof candidate.description === "string" ? candidate.description : "";
+
+    if (type === "function" && typeof name === "string" && name.length > 0) {
+      pushFunction(name, description, candidate.parameters, candidate.strict);
+      continue;
     }
-    const tool: Tool = {
-      name,
-      description,
-      parameters: candidate.parameters,
-    };
-    if (candidate.strict === true) {
-      tool.constrainedSampling = { type: "json_schema", strict: "require" };
+    if (type === "custom" && typeof name === "string" && name.length > 0) {
+      // Freeform custom tool (e.g. apply_patch): expose as a function with a
+      // single string `input` carrying the raw tool body.
+      pushFunction(name, description, {
+        type: "object",
+        properties: {
+          input: {
+            type: "string",
+            description: "Raw tool input.",
+          },
+        },
+        required: ["input"],
+      });
+      continue;
     }
-    tools.push(tool);
+    if (type === "namespace" && Array.isArray(candidate.tools)) {
+      // MCP tools arrive grouped under a namespace tool; flatten inner
+      // function tools (opencodex behavior).
+      for (const inner of candidate.tools) {
+        if (
+          isRecord(inner) &&
+          inner.type === "function" &&
+          typeof inner.name === "string" &&
+          inner.name.length > 0
+        ) {
+          pushFunction(
+            inner.name,
+            typeof inner.description === "string" ? inner.description : "",
+            inner.parameters,
+          );
+        }
+      }
+      continue;
+    }
+    // OpenAI-hosted server-side tools (web_search, image_generation, ...) and
+    // tool_search are intentionally skipped: the local Provider cannot
+    // execute them, and listing them would mislead the model. Tools with a
+    // non-string name are also skipped (opencodex parity).
   }
   return tools;
 }
