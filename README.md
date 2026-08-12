@@ -149,6 +149,18 @@ and both client and Provider keys are rejected if they occur anywhere in the
 artifact. Use `--samples <path>` to select a different output. The terminal
 summary contains counts, failure categories, and aggregate latency.
 
+The OpenAI Responses online suite drives the same real CommandCode provider
+through the `/v1/responses` endpoint with genuine Codex-style incremental
+semantics: `previous_response_id` chaining with upstream history-expansion
+evidence, durable snapshot recovery across a simulated process restart, atomic
+SSE lifecycle, function_call → function_call_output tool round-trips,
+`store:false` unconditional saving, client cancellation, per-protocol Auth
+isolation, and concurrent isolation.
+
+```powershell
+npm run test:online-responses
+```
+
 Malformed known events, unknown future events, terminal-less EOF, retry timing,
 UTF-8/chunk splitting, and unsupported image capability gates remain
 deterministic offline fault-injection cases because a healthy real service

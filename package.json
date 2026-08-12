@@ -37,6 +37,7 @@
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
     "test": "npm run test:certification && vitest run",
     "test:online": "tsx test/online/run-commandcode.ts",
+    "test:online-responses": "tsx test/online/run-openai-responses.ts",
     "test:certification": "node --test test/certification/*.test.mjs",
     "test:unit": "vitest run test/unit --passWithNoTests",
     "test:integration": "vitest run test/integration"
