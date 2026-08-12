@@ -46,8 +46,9 @@ Client Wire ↔ Client Protocol ↔ Pi public contracts ↔ Provider ↔ Provide
 - Client Protocol 只拥有 Client Wire ↔ Pi；Provider 只拥有 Pi ↔ 自己的 upstream wire。
 - Runtime/HTTP 只拥有 route、WHATWG `Request`/`Response` 和取消生命周期。
 - `composition.ts` 可以同时看见具体两侧以便构造、注入和认证，但不能承担转换语义。
-- Pi 生产依赖是 `@earendil-works/pi-ai@0.84.1`；`pi-agent/packages/ai` 是参考/审查源，
-  不应加入 LuckyToken 私有修改。
+- Pi 生产依赖是 `@earendil-works/pi-ai@0.84.1`；整个 `pi-agent/` 树是不可修改的
+  参考/审查源（AGENTS.md 硬约束），LuckyToken 只通过 Pi 公共接口消费，上游更新
+  整体替换。
 - Deployment config、Client Protocol token、Pi model catalog、Pi Provider credential
   分属不同 owner 和生命周期，不应重新合并成一个大配置或通用 Auth store。
 - 半成品 stream/tool state、raw token、wire-specific representation 都必须在 owner

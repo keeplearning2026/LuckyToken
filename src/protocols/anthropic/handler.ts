@@ -1,4 +1,8 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type {
+  FetchFunction,
+  Model,
+  Models,
+} from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import type { Auth } from "../../auth.js";
@@ -11,6 +15,8 @@ import {
   type ClientProtocolHandler,
   HttpRequestAbortedError,
 } from "../../http.js";
+import { HttpObserver } from "../../http-observer.js";
+import { supportsFetchObservation } from "../../http-failure-acquisition.js";
 import {
   ModelResolutionFailure,
   resolveModel,
@@ -23,6 +29,7 @@ import {
 } from "./profile.js";
 import {
   convertValidatedAnthropicRequest,
+  extractAnthropicModelSelector,
   validateAnthropicSourceRequest,
 } from "./request.js";
 import {
@@ -37,12 +44,21 @@ import {
   renderAnthropicJsonSuccess,
   type PreparedHttpResponse,
 } from "./wire.js";
+import { mapUpstreamHttpFailure } from "./upstream-failure.js";
+import { passthroughAnthropicRequest } from "./passthrough.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;
+  /**
+   * Optional invocation HTTP observer shared with provider composition. When
+   * provided, the handler uses it instead of creating its own, so provider
+   * HTTP failures observed through the bound fetch chain are visible to the
+   * handler.
+   */
+  readonly httpObserver?: HttpObserver;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
   readonly maxRequestBytes?: number;
@@ -53,6 +69,7 @@ export interface AnthropicMessagesHandlerOptions {
 interface AnthropicMessagesDependencies {
   readonly models: Models;
   readonly auth: Auth;
+  readonly httpObserver?: HttpObserver;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
   readonly maxRequestBytes: number;
@@ -107,6 +124,9 @@ async function handleAnthropicMessages(
   dependencies: AnthropicMessagesDependencies,
   request: Request,
 ): Promise<Response> {
+  // Invocation-local HTTP observer. Created before the try so the catch can
+  // read the latest upstream HTTP outcome after `execute` throws.
+  const httpObserver = dependencies.httpObserver ?? new HttpObserver();
   try {
     request.signal.throwIfAborted();
     const receivedAt = dependencies.now();
@@ -147,8 +167,18 @@ async function handleAnthropicMessages(
     }
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
+    const selector = extractAnthropicModelSelector(body);
+    const model = resolveModel(dependencies.models, selector);
+    if (model.api === "anthropic-messages") {
+      return passthroughBranch(
+        dependencies,
+        httpObserver.observedFetch,
+        request,
+        model,
+        rawBody,
+      );
+    }
     const validatedRequest = validateAnthropicSourceRequest(body);
-    const model = resolveModel(dependencies.models, validatedRequest.selector);
     assertAnthropicModelAwareValidity(
       validatedRequest,
       model,
@@ -161,6 +191,12 @@ async function handleAnthropicMessages(
       {
         sessionId: authResult.sessionId,
         signal: request.signal,
+        // Only inject the HTTP observer for Pi adapters that accept and use
+        // options.fetch. Adapters with their own fetch binding must keep
+        // their injected fetch chain.
+        ...(supportsFetchObservation(model.api)
+          ? { fetch: httpObserver.observedFetch }
+          : {}),
         ...(authResult.projectDir === undefined
           ? {}
           : { projectDir: authResult.projectDir }),
@@ -211,10 +247,99 @@ async function handleAnthropicMessages(
     if (error instanceof ModelResolutionFailure) {
       return toResponse(renderAnthropicError(404, "not_found_error", error.message));
     }
+    const observation = httpObserver.latestObservation;
+    if (observation !== undefined && observation.kind === "response") {
+      const mapping = mapUpstreamHttpFailure(observation);
+      if (mapping !== undefined) {
+        return toResponse(
+          renderAnthropicError(mapping.status, mapping.type, mapping.message),
+        );
+      }
+    }
+    // Provider execution failure without an observed HTTP response: forward
+    // the Pi error text as a 502 (upstream failure) so the Anthropic client
+    // sees the real reason instead of a generic 500. Structural check rather
+    // than `instanceof` so module duplication across test runtimes cannot
+    // misclassify the error. Only the exact ExecutionFailure kind (not the
+    // MalformedExecutionStreamError / UnsupportedExecutionOutcomeError
+    // subclasses) represents a provider-reported failure.
+    if (
+      error instanceof Error &&
+      "kind" in error &&
+      error.kind === "ExecutionFailure" &&
+      "diagnostic" in error &&
+      "reason" in error &&
+      error.reason === "error"
+    ) {
+      const diagnostic = error.diagnostic;
+      const message =
+        typeof diagnostic === "string"
+          ? diagnostic
+          : error.message || "Upstream provider failed";
+      return toResponse(
+        renderAnthropicError(502, "api_error", message),
+      );
+    }
     return toResponse(
       renderAnthropicError(500, "api_error", "Internal server error"),
     );
   }
+}
+
+/**
+ * Passthrough branch: forward the client's raw Anthropic request verbatim to
+ * the upstream endpoint and return its response unchanged (buffered Atomic).
+ *
+ * Owns the full passthrough lifecycle: upstream auth resolution, forwarding,
+ * and verbatim response return (status + headers + body) for both success
+ * and upstream HTTP failure. The HttpObserver still records the upstream
+ * outcome through its observed fetch, but the client always sees the
+ * upstream response as-is.
+ */
+async function passthroughBranch(
+  dependencies: AnthropicMessagesDependencies,
+  fetchImpl: FetchFunction,
+  request: Request,
+  model: Model<string>,
+  rawBody: string,
+): Promise<Response> {
+  const auth = await raceWithRequestSignal(
+    dependencies.models.getAuth(model),
+    request.signal,
+  );
+  const apiKey = auth?.auth.apiKey;
+  if (apiKey === undefined) {
+    return toResponse(
+      renderAnthropicError(
+        502,
+        "api_error",
+        `Provider is not configured: ${model.provider}`,
+      ),
+    );
+  }
+  const upstream = await raceWithRequestSignal(
+    passthroughAnthropicRequest({
+      model,
+      rawBody,
+      apiKey,
+      signal: request.signal,
+      fetch: fetchImpl,
+    }),
+    request.signal,
+  );
+  request.signal.throwIfAborted();
+  // Passthrough is verbatim in both directions: success and upstream HTTP
+  // failure responses are returned unchanged (status, headers, body). The
+  // observer still records the outcome for diagnostics, but the client sees
+  // the upstream response as-is.
+  const headers = new Headers();
+  for (const [name, value] of upstream.headers) {
+    headers.set(name, value);
+  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers,
+  });
 }
 
 export function createAnthropicMessagesHandler(
@@ -243,6 +368,9 @@ export function createAnthropicMessagesHandler(
   const dependencies: AnthropicMessagesDependencies = Object.freeze({
     models: options.models,
     auth: options.auth,
+    ...(options.httpObserver === undefined
+      ? {}
+      : { httpObserver: options.httpObserver }),
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     maxRequestBytes: options.maxRequestBytes ?? 1_048_576,

@@ -1,9 +1,20 @@
-import type { FetchFunction, MutableModels } from "@earendil-works/pi-ai";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import {
+  createProvider,
+  type FetchFunction,
+  type MutableModels,
+} from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { randomUUID } from "node:crypto";
 
+import type { HttpObserver } from "../http-observer.js";
 import { createCommandCodePrivateProvider } from "./commandcode-private/provider.js";
-import { createCommandCodeDefaultModel } from "./commandcode-private/model.js";
+import { COMMANDCODE_MODELS } from "./commandcode-private/models.js";
+import {
+  modelsJsonApiKeyAuth,
+  modelsJsonModel,
+  type ModelsJsonConfig,
+} from "./models-json.js";
 import {
   createNodeProjectSnapshot,
   type ProjectSnapshot,
@@ -12,6 +23,7 @@ import {
 export type { ProjectSnapshot } from "./commandcode-private/project.js";
 export type { CommandCodeCompatibilityPolicy } from "./commandcode-private/provider.js";
 export { commandCodePrivateProviderId } from "./commandcode-private/provider.js";
+export { COMMANDCODE_DEFAULT_MODEL_ID as commandCodePrivateDefaultModelId } from "./commandcode-private/model.js";
 
 /**
  * LuckyToken built-in provider catalog.
@@ -24,11 +36,17 @@ export { commandCodePrivateProviderId } from "./commandcode-private/provider.js"
 
 export interface LuckyTokenProviderDependencies {
   readonly fetch: FetchFunction;
+  /**
+   * Optional invocation HTTP observer shared with the Client Protocol
+   * handler. When provided, the CommandCode provider's bound fetch is wrapped
+   * by this observer so provider HTTP failures are visible to the handler.
+   */
+  readonly httpObserver?: HttpObserver;
+  /** Optional parsed models.json for user-registered custom providers. */
+  readonly modelsJson?: ModelsJsonConfig;
   readonly now?: () => number;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createSessionId?: () => string;
-  /** Test-only override for the provider upstream endpoint. */
-  readonly baseUrl?: string;
 }
 
 /**
@@ -48,13 +66,65 @@ export function registerLuckyTokenProviders(
   }
 
   const provider = createCommandCodePrivateProvider({
-    fetch: dependencies.fetch,
+    fetch: dependencies.httpObserver?.observedFetch ?? dependencies.fetch,
     now: dependencies.now ?? Date.now,
     projectSnapshot: dependencies.projectSnapshot ?? createNodeProjectSnapshot(),
     createSessionId: dependencies.createSessionId ?? randomUUID,
-    ...(dependencies.baseUrl === undefined
-      ? {}
-      : { model: createCommandCodeDefaultModel(dependencies.baseUrl) }),
+    models: COMMANDCODE_MODELS,
   });
   models.setProvider(provider);
+
+  registerModelsJsonProviders(models, dependencies.modelsJson);
+}
+
+function registerModelsJsonProviders(
+  models: MutableModels,
+  modelsJson: ModelsJsonConfig | undefined,
+): void {
+  if (modelsJson === undefined) return;
+  for (const [providerId, config] of Object.entries(modelsJson.providers)) {
+    // Built-in providers win over models.json with the same provider id, so a
+    // stale models.json can never shadow the curated CommandCode catalog.
+    if (models.getProvider(providerId) !== undefined) continue;
+    const api = config.api;
+    if (api === undefined) {
+      throw new Error(
+        `models.json provider ${providerId}: no "api" specified`,
+      );
+    }
+    const apiImpl = getApiProvider(api);
+    if (apiImpl === undefined) {
+      throw new Error(
+        `models.json provider ${providerId}: unknown api "${api}"`,
+      );
+    }
+    const baseUrl = config.baseUrl;
+    if (baseUrl === undefined) {
+      throw new Error(
+        `models.json provider ${providerId}: no "baseUrl" specified`,
+      );
+    }
+    const modelList = (config.models ?? []).map((definition) =>
+      modelsJsonModel(providerId, definition, config),
+    );
+    if (modelList.length === 0) {
+      throw new Error(
+        `models.json provider ${providerId}: no models defined`,
+      );
+    }
+    const auth = modelsJsonApiKeyAuth(config);
+    models.setProvider(
+      createProvider({
+        id: providerId,
+        name: config.name ?? providerId,
+        baseUrl,
+        models: modelList,
+        auth: { apiKey: auth },
+        api: {
+          stream: apiImpl.stream,
+          streamSimple: apiImpl.streamSimple,
+        },
+      }),
+    );
+  }
 }

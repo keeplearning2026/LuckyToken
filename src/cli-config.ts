@@ -7,7 +7,11 @@ export interface LuckyTokenCliConfig {
   readonly clientProtocols: Readonly<
     Record<string, { readonly authFile: string }>
   >;
-  readonly pi: { readonly directory: string };
+  readonly pi: {
+    readonly directory: string;
+    /** Optional models.json path; defaults to `<pi.directory>/models.json`. */
+    readonly modelsJson?: string;
+  };
   readonly limits: {
     readonly maxRequestBytes: number;
     readonly requestTimeoutMs: number;
@@ -99,7 +103,7 @@ export async function loadLuckyTokenCliConfig(
   const pi = requireRecord(root.pi, "pi");
   const limits = root.limits === undefined ? {} : requireRecord(root.limits, "limits");
   assertKeys(server, ["host", "port"], "server");
-  assertKeys(pi, ["directory"], "pi");
+  assertKeys(pi, ["directory", "modelsJson"], "pi");
   assertKeys(limits, ["maxRequestBytes", "requestTimeoutMs"], "limits");
 
   const host = server.host === undefined
@@ -108,6 +112,10 @@ export async function loadLuckyTokenCliConfig(
   if (/\s|:\/\//u.test(host)) throw new Error("server.host must be a host name or address");
   const port = safeInteger(server.port, 3000, "server.port", 0, 65_535);
   const piDirectoryValue = nonEmptyString(pi.directory, "pi.directory");
+  const modelsJsonValue =
+    pi.modelsJson === undefined
+      ? undefined
+      : nonEmptyString(pi.modelsJson, "pi.modelsJson");
   const directory = dirname(configPath);
   if (Object.keys(clientProtocols).length === 0) {
     throw new Error("clientProtocols must configure at least one Client Protocol");
@@ -157,6 +165,9 @@ export async function loadLuckyTokenCliConfig(
     clientProtocols: resolvedClientProtocols,
     pi: Object.freeze({
       directory: fromConfigDirectory(piDirectoryValue, directory),
+      ...(modelsJsonValue === undefined
+        ? {}
+        : { modelsJson: fromConfigDirectory(modelsJsonValue, directory) }),
     }),
     limits: Object.freeze({
       maxRequestBytes: safeInteger(

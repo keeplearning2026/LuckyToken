@@ -171,6 +171,42 @@ describe("CommandCode generation control mapping", () => {
     expect(value.reasoning_effort).toBe("xhigh");
   });
 
+  it("falls back to the highest supported effort for unsupported levels", () => {
+    const strictModel = {
+      ...model,
+      reasoning: true,
+      thinkingLevelMap: { off: null, high: "high", max: "max" },
+    };
+    for (const level of ["minimal", "low", "medium", "xhigh"] as const) {
+      const value = buildCommandCodeBody(
+        strictModel,
+        context,
+        { maxTokens: 20, reasoning: level },
+        createEmptyServerConfig(),
+        sessionId,
+        {},
+      ).body.params as Record<string, unknown>;
+      expect(value.reasoning_effort, level).toBe("max");
+    }
+  });
+
+  it("falls back to the highest supported effort even for high", () => {
+    const strictModel = {
+      ...model,
+      reasoning: true,
+      thinkingLevelMap: { off: null, max: "max" },
+    };
+    const value = buildCommandCodeBody(
+      strictModel,
+      context,
+      { maxTokens: 20, reasoning: "high" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value.reasoning_effort).toBe("max");
+  });
+
   it("omits reasoning_effort when reasoning is absent or clamps to off", () => {
     const reasoningModel = { ...model, reasoning: false };
     const absent = buildCommandCodeBody(

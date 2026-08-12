@@ -20,6 +20,7 @@ const MODEL_KEYS = new Set([
   "provider",
   "baseUrl",
   "reasoning",
+  "thinkingLevelMap",
   "input",
   "cost",
   "contextWindow",
@@ -177,8 +178,8 @@ function validateModel(model: Model<string>, failures: string[]): void {
   if (model.api !== CERTIFIED_API_ID) {
     failures.push("Model API does not match the certified API implementation");
   }
-  if (model.id.length === 0 || model.name !== model.id) {
-    failures.push("Model identity must be one non-empty exact id/name pair");
+  if (model.id.length === 0 || model.name.length === 0) {
+    failures.push("Model identity must have non-empty id and name");
   }
   if (
     !model.input.includes("text") ||
@@ -187,17 +188,19 @@ function validateModel(model: Model<string>, failures: string[]): void {
   ) {
     failures.push("Model input capabilities are not the certified text/image set");
   }
-  if (model.contextWindow !== 200_000 || model.maxTokens !== 64_000) {
-    failures.push("Model context or maximum-output configuration drifted");
-  }
   if (
-    model.cost.input !== 0 ||
-    model.cost.output !== 0 ||
-    model.cost.cacheRead !== 0 ||
-    model.cost.cacheWrite !== 0 ||
-    model.cost.tiers !== undefined
+    !Number.isSafeInteger(model.contextWindow) ||
+    model.contextWindow <= 0 ||
+    !Number.isSafeInteger(model.maxTokens) ||
+    model.maxTokens <= 0
   ) {
-    failures.push("Model cost configuration drifted from the certified route");
+    failures.push("Model context or maximum-output must be positive safe integers");
+  }
+  for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const value = model.cost[field];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      failures.push("Model cost rates must be finite non-negative numbers");
+    }
   }
 }
 
@@ -248,7 +251,7 @@ export function certifyServingComposition(
     failures,
     identity: {
       core: {
-        specification: "LuckyToken Core Architecture Specification v5.6",
+        specification: "LuckyToken Core Architecture Specification v5.7",
         servingComposition: "luckytoken-serving-composition-v2",
       },
       conversions: {

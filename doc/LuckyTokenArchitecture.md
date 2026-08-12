@@ -147,6 +147,9 @@ WHATWG Response → Node ServerResponse → Agent
   Pi-owned `auth.json`；
 - CommandCode Private Provider 作为 Pi 内置 Provider 注册（模型与上游地址内置，
   用户零配置）；
+- 支持 `models.json` 注册用户自定义 Provider（`baseUrl` + `api` + `apiKey` +
+  `models`），复用 Pi 内置 api adapter（如 `anthropic-messages`），经同一
+  Anthropic endpoint 按 `provider/model_id` selector 访问；
 - 支持 Anthropic text、history、thinking replay、tool call/tool result、JSON 与
   Atomic SSE；
 - 支持 `output_config.effort` → Pi reasoning 映射、`metadata.user_id` 透传、
@@ -154,6 +157,10 @@ WHATWG Response → Node ServerResponse → Agent
 - 支持 Claude Code 等真实 Anthropic Agent 接入（其发送的 `context_management`、
   `thinking`、`tool_choice`、`top_p` 等标准扩展字段按"只读所需"原则忽略）；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
+- 把上游 Provider 的 HTTP 错误（status + 原始 body）透传给 Anthropic 客户端：
+  通过 fetch 层 observer 观察真实 Response，错误按原样转发（`error.type` 取
+  provider 自身 body 的 type/code，无则按 status 兜底）；无 HTTP observation 的
+  执行失败回传 502 `api_error` + Pi `errorMessage`；
 - 用 serving certification 和真实在线 conformance 固定当前可服务组合。
 
 ## 1.2 当前没有实现的能力
@@ -1126,8 +1133,16 @@ wire compatibility，但不是把 upstream partial JSONL 直接透传给客户�
 | malformed JSON/source-invalid/unsupported | 400 `invalid_request_error` |
 | model unknown/ambiguous | 404 `not_found_error` |
 | classified execution abort | 500 `api_error` |
+| upstream provider HTTP failure（observer 捕获 non-2xx） | **status 原样透传**；`error.type` 取 provider body 的 `error.type`/`error.code`（无则按 status 表兜底）；`message` 为原始 body |
+| provider execution failure（无 HTTP observation） | 502 `api_error`，message 为 Pi `errorMessage` |
 | request connection/shutdown/timeout abort | 不再写 response，由 HTTP lifecycle 终止 |
 | other internal failure | 500 `api_error` without internal diagnostic leakage |
+
+Upstream HTTP failure 的透传由 `src/http-observer.ts`（fetch 层观察）、
+`src/http-failure-acquisition.ts`（按 Pi `api` 选择获取方式）与
+`src/protocols/anthropic/upstream-failure.ts`（status/body → Anthropic error
+envelope）共同完成。LuckyToken 不做内容加工：status 与 body 原样进入客户端响应，
+只保证 `error.type` 在 body 无可用值时仍有一个合法兜底。
 
 ## 5.13 Anthropic 模块内部关系
 
@@ -1235,16 +1250,56 @@ Output
 
 Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contracts。
 
-## 6.2 Provider model data — 内置，无配置文件
+## 6.2 Provider model data — 内置模型目录，单一权威来源
 
 > **小白理解：** 供应商的商品目录（模型 id、能力、容量）直接写在 LuckyToken 的
 > Provider 模块里，用户不需要任何 `models.json`。这就像 Pi 内置的 deepseek/anthropic
 > provider 一样——`login` 填 API key 就能用。
 
-CommandCode Private Provider 的模型数据（默认 `deepseek/deepseek-v4-flash`：
-reasoning/input/cost/contextWindow/maxTokens）和固定上游地址都封装在
-`providers/commandcode-private/model.ts`，由 Provider 工厂直接使用。没有
-`models.json` 配置文件，也没有对应的 loader 模块。
+CommandCode Private Provider 内置 **33 个模型**，全部硬编码在
+`providers/commandcode-private/models.ts`（`COMMANDCODE_MODEL_SOURCES`），这是
+**唯一的模型权威来源**——没有运行时端点拉取，更新模型只需改这个文件。
+
+模型数据来自 `doc/# CommandCode 1.9.0 模型信息表.md`（官方 command-code@1.9.0
+bundle 静态分析）：
+
+- `id`：官方权威 id（如 `deepseek/deepseek-v4-flash`、`Qwen/Qwen3.8-Max`）；
+- `contextWindow` / `input`（text/image）：官方模态；
+- `cost`：官方定价表（每百万 token USD）；
+- `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
+  `low/medium/xhigh`）；官方未标注档位的模型保持全档位宽松。
+
+`thinkingLevelMap` 由 `reasoningEfforts` 生成，语义是：客户端请求档位在模型支持
+范围内 → 原样使用；不在范围内 → **fallback 到模型支持的最高档**（不报错、不发
+无效参数）；模型明确标注 `null` 的档位 → 报错。
+
+默认模型仍是 `deepseek/deepseek-v4-flash`（`COMMANDCODE_DEFAULT_MODEL_ID`）。
+
+### 6.2.1 用户自定义 Provider — `models.json`（新增）
+
+用户可通过 `pi.modelsJson` 配置（默认 `<pi.directory>/models.json`）注册自定义
+Provider，复用 Pi 内置 api adapter：
+
+```json
+{
+  "providers": {
+    "my-anthropic": {
+      "baseUrl": "https://gateway.example.com",
+      "api": "anthropic-messages",
+      "apiKey": "sk-...",
+      "models": [
+        { "id": "claude-sonnet", "contextWindow": 200000, "maxTokens": 64000 }
+      ]
+    }
+  }
+}
+```
+
+`src/providers/models-json.ts` 是 LuckyToken 自有解析器（最小 schema 子集，不
+import coding-agent 参考源）；`catalog.ts` 用 Pi 公共接口 `createProvider` +
+`getApiProvider(api)` 注册。apiKey 优先读 Pi `CredentialStore`（`login` 存储），
+fallback 到配置字段。注册后走标准 Pi IR 路径：请求由对应 api adapter 按
+`model.baseUrl` 直发，响应经 Pi 解析后渲染回 Anthropic。
 
 ## 6.3 Pi credential persistence — `src/pi/file-credential-store.ts`
 
@@ -1339,7 +1394,7 @@ OpenAI Responses handler 已实现。
 
 ```ts
 createConfiguredPiModels(options)
-  → { models: Pi.Models, model: Pi.Model<"commandcode-private"> }
+  → { models: Pi.Models }
 
 createConfiguredLuckyTokenComposition(options)
   → { runtime: LuckyTokenRuntime, certification: ServingCertificationManifest }
@@ -1357,6 +1412,7 @@ createConfiguredLuckyTokenComposition(options)
 | `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
 | required bound `fetch` | 交给 concrete Provider；不使用 ambient fallback |
+| optional `HttpObserver` | 包装 CommandCode 的 bound fetch，使 provider HTTP 失败对 Client Protocol handler 可见 |
 | optional `ProjectSnapshot` | 交给 CommandCode Provider |
 | optional ID/clock | 交给对应 owner |
 
@@ -1386,6 +1442,12 @@ all bound facts → serving certification
 
 它不做 Anthropic↔Pi 或 Pi↔CommandCode conversion。完整 `LuckyTokenCliConfig` 在
 这里被拆成窄 constructor facts，之后不进入 Runtime request path。
+
+HTTP failure 观察的生命周期收敛在 composition：`createConfiguredLuckyTokenComposition()`
+创建一个 `HttpObserver`，同时注入 `registerLuckyTokenProviders()`（包装
+CommandCode bound fetch）与 `createAnthropicMessagesHandler()`（读取观察结果）。
+`createConfiguredPiModels()` 不负责创建 observer，只接受可选注入，避免把
+infrastructure 对象当作公共返回值泄漏。
 
 当前 production composition 有意只认证一个 `anthropic-messages` handler 和一个
 `commandcode-private` model。未来扩展时应增加独立 binding/registration，而不是在
@@ -1683,6 +1745,11 @@ session、project config、permission、image/reasoning capabilities、message/t
 
 Transport 选择 precedence 是 request `options.fetch` → Provider-bound fetch → global
 fetch。当前 certified composition 总是显式绑定 fetch，并禁止依赖 global fallback。
+在 certified composition 中，注入给 Provider 的 bound fetch 被 `HttpObserver`
+包装：observer 旁观每次 HTTP attempt（2xx 只记 status/headers，non-2xx 完整快照
+body，transport failure 单独记录），然后把原始 Response 原样交给 CommandCode
+attempt 逻辑。因此 CommandCode 的错误透传与 Anthropic/OpenAI 等 Pi adapter 走
+`options.fetch` 的观察路径不同，但共享同一个 observer 实例，handler 侧读取一致。
 
 ## 7.5 HTTP attempt/retry/cancellation — `attempts.ts`
 
@@ -2021,12 +2088,16 @@ flowchart TB
 
 > **小白理解：** 这组模块把 LuckyToken 接到 Pi 的标准接口，并管理 Pi 所需的
 > Provider 凭证。Provider 的模型与上游地址内置在 Provider 模块里，无需模型配置
-> 文件。仓库里的 `pi-agent/packages/ai` 是供人核对上游行为的参考源，正式运行依赖
-> npm 包，LuckyToken 不在参考源码里打自己的补丁。
+> 文件。仓库里的 `pi-agent/` 是供人核对上游行为的参考源，正式运行依赖 npm 包；
+> `pi-agent/` 整棵树不可修改（见 AGENTS.md），LuckyToken 只通过 Pi 公共接口消费，
+> 不在参考源码里打任何补丁。
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
+| `src/http-observer.ts` | invocation-local fetch observer（`HttpObserver`）；latest-call-wins 快照 status/body/transport | composition 创建；handler/CommandCode bound fetch 使用 | `globalThis.fetch` 或注入 base | `test/unit/http-observer.test.ts` |
+| `src/http-failure-acquisition.ts` | Pi `api` → HTTP failure 获取方式映射 | handler（判断是否注入 `options.fetch`） | Pi `KnownApi` types | `test/unit/http-failure-acquisition.test.ts` |
+| `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerLuckyTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
 | `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
 | `pi-agent/packages/ai` | reviewed reference/source mirror | maintainers/certification review | upstream Pi source | 不作为 LuckyToken production import |
 
@@ -2048,6 +2119,7 @@ flowchart TB
 | `options.ts` | protocol + infrastructure facts → Pi options | handler | Pi options type | options/invocation-options tests |
 | `response.ts` | committed Pi message → Anthropic Message | handler | Pi AssistantMessage | Anthropic response/thinking integration |
 | `wire.ts` | Anthropic target/error → exact JSON bytes | handler/SSE | response target types | Anthropic wire + atomic delivery tests |
+| `upstream-failure.ts` | observed HTTP failure → Anthropic error envelope（status/body 原样，type 取 provider body） | handler catch | `http-observer` types、wire error type | `test/unit/upstream-failure.test.ts`、commandcode-http-failure integration |
 | `sse.ts` | target → Atomic SSE events/bytes | handler | wire schema assertion | Anthropic SSE unit/integration |
 
 ## 9.4 CommandCode Provider
@@ -2059,7 +2131,9 @@ flowchart TB
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `providers/catalog.ts` | `registerLuckyTokenProviders()`；唯一 import Provider 实现的注册点 | composition | CommandCode provider、Pi Models | configured-composition、provider-boundary tests |
-| `providers/commandcode-private/model.ts` | 内置默认 Pi `Model`；固定 baseUrl | provider factory | Pi Model type | `test/unit/commandcode-model.test.ts` |
+| `providers/commandcode-private/models.ts` | **33 个模型的唯一权威目录**（id/context/模态/价格/推理档位，来自官方 1.9.0 分析）；`thinkingLevelMap` 生成 | provider factory | `constants.ts`、Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
+| `providers/commandcode-private/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider、catalog | none | 被 model tests 覆盖 |
+| `providers/commandcode-private/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory、catalog | `models.ts` | `test/unit/commandcode-model.test.ts` |
 | `providers/commandcode-private/provider.ts` | factory、Pi→wire conversion、request preparation | composition/Pi Models | project、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
 | `project.ts` | `ProjectSnapshot` → `ServerConfig` | Provider preparation | directory/Git/date/platform capabilities | project unit/provider integration/online project scope |
 | `attempts.ts` | prepared request → committed `CommandCodeResult` | Provider stream | fetch/timers/assembler | attempt controls、decoder、retry/cancel integration |
@@ -2249,7 +2323,9 @@ flowchart LR
 | Capability cohesion | token schema/mutation/authority 在一个模块；Provider JSONL state 全在 Provider 目录 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；handler 只有 method/path/handle；Auth 只有 `resolve(headers)` | 符合 |
 | Information lifecycle | raw token/file JSON/Client Wire/Provider JSONL 都有明确死亡点；只传播窄 Pi facts | 符合 |
-| Upstream-clean Pi | LuckyToken-specific code不修改 `pi-agent/packages/ai`；通过 public `Models/Provider/CredentialStore` 接入 | 符合 |
+| 模型单一权威来源 | CommandCode 33 个模型只存在于 `models.ts`（官方 1.9.0 数据）；无运行时端点拉取、无第二份模型清单 | 符合 |
+| `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
+| HTTP failure 观察边界 | observer 由 composition 创建并注入；handler 只按 `KnownApi` 注入 `options.fetch`，CommandCode 走 composition 包装 bound fetch；观察结果只在 handler 侧映射成 Anthropic error envelope | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
 | Tool identity | 两侧转换都保留 call ID/name/correlation；不按位置猜测 | 符合 |
 | Cancellation | socket→HTTP→Pi→Provider→fetch/reader/retry 全链传播；commit 前仍 authoritative | 符合 |
@@ -2318,6 +2394,13 @@ construction/registration/certification，没有 message/content/usage/tool conv
    明确的 Source→Target 规则，才会进入 Pi 状态；在获得规则前，忽略是协议约定的
    行为，不是 bug。CommandCode 响应侧同理：只有三种 content 生命周期进入 content，
    `tool-result` 等 no-op 事件不产生语义。
+
+8. **Provider HTTP 错误"尽量原样"透传是显式取舍。** 上游的 status、原始 body 和
+   `error.type`/`error.code` 会原样进入 Anthropic 错误响应（Anthropic 协议允许未知
+   error type，见协议 7.10 versioning）。代价是：客户端可能收到非 Anthropic 原生
+   的错误 type（如 OpenAI 的 `insufficient_quota`、CommandCode 的 `RATE_LIMITED`），
+   依赖 SDK 按已知 type 分类的客户端需要自己处理未知值。若未来要求"统一错误
+   分类"，应只在 `upstream-failure.ts` 内调整映射表，不改变 observer 与 handler。
 
 ## 11.4 用于代码评审的边界问题
 

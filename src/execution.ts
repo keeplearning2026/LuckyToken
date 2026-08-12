@@ -118,6 +118,7 @@ export class ExecutionAbortedError extends Error {
 }
 
 export class ExecutionFailure extends Error {
+  readonly kind: string = "ExecutionFailure";
   readonly reason = "error";
   readonly diagnostic: unknown;
 
@@ -129,6 +130,8 @@ export class ExecutionFailure extends Error {
 }
 
 export class UnsupportedExecutionOutcomeError extends ExecutionFailure {
+  readonly kind = "UnsupportedExecutionOutcomeError";
+
   constructor(message: string) {
     super(message);
     this.name = "UnsupportedExecutionOutcomeError";
@@ -136,6 +139,8 @@ export class UnsupportedExecutionOutcomeError extends ExecutionFailure {
 }
 
 export class MalformedExecutionStreamError extends ExecutionFailure {
+  readonly kind = "MalformedExecutionStreamError";
+
   constructor(message: string) {
     super(message);
     this.name = "MalformedExecutionStreamError";

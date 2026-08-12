@@ -91,6 +91,15 @@ function createRunner(
 }
 
 describe("CommandCode physical attempts", () => {
+  it("rejects provider construction without any model contract", () => {
+    expect(() =>
+      createCommandCodePrivateProvider({
+        now: () => 1_000,
+        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      }),
+    ).toThrow(/model/i);
+  });
+
   it("reuses logical wire facts while refreshing attempts, traces, and callbacks", async () => {
     const requests: Request[] = [];
     const bodies: string[] = [];

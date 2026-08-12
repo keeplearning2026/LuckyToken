@@ -6,9 +6,15 @@ import {
 export type AnthropicErrorType =
   | "invalid_request_error"
   | "authentication_error"
+  | "billing_error"
+  | "permission_error"
   | "not_found_error"
+  | "conflict_error"
   | "request_too_large"
-  | "api_error";
+  | "rate_limit_error"
+  | "api_error"
+  | "timeout_error"
+  | "overloaded_error";
 
 export interface PreparedHttpResponse {
   readonly status: number;
@@ -277,7 +283,7 @@ export function renderAnthropicJsonSuccess(
 
 export function renderAnthropicError(
   status: number,
-  type: AnthropicErrorType,
+  type: string,
   message: string,
 ): PreparedHttpResponse {
   return {

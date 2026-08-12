@@ -1,5 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
+import { findCommandCodeModel } from "./models.js";
+
 /**
  * CommandCode Private provider-owned model construction.
  *
@@ -9,9 +11,7 @@ import type { Model } from "@earendil-works/pi-ai";
  * never imports it.
  */
 
-export const COMMANDCODE_BASE_URL = "https://api.commandcode.ai";
-export const COMMANDCODE_PROVIDER_ID = "commandcode-private";
-export const COMMANDCODE_API_ID = "commandcode-private";
+export { COMMANDCODE_BASE_URL, COMMANDCODE_PROVIDER_ID, COMMANDCODE_API_ID } from "./constants.js";
 
 /**
  * Built-in default model. The CommandCode provider ships with this model so
@@ -20,20 +20,12 @@ export const COMMANDCODE_API_ID = "commandcode-private";
 export const COMMANDCODE_DEFAULT_MODEL_ID = "deepseek/deepseek-v4-flash";
 
 export function createCommandCodeDefaultModel(
-  baseUrlOverride?: string,
-): Model<typeof COMMANDCODE_API_ID> {
-  const input: Array<"text" | "image"> = ["text"];
-  Object.freeze(input);
-  return Object.freeze({
-    id: COMMANDCODE_DEFAULT_MODEL_ID,
-    name: COMMANDCODE_DEFAULT_MODEL_ID,
-    api: COMMANDCODE_API_ID,
-    provider: COMMANDCODE_PROVIDER_ID,
-    baseUrl: baseUrlOverride ?? COMMANDCODE_BASE_URL,
-    reasoning: true,
-    input,
-    cost: Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-  });
+): Model<string> {
+  const catalogModel = findCommandCodeModel(COMMANDCODE_DEFAULT_MODEL_ID);
+  if (catalogModel === undefined) {
+    throw new Error(
+      `CommandCode catalog is missing the default model: ${COMMANDCODE_DEFAULT_MODEL_ID}`,
+    );
+  }
+  return catalogModel;
 }

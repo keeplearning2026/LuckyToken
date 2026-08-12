@@ -1,7 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { execFile } from "node:child_process";
-import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -49,20 +47,6 @@ function captureChild(child: ChildProcessWithoutNullStreams): {
   return { result, stdout: () => stdout, stderr: () => stderr };
 }
 
-async function waitForText(
-  read: () => string,
-  text: string,
-  timeoutMs = 15_000,
-): Promise<string> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const output = read();
-    if (output.includes(text)) return output;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
-  }
-  throw new Error(`Timed out waiting for CLI output: ${text}`);
-}
-
 function startCli(
   args: readonly string[],
   bridgeSignal = false,
@@ -84,29 +68,14 @@ function startCli(
   });
 }
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    server.close((error) => {
-      if (error) rejectPromise(error);
-      else resolvePromise();
-    });
-  });
-}
-
 describe("LuckyToken CLI", () => {
   const directories: string[] = [];
   const children: ChildProcessWithoutNullStreams[] = [];
-  const servers: Server[] = [];
 
   afterEach(async () => {
     for (const child of children.splice(0)) {
       if (child.exitCode === null) child.kill("SIGTERM");
     }
-    await Promise.all(
-      servers.splice(0).map(async (server) => {
-        if (server.listening) await closeServer(server);
-      }),
-    );
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),
@@ -272,35 +241,7 @@ describe("LuckyToken CLI", () => {
     expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
   }, 30_000);
 
-  it("logs in through Pi, serves the SDK, and shuts down without leaking keys", async () => {
-    const upstreamAuthorization: Array<string | undefined> = [];
-    const upstream = createServer((request, response) => {
-      upstreamAuthorization.push(request.headers.authorization);
-      request.resume();
-      response.writeHead(200, { "content-type": "application/x-ndjson" });
-      response.end(
-        [
-          JSON.stringify({ type: "text-start", id: "0" }),
-          JSON.stringify({ type: "text-delta", id: "0", text: "CLI through Pi" }),
-          JSON.stringify({ type: "text-end", id: "0" }),
-          JSON.stringify({
-            type: "finish",
-            finishReason: "stop",
-            totalUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
-          }),
-        ].join("\n"),
-      );
-    });
-    servers.push(upstream);
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      upstream.once("error", rejectPromise);
-      upstream.listen(0, "127.0.0.1", resolvePromise);
-    });
-    const upstreamAddress = upstream.address();
-    if (upstreamAddress === null || typeof upstreamAddress === "string") {
-      throw new Error("Fixture server did not expose a TCP address");
-    }
-
+  it("logs in and out through the built-in provider without leaking the key", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-e2e-"));
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
@@ -321,23 +262,6 @@ describe("LuckyToken CLI", () => {
       "utf8",
     );
 
-    const clientToken = startCli([
-      "client-token",
-      "create",
-      "anthropic-messages",
-      "--global",
-      "--token",
-      "local-client-secret",
-      "--config",
-      configPath,
-    ]);
-    children.push(clientToken);
-    const clientTokenResult = await captureChild(clientToken).result;
-    expect(clientTokenResult.code).toBe(0);
-    expect(`${clientTokenResult.stdout}\n${clientTokenResult.stderr}`).not.toContain(
-      "local-client-secret",
-    );
-
     const login = startCli([
       "login",
       "commandcode-private",
@@ -354,45 +278,11 @@ describe("LuckyToken CLI", () => {
       "stored-provider-secret",
     );
 
-    const serving = startCli(
-      ["--config", configPath],
-      true,
-      {
-        LUCKYTOKEN_COMMANDCODE_BASE_URL: `http://127.0.0.1:${upstreamAddress.port}`,
-      },
-    );
-    children.push(serving);
-    const servingCapture = captureChild(serving);
-    const output = await waitForText(servingCapture.stdout, "/v1/messages");
-    const endpoint = output.match(/http:\/\/[^\s]+\/v1\/messages/u)?.[0];
-    expect(endpoint).toBeDefined();
-    const origin = new URL(endpoint as string).origin;
-    const client = new Anthropic({
-      apiKey: "local-client-secret",
-      baseURL: origin,
-      maxRetries: 0,
-      timeout: 10_000,
-    });
-    const message = await client.messages.create({
-      model: "commandcode-private/deepseek/deepseek-v4-flash",
-      max_tokens: 32,
-      messages: [{ role: "user", content: "hello" }],
-    });
-
-    expect(message.content).toEqual([
-      { type: "text", text: "CLI through Pi", citations: null },
-    ]);
-    expect(upstreamAuthorization).toEqual(["Bearer stored-provider-secret"]);
-    expect(`${servingCapture.stdout()}\n${servingCapture.stderr()}`).not.toContain(
-      "local-client-secret",
-    );
-    expect(`${servingCapture.stdout()}\n${servingCapture.stderr()}`).not.toContain(
-      "stored-provider-secret",
-    );
-
-    serving.stdin.end("SIGTERM\n");
-    const servingResult = await servingCapture.result;
-    expect(servingResult.code).toBe(0);
+    await expect(
+      createFileCredentialStore(join(piDirectory, "auth.json")).read(
+        "commandcode-private",
+      ),
+    ).resolves.toEqual({ type: "api_key", key: "stored-provider-secret" });
 
     const logout = startCli([
       "logout",

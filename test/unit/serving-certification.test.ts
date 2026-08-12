@@ -17,15 +17,23 @@ import {
 
 function model(): Model<typeof commandCodePrivateApiId> {
   return {
-    id: "claude-certified",
-    name: "claude-certified",
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek V4 Flash (latest)",
     api: commandCodePrivateApiId,
     provider: commandCodePrivateProviderId,
     baseUrl: "https://commandcode.example/nested",
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
+    reasoning: true,
+    thinkingLevelMap: {
+      off: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    },
+    input: ["text"],
+    cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+    contextWindow: 1_000_000,
     maxTokens: 64_000,
   };
 }
@@ -76,7 +84,7 @@ describe("serving composition certification", () => {
       failures: [],
       identity: {
         core: {
-          specification: "LuckyToken Core Architecture Specification v5.6",
+          specification: "LuckyToken Core Architecture Specification v5.7",
           servingComposition: "luckytoken-serving-composition-v2",
         },
         conversions: {
@@ -113,10 +121,10 @@ describe("serving composition certification", () => {
           apiId: "commandcode-private",
         },
         model: {
-          id: "claude-certified",
+          id: "deepseek/deepseek-v4-flash",
           endpoint: "https://commandcode.example/alpha/generate",
-          input: ["text", "image"],
-          contextWindow: 200_000,
+          input: ["text"],
+          contextWindow: 1_000_000,
           maxTokens: 64_000,
         },
         conformanceRevision: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),

@@ -35,11 +35,7 @@ import {
   replayCommandCodeAssistantMessage,
 } from "./semantic.js";
 import { cloneLosslessJsonObject } from "./json.js";
-import {
-  COMMANDCODE_API_ID,
-  COMMANDCODE_PROVIDER_ID,
-  createCommandCodeDefaultModel,
-} from "./model.js";
+import { COMMANDCODE_API_ID, COMMANDCODE_PROVIDER_ID } from "./model.js";
 
 const PROVIDER_ID = COMMANDCODE_PROVIDER_ID;
 const API_ID = COMMANDCODE_API_ID;
@@ -50,8 +46,13 @@ export interface CommandCodePrivateProviderOptions {
   /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
   apiKey?: string;
   fetch?: FetchFunction;
-  /** Optional model override. Defaults to the built-in CommandCode model. */
-  model?: Model<typeof API_ID>;
+  /**
+   * Single-model override for tests / narrow embeddings. `models` takes
+   * precedence; exactly one of `model` or `models` must be provided.
+   */
+  model?: Model<string>;
+  /** Full model catalog (e.g. the built-in 33-model directory). */
+  models?: readonly Model<string>[];
   now: () => number;
   projectSnapshot: ProjectSnapshot;
   compatibility?: CommandCodeCompatibilityPolicy;
@@ -247,6 +248,7 @@ export function convertCommandCodeTools(
 }
 
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
 
 function mapReasoningLevel(
   model: Model<typeof API_ID>,
@@ -261,6 +263,22 @@ function mapReasoningLevel(
       throw new Error(`Model maps ${level} to an invalid CommandCode effort`);
     }
     return explicit;
+  }
+  // Strict mode (model declares a thinkingLevelMap): an unsupported level
+  // falls back to the highest supported effort instead of erroring, so a
+  // client that picked a level this model cannot express still gets a valid
+  // upstream request.
+  if (model.thinkingLevelMap !== undefined) {
+    const supported = (Object.values(model.thinkingLevelMap) as Array<string | null>)
+      .filter((value): value is string => value !== null)
+      .sort(
+        (a, b) =>
+          EFFORT_ORDER.indexOf(a as (typeof EFFORT_ORDER)[number]) -
+          EFFORT_ORDER.indexOf(b as (typeof EFFORT_ORDER)[number]),
+      );
+    const highest = supported[supported.length - 1];
+    if (highest !== undefined) return highest;
+    throw new Error(`Model exposes no supported reasoning effort`);
   }
   if (level === "minimal" || level === "low") return "low";
   if (level === "medium" || level === "high") return level;
@@ -958,10 +976,14 @@ export function createCommandCodePrivateProvider(
   if (options.apiKey !== undefined && configuredApiKey?.length === 0) {
     throw new Error("CommandCode API key must be non-empty");
   }
-  const model = deepFreezeProviderData(
-    structuredClone(options.model ?? createCommandCodeDefaultModel()) as Model<
-      typeof API_ID
-    >,
+  if (options.models === undefined && options.model === undefined) {
+    throw new Error(
+      "CommandCode provider requires a model contract: provide `models` (catalog) or `model` (single override)",
+    );
+  }
+  const catalogModels = options.models ?? [options.model as Model<string>];
+  const frozenModels = catalogModels.map((entry) =>
+    deepFreezeProviderData(structuredClone(entry) as Model<typeof API_ID>),
   );
   const compatibility = snapshotCompatibilityPolicy(options.compatibility ?? {});
   const projectSnapshot = snapshotProjectCapability(options.projectSnapshot);
@@ -978,7 +1000,7 @@ export function createCommandCodePrivateProvider(
   return createProvider({
     id: PROVIDER_ID,
     name: "CommandCode Private",
-    models: [model],
+    models: frozenModels,
     auth: {
       apiKey: {
         name: "CommandCode API key",

@@ -13,14 +13,14 @@ describe("CommandCode built-in default model", () => {
     expect(model.baseUrl).toBe("https://api.commandcode.ai");
   });
 
-  it("ships the built-in default model id with fixed capability facts", () => {
+  it("ships the built-in default model id with real capability facts", () => {
     const model = createCommandCodeDefaultModel();
     expect(model.id).toBe(COMMANDCODE_DEFAULT_MODEL_ID);
     expect(model.api).toBe("commandcode-private");
     expect(model.provider).toBe("commandcode-private");
     expect(model.reasoning).toBe(true);
     expect(model.input).toEqual(["text"]);
-    expect(model.contextWindow).toBe(200_000);
+    expect(model.contextWindow).toBe(1_000_000);
     expect(model.maxTokens).toBe(64_000);
   });
 
@@ -31,12 +31,12 @@ describe("CommandCode built-in default model", () => {
     expect(Object.isFrozen(model.input)).toBe(true);
   });
 
-  it("has a zero cost baseline", () => {
+  it("uses the DeepSeek V4 Flash per-1M-token pricing", () => {
     const model = createCommandCodeDefaultModel();
     expect(model.cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.0028,
       cacheWrite: 0,
     });
   });

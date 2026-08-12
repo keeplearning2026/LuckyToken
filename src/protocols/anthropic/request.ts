@@ -456,6 +456,25 @@ export function validateAnthropicSourceRequest(
   return validated;
 }
 
+/**
+ * Minimal selector extraction for passthrough routing.
+ *
+ * This deliberately performs no semantic validation beyond a JSON object
+ * shape and a non-empty `model` string: passthrough must forward the raw
+ * body verbatim, so upstream-accepted fields that LuckyToken conversion
+ * would reject must not block the passthrough branch.
+ */
+export function extractAnthropicModelSelector(value: unknown): string {
+  if (!isRecord(value)) {
+    throw new InvalidRequest("Request body must be a JSON object");
+  }
+  const model = value.model;
+  if (typeof model !== "string" || model.length === 0) {
+    throw new InvalidRequest("model must be a non-empty string");
+  }
+  return model;
+}
+
 interface CanonicalToolUse {
   type: "toolUse";
   id: string;

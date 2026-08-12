@@ -15,8 +15,11 @@ import {
   ServingCertificationFailure,
   type ServingCertificationManifest,
 } from "./commandcode-serving-certification.js";
+import { HttpObserver } from "./http-observer.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
+import { loadModelsJson } from "./providers/models-json.js";
 import {
+  commandCodePrivateDefaultModelId,
   commandCodePrivateProviderId,
   registerLuckyTokenProviders,
   type ProjectSnapshot,
@@ -39,8 +42,14 @@ export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
-  /** Test-only override for the built-in provider upstream endpoint. */
-  readonly commandCodeBaseUrl?: string;
+  /** Optional models.json path; absent means no user-registered providers. */
+  readonly modelsJsonPath?: string;
+  /**
+   * Optional shared HTTP observer. When provided, the CommandCode provider's
+   * bound fetch is wrapped by it so provider HTTP failures are visible to the
+   * Client Protocol handler.
+   */
+  readonly httpObserver?: HttpObserver;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -50,8 +59,6 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly config: LuckyTokenCliConfig;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
-  /** Test-only override for the built-in provider upstream endpoint. */
-  readonly commandCodeBaseUrl?: string;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
@@ -67,6 +74,7 @@ export interface ConfiguredLuckyTokenComposition {
 export async function createConfiguredPiModels(
   options: ConfiguredPiModelsOptions,
 ): Promise<{ models: Models }> {
+  const modelsJson = await loadModelsJson(options.modelsJsonPath);
   const mutableModels = createModels({
     credentials:
       options.credentials ??
@@ -74,9 +82,10 @@ export async function createConfiguredPiModels(
   });
   registerLuckyTokenProviders(mutableModels, {
     fetch: options.fetch,
-    ...(options.commandCodeBaseUrl === undefined
+    ...(modelsJson === undefined ? {} : { modelsJson }),
+    ...(options.httpObserver === undefined
       ? {}
-      : { baseUrl: options.commandCodeBaseUrl }),
+      : { httpObserver: options.httpObserver }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.projectSnapshot === undefined
       ? {}
@@ -117,15 +126,17 @@ export async function createConfiguredLuckyTokenComposition(
   );
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
+  const httpObserver = new HttpObserver(options.fetch);
   const { models } = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
+    ...(config.pi.modelsJson === undefined
+      ? {}
+      : { modelsJsonPath: config.pi.modelsJson }),
     ...(options.credentials === undefined
       ? {}
       : { credentials: options.credentials }),
     fetch: options.fetch,
-    ...(options.commandCodeBaseUrl === undefined
-      ? {}
-      : { commandCodeBaseUrl: options.commandCodeBaseUrl }),
+    httpObserver,
     ...(options.projectSnapshot === undefined
       ? {}
       : { projectSnapshot: options.projectSnapshot }),
@@ -143,9 +154,11 @@ export async function createConfiguredLuckyTokenComposition(
         `${providers.map((provider) => provider.id).join(", ") || "none"})`,
     );
   }
-  const certifiedModel = models
-    .getModels()
-    .find((entry) => entry.provider === certifiedProvider.id);
+  const certifiedModel = models.getModels().find(
+    (entry) =>
+      entry.provider === certifiedProvider.id &&
+      entry.id === commandCodePrivateDefaultModelId,
+  );
   if (certifiedModel === undefined) {
     throw new Error(
       `Registered Provider ${certifiedProvider.id} exposes no model`,
@@ -197,6 +210,7 @@ export async function createConfiguredLuckyTokenComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
+    httpObserver,
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),

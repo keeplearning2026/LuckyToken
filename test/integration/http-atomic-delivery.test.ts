@@ -185,8 +185,65 @@ describe("atomic HTTP failure delivery", () => {
     await expectError(missing, 404, "not_found_error");
   });
 
-  it("never converts Pi errors, Provider failures, or malformed execution to success", async () => {
-    const providerDiagnostic = "private provider diagnostic";
+  it("passes an observed upstream HTTP failure status to the Anthropic protocol", async () => {
+    // anthropic-messages models take the passthrough path; mock the upstream
+    // 429 and verify the status/body are forwarded to the Anthropic client.
+    const observableModel: Model<string> = { ...model, api: "anthropic-messages" };
+    const upstreamBody = JSON.stringify({
+      error: { message: "provider rate limited", type: "rate_limit" },
+    });
+    const globalFetch = globalThis.fetch;
+    (globalThis as { fetch: typeof fetch }).fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      if (String(input).includes("provider.test")) {
+        return new Response(upstreamBody, {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return globalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const auth: Auth = {
+        resolve: async () => ({ authorized: true, sessionId: "session" }),
+      };
+      const models = {
+        getModels: () => [observableModel],
+        getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
+      } as unknown as Models;
+      const anthropic = createAnthropicMessagesHandler({
+        models,
+        auth,
+        modelValidityPolicy: defaultAnthropicModelValidityPolicy,
+        createMessageId: () => "msg_client",
+        maxRequestBytes: 1_000_000,
+        routerDefaults: {},
+        now: () => 1,
+      });
+      const runtimeDeps: HttpBoundaryDependencies = {
+        clientProtocols: [anthropic],
+        requestTimeoutMs: undefined,
+        shutdownSignal: undefined,
+      };
+      const response = await handleHttpRequest(
+        runtimeDeps,
+        request(),
+      );
+      // Passthrough forwards the upstream error response verbatim.
+      expect(response.status).toBe(429);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      await expect(response.text()).resolves.toBe(upstreamBody);
+    } finally {
+      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
+    }
+  });
+
+  it("forwards Pi provider failures as upstream errors without faking success", async () => {
+    const providerDiagnostic = "provider rate limit exceeded";
     const failed = await handleHttpRequest(
       dependencies(() =>
         streamFrom([
@@ -202,8 +259,8 @@ describe("atomic HTTP failure delivery", () => {
       ),
       request(),
     );
-    const failedBody = await expectError(failed, 500, "api_error");
-    expect(JSON.stringify(failedBody)).not.toContain(providerDiagnostic);
+    const failedBody = await expectError(failed, 502, "api_error");
+    expect(JSON.stringify(failedBody)).toContain(providerDiagnostic);
 
     const malformed = await handleHttpRequest(
       dependencies(() => streamFrom([])),

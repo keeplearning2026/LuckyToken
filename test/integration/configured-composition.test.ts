@@ -94,6 +94,12 @@ describe("configured serving composition", () => {
   it("registers the built-in CommandCode Provider hidden behind one Client Protocol", async () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
+      if (String(input).includes("/provider/v1/models")) {
+        return new Response(
+          JSON.stringify({ object: "list", data: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
       upstreamRequests.push(new Request(input, init));
       return commandCodeText("configured through Pi");
     };
@@ -154,6 +160,47 @@ describe("configured serving composition", () => {
     );
     await expect(access(join(piDirectory, "auth.json"))).rejects.toMatchObject({
       code: "ENOENT",
+    });
+  });
+
+  it("serves every built-in CommandCode model through the route", async () => {
+    const fetch: FetchFunction = async () =>
+      commandCodeText("served through Pi");
+    const { configPath, clientToken } = await writeConfiguration();
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: "provider-secret",
+    }));
+    const composition = await createConfiguredLuckyTokenComposition({
+      config: await loadLuckyTokenCliConfig(configPath),
+      credentials,
+      fetch,
+      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      createMessageId: () => "msg_models",
+      createSessionId: () => "00000000-0000-4000-8000-000000000251",
+      now: () => 1_786_400_000_000,
+    });
+
+    const response = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${clientToken}`,
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/gpt-5.6-luna",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "served through Pi" }],
     });
   });
 

@@ -187,26 +187,28 @@ Before implementing model, provider, auth, credential, configuration, streaming,
 
 Reuse mature code when it reduces total complexity.
 
-### Keep the Pi AI package upstream-clean
+### The `pi-agent` tree is immutable
 
-`pi-agent/packages/ai` is a vendored upstream Pi AI module and must remain
-upstream-clean so that later Pi releases can be audited and synchronized
-without disentangling LuckyToken-specific patches.
+Everything under `pi-agent/` is vendored upstream material. It is a hard
+constraint that **nothing under `pi-agent/` may be modified in any way**: no
+source edits, no local patches, no generated-file edits, no config edits, no
+new files, no deletions, no formatting changes, no dependency changes.
 
-- Do not modify `pi-agent/packages/ai` to implement LuckyToken behavior.
-- Consume Pi AI through its public exported contracts, including `Models`,
-  `Provider`, `Provider.auth`, `CredentialStore`, and Pi message/event types.
+- Treat every `pi-agent/` path as read-only reference material.
+- Consume Pi AI only through its public exported contracts, including
+  `Models`, `Provider`, `Provider.auth`, `CredentialStore`, and Pi
+  message/event types.
 - Put LuckyToken-specific Client Protocol adapters, Provider adapters,
   credential persistence, CLI interaction, configuration, and composition in
   LuckyToken-owned modules outside the vendored package.
 - Do not copy Pi Coding Agent TUI, session, or command architecture merely to
   expose a Pi AI capability. Build the smallest LuckyToken-owned shell around
   the Pi AI public interface.
-- Update the vendored Pi AI module by replacing it with a reviewed upstream
-  revision, not by accumulating local feature patches.
-- If an upstream Pi AI defect makes a required invariant impossible, record
-  the exact contract gap and obtain an explicit architectural decision before
-  carrying any local patch. Never patch it silently.
+- Upstream updates arrive by replacing `pi-agent/` with a reviewed upstream
+  revision, never by accumulating local changes.
+- If an upstream defect makes a required invariant impossible, record the
+  exact contract gap and obtain an explicit architectural decision before
+  working around it from LuckyToken-owned code. Never patch `pi-agent/`.
 
 When extracting code:
 
@@ -355,7 +357,9 @@ Use existing repository test and validation commands rather than inventing repla
 
 Directories containing copied Pi / Pi Agent source are reference material unless LuckyToken explicitly depends on them.
 
-Do not modify reference-source code casually.
+The `pi-agent/` tree is immutable: nothing under it may be modified (see
+"The `pi-agent` tree is immutable" above). Other reference-source directories
+must not be modified casually either.
 
 Prefer implementing or extracting the required capability into LuckyToken-owned modules rather than gradually turning the reference tree into production code.
 

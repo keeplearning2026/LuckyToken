@@ -11,6 +11,7 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import { selectorTool } from "../../src/model-resolution.js";
 import { ONLINE_CONFORMANCE_CASES } from "./plan.js";
 
 const KNOWN_COMMANDCODE_EVENTS = new Set([
@@ -191,7 +192,7 @@ export function createCapturingCommandCodeFetch(
 
 function validateProviderEnvelope(
   exchange: CapturedCommandCodeExchange,
-  modelId: string,
+  selector: string,
 ): Record<string, unknown> {
   if (
     exchange.request.method !== "POST" ||
@@ -202,8 +203,12 @@ function validateProviderEnvelope(
   }
   const body = record(exchange.request.body, "upstream_body");
   const params = record(body.params, "upstream_params");
+  // The upstream request carries the model id (model.id), not the client
+  // selector. selectorTool is the single owner of the selector format, so
+  // the upstream expectation is derived through it rather than re-split here.
+  const expectedUpstreamModelId = selectorTool.parse(selector).modelId;
   if (
-    params.model !== modelId ||
+    params.model !== expectedUpstreamModelId ||
     params.stream !== true ||
     !Number.isSafeInteger(params.max_tokens) ||
     (params.max_tokens as number) <= 0 ||

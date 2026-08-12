@@ -1,6 +1,6 @@
-# LuckyToken Core Architecture Specification v5.6
+# LuckyToken Core Architecture Specification v5.7
 
-**Status:** FROZEN — Per-Client-Protocol Auth Isolation Added
+**Status:** FROZEN — Upstream HTTP Failure Preservation Added
 
 本文件描述 LuckyToken 的 Core Architecture。
 
@@ -3448,6 +3448,19 @@ Architecture invariant 是：
 
 当前不提前建立 error hierarchy。
 
+已实现的最小 preservation mechanism（Anthropic Client Protocol 需要上游 HTTP
+failure 的 status/body 原样透传）：
+
+- fetch-layer `HttpObserver`（per-invocation）在 HTTP fetch 边界观察 non-2xx
+  Response（status/headers/body）或 transport failure；
+- 不解析 `errorMessage` 字符串，不依赖 Pi error hierarchy；
+- 获取方式按 Pi `api` 选择（`fetch-observation` / `diagnostics` /
+  `error-message`），未知 api 不注入 observer；
+- 观察结果保留至 Client Protocol rendering，由 Client Protocol error
+  renderer 决定 protocol-visible 表达。
+
+该机制位于 Pi execution 之外，不修改 Pi public contract。
+
 ### Atomic Downstream Semantics
 
 Core v1 的 downstream semantic boundary 是 atomic。
@@ -6855,6 +6868,8 @@ Pi metadata no longer provides the required Provider-visible request carrier
 current Auth fixed output cannot express a demonstrated request-edge fact
 request cancellation cannot be made correct within current Execution boundary
 a new capability changes the atomic downstream commit model
+Pi public contract cannot preserve upstream HTTP failure classification
+  (demonstrated by Anthropic Client Protocol status/body passthrough)
 ```
 
 以下变化本身不重新打开 Architecture：
@@ -7479,3 +7494,46 @@ none for Pi or Providers.
 
 LuckyToken Core Architecture v5.6 冻结 per-handler Auth isolation，同时保留
 v5.5 已冻结的 Generic Core dependency semantics。
+
+### v5.7 Frozen Status
+
+```text
+LuckyToken Core Architecture v5.7
+        │
+        ├── v5.6 frozen surface                     preserved
+        │      ├── per-handler Auth isolation
+        │      ├── dependency semantics
+        │      └── data flow / cancellation / atomic commit
+        │
+        └── Upstream HTTP failure preservation now explicit
+               ├── fetch-layer observer at HTTP boundary (per-invocation)
+               ├── status/body/transport outcome retained until rendering
+               ├── no errorMessage string parsing
+               ├── no Pi error hierarchy dependency
+               ├── acquisition method selected by Pi api
+               └── unknown api never receives an injected observer
+```
+
+LuckyToken Core Architecture v5.7 冻结 Upstream HTTP Failure Preservation，同时
+保留 v5.6 已冻结的 per-handler Auth isolation 与 v5.5 已冻结的 Generic Core
+dependency semantics。
+
+v5.7 新增的 assumption correction：
+
+```text
+Previous:
+Pi execution 后只能看到 errorMessage 字符串，
+上游 HTTP status/body 在 Pi boundary 被压平丢失。
+
+Finding:
+Anthropic Client Protocol 需要上游 HTTP failure 的
+status/body 原样透传（demonstrated requirement）。
+
+Correction:
+在 HTTP fetch 边界增加 per-invocation observer，
+保留下游 error contract 所需分类直至 Client Protocol rendering；
+不解析 errorMessage，不修改 Pi public contract。
+
+Required cross-boundary behavior change:
+none for Pi or Providers.
+```

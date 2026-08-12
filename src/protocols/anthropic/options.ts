@@ -1,4 +1,7 @@
-import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type {
+  FetchFunction,
+  ModelsSimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 
 export class InvocationCompositionFailure extends Error {
   readonly kind = "InvocationCompositionFailure";
@@ -13,6 +16,14 @@ export interface InvocationInfrastructureFacts {
   sessionId: string;
   signal: AbortSignal;
   projectDir?: string;
+  /**
+   * Optional fetch for provider HTTP requests. The Pi adapter forwards this
+   * into the provider SDK / direct fetch call, so LuckyToken can observe the
+   * real HTTP Response before Pi flattens it into `errorMessage`. This is
+   * infrastructure, not protocol semantics: it never changes what the client
+   * protocol owns.
+   */
+  fetch?: FetchFunction;
 }
 
 export type RouterOptionDefaults = Readonly<Record<string, unknown>>;
@@ -118,6 +129,9 @@ export function composeOptions(
     sessionId: infrastructure.sessionId,
     signal: infrastructure.signal,
   };
+  if (infrastructure.fetch !== undefined) {
+    effective.fetch = infrastructure.fetch;
+  }
   if (protocolOptions.temperature !== undefined) {
     effective.temperature = protocolOptions.temperature;
   }
