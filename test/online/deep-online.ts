@@ -9,7 +9,7 @@ import { readFile } from "node:fs/promises";
  */
 
 const BASE_URL = "http://127.0.0.1:3000";
-const MODEL = "deepseek/deepseek-v4-flash";
+const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 
 interface CaseResult {
   readonly name: string;

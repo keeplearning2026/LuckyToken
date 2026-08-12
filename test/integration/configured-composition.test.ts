@@ -135,7 +135,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -145,7 +145,7 @@ describe("configured serving composition", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       id: "msg_configured",
-      model: "deepseek/deepseek-v4-flash",
+      model: "commandcode-private/deepseek/deepseek-v4-flash",
       content: [{ type: "text", text: "configured through Pi" }],
     });
     expect(upstreamRequests).toHaveLength(1);
@@ -193,7 +193,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),

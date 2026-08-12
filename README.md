@@ -80,7 +80,8 @@ npm start -- login commandcode-private --config .luckytoken/config.json
 ```
 
 The key is saved to `.luckytoken/pi/auth.json`. No model configuration is
-required — the built-in model is `deepseek/deepseek-v4-flash`.
+required — the built-in model is selected as
+`commandcode-private/deepseek/deepseek-v4-flash`.
 
 Start the local listener:
 
@@ -119,8 +120,8 @@ propagation.
 npm run test:online
 ```
 
-The default model is `deepseek/deepseek-v4-flash`. Override only the model id
-explicitly when needed:
+The default model is `commandcode-private/deepseek/deepseek-v4-flash`. Override
+only the model id explicitly when needed:
 
 ```powershell
 npm run test:online -- --model provider/model-id

@@ -374,7 +374,7 @@ describe("LuckyToken CLI", () => {
       timeout: 10_000,
     });
     const message = await client.messages.create({
-      model: "deepseek/deepseek-v4-flash",
+      model: "commandcode-private/deepseek/deepseek-v4-flash",
       max_tokens: 32,
       messages: [{ role: "user", content: "hello" }],
     });

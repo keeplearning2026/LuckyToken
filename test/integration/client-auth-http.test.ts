@@ -113,7 +113,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
       new Anthropic({ apiKey, baseURL: origin, maxRetries: 0, timeout: 10_000 });
     const complete = (sdk: Anthropic) =>
       sdk.messages.create({
-        model: "deepseek/deepseek-v4-flash",
+        model: "commandcode-private/deepseek/deepseek-v4-flash",
         max_tokens: 32,
         messages: [{ role: "user", content: "hello" }],
       });

@@ -1,4 +1,5 @@
 import type { FetchFunction, MutableModels } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { randomUUID } from "node:crypto";
 
 import { createCommandCodePrivateProvider } from "./commandcode-private/provider.js";
@@ -39,6 +40,13 @@ export function registerLuckyTokenProviders(
   models: MutableModels,
   dependencies: LuckyTokenProviderDependencies,
 ): void {
+  // Pi built-in providers are part of the LuckyToken provider collection:
+  // every Pi provider (openai, anthropic, deepseek, ...) is registered so it
+  // can be logged in and served through the same Anthropic endpoint.
+  for (const provider of builtinProviders()) {
+    models.setProvider(provider);
+  }
+
   const provider = createCommandCodePrivateProvider({
     fetch: dependencies.fetch,
     now: dependencies.now ?? Date.now,
