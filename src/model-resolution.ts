@@ -9,40 +9,61 @@ export class ModelResolutionFailure extends Error {
   }
 }
 
+/**
+ * The single owner of the selector string format.
+ *
+ * Every model selector follows the `provider/model_id` convention: the first
+ * slash splits the provider id from the model id, and everything after the
+ * first slash is the model id (which may itself contain slashes). If the
+ * selector format ever changes, this tool is the only place that needs to
+ * change: `parse` (split) and `format` (join) are the two directions of the
+ * same format knowledge; matching semantics stay in `resolveModel`.
+ */
+export interface ParsedModelSelector {
+  readonly provider: string | undefined;
+  readonly modelId: string;
+}
+
+export const selectorTool = {
+  /** Split a selector into provider and model id. */
+  parse(selector: string): ParsedModelSelector {
+    const slashIndex = selector.indexOf("/");
+    if (slashIndex === -1) {
+      return { provider: undefined, modelId: selector.trim() };
+    }
+    return {
+      provider: selector.substring(0, slashIndex).trim(),
+      modelId: selector.substring(slashIndex + 1).trim(),
+    };
+  },
+  /** Join a provider and a model id into a canonical selector string. */
+  format(provider: string, modelId: string): string {
+    return `${provider}/${modelId}`;
+  },
+};
+
 export function resolveModel(
   models: Pick<Models, "getModels">,
   selector: string,
 ): Model<string> {
   const catalog = models.getModels();
-  // Canonical "provider/id" full-string match (Pi model-resolver step 1).
-  const qualified = catalog.filter(
-    (model) => `${model.provider}/${model.id}` === selector,
-  );
-  if (qualified.length === 1) return qualified[0] as Model<string>;
-  if (qualified.length > 1) {
-    throw new ModelResolutionFailure(`Ambiguous qualified model selector: ${selector}`);
-  }
-
-  // "provider/model_id": only the first slash separates provider from model_id
-  // (Pi model-resolver step 2). The model_id is everything after the first
-  // slash and is matched against the full model.id.
-  const slashIndex = selector.indexOf("/");
-  if (slashIndex !== -1) {
-    const provider = selector.substring(0, slashIndex).trim();
-    const modelId = selector.substring(slashIndex + 1).trim();
-    if (provider.length > 0 && modelId.length > 0) {
-      const providerMatches = catalog.filter(
-        (model) =>
-          model.provider === provider && model.id === modelId,
+  const { provider, modelId } = selectorTool.parse(selector);
+  // "provider/model_id": the first slash separates provider from model_id,
+  // and the model_id (which may itself contain slashes) is matched against
+  // the full model.id. This also covers the canonical "provider/id"
+  // full-string form: splitting on the first slash yields exactly the same
+  // provider and model id, so no separate concatenation step is needed.
+  if (provider !== undefined && modelId.length > 0) {
+    const providerMatches = catalog.filter(
+      (model) => model.provider === provider && model.id === modelId,
+    );
+    if (providerMatches.length === 1) {
+      return providerMatches[0] as Model<string>;
+    }
+    if (providerMatches.length > 1) {
+      throw new ModelResolutionFailure(
+        `Ambiguous model selector: ${selector}`,
       );
-      if (providerMatches.length === 1) {
-        return providerMatches[0] as Model<string>;
-      }
-      if (providerMatches.length > 1) {
-        throw new ModelResolutionFailure(
-          `Ambiguous model selector: ${selector}`,
-        );
-      }
     }
   }
 

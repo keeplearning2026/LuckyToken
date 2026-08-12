@@ -112,6 +112,34 @@ Composition roots and conformance/certification code may see both sides only to
 construct, bind, and verify a concrete route. They must not perform conversion
 or let one side's terminology, state, or policy leak into the other side.
 
+### Model selector contract
+
+Model selectors follow the `provider/model_id` convention: the first slash
+splits the provider id from the model id, and everything after the first slash
+is the model id (which may itself contain slashes).
+
+- A selector is resolved against the full registered provider collection
+  (LuckyToken-owned providers plus Pi built-in providers), never against a
+  single provider.
+- Resolution is exact: first-slash split into `provider` + `model_id`
+  (which covers the canonical `provider/id` form, since the split yields the
+  same provider and full `model.id`), matched against the catalog, then bare
+  `model.id` fallback. Ambiguous or unknown selectors fail explicitly; there
+  is no fuzzy fallback.
+- A model id may contain slashes (for example the CommandCode built-in model id
+  is `deepseek/deepseek-v4-flash`), so the qualified selector
+  `commandcode-private/deepseek/deepseek-v4-flash` is distinct from the Pi
+  built-in deepseek selector `deepseek/deepseek-v4-flash`.
+- All providers in the collection are equally addressable through the
+  Anthropic endpoint by selector; no provider implementation is exposed to
+  callers beyond its provider id and model ids.
+- Only `selectorTool` knows the selector string format; `selectorTool.parse`
+  (split) and `selectorTool.format` (join) are the two directions of one
+  capability in `model-resolution.ts`. Everywhere else a selector is an
+  opaque string: it is passed through, matched as a whole, or echoed back —
+  never split, joined, trimmed, or pattern-matched. If the selector format
+  changes, only `selectorTool` (and its tests) need to change.
+
 ### Client Protocol Auth isolation
 
 Inbound client authorization is isolated per Client Protocol handler.
