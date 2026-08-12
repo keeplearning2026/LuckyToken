@@ -105,6 +105,48 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     });
   });
 
+  it("correlates outputs for multiple function_calls appended to one assistant turn", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "user", content: "use two tools" },
+          {
+            type: "function_call",
+            call_id: "call_1",
+            name: "lookup",
+            arguments: "{}",
+          },
+          {
+            type: "function_call",
+            call_id: "call_2",
+            name: "search",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: "first result",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_2",
+            output: "second result",
+          },
+        ],
+      },
+      1,
+    );
+
+    const roles = invocation.context.messages.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant", "toolResult", "toolResult"]);
+    const results = invocation.context.messages.filter(
+      (m) => m.role === "toolResult",
+    );
+    expect(results.map((m) => m.toolCallId)).toEqual(["call_1", "call_2"]);
+    expect(results.map((m) => m.toolName)).toEqual(["lookup", "search"]);
+  });
+
   it("tolerates non-JSON tool arguments as empty objects", () => {
     const invocation = convertResponsesRequest(
       {

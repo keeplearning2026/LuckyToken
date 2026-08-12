@@ -423,6 +423,7 @@ function convertMessages(
         const last = messages.at(-1);
         if (last?.role === "assistant") {
           (last.content as Array<TextContent | ThinkingContent | ToolCall>).push(toolCall);
+          assistantIndex.set(toolCall.id, toolCall.name);
         } else {
           flushAssistant([...pendingReasoning, toolCall]);
         }
