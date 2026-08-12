@@ -591,6 +591,30 @@ export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
       port: config.server.port,
     });
     const origin = server.origin;
+
+    // Model discovery: GET /v1/models exposes the resolved model selector.
+    const modelsResponse = await fetch(`${origin}/v1/models`, {
+      headers: { authorization: `Bearer ${responsesToken}` },
+      signal: requestSignal(totalSignal),
+    });
+    if (modelsResponse.status !== 200) {
+      throw new Error(`online_models_status_${modelsResponse.status}`);
+    }
+    const modelsList = (await modelsResponse.json()) as {
+      object?: string;
+      data?: Array<{ id?: string; object?: string; owned_by?: string }>;
+    };
+    if (
+      modelsList.object !== "list" ||
+      !modelsList.data?.some(
+        (entry) =>
+          entry.id === DEFAULT_MODEL &&
+          entry.object === "model" &&
+          entry.owned_by === "commandcode-private",
+      )
+    ) {
+      throw new Error("online_models_discovery_missing");
+    }
     const summary: OnlineSummary = {
       attemptedRequests: 0,
       successfulJson: 0,

@@ -17,6 +17,7 @@ import {
 } from "./commandcode-serving-certification.js";
 import { HttpObserver } from "./http-observer.js";
 import type { ClientProtocolHandler } from "./http.js";
+import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import { loadModelsJson } from "./providers/models-json.js";
 import {
@@ -231,6 +232,14 @@ export async function createConfiguredLuckyTokenComposition(
     ? config.clientProtocols[openaiResponsesProtocolId]
     : undefined;
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
+  // Shared, unauthenticated model discovery: any client may learn the
+  // selectors this endpoint serves, independent of Client Protocol Auth.
+  clientProtocols.push(
+    createModelsDiscoveryHandler({
+      models,
+      ...(options.now === undefined ? {} : { now: options.now }),
+    }),
+  );
   if (openaiResponsesConfig !== undefined) {
     const responsesAuthority = await loadFileClientTokenAuthority(
       openaiResponsesConfig.authFile,

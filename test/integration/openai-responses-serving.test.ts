@@ -256,4 +256,26 @@ describe("OpenAI Responses serving", () => {
     expect(body.error.type).toBe("rate_limit_exceeded");
     expect(body.error.message).toContain("slow down");
   });
+
+  it("exposes the resolved model through GET /v1/models without auth", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("unused"),
+    });
+    const response = await runtime.handle(
+      new Request("http://luckytoken.test/v1/models", {
+        method: "GET",
+      }),
+    );
+    expect(response.status).toBe(200);
+    const list = await response.json();
+    expect(list.object).toBe("list");
+    expect(list.data).toEqual([
+      {
+        id: "commandcode-private/deepseek/deepseek-v4-flash",
+        object: "model",
+        created: expect.any(Number),
+        owned_by: "commandcode-private",
+      },
+    ]);
+  });
 });

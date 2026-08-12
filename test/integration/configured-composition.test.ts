@@ -402,6 +402,18 @@ describe("configured serving composition", () => {
       }),
     );
     expect(forbiddenAnthropic.status).toBe(401);
+    // Model discovery is unauthenticated and cross-protocol.
+    const modelsResponse = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/models", {
+        method: "GET",
+      }),
+    );
+    expect(modelsResponse.status).toBe(200);
+    const modelsJson = await modelsResponse.json();
+    expect(modelsJson.object).toBe("list");
+    expect(modelsJson.data.map((entry: { id: string }) => entry.id)).toContain(
+      "commandcode-private/deepseek/deepseek-v4-flash",
+    );
   });
 
 });

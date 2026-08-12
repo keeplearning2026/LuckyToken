@@ -20,3 +20,7 @@ export {
   type ResponsesResponseObject,
 } from "./response.js";
 export { renderResponsesSse } from "./sse.js";
+export {
+  renderResponsesModelsList,
+  type ResponsesModelsList,
+} from "./models.js";

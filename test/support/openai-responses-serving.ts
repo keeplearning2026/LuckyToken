@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { createAuth } from "../../src/auth.js";
 import { HttpObserver } from "../../src/http-observer.js";
+import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import {
   commandCodePrivateApiId,
@@ -108,8 +109,12 @@ export async function createOpenAIResponsesServingTestComposition(
       ? {}
       : { maxRequestBytes: options.maxRequestBytes }),
   });
+  const modelsHandler = createModelsDiscoveryHandler({
+    models,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
   const runtime = createLuckyTokenRuntime({
-    clientProtocols: [handler],
+    clientProtocols: [handler, modelsHandler],
   });
   return Object.freeze({
     runtime,
