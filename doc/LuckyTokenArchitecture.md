@@ -2124,7 +2124,7 @@ flowchart TB
 | Online | 真实 listener + 官方 Anthropic SDK + Pi + 真实 CommandCode | `test/online/*` | 是，显式 `npm run test:online` |
 
 普通 `npm test` 不读取真实 key、不自动产生费用。Online runner 独立读取被忽略的
-`CommandcodeAPIKey.txt`，默认模型是 `deepseek/deepseek-v4-flash`，保存脱敏的完整
+`CommandcodeAPIKey.txt`，默认模型是 `commandcode-private/deepseek/deepseek-v4-flash`，保存脱敏的完整
 wire evidence。
 
 ## 10.2 Semantic coverage ownership

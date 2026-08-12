@@ -1066,7 +1066,7 @@ CLI 源码（`prepareForSend` / `cleanContent` / `isEmptyText`）会在发送前
 ```json
 {
   "params": {
-    "model": "deepseek/deepseek-v4-flash",
+    "model": "commandcode-private/deepseek/deepseek-v4-flash",
     "messages": [
       {
         "role": "user",
