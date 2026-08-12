@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
 
 function minimalBody(overrides?: Record<string, unknown>): Record<string, unknown> {
@@ -70,13 +69,12 @@ describe("Anthropic request output_config.effort conversion (doc §6.3)", () => 
     expect(withConfig.options.reasoning).toBeUndefined();
   });
 
-  it("does not invent a reasoning level for an unknown effort", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        minimalBody({ output_config: { effort: "super" } }),
-        1,
-      ),
-    ).toThrow(UnsupportedFeature);
+  it("falls back to Pi reasoning default for an unknown effort", () => {
+    const invocation = parseAnthropicTextInvocation(
+      minimalBody({ output_config: { effort: "super" } }),
+      1,
+    );
+    expect(invocation.options.reasoning).toBeUndefined();
   });
 });
 

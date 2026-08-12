@@ -68,18 +68,23 @@ describe("Anthropic closed-world body acceptance", () => {
     ).toThrow(InvalidRequest);
   });
 
-  it("rejects unknown body semantics as unsupported", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(minimalBody({ future_control: true }), 1),
-    ).toThrow(UnsupportedFeature);
-    expect(() =>
-      parseAnthropicTextInvocation(
-        minimalBody({
-          messages: [{ role: "user", content: "hello", future_field: true }],
-        }),
-        1,
-      ),
-    ).toThrow(UnsupportedFeature);
+  it("ignores unknown body and message fields per doc §7", () => {
+    const invocation = parseAnthropicTextInvocation(
+      minimalBody({
+        future_control: true,
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            future_field: true,
+          },
+        ],
+      }),
+      1,
+    );
+    expect(invocation.context.messages[0]?.content).toEqual([
+      { type: "text", text: "hello" },
+    ]);
   });
 
   it("finishes known field-shape validity before feature rejection", () => {
@@ -95,12 +100,14 @@ describe("Anthropic closed-world body acceptance", () => {
   });
 
   it("preserves the frozen explicit-empty-array grammar boundaries", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        minimalBody({ messages: [{ role: "user", content: [] }] }),
-        1,
-      ),
-    ).toThrow(UnsupportedFeature);
+    const emptyUser = parseAnthropicTextInvocation(
+      minimalBody({ messages: [{ role: "user", content: [] }] }),
+      1,
+    );
+    expect(emptyUser.context.messages[0]).toMatchObject({
+      role: "user",
+      content: [],
+    });
 
     const invocation = parseAnthropicTextInvocation(
       minimalBody({

@@ -21,7 +21,6 @@ import {
 } from "./conformance.js";
 import { createOnlineTestPlan, type OnlineTestJob } from "./plan.js";
 
-const COMMANDCODE_BASE_URL = "https://api.commandcode.ai";
 const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
 const DEFAULT_CONCURRENCY = 5;
 const SUCCESS_MAX_TOKENS = 512;
@@ -412,30 +411,6 @@ export async function runCommandCodeOnlineSuite(
     await writeFile(
       join(projectDirectory, "online-auth-scope.txt"),
       "controlled online project scope\n",
-      "utf8",
-    );
-    await writeFile(
-      join(piDirectory, "models.json"),
-      JSON.stringify({
-        providers: {
-          "commandcode-private": {
-            baseUrl: COMMANDCODE_BASE_URL,
-            api: "commandcode-private",
-            models: [
-              {
-                id: modelId,
-                name: modelId,
-                api: "commandcode-private",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 64_000,
-              },
-            ],
-          },
-        },
-      }),
       "utf8",
     );
     const localGlobalClientKey = randomUUID();

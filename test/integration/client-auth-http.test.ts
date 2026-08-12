@@ -58,30 +58,6 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
     );
     await mkdir(piDirectory, { recursive: true });
     await mkdir(projectDir);
-    await writeFile(
-      join(piDirectory, "models.json"),
-      JSON.stringify({
-        providers: {
-          "commandcode-private": {
-            baseUrl: "https://commandcode.fixture.test",
-            api: "commandcode-private",
-            models: [
-              {
-                id: "configured-model",
-                name: "configured-model",
-                api: "commandcode-private",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 64_000,
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
@@ -137,7 +113,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
       new Anthropic({ apiKey, baseURL: origin, maxRetries: 0, timeout: 10_000 });
     const complete = (sdk: Anthropic) =>
       sdk.messages.create({
-        model: "configured-model",
+        model: "deepseek/deepseek-v4-flash",
         max_tokens: 32,
         messages: [{ role: "user", content: "hello" }],
       });

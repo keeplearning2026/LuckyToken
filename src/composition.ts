@@ -2,7 +2,6 @@ import {
   createModels,
   type CredentialStore,
   type FetchFunction,
-  type Model,
   type Models,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
@@ -18,19 +17,9 @@ import {
 } from "./commandcode-serving-certification.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import {
-  loadPiModelsConfig,
-  type PiModelDefinition,
-  type PiProviderConfig,
-} from "./pi/model-config.js";
-import {
-  commandCodePrivateApiId,
-  commandCodePrivateProviderId,
-  createCommandCodePrivateProvider,
-} from "./providers/commandcode-private/provider.js";
-import {
-  createNodeProjectSnapshot,
+  registerLuckyTokenProviders,
   type ProjectSnapshot,
-} from "./providers/commandcode-private/project.js";
+} from "./providers/catalog.js";
 import {
   anthropicMessagesProtocolId,
   createAnthropicMessagesHandler,
@@ -45,43 +34,23 @@ import {
   type LuckyTokenRuntime,
 } from "./runtime.js";
 
-const COMMANDCODE_PROVIDER_FIELDS = new Set([
-  "name",
-  "baseUrl",
-  "api",
-  "models",
-]);
-const COMMANDCODE_MODEL_FIELDS = new Set([
-  "id",
-  "name",
-  "api",
-  "baseUrl",
-  "reasoning",
-  "input",
-  "cost",
-  "contextWindow",
-  "maxTokens",
-]);
-const COST_FIELDS = new Set(["input", "output", "cacheRead", "cacheWrite"]);
-
 export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
+  /** Test-only override for the built-in provider upstream endpoint. */
+  readonly commandCodeBaseUrl?: string;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
-}
-
-export interface ConfiguredPiModels {
-  readonly models: Models;
-  readonly model: Model<typeof commandCodePrivateApiId>;
 }
 
 export interface ConfiguredLuckyTokenCompositionOptions {
   readonly config: LuckyTokenCliConfig;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
+  /** Test-only override for the built-in provider upstream endpoint. */
+  readonly commandCodeBaseUrl?: string;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
@@ -94,114 +63,29 @@ export interface ConfiguredLuckyTokenComposition {
   readonly certification: ServingCertificationManifest;
 }
 
-function assertOnlyFields(
-  value: Readonly<Record<string, unknown>>,
-  fields: ReadonlySet<string>,
-  description: string,
-): void {
-  for (const field of Object.keys(value)) {
-    if (!fields.has(field)) {
-      throw new Error(`${description} has unsupported field: ${field}`);
-    }
-  }
-}
-
-function commandCodeCost(
-  definition: PiModelDefinition,
-): Model<typeof commandCodePrivateApiId>["cost"] {
-  if (definition.cost === undefined) {
-    return Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  }
-  assertOnlyFields(definition.cost, COST_FIELDS, `model ${definition.id}.cost`);
-  const cost: Record<string, number> = {};
-  for (const field of COST_FIELDS) {
-    const value = definition.cost[field];
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-      throw new Error(`model ${definition.id}.cost.${field} must be non-negative`);
-    }
-    cost[field] = value;
-  }
-  return Object.freeze({
-    input: cost.input as number,
-    output: cost.output as number,
-    cacheRead: cost.cacheRead as number,
-    cacheWrite: cost.cacheWrite as number,
-  });
-}
-
-function commandCodeModel(
-  provider: PiProviderConfig,
-): Model<typeof commandCodePrivateApiId> {
-  if (provider.api !== undefined && provider.api !== commandCodePrivateApiId) {
-    throw new Error(
-      `models.json commandcode-private API must be ${commandCodePrivateApiId}`,
-    );
-  }
-  assertOnlyFields(
-    provider,
-    COMMANDCODE_PROVIDER_FIELDS,
-    "models.json commandcode-private provider",
-  );
-  if (provider.models?.length !== 1) {
-    throw new Error(
-      "models.json commandcode-private provider requires exactly one certified model",
-    );
-  }
-  const definition = provider.models[0] as PiModelDefinition;
-  assertOnlyFields(
-    definition,
-    COMMANDCODE_MODEL_FIELDS,
-    `models.json model ${definition.id}`,
-  );
-  if (definition.api !== undefined && definition.api !== commandCodePrivateApiId) {
-    throw new Error(`model ${definition.id} API must be ${commandCodePrivateApiId}`);
-  }
-  const baseUrl = definition.baseUrl ?? provider.baseUrl ?? "https://api.commandcode.ai";
-  const input: Array<"text" | "image"> = [...(definition.input ?? ["text"])];
-  Object.freeze(input);
-  return Object.freeze({
-    id: definition.id,
-    name: definition.name ?? definition.id,
-    api: commandCodePrivateApiId,
-    provider: commandCodePrivateProviderId,
-    baseUrl,
-    reasoning: definition.reasoning ?? false,
-    input,
-    cost: commandCodeCost(definition),
-    contextWindow: definition.contextWindow ?? 200_000,
-    maxTokens: definition.maxTokens ?? 64_000,
-  });
-}
-
 export async function createConfiguredPiModels(
   options: ConfiguredPiModelsOptions,
-): Promise<ConfiguredPiModels> {
-  const config = await loadPiModelsConfig(join(options.piDirectory, "models.json"));
-  const providerConfig = config.getProvider(commandCodePrivateProviderId);
-  if (providerConfig === undefined) {
-    throw new Error(
-      `models.json must configure provider ${commandCodePrivateProviderId}`,
-    );
-  }
-  const model = commandCodeModel(providerConfig);
-  const now = options.now ?? Date.now;
-  const createSessionId = options.createSessionId ?? randomUUID;
+): Promise<{ models: Models }> {
   const mutableModels = createModels({
     credentials:
       options.credentials ??
       createFileCredentialStore(join(options.piDirectory, "auth.json")),
   });
-  mutableModels.setProvider(
-    createCommandCodePrivateProvider({
-      fetch: options.fetch,
-      model,
-      now,
-      projectSnapshot: options.projectSnapshot ?? createNodeProjectSnapshot(),
-      createSessionId,
-    }),
-  );
+  registerLuckyTokenProviders(mutableModels, {
+    fetch: options.fetch,
+    ...(options.commandCodeBaseUrl === undefined
+      ? {}
+      : { baseUrl: options.commandCodeBaseUrl }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.projectSnapshot === undefined
+      ? {}
+      : { projectSnapshot: options.projectSnapshot }),
+    ...(options.createSessionId === undefined
+      ? {}
+      : { createSessionId: options.createSessionId }),
+  });
   const models: Models = mutableModels;
-  return Object.freeze({ models, model });
+  return Object.freeze({ models });
 }
 
 export async function createConfiguredLuckyTokenComposition(
@@ -232,21 +116,37 @@ export async function createConfiguredLuckyTokenComposition(
   );
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const { models, model } = await createConfiguredPiModels({
+  const { models } = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
     ...(options.credentials === undefined
       ? {}
       : { credentials: options.credentials }),
     fetch: options.fetch,
+    ...(options.commandCodeBaseUrl === undefined
+      ? {}
+      : { commandCodeBaseUrl: options.commandCodeBaseUrl }),
     ...(options.projectSnapshot === undefined
       ? {}
       : { projectSnapshot: options.projectSnapshot }),
     createSessionId,
     now,
   });
-  const providerAuth = await models.checkAuth(commandCodePrivateProviderId);
+  const providers = models.getProviders();
+  const certifiedProvider = providers[0];
+  if (certifiedProvider === undefined) {
+    throw new Error("No LuckyToken built-in Provider is registered");
+  }
+  const certifiedModel = models
+    .getModels()
+    .find((entry) => entry.provider === certifiedProvider.id);
+  if (certifiedModel === undefined) {
+    throw new Error(
+      `Registered Provider ${certifiedProvider.id} exposes no model`,
+    );
+  }
+  const providerAuth = await models.checkAuth(certifiedProvider.id);
   const certification = certifyServingComposition({
-    model,
+    model: certifiedModel,
     modelValidityPolicyRevision: defaultAnthropicModelValidityPolicy.revision,
     compatibility: {},
     fetchBound: true,
@@ -260,7 +160,7 @@ export async function createConfiguredLuckyTokenComposition(
     clientAuthConfigured: true,
     providerApiKeyConfigured: providerAuth !== undefined,
     providerAuthPolicy: "pi-models-credential-store-v1",
-    providerRegistrationPolicy: "pi-models-json-startup-registration-v1",
+    providerRegistrationPolicy: "startup-only-mutable-models-v1",
     maxRequestBytes: config.limits.maxRequestBytes,
     requestTimeoutMs: config.limits.requestTimeoutMs,
     shutdownSignalBound: options.shutdownSignal !== undefined,

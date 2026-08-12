@@ -287,6 +287,11 @@ async function runServe(
   const composition = await createConfiguredLuckyTokenComposition({
     config,
     fetch: globalThis.fetch,
+    ...(process.env.LUCKYTOKEN_COMMANDCODE_BASE_URL === undefined
+      ? {}
+      : {
+          commandCodeBaseUrl: process.env.LUCKYTOKEN_COMMANDCODE_BASE_URL,
+        }),
     shutdownSignal: shutdownController.signal,
   });
   const server = await startLuckyTokenHttpServer({

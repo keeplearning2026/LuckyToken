@@ -145,9 +145,14 @@ WHATWG Response → Node ServerResponse → Agent
   `Options.metadata.projectDir`；
 - 通过 Pi `Provider.auth` 接口执行 Provider login/logout，并把 credential 保存到
   Pi-owned `auth.json`；
-- 从 `models.json` 加载 Pi Provider/model 静态资料；
+- CommandCode Private Provider 作为 Pi 内置 Provider 注册（模型与上游地址内置，
+  用户零配置）；
 - 支持 Anthropic text、history、thinking replay、tool call/tool result、JSON 与
   Atomic SSE；
+- 支持 `output_config.effort` → Pi reasoning 映射、`metadata.user_id` 透传、
+  `max_tokens=0` 保留；未知 effort 降级为 Pi reasoning default；
+- 支持 Claude Code 等真实 Anthropic Agent 接入（其发送的 `context_management`、
+  `thinking`、`tool_choice`、`top_p` 等标准扩展字段按"只读所需"原则忽略）；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
 - 用 serving certification 和真实在线 conformance 固定当前可服务组合。
 
@@ -255,7 +260,6 @@ flowchart LR
 
     TokenFile["Anthropic token file"] --> Authority["immutable token authority"]
     Authority --> Auth
-    ModelsFile["models.json"] --> CLI
     PiAuth["Pi auth.json"] --> Models
 ```
 
@@ -283,9 +287,8 @@ CLI serve 路径只在启动期读取完整配置：
 createConfiguredLuckyTokenComposition(config)
   ├── load selected protocol token file once
   │    └── immutable ClientTokenAuthority
-  ├── load pi/models.json
   ├── construct Pi Models with CredentialStore(pi/auth.json)
-  ├── construct/register CommandCode Provider
+  ├── register built-in CommandCode Provider via catalog (no models.json)
   ├── verify Provider credential availability
   ├── certify the complete serving composition
   ├── construct generic Auth
@@ -369,6 +372,9 @@ flowchart LR
 | Pi `Context` / `Options` | Anthropic adapter/options composer | Pi Models/Provider | Pi invocation terminal 后 |
 | CommandCode request JSON | CommandCode Provider | upstream transport | transport 不再需要 body 后 |
 | partial JSONL/tool state | CommandCode assembler | Provider stream | content completion、terminal、abort 或 error 后 |
+| Anthropic 未转换字段（`top_p`、`thinking`、`context_management` 等） | Anthropic handler | 读取所需字段时 | 不进入任何 Pi 状态；在 validation 读取阶段即死亡 |
+| CommandCode no-op 事件（`start`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | assembler 接受但忽略 | 不进入 committed content/finish state |
+| CommandCode `providerExecuted`/`dynamic` 元数据 | CommandCode assembler | event 校验阶段 | committed response 建立前；不保留 |
 
 这张表是判断“信息是否到处飞”的主要依据：一个模块可以透明传递 Pi contract
 中的窄字段，但不应同时保留其旧 wire representation、文件 schema 或来源分类。
@@ -859,8 +865,31 @@ interface AnthropicInvocation {
 
 当前 accepted deterministic surface 包括 text、system prompt、历史 ordinary thinking、
 base64 image shape、client tool definition、tool use/result、temperature、
-`metadata.user_id` 和 stream flag；但 image 还必须通过 model-aware fidelity policy，
-production 默认 policy 当前不认证 image path，因此不会仅凭 JSON shape 放行。
+`output_config.effort`、`metadata.user_id` 和 stream flag；但 image 还必须通过
+model-aware fidelity policy，production 默认 policy 当前不认证 image path，因此
+不会仅凭 JSON shape 放行。
+
+**只转换指定字段，其他一律忽略。** 这是本模块的第一原则：conversion 只读取
+Part II 1-7 章定义的字段（`model`、`system`、`messages`、`tools`、`max_tokens`、
+`temperature`、`output_config.effort`、`metadata.user_id`、`stream`），其他任何
+字段（`top_p`、`top_k`、`thinking`、`tool_choice`、`stop_sequences`、
+`cache_control`、`context_management` 以及未来未知字段）直接忽略，不报错、不进入
+Pi 状态。转换器不维护"已知 vs 未知"字段清单——它只关心自己需要的字段，读不到/
+读坏了才报错。同理，message 的额外字段、content block 的额外字段（如
+`cache_control`、`citations`、`caller`）、tool definition 的额外控制字段
+（`type`、`allowed_callers`、`defer_loading` 等）都忽略。
+
+**只有真正转换不了才报错。** 错误分类只有两类：
+
+- `InvalidRequest`：转换需要的字段 malformed（如 `messages` 不是数组、
+  `output_config.effort` 不是 string、`tool_use.input` 不是对象）；
+- `UnsupportedFeature`：源语义有效但 Pi 无 faithful 表示且丢弃会改变请求意义
+  （如 URL image source、未知 content block type、不在支持集合的 image
+  media type）。
+
+`output_config.effort` 的五个已知值（`low/medium/high/xhigh/max`）映射到 Pi
+`ThinkingLevel`；**未知 effort 值降级为不设置 `reasoning`**（使用 Pi reasoning
+default behavior），绝不让 request 因 effort 失败，也不强转为已知 level。
 
 重要 conversation 规则：
 
@@ -868,23 +897,27 @@ production 默认 policy 当前不认证 image path，因此不会仅凭 JSON sh
 - historical assistant message 变成 Pi `AssistantMessage`，使用保留的 synthetic
   provider/api identity，不冒充真实 Provider output；
 - `thinking + signature` 变成 Pi `ThinkingContent + thinkingSignature`；
+- `redacted_thinking + data` 变成 Pi `ThinkingContent { thinking: "", redacted: true }`，
+  signature 携带 opaque data；
 - assistant `tool_use` 变成 Pi `ToolCall`，ID/name/arguments 精确保留；
 - immediately following user `tool_result` 变成 Pi `ToolResultMessage`，通过
   `tool_use_id` 查回 tool name；
 - tool results 必须领先该 user turn 的 ordinary content，不能 orphan、duplicate 或
   延迟到后续 turn；
+- 空 content 数组（`content: []`）是合法输入，构造 Pi `UserMessage { content: [] }`；
+- `max_tokens=0` 原样保留为 `maxTokens=0`，不 clamp 不拒绝；
 - source-invalid lifecycle 直接失败，converter 不猜测或修复；
 - `renderState.clientModel` 保留客户端请求中的 model identity，response 时使用，但
   不进入 Pi model-visible context。
 
-## 5.4 Client tools/schema subset — `tools.ts`
+## 5.4 Client tools conversion — `tools.ts`
 
 > **小白理解：** Agent 不只会聊天，也可能递交一张“可使用工具说明书”。这里检查
 > 工具名称、参数表和约束，再把说明书原样含义地交给 Pi。它不会把结构化说明书压成
 > 一段随意文字，因此工具名称、参数和严格约束不会在途中丢失。
 
 ```ts
-validateAnthropicTools(value, unsupported)
+validateAnthropicTools(value)
   → ValidatedAnthropicTool[] | undefined
 
 convertAnthropicTools(validated)
@@ -893,7 +926,7 @@ convertAnthropicTools(validated)
 
 | 项目 | 内容 |
 | --- | --- |
-| 功能 | 验证 client tool identity、strict flag 和冻结的 JSON Schema subset；转换为 Pi `Tool` |
+| 功能 | 验证 client tool identity、strict flag 和 strict 计数；转换为 Pi `Tool` |
 | 输入 | Anthropic `tools[]` unknown JSON |
 | 输出 | name/description/inputSchema/strict validated state，再到 Pi tool definitions |
 | 持有状态 | 仅一次 validation traversal 的 cycle set 与 strict request-wide counters |
@@ -901,9 +934,20 @@ convertAnthropicTools(validated)
 | 它使用谁 | Pi `Tool` type；Anthropic `InvalidRequest` |
 
 它保留 tool name 和 schema，不把 schema stringify 成 prompt。`strict:true` 转成 Pi
-`constrainedSampling = { type: "json_schema", strict: "require" }`。当前确定性限制
-包括最多 20 个 strict tools、24 个 optional parameters、16 个 union parameters；
-未知/未认证 schema keyword 被分为 malformed 或 unsupported，而不是静默丢弃。
+`constrainedSampling = { type: "json_schema", strict: "require" }`。
+
+**`input_schema` 直接传递，不做 JSON Schema keyword 校验。** conversion 不 rewrite、
+normalize、reconstruct schema，也不重新实现 JSON Schema keyword validation
+（转换文档 §5）。`$schema`、`anyOf`、`oneOf`、`format`、type array、未知 keyword
+等全部原样传给 Pi `Tool.parameters`。工具定义中未转换的额外控制字段（`type`、
+`cache_control`、`allowed_callers`、`defer_loading`、`eager_input_streaming`、
+`input_examples`）按"只读所需"原则忽略，不报错。
+
+唯一保留的 schema 解析是**协议层 strict 源有效性计数**（协议文档 §5.2.3）：
+最多 20 个 strict tools、24 个 optional parameters、16 个 union parameters，
+request-wide 累计。这个计数需要解析 `properties`/`required`/`type`，但只计数、
+不拒绝未知 keyword。malformed 结构（如 `properties` 不是对象、`required` 不是
+string 数组）仍是 `InvalidRequest`。
 
 ## 5.5 Model-aware representability — `representability.ts`
 
@@ -949,7 +993,7 @@ composeOptions(
 
 | Fact owner | 输入字段 | Pi carrier |
 | --- | --- | --- |
-| Anthropic protocol | `maxTokens`, `temperature?`, `metadata.user_id?` | 对应 Pi option |
+| Anthropic protocol | `maxTokens`, `temperature?`, `reasoning?`, `metadata.user_id?` | 对应 Pi option |
 | Auth | `sessionId`, `projectDir?` | `sessionId`, `metadata.projectDir?` |
 | HTTP lifecycle | `AbortSignal` | `signal` |
 | Router | 当前必须为空的 classified defaults | 当前不产生 option |
@@ -957,6 +1001,11 @@ composeOptions(
 它使用 closed-world allowlist 防止某一 owner 覆盖另一 owner 的字段。特别是 Anthropic
 request 不能制造 `projectDir`，Router defaults 不能覆盖 `user_id/projectDir`。输出
 建立后，各输入来源分类结束，只剩 Pi options fields。
+
+Anthropic protocol 现在拥有的 Pi option keys 为：`maxTokens`、`temperature`、
+`reasoning`、`metadata`（其下仅 `user_id`）。`reasoning` 来自
+`output_config.effort` 的映射；Router defaults 不能注入 `reasoning`（它不属于
+Router 的已分类 v1 policy）。
 
 ## 5.7 Model resolution — `src/model-resolution.ts`
 
@@ -1121,7 +1170,6 @@ Client Protocol，右边也可能增加更多 Provider。Pi 就像中间统一�
 flowchart LR
     CP["Client Protocol\n把客户请求变成 Pi 格式"] --> PI["Pi 统一接口\nModels / Model / Context / Events"]
     PI --> PR["Provider\n把 Pi 格式变成供应商请求"]
-    MC["models.json\n模型目录"] --> CO["Composition\n启动时装配"]
     AC["auth.json\nProvider 凭证"] --> PI
     CO --> PI
     CO --> CP
@@ -1187,37 +1235,16 @@ Output
 
 Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contracts。
 
-## 6.2 Pi static model config — `src/pi/model-config.ts`
+## 6.2 Provider model data — 内置，无配置文件
 
-> **小白理解：** `models.json` 是“供应商与商品目录”：写明 Provider 地址、模型名称、
-> 能力和容量，但不存任何密钥。程序启动时把目录读成一份不可修改的快照，此后处理
-> 请求时不再反复翻文件。
+> **小白理解：** 供应商的商品目录（模型 id、能力、容量）直接写在 LuckyToken 的
+> Provider 模块里，用户不需要任何 `models.json`。这就像 Pi 内置的 deepseek/anthropic
+> provider 一样——`login` 填 API key 就能用。
 
-```ts
-loadPiModelsConfig(path): Promise<PiModelsConfig>
-
-interface PiModelsConfig {
-  path: string;
-  getProvider(providerId): PiProviderConfig | undefined;
-  getProviderIds(): readonly string[];
-}
-```
-
-| 项目 | 内容 |
-| --- | --- |
-| 功能 | 读取 Pi-style `models.json`，验证静态 Provider/model facts，建立 deep-frozen snapshot |
-| 输入 | 显式 models file path |
-| 输出 | path + provider lookup/read-only IDs |
-| 配套文件 | `.luckytoken/pi/models.json`；committed placeholder 是根目录 `models.example.json` |
-| 谁使用它 | `createConfiguredPiModels()` |
-| 它使用谁 | Node file API；不使用 CredentialStore、Auth、Client Protocol |
-
-它是从 Pi Coding Agent 的 models JSON grammar 中提取的最小 coherent subset，支持
-JSON comments/trailing commas，但排除了 credential template、command execution、
-Agent/TUI/session state。文件中只允许静态字段：provider name/baseUrl/api/models 和
-model id/name/api/baseUrl/reasoning/input/cost/contextWindow/maxTokens。
-
-`models.json` 不保存 CommandCode API key，也不决定本地 Client token。
+CommandCode Private Provider 的模型数据（默认 `deepseek/deepseek-v4-flash`：
+reasoning/input/cost/contextWindow/maxTokens）和固定上游地址都封装在
+`providers/commandcode-private/model.ts`，由 Provider 工厂直接使用。没有
+`models.json` 配置文件，也没有对应的 loader 模块。
 
 ## 6.3 Pi credential persistence — `src/pi/file-credential-store.ts`
 
@@ -1321,20 +1348,25 @@ createConfiguredLuckyTokenComposition(options)
 ### `createConfiguredPiModels()`
 
 > **小白理解：** 这一层只组装 Pi 的“模型侧”：读取模型目录、准备 Provider 凭证柜、
-> 创建 CommandCode Provider，再通过 Pi 自己的标准接口登记。结果对外只是普通的 Pi
-> `Models`，上层看不见 CommandCode 的私有实现。
+> 这一层只组装 Pi 的“模型侧”：准备 Provider 凭证柜，通过内置 Provider catalog
+> 注册 LuckyToken 自带的 Provider，再通过 Pi 自己的标准接口登记。结果对外只是
+> 普通的 Pi `Models`，上层看不见 CommandCode 的私有实现。
 
 | 输入 | 输出/行为 |
 | --- | --- |
-| `piDirectory` | 只定位 `models.json` 和默认 `auth.json` |
+| `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
 | required bound `fetch` | 交给 concrete Provider；不使用 ambient fallback |
 | optional `ProjectSnapshot` | 交给 CommandCode Provider |
 | optional ID/clock | 交给对应 owner |
 
-它读取 `commandcode-private` 的 static model entry，构造一个 frozen Pi `Model`，创建
-Pi `MutableModels`，创建 CommandCode Provider，并调用唯一标准注册接口
-`models.setProvider(provider)`。注册完成后只向外暴露 `Models` view。
+**CommandCode 是 Pi 内置风格 Provider，被完全屏蔽。** 模型数据（默认
+`deepseek/deepseek-v4-flash`）、固定上游地址（`https://api.commandcode.ai`）、
+auth（API key login）都封装在 `providers/commandcode-private/` 内。`catalog.ts`
+是唯一 import 该实现的注册点；composition 只调用
+`registerLuckyTokenProviders(models, deps)`，其余代码通过 Pi `Models` 接口 +
+provider id / model id 使用。**用户零配置**：不需要 models.json，`login` 填
+API key 即可 serve。
 
 ### `createConfiguredLuckyTokenComposition()`
 
@@ -1347,7 +1379,7 @@ installed Provider 的位置。职责严格限定为：
 
 ```text
 protocol id → authFile → immutable authority → Auth → handler
-models.json → Pi Model → CommandCode Provider → Pi Models
+catalog → register built-in CommandCode Provider → Pi Models
 handler list → Runtime
 all bound facts → serving certification
 ```
@@ -1409,35 +1441,25 @@ lifecycle 和 HTTP server close，确保停止接受请求、abort 上游工作�
 
 ## 6.8 Pi 文件与 ownership 关系
 
-> **小白理解：** 下面两个文件像放在同一个 Pi 文件柜里的两只抽屉：`models.json`
-> 是不会随每次请求变化的商品目录，`auth.json` 是可能被登录和刷新修改的供应商凭证。
-> 地理上放在一起只是方便管理，不代表一个模块可以跨抽屉读取或混用数据。
+> **小白理解：** Pi 文件柜里现在只有一只抽屉：`auth.json`（供应商凭证）。模型和
+> Provider 的静态资料内置在 LuckyToken 代码里，不需要配置文件。
 
 ```mermaid
 flowchart TB
-    D[".luckytoken/pi/（同一个文件柜）"] --> M["models.json\n模型与 Provider 的静态资料\n启动时读取"]
-    D --> A["auth.json\nProvider 凭证\n由 Pi CredentialStore 管理"]
-    M --> C["Composition"]
+    D[".luckytoken/pi/（同一个文件柜）"] --> A["auth.json\nProvider 凭证\n由 Pi CredentialStore 管理"]
     A --> P["Pi Models 认证流程"]
-    M -. "不存密钥、schema 不共享" .-> A
 ```
 
 ```text
 .luckytoken/pi/
-├── models.json
-│   owner: LuckyToken minimal Pi model-config loader
-│   semantics: static Provider/model facts
-│   reader: startup composition
-│
 └── auth.json
     owner: Pi CredentialStore contract implementation
     semantics: mutable Provider credentials keyed by Provider ID
     readers/writers: Pi Models login/logout/getAuth/refresh
 ```
 
-两个文件放在同一 Pi directory 是 deployment organization，不代表共享 schema 或
-owner。`models.json` loader 不能读取 `auth.json`；Provider model definition 不能包含
-本地 Client Protocol token；Client Auth 模块也不能读取 Pi directory。
+Provider model definition 不能包含本地 Client Protocol token；Client Auth 模块
+也不能读取 Pi directory。
 
 ---
 
@@ -1499,6 +1521,12 @@ Provider.name = CommandCode Private
 Model.api     = commandcode-private
 ```
 
+CommandCode 是 Pi 内置风格 Provider（对齐 `deepseekProvider()` 形态）：
+`createCommandCodePrivateProvider()` 自带固定上游地址
+`https://api.commandcode.ai` 和内置默认模型，`auth.apiKey.login` 让用户只填
+API key 即可使用。用户**零配置**（无 models.json）；测试通过
+`LUCKYTOKEN_COMMANDCODE_BASE_URL` 环境变量指向 fixture 上游。
+
 | 项目 | 内容 |
 | --- | --- |
 | 功能 | 实现 Pi Provider auth/model/stream contract；编排 request preparation、attempt、semantic commit、Pi replay |
@@ -1515,7 +1543,8 @@ Provider auth 通过 Pi `Provider.auth.apiKey` 暴露：
 - Pi `Models.login()` 负责调用并持久化到 `CredentialStore`；
 - request-time `resolve()` 优先使用 Pi stored credential；只有未存储时才使用可选
   deployment fallback `options.apiKey`；
-- composition 的 production path 不把 key 放进 `models.json`。
+- Provider credential 只存于 Pi CredentialStore（`auth.json`），从不进入代码或
+  配置文件。
 
 ## 7.2 Pi Context → CommandCode messages/tools — `provider.ts`
 
@@ -1548,9 +1577,11 @@ buildCommandCodeBody(model, context, options, config, sessionId, compatibility)
 | ToolResultMessage | adjacent `role:"tool"` 的 `tool-result`，error 映射为 `error-text` |
 
 Provider 检查历史 message 的 target identity 与 continuity fields。CommandCode 无法
-保留的 same-target text/thinking/tool signatures、redacted thinking、tool namespace、
-image tool result 都 fail closed。Failed/aborted historical assistant messages不进入
-上游 history。
+保留的 same-target text/thinking/tool signatures、**redacted thinking（无论 same 还是
+cross target 都拒绝）**、tool namespace、image tool result 都 fail closed。
+`ToolResultMessage.toolName` 不读取、不比较、不校验——tool result correlation 只认
+`toolCallId`（CommandCode wire 的 `toolName` 固定为 `""`）。Failed/aborted historical
+assistant messages 不进入上游 history。
 
 如果 Pi history 含 tool call 但结果丢失，Provider 按 CommandCode wire 要求生成一个
 与原 call ID 配对的明确 missing-result block，而不是删除 tool call 或猜测结果。
@@ -1723,7 +1754,17 @@ finish/rawUsage      terminal candidate
 
 关键不变量：
 
-- 只有 `*-start` reserve ordered slot；delta/end 不能重排；
+- **只有指定 event type 进入 content。** 进入 content 的事件只有三类生命周期：
+  `text-start/delta/end`、`reasoning-start/delta/end`、
+  `tool-input-start/delta/end + tool-call`；且只有 `*-start` reserve ordered slot；
+  delta/end 不能重排；
+- 其他事件按协议分类：`start`、`start-step`、`finish-step`、`provider-metadata`、
+  response-side `tool-result` 是 **accepted no-op**（不进入 content、不改变状态）；
+  `finish` 只决定终止 reason 与 final usage；`abort`/`error` 立即失败；
+- `providerExecuted`/`dynamic` 等 server-owned 元数据**不读取、不校验、不保留**
+  （协议文档 §2.8）：`tool-input-start`/`tool-call` 只消费 `id`/`toolName`/
+  `toolCallId`/`input` 等转换所需字段，这些额外字段的生命周期在 event 消费时即
+  结束，不进入 committed response；
 - text/reasoning 必须 start → delta* → end，结束时不能是空内容；
 - tool 必须 `tool-input-start → delta* → input-end → authoritative tool-call`；
 - partial tool preview 不是 completed tool input；只有 final `tool-call` materialize；
@@ -1761,10 +1802,15 @@ Conversion 只在 assembler commit 后发生：
 - CommandCode text → Pi `TextContent`；
 - reasoning → Pi `ThinkingContent`，但 model 必须是 certified reasoning model；
 - client-owned tool use → Pi `ToolCall`，ID/name/lossless JSON arguments 保留；
-- Provider-executed/dynamic tool semantics 无 lossless Pi representation，fail closed；
-- usage 验证 input/cache/output/reasoning partition 后用 captured pricing model 算 cost；
-- finish `stop|length|tool-calls` → Pi `stop|length|toolUse`；refusal、context-window、
-  pause_turn 等无 lossless success terminal，转为 Pi error message。
+- `providerExecuted`/`dynamic` 等 server-owned 元数据在 assembler 阶段已不保留，
+  这里不再读取或检查；
+- usage 按文档 §5.3 构造：`noCacheTokens` 优先（存在即权威，不读 `inputTokens`
+  做一致性校验），否则 `inputTokens − cacheRead − cacheWrite`；reasoning 只来自
+  `outputTokenDetails.reasoningTokens`（不读顶层 `reasoningTokens` alias）；
+  用 captured pricing model 算 cost；
+- finish 按文档 §6.4 只映射两个精确分支：`tool-calls → toolUse`、
+  `length → length`；**其他/缺失 finishReason → `stop`**（不维护 whitelist、
+  不报错、不读 rawFinishReason 分类；pause_turn 已在 assembler commit 前失败）。
 
 Replay 在完整 `AssistantMessage` 已知后生成 Pi start/content/done events。任何 error 或
 abort 只发 Pi error terminal；如果 signal 在 replay 前 abort，已完成内容也被丢弃并
@@ -1821,7 +1867,6 @@ flowchart TD
 flowchart LR
     OP["操作者"] --> CFG["config.json\n部署地址簿"]
     CT["client-token CLI"] --> CA["Client Protocol 门卡文件"]
-    OP --> MM["models.json\n模型目录"]
     PI["Pi login / refresh"] --> PA["auth.json\nProvider 凭证"]
     APP["其他 Node 程序"] --> API["Package public API\nAuth / Runtime / Server 等"]
 ```
@@ -1848,26 +1893,19 @@ flowchart LR
 │       runtime form: immutable authorize(token) closure
 │
 └── pi/
-    ├── models.json
-    │   owner: Pi model-config capability
-    │   writer: operator
-    │   reader: startup Pi composition
-    │   runtime form: Pi Model + registered Provider
-    │
     └── auth.json
         owner: Pi CredentialStore implementation
         writer/reader: Pi Models login/logout/getAuth/refresh
         runtime form: effective Provider auth applied by Pi Models
 ```
 
-这四类文件没有统一成一个“大配置文件”，因为它们的 semantic owner、mutation
+这些文件没有统一成一个“大配置文件”，因为它们的 semantic owner、mutation
 frequency、secret level 和 lifetime 不同：
 
 | 文件 | 静态/动态 | 是否 secret | 是否 serving 期间读取 | 变化生效 |
 | --- | --- | --- | --- | --- |
 | `config.json` | 静态 deployment | 否 | 否 | 重启 |
 | protocol token file | 低频管理 | 是 | 否 | 重启后新 snapshot |
-| `models.json` | 静态 Pi catalog | 否 | 否 | 重启 |
 | `auth.json` | 动态 Pi credential | 是 | 由 Pi auth operations 读取 | login/logout/refresh contract |
 
 所有 `.luckytoken/`、任意 `auth.json`、`CommandcodeAPIKey.txt` 和
@@ -1981,13 +2019,13 @@ flowchart TB
 
 ## 9.2 Pi integration
 
-> **小白理解：** 这组模块把 LuckyToken 接到 Pi 的标准接口，并管理 Pi 所需的模型
-> 目录与 Provider 凭证。仓库里的 `pi-agent/packages/ai` 是供人核对上游行为的参考源，
-> 正式运行依赖 npm 包，LuckyToken 不在参考源码里打自己的补丁。
+> **小白理解：** 这组模块把 LuckyToken 接到 Pi 的标准接口，并管理 Pi 所需的
+> Provider 凭证。Provider 的模型与上游地址内置在 Provider 模块里，无需模型配置
+> 文件。仓库里的 `pi-agent/packages/ai` 是供人核对上游行为的参考源，正式运行依赖
+> npm 包，LuckyToken 不在参考源码里打自己的补丁。
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
-| `src/pi/model-config.ts` | `loadPiModelsConfig()` → frozen provider lookup | `createConfiguredPiModels()` | Node file/path | `test/unit/pi-model-config.test.ts` |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
 | `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
 | `pi-agent/packages/ai` | reviewed reference/source mirror | maintainers/certification review | upstream Pi source | 不作为 LuckyToken production import |
@@ -2020,6 +2058,8 @@ flowchart TB
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
+| `providers/catalog.ts` | `registerLuckyTokenProviders()`；唯一 import Provider 实现的注册点 | composition | CommandCode provider、Pi Models | configured-composition、provider-boundary tests |
+| `providers/commandcode-private/model.ts` | 内置默认 Pi `Model`；固定 baseUrl | provider factory | Pi Model type | `test/unit/commandcode-model.test.ts` |
 | `providers/commandcode-private/provider.ts` | factory、Pi→wire conversion、request preparation | composition/Pi Models | project、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
 | `project.ts` | `ProjectSnapshot` → `ServerConfig` | Provider preparation | directory/Git/date/platform capabilities | project unit/provider integration/online project scope |
 | `attempts.ts` | prepared request → committed `CommandCodeResult` | Provider stream | fetch/timers/assembler | attempt controls、decoder、retry/cancel integration |
@@ -2136,6 +2176,24 @@ Capturing wrapper 位于 Provider 的 external transport boundary，不 mock Luc
 Provider JSONL 和 physical EOF。Secret 值不得出现在 artifact；summary 只记录数量、
 失败分类和 latency。
 
+标准 `test/online/run-commandcode.ts` 之外，还有两个深度在线套件（同样显式运行、
+不纳入 `npm test`）：
+
+- `test/online/deep-online.ts`：覆盖标准套件之外的场景——多轮历史对话、system
+  prompt、五种 reasoning effort、复杂工具 schema（含 `$schema`）、并行工具调用、
+  长输出、流式、工具结果往返、未知 effort 降级、空消息数组、并发突发、
+  `top_p`/`stop_sequences` 忽略、system block `cache_control` 忽略。断言以
+  "请求成功且 content 非空"为准，允许模型合法的 thinking-only 响应。
+- `test/online/event-coverage.ts`：验证**所有 CommandCode 正常生命周期 event type
+  都真实出现且不报错**：`start`、`start-step`、`finish-step`、`provider-metadata`、
+  `text-start/delta/end`、`reasoning-start/delta/end`、
+  `tool-input-start/delta/end`、`tool-call`、`finish` 共 15 种。`abort`/`error`/
+  response-side `tool-result` 是失败/边缘事件，不强求出现。捕获器记录每个 event
+  type 的出现次数，缺任一必需类型即失败。
+
+真实在线测试是黄金标准：它证明 Anthropic 侧"只转换指定字段"和 CommandCode 侧
+"只有指定 event type 进入 content"在真实上游上成立，且不依赖 fixture 推断。
+
 ## 10.4 完成 gate
 
 > **小白理解：** Gate 是发布前必须全部打勾的清单：功能测试、类型检查、代码规范、
@@ -2251,6 +2309,15 @@ construction/registration/certification，没有 message/content/usage/tool conv
 6. **Pi CredentialStore 的 file lock 不能被复制到所有 JSON 文件。** 它解决的是
    concurrent OAuth refresh/login/logout；Client token CLI 没有同样并发需求。是否加锁
    必须由 capability 自己的真实 lifecycle 决定。
+
+7. **"只读所需、其他忽略"是显式取舍，不是偷懒。** Anthropic 请求的未转换字段
+   （`top_p`、`thinking`、`tool_choice`、`context_management` 及未来字段）被静默
+   忽略，因为维护"已知 vs 未知"清单无法预知未来客户端。代价是：如果某天某个
+   **被忽略的字段**承载了必须保留的语义（例如未来 Anthropic 用 `thinking` 控制
+   推理预算），当前代码不会自动发现。缓解：这类字段必须先在转换文档 1-7 章获得
+   明确的 Source→Target 规则，才会进入 Pi 状态；在获得规则前，忽略是协议约定的
+   行为，不是 bug。CommandCode 响应侧同理：只有三种 content 生命周期进入 content，
+   `tool-result` 等 no-op 事件不产生语义。
 
 ## 11.4 用于代码评审的边界问题
 
@@ -2411,7 +2478,9 @@ flowchart TB
 5. Pi `Models.streamSimple()` public contract；
 6. `providers/commandcode-private/provider.ts` → project/attempts/assembler/semantic；
 7. 对应 Protocol/Conversion Spec；
-8. owning unit/integration test 与 serving conformance record。
+8. owning unit/integration test、serving conformance record，以及深度在线证据
+   （`test/online/deep-online.ts`、`test/online/event-coverage.ts`）——后者证明
+   真实上游上"Anthropic 只转换指定字段、CommandCode 只有指定 event 进 content"。
 
 不要从 `composition.ts` 的同时 import 两侧推断存在“Anthropic→CommandCode
 converter”；真正的数据转换必须分别在 Client Protocol 与 Provider boundary 中找到。

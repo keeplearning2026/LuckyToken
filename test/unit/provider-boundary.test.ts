@@ -31,6 +31,7 @@ const commandCodeProviderModules = [
   "providers/commandcode-private/assembler.ts",
   "providers/commandcode-private/attempts.ts",
   "providers/commandcode-private/json.ts",
+  "providers/commandcode-private/model.ts",
   "providers/commandcode-private/project.ts",
   "providers/commandcode-private/provider.ts",
   "providers/commandcode-private/semantic.ts",

@@ -143,8 +143,12 @@ describe("atomic HTTP failure delivery", () => {
         JSON.stringify({
           model: "model",
           max_tokens: 10,
-          messages: [{ role: "user", content: "hello" }],
-          stop_sequences: ["stop"],
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "future_block", data: "x" }],
+            },
+          ],
         }),
       ),
     );

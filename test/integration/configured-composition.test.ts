@@ -40,7 +40,6 @@ describe("configured serving composition", () => {
   });
 
   async function writeConfiguration(
-    providerOverrides: Record<string, unknown> = {},
     clientScope: "global" | "project" = "global",
   ): Promise<{
     configPath: string;
@@ -58,31 +57,6 @@ describe("configured serving composition", () => {
       "anthropic-messages.json",
     );
     await mkdir(piDirectory, { recursive: true });
-    await writeFile(
-      join(piDirectory, "models.json"),
-      JSON.stringify({
-        providers: {
-          "commandcode-private": {
-            baseUrl: "https://commandcode.fixture.test",
-            api: "commandcode-private",
-            models: [
-              {
-                id: "configured-model",
-                name: "configured-model",
-                api: "commandcode-private",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 64_000,
-              },
-            ],
-            ...providerOverrides,
-          },
-        },
-      }),
-      "utf8",
-    );
     const projectDir =
       clientScope === "project" ? join(directory, "workspace") : undefined;
     if (projectDir !== undefined) await mkdir(projectDir);
@@ -117,7 +91,7 @@ describe("configured serving composition", () => {
     };
   }
 
-  it("turns models.json into a Pi Provider hidden behind one Client Protocol", async () => {
+  it("registers the built-in CommandCode Provider hidden behind one Client Protocol", async () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       upstreamRequests.push(new Request(input, init));
@@ -148,7 +122,7 @@ describe("configured serving composition", () => {
     );
     expect(
       composition.certification.policies.models.providerRegistration,
-    ).toBe("pi-models-json-startup-registration-v1");
+    ).toBe("startup-only-mutable-models-v1");
     expect(composition.runtime).not.toHaveProperty("models");
     expect(composition.runtime).not.toHaveProperty("provider");
 
@@ -161,7 +135,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "configured-model",
+          model: "deepseek/deepseek-v4-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -171,7 +145,7 @@ describe("configured serving composition", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       id: "msg_configured",
-      model: "configured-model",
+      model: "deepseek/deepseek-v4-flash",
       content: [{ type: "text", text: "configured through Pi" }],
     });
     expect(upstreamRequests).toHaveLength(1);
@@ -184,10 +158,8 @@ describe("configured serving composition", () => {
   });
 
   it("projects one protocol-scoped client token into Pi without exposing Auth state", async () => {
-    const { configPath, clientToken, projectDir } = await writeConfiguration(
-      {},
-      "project",
-    );
+    const { configPath, clientToken, projectDir } =
+      await writeConfiguration("project");
     const projectSnapshot = vi.fn(
       async (input: { readonly projectDir: string; readonly signal: AbortSignal }) => {
         input.signal.throwIfAborted();
@@ -221,7 +193,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "configured-model",
+          model: "deepseek/deepseek-v4-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -237,19 +209,6 @@ describe("configured serving composition", () => {
       "projectDir",
       "signal",
     ]);
-  });
-
-  it("rejects an unregistered API instead of coupling it into Runtime", async () => {
-    const { configPath } = await writeConfiguration({
-      api: "unknown-private-api",
-    });
-    const config = await loadLuckyTokenCliConfig(configPath);
-    await expect(
-      createConfiguredLuckyTokenComposition({
-        config,
-        fetch: async () => commandCodeText("unused"),
-      }),
-    ).rejects.toThrow("commandcode-private API");
   });
 
   it("rejects an uninstalled Client Protocol only at the composition root", async () => {
@@ -275,16 +234,4 @@ describe("configured serving composition", () => {
     );
   });
 
-  it("rejects CommandCode credentials in static models.json", async () => {
-    const { configPath } = await writeConfiguration({
-      apiKey: "must-live-in-auth-json",
-    });
-    const config = await loadLuckyTokenCliConfig(configPath);
-    await expect(
-      createConfiguredLuckyTokenComposition({
-        config,
-        fetch: async () => commandCodeText("unused"),
-      }),
-    ).rejects.toThrow("unknown field: apiKey");
-  });
 });

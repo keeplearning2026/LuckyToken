@@ -137,9 +137,13 @@ describe("Anthropic Atomic SSE HTTP representation", () => {
       body: JSON.stringify({
         model: "model",
         max_tokens: 10,
-        messages: [{ role: "user", content: "hello" }],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "future_block", data: "x" }],
+          },
+        ],
         stream: true,
-        stop_sequences: ["unsupported"],
       }),
     });
 

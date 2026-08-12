@@ -202,13 +202,13 @@ describe("CommandCode atomic content assembler", () => {
         { type: "start-step" },
         { type: "provider-metadata", provider: "x" },
         { type: "finish-step", usage: { ignored: true } },
+        { type: "tool-result", toolCallId: "ignored" },
         { type: "finish", finishReason: "stop" },
       ]).content,
     ).toEqual([]);
 
     for (const raw of [
       line({ type: "future-event" }),
-      line({ type: "tool-result", toolCallId: "ignored" }),
       line({ type: "text-start" }),
       line({ type: "finish", totalUsage: [] }),
       "data: {}",

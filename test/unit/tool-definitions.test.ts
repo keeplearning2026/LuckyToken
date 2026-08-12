@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidRequest, UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
+import { InvalidRequest } from "../../src/protocols/anthropic/failures.js";
 import {
   convertValidatedAnthropicRequest,
   validateAnthropicSourceRequest,
@@ -116,16 +116,22 @@ describe("Anthropic tool definitions", () => {
     ["input examples", { input_examples: [{}] }],
     ["server tool type", { type: "web_search_20250305" }],
     ["future control", { future_control: true }],
-  ])("rejects unsupported tool control: %s", (_name, extras) => {
-    expect(() =>
+  ])("ignores non-converted tool control: %s", (_name, extras) => {
+    const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([tool({ type: "object", properties: {} }, extras)]),
       ),
-    ).toThrow(UnsupportedFeature);
+      1,
+    );
+    expect(invocation.context.tools?.[0]).toEqual({
+      name: "lookup",
+      description: "",
+      parameters: { type: "object", properties: {} },
+    });
   });
 
-  it("keeps source-invalid schema ownership ahead of subset rejection", () => {
-    expect(() =>
+  it("passes malformed-shape schemas through for non-strict tools", () => {
+    const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([
           tool({
@@ -135,7 +141,13 @@ describe("Anthropic tool definitions", () => {
           }),
         ]),
       ),
-    ).toThrow(InvalidRequest);
+      1,
+    );
+    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: [],
+      format: "also-unsupported",
+    });
   });
 
   it.each([
@@ -144,19 +156,24 @@ describe("Anthropic tool definitions", () => {
     ["format", { type: "object", properties: { x: { type: "string", format: "date" } } }],
     ["type array", { type: "object", properties: { x: { type: ["string", "null"] } } }],
     ["unknown keyword", { type: "object", properties: { x: { type: "string", future: true } } }],
-  ])("classifies source-valid unsupported schema feature: %s", (_name, schema) => {
-    expect(() => validateAnthropicSourceRequest(request([tool(schema)]))).toThrow(
-      UnsupportedFeature,
+    ["$schema", { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object" }],
+  ])("passes schema features through without keyword validation: %s", (_name, schema) => {
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(request([tool(schema)])),
+      1,
     );
+    expect(invocation.context.tools?.[0]?.parameters).toEqual(schema);
   });
 
-  it("classifies cyclic schema graphs as unsupported without recursing forever", () => {
+  it("accepts non-strict cyclic schema graphs without recursing forever", () => {
     const cyclic: Record<string, unknown> = { type: "object", properties: {} };
     (cyclic.properties as Record<string, unknown>).self = cyclic;
 
-    expect(() => validateAnthropicSourceRequest(request([tool(cyclic)]))).toThrow(
-      UnsupportedFeature,
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(request([tool(cyclic)])),
+      1,
     );
+    expect(invocation.context.tools?.[0]?.parameters).toEqual(cyclic);
   });
 
   it("enforces request-wide strict limits before the subset check", () => {
@@ -244,6 +261,6 @@ describe("Anthropic tool definitions", () => {
           }),
         ]),
       ),
-    ).toThrow(UnsupportedFeature);
+    ).not.toThrow();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidRequest, UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
+import { InvalidRequest } from "../../src/protocols/anthropic/failures.js";
 import {
   convertValidatedAnthropicRequest,
   validateAnthropicSourceRequest,
@@ -53,7 +53,7 @@ describe("Anthropic tool turns", () => {
     });
   });
 
-  it("keeps malformed and unsupported caller forms distinct", () => {
+  it("ignores optional caller forms per doc §4.3", () => {
     const withCaller = (caller: unknown) =>
       request([
         { role: "user", content: "run" },
@@ -69,14 +69,23 @@ describe("Anthropic tool turns", () => {
         },
       ]);
 
-    expect(() => validateAnthropicSourceRequest(withCaller({}))).toThrow(
-      InvalidRequest,
-    );
-    expect(() =>
-      validateAnthropicSourceRequest(
-        withCaller({ type: "server_tool", tool_name: "lookup" }),
-      ),
-    ).toThrow(UnsupportedFeature);
+    for (const caller of [
+      undefined,
+      {},
+      { type: "direct" },
+      { type: "server_tool", tool_name: "lookup" },
+    ]) {
+      const conversion = convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest(withCaller(caller)),
+        1,
+      );
+      expect(conversion.context.messages[1]).toMatchObject({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call", name: "lookup", arguments: {} },
+        ],
+      });
+    }
   });
 
   it("correlates parallel results by ID and expands results before ordinary user content", () => {

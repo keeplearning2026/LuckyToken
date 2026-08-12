@@ -1,10 +1,10 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
-import type { CommandCodeCompatibilityPolicy } from "./providers/commandcode-private/provider.js";
+import type { CommandCodeCompatibilityPolicy } from "./providers/catalog.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:b661ac6faa41132fc21ebc024ded09ad8311abc4e511120b8ab7444115b26958";
+  "sha256:ca88922836ee41e7b21690880b20ed935f5f1311b5573e17323b05b3047dbddc";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";

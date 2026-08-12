@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidRequest, UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
+import { InvalidRequest } from "../../src/protocols/anthropic/failures.js";
 import {
   convertValidatedAnthropicRequest,
   validateAnthropicSourceRequest,
@@ -55,14 +55,41 @@ describe("Anthropic Pi invocation controls", () => {
   it.each([
     ["temperature string", { temperature: "0.5" }, InvalidRequest],
     ["metadata user id number", { metadata: { user_id: 1 } }, InvalidRequest],
-    ["metadata escape hatch", { metadata: { other: "value" } }, UnsupportedFeature],
-    ["top p", { top_p: 0.5 }, UnsupportedFeature],
-    ["top k", { top_k: 1 }, UnsupportedFeature],
-    ["stop sequences", { stop_sequences: ["stop"] }, UnsupportedFeature],
-    ["thinking", { thinking: { type: "enabled" } }, UnsupportedFeature],
-    ["unknown output effort", { output_config: { effort: "super" } }, UnsupportedFeature],
-    ["unknown output field", { output_config: { format: "text" } }, UnsupportedFeature],
   ])("rejects unsupported or malformed control: %s", (_name, extras, failure) => {
     expect(() => validateAnthropicSourceRequest(request(extras))).toThrow(failure);
+  });
+
+  it.each([
+    { name: "top p", extras: { top_p: 0.5 } },
+    { name: "top k", extras: { top_k: 1 } },
+    { name: "stop sequences", extras: { stop_sequences: ["stop"] } },
+    { name: "thinking", extras: { thinking: { type: "enabled" } } },
+    { name: "metadata extension", extras: { metadata: { other: "value" } } },
+    { name: "unknown output field", extras: { output_config: { format: "text" } } },
+    { name: "future top-level field", extras: { future_control: true } },
+  ])("ignores unconverted fields: $name", ({ extras }) => {
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(request(extras)),
+      1,
+    );
+    expect(invocation.options).toEqual({ maxTokens: 32 });
+  });
+
+  it("falls back to Pi reasoning default for an unknown effort", () => {
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(
+        request({ output_config: { effort: "super" } }),
+      ),
+      1,
+    );
+    expect(invocation.options.reasoning).toBeUndefined();
+  });
+
+  it("rejects a non-string output_config.effort as malformed", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request({ output_config: { effort: 123 } }),
+      ),
+    ).toThrow(InvalidRequest);
   });
 });

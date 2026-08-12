@@ -419,6 +419,7 @@ export class CommandCodeContentAssembler {
       case "start-step":
       case "provider-metadata":
       case "finish-step":
+      case "tool-result":
         return;
       default:
         this.rollback();

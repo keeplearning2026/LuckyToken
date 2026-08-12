@@ -66,6 +66,7 @@ async function waitForText(
 function startCli(
   args: readonly string[],
   bridgeSignal = false,
+  extraEnv: Record<string, string> = {},
 ): ChildProcessWithoutNullStreams {
   const command = bridgeSignal
     ? [tsxCli, "test/fixtures/cli-signal-bridge.ts"]
@@ -74,6 +75,7 @@ function startCli(
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...extraEnv,
       ...(bridgeSignal
         ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
         : {}),
@@ -304,30 +306,6 @@ describe("LuckyToken CLI", () => {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    await writeFile(
-      join(piDirectory, "models.json"),
-      JSON.stringify({
-        providers: {
-          "commandcode-private": {
-            baseUrl: `http://127.0.0.1:${upstreamAddress.port}`,
-            api: "commandcode-private",
-            models: [
-              {
-                id: "configured-model",
-                name: "configured-model",
-                api: "commandcode-private",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 64_000,
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
@@ -376,7 +354,13 @@ describe("LuckyToken CLI", () => {
       "stored-provider-secret",
     );
 
-    const serving = startCli(["--config", configPath], true);
+    const serving = startCli(
+      ["--config", configPath],
+      true,
+      {
+        LUCKYTOKEN_COMMANDCODE_BASE_URL: `http://127.0.0.1:${upstreamAddress.port}`,
+      },
+    );
     children.push(serving);
     const servingCapture = captureChild(serving);
     const output = await waitForText(servingCapture.stdout, "/v1/messages");
@@ -390,7 +374,7 @@ describe("LuckyToken CLI", () => {
       timeout: 10_000,
     });
     const message = await client.messages.create({
-      model: "configured-model",
+      model: "deepseek/deepseek-v4-flash",
       max_tokens: 32,
       messages: [{ role: "user", content: "hello" }],
     });

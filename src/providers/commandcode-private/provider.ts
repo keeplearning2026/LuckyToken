@@ -35,9 +35,14 @@ import {
   replayCommandCodeAssistantMessage,
 } from "./semantic.js";
 import { cloneLosslessJsonObject } from "./json.js";
+import {
+  COMMANDCODE_API_ID,
+  COMMANDCODE_PROVIDER_ID,
+  createCommandCodeDefaultModel,
+} from "./model.js";
 
-const PROVIDER_ID = "commandcode-private";
-const API_ID = "commandcode-private";
+const PROVIDER_ID = COMMANDCODE_PROVIDER_ID;
+const API_ID = COMMANDCODE_API_ID;
 const MISSING_TOOL_RESULT =
   "No result — the tool call did not complete (interrupted or lost).";
 
@@ -45,7 +50,8 @@ export interface CommandCodePrivateProviderOptions {
   /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
   apiKey?: string;
   fetch?: FetchFunction;
-  model: Model<typeof API_ID>;
+  /** Optional model override. Defaults to the built-in CommandCode model. */
+  model?: Model<typeof API_ID>;
   now: () => number;
   projectSnapshot: ProjectSnapshot;
   compatibility?: CommandCodeCompatibilityPolicy;
@@ -953,7 +959,9 @@ export function createCommandCodePrivateProvider(
     throw new Error("CommandCode API key must be non-empty");
   }
   const model = deepFreezeProviderData(
-    structuredClone(options.model) as Model<typeof API_ID>,
+    structuredClone(options.model ?? createCommandCodeDefaultModel()) as Model<
+      typeof API_ID
+    >,
   );
   const compatibility = snapshotCompatibilityPolicy(options.compatibility ?? {});
   const projectSnapshot = snapshotProjectCapability(options.projectSnapshot);

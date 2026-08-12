@@ -34,24 +34,25 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
 ├── client-auth/
 │   └── anthropic-messages.json         # Anthropic global/project local tokens
 └── pi/
-    ├── models.json                     # static Pi Provider/model configuration
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
 
 Each Client Protocol handler has its own Auth file and immutable startup Auth
 snapshot. Runtime selects the handler by HTTP method/path; Auth files contain
 only global/project token scopes and do not identify or inspect another Client
-Protocol. `models.json` and `auth.json` share one Pi directory but have different
-owners. The model-config loader never reads credentials. Pi `Models`, through
-its injected `CredentialStore`, is the only runtime owner of Pi `auth.json`.
-The complete `.luckytoken/` directory and every `auth.json` are ignored by Git.
+Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
+runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
+every `auth.json` are ignored by Git.
+
+The CommandCode Private Provider is a Pi built-in provider: its upstream
+endpoint and default model are embedded in LuckyToken, so no `models.json` is
+needed. Users authenticate with `login` (API key only) and are ready to serve.
 
 Create local files from the committed placeholders:
 
 ```powershell
 New-Item -ItemType Directory -Force .luckytoken\pi
 Copy-Item luckytoken.config.example.json .luckytoken\config.json
-Copy-Item models.example.json .luckytoken\pi\models.json
 ```
 
 Create an Anthropic protocol-global token, or bind one token to one project
@@ -78,9 +79,8 @@ subscription/OAuth:
 npm start -- login commandcode-private --config .luckytoken/config.json
 ```
 
-The key is saved to `.luckytoken/pi/auth.json`. The CommandCode entry in
-`models.json` contains only static Provider/model facts; it does not contain or
-resolve the Provider credential.
+The key is saved to `.luckytoken/pi/auth.json`. No model configuration is
+required — the built-in model is `deepseek/deepseek-v4-flash`.
 
 Start the local listener:
 

@@ -20,70 +20,18 @@ HTTP Request
 Method
 → POST
 
+固定的
 Endpoint
 → <baseUrl>/alpha/generate
 ```
 
 `alpha/generate` 是追加到 Base URL 后的固定 CommandCode path。
 
-------
-
-### 1.2 Source
-
-Endpoint 的 Base URL 来自 Pi selected model：
-
-```text
-Model
-└── baseUrl: string
-```
-
-对应：
-
-```text
-Target Base URL
-← model.baseUrl
-```
-
-`Method` 和 `alpha/generate` 不需要 Source。
+Base URL = https://api.commandcode.ai
 
 ------
 
-### 1.3 Construction Method
 
-```text
-Method
-→ fixed "POST"
-
-Endpoint
-← model.baseUrl
-+ fixed "alpha/generate"
-```
-
-构造 endpoint 时必须保留 `model.baseUrl` 已有 path。
-
-例如：
-
-```text
-https://host
-→ https://host/alpha/generate
-
-https://host/proxy
-→ https://host/proxy/alpha/generate
-```
-
-因此不能使用会重置已有 path 的：
-
-```ts
-new URL("/alpha/generate", model.baseUrl)
-```
-
-`model.baseUrl` 无法构造有效 endpoint 时：
-
-```text
-→ error
-```
-
-不使用其他 Base URL fallback。
 
 ## 2. Headers
 

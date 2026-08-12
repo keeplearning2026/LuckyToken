@@ -66,7 +66,7 @@
     {
       "dimension": "pi-configuration-credential-cli",
       "tests": [
-        "test/unit/pi-model-config.test.ts",
+        "test/unit/commandcode-model.test.ts",
         "test/unit/cli-config.test.ts",
         "test/unit/online-test-plan.test.ts",
         "test/integration/pi-credential-login.test.ts",

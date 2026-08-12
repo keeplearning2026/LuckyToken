@@ -1,6 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import Anthropic from "@anthropic-ai/sdk";
 import { request as nodeHttpRequest } from "node:http";
+import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
@@ -257,6 +258,148 @@ describe("local Anthropic HTTP server", () => {
     });
   }, 5_000);
 
+  it("cancels upstream when a real TCP client disconnects mid-response (Ctrl+C)", async () => {
+    let markUpstreamStarted: (() => void) | undefined;
+    let markUpstreamAborted: (() => void) | undefined;
+    const upstreamStarted = new Promise<void>((resolve) => {
+      markUpstreamStarted = resolve;
+    });
+    const upstreamAborted = new Promise<void>((resolve) => {
+      markUpstreamAborted = resolve;
+    });
+    let calls = 0;
+    const upstream: FetchFunction = async (input, init) => {
+      calls += 1;
+      if (calls > 1) return commandCodeText("recovered-after-tcp-drop");
+      const signal = new Request(input, init).signal;
+      markUpstreamStarted?.();
+      return await new Promise<Response>((_resolve, reject) => {
+        const onAbort = (): void => {
+          markUpstreamAborted?.();
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    };
+    const runtime = createLuckyTokenRuntime({
+      clientApiKey: "tcp-abort-client-key",
+      commandCodeApiKey: "provider-key",
+      commandCodeBaseUrl: "https://commandcode.fixture.test",
+      fetch: upstream,
+      modelId: "model",
+    });
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    // Send a real HTTP request over a raw TCP socket, then destroy the socket
+    // while the upstream is still pending — the exact shape of a Ctrl+C.
+    const requestBody = JSON.stringify({
+      model: "model",
+      max_tokens: 8,
+      messages: [{ role: "user", content: "wait" }],
+    });
+    const socket = net.connect(server?.port ?? 0, server?.host ?? "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.write(
+      `POST /v1/messages HTTP/1.1\r\n` +
+        `Host: ${server?.host ?? "127.0.0.1"}\r\n` +
+        `Content-Type: application/json\r\n` +
+        `Authorization: Bearer tcp-abort-client-key\r\n` +
+        `Anthropic-Version: 2023-06-01\r\n` +
+        `Content-Length: ${Buffer.byteLength(requestBody)}\r\n` +
+        `Connection: close\r\n` +
+        `\r\n` +
+        requestBody,
+    );
+
+    await upstreamStarted;
+    // Simulate Ctrl+C: destroy the TCP connection while upstream is pending.
+    socket.destroy();
+    await upstreamAborted;
+
+    // The server must remain usable after the dropped connection.
+    const recovered = await fetch(`${server?.origin}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer tcp-abort-client-key",
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "model",
+        max_tokens: 8,
+        messages: [{ role: "user", content: "recover" }],
+      }),
+    });
+    expect(recovered.status).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "recovered-after-tcp-drop" }],
+    });
+  }, 5_000);
+
+  it("never dispatches upstream when a TCP client disconnects mid-body", async () => {
+    let calls = 0;
+    const upstream: FetchFunction = async () => {
+      calls += 1;
+      return commandCodeText("recovered-after-midbody-drop");
+    };
+    const runtime = createLuckyTokenRuntime({
+      clientApiKey: "tcp-midbody-client-key",
+      commandCodeApiKey: "provider-key",
+      commandCodeBaseUrl: "https://commandcode.fixture.test",
+      fetch: upstream,
+      modelId: "model",
+    });
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    // Start sending a large body but never finish it; the client then drops
+    // the connection (Ctrl+C mid-upload).
+    const socket = net.connect(server?.port ?? 0, server?.host ?? "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.write(
+      `POST /v1/messages HTTP/1.1\r\n` +
+        `Host: ${server?.host ?? "127.0.0.1"}\r\n` +
+        `Content-Type: application/json\r\n` +
+        `Authorization: Bearer tcp-midbody-client-key\r\n` +
+        `Anthropic-Version: 2023-06-01\r\n` +
+        `Content-Length: 1000000\r\n` +
+        `Connection: close\r\n` +
+        `\r\n` +
+        `{"model":"model","max_tokens":8,"messages":[{"role":"user","content":"`,
+    );
+    // Give the server a moment to start reading the body, then drop.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    socket.destroy();
+    // Let the server process the abort and close the request cleanly.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // An incomplete request body must never reach the upstream provider.
+    expect(calls).toBe(0);
+
+    // The server must remain usable after the mid-body drop.
+    const recovered = await fetch(`${server?.origin}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer tcp-midbody-client-key",
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "model",
+        max_tokens: 8,
+        messages: [{ role: "user", content: "recover" }],
+      }),
+    });
+    expect(recovered.status).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "recovered-after-midbody-drop" }],
+    });
+  }, 5_000);
+
   it("keeps concurrent requests isolated", async () => {
     let releaseFirst: (() => void) | undefined;
     const firstMayFinish = new Promise<void>((resolve) => {
@@ -310,6 +453,93 @@ describe("local Anthropic HTTP server", () => {
     expect(second.content).toMatchObject([{ type: "text", text: "second response" }]);
     expect(calls).toBe(2);
   });
+
+  it("keeps a concurrent healthy request unaffected when another client disconnects", async () => {
+    let releaseSecond: (() => void) | undefined;
+    let markSecondStarted: (() => void) | undefined;
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const secondMayFinish = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let calls = 0;
+    const upstream: FetchFunction = async (input, init) => {
+      calls += 1;
+      const call = calls;
+      const signal = new Request(input, init).signal;
+      if (call === 1) {
+        // First request: hold upstream open until the client disconnects.
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      }
+      markSecondStarted?.();
+      await secondMayFinish;
+      return commandCodeText("healthy-concurrent-response");
+    };
+    const runtime = createLuckyTokenRuntime({
+      clientApiKey: "disconnect-concurrent-key",
+      commandCodeApiKey: "provider-key",
+      commandCodeBaseUrl: "https://commandcode.fixture.test",
+      fetch: upstream,
+      modelId: "model",
+    });
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    // Request 1 over a raw TCP socket, held open upstream.
+    const requestBody = JSON.stringify({
+      model: "model",
+      max_tokens: 8,
+      messages: [{ role: "user", content: "wait" }],
+    });
+    const socket = net.connect(server?.port ?? 0, server?.host ?? "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.write(
+      `POST /v1/messages HTTP/1.1\r\n` +
+        `Host: ${server?.host ?? "127.0.0.1"}\r\n` +
+        `Content-Type: application/json\r\n` +
+        `Authorization: Bearer disconnect-concurrent-key\r\n` +
+        `Anthropic-Version: 2023-06-01\r\n` +
+        `Content-Length: ${Buffer.byteLength(requestBody)}\r\n` +
+        `Connection: close\r\n` +
+        `\r\n` +
+        requestBody,
+    );
+
+    // Request 2 via fetch, must complete despite request 1 disconnecting.
+    const healthy = fetch(`${server?.origin}/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer disconnect-concurrent-key",
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "model",
+        max_tokens: 8,
+        messages: [{ role: "user", content: "healthy" }],
+      }),
+    });
+    await secondStarted;
+
+    // Now the first client disconnects (Ctrl+C).
+    socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    releaseSecond?.();
+    const healthyResponse = await healthy;
+    expect(healthyResponse.status).toBe(200);
+    await expect(healthyResponse.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "healthy-concurrent-response" }],
+    });
+    expect(calls).toBe(2);
+  }, 5_000);
 
   it("aborts active requests during idempotent server shutdown", async () => {
     let markUpstreamStarted: (() => void) | undefined;

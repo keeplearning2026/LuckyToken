@@ -168,7 +168,7 @@ describe("Anthropic conversation conversion", () => {
     );
   });
 
-  it("rejects malformed, user-role, and redacted thinking independently", () => {
+  it("rejects malformed and user-role thinking and converts redacted thinking", () => {
     const request = (block: Record<string, unknown>, role = "assistant") => ({
       model: "client-model",
       max_tokens: 32,
@@ -189,11 +189,24 @@ describe("Anthropic conversation conversion", () => {
         request({ type: "thinking", thinking: "ok", signature: "sig" }, "user"),
       ),
     ).toThrow(InvalidRequest);
-    expect(() =>
+
+    const conversion = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request({ type: "redacted_thinking", data: "opaque" }),
       ),
-    ).toThrow(UnsupportedFeature);
+      1,
+    );
+    const assistant = conversion.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: "opaque",
+        redacted: true,
+      },
+    ]);
   });
 
   it("preserves supported base64 image MIME and payload and rejects opaque/remote variants", () => {

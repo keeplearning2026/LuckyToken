@@ -46,43 +46,19 @@ export interface ValidatedAnthropicSourceRequest {
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
 export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
 
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/gif",
   "image/webp",
 ]);
-const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
-
-const KNOWN_TOP_LEVEL_FIELDS = new Set([
-  "model",
-  "max_tokens",
-  "messages",
-  "system",
-  "tools",
-  "tool_choice",
-  "thinking",
-  "output_config",
-  "stop_sequences",
-  "temperature",
-  "top_p",
-  "top_k",
-  "stream",
-  "cache_control",
-  "container",
-  "inference_geo",
-  "service_tier",
-  "metadata",
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validateOptionalFieldShapes(
-  value: Record<string, unknown>,
-  unsupported: string[],
-): void {
+function validateOptionalFieldShapes(value: Record<string, unknown>): void {
   const arrayFields = ["tools", "stop_sequences"] as const;
   for (const name of arrayFields) {
     if (value[name] !== undefined && !Array.isArray(value[name])) {
@@ -124,24 +100,6 @@ function validateOptionalFieldShapes(
       throw new InvalidRequest(`${name} must be a string when present`);
     }
   }
-  for (const name of KNOWN_TOP_LEVEL_FIELDS) {
-    if (
-      ![
-        "model",
-        "max_tokens",
-        "messages",
-        "stream",
-        "system",
-        "tools",
-        "temperature",
-        "metadata",
-        "output_config",
-      ].includes(name) &&
-      value[name] !== undefined
-    ) {
-      unsupported.push(`unsupported top-level field: ${name}`);
-    }
-  }
 }
 
 function validateContentBlock(
@@ -158,18 +116,6 @@ function validateContentBlock(
       if (typeof block.text !== "string") {
         throw new InvalidRequest("text blocks require string text");
       }
-      if (block.citations !== undefined) {
-        if (role !== "assistant" || block.citations !== null) {
-          unsupported.push("unsupported text citations");
-        }
-      }
-      if (
-        Object.keys(block).some(
-          (name) => !["type", "text", "citations"].includes(name),
-        )
-      ) {
-        unsupported.push("unknown text block field");
-      }
       return;
     case "thinking":
       if (
@@ -183,13 +129,6 @@ function validateContentBlock(
       if (role !== "assistant") {
         throw new InvalidRequest("thinking is valid only in an assistant turn");
       }
-      if (
-        Object.keys(block).some(
-          (name) => !["type", "thinking", "signature"].includes(name),
-        )
-      ) {
-        unsupported.push("unknown thinking block field");
-      }
       facts.hasThinking = true;
       return;
     case "redacted_thinking":
@@ -201,10 +140,7 @@ function validateContentBlock(
           "redacted_thinking is valid only in an assistant turn",
         );
       }
-      if (Object.keys(block).some((name) => !["type", "data"].includes(name))) {
-        unsupported.push("unknown redacted_thinking block field");
-      }
-      unsupported.push("redacted thinking");
+      facts.hasThinking = true;
       return;
     case "image":
       if (!isRecord(block.source) || typeof block.source.type !== "string") {
@@ -224,15 +160,9 @@ function validateContentBlock(
         );
       }
       if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(block.source.media_type)) {
-        unsupported.push(`unsupported image media type: ${block.source.media_type}`);
-      }
-      if (
-        Object.keys(block).some((name) => name !== "type" && name !== "source") ||
-        Object.keys(block.source).some(
-          (name) => !["type", "media_type", "data"].includes(name),
-        )
-      ) {
-        unsupported.push("unknown image field");
+        unsupported.push(
+          `unsupported image media type: ${block.source.media_type}`,
+        );
       }
       facts.hasImages = true;
       return;
@@ -247,24 +177,6 @@ function validateContentBlock(
         throw new InvalidRequest(
           "tool_use requires non-empty id and name strings and object input",
         );
-      }
-      if (block.caller !== undefined) {
-        if (!isRecord(block.caller) || typeof block.caller.type !== "string") {
-          throw new InvalidRequest("tool_use.caller must be a tagged object");
-        }
-        if (block.caller.type !== "direct") {
-          unsupported.push(`unsupported tool_use caller: ${block.caller.type}`);
-        }
-        if (Object.keys(block.caller).some((name) => name !== "type")) {
-          unsupported.push("unknown tool_use caller field");
-        }
-      }
-      if (
-        Object.keys(block).some(
-          (name) => !["type", "id", "name", "input", "caller"].includes(name),
-        )
-      ) {
-        unsupported.push("unknown tool_use field");
       }
       return;
     case "tool_result": {
@@ -300,14 +212,6 @@ function validateContentBlock(
           validateContentBlock(nestedBlock, unsupported, facts, "user");
         }
       }
-      if (
-        Object.keys(block).some(
-          (name) =>
-            !["type", "tool_use_id", "content", "is_error"].includes(name),
-        )
-      ) {
-        unsupported.push("unknown tool_result field");
-      }
       return;
     }
     default:
@@ -315,10 +219,7 @@ function validateContentBlock(
   }
 }
 
-function validateSystem(
-  value: unknown,
-  unsupported: string[],
-): string | undefined {
+function validateSystem(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) {
@@ -328,9 +229,6 @@ function validateSystem(
   for (const block of value) {
     if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       throw new InvalidRequest("system blocks must be text blocks");
-    }
-    if (Object.keys(block).some((name) => name !== "type" && name !== "text")) {
-      unsupported.push("unsupported system text extension");
     }
     texts.push(block.text);
   }
@@ -347,19 +245,19 @@ const ANTHROPIC_EFFORT_TO_REASONING = new Set([
 
 function validateOutputConfig(
   value: unknown,
-  unsupported: string[],
 ): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
     throw new InvalidRequest("output_config must be an object when present");
   }
-  for (const key of Object.keys(value)) {
-    if (key !== "effort") unsupported.push(`unsupported output_config field: ${key}`);
-  }
   const effort = value.effort;
   if (effort === undefined) return undefined;
-  if (typeof effort !== "string" || !ANTHROPIC_EFFORT_TO_REASONING.has(effort)) {
-    unsupported.push(`unsupported output_config.effort: ${String(effort)}`);
+  if (typeof effort !== "string") {
+    throw new InvalidRequest("output_config.effort must be a string when present");
+  }
+  if (!ANTHROPIC_EFFORT_TO_REASONING.has(effort)) {
+    // Unknown future effort values fall back to Pi reasoning default behavior
+    // instead of failing the request.
     return undefined;
   }
   return effort as "low" | "medium" | "high" | "xhigh" | "max";
@@ -367,14 +265,10 @@ function validateOutputConfig(
 
 function validateMetadata(
   value: unknown,
-  unsupported: string[],
 ): string | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
     throw new InvalidRequest("metadata must be an object when present");
-  }
-  for (const key of Object.keys(value)) {
-    if (key !== "user_id") unsupported.push(`unsupported metadata field: ${key}`);
   }
   if (value.user_id === undefined) return undefined;
   if (typeof value.user_id !== "string") {
@@ -407,9 +301,6 @@ function validateMessages(
         "messages require a user, assistant, or system role",
       );
     }
-    if (Object.keys(message).some((name) => name !== "role" && name !== "content")) {
-      unsupported.push("unknown message field");
-    }
     const normalizedRole: "user" | "assistant" =
       message.role === "system" ? "user" : (message.role as "user" | "assistant");
     if (typeof message.content === "string") {
@@ -418,9 +309,6 @@ function validateMessages(
     }
     if (!Array.isArray(message.content)) {
       throw new InvalidRequest("message.content must be a string or block array");
-    }
-    if (message.content.length === 0) {
-      unsupported.push("explicit empty ordinary message content array");
     }
     for (const block of message.content) {
       validateContentBlock(
@@ -536,16 +424,13 @@ export function validateAnthropicSourceRequest(
   }
 
   const unsupported: string[] = [];
-  for (const name of Object.keys(value)) {
-    if (!KNOWN_TOP_LEVEL_FIELDS.has(name)) unsupported.push(`unknown body field: ${name}`);
-  }
-  validateOptionalFieldShapes(value, unsupported);
+  validateOptionalFieldShapes(value);
   const messageFacts = validateMessages(messages, unsupported);
   validateToolTurnLifecycle(messageFacts.messages);
-  const tools = validateAnthropicTools(value.tools, unsupported);
-  const systemPrompt = validateSystem(value.system, unsupported);
-  const metadataUserId = validateMetadata(value.metadata, unsupported);
-  const reasoning = validateOutputConfig(value.output_config, unsupported);
+  const tools = validateAnthropicTools(value.tools);
+  const systemPrompt = validateSystem(value.system);
+  const metadataUserId = validateMetadata(value.metadata);
+  const reasoning = validateOutputConfig(value.output_config);
 
   if (unsupported.length > 0) {
     throw new UnsupportedFeature(unsupported[0] ?? "Unsupported Anthropic semantic");
@@ -609,6 +494,13 @@ function convertPortableBlock(block: Record<string, unknown>): CanonicalContent 
         ...(signature.length > 0 ? { thinkingSignature: signature } : {}),
       };
     }
+    case "redacted_thinking":
+      return {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: block.data as string,
+        redacted: true,
+      };
     case "image": {
       const source = block.source as Record<string, unknown>;
       return {
@@ -757,6 +649,7 @@ export function convertValidatedAnthropicRequest(
       continue;
     }
 
+    const sourceContentWasEmpty = message.content.length === 0;
     const ordinary: Array<TextContent | ImageContent> = [];
     for (const block of message.content) {
       if (block.type === "toolResult") {
@@ -782,7 +675,7 @@ export function convertValidatedAnthropicRequest(
         ordinary.push(block);
       }
     }
-    if (ordinary.length > 0) {
+    if (ordinary.length > 0 || sourceContentWasEmpty) {
       messages.push({ role: "user", content: ordinary, timestamp: receivedAt });
     }
   }

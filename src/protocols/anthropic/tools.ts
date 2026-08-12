@@ -14,7 +14,6 @@ interface StrictSchemaCounts {
   unionParameters: number;
 }
 
-const TOOL_FIELDS = new Set(["name", "description", "input_schema", "strict"]);
 const SUPPORTED_SCHEMA_TYPES = new Set([
   "object",
   "array",
@@ -23,32 +22,6 @@ const SUPPORTED_SCHEMA_TYPES = new Set([
   "integer",
   "boolean",
   "null",
-]);
-const SUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "type",
-  "properties",
-  "required",
-  "additionalProperties",
-  "items",
-  "enum",
-  "const",
-  "description",
-  "title",
-  "default",
-  "examples",
-  "minimum",
-  "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "multipleOf",
-  "minLength",
-  "maxLength",
-  "pattern",
-  "minItems",
-  "maxItems",
-  "uniqueItems",
-  "minProperties",
-  "maxProperties",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,184 +39,26 @@ function requireUniqueStrings(value: unknown, field: string): string[] {
   return value as string[];
 }
 
-function validateJsonValue(
+function countStrictSchema(
   value: unknown,
-  field: string,
-  ancestors: Set<object> = new Set(),
-): void {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new InvalidRequest(`${field} must contain finite JSON numbers`);
-    }
-    return;
-  }
-  if (typeof value !== "object") {
-    throw new InvalidRequest(`${field} must contain JSON values only`);
-  }
-  if (ancestors.has(value)) {
-    throw new InvalidRequest(`${field} must be JSON-serializable`);
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (const entry of value) validateJsonValue(entry, field, ancestors);
-      return;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      throw new InvalidRequest(`${field} must contain plain JSON objects`);
-    }
-    for (const entry of Object.values(value)) {
-      validateJsonValue(entry, field, ancestors);
-    }
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function validateSchemaValue(
-  value: unknown,
-  field: string,
-  unsupported: string[],
+  path: string,
+  counts: StrictSchemaCounts,
   ancestors: Set<object>,
-  counts: StrictSchemaCounts | undefined,
 ): void {
   if (typeof value === "boolean") {
-    unsupported.push(`${field} uses a boolean schema`);
+    // JSON Schema boolean schemas are accepted as-is.
     return;
   }
-  validateSchemaNode(value, field, unsupported, ancestors, counts, false);
-}
-
-function validateSchemaMap(
-  value: unknown,
-  field: string,
-  unsupported: string[],
-  ancestors: Set<object>,
-  counts: StrictSchemaCounts | undefined,
-): void {
-  if (!isRecord(value)) {
-    throw new InvalidRequest(`${field} must be an object of schemas`);
-  }
-  for (const [name, schema] of Object.entries(value)) {
-    validateSchemaValue(
-      schema,
-      `${field}.${name}`,
-      unsupported,
-      ancestors,
-      counts,
-    );
-  }
-}
-
-function validateUnsupportedSchemaKeywords(
-  node: Record<string, unknown>,
-  path: string,
-  unsupported: string[],
-  ancestors: Set<object>,
-  counts: StrictSchemaCounts | undefined,
-): void {
-  if (node.$ref !== undefined && typeof node.$ref !== "string") {
-    throw new InvalidRequest(`${path}.$ref must be a string`);
-  }
-  for (const keyword of ["$defs", "definitions", "dependentSchemas", "patternProperties"] as const) {
-    if (node[keyword] !== undefined) {
-      validateSchemaMap(
-        node[keyword],
-        `${path}.${keyword}`,
-        unsupported,
-        ancestors,
-        counts,
-      );
-    }
-  }
-  for (const keyword of ["oneOf", "anyOf", "allOf", "prefixItems"] as const) {
-    const value = node[keyword];
-    if (value === undefined) continue;
-    if (!Array.isArray(value) || value.length === 0) {
-      throw new InvalidRequest(`${path}.${keyword} must be a non-empty schema array`);
-    }
-    for (const [index, schema] of value.entries()) {
-      validateSchemaValue(
-        schema,
-        `${path}.${keyword}[${index}]`,
-        unsupported,
-        ancestors,
-        counts,
-      );
-    }
-  }
-  for (const keyword of [
-    "not",
-    "if",
-    "then",
-    "else",
-    "propertyNames",
-    "contains",
-    "unevaluatedProperties",
-    "unevaluatedItems",
-  ] as const) {
-    if (node[keyword] !== undefined) {
-      validateSchemaValue(
-        node[keyword],
-        `${path}.${keyword}`,
-        unsupported,
-        ancestors,
-        counts,
-      );
-    }
-  }
-  if (node.dependentRequired !== undefined) {
-    if (!isRecord(node.dependentRequired)) {
-      throw new InvalidRequest(`${path}.dependentRequired must be an object`);
-    }
-    for (const [name, required] of Object.entries(node.dependentRequired)) {
-      requireUniqueStrings(required, `${path}.dependentRequired.${name}`);
-    }
-  }
-  for (const keyword of ["minContains", "maxContains"] as const) {
-    const value = node[keyword];
-    if (
-      value !== undefined &&
-      (!Number.isSafeInteger(value) || (value as number) < 0)
-    ) {
-      throw new InvalidRequest(`${path}.${keyword} must be a non-negative integer`);
-    }
-  }
-  if (node.format !== undefined && typeof node.format !== "string") {
-    throw new InvalidRequest(`${path}.format must be a string`);
-  }
-}
-
-function validateSchemaNode(
-  value: unknown,
-  path: string,
-  unsupported: string[],
-  ancestors: Set<object>,
-  counts: StrictSchemaCounts | undefined,
-  isParameter: boolean,
-): void {
   if (!isRecord(value)) {
     throw new InvalidRequest(`${path} must be a schema object`);
   }
   if (ancestors.has(value)) {
-    unsupported.push(`${path} contains a cyclic schema graph`);
-    return;
+    throw new InvalidRequest(`${path} contains a cyclic schema graph`);
   }
   ancestors.add(value);
   try {
     const type = value.type;
-    if (typeof type === "string") {
-      if (!SUPPORTED_SCHEMA_TYPES.has(type)) {
-        throw new InvalidRequest(`${path}.type is not a JSON Schema type`);
-      }
-    } else if (Array.isArray(type)) {
+    if (Array.isArray(type)) {
       if (
         type.length === 0 ||
         type.some(
@@ -254,13 +69,14 @@ function validateSchemaNode(
       ) {
         throw new InvalidRequest(`${path}.type array is malformed`);
       }
-      if (counts !== undefined && isParameter && type.length > 1) {
+      if (type.length > 1) {
         counts.unionParameters += 1;
       }
-      unsupported.push(`${path}.type arrays are unsupported`);
-    } else if (type === undefined) {
-      unsupported.push(`${path}.type omission is outside the frozen subset`);
-    } else {
+    } else if (typeof type === "string") {
+      if (!SUPPORTED_SCHEMA_TYPES.has(type)) {
+        throw new InvalidRequest(`${path}.type is not a JSON Schema type`);
+      }
+    } else if (type !== undefined) {
       throw new InvalidRequest(`${path}.type has an invalid shape`);
     }
 
@@ -274,128 +90,69 @@ function validateSchemaNode(
         throw new InvalidRequest(`${path}.properties must be an object`);
       }
       for (const [name, schema] of Object.entries(value.properties)) {
-        if (counts !== undefined && !requiredNames.has(name)) {
+        if (!requiredNames.has(name)) {
           counts.optionalParameters += 1;
         }
-        validateSchemaNode(
+        countStrictSchema(
           schema,
           `${path}.properties.${name}`,
-          unsupported,
-          ancestors,
           counts,
-          true,
+          ancestors,
         );
       }
     }
 
-    if (value.additionalProperties !== undefined) {
-      if (typeof value.additionalProperties !== "boolean") {
-        validateSchemaNode(
-          value.additionalProperties,
-          `${path}.additionalProperties`,
-          unsupported,
-          ancestors,
+    for (const keyword of [
+      "additionalProperties",
+      "items",
+      "not",
+      "if",
+      "then",
+      "else",
+      "propertyNames",
+      "contains",
+      "unevaluatedProperties",
+      "unevaluatedItems",
+      "dependentSchemas",
+      "patternProperties",
+    ] as const) {
+      const nested = value[keyword];
+      if (nested === undefined) continue;
+      countStrictSchema(nested, `${path}.${keyword}`, counts, ancestors);
+    }
+    for (const keyword of [
+      "oneOf",
+      "anyOf",
+      "allOf",
+      "prefixItems",
+    ] as const) {
+      const nested = value[keyword];
+      if (nested === undefined) continue;
+      if (!Array.isArray(nested) || nested.length === 0) {
+        throw new InvalidRequest(`${path}.${keyword} must be a schema array`);
+      }
+      for (const [index, schema] of nested.entries()) {
+        countStrictSchema(
+          schema,
+          `${path}.${keyword}[${index}]`,
           counts,
-          false,
+          ancestors,
         );
       }
     }
-    if (value.items !== undefined) {
-      validateSchemaValue(
-        value.items,
-        `${path}.items`,
-        unsupported,
-        ancestors,
-        counts,
-      );
-    }
-
-    if (value.enum !== undefined) {
-      if (!Array.isArray(value.enum) || value.enum.length === 0) {
-        throw new InvalidRequest(`${path}.enum must be a non-empty array`);
+    for (const keyword of ["$defs", "definitions"] as const) {
+      const nested = value[keyword];
+      if (nested === undefined) continue;
+      if (!isRecord(nested)) {
+        throw new InvalidRequest(`${path}.${keyword} must be an object of schemas`);
       }
-      validateJsonValue(value.enum, `${path}.enum`);
-    }
-    for (const keyword of ["const", "default"] as const) {
-      if (Object.hasOwn(value, keyword)) {
-        validateJsonValue(value[keyword], `${path}.${keyword}`);
-      }
-    }
-    if (value.examples !== undefined) {
-      if (!Array.isArray(value.examples)) {
-        throw new InvalidRequest(`${path}.examples must be an array`);
-      }
-      validateJsonValue(value.examples, `${path}.examples`);
-    }
-    for (const keyword of ["description", "title"] as const) {
-      if (value[keyword] !== undefined && typeof value[keyword] !== "string") {
-        throw new InvalidRequest(`${path}.${keyword} must be a string`);
-      }
-    }
-    for (const keyword of [
-      "minimum",
-      "maximum",
-      "exclusiveMinimum",
-      "exclusiveMaximum",
-    ] as const) {
-      if (
-        value[keyword] !== undefined &&
-        (typeof value[keyword] !== "number" || !Number.isFinite(value[keyword]))
-      ) {
-        throw new InvalidRequest(`${path}.${keyword} must be a finite number`);
-      }
-    }
-    if (
-      value.multipleOf !== undefined &&
-      (typeof value.multipleOf !== "number" ||
-        !Number.isFinite(value.multipleOf) ||
-        value.multipleOf <= 0)
-    ) {
-      throw new InvalidRequest(`${path}.multipleOf must be a positive number`);
-    }
-    for (const keyword of [
-      "minLength",
-      "maxLength",
-      "minItems",
-      "maxItems",
-      "minProperties",
-      "maxProperties",
-    ] as const) {
-      const entry = value[keyword];
-      if (
-        entry !== undefined &&
-        (!Number.isSafeInteger(entry) || (entry as number) < 0)
-      ) {
-        throw new InvalidRequest(`${path}.${keyword} must be a non-negative integer`);
-      }
-    }
-    if (value.pattern !== undefined) {
-      if (typeof value.pattern !== "string") {
-        throw new InvalidRequest(`${path}.pattern must be a string`);
-      }
-      try {
-        new RegExp(value.pattern, "u");
-      } catch {
-        throw new InvalidRequest(`${path}.pattern must be a valid expression`);
-      }
-    }
-    if (
-      value.uniqueItems !== undefined &&
-      typeof value.uniqueItems !== "boolean"
-    ) {
-      throw new InvalidRequest(`${path}.uniqueItems must be boolean`);
-    }
-
-    validateUnsupportedSchemaKeywords(
-      value,
-      path,
-      unsupported,
-      ancestors,
-      counts,
-    );
-    for (const keyword of Object.keys(value)) {
-      if (!SUPPORTED_SCHEMA_KEYWORDS.has(keyword)) {
-        unsupported.push(`${path}.${keyword} is outside the frozen schema subset`);
+      for (const [name, schema] of Object.entries(nested)) {
+        countStrictSchema(
+          schema,
+          `${path}.${keyword}.${name}`,
+          counts,
+          ancestors,
+        );
       }
     }
   } finally {
@@ -425,7 +182,6 @@ function validateToolControlShapes(tool: Record<string, unknown>): void {
 
 export function validateAnthropicTools(
   value: unknown,
-  unsupported: string[],
 ): ValidatedAnthropicTool[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
@@ -467,24 +223,20 @@ export function validateAnthropicTools(
 
     const strict = candidate.strict === true;
     if (strict) strictToolCount += 1;
-    validateSchemaNode(
-      candidate.input_schema,
-      `tools[${index}].input_schema`,
-      unsupported,
-      new Set(),
-      strict ? strictCounts : undefined,
-      false,
-    );
+    if (strict) {
+      countStrictSchema(
+        candidate.input_schema,
+        `tools[${index}].input_schema`,
+        strictCounts,
+        new Set(),
+      );
+    }
     if (
       typeof candidate.input_schema.type === "string" &&
       candidate.input_schema.type !== "object"
     ) {
       throw new InvalidRequest(`tools[${index}].input_schema must have type object`);
     }
-    for (const field of Object.keys(candidate)) {
-      if (!TOOL_FIELDS.has(field)) unsupported.push(`unsupported tool field: ${field}`);
-    }
-
     const validated: ValidatedAnthropicTool = {
       name: candidate.name,
       inputSchema: candidate.input_schema,
