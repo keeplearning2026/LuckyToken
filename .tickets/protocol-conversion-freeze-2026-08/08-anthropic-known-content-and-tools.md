@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 — message order; 06 — tool lifecycle; 07 — options/thinking/cache.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,18 @@ Resolver handles remain in Anthropic-owned capabilities and resolve to Pi bytes/
 
 ## Acceptance criteria
 
-- [ ] Text, base64 image, ordinary/redacted thinking, and client tool_use map exactly where Pi supports them.
-- [ ] Document and search-result readable content degrades deterministically in source order; citations/source presentation without Pi slots drop.
-- [ ] Resolver-dependent URL/PDF/file content uses an Anthropic-owned trusted capability with abort/size/MIME limits; missing authority follows the known-family rule.
-- [ ] Server-hosted calls/results preserve representable result content/transcript and do not become Pi client-executable ToolCalls.
-- [ ] Ordinary Client/BYOT tools map name/description/schema/strict into Pi Tool.
-- [ ] Context.tools contains the complete current Client/BYOT catalog, including defer_loading definitions.
-- [ ] tool_reference maps valid names to addedToolNames without hiding unreferenced tools; unknown references fail.
-- [ ] Unknown content discriminator uses Anthropic-local error|ignore, default error; ignore emits notice and never supplies a terminal.
-- [ ] Known malformed content cannot be made valid by unknown=ignore.
-- [ ] Tests cover every installed Anthropic known family and future unknown separately.
-- [ ] No concrete Provider or Responses module participates in classification.
+- [x] Text, base64 image, ordinary/redacted thinking, and client tool_use map exactly where Pi supports them.
+- [x] Document and search-result readable content degrades deterministically in source order; citations/source presentation without Pi slots drop.
+- [x] Resolver-dependent URL/PDF/file content uses an Anthropic-owned trusted capability with abort/size/MIME limits; missing authority follows the known-family rule.
+- [x] Server-hosted calls/results preserve representable result content/transcript and do not become Pi client-executable ToolCalls.
+- [x] Ordinary Client/BYOT tools map name/description/schema/strict into Pi Tool.
+- [x] Context.tools contains the complete current Client/BYOT catalog, including defer_loading definitions.
+- [x] tool_reference maps valid names to addedToolNames without hiding unreferenced tools; unknown references fail.
+- [x] Unknown content discriminator uses Anthropic-local error|ignore, default error; ignore emits notice and never supplies a terminal.
+- [x] Known malformed content cannot be made valid by unknown=ignore.
+- [x] Tests cover every installed Anthropic known family and future unknown separately.
+- [x] No concrete Provider or Responses module participates in classification.
 
 ## Out of scope
 
 Native passthrough, which may preserve unsupported native families without Pi (11).
-

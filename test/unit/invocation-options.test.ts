@@ -24,6 +24,8 @@ describe("Anthropic Pi invocation controls", () => {
           stream: true,
           metadata: { user_id: "exact-user" },
           output_config: { effort: "high" },
+          top_p: 0.5,
+          top_k: 3,
         }),
       ),
       1,
@@ -32,12 +34,13 @@ describe("Anthropic Pi invocation controls", () => {
     expect(invocation.options).toEqual({
       maxTokens: 32,
       temperature: 0,
+      samplingParams: { top_p: 0.5, top_k: 3 },
       metadata: { user_id: "exact-user" },
       reasoning: "high",
     });
     expect(invocation.renderState).toEqual({
       stream: true,
-      clientModel: "model",
+      selector: "model",
     });
     expect(invocation.options).not.toHaveProperty("stream");
   });
@@ -60,19 +63,21 @@ describe("Anthropic Pi invocation controls", () => {
   });
 
   it.each([
-    { name: "top p", extras: { top_p: 0.5 } },
-    { name: "top k", extras: { top_k: 1 } },
-    { name: "stop sequences", extras: { stop_sequences: ["stop"] } },
-    { name: "thinking", extras: { thinking: { type: "enabled" } } },
-    { name: "metadata extension", extras: { metadata: { other: "value" } } },
-    { name: "unknown output field", extras: { output_config: { format: "text" } } },
-    { name: "future top-level field", extras: { future_control: true } },
-  ])("ignores unconverted fields: $name", ({ extras }) => {
+    { name: "top p", extras: { top_p: 0.5 }, expected: { samplingParams: { top_p: 0.5 } } },
+    { name: "top k", extras: { top_k: 1 }, expected: { samplingParams: { top_k: 1 } } },
+    { name: "thinking enabled", extras: { thinking: { type: "enabled", budget_tokens: 4096 } }, expected: { thinkingBudgets: { low: 4096 } } },
+    { name: "thinking disabled", extras: { thinking: { type: "disabled" } }, expected: {} },
+    { name: "thinking adaptive", extras: { thinking: { type: "adaptive" } }, expected: {} },
+    { name: "stop sequences", extras: { stop_sequences: ["stop"] }, expected: {} },
+    { name: "metadata extension", extras: { metadata: { other: "value" } }, expected: {} },
+    { name: "unknown output field", extras: { output_config: { format: "text" } }, expected: {} },
+    { name: "future top-level field", extras: { future_control: true }, expected: {} },
+  ])("handles unconverted or mapped fields: $name", ({ extras, expected }) => {
     const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(request(extras)),
       1,
     );
-    expect(invocation.options).toEqual({ maxTokens: 32 });
+    expect(invocation.options).toEqual({ maxTokens: 32, ...expected });
   });
 
   it("falls back to Pi reasoning default for an unknown effort", () => {

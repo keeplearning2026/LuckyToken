@@ -19,6 +19,7 @@ import {
 import {
   execute,
   ExecutionAbortedError,
+  ExecutionFailure,
   freezePiInvocation,
 } from "../../execution.js";
 import {
@@ -38,7 +39,7 @@ import {
   resolveAnthropicSourceProfile,
 } from "./profile.js";
 import {
-  convertValidatedAnthropicRequest,
+  convertValidatedAnthropicRequestWithPolicy,
   extractAnthropicModelSelector,
   validateAnthropicSourceRequest,
 } from "./request.js";
@@ -47,15 +48,23 @@ import {
   defaultAnthropicModelValidityPolicy,
   type AnthropicModelValidityPolicy,
 } from "./representability.js";
-import { renderAnthropicTextMessage } from "./response.js";
+import { convertAssistantMessageToAnthropicWithPolicy } from "./response.js";
 import { renderAnthropicAtomicSse } from "./sse.js";
 import {
   renderAnthropicError,
   renderAnthropicJsonSuccess,
   type PreparedHttpResponse,
 } from "./wire.js";
+import {
+  mapUpstreamFailureFact,
+  requestIdFromFact,
+} from "./failure-rendering.js";
 import { mapUpstreamHttpFailure } from "./upstream-failure.js";
-import { passthroughAnthropicRequest } from "./passthrough.js";
+import {
+  isAnthropicNativePassthroughModel,
+  passthroughAnthropicRequest,
+  passthroughRequestHeaders,
+} from "./passthrough.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
@@ -95,9 +104,17 @@ interface AnthropicMessagesDependencies {
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
+  const headers: Record<string, string> = {
+    "content-type": prepared.contentType,
+  };
+  if (prepared.headers !== undefined) {
+    for (const [name, value] of Object.entries(prepared.headers)) {
+      headers[name] = value;
+    }
+  }
   return new Response(prepared.body, {
     status: prepared.status,
-    headers: { "content-type": prepared.contentType },
+    headers,
   });
 }
 
@@ -189,13 +206,14 @@ async function handleAnthropicMessages(
     const selector = extractAnthropicModelSelector(body);
     diagnostics.checkpoint({ stage: "model-resolution", selector });
     const model = resolveModel(dependencies.models, selector);
-    if (model.api === "anthropic-messages") {
+    if (isAnthropicNativePassthroughModel(model)) {
       return passthroughBranch(
         dependencies,
         httpObserver.observedFetch,
         request,
         model,
         rawBody,
+        diagnostics,
       );
     }
     const validatedRequest = validateAnthropicSourceRequest(body);
@@ -205,7 +223,14 @@ async function handleAnthropicMessages(
       sourceProfile,
       dependencies.modelValidityPolicy,
     );
-    const invocation = convertValidatedAnthropicRequest(validatedRequest, receivedAt);
+    const invocation = convertValidatedAnthropicRequestWithPolicy(
+      validatedRequest,
+      receivedAt,
+      dependencies.configuration.conversion.request,
+    );
+    for (const notice of invocation.notices) {
+      diagnostics.notice(notice);
+    }
     diagnostics.checkpoint({ stage: "pi-composition", selector });
     const piOptions = composeOptions(
       invocation.options,
@@ -233,11 +258,18 @@ async function handleAnthropicMessages(
     );
     diagnostics.checkpoint({ stage: "client-render", selector });
     request.signal.throwIfAborted();
-    const target = renderAnthropicTextMessage(
+    const responseConversion = convertAssistantMessageToAnthropicWithPolicy(
       message,
-      invocation.renderState.clientModel,
-      dependencies.createMessageId(),
+      {
+        selector: invocation.renderState.selector,
+        createMessageId: dependencies.createMessageId,
+      },
+      dependencies.configuration.conversion.response,
     );
+    for (const notice of responseConversion.notices) {
+      diagnostics.notice(notice);
+    }
+    const target = responseConversion.message;
     const prepared = invocation.renderState.stream
       ? renderAnthropicAtomicSse(target)
       : renderAnthropicJsonSuccess(target);
@@ -268,6 +300,22 @@ async function handleAnthropicMessages(
     }
     if (error instanceof ModelResolutionFailure) {
       return toResponse(renderAnthropicError(404, "not_found_error", error.message));
+    }
+    if (
+      error instanceof ExecutionFailure &&
+      error.failure !== undefined &&
+      error.failure.kind !== "caller_cancellation"
+    ) {
+      const mapping = mapUpstreamFailureFact(error.failure);
+      return toResponse(
+        renderAnthropicError(
+          mapping.status,
+          mapping.type,
+          mapping.message,
+          requestIdFromFact(error.failure),
+          mapping.safeHeaders,
+        ),
+      );
     }
     const observation = httpObserver.latestObservation;
     if (observation !== undefined && observation.kind === "response") {
@@ -350,6 +398,7 @@ async function passthroughBranch(
   request: Request,
   model: Model<string>,
   rawBody: string,
+  diagnostics: InvocationDiagnostics,
 ): Promise<Response> {
   const auth = await raceWithRequestSignal(
     dependencies.models.getAuth(model),
@@ -372,21 +421,24 @@ async function passthroughBranch(
       apiKey,
       signal: request.signal,
       fetch: fetchImpl,
+      upstreamHeaders: passthroughRequestHeaders(request),
     }),
     request.signal,
   );
   request.signal.throwIfAborted();
-  // Passthrough is verbatim in both directions: success and upstream HTTP
-  // failure responses are returned unchanged (status, headers, body). The
-  // observer still records the outcome for diagnostics, but the client sees
-  // the upstream response as-is.
-  const headers = new Headers();
-  for (const [name, value] of upstream.headers) {
-    headers.set(name, value);
+  if (upstream.status >= 400) {
+    await diagnostics.fail({
+      classification: "runtime-failure",
+      stage: "native-passthrough",
+      clientStatus: upstream.status,
+      ...(upstream.headers["request-id"] === undefined
+        ? {}
+        : { safeIds: { requestId: upstream.headers["request-id"] } }),
+    });
   }
   return new Response(upstream.body, {
     status: upstream.status,
-    headers,
+    headers: { ...upstream.headers },
   });
 }
 

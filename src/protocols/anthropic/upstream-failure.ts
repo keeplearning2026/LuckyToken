@@ -39,14 +39,6 @@ const ANTHROPIC_ERROR_TYPE_BY_STATUS: Readonly<Record<number, AnthropicErrorType
 
 const DEFAULT_UPSTREAM_ERROR_TYPE: AnthropicErrorType = "api_error";
 
-/**
- * Map an observed upstream HTTP failure to the Anthropic error shape.
- *
- * Only non-2xx `response` observations are provider HTTP failures. A
- * `transport-error` (SDK timeout, connection failure) or the absence of any
- * observation (configuration failure before an HTTP attempt) is not an
- * upstream HTTP failure and must not be mapped here.
- */
 export function mapUpstreamHttpFailure(
   observation: Extract<HttpObservation, { kind: "response" }>,
 ): UpstreamHttpFailureMapping | undefined {
@@ -55,7 +47,6 @@ export function mapUpstreamHttpFailure(
   }
   const message = decodeUpstreamBody(observation.body);
   const type =
-    extractUpstreamErrorType(message) ??
     ANTHROPIC_ERROR_TYPE_BY_STATUS[observation.status] ??
     DEFAULT_UPSTREAM_ERROR_TYPE;
   return {
@@ -66,35 +57,6 @@ export function mapUpstreamHttpFailure(
         ? `Upstream provider returned HTTP ${observation.status}`
         : message,
   };
-}
-
-/**
- * Extract the provider's own error type from its JSON error body.
- *
- * Common provider error bodies are `{"error":{"type":"..."}}` (OpenAI,
- * Anthropic) or `{"error":{"code":"..."}}` (CommandCode, Mistral). The value
- * is used verbatim when it is a non-empty string; the Anthropic protocol
- * permits new error types under its versioning policy, so an unknown provider
- * type/code is forwarded unchanged rather than replaced.
- */
-function extractUpstreamErrorType(body: string | undefined): string | undefined {
-  if (body === undefined) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return undefined;
-  }
-  const error = (parsed as Record<string, unknown>).error;
-  if (typeof error !== "object" || error === null || Array.isArray(error)) {
-    return undefined;
-  }
-  const candidate = (error as Record<string, unknown>).type ?? (error as Record<string, unknown>).code;
-  if (typeof candidate !== "string" || candidate.length === 0) return undefined;
-  return candidate;
 }
 
 function decodeUpstreamBody(body: Uint8Array | undefined): string | undefined {

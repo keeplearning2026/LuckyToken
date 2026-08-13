@@ -41,13 +41,10 @@ Request-local information remains request-local. Prompts, tool outputs, opaque h
 
 ## Frontier
 
-All four infrastructure tickets are complete. The next frontier is every
-ticket whose dependencies are now satisfied:
+All four infrastructure tickets and the complete Anthropic lane (05–11) are
+complete. The next frontier is every ticket whose dependencies are now
+satisfied:
 
-- 05 — Preserve Anthropic message order and system-prompt semantics
-- 07 — Map Anthropic sampling, thinking budgets, and cache policy
-- 09 — Project Pi responses faithfully into Anthropic messages
-- 11 — Certify and harden native Anthropic passthrough
 - 12 — Rebuild Responses local response state
 - 13 — Convert Responses privileged prompts, options, and handles
 - 15 — Complete Responses function/custom/namespace tool lifecycles

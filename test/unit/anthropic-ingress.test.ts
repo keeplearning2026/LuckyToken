@@ -137,39 +137,39 @@ describe("Anthropic closed-world body acceptance", () => {
 });
 
 describe("Anthropic system-role degradation", () => {
-  it("degrades messages[].role=system to user with content preserved", () => {
+  it("promotes the first messages[].role=system into the systemPrompt", () => {
     const invocation = parseAnthropicTextInvocation(
       minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
       1,
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    const msg = invocation.context.messages[0];
-    expect(msg?.role).toBe("user");
-    const content = msg?.content as unknown as Array<Record<string, unknown>>;
-    expect(content).toHaveLength(1);
-    expect(content[0]).toMatchObject({ type: "text", text: "runtime hint" });
+    expect(invocation.context.systemPrompt).toBe("runtime hint");
+    expect(invocation.context.messages).toHaveLength(0);
   });
 
-  it("merges adjacent user and degraded system into one user Pi message", () => {
+  it("promotes only the first system message and degrades later ones to user", () => {
     const invocation = parseAnthropicTextInvocation(
       minimalBody({
         messages: [
           { role: "user", content: "hello" },
-          { role: "system", content: "runtime instruction" },
+          { role: "system", content: "first instruction" },
+          { role: "system", content: "second instruction" },
         ],
       }),
       1,
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    const msg = invocation.context.messages[0];
-    expect(msg?.role).toBe("user");
-    const content = msg?.content as unknown as Array<Record<string, unknown>>;
-    expect(content).toHaveLength(2);
-    expect(content[0]).toMatchObject({ type: "text", text: "hello" });
-    expect(content[1]).toMatchObject({ type: "text", text: "runtime instruction" });
+    expect(invocation.context.systemPrompt).toBe("first instruction");
+    const users = invocation.context.messages.filter(
+      (message) => message.role === "user",
+    );
+    expect(users).toHaveLength(1);
+    const content = users[0]?.content as Array<{ text: string }>;
+    expect(content.map((entry) => entry.text)).toEqual([
+      "hello",
+      "second instruction",
+    ]);
   });
 
-  it("preserves relative message ordering after system degradation", () => {
+  it("preserves relative ordering of degraded later system messages", () => {
     const invocation = parseAnthropicTextInvocation(
       minimalBody({
         messages: [
@@ -181,13 +181,12 @@ describe("Anthropic system-role degradation", () => {
       }),
       1,
     );
-    expect(invocation.context.messages).toHaveLength(3);
-    expect(invocation.context.messages[0]?.role).toBe("user");
-    expect(invocation.context.messages[1]?.role).toBe("assistant");
-    expect(invocation.context.messages[2]?.role).toBe("user");
+    expect(invocation.context.systemPrompt).toBe("B");
+    const roles = invocation.context.messages.map((message) => message.role);
+    expect(roles).toEqual(["user", "assistant", "user"]);
   });
 
-  it("keeps top-level system separate from messages[].role=system degradation", () => {
+  it("appends the first system message after the top-level system prompt", () => {
     const invocation = parseAnthropicTextInvocation(
       minimalBody({
         system: "stable root prompt",
@@ -198,17 +197,16 @@ describe("Anthropic system-role degradation", () => {
       }),
       1,
     );
-    expect(invocation.context.systemPrompt).toBe("stable root prompt");
+    expect(invocation.context.systemPrompt).toBe(
+      "stable root prompt\nruntime context",
+    );
     const userMessages = invocation.context.messages.filter(
       (m) => m.role === "user",
     );
     expect(userMessages).toHaveLength(1);
-    const content = userMessages[0]?.content as unknown as Array<
-      Record<string, unknown>
-    >;
-    expect(content).toHaveLength(2);
-    expect(content[0]).toMatchObject({ type: "text", text: "hello" });
-    expect(content[1]).toMatchObject({ type: "text", text: "runtime context" });
+    expect(userMessages[0]?.content).toEqual([
+      { type: "text", text: "hello" },
+    ]);
   });
 
   it("rejects unknown role values that are not user/assistant/system", () => {

@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — adapter-owned configuration; 02 — request-local notices/journal.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -18,19 +18,18 @@ Inbound raw body and approved headers flow directly to the compatible upstream a
 
 ## Acceptance criteria
 
-- [ ] Passthrough selection uses declared Anthropic wire compatibility, not scattered concrete Provider-name checks.
-- [ ] Configured base path and endpoint semantics are explicit and tested.
-- [ ] Model selector/body rewrite policy is explicit; no qualified Lucky selector leaks unless intentionally supported.
-- [ ] Anthropic version/beta and approved end-to-end headers follow documented rules.
-- [ ] Hop-by-hop, cookie, auth, stale content-length/encoding, and unsafe headers never cross.
-- [ ] Status/body/SSE are preserved for normal native responses.
-- [ ] Pre-commit body/read failure produces legal Anthropic error; post-commit failure uses native SSE lifecycle.
-- [ ] Cancellation aborts upstream work and writes no closed response.
-- [ ] Conversion and passthrough tests/metrics identify profile separately.
-- [ ] Final failure writes one bounded safe journal.
-- [ ] No Responses passthrough classifier/config/test/helper is imported.
+- [x] Passthrough selection uses declared Anthropic wire compatibility, not scattered concrete Provider-name checks.
+- [x] Configured base path and endpoint semantics are explicit and tested.
+- [x] Model selector/body rewrite policy is explicit; no qualified Lucky selector leaks unless intentionally supported.
+- [x] Anthropic version/beta and approved end-to-end headers follow documented rules.
+- [x] Hop-by-hop, cookie, auth, stale content-length/encoding, and unsafe headers never cross.
+- [x] Status/body/SSE are preserved for normal native responses.
+- [x] Pre-commit body/read failure produces legal Anthropic error; post-commit failure uses native SSE lifecycle.
+- [x] Cancellation aborts upstream work and writes no closed response.
+- [x] Conversion and passthrough tests/metrics identify profile separately.
+- [x] Final failure writes one bounded safe journal.
+- [x] No Responses passthrough classifier/config/test/helper is imported.
 
 ## Out of scope
 
 Anthropic↔Pi conversion and Responses native passthrough.
-

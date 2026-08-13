@@ -47,8 +47,8 @@ describe("CommandCode HTTP failure passthrough", () => {
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).toMatchObject({
       type: "error",
-      error: { type: "RATE_LIMITED" },
+      error: { type: "rate_limit_error" },
     });
-    expect(JSON.stringify(body)).toContain("RATE_LIMITED");
+    expect(JSON.stringify(body)).toContain("slow down");
   });
 });

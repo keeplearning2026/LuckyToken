@@ -1,0 +1,254 @@
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+
+import {
+  convertAssistantMessageToAnthropicWithPolicy,
+  OutboundResponseFidelityFailure,
+  type AnthropicResponseConversionPolicy,
+} from "../../src/protocols/anthropic/response.js";
+
+function usage(overrides: Partial<Usage> = {}): Usage {
+  return {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    ...overrides,
+  };
+}
+
+function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "hello" }],
+    api: "internal-api",
+    provider: "internal-provider",
+    model: "internal-model",
+    usage: usage(),
+    stopReason: "stop",
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+function policy(
+  overrides: Partial<AnthropicResponseConversionPolicy> = {},
+): AnthropicResponseConversionPolicy {
+  return { unknownPiContent: "error", ...overrides };
+}
+
+describe("09: Pi-to-Anthropic response projection", () => {
+  it("uses a valid responseId and falls back to generated identity", () => {
+    const withId = convertAssistantMessageToAnthropicWithPolicy(
+      message({ responseId: "msg_valid_1" }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(withId.message.id).toBe("msg_valid_1");
+
+    const generated = convertAssistantMessageToAnthropicWithPolicy(
+      message(),
+      { selector: "client-selector", createMessageId: () => "msg_generated" },
+      policy(),
+    );
+    expect(generated.message.id).toBe("msg_generated");
+
+    const fallback = convertAssistantMessageToAnthropicWithPolicy(
+      message(),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(fallback.message.id).toMatch(/^msg_[A-Za-z0-9-]+$/u);
+  });
+
+  it("always echoes the client selector and never leaks responseModel", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({ responseModel: "provider-model-x", responseId: "msg_1" }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.model).toBe("client-selector");
+    expect(JSON.stringify(result.message)).not.toContain("provider-model-x");
+  });
+
+  it("preserves text exactly and ordinary thinking with signature", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        content: [
+          { type: "text", text: "A" },
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: "sig",
+          },
+        ],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.content).toEqual([
+      { citations: null, text: "A", type: "text" },
+      { signature: "sig", thinking: "reasoning", type: "thinking" },
+    ]);
+    expect(result.notices).toEqual([]);
+  });
+
+  it("synthesizes an empty signature with a notice when ordinary thinking lacks one", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        content: [{ type: "thinking", thinking: "unsigned" }],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.content).toEqual([
+      { signature: "", thinking: "unsigned", type: "thinking" },
+    ]);
+    expect(
+      result.notices.some(
+        (notice) =>
+          notice.code === "anthropic_missing_thinking_signature" &&
+          notice.action === "degrade",
+      ),
+    ).toBe(true);
+  });
+
+  it("maps redacted thinking to redacted_thinking and requires opaque data", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "opaque-payload",
+            redacted: true,
+          },
+        ],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.content).toEqual([
+      { data: "opaque-payload", type: "redacted_thinking" },
+    ]);
+
+    expect(() =>
+      convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          content: [
+            { type: "thinking", thinking: "", redacted: true },
+          ],
+        }),
+        { selector: "client-selector" },
+        policy(),
+      ),
+    ).toThrow(OutboundResponseFidelityFailure);
+  });
+
+  it("preserves empty projected content without inventing a text block", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({ content: [] }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.content).toEqual([]);
+    expect(result.message.stop_reason).toBe("end_turn");
+  });
+
+  it("maps usage including thinking and cache breakdown", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        usage: usage({
+          input: 10,
+          output: 20,
+          cacheRead: 3,
+          cacheWrite: 5,
+          cacheWrite1h: 2,
+          reasoning: 7,
+        }),
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.usage).toEqual({
+      cache_creation: {
+        ephemeral_1h_input_tokens: 2,
+        ephemeral_5m_input_tokens: 3,
+      },
+      cache_creation_input_tokens: 5,
+      cache_read_input_tokens: 3,
+      inference_geo: null,
+      input_tokens: 10,
+      output_tokens: 20,
+      output_tokens_details: { thinking_tokens: 7 },
+      server_tool_use: null,
+      service_tier: null,
+    });
+  });
+
+  it("keeps length authoritative over toolCall content", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        stopReason: "length",
+        content: [
+          { type: "toolCall", id: "call", name: "tool", arguments: {} },
+        ],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.stop_reason).toBe("max_tokens");
+    expect(result.notices).toEqual([]);
+  });
+
+  it("emits a non-model-visible notice when stop reason is normalized", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        stopReason: "stop",
+        content: [
+          { type: "toolCall", id: "call", name: "tool", arguments: {} },
+        ],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+    expect(result.message.stop_reason).toBe("tool_use");
+    expect(
+      result.notices.some(
+        (notice) => notice.code === "anthropic_stop_reason_normalized",
+      ),
+    ).toBe(true);
+  });
+
+  it("handles unknown Pi content with error/ignore policy", () => {
+    expect(() =>
+      convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          content: [
+            { type: "future_content", payload: 1 },
+          ] as unknown as AssistantMessage["content"],
+        }),
+        { selector: "client-selector" },
+        policy(),
+      ),
+    ).toThrow(/Unsupported Pi assistant content/u);
+
+    const ignored = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        content: [
+          { type: "future_content", payload: 1 },
+        ] as unknown as AssistantMessage["content"],
+      }),
+      { selector: "client-selector" },
+      policy({ unknownPiContent: "ignore" }),
+    );
+    expect(ignored.message.content).toEqual([]);
+    expect(
+      ignored.notices.some(
+        (notice) => notice.code === "anthropic_unknown_pi_content_ignored",
+      ),
+    ).toBe(true);
+  });
+});

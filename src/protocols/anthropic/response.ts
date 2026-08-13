@@ -1,4 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
+
+import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
@@ -19,6 +22,11 @@ export interface AnthropicThinkingBlock {
   signature: string;
   thinking: string;
   type: "thinking";
+}
+
+export interface AnthropicRedactedThinkingBlock {
+  data: string;
+  type: "redacted_thinking";
 }
 
 export interface AnthropicToolUseBlock {
@@ -56,7 +64,10 @@ export interface AnthropicResponseMessage {
   id: string;
   container: null;
   content: Array<
-    AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock
+    | AnthropicTextBlock
+    | AnthropicThinkingBlock
+    | AnthropicRedactedThinkingBlock
+    | AnthropicToolUseBlock
   >;
   model: string;
   role: "assistant";
@@ -68,6 +79,20 @@ export interface AnthropicResponseMessage {
 }
 
 export type AnthropicTextMessage = AnthropicResponseMessage;
+
+export interface AnthropicResponseConversion {
+  readonly message: AnthropicResponseMessage;
+  readonly notices: readonly ConversionNotice[];
+}
+
+export interface AnthropicResponseRenderState {
+  readonly selector: string;
+  readonly createMessageId?: () => string;
+}
+
+export interface AnthropicResponseConversionPolicy {
+  readonly unknownPiContent: "error" | "ignore";
+}
 
 const ASSISTANT_MESSAGE_FIELDS = new Set([
   "role",
@@ -97,8 +122,29 @@ const USAGE_FIELDS = new Set([
   "cost",
 ]);
 
+export const MISSING_THINKING_SIGNATURE_NOTICE_CODE =
+  "anthropic_missing_thinking_signature";
+export const UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE =
+  "anthropic_unknown_pi_content_ignored";
+export const STOP_REASON_NORMALIZED_NOTICE_CODE =
+  "anthropic_stop_reason_normalized";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function responseNotice(
+  code: string,
+  action: ConversionNotice["action"],
+  jsonPath?: string,
+): ConversionNotice {
+  return Object.freeze({
+    adapter: "anthropic-messages",
+    direction: "response",
+    code,
+    ...(jsonPath === undefined ? {} : { jsonPath }),
+    action,
+  });
 }
 
 function assertAllowedFields(
@@ -265,9 +311,19 @@ function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
 
 function convertContent(
   message: AssistantMessage,
-): Array<AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock> {
+  notices: ConversionNotice[],
+  policy: AnthropicResponseConversionPolicy,
+): Array<
+  | AnthropicTextBlock
+  | AnthropicThinkingBlock
+  | AnthropicRedactedThinkingBlock
+  | AnthropicToolUseBlock
+> {
   const projected: Array<
-    AnthropicTextBlock | AnthropicThinkingBlock | AnthropicToolUseBlock
+    | AnthropicTextBlock
+    | AnthropicThinkingBlock
+    | AnthropicRedactedThinkingBlock
+    | AnthropicToolUseBlock
   > = [];
   message.content.forEach((block, index) => {
     const raw = block as unknown;
@@ -276,6 +332,7 @@ function convertContent(
         `Pi content[${index}] must be a tagged object`,
       );
     }
+    const path = `$.content[${index}]`;
     if (raw.type === "thinking") {
       assertAllowedFields(
         raw,
@@ -301,11 +358,27 @@ function convertContent(
         );
       }
       if (raw.redacted === true) {
-        // Doc §4.3: redacted ThinkingContent is discarded.
+        const data = raw.thinkingSignature;
+        if (typeof data !== "string" || data.length === 0) {
+          throw new OutboundResponseFidelityFailure(
+            `Pi content[${index}] redacted thinking requires opaque data`,
+          );
+        }
+        projected.push({ data, type: "redacted_thinking" });
         return;
       }
+      const signature = raw.thinkingSignature;
+      if (signature === undefined) {
+        notices.push(
+          responseNotice(
+            MISSING_THINKING_SIGNATURE_NOTICE_CODE,
+            "degrade",
+            `${path}.thinkingSignature`,
+          ),
+        );
+      }
       projected.push({
-        signature: raw.thinkingSignature ?? "",
+        signature: signature ?? "",
         thinking: raw.thinking,
         type: "thinking",
       });
@@ -325,53 +398,72 @@ function convertContent(
       projected.push({ citations: null, text: raw.text, type: "text" });
       return;
     }
-    if (raw.type !== "toolCall") {
-      throw new OutboundResponseFidelityFailure(
-        `Unsupported Pi assistant content: ${raw.type}`,
+    if (raw.type === "toolCall") {
+      assertAllowedFields(
+        raw,
+        new Set([
+          "type",
+          "id",
+          "name",
+          "arguments",
+          "thoughtSignature",
+          "namespace",
+        ]),
+        `Pi content[${index}]`,
       );
+      if (
+        typeof raw.id !== "string" ||
+        raw.id.length === 0 ||
+        typeof raw.name !== "string" ||
+        raw.name.length === 0
+      ) {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}] tool identity must be non-empty strings`,
+        );
+      }
+      projected.push({
+        id: raw.id,
+        caller: { type: "direct" },
+        input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
+        name: raw.name,
+        type: "tool_use",
+      });
+      return;
     }
-    assertAllowedFields(
-      raw,
-      new Set([
-        "type",
-        "id",
-        "name",
-        "arguments",
-        "thoughtSignature",
-        "namespace",
-      ]),
-      `Pi content[${index}]`,
+    if (policy.unknownPiContent === "ignore") {
+      notices.push(
+        responseNotice(
+          UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE,
+          "ignore",
+          `${path}.type`,
+        ),
+      );
+      return;
+    }
+    throw new OutboundResponseFidelityFailure(
+      `Unsupported Pi assistant content: ${String(raw.type)}`,
     );
-    if (
-      typeof raw.id !== "string" ||
-      raw.id.length === 0 ||
-      typeof raw.name !== "string" ||
-      raw.name.length === 0
-    ) {
-      throw new OutboundResponseFidelityFailure(
-        `Pi content[${index}] tool identity must be non-empty strings`,
-      );
-    }
-    projected.push({
-      id: raw.id,
-      caller: { type: "direct" },
-      input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
-      name: raw.name,
-      type: "tool_use",
-    });
   });
   return projected;
 }
 
-function convertStopReason(
-  stopReason: AssistantMessage["stopReason"],
-): AnthropicResponseMessage["stop_reason"] {
-  if (stopReason === "stop") return "end_turn";
-  if (stopReason === "length") return "max_tokens";
-  if (stopReason === "toolUse") return "tool_use";
-  throw new OutboundResponseFidelityFailure(
-    `Unsupported committed Pi stop reason: ${stopReason}`,
-  );
+function resolveStopReason(
+  message: AssistantMessage,
+  projected: Array<
+    | AnthropicTextBlock
+    | AnthropicThinkingBlock
+    | AnthropicRedactedThinkingBlock
+    | AnthropicToolUseBlock
+  >,
+): { stopReason: AnthropicResponseMessage["stop_reason"]; mismatch: boolean } {
+  if (message.stopReason === "length") {
+    return { stopReason: "max_tokens", mismatch: false };
+  }
+  const hasToolUse = projected.some((block) => block.type === "tool_use");
+  if (hasToolUse) {
+    return { stopReason: "tool_use", mismatch: message.stopReason !== "toolUse" };
+  }
+  return { stopReason: "end_turn", mismatch: message.stopReason !== "stop" };
 }
 
 function assertMessageEnvelope(message: AssistantMessage): void {
@@ -397,13 +489,39 @@ function assertMessageEnvelope(message: AssistantMessage): void {
       "Deferred Pi state is outside the Anthropic v1 renderer",
     );
   }
-  convertStopReason(message.stopReason);
 }
 
-export function assertOutboundResponseFidelity(message: AssistantMessage): void {
-  assertMessageEnvelope(message);
-  convertContent(message);
-  convertUsage(message);
+function validResponseId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    /^[A-Za-z0-9._:-]+$/u.test(value)
+  );
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
+  if (Array.isArray(value)) {
+    for (const entry of value) deepFreeze(entry);
+    return Object.freeze(value);
+  }
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function createResponseId(
+  message: AssistantMessage,
+  renderState: AnthropicResponseRenderState,
+): string {
+  if (validResponseId(message.responseId)) {
+    return message.responseId;
+  }
+  if (renderState.createMessageId !== undefined) {
+    const generated = renderState.createMessageId();
+    if (validResponseId(generated)) return generated;
+  }
+  return `msg_${randomUUID()}`;
 }
 
 export function convertAssistantMessageToAnthropic(
@@ -411,37 +529,61 @@ export function convertAssistantMessageToAnthropic(
   clientModel: string,
   messageId: string,
 ): AnthropicResponseMessage {
-  if (
-    typeof clientModel !== "string" ||
-    clientModel.length === 0 ||
-    typeof messageId !== "string" ||
-    messageId.length === 0
-  ) {
+  return convertAssistantMessageToAnthropicWithPolicy(
+    message,
+    { selector: clientModel, createMessageId: () => messageId },
+    { unknownPiContent: "error" },
+  ).message;
+}
+
+export function convertAssistantMessageToAnthropicWithPolicy(
+  message: AssistantMessage,
+  renderState: AnthropicResponseRenderState,
+  policy: AnthropicResponseConversionPolicy,
+): AnthropicResponseConversion {
+  const selector = renderState.selector;
+  if (typeof selector !== "string" || selector.length === 0) {
     throw new OutboundResponseFidelityFailure(
-      "Anthropic response identity must be non-empty strings",
+      "Anthropic response selector must be a non-empty string",
     );
   }
   assertMessageEnvelope(message);
-  const content = convertContent(message);
-  if (content.length === 0) {
-    throw new OutboundResponseFidelityFailure(
-      "Projected Anthropic content is empty",
+  const notices: ConversionNotice[] = [];
+  const id = createResponseId(message, renderState);
+  const content = convertContent(message, notices, policy);
+  const stop = resolveStopReason(message, content);
+  if (stop.mismatch) {
+    notices.push(
+      responseNotice(
+        STOP_REASON_NORMALIZED_NOTICE_CODE,
+        "degrade",
+        "$.stop_reason",
+      ),
     );
   }
-  const stopReason = convertStopReason(message.stopReason);
   const usage = convertUsage(message);
-  return {
-    id: messageId,
+  const result: AnthropicResponseMessage = {
+    id,
     container: null,
     content,
-    model: clientModel,
+    model: selector,
     role: "assistant",
     stop_details: null,
-    stop_reason: stopReason,
+    stop_reason: stop.stopReason,
     stop_sequence: null,
     type: "message",
     usage,
   };
+  return {
+    message: deepFreeze(result),
+    notices: deepFreeze(notices),
+  };
+}
+
+export function assertOutboundResponseFidelity(message: AssistantMessage): void {
+  assertMessageEnvelope(message);
+  convertContent(message, [], { unknownPiContent: "error" });
+  convertUsage(message);
 }
 
 export function renderAnthropicTextMessage(

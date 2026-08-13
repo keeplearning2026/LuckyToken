@@ -60,9 +60,10 @@ describe("passthroughAnthropicRequest", () => {
     );
     expect(init?.body).toBe(rawBody);
     expect(response.status).toBe(200);
-    await expect(response.text()).resolves.toBe(
+    expect(new TextDecoder().decode(response.body)).toBe(
       '{"type":"message","content":[]}',
     );
+    expect(response.headers).toEqual({ "content-type": "application/json" });
   });
 
   it("returns the upstream non-2xx response unchanged", async () => {
@@ -87,7 +88,7 @@ describe("passthroughAnthropicRequest", () => {
     });
 
     expect(response.status).toBe(429);
-    await expect(response.text()).resolves.toBe(upstreamBody);
+    expect(new TextDecoder().decode(response.body)).toBe(upstreamBody);
   });
 
   it("requires an api key", async () => {

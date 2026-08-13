@@ -227,75 +227,116 @@ describe("Anthropic tool turns", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "duplicate calls",
-      messages: [
-        { role: "user", content: "run" },
-        {
-          role: "assistant",
-          content: [
-            { type: "tool_use", id: "same", name: "a", input: {} },
-            { type: "tool_use", id: "same", name: "b", input: {} },
-          ],
-        },
-      ],
-    },
-    {
-      name: "orphan result",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "tool_result", tool_use_id: "missing" }],
-        },
-      ],
-    },
-    {
-      name: "duplicate result",
-      messages: [
-        { role: "user", content: "run" },
-        {
-          role: "assistant",
-          content: [{ type: "tool_use", id: "call", name: "a", input: {} }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "call" },
-            { type: "tool_result", tool_use_id: "call" },
-          ],
-        },
-      ],
-    },
-    {
-      name: "unresolved call",
-      messages: [
-        { role: "user", content: "run" },
-        parallelCalls,
-        {
-          role: "user",
-          content: [{ type: "tool_result", tool_use_id: "call_a" }],
-        },
-      ],
-    },
-    {
-      name: "ordinary content before required results",
-      messages: [
-        { role: "user", content: "run" },
-        parallelCalls,
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "too early" },
-            { type: "tool_result", tool_use_id: "call_a" },
-            { type: "tool_result", tool_use_id: "call_b" },
-          ],
-        },
-      ],
-    },
-  ])("rejects $name as source-invalid", ({ messages }) => {
-    expect(() => validateAnthropicSourceRequest(request(messages))).toThrow(
-      InvalidRequest,
+  it("rejects duplicate tool_use ids in one assistant turn as source-invalid", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "same", name: "a", input: {} },
+              { type: "tool_use", id: "same", name: "b", input: {} },
+            ],
+          },
+        ]),
+      ),
+    ).toThrow(InvalidRequest);
+  });
+
+  it("rejects orphan and duplicate results as fixed conversion errors", () => {
+    expect(() =>
+      convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest(
+          request([
+            {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "missing" }],
+            },
+          ]),
+        ),
+        1,
+      ),
+    ).toThrow(/Orphan/u);
+
+    expect(() =>
+      convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest(
+          request([
+            { role: "user", content: "run" },
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "call", name: "a", input: {} }],
+            },
+            {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "call" },
+                { type: "tool_result", tool_use_id: "call" },
+              ],
+            },
+          ]),
+        ),
+        1,
+      ),
+    ).toThrow(/Orphan|duplicate/u);
+  });
+
+  it("repairs a partially resolved parallel call set by default", () => {
+    const conversion = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          parallelCalls,
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call_a" }],
+          },
+        ]),
+      ),
+      1,
     );
+    const results = conversion.context.messages.filter(
+      (m) => m.role === "toolResult",
+    );
+    expect(results.map((r) => r.toolCallId)).toEqual(["call_a", "call_b"]);
+    expect(results[1]).toMatchObject({
+      toolCallId: "call_b",
+      toolName: "beta",
+      isError: true,
+    });
+  });
+
+  it("allows ordinary user content before results in mixed source order", () => {
+    const conversion = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          parallelCalls,
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "before" },
+              { type: "tool_result", tool_use_id: "call_a" },
+              { type: "tool_result", tool_use_id: "call_b" },
+              { type: "text", text: "after" },
+            ],
+          },
+        ]),
+      ),
+      1,
+    );
+    const roles = conversion.context.messages.map((m) => m.role);
+    expect(roles).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    const users = conversion.context.messages.filter((m) => m.role === "user");
+    expect(users.at(-2)?.content).toEqual([{ type: "text", text: "before" }]);
+    expect(users.at(-1)?.content).toEqual([{ type: "text", text: "after" }]);
   });
 });

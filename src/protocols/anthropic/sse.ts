@@ -1,4 +1,5 @@
 import {
+  type AnthropicRedactedThinkingBlock,
   type AnthropicResponseMessage,
   type AnthropicResponseUsage,
   type AnthropicThinkingBlock,
@@ -29,7 +30,6 @@ interface AnthropicMessageDeltaUsage {
   cache_read_input_tokens: number;
   input_tokens: number;
   output_tokens: number;
-  output_tokens_details: { thinking_tokens: number } | null;
   server_tool_use: null;
 }
 
@@ -41,6 +41,7 @@ export type AnthropicAtomicSseEvent =
       content_block:
         | AnthropicTextBlock
         | AnthropicThinkingBlock
+        | AnthropicRedactedThinkingBlock
         | AnthropicToolUseBlock;
     }
   | {
@@ -102,7 +103,6 @@ function assertMessageDeltaUsage(value: unknown): void {
       "cache_read_input_tokens",
       "input_tokens",
       "output_tokens",
-      "output_tokens_details",
       "server_tool_use",
     ],
     "Anthropic message_delta usage",
@@ -117,26 +117,6 @@ function assertMessageDeltaUsage(value: unknown): void {
   }
   if (value.server_tool_use !== null) {
     fail("Anthropic message_delta server_tool_use must be null");
-  }
-  if (value.output_tokens_details !== null) {
-    if (!isRecord(value.output_tokens_details)) {
-      fail("Anthropic message_delta output_tokens_details must be an object or null");
-    }
-    assertFields(
-      value.output_tokens_details,
-      ["thinking_tokens"],
-      "Anthropic message_delta output_tokens_details",
-    );
-    assertCount(
-      value.output_tokens_details.thinking_tokens,
-      "Anthropic message_delta thinking_tokens",
-    );
-    if (
-      (value.output_tokens_details.thinking_tokens as number) >
-      (value.output_tokens as number)
-    ) {
-      fail("Anthropic message_delta thinking usage exceeds output usage");
-    }
   }
 }
 
@@ -218,6 +198,17 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
         event.content_block.signature !== ""
       ) {
         fail("Anthropic streaming ThinkingBlock start is malformed");
+      }
+      return;
+    }
+    if (event.content_block.type === "redacted_thinking") {
+      assertFields(
+        block,
+        ["data", "type"],
+        "Anthropic streaming RedactedThinkingBlock",
+      );
+      if (typeof event.content_block.data !== "string") {
+        fail("Anthropic streaming RedactedThinkingBlock is malformed");
       }
       return;
     }
@@ -306,6 +297,11 @@ export function createAnthropicAtomicSseEvents(
   target: AnthropicResponseMessage,
 ): AnthropicAtomicSseEvent[] {
   assertAnthropicTargetSchema(target);
+  const startUsage: AnthropicResponseUsage = {
+    ...target.usage,
+    output_tokens: 0,
+    output_tokens_details: null,
+  };
   const events: AnthropicAtomicSseEvent[] = [
     {
       type: "message_start",
@@ -319,7 +315,7 @@ export function createAnthropicAtomicSseEvents(
         stop_reason: null,
         stop_sequence: null,
         type: "message",
-        usage: target.usage,
+        usage: startUsage,
       },
     },
   ];
@@ -357,6 +353,17 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_delta",
           index,
           delta: { type: "signature_delta", signature: block.signature },
+        },
+        { type: "content_block_stop", index },
+      );
+      return;
+    }
+    if (block.type === "redacted_thinking") {
+      events.push(
+        {
+          type: "content_block_start",
+          index,
+          content_block: { data: block.data, type: "redacted_thinking" },
         },
         { type: "content_block_stop", index },
       );
@@ -401,7 +408,6 @@ export function createAnthropicAtomicSseEvents(
         cache_read_input_tokens: target.usage.cache_read_input_tokens,
         input_tokens: target.usage.input_tokens,
         output_tokens: target.usage.output_tokens,
-        output_tokens_details: target.usage.output_tokens_details,
         server_tool_use: target.usage.server_tool_use,
       },
     },

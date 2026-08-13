@@ -6,13 +6,13 @@
 | 02 | Add request-local notices and per-failure journals | 01 | completed |
 | 03 | Expand a protocol-neutral upstream failure contract | None | completed |
 | 04 | Complete the protocol-neutral Pi options composer | None | completed |
-| 05 | Preserve Anthropic message order and system-prompt semantics | 01, 02 | ready-for-agent |
-| 06 | Enforce Anthropic tool lifecycle and local missing-result repair | 05 | ready-for-agent |
-| 07 | Map Anthropic sampling, thinking budgets, and cache policy | 01, 02, 04 | ready-for-agent |
-| 08 | Cover Anthropic known content, tools, and execution ownership | 05, 06, 07 | ready-for-agent |
-| 09 | Project Pi responses faithfully into Anthropic messages | 01, 02 | ready-for-agent |
-| 10 | Render Anthropic JSON, atomic SSE, and protocol errors | 02, 03, 09 | ready-for-agent |
-| 11 | Certify and harden native Anthropic passthrough | 01, 02 | ready-for-agent |
+| 05 | Preserve Anthropic message order and system-prompt semantics | 01, 02 | completed |
+| 06 | Enforce Anthropic tool lifecycle and local missing-result repair | 05 | completed |
+| 07 | Map Anthropic sampling, thinking budgets, and cache policy | 01, 02, 04 | completed |
+| 08 | Cover Anthropic known content, tools, and execution ownership | 05, 06, 07 | completed |
+| 09 | Project Pi responses faithfully into Anthropic messages | 01, 02 | completed |
+| 10 | Render Anthropic JSON, atomic SSE, and protocol errors | 02, 03, 09 | completed |
+| 11 | Certify and harden native Anthropic passthrough | 01, 02 | completed |
 | 12 | Rebuild Responses local response state | 01, 02 | ready-for-agent |
 | 13 | Convert Responses privileged prompts, options, and handles | 01, 02, 04, 12 | ready-for-agent |
 | 14 | Convert Responses text, images, files, and reasoning continuity | 02, 13 | ready-for-agent |

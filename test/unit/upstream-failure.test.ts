@@ -53,23 +53,23 @@ describe("mapUpstreamHttpFailure", () => {
     );
   });
 
-  it("uses the provider's own error.type from the body verbatim", () => {
+  it("never forwards a provider error.type as an unchecked Anthropic type", () => {
     const body = utf8('{"error":{"message":"quota","type":"insufficient_quota"}}');
     const mapping = mapUpstreamHttpFailure(responseObservation(429, body));
-    expect(mapping?.type).toBe("insufficient_quota");
+    expect(mapping?.type).toBe("rate_limit_error");
     expect(mapping?.status).toBe(429);
   });
 
-  it("uses the provider's own error.code from the body when type is absent", () => {
+  it("maps provider error.code from the body to the status family", () => {
     const body = utf8('{"error":{"code":"RATE_LIMITED","message":"slow down"}}');
     const mapping = mapUpstreamHttpFailure(responseObservation(429, body));
-    expect(mapping?.type).toBe("RATE_LIMITED");
+    expect(mapping?.type).toBe("rate_limit_error");
     expect(mapping?.message).toBe(
       '{"error":{"code":"RATE_LIMITED","message":"slow down"}}',
     );
   });
 
-  it("falls back to the status table when the body has no usable type", () => {
+  it("keeps the status table authoritative for the error type", () => {
     const body = utf8("not json at all");
     const mapping = mapUpstreamHttpFailure(responseObservation(429, body));
     expect(mapping?.type).toBe("rate_limit_error");

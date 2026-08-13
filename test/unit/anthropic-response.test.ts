@@ -248,7 +248,6 @@ describe("schema-complete Anthropic JSON response", () => {
   it.each([
     ["stop", "end_turn"],
     ["length", "max_tokens"],
-    ["toolUse", "tool_use"],
   ] as const)("maps %s to %s", (stopReason, expected) => {
     const target = convertAssistantMessageToAnthropic(
       message({ stopReason }),
@@ -258,6 +257,27 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(target.stop_reason).toBe(expected);
     expect(target.stop_details).toBeNull();
     expect(target.stop_sequence).toBeNull();
+  });
+
+  it("derives tool_use from actual toolCall content, not the Pi stop reason", () => {
+    const target = convertAssistantMessageToAnthropic(
+      message({
+        stopReason: "toolUse",
+        content: [
+          { type: "toolCall", id: "call", name: "tool", arguments: { x: 1 } },
+        ],
+      }),
+      "client-selector",
+      "opaque-id",
+    );
+    expect(target.stop_reason).toBe("tool_use");
+
+    const noTool = convertAssistantMessageToAnthropic(
+      message({ stopReason: "toolUse" }),
+      "client-selector",
+      "opaque-id",
+    );
+    expect(noTool.stop_reason).toBe("end_turn");
   });
 
   it("echoes only client identity and includes all required Message fields", () => {
@@ -288,8 +308,10 @@ describe("schema-complete Anthropic JSON response", () => {
       "original-client-selector",
       "client-owned-id",
     );
+    // Ticket 09: a valid Pi responseId is preserved; the generator is only a
+    // fallback. The source carries provider-response-id, so that wins.
     expect(target).toMatchObject({
-      id: "client-owned-id",
+      id: "provider-response-id",
       container: null,
       model: "original-client-selector",
       role: "assistant",
@@ -316,7 +338,6 @@ describe("schema-complete Anthropic JSON response", () => {
       "internal-api",
       "internal-provider",
       "internal-model",
-      "provider-response-id",
       "opaque-text",
       "opaque-thought",
       "internal-namespace",
@@ -327,7 +348,7 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(JSON.parse(wire)).toEqual(target);
   });
 
-  it("discards redacted thinking and preserves surviving content order", () => {
+  it("projects redacted thinking as redacted_thinking in content order", () => {
     const target = convertAssistantMessageToAnthropic(
       message({
         content: [
@@ -346,27 +367,29 @@ describe("schema-complete Anthropic JSON response", () => {
     );
     expect(target.content).toEqual([
       { citations: null, text: "A", type: "text" },
+      { data: "redacted-payload", type: "redacted_thinking" },
       { citations: null, text: "B", type: "text" },
     ]);
   });
 
-  it("fails when discarding redacted thinking leaves empty projected content", () => {
-    expect(() =>
-      convertAssistantMessageToAnthropic(
-        message({
-          content: [
-            {
-              type: "thinking",
-              thinking: "",
-              thinkingSignature: "redacted-payload",
-              redacted: true,
-            },
-          ],
-        }),
-        "client-selector",
-        "opaque-id",
-      ),
-    ).toThrow("empty");
+  it("succeeds for a redacted-only projected message", () => {
+    const target = convertAssistantMessageToAnthropic(
+      message({
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "redacted-payload",
+            redacted: true,
+          },
+        ],
+      }),
+      "client-selector",
+      "opaque-id",
+    );
+    expect(target.content).toEqual([
+      { data: "redacted-payload", type: "redacted_thinking" },
+    ]);
   });
 
   it("fails deferred state and unclassified future fields", () => {

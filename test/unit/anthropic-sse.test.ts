@@ -190,13 +190,16 @@ describe("verifiable Anthropic Atomic SSE", () => {
     if (start?.type !== "message_start" || delta?.type !== "message_delta") {
       throw new Error("invalid fixture lifecycle");
     }
-    expect(start.message.usage).toEqual(message.usage);
+    expect(start.message.usage).toEqual({
+      ...message.usage,
+      output_tokens: 0,
+      output_tokens_details: null,
+    });
     expect(delta.usage).toEqual({
       cache_creation_input_tokens: message.usage.cache_creation_input_tokens,
       cache_read_input_tokens: message.usage.cache_read_input_tokens,
       input_tokens: message.usage.input_tokens,
       output_tokens: message.usage.output_tokens,
-      output_tokens_details: message.usage.output_tokens_details,
       server_tool_use: message.usage.server_tool_use,
     });
   });
@@ -207,7 +210,11 @@ describe("verifiable Anthropic Atomic SSE", () => {
     expect(rendered).toMatchObject({ status: 200, contentType: "text/event-stream" });
     const frames = parseSse(rendered.body);
     for (const frame of frames) expect(frame.event).toBe(frame.data.type);
-    expect(accumulate(frames.map((frame) => frame.data))).toEqual(message);
+    const accumulated = accumulate(frames.map((frame) => frame.data));
+    expect(accumulated).toEqual({
+      ...message,
+      usage: { ...message.usage, output_tokens_details: null },
+    });
   });
 
   it("is accepted and reconstructed by the installed official Anthropic SDK", async () => {
@@ -232,6 +239,9 @@ describe("verifiable Anthropic Atomic SSE", () => {
     expect(sdkMessage.parsed_output).toBeNull();
     const sdkWireMessage = { ...sdkMessage };
     delete (sdkWireMessage as { parsed_output?: unknown }).parsed_output;
-    expect(sdkWireMessage).toEqual(message);
+    expect(sdkWireMessage).toEqual({
+      ...message,
+      usage: { ...message.usage, output_tokens_details: null },
+    });
   });
 });

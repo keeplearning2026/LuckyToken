@@ -51,27 +51,56 @@ describe("Anthropic atomic wire rendering", () => {
     );
   });
 
-  it("does not expose bytes when a later target block could repair itself", () => {
+  it("freezes the converted target so post-conversion mutation cannot reach the wire", () => {
     const target = convertAssistantMessageToAnthropic(
       message(),
       "client-model",
       "msg_client",
     );
-    const later = target.content[1] as unknown as {
-      input: Record<string, unknown>;
-    };
-    later.input = {
-      unsafe: {
-        toJSON: () => ({ silently: "repaired" }),
-      },
-    };
-    const written: Uint8Array[] = [];
-
     expect(() => {
-      const rendered = renderAnthropicJsonSuccess(target);
-      written.push(rendered.body);
-    }).toThrow(OutboundResponseFidelityFailure);
-    expect(written).toEqual([]);
+      const later = target.content[1] as unknown as {
+        input: Record<string, unknown>;
+      };
+      later.input = {
+        unsafe: {
+          toJSON: () => ({ silently: "repaired" }),
+        },
+      };
+    }).toThrow();
+    expect(Object.isFrozen(target.content)).toBe(true);
+  });
+
+  it("rejects non-lossless tool arguments at conversion time", () => {
+    const unsafe = {
+      toJSON: () => ({ silently: "repaired" }),
+    };
+    const source: AssistantMessage = {
+      role: "assistant",
+      api: "api",
+      provider: "provider",
+      model: "model",
+      content: [
+        {
+          type: "toolCall",
+          id: "call",
+          name: "tool",
+          arguments: { unsafe },
+        },
+      ],
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 3,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 1,
+    };
+    expect(() =>
+      convertAssistantMessageToAnthropic(source, "client-model", "msg_client"),
+    ).toThrow(OutboundResponseFidelityFailure);
   });
 
   it("renders documented error families as complete UTF-8 JSON", () => {

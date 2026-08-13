@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — adapter-owned configuration; 02 — request-local notices; 04 — complete Pi options composer.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,18 @@ Wire controls are normalized once into Pi values. Local cache-breakpoint positio
 
 ## Acceptance criteria
 
-- [ ] top_p/top_k map to Pi samplingParams and survive composition.
-- [ ] metadata.user_id maps to Pi metadata; null/absence omits it.
-- [ ] output_config.effort low–max maps exactly to Pi reasoning; null/absence omits.
-- [ ] thinking.enabled validates budget, chooses level by frozen precedence/ladder, and preserves exact budget in the normalized Pi thinkingBudgets key.
-- [ ] xhigh/max budgets use the high budget slot while reasoning retains xhigh/max.
-- [ ] thinking.disabled/adaptive/display apply documented omission/drop semantics without fabricating off or injecting text.
-- [ ] local cache controls use Anthropic-local `ignore|promote`, default ignore; promote folds 1h→long and otherwise 5m/default→short and emits notice.
-- [ ] stop_sequences, unsupported tool_choice controls, output format, container, inference_geo, and service_tier drop without blocking the core request.
-- [ ] Source nullability and invalid numeric bounds produce Anthropic Client errors, never composition 500s.
-- [ ] Tests assert the final immutable Pi options snapshot for every branch.
-- [ ] No Responses effort/cache policy is imported or consulted.
+- [x] top_p/top_k map to Pi samplingParams and survive composition.
+- [x] metadata.user_id maps to Pi metadata; null/absence omits it.
+- [x] output_config.effort low–max maps exactly to Pi reasoning; null/absence omits.
+- [x] thinking.enabled validates budget, chooses level by frozen precedence/ladder, and preserves exact budget in the normalized Pi thinkingBudgets key.
+- [x] xhigh/max budgets use the high budget slot while reasoning retains xhigh/max.
+- [x] thinking.disabled/adaptive/display apply documented omission/drop semantics without fabricating off or injecting text.
+- [x] local cache controls use Anthropic-local `ignore|promote`, default ignore; promote folds 1h→long and otherwise 5m/default→short and emits notice.
+- [x] stop_sequences, unsupported tool_choice controls, output format, container, inference_geo, and service_tier drop without blocking the core request.
+- [x] Source nullability and invalid numeric bounds produce Anthropic Client errors, never composition 500s.
+- [x] Tests assert the final immutable Pi options snapshot for every branch.
+- [x] No Responses effort/cache policy is imported or consulted.
 
 ## Out of scope
 
 Provider interpretation/clamping after the Pi seam.
-

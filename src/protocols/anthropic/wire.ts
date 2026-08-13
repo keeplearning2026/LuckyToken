@@ -20,6 +20,7 @@ export interface PreparedHttpResponse {
   readonly status: number;
   readonly contentType: "application/json" | "text/event-stream";
   readonly body: Uint8Array<ArrayBuffer>;
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 const MESSAGE_FIELDS = new Set([
@@ -177,6 +178,17 @@ export function assertAnthropicTargetSchema(
       }
       return;
     }
+    if (block.type === "redacted_thinking") {
+      assertExactFields(
+        block,
+        new Set(["data", "type"]),
+        `Anthropic content[${index}]`,
+      );
+      if (typeof block.data !== "string" || block.data.length === 0) {
+        fail(`Anthropic content[${index}] RedactedThinkingBlock is malformed`);
+      }
+      return;
+    }
     if (block.type !== "tool_use") {
       fail(`Anthropic content[${index}] has an unsupported type`);
     }
@@ -285,10 +297,48 @@ export function renderAnthropicError(
   status: number,
   type: string,
   message: string,
+  requestId?: string,
+  safeHeaders?: Readonly<Record<string, string>>,
 ): PreparedHttpResponse {
+  if (!ANTHROPIC_ERROR_TYPES.has(type)) {
+    throw new OutboundResponseFidelityFailure(
+      `Unsafe Anthropic error type: ${type}`,
+    );
+  }
+  const sanitizedMessage = sanitizeErrorText(message);
+  const error = {
+    type: "error",
+    error: { type, message: sanitizedMessage },
+    ...(requestId === undefined ? {} : { request_id: requestId }),
+  };
   return {
     status,
     contentType: "application/json",
-    body: encodeJson({ type: "error", error: { type, message } }),
+    ...(safeHeaders === undefined
+      ? {}
+      : { headers: Object.freeze({ ...safeHeaders }) }),
+    body: encodeJson(error),
   };
+}
+
+const ANTHROPIC_ERROR_TYPES: ReadonlySet<string> = new Set([
+  "invalid_request_error",
+  "authentication_error",
+  "billing_error",
+  "permission_error",
+  "not_found_error",
+  "conflict_error",
+  "request_too_large",
+  "rate_limit_error",
+  "api_error",
+  "timeout_error",
+  "overloaded_error",
+]);
+
+function sanitizeErrorText(value: string): string {
+  const withoutControls = value.replace(/[\u0000-\u001f\u007f]/gu, " ");
+  const bounded = withoutControls.slice(0, 4_096);
+  return bounded
+    .replace(/\b(?:bearer|basic)\s+\S+/giu, "[REDACTED]")
+    .replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._-]{8,}\b/giu, "[REDACTED]");
 }
