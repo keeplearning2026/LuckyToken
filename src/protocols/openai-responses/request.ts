@@ -11,6 +11,8 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 
+import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+
 export class InvalidRequest extends Error {
   readonly kind = "InvalidRequest";
 
@@ -20,6 +22,27 @@ export class InvalidRequest extends Error {
   }
 }
 
+/** Responses-owned frozen request conversion policy (from the adapter config). */
+export interface ResponseRequestConversionPolicy {
+  readonly privilegedMessages: "full" | "first" | "user";
+  readonly unknownInputItem: "error" | "ignore";
+  readonly orphanToolOutput: "error" | "ignore";
+  readonly unresolvedToolCall: "error" | "xrepair";
+  readonly futureReasoningEffort: "max" | "omit" | "error";
+}
+
+/**
+ * Narrow Responses-owned resolver capability for LuckyToken-provable opaque
+ * references/envelopes. Only the Responses adapter may install one; it never
+ * borrows a Provider credential and never leaks a Responses handle into Pi.
+ */
+export interface ResponseReferenceResolver {
+  resolveItemReference(
+    reference: Readonly<Record<string, unknown>>,
+    context: { readonly authority: string; readonly signal?: AbortSignal },
+  ): Promise<readonly unknown[]>;
+}
+
 export interface ResponsesInvocation {
   selector: string;
   context: Context;
@@ -27,10 +50,16 @@ export interface ResponsesInvocation {
   renderState: {
     clientModel: string;
     stream: boolean;
+    /** Effective tool_choice that actually took effect (auto/none/allowed). */
+    toolChoice?: string;
     /** Tool names declared as freeform `custom` tools; their calls must
      *  round-trip as `custom_tool_call` output items. */
     freeformToolNames?: ReadonlySet<string>;
+    /** Source metadata retained only for request-local response echo. Never
+     *  placed into model context. */
+    metadataEcho?: Readonly<Record<string, string>>;
   };
+  notices: readonly ConversionNotice[];
 }
 
 export interface ValidatedResponsesRequest {
@@ -40,12 +69,44 @@ export interface ValidatedResponsesRequest {
   stream: boolean;
   maxOutputTokens?: number;
   temperature?: number;
+  topP?: number;
+  cacheRetention?: "short" | "long";
+  metadataUserId?: string;
   reasoning?: string;
   tools?: Tool[];
+  toolChoice?: string;
+  background: boolean;
+  conversationPresent: boolean;
+  promptPresent: boolean;
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
 export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
+
+export const FUTURE_EFFORT_NOTICE_CODE = "openai-responses_future_effort";
+export const ULTRA_ALIAS_NOTICE_CODE = "openai-responses_effort_ultra_alias";
+export const UNKNOWN_INPUT_ITEM_IGNORED_NOTICE_CODE =
+  "openai-responses_unknown_input_item_ignored";
+export const REFERENCE_UNRESOLVED_NOTICE_CODE =
+  "openai-responses_reference_unresolved";
+
+const DEFAULT_POLICY: ResponseRequestConversionPolicy = Object.freeze({
+  privilegedMessages: "first",
+  unknownInputItem: "error",
+  orphanToolOutput: "error",
+  unresolvedToolCall: "xrepair",
+  futureReasoningEffort: "max",
+});
+
+const KNOWN_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -93,6 +154,20 @@ function emptyUsage(): Usage {
   };
 }
 
+function requestNotice(
+  code: string,
+  action: ConversionNotice["action"],
+  jsonPath?: string,
+): ConversionNotice {
+  return Object.freeze({
+    adapter: "openai-responses",
+    direction: "request",
+    code,
+    ...(jsonPath === undefined ? {} : { jsonPath }),
+    action,
+  });
+}
+
 function parseContentParts(content: unknown): TextContent[] {
   if (typeof content === "string") {
     return content.length === 0 ? [] : [{ type: "text", text: content }];
@@ -102,7 +177,10 @@ function parseContentParts(content: unknown): TextContent[] {
   for (const raw of content) {
     if (!isRecord(raw)) continue;
     const type = raw.type;
-    if ((type === "input_text" || type === "text" || type === "output_text") && typeof raw.text === "string") {
+    if (
+      (type === "input_text" || type === "text" || type === "output_text") &&
+      typeof raw.text === "string"
+    ) {
       parts.push({ type: "text", text: raw.text });
     }
   }
@@ -131,10 +209,10 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (isRecord(parsed)) return parsed;
-    return {};
-  } catch {
-    // Tolerate non-JSON arguments (e.g. a no-arg tool call serialized as "").
-    return {};
+    throw new InvalidRequest("function_call arguments must be a JSON object");
+  } catch (error) {
+    if (error instanceof InvalidRequest) throw error;
+    throw new InvalidRequest("function_call arguments must be valid JSON");
   }
 }
 
@@ -233,25 +311,69 @@ function convertTools(
   return tools;
 }
 
-function convertReasoning(value: unknown): string | undefined {
+/**
+ * Convert `reasoning.effort` per the frozen matrix:
+ *   absent/null/none → omission (none is documented explicit-off degradation)
+ *   minimal..xhigh   → direct
+ *   ultra            → max (compatibility notice)
+ *   max              → max
+ *   future unknown   → futureReasoningEffort policy (max|omit|error), notice on max/omit
+ */
+function convertReasoning(
+  value: unknown,
+  futureReasoningEffort: ResponseRequestConversionPolicy["futureReasoningEffort"],
+  notices: ConversionNotice[],
+): string | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
     throw new InvalidRequest("reasoning must be an object when present");
   }
   const effort = value.effort;
-  if (effort === undefined) return undefined;
+  if (effort === undefined || effort === null) return undefined;
   if (typeof effort !== "string") {
     throw new InvalidRequest("reasoning.effort must be a string when present");
   }
-  if (effort === "ultra") return "max";
-  const known = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
-  if (!known.has(effort)) {
+  if (effort === "none") return undefined;
+  if (effort === "ultra") {
+    notices.push(
+      requestNotice(ULTRA_ALIAS_NOTICE_CODE, "degrade", "$.reasoning.effort"),
+    );
+    return "max";
+  }
+  if (effort === "max") return "max";
+  if (KNOWN_EFFORTS.has(effort)) return effort;
+  // Future unknown effort value.
+  if (futureReasoningEffort === "error") {
     throw new InvalidRequest(
       `reasoning.effort is not a known thinking level: ${effort}`,
     );
   }
-  if (effort === "none") return undefined;
-  return effort;
+  notices.push(
+    requestNotice(FUTURE_EFFORT_NOTICE_CODE, "degrade", "$.reasoning.effort"),
+  );
+  return futureReasoningEffort === "max" ? "max" : undefined;
+}
+
+function parseToolChoice(value: unknown): string | undefined {
+  // "none" | "auto" | "required" | {type:"allowed"|"function"|...}
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") {
+    if (value === "none" || value === "auto" || value === "required") {
+      return value;
+    }
+    throw new InvalidRequest(`unsupported tool_choice: ${value}`);
+  }
+  if (!isRecord(value)) {
+    throw new InvalidRequest("tool_choice must be a string or object when present");
+  }
+  const type = value.type;
+  if (type === "allowed") {
+    return "allowed";
+  }
+  if (type === "function" || type === "custom" || type === "namespace") {
+    return "forced";
+  }
+  throw new InvalidRequest(`unsupported tool_choice.type: ${String(type)}`);
 }
 
 export function validateResponsesRequest(
@@ -292,17 +414,56 @@ export function validateResponsesRequest(
       );
     }
   }
+  validateReasoningShape(value.reasoning);
+  if (value.background === true) {
+    throw new InvalidRequest(
+      "background=true is not supported by Core conversion v1",
+    );
+  }
+  if (value.conversation !== undefined) {
+    throw new InvalidRequest(
+      "conversation is not supported by Core conversion v1",
+    );
+  }
+  if (value.prompt !== undefined) {
+    throw new InvalidRequest("prompt is not supported by Core conversion v1");
+  }
   const maxOutputTokens = optionalNonNegativeInt(
     value.max_output_tokens,
     "max_output_tokens",
   );
   const temperature = optionalFiniteNumber(value.temperature, "temperature");
   const topP = optionalFiniteNumber(value.top_p, "top_p");
-  if (topP !== undefined) {
-    // Validated but not converted (no Pi option for top_p in the closed set).
+  const cacheRetentionValue = value.prompt_cache_retention;
+  let cacheRetention: "short" | "long" | undefined;
+  if (cacheRetentionValue !== undefined && cacheRetentionValue !== null) {
+    if (cacheRetentionValue === "in-memory") cacheRetention = "short";
+    else if (cacheRetentionValue === "24h") cacheRetention = "long";
+    else {
+      throw new InvalidRequest(
+        "prompt_cache_retention must be in-memory or 24h when present",
+      );
+    }
+  }
+  const safetyIdentifier = value.safety_identifier;
+  const userValue = value.user;
+  let metadataUserId: string | undefined;
+  if (safetyIdentifier !== undefined) {
+    if (typeof safetyIdentifier !== "string") {
+      throw new InvalidRequest("safety_identifier must be a string when present");
+    }
+    metadataUserId = safetyIdentifier;
+  } else if (userValue !== undefined) {
+    if (typeof userValue !== "string") {
+      throw new InvalidRequest("user must be a string when present");
+    }
+    metadataUserId = userValue;
   }
   const tools = convertTools(value.tools, freeformNames);
-  const reasoning = convertReasoning(value.reasoning);
+  const toolChoice = parseToolChoice(value.tool_choice);
+  const background = optionalBoolean(value.background, "background") ?? false;
+  const conversationPresent = value.conversation !== undefined;
+  const promptPresent = value.prompt !== undefined;
   const instructions =
     value.instructions === undefined
       ? undefined
@@ -316,13 +477,33 @@ export function validateResponsesRequest(
     selector,
     input,
     stream,
+    background,
+    conversationPresent,
+    promptPresent,
   };
   if (instructions !== undefined) validated.instructions = instructions;
   if (maxOutputTokens !== undefined) validated.maxOutputTokens = maxOutputTokens;
   if (temperature !== undefined) validated.temperature = temperature;
-  if (reasoning !== undefined) validated.reasoning = reasoning;
+  if (topP !== undefined) validated.topP = topP;
+  if (cacheRetention !== undefined) validated.cacheRetention = cacheRetention;
+  if (metadataUserId !== undefined) validated.metadataUserId = metadataUserId;
   if (tools !== undefined) validated.tools = tools;
+  if (toolChoice !== undefined) validated.toolChoice = toolChoice;
   return validated;
+}
+
+/** Validate the reasoning field shape; the effort matrix is applied in the
+ *  conversion entries where the policy and notices are available. */
+function validateReasoningShape(value: unknown): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    throw new InvalidRequest("reasoning must be an object when present");
+  }
+  const effort = value.effort;
+  if (effort === undefined || effort === null) return;
+  if (typeof effort !== "string") {
+    throw new InvalidRequest("reasoning.effort must be a string when present");
+  }
 }
 
 function convertMessages(
@@ -330,13 +511,18 @@ function convertMessages(
   selector: string,
   receivedAt: number,
   additionalTools: unknown[],
+  policy: ResponseRequestConversionPolicy,
+  notices: ConversionNotice[],
 ): Message[] {
   const messages: Message[] = [];
-  const systemPromptParts: string[] = [];
-  let pendingReasoning: ThinkingContent[] = [];
+  const pendingReasoning: ThinkingContent[] = [];
   const assistantIndex = new Map<string, string>();
+  let seenFirstUser = false;
+  const privilegedMode = policy.privilegedMessages;
 
-  const flushAssistant = (content: Array<TextContent | ThinkingContent | ToolCall>): void => {
+  const flushAssistant = (
+    content: Array<TextContent | ThinkingContent | ToolCall>,
+  ): void => {
     const assistant: Message = {
       role: "assistant",
       api: SYNTHETIC_CLIENT_HISTORY_API,
@@ -355,13 +541,22 @@ function convertMessages(
     }
   };
 
+  const pushUser = (text: string): void => {
+    messages.push({
+      role: "user",
+      content: text.length === 0 ? [] : [{ type: "text", text }],
+      timestamp: receivedAt,
+    });
+  };
+
   const items: unknown[] =
     typeof input === "string"
       ? [{ role: "user", content: input }]
       : (input as unknown[]);
   for (const rawItem of items) {
     if (!isRecord(rawItem)) continue;
-    const type = rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
+    const type =
+      rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
     if (type === undefined) continue;
 
     switch (type) {
@@ -371,12 +566,19 @@ function convertMessages(
         const images = parseImageParts(rawItem.content);
         if (role === "system" || role === "developer") {
           const text = content.map((part) => part.text).join("");
-          if (text.length > 0) systemPromptParts.push(text);
-          pendingReasoning = [];
+          const promote =
+            privilegedMode === "full" ||
+            (privilegedMode === "first" && !seenFirstUser);
+          if (!promote) {
+            // Degraded to a user message, preserving source order.
+            pushUser(text);
+          }
+          pendingReasoning.length = 0;
           continue;
         }
         if (role === "user") {
-          pendingReasoning = [];
+          seenFirstUser = true;
+          pendingReasoning.length = 0;
           const blocks = [...content, ...images];
           messages.push({
             role: "user",
@@ -390,7 +592,7 @@ function convertMessages(
             ...pendingReasoning,
             ...content,
           ];
-          pendingReasoning = [];
+          pendingReasoning.length = 0;
           flushAssistant(blocks);
           continue;
         }
@@ -432,24 +634,38 @@ function convertMessages(
         // Find or create the assistant container.
         const last = messages.at(-1);
         if (last?.role === "assistant") {
-          (last.content as Array<TextContent | ThinkingContent | ToolCall>).push(toolCall);
+          (
+            last.content as Array<TextContent | ThinkingContent | ToolCall>
+          ).push(toolCall);
           assistantIndex.set(toolCall.id, toolCall.name);
         } else {
           flushAssistant([...pendingReasoning, toolCall]);
         }
-        pendingReasoning = [];
+        pendingReasoning.length = 0;
         continue;
       }
       case "function_call_output":
       case "custom_tool_call_output": {
-        const callId = nonEmptyString(rawItem.call_id, "function_call_output.call_id");
+        const callId = nonEmptyString(
+          rawItem.call_id,
+          "function_call_output.call_id",
+        );
         const toolName = assistantIndex.get(callId);
         if (toolName === undefined) {
-          // Codex real clients send tool-result increments that may reference
-          // a call from an earlier response (or an incomplete replay).
-          // Rejecting the whole turn would kill the conversation, so an
-          // orphan output is tolerated: it is dropped from the Pi context.
-          pendingReasoning = [];
+          // Orphan output follows the frozen orphanToolOutput policy.
+          if (policy.orphanToolOutput === "error") {
+            throw new InvalidRequest(
+              `function_call_output references an unknown call_id: ${callId}`,
+            );
+          }
+          notices.push(
+            requestNotice(
+              "openai-responses_orphan_tool_output_ignored",
+              "ignore",
+              `$.input[?call_id=${callId}]`,
+            ),
+          );
+          pendingReasoning.length = 0;
           continue;
         }
         const output = rawItem.output;
@@ -459,7 +675,9 @@ function convertMessages(
             : Array.isArray(output)
               ? output
                   .filter(isRecord)
-                  .filter((part) => part.type === "input_text" || part.type === "text")
+                  .filter(
+                    (part) => part.type === "input_text" || part.type === "text",
+                  )
                   .map((part) => (typeof part.text === "string" ? part.text : ""))
                   .join("\n")
               : "";
@@ -472,27 +690,40 @@ function convertMessages(
           timestamp: receivedAt,
         };
         messages.push(result);
-        pendingReasoning = [];
+        pendingReasoning.length = 0;
         continue;
       }
       case "compaction":
       case "compaction_summary":
       case "context_compaction": {
         const encrypted = rawItem.encrypted_content;
-        if (type === "context_compaction" && typeof encrypted !== "string") continue;
-        const text =
-          typeof encrypted === "string"
-            ? `[compacted conversation: ${encrypted.length} bytes of encrypted content]`
-            : "[compacted conversation]";
-        pendingReasoning = [];
-        messages.push({ role: "user", content: [{ type: "text", text }], timestamp: receivedAt });
+        if (typeof encrypted === "string" && encrypted.length > 0) {
+          // Foreign encrypted-only compaction: error, never fabricate bytes.
+          throw new InvalidRequest(
+            "compaction with foreign encrypted content cannot be converted",
+          );
+        }
+        pendingReasoning.length = 0;
         continue;
+      }
+      case "item_reference": {
+        // External/unknown item_reference: error (no fail-open). Lucky-owned
+        // references are resolved by the async entry before conversion.
+        throw new InvalidRequest(
+          "item_reference cannot be resolved without a Lucky-owned envelope",
+        );
       }
       case "agent_message": {
         const content = parseContentParts(rawItem.content);
-        const text = content.map((part) => part.text).join("") || "(sub-agent message received)";
-        pendingReasoning = [];
-        messages.push({ role: "user", content: [{ type: "text", text }], timestamp: receivedAt });
+        const text =
+          content.map((part) => part.text).join("") ||
+          "(sub-agent message received)";
+        pendingReasoning.length = 0;
+        messages.push({
+          role: "user",
+          content: [{ type: "text", text }],
+          timestamp: receivedAt,
+        });
         continue;
       }
       case "web_search_call":
@@ -508,29 +739,155 @@ function convertMessages(
         continue;
       }
       default:
-        throw new InvalidRequest(`Unsupported input item type: ${String(type)}`);
+        if (policy.unknownInputItem === "error") {
+          throw new InvalidRequest(`Unsupported input item type: ${String(type)}`);
+        }
+        notices.push(
+          requestNotice(
+            UNKNOWN_INPUT_ITEM_IGNORED_NOTICE_CODE,
+            "ignore",
+            `$.input[?type=${String(type)}]`,
+          ),
+        );
+        continue;
     }
   }
 
   return messages;
 }
 
-export function convertResponsesRequest(
+/**
+ * Expand Lucky-owned provable references/envelopes in the input items,
+ * awaiting the narrow resolver, preserving source order. Unresolvable
+ * references become notices rather than fabricated fallbacks. The caller's
+ * abort signal is forwarded so resolution can be cancelled.
+ */
+async function resolveLuckyReferences(
+  items: readonly unknown[],
+  resolver: ResponseReferenceResolver,
+  notices: ConversionNotice[],
+  signal?: AbortSignal,
+): Promise<unknown[]> {
+  const expanded: unknown[] = [];
+  for (const rawItem of items) {
+    if (!isRecord(rawItem)) {
+      expanded.push(rawItem);
+      continue;
+    }
+    const type =
+      rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
+    const envelope = rawItem.envelope;
+    const isReference = type === "item_reference";
+    const isCompaction =
+      (type === "compaction" ||
+        type === "compaction_summary" ||
+        type === "context_compaction") &&
+      isRecord(envelope) &&
+      typeof envelope.authority === "string";
+    if (!isReference && !isCompaction) {
+      expanded.push(rawItem);
+      continue;
+    }
+    if (!isRecord(envelope) || typeof envelope.authority !== "string") {
+      expanded.push(rawItem); // External reference; the core errors on it.
+      continue;
+    }
+    try {
+      const resolved = await resolver.resolveItemReference(rawItem, {
+        authority: envelope.authority,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      expanded.push(...resolved);
+    } catch {
+      notices.push(
+        requestNotice(
+          REFERENCE_UNRESOLVED_NOTICE_CODE,
+          "ignore",
+          `$.input[?id=${String(rawItem.id)}]`,
+        ),
+      );
+    }
+  }
+  return expanded;
+}
+
+function applyToolChoiceFilter(
   value: unknown,
-  receivedAt: number,
+  mergedTools: Tool[] | undefined,
+  toolChoice: string | undefined,
+  freeformNames: Set<string>,
+): { tools: Tool[] | undefined; effective: string | undefined } {
+  let effectiveTools = mergedTools;
+  let effectiveToolChoice: string | undefined;
+  if (toolChoice === "none") {
+    effectiveTools = undefined;
+    effectiveToolChoice = "none";
+  } else if (toolChoice === "allowed") {
+    const allowed = (value as Record<string, unknown>).tool_choice as
+      | Record<string, unknown>
+      | undefined;
+    const names = new Set(
+      Array.isArray(allowed?.allowed_tools)
+        ? allowed.allowed_tools.filter(
+            (entry): entry is string => typeof entry === "string",
+          )
+        : [],
+    );
+    effectiveTools =
+      effectiveTools === undefined
+        ? undefined
+        : effectiveTools.filter((tool) => names.has(tool.name));
+    effectiveToolChoice = "allowed";
+  } else if (toolChoice === "forced") {
+    // Unsupported forced control: drop unless it requires an unavailable tool.
+    const choice = (value as Record<string, unknown>).tool_choice as
+      | Record<string, unknown>
+      | undefined;
+    const requiredName = choice?.name;
+    if (typeof requiredName === "string") {
+      const catalogNames = new Set(
+        effectiveTools === undefined ? [] : effectiveTools.map((t) => t.name),
+      );
+      if (!catalogNames.has(requiredName)) {
+        throw new InvalidRequest(
+          `tool_choice requires an unavailable tool: ${requiredName}`,
+        );
+      }
+    }
+    // Dropped: no generic Pi control. effectiveToolChoice stays unset.
+  }
+  void freeformNames;
+  return { tools: effectiveTools, effective: effectiveToolChoice };
+}
+
+function buildInvocation(
+  value: unknown,
+  validated: ValidatedResponsesRequest,
+  freeformNames: Set<string>,
+  additionalTools: unknown[],
+  messages: Message[],
+  notices: ConversionNotice[],
+  policy: ResponseRequestConversionPolicy,
 ): ResponsesInvocation {
-  const freeformNames = new Set<string>();
-  const validated = validateResponsesRequest(value, freeformNames);
-  const additionalTools: unknown[] = [];
-  const messages = convertMessages(
-    validated.input,
-    validated.selector,
-    receivedAt,
-    additionalTools,
-  );
   const context: Context = { messages };
+  // Source metadata is retained only for request-local response echo; it is
+  // never placed into model context.
+  const metadataEcho = collectMetadataEcho(value);
+  // Top-level instructions always lead the Pi systemPrompt; promoted input
+  // privileged segments follow in source order, joined by one newline.
+  const promptParts: string[] = [];
   if (validated.instructions !== undefined) {
-    context.systemPrompt = validated.instructions;
+    promptParts.push(validated.instructions);
+  }
+  const promoted = collectPromotedSegments(
+    validated.input,
+    policy.privilegedMessages,
+  );
+  for (const segment of promoted) {
+    if (segment.length > 0) promptParts.push(segment);
+  }
+  if (promptParts.length > 0) {
+    context.systemPrompt = promptParts.join("\n");
   }
   const mergedTools =
     validated.tools === undefined
@@ -541,8 +898,14 @@ export function convertResponsesRequest(
           ...validated.tools,
           ...(convertTools(additionalTools, freeformNames) ?? []),
         ];
-  if (mergedTools !== undefined && mergedTools.length > 0) {
-    context.tools = mergedTools;
+  const filtered = applyToolChoiceFilter(
+    value,
+    mergedTools,
+    validated.toolChoice,
+    freeformNames,
+  );
+  if (filtered.tools !== undefined && filtered.tools.length > 0) {
+    context.tools = filtered.tools;
   }
   const options: ModelsSimpleStreamOptions = {};
   if (validated.maxOutputTokens !== undefined) {
@@ -550,6 +913,15 @@ export function convertResponsesRequest(
   }
   if (validated.temperature !== undefined) {
     options.temperature = validated.temperature;
+  }
+  if (validated.topP !== undefined) {
+    options.samplingParams = { top_p: validated.topP };
+  }
+  if (validated.cacheRetention !== undefined) {
+    options.cacheRetention = validated.cacheRetention;
+  }
+  if (validated.metadataUserId !== undefined) {
+    options.metadata = { user_id: validated.metadataUserId };
   }
   if (validated.reasoning !== undefined) {
     const reasoning = validated.reasoning as ModelsSimpleStreamOptions["reasoning"];
@@ -562,7 +934,148 @@ export function convertResponsesRequest(
     renderState: {
       clientModel: validated.selector,
       stream: validated.stream,
+      ...(filtered.effective === undefined
+        ? {}
+        : { toolChoice: filtered.effective }),
       ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
+      ...(metadataEcho === undefined ? {} : { metadataEcho }),
     },
+    notices: Object.freeze(notices),
   };
+}
+
+/** Retain only safely-echoable string metadata for the local response. */
+function collectMetadataEcho(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const metadata = value.metadata;
+  if (!isRecord(metadata)) return undefined;
+  const echo: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(metadata)) {
+    if (typeof entry === "string") echo[key] = entry;
+  }
+  return Object.keys(echo).length === 0 ? undefined : Object.freeze(echo);
+}
+
+/**
+ * Convert a validated Responses request into the Pi invocation.
+ *
+ * Without a resolver, Lucky-owned references/envelopes are a conversion
+ * error (no fail-open). Use {@link convertResponsesRequestAsync} with a
+ * narrow Responses-owned resolver to materialize them.
+ */
+export function convertResponsesRequest(
+  value: unknown,
+  receivedAt: number,
+  policy: ResponseRequestConversionPolicy = DEFAULT_POLICY,
+): ResponsesInvocation {
+  const freeformNames = new Set<string>();
+  const validated = validateResponsesRequest(value, freeformNames);
+  const notices: ConversionNotice[] = [];
+  const reasoning = convertReasoning(
+    isRecord(value) ? value.reasoning : undefined,
+    policy.futureReasoningEffort,
+    notices,
+  );
+  if (reasoning !== undefined) validated.reasoning = reasoning;
+  const additionalTools: unknown[] = [];
+  const messages = convertMessages(
+    validated.input,
+    validated.selector,
+    receivedAt,
+    additionalTools,
+    policy,
+    notices,
+  );
+  return buildInvocation(
+    value,
+    validated,
+    freeformNames,
+    additionalTools,
+    messages,
+    notices,
+    policy,
+  );
+}
+
+/**
+ * Async conversion entry that materializes Lucky-owned opaque references
+ * through the narrow Responses resolver capability. Resolved items are
+ * converted in source order; an unresolvable reference becomes a notice, not
+ * a fabricated fallback.
+ */
+export async function convertResponsesRequestAsync(
+  value: unknown,
+  receivedAt: number,
+  policy: ResponseRequestConversionPolicy,
+  resolver: ResponseReferenceResolver,
+  signal?: AbortSignal,
+): Promise<ResponsesInvocation> {
+  const freeformNames = new Set<string>();
+  const validated = validateResponsesRequest(value, freeformNames);
+  const notices: ConversionNotice[] = [];
+  const reasoning = convertReasoning(
+    isRecord(value) ? value.reasoning : undefined,
+    policy.futureReasoningEffort,
+    notices,
+  );
+  if (reasoning !== undefined) validated.reasoning = reasoning;
+  const additionalTools: unknown[] = [];
+  const rawItems: readonly unknown[] =
+    typeof validated.input === "string"
+      ? [{ role: "user", content: validated.input }]
+      : (validated.input as readonly unknown[]);
+  const expandedItems = await resolveLuckyReferences(
+    rawItems,
+    resolver,
+    notices,
+    signal,
+  );
+  const messages = convertMessages(
+    expandedItems,
+    validated.selector,
+    receivedAt,
+    additionalTools,
+    policy,
+    notices,
+  );
+  return buildInvocation(
+    value,
+    validated,
+    freeformNames,
+    additionalTools,
+    messages,
+    notices,
+    policy,
+  );
+}
+
+function collectPromotedSegments(
+  input: unknown,
+  mode: "full" | "first" | "user",
+): string[] {
+  const segments: string[] = [];
+  const items: unknown[] =
+    typeof input === "string"
+      ? [{ role: "user", content: input }]
+      : (input as unknown[]);
+  let seenFirstUser = false;
+  for (const rawItem of items) {
+    if (!isRecord(rawItem)) continue;
+    const type =
+      rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
+    if (type !== "message") continue;
+    const role = rawItem.role;
+    if (role === "user") {
+      seenFirstUser = true;
+      continue;
+    }
+    if (role !== "system" && role !== "developer") continue;
+    if (mode === "user") continue;
+    if (mode === "first" && seenFirstUser) continue;
+    const text = parseContentParts(rawItem.content)
+      .map((part) => part.text)
+      .join("");
+    if (text.length > 0) segments.push(text);
+  }
+  return segments;
 }

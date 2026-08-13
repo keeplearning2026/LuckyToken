@@ -6,13 +6,19 @@ export {
 export {
   createResponseSessionState,
   responseInputItems,
+  ResponseStateConversionFailure,
   type ResponseSessionState,
   type ResponseSessionStateOptions,
+  type StoreFalsePolicy,
 } from "./session-state.js";
 export {
   convertResponsesRequest,
+  convertResponsesRequestAsync,
   validateResponsesRequest,
+  type ResponseReferenceResolver,
+  type ResponseRequestConversionPolicy,
   type ResponsesInvocation,
+  type ValidatedResponsesRequest,
 } from "./request.js";
 export {
   convertAssistantMessageToResponses,

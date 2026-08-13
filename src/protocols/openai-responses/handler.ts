@@ -43,6 +43,7 @@ import {
 import { renderResponsesSse } from "./sse.js";
 import {
   createResponseSessionState,
+  ResponseStateConversionFailure,
   type ResponseSessionState,
 } from "./session-state.js";
 
@@ -54,6 +55,11 @@ export interface OpenAIResponsesHandlerOptions {
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly stateFile: string;
+  /**
+   * Optional injected session state (test seam). When omitted, the handler
+   * creates and owns its own store bound to `stateFile`.
+   */
+  readonly sessionState?: ResponseSessionState;
   readonly shutdownSignal?: AbortSignal;
   /**
    * Optional invocation HTTP observer shared with provider composition. When
@@ -135,11 +141,21 @@ async function readRawBody(
 
 function rememberAfterSuccess(
   dependencies: OpenAIResponsesDependencies,
+  diagnostics: InvocationDiagnostics,
   rawBody: unknown,
   rendered: ResponsesResponseObject,
 ): void {
   // Anti-poisoning + save conditions live inside sessionState.remember.
-  void dependencies.sessionState.remember(rawBody, rendered);
+  // store:false=persist surfaces a request-local notice through the current
+  // invocation's diagnostics.
+  void dependencies.sessionState.remember(rawBody, rendered, (code) => {
+    diagnostics.notice({
+      adapter: openaiResponsesProtocolId,
+      direction: "request",
+      code,
+      action: "degrade",
+    });
+  });
 }
 
 async function handleOpenAIResponses(
@@ -191,13 +207,21 @@ async function handleOpenAIResponses(
     }
     const body: unknown = JSON.parse(rawBody);
 
-    // Expand previous_response_id into the full input (fail-open).
+    // Expand previous_response_id into the full input. Unknown/expired/
+    // evicted/corrupt/unresolvable IDs throw a typed conversion error.
     const expanded = await raceWithRequestSignal(
       dependencies.sessionState.expand(body),
       request.signal,
     );
 
-    const invocation = convertResponsesRequest(expanded, dependencies.now());
+    const invocation = convertResponsesRequest(
+      expanded,
+      dependencies.now(),
+      dependencies.configuration.conversion.request,
+    );
+    for (const notice of invocation.notices) {
+      diagnostics.notice(notice);
+    }
     diagnostics.checkpoint({
       stage: "model-resolution",
       selector: invocation.selector,
@@ -242,7 +266,7 @@ async function handleOpenAIResponses(
     // entry contains the complete conversation up to this response. A later
     // `previous_response_id` expansion then reproduces the full history;
     // saving the raw (unexpanded) increment would drop all earlier turns.
-    rememberAfterSuccess(dependencies, expanded, rendered);
+    rememberAfterSuccess(dependencies, diagnostics, expanded, rendered);
 
     const prepared = invocation.renderState.stream
       ? renderResponsesSse(rendered)
@@ -263,6 +287,11 @@ async function handleOpenAIResponses(
       );
     }
     if (error instanceof InvalidRequest) {
+      return toResponse(
+        renderResponsesError(400, "invalid_request_error", error.message),
+      );
+    }
+    if (error instanceof ResponseStateConversionFailure) {
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
@@ -351,13 +380,25 @@ function composeInvocationOptions(
   return composeOptions(options, infrastructure, routerDefaults);
 }
 
+function dependenciesConfiguration(
+  options: OpenAIResponsesHandlerOptions,
+): OpenAIResponsesConfiguration {
+  return options.configuration === undefined
+    ? parseOpenAIResponsesConfiguration()
+    : bindOpenAIResponsesConfiguration(options.configuration);
+}
+
 export function createOpenAIResponsesHandler(
   options: OpenAIResponsesHandlerOptions,
 ): ClientProtocolHandler {
-  const sessionState = createResponseSessionState({
-    stateFile: options.stateFile,
-    ...(options.now === undefined ? {} : { now: options.now }),
-  });
+  const configuration = dependenciesConfiguration(options);
+  const sessionState =
+    options.sessionState ??
+    createResponseSessionState({
+      stateFile: options.stateFile,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      storeFalsePolicy: configuration.conversion.response.storeFalse,
+    });
   if (options.shutdownSignal !== undefined) {
     if (options.shutdownSignal.aborted) {
       void sessionState.flush();
@@ -374,10 +415,7 @@ export function createOpenAIResponsesHandler(
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
     auth: options.auth,
-    configuration:
-      options.configuration === undefined
-        ? parseOpenAIResponsesConfiguration()
-        : bindOpenAIResponsesConfiguration(options.configuration),
+    configuration,
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     sessionState,

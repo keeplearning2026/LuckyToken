@@ -2,6 +2,8 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
+import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
@@ -48,7 +50,16 @@ describe("OpenAI Responses serving", () => {
     modelId: "deepseek/deepseek-v4-flash",
   };
 
-  async function start(options: Partial<typeof baseOptions> & { fetch: FetchFunction }) {
+  async function start(
+    options: Partial<typeof baseOptions> &
+      {
+        fetch: FetchFunction;
+        directory?: string;
+        stateFile?: string;
+        configuration?: OpenAIResponsesConfiguration;
+        invocationDiagnostics?: InvocationDiagnosticsFactory;
+      },
+  ) {
     const composition = await createOpenAIResponsesServingTestComposition({
       ...baseOptions,
       ...options,
@@ -102,7 +113,7 @@ describe("OpenAI Responses serving", () => {
     expect(roles).toEqual(["user", "assistant", "user"]);
   });
 
-  it("tolerates an orphan function_call_output in an expanded increment", async () => {
+  it("rejects an orphan function_call_output by default in an expanded increment", async () => {
     const upstreamBodies: unknown[] = [];
     const fetch: FetchFunction = async (input, init) => {
       const request = new Request(input, init);
@@ -125,8 +136,59 @@ describe("OpenAI Responses serving", () => {
     const firstJson = await first.json();
 
     // Second turn: Codex sends a tool-result increment whose call_id has no
-    // preceding function_call in the same batch (real client replay shape).
-    // This must NOT 400 the whole turn.
+    // preceding function_call in the expanded history. The frozen default
+    // orphanToolOutput=error rejects it; ignore is opt-in.
+    const second = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [
+            {
+              type: "function_call_output",
+              call_id: "call_orphan",
+              output: "tool result",
+            },
+            { type: "message", role: "user", content: "continue" },
+          ],
+          previous_response_id: firstJson.id,
+        },
+        "client-token",
+      ),
+    );
+    expect(second.status).toBe(400);
+    const secondJson = await second.json();
+    expect(secondJson.error.message).toContain("unknown call_id");
+  });
+
+  it("tolerates an orphan function_call_output when orphanToolOutput=ignore", async () => {
+    const upstreamBodies: unknown[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      const request = new Request(input, init);
+      upstreamBodies.push(JSON.parse(await request.text()));
+      return commandCodeText("answered");
+    };
+    const { parseOpenAIResponsesConfiguration } = await import(
+      "../../src/protocols/openai-responses/configuration.js"
+    );
+    const configuration = parseOpenAIResponsesConfiguration({
+      conversion: {
+        request: { orphanToolOutput: "ignore" },
+      },
+    });
+    const { runtime } = await start({ fetch, configuration });
+
+    const first = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "hello" }],
+        },
+        "client-token",
+      ),
+    );
+    expect(first.status).toBe(200);
+    const firstJson = await first.json();
+
     const second = await runtime.handle(
       responsesRequest(
         {
@@ -146,8 +208,8 @@ describe("OpenAI Responses serving", () => {
     );
     expect(second.status).toBe(200);
 
-    // The upstream history must not contain the orphan tool output (storage
-    // hygiene dropped it on save).
+    // The upstream history must not contain the orphan tool output (the
+    // ignore policy dropped it from the Pi context).
     const lastUpstream = upstreamBodies.at(-1) as {
       params?: { messages?: unknown[] };
     };
@@ -214,6 +276,45 @@ describe("OpenAI Responses serving", () => {
     expect(upstreamText).toContain("MARKER_THREE");
   });
 
+  it("emits a request-local notice when store:false=persist stores despite caller false", async () => {
+    const { parseOpenAIResponsesConfiguration } = await import(
+      "../../src/protocols/openai-responses/configuration.js"
+    );
+    const configuration = parseOpenAIResponsesConfiguration({
+      conversion: {
+        response: { storeFalse: "persist" },
+      },
+    });
+    const notices: string[] = [];
+    const factory = {
+      begin: () => ({
+        requestId: "req-test",
+        notice: (notice: { code: string }) => notices.push(notice.code),
+        attempt: () => undefined,
+        checkpoint: () => undefined,
+        succeed: async () => undefined,
+        fail: async () => undefined,
+      }),
+    };
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("kept"),
+      configuration,
+      invocationDiagnostics: factory,
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "secret turn",
+          store: false,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(notices).toContain("openai-responses_store_false_persisted");
+  });
+
   it("rejects an invalid client token with 401", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),
@@ -274,8 +375,16 @@ describe("OpenAI Responses serving", () => {
   });
 
   it("survives a restart by loading history from the snapshot file", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-responses-restart-"),
+    );
+    const stateFile = join(directory, "openai-responses.json");
     const fetch: FetchFunction = async () => commandCodeText("restart-safe");
-    const first = await start({ fetch });
+
+    const first = await start({ fetch, directory, stateFile });
     const firstResponse = await first.runtime.handle(
       responsesRequest(
         {
@@ -286,11 +395,13 @@ describe("OpenAI Responses serving", () => {
       ),
     );
     const firstJson = await firstResponse.json();
+    // Flush the pending debounced snapshot before the process "exits".
+    await first.flushState();
     await first.close();
     compositions.splice(compositions.indexOf(first), 1);
 
     // New composition on the SAME stateFile (simulated process restart).
-    const second = await start({ fetch });
+    const second = await start({ fetch, directory, stateFile });
     const continuation = await second.runtime.handle(
       responsesRequest(
         {
@@ -304,6 +415,11 @@ describe("OpenAI Responses serving", () => {
     expect(continuation.status).toBe(200);
     const continuationJson = await continuation.json();
     expect(continuationJson.previous_response_id).toBe(firstJson.id);
+    // The shared directory is owned by this test; clean it up here.
+    await second.close();
+    compositions.splice(compositions.indexOf(second), 1);
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
   });
 
   it("propagates client cancellation to the upstream fetch and saves no state", async () => {

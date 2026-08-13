@@ -1,12 +1,15 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
+import {
+  createResponseSessionState,
+  type ResponseSessionStateOptions,
+} from "../../src/protocols/openai-responses/session-state.js";
 
-describe("OpenAI Responses session state", () => {
+describe("12: Responses local response state", () => {
   const directories: string[] = [];
 
   afterEach(async () => {
@@ -17,9 +20,7 @@ describe("OpenAI Responses session state", () => {
     );
   });
 
-  async function fixtureState(
-    options: { now?: () => number; maxEntries?: number } = {},
-  ) {
+  async function fixtureState(options: Partial<ResponseSessionStateOptions> = {}) {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-state-"));
     directories.push(directory);
     const stateFile = join(directory, "openai-responses.json");
@@ -29,18 +30,55 @@ describe("OpenAI Responses session state", () => {
       create: () =>
         createResponseSessionState({
           stateFile,
-          ...(options.now === undefined ? {} : { now: options.now }),
-          ...(options.maxEntries === undefined
+          ...(options.maxEntries === undefined ? {} : { maxEntries: options.maxEntries }),
+          ...(options.ttlMs === undefined ? {} : { ttlMs: options.ttlMs }),
+          ...(options.storeFalsePolicy === undefined
             ? {}
-            : { maxEntries: options.maxEntries }),
+            : { storeFalsePolicy: options.storeFalsePolicy }),
+          ...(options.now === undefined ? {} : { now: options.now }),
         }),
     };
   }
 
-  const completedResponse = (id: string, output: unknown[]) => ({
+  const completedResponse = (id: string, output: unknown[] = []) => ({
     id,
     status: "completed",
     output,
+  });
+
+  function attemptExpand(state: ReturnType<typeof createResponseSessionState>, body: unknown): Promise<unknown> {
+    return state.expand(body);
+  }
+
+  it("prepends stored items in exact order for a known previous_response_id", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: [{ role: "user", content: "hello" }] },
+      completedResponse("resp_1", [
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "hi" }] },
+        { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+      ]),
+    );
+    await state.flush();
+
+    const expanded = await attemptExpand(state, {
+      model: "m",
+      input: [{ role: "user", content: "next" }],
+      previous_response_id: "resp_1",
+    });
+    expect(expanded).toMatchObject({
+      input: [
+        { role: "user", content: "hello" },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "hi" }],
+        },
+        { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+        { role: "user", content: "next" },
+      ],
+    });
   });
 
   it("round-trips saved history through the snapshot file into a fresh instance", async () => {
@@ -54,11 +92,10 @@ describe("OpenAI Responses session state", () => {
 
     const second = create();
     const expanded = await second.expand({
-      model: "commandcode-private/deepseek/deepseek-v4-flash",
+      model: "m",
       input: [{ role: "user", content: "next" }],
       previous_response_id: "resp_1",
     });
-
     expect(expanded).toMatchObject({
       input: [
         { role: "user", content: "hello" },
@@ -71,101 +108,258 @@ describe("OpenAI Responses session state", () => {
       ],
     });
     expect(JSON.parse(await readFile(stateFile, "utf8"))).toMatchObject({
-      version: 2,
+      version: 3,
     });
   });
 
-  it("saves regardless of store:false but only for completed or max_output_tokens-incomplete responses", async () => {
+  it("errors on an unknown previous_response_id (no fail-open)", async () => {
     const { create } = await fixtureState();
     const state = create();
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "increment",
+        previous_response_id: "resp_unknown",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
 
+  it("errors on an expired previous_response_id", async () => {
+    let current = 1_000_000;
+    const { create } = await fixtureState({ now: () => current, ttlMs: 100 });
+    const state = create();
     await state.remember(
-      { input: "stored", store: false },
-      completedResponse("resp_store_false", [{ type: "message", role: "assistant", content: [] }]),
+      { input: "old" },
+      completedResponse("resp_old", []),
     );
-    await state.remember(
-      { input: "incomplete-ok" },
-      {
-        id: "resp_incomplete_ok",
-        status: "incomplete",
-        incomplete_details: { reason: "max_output_tokens" },
-        output: [{ type: "message", role: "assistant", content: [] }],
-      },
-    );
-    await state.remember(
-      { input: "incomplete-filter" },
-      {
-        id: "resp_incomplete_filter",
-        status: "incomplete",
-        incomplete_details: { reason: "content_filter" },
-        output: [{ type: "message", role: "assistant", content: [] }],
-      },
-    );
-    await state.remember(
-      { input: "failed" },
-      {
-        id: "resp_failed",
-        status: "failed",
-        output: [],
-      },
-    );
+    await state.flush();
+    current += 101;
 
-    expect(await state.expand({ input: "x", previous_response_id: "resp_store_false" })).toMatchObject({
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "new",
+        previous_response_id: "resp_old",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("errors on an evicted previous_response_id", async () => {
+    const { create } = await fixtureState({ maxEntries: 2 });
+    const state = create();
+    await state.remember({ input: "one" }, completedResponse("resp_1", []));
+    await state.remember({ input: "two" }, completedResponse("resp_2", []));
+    await state.remember({ input: "three" }, completedResponse("resp_3", []));
+
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "x",
+        previous_response_id: "resp_1",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    expect(await state.expand({ input: "x", previous_response_id: "resp_2" })).toMatchObject({
       input: [
-        { role: "user", content: "stored" },
-        { type: "message", role: "assistant", content: [] },
+        { role: "user", content: "two" },
         { role: "user", content: "x" },
       ],
-    });
-    expect(await state.expand({ input: "x", previous_response_id: "resp_incomplete_ok" })).toMatchObject({
-      input: [
-        { role: "user", content: "incomplete-ok" },
-        { type: "message", role: "assistant", content: [] },
-        { role: "user", content: "x" },
-      ],
-    });
-    const filterExpansion = await state.expand({
-      input: "x",
-      previous_response_id: "resp_incomplete_filter",
-    });
-    expect(filterExpansion).toMatchObject({ input: "x" });
-    expect(await state.expand({ input: "x", previous_response_id: "resp_failed" })).toMatchObject({
-      input: "x",
     });
   });
 
-  it("fails open when previous_response_id is unknown", async () => {
+  it("errors on an unresolvable previous_response_id (a referenced missing entry)", async () => {
     const { create } = await fixtureState();
     const state = create();
-    const body = {
+    // A response was saved, but its entry is not resolvable: simulate a
+    // snapshot that references an ID whose entry is missing (corrupt chain).
+    await state.remember(
+      { input: "history", previous_response_id: "resp_ghost" },
+      completedResponse("resp_chain", []),
+    );
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "y",
+        previous_response_id: "resp_chain",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("quarantines a corrupt snapshot and errors for a specifically referenced ID", async () => {
+    const { stateFile, create } = await fixtureState();
+    await writeFile(stateFile, "{ not json", "utf8");
+
+    const state = create();
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "x",
+        previous_response_id: "resp_any",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    const { access } = await import("node:fs/promises");
+    await expect(access(`${stateFile}.corrupt`)).resolves.toBeUndefined();
+  });
+
+  it("honors store:false by storing neither memory nor disk", async () => {
+    const { stateFile, create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: "secret", store: false },
+      completedResponse("resp_honor", []),
+    );
+    await state.flush();
+
+    expect(state.size()).toBe(0);
+    // honor stores neither memory nor disk: no snapshot file is written at all.
+    const { access } = await import("node:fs/promises");
+    await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      attemptExpand(state, {
+        model: "m",
+        input: "x",
+        previous_response_id: "resp_honor",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("keeps store:false in memory only under the memory policy", async () => {
+    const { create } = await fixtureState({ storeFalsePolicy: "memory" });
+    const state = create();
+    await state.remember(
+      { input: "process only", store: false },
+      completedResponse("resp_mem", []),
+    );
+    await state.flush();
+
+    expect(state.size()).toBe(1);
+    expect(await state.expand({ input: "x", previous_response_id: "resp_mem" })).toMatchObject({
+      input: [
+        { role: "user", content: "process only" },
+        { role: "user", content: "x" },
+      ],
+    });
+  });
+
+  it("persists store:false under the persist policy and reports a notice", async () => {
+    const { create } = await fixtureState({ storeFalsePolicy: "persist" });
+    const state = create();
+    const notices: string[] = [];
+    await state.remember(
+      { input: "kept", store: false },
+      completedResponse("resp_persist", []),
+      (code) => notices.push(code),
+    );
+    await state.flush();
+
+    expect(state.size()).toBe(1);
+    expect(notices).toEqual(["openai-responses_store_false_persisted"]);
+    expect(await state.expand({ input: "x", previous_response_id: "resp_persist" })).toMatchObject({
+      input: [
+        { role: "user", content: "kept" },
+        { role: "user", content: "x" },
+      ],
+    });
+  });
+
+  it("does not wait for the commit before a continuation may resolve (documented race)", async () => {
+    // Deterministic demonstration: the remember() promise is not awaited
+    // before expand() runs; the store must not synchronously complete a write
+    // that would make the immediately-following expand() always succeed.
+    const { create } = await fixtureState();
+    const state = create();
+    const pending = state.remember(
+      { input: "racing" },
+      completedResponse("resp_race", []),
+    );
+    // Do NOT await pending: this is the documented immediate-continuation
+    // race. expand may observe the entry (memory state is synchronous) or a
+    // failed commit, but the response must not have blocked on the commit.
+    const expanded = await state.expand({
       model: "m",
-      input: "increment",
-      previous_response_id: "resp_unknown",
-    };
-
-    await expect(state.expand(body)).resolves.toBe(body);
+      input: "continue",
+      previous_response_id: "resp_race",
+    });
+    await pending;
+    expect(expanded).toMatchObject({
+      input: [
+        { role: "user", content: "racing" },
+        { role: "user", content: "continue" },
+      ],
+    });
   });
 
-  it("never saves a request whose own previous_response_id failed to expand", async () => {
-    const { create } = await fixtureState();
+  it("evicts oldest entries past the entry cap", async () => {
+    const { create } = await fixtureState({ maxEntries: 2 });
     const state = create();
-    await state.remember(
-      { input: "delta", previous_response_id: "resp_missing" },
-      completedResponse("resp_bad_chain", [{ type: "message", role: "assistant", content: [] }]),
-    );
+    await state.remember({ input: "one" }, completedResponse("resp_1", []));
+    await state.remember({ input: "two" }, completedResponse("resp_2", []));
+    await state.remember({ input: "three" }, completedResponse("resp_3", []));
 
-    await expect(state.expand({ input: "y", previous_response_id: "resp_bad_chain" })).resolves.toMatchObject({
-      input: "y",
+    expect(await state.expand({ input: "x", previous_response_id: "resp_2" })).toMatchObject({
+      input: [
+        { role: "user", content: "two" },
+        { role: "user", content: "x" },
+      ],
     });
+    expect(await state.expand({ input: "x", previous_response_id: "resp_3" })).toMatchObject({
+      input: [
+        { role: "user", content: "three" },
+        { role: "user", content: "x" },
+      ],
+    });
+    expect(state.size()).toBe(2);
+  });
+
+  it("never writes a snapshot the next load refuses (closed limits)", async () => {
+    const { stateFile, create } = await fixtureState();
+    const state = create();
+    // A snapshot written with a moderately large but admitted history must
+    // load cleanly in a fresh instance (write-side and load-side caps are
+    // mutually compatible).
+    const text = "x".repeat(100_000);
+    await state.remember(
+      { input: text },
+      completedResponse("resp_big", []),
+    );
+    await state.flush();
+    const onDisk = JSON.parse(await readFile(stateFile, "utf8"));
+    expect(String(onDisk.states[0]?.[1]?.items?.[0]?.content).length).toBe(100_000);
+
+    // Loading the snapshot in a fresh instance must succeed (no refusal).
+    const second = create();
+    await expect(
+      second.expand({ input: "y", previous_response_id: "resp_big" }),
+    ).resolves.toMatchObject({
+      input: [
+        { role: "user", content: expect.stringContaining("x".repeat(10)) },
+        { role: "user", content: "y" },
+      ],
+    });
+  });
+
+  it("writes atomically with same-directory temp + rename and serializes writes", async () => {
+    const { stateFile, create } = await fixtureState();
+    const state = create();
+    // Fire many remembers without awaiting; writes must serialize and never
+    // interleave partial snapshots.
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        state.remember(
+          { input: `item-${index}` },
+          completedResponse(`resp_${index}`, []),
+        ),
+      ),
+    );
+    await state.flush();
+
+    const loaded = JSON.parse(await readFile(stateFile, "utf8"));
+    const ids = loaded.states.map((entry: [string, unknown]) => entry[0]);
+    expect(ids).toEqual(Array.from({ length: 12 }, (_, index) => `resp_${index}`));
   });
 
   it("drops orphan function_call_output items when saving (storage hygiene)", async () => {
     const { create } = await fixtureState();
     const state = create();
-    // The request input carries a tool-result increment whose call_id has no
-    // preceding function_call in the same batch (Codex replay shape). The
-    // stored history must not retain it, or a later expansion would replay a
-    // poisoned chain.
     await state.remember(
       {
         input: [
@@ -177,8 +371,9 @@ describe("OpenAI Responses session state", () => {
           { type: "message", role: "user", content: "continue" },
         ],
       },
-      completedResponse("resp_clean", [{ type: "message", role: "assistant", content: [] }]),
+      completedResponse("resp_clean", []),
     );
+    await state.flush();
 
     const expanded = await state.expand({
       input: "next",
@@ -190,23 +385,20 @@ describe("OpenAI Responses session state", () => {
         ? (item as { type: string }).type
         : "message",
     );
-    expect(types).toEqual(["message", "message", "message"]);
+    expect(types).toEqual(["message", "message"]);
   });
 
   it("self-heals orphan items already on disk at load time", async () => {
     const { stateFile, create } = await fixtureState();
-    // Simulate a snapshot written by an older version (or a crashed writer)
-    // that contains an orphan function_call_output.
-    const { writeFile } = await import("node:fs/promises");
     await writeFile(
       stateFile,
       JSON.stringify({
-        version: 2,
+        version: 3,
         states: [
           [
             "resp_legacy",
             {
-              createdAt: 1_786_400_000,
+              createdAt: Date.now(),
               items: [
                 {
                   type: "function_call_output",
@@ -233,61 +425,89 @@ describe("OpenAI Responses session state", () => {
         ? (item as { type: string }).type
         : "message",
     );
-    // The orphan output must be gone; the user history message remains.
     expect(types).toEqual(["message", "message"]);
   });
 
-  it("evicts oldest entries past the entry cap", async () => {
-    const { create } = await fixtureState({ maxEntries: 2 });
+  it("never saves a request whose own previous_response_id failed to expand", async () => {
+    const { create } = await fixtureState();
     const state = create();
+    await state.remember(
+      { input: "delta", previous_response_id: "resp_missing" },
+      completedResponse("resp_bad_chain", []),
+    );
+    await state.flush();
 
-    await state.remember({ input: "one" }, completedResponse("resp_1", []));
-    await state.remember({ input: "two" }, completedResponse("resp_2", []));
-    await state.remember({ input: "three" }, completedResponse("resp_3", []));
+    await expect(
+      attemptExpand(state, {
+        input: "y",
+        previous_response_id: "resp_bad_chain",
+      }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
 
-    expect(await state.expand({ input: "x", previous_response_id: "resp_1" })).toMatchObject({ input: "x" });
-    expect(await state.expand({ input: "x", previous_response_id: "resp_2" })).toMatchObject({
+  it("saves only completed or max_output_tokens-incomplete responses", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: "incomplete-ok" },
+      {
+        id: "resp_incomplete_ok",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [{ type: "message", role: "assistant", content: [] }],
+      },
+    );
+    await state.remember(
+      { input: "incomplete-filter" },
+      {
+        id: "resp_incomplete_filter",
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+        output: [],
+      },
+    );
+    await state.remember(
+      { input: "failed" },
+      { id: "resp_failed", status: "failed", output: [] },
+    );
+    await state.flush();
+
+    expect(state.size()).toBe(1);
+    await expect(
+      attemptExpand(state, { input: "x", previous_response_id: "resp_incomplete_ok" }),
+    ).resolves.toMatchObject({
       input: [
-        { role: "user", content: "two" },
-        { role: "user", content: "x" },
-      ],
-    });
-    expect(await state.expand({ input: "x", previous_response_id: "resp_3" })).toMatchObject({
-      input: [
-        { role: "user", content: "three" },
+        { role: "user", content: "incomplete-ok" },
+        { type: "message", role: "assistant", content: [] },
         { role: "user", content: "x" },
       ],
     });
   });
 
-  it("backs up a corrupt snapshot and starts empty", async () => {
-    const { stateFile, create } = await fixtureState();
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(stateFile, "{ not json", "utf8");
-
+  it("exposes no mutable entry objects through the public interface", async () => {
+    const { create } = await fixtureState();
     const state = create();
-    await expect(state.expand({ input: "x", previous_response_id: "resp_any" })).resolves.toMatchObject({
-      input: "x",
-    });
-    const { access } = await import("node:fs/promises");
-    await expect(access(`${stateFile}.corrupt`)).resolves.toBeUndefined();
-  });
+    await state.remember(
+      { input: [{ role: "user", content: "stable" }] },
+      completedResponse("resp_1", [
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "hi" }] },
+      ]),
+    );
+    await state.flush();
 
-  it("cleans up orphan tmp files from dead writers on load", async () => {
-    const { directory, stateFile, create } = await fixtureState();
-    const { writeFile } = await import("node:fs/promises");
-    const orphan = join(directory, "openai-responses.json.999999.1.tmp");
-    await writeFile(orphan, "partial", "utf8");
-    // Backdate the tmp file beyond the 15-minute grace.
-    const { utimes } = await import("node:fs/promises");
-    await utimes(orphan, new Date(Date.now() - 20 * 60 * 1000), new Date(Date.now() - 20 * 60 * 1000));
-
-    const state = create();
-    await state.expand({ input: "x" });
-
-    const { access } = await import("node:fs/promises");
-    await expect(access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(stateFile).toBe(stateFile);
+    // Concurrent expansions must return independent, non-aliased arrays.
+    const [a, b] = await Promise.all([
+      state.expand({ input: "next", previous_response_id: "resp_1" }),
+      state.expand({ input: "next", previous_response_id: "resp_1" }),
+    ]);
+    const inputA = (a as { input: unknown[] }).input;
+    const inputB = (b as { input: unknown[] }).input;
+    expect(inputA).not.toBe(inputB);
+    expect(inputA).toEqual(inputB);
+    // Mutating a returned expansion must not affect the store.
+    (inputA[0] as Record<string, unknown>).role = "system";
+    const again = await state.expand({ input: "next", previous_response_id: "resp_1" });
+    expect((again as { input: unknown[] }).input[0]).toMatchObject({ role: "user" });
   });
 
   it("flushes a pending debounced write immediately", async () => {

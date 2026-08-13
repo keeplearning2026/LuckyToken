@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — adapter-owned configuration; 02 — request-local notices/journal.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -18,17 +18,17 @@ Raw Responses wire items are copied into owned immutable entries. Pi Context is 
 
 ## Acceptance criteria
 
-- [ ] Known previous_response_id prepends stored items in exact order before new input.
-- [ ] Unknown, expired, evicted, corrupt, or unresolvable previous_response_id returns a typed conversion error; no naked-increment fail-open.
-- [ ] IDs are high entropy, non-enumerable, safe for file/log correlation, and not bound to auth/project scope.
-- [ ] `store:false=honor` stores neither memory nor disk; memory stores process-only; persist stores and emits notice.
-- [ ] true/null/absence follows documented normal storage policy and response reports only effective behaviour.
-- [ ] First response does not wait for commit; a deterministic test demonstrates/document the immediate-continuation race.
-- [ ] Entry TTL, count/byte caps, total snapshot cap, and load cap form a closed contract; module never writes an unloadable snapshot.
-- [ ] Writes are serialized, temp+atomic rename, and graceful flush is supported.
-- [ ] Corrupt state is quarantined; a referenced missing entry still errors.
-- [ ] Concurrent expansion/remember/flush tests use the public state interface and prove no mutable entry escapes.
-- [ ] No Anthropic or Provider imports enter the module.
+- [x] Known previous_response_id prepends stored items in exact order before new input.
+- [x] Unknown, expired, evicted, corrupt, or unresolvable previous_response_id returns a typed conversion error; no naked-increment fail-open.
+- [x] IDs are high entropy, non-enumerable, safe for file/log correlation, and not bound to auth/project scope.
+- [x] `store:false=honor` stores neither memory nor disk; memory stores process-only; persist stores and emits notice.
+- [x] true/null/absence follows documented normal storage policy and response reports only effective behaviour.
+- [x] First response does not wait for commit; a deterministic test demonstrates/document the immediate-continuation race.
+- [x] Entry TTL, count/byte caps, total snapshot cap, and load cap form a closed contract; module never writes an unloadable snapshot.
+- [x] Writes are serialized, temp+atomic rename, and graceful flush is supported.
+- [x] Corrupt state is quarantined; a referenced missing entry still errors.
+- [x] Concurrent expansion/remember/flush tests use the public state interface and prove no mutable entry escapes.
+- [x] No Anthropic or Provider imports enter the module.
 
 ## Out of scope
 
