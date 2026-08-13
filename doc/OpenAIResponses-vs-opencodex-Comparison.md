@@ -1,5 +1,7 @@
 # LuckyToken × opencodex OpenAI Responses Adapter 对比报告
 
+> **历史对比，非当前规范。** 本文记录的 Lucky HEAD、session-state 行为与部分 SSE/compaction 结论已经过期。当前 HEAD 为 `2863af2`；未知 previous ID、`store:false`、SSE terminal、字段覆盖和安全边界已在 [`ProtocolConversion-Completeness-Audit.md`](./ProtocolConversion-Completeness-Audit.md) 与 [`OpenAI Responses-Pi AI IR Conversion Method.md`](./Protocols/OpenAI%20Responses-Pi%20AI%20IR%20Conversion%20Method.md) 重新冻结。opencodex 目录仅能由 package manifest 确认标称 `2.13.0`，因无 `.git` 不能证明源码 revision。
+
 > 日期：2026-08-12
 > 类型：只读对比分析（未修改任何代码）
 > 基线：`codex/openai-responses-protocol` @ `ac9fa9a`（HEAD `01ff355` 与基线仅差 `doc/HANDOFF.md`，代码无差异）

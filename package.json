@@ -32,6 +32,7 @@
   },
   "scripts": {
     "start": "tsx src/cli.ts",
+    "test:cache": "tsx test/online/cache-probe.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",

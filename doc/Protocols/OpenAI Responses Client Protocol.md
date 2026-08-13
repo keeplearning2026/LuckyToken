@@ -1,377 +1,292 @@
 # OpenAI Responses Client Protocol
 
-**Version:** 0.1.0  
-**Status:** Draft
+Version: **1.0 frozen design**
 
-**Owner:** `keeplearning2026/LuckyToken`  
-**Reference Date:** `2026-08-12`
+Reference date: **2026-08-13**
+Owner: LuckyToken OpenAI Responses Client Protocol adapter
 
-**Reference Implementations:**
+This document defines the Client wire, local state, rendering, passthrough profile, and ownership boundary for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
 
-- `D:\project\opencodex` — opencodex `src/responses/state.ts` (session state),
-  `src/responses/parser.ts` (request parsing), `src/server/responses-json-events.ts`
-  (SSE synthesis), `src/server/responses/core.ts` (save conditions)
-- `pi-agent/packages/ai/src/api/openai-responses*.ts` — Pi AI IR ↔ OpenAI Responses
-  conversion (reverse direction reference)
+## 1. Profiles
 
----
-
-## 1. Protocol Foundations
-
-### 1.1 Purpose
-
-This specification describes the **OpenAI Responses Client Protocol** adapter
-for LuckyToken: the server-side handling of `POST /v1/responses` requests from
-Codex-family clients, including the **incremental request + `previous_response_id`
-history expansion** mechanism and its **durable local session state**.
-
-Codex clients do not send full conversation history. Each request carries only
-the new input items plus a `previous_response_id` reference to a prior response.
-The upstream Provider (e.g. CommandCode) is stateless with respect to Responses
-semantics and does not recognize `previous_response_id`. LuckyToken therefore
-owns the history: it saves each response's `input + output` wire items and
-expands `previous_response_id` into the full input before Pi IR conversion.
-
-### 1.2 Scope
-
-This specification covers:
+### 1.1 Conversion
 
 ```text
-OpenAI Responses Wire (incremental + previous_response_id)
-        ↕
-OpenAI Responses Client Protocol adapter (LuckyToken-owned)
-  ├── session state (memory + durable snapshot)
-  ├── previous_response_id expansion
-  └── Responses wire ↔ Pi IR conversion
-        ↕
-Pi AI IR (Context / AssistantMessage)
-        ↕
-Provider adapter (stateless w.r.t. Responses)
+Responses request
+→ Responses Client adapter
+→ Pi Context / options
+→ selected Pi Provider
+→ Pi AssistantMessage
+→ Responses JSON or atomic SSE
 ```
 
-The following are **outside** this specification:
+The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. It never inspects a concrete Provider protocol.
 
-```text
-provider-specific conversion (Pi ↔ CommandCode etc.)
-multi-instance / distributed shared state
-per-delta streaming (first version emits atomic SSE sequences)
-OpenAI server-side response storage semantics (store:true dashboard)
-```
+### 1.2 Native passthrough
 
-### 1.3 Relationship to Other Documents
+If the selected upstream declares compatible OpenAI Responses wire support, LuckyToken may use native passthrough. It does not enter Pi and is certified independently. It is the preferred path for native handles, hosted tools, background jobs, and new Responses fields that cannot yet pass through Pi.
 
-```text
-Pi AI IR Protocol.md                  — the Pi IR boundary this adapter targets
-Anthropic Message Protocol.md         — sibling Client Protocol (independent)
-OpenAIResponsesAdapter-Research.md    — opencodex research and decision record
-LuckyTokenCoreSpec.md                 — architecture and information ownership
-```
+Profile selection is a declared protocol compatibility decision, not a scattered concrete Provider-name condition.
 
-The two Client Protocols (Anthropic Messages and OpenAI Responses) are
-independent: they share only the Pi IR contracts and the composition root.
-
----
-
-## 2. Wire Contract
-
-### 2.1 Endpoint
+## 2. Endpoint and authentication
 
 ```text
 POST /v1/responses
 Content-Type: application/json
+Authorization: Client Protocol-specific LuckyToken credential
 ```
 
-### 2.2 Request
+The Responses handler has its own immutable Auth authority. Raw credentials terminate after authorization. Only the generic authorized facts allowed by the architecture may continue into Pi.
 
-The request body is a JSON object with the following fields:
+Request size and request lifetime are bounded by configured Client handler limits. Cancellation aborts state expansion/resolution/execution and does not write a closed response.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `model` | string | yes | model selector (`provider/model_id`, resolved via `selectorTool` / `resolveModel`) |
-| `input` | string \| item[] | yes | conversation increment; string → single user message |
-| `previous_response_id` | string | no | reference to a prior response for history expansion |
-| `instructions` | string | no | system prompt |
-| `store` | boolean | no | **ignored for saving** (local cache semantics, see §3.3) |
-| `stream` | boolean | no | SSE vs JSON response |
-| `max_output_tokens` | non-negative integer | no | → Pi `maxTokens` |
-| `temperature` | finite number | no | → Pi `temperature` |
-| `top_p` | finite number | no | validated, not converted |
-| `reasoning` | object | no | `reasoning.effort` (`ultra` → `max`) → Pi `reasoning` |
-| `tools` | array | no | → Pi `Tool[]` |
-| `tool_choice` | object/string | no | validated, not converted |
+## 3. Request wire
 
-#### 2.2.1 Input Items
+The active target is the selected OpenAI Responses create profile. It includes, among other fields:
 
-`input` may be a string (→ one user message) or an array of items. Item `type`
-dispatch:
+- model, input, instructions;
+- max_output_tokens, temperature, top_p;
+- reasoning, text;
+- tools, tool_choice, parallel_tool_calls;
+- previous_response_id, conversation, prompt;
+- prompt_cache_key, prompt_cache_retention;
+- metadata, safety_identifier, user;
+- background, store, stream, stream_options;
+- include, context_management, truncation, service_tier.
 
-| Item type | Mapping |
+LuckyToken validates known required types and nullability before conversion. `null` means absence/default where the source contract defines it; it must not become an internal 500.
+
+The complete exact/degrade/drop/error matrix is normative in the conversion document. Important wire decisions:
+
+- LuckyToken conversion requires a resolvable model selector.
+- `max_output_tokens`, when present, is positive.
+- `conversation` and `previous_response_id` cannot coexist.
+- `background:true` is unsupported in Core conversion v1; native passthrough may support it.
+- a known malformed item is not treated as a future unknown item.
+- unknown discriminators use adapter-local `error|ignore`, default error.
+
+## 4. Input item families
+
+The adapter recognizes the selected SDK/profile's complete item union, including:
+
+- easy/input/output messages;
+- reasoning;
+- function/custom calls and outputs;
+- compaction and item references;
+- computer, shell, local shell, apply patch;
+- file search, web search, image generation, code interpreter;
+- MCP list/approval/call families;
+- tool search;
+- current documented LuckyToken/Codex extension families.
+
+Recognition does not imply exact Pi mapping. Each known family is classified by semantic content and execution ownership:
+
+- ordinary text/image/reasoning maps to Pi where representable;
+- Client/BYOT tool lifecycle maps structurally;
+- Provider/server-hosted results degrade to ordered content/transcript rather than fake client tools;
+- foreign opaque handles require authority or fail conversion;
+- Core v1 tool-search/deferred lifecycle fails explicitly;
+- pure lifecycle metadata with no Pi target is dropped;
+- partial structured tools fail conversion.
+
+The adapter preserves source order and ToolCall/ToolResult correlation.
+
+## 5. Privileged input mode
+
+Top-level `instructions` always becomes the leading Pi system prompt segment.
+
+Configured `privilegedMessages`:
+
+| Mode | Input system/developer behavior |
 |---|---|
-| `message` (role `system`/`developer`) | appended to `systemPrompt` |
-| `message` (role `user`) | Pi `UserMessage` |
-| `message` (role `assistant`) | Pi `AssistantMessage` (synthetic history identity, empty usage, `stopReason` stop/toolUse) |
-| `reasoning` | pending thinking block, attached to the **next** assistant message |
-| `function_call` / `custom_tool_call` | Pi `toolCall` (`id: call_id`, `arguments` JSON-parsed, non-JSON → `{}`) |
-| `function_call_output` / `custom_tool_call_output` | Pi `toolResult` (correlated to preceding toolCall; orphan → `InvalidRequest`) |
-| `compaction` / `compaction_summary` / `context_compaction` | user text degradation (`encrypted_content` non-string → dropped marker) |
-| `agent_message` | Pi `UserMessage` |
-| `web_search_call` / `tool_search_call` | dropped (not model-visible) |
-| `additional_tools` | merged into tool definitions |
-| `compaction_trigger` | dropped |
-| unknown type | `InvalidRequest` |
+| `full` | All enter Pi systemPrompt in source order. |
+| `first` (default) | Only system/developer items before the first user message enter systemPrompt; later ones become user messages in place. |
+| `user` | All input system/developer items become user messages. |
 
-Content parts: `input_text` / `text` / `output_text` → Pi `TextContent`;
-`input_image` → Pi `ImageContent` (base64 `image_url`).
+Promoted prompt segments are separated with `\n`. This explicit mode exists because repeatedly changing a Pi system prefix invalidates prefix caches; the default retains the stable initial privileged prefix without discarding later content.
 
-#### 2.2.2 Tools
+## 6. Tools
 
-`tools[]` items `{type:"function", name, description, parameters, strict?}` map
-to Pi `Tool[]`. `strict: true` → `constrainedSampling
-{type:"json_schema", strict:"require"}`.
+The executable Pi catalog contains the complete current Client/BYOT tool catalog after any supported `tool_choice` filter. Provider/server-hosted execution with no Pi owner is not advertised as a Pi tool.
 
-### 2.3 Response
+Core invariants:
 
-Successful response object:
+- preserve tool ID, name, arguments, result identity, error state, and order;
+- function arguments missing/blank→`{}`; invalid JSON/non-object→error;
+- custom freeform input uses the documented `{input:string}` compatibility representation;
+- grammar maps to Pi constrainedSampling grammar;
+- duplicate result is error;
+- orphan output is configurable `error|ignore`, default error;
+- unresolved call is configurable `error|xrepair`, default xrepair;
+- structured tool status in_progress/incomplete/unknown is error;
+- `tool_search`/deferred tool discovery is unsupported in Core conversion v1.
+
+## 7. Opaque resources
+
+Core conversion refuses any handle whose model-visible meaning cannot be recovered in a trusted Client-owned authority:
+
+| Handle/state | Core conversion |
+|---|---|
+| conversation | error |
+| reusable prompt | error |
+| external item_reference | error |
+| foreign encrypted-only compaction | error |
+| LuckyToken-owned provable item | resolve→convert |
+| LuckyToken-owned verified opaque envelope | decode→convert |
+| input_image file_id/remote URL | trusted image resolver→Pi bytes, otherwise error |
+| generic non-image input_file | drop/record; no Pi FileContent |
+
+Resolvers belong to this Client adapter and never borrow a Provider credential. Native passthrough may preserve same-authority handles without conversion.
+
+## 8. Local response state
+
+### 8.1 Stored representation
+
+The Client adapter stores Responses wire items, not Pi Context, so expansion is deterministic under the current conversion profile.
+
+```text
+response_id → { createdAt, items, storageClass, version }
+```
+
+Entries have TTL/capacity and state-file bounds. State write limits and next-start load limits must be mutually compatible.
+
+### 8.2 previous_response_id
+
+```text
+absent                         → no expansion
+known current local ID          → prepend stored items
+unknown/expired/evicted ID      → conversion error
+```
+
+There is no fail-open assumption. The 27 sanitized repository fixtures contain no `previous_response_id`, so replay tests do not validate this path.
+
+### 8.3 Authority
+
+Entries are not bound to a Client principal or project. A response ID is therefore a bearer capability. IDs are high entropy, non-enumerable, bounded by TTL/capacity, and treated as sensitive correlation values in logs.
+
+### 8.4 Commit timing
+
+Returning the first response does not wait for memory/session commit. An immediate continuation may race and receive unknown previous_response_id. This is an explicit availability/storage tradeoff, not a guarantee of read-after-write consistency.
+
+### 8.5 store:false
+
+Configured response policy:
+
+| Value | Meaning |
+|---|---|
+| `honor` (default) | no reusable memory entry and no disk persistence |
+| `memory` | process-memory entry only |
+| `persist` | store despite false; emit conversion notice |
+
+For true/null/absence, the normal configured storage profile applies. The Response reports only behavior that actually took effect.
+
+### 8.6 Persistence
+
+- state file path is relative to the active config directory unless absolute;
+- writes use same-directory temporary file plus atomic rename;
+- in-process write serialization prevents overlapping snapshots;
+- corrupt state is quarantined;
+- disk, entry, and object limits are validated;
+- write failure is observable and does not silently claim durability;
+- graceful shutdown may flush pending persistence.
+
+## 9. Successful Response wire
+
+The complete object follows the selected Responses target profile. It includes required fields/defaults such as:
 
 ```json
 {
-  "id": "resp_<uuid>",
+  "id": "resp_...",
   "object": "response",
-  "created_at": 1723456789,
+  "created_at": 0,
   "status": "completed",
-  "model": "<client model selector>",
-  "output": [ /* output items */ ],
-  "previous_response_id": "<echoed when present>",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "metadata": {},
+  "model": "<client selector>",
+  "output": [],
+  "parallel_tool_calls": true,
+  "temperature": null,
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": null,
   "usage": {
     "input_tokens": 0,
-    "output_tokens": 0,
-    "total_tokens": 0,
     "input_tokens_details": { "cached_tokens": 0 },
-    "output_tokens_details": { "reasoning_tokens": 0 }
+    "output_tokens": 0,
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "total_tokens": 0
   }
 }
 ```
 
-`status` mapping from Pi `stopReason`:
+Values above illustrate shape; renderer uses the actual effective/default values. It does not echo a caller setting that was dropped or unsupported as though it took effect. SDK-computed convenience `output_text` is not automatically a wire field.
+
+Status:
+
+- completed: success, error/incomplete_details null;
+- incomplete: legal incomplete_details non-null, error null;
+- failed: error non-null and distinct from incomplete.
+
+Pi responseId is reused when present; otherwise generate a high-entropy ID. `model` always echoes the Client selector and does not expose a concrete Provider response model.
+
+## 10. Atomic SSE
+
+Current conversion mode buffers Pi execution before committing SSE.
 
 ```text
-stop    → "completed"
-length  → "incomplete" + incomplete_details.reason = "max_output_tokens"
-toolUse → "completed"
-other   → fidelity failure
+response.created
+response.output_item.done ...
+response.completed | response.incomplete | response.failed
+[DONE]
 ```
 
-`previous_response_id` is echoed when the client sent it (`store` is **not**
-echoed).
+- Every schema event contains a monotonically increasing `sequence_number`.
+- Terminal type matches status.
+- Failures before the first SSE byte return non-2xx Responses error JSON.
+- `response.failed` is used when a failed Response exists or a future live profile has already committed.
+- `[DONE]` is a compatibility terminator, not a substitute for the semantic terminal event.
 
-Output items from Pi content blocks:
+## 11. Errors
 
-```text
-text / thinking → message item (output_text parts, role assistant)
-thinking       → additional reasoning item
-toolCall       → function_call item
-                  {call_id, name, arguments: JSON.stringify(arguments), status:"completed"}
-```
-
-### 2.4 SSE
-
-When `stream: true`, the response is a synthetic atomic SSE sequence:
-
-```text
-response.created          (status "in_progress", output [])
-response.output_item.done (one per output item, {output_index, item})
-response.completed        (full response object)
-data: [DONE]
-```
-
-This is the canonical sequence Codex commits. First version emits the full
-sequence atomically (Pi `execute` returns a complete `AssistantMessage`); no
-per-delta streaming.
-
-### 2.5 Errors
-
-Error response shape:
-
-```json
-{ "error": { "type": "<error_type>", "message": "<message>" } }
-```
-
-Error type mapping:
-
-| Condition | Status | Error type |
-|---|---|---|
-| invalid body / semantic | 400 | `invalid_request_error` |
-| auth failure | 401 | `authentication_error` |
-| model resolution failure | 404 | `not_found_error` |
-| provider execution failure | 502 | `api_error` |
-| request too large | 413 | `request_too_large` |
-| unknown | 500 | `api_error` |
-
----
-
-## 3. Session State
-
-### 3.1 In-Memory Store
-
-The adapter owns a module-local `Map<string, {createdAt, items}>`:
-
-```text
-response_id → { createdAt: number, items: unknown[] }
-```
-
-`items` are the **raw wire items** (`[...inputItems(request.input), ...response.output]`).
-Pi Context conversion is deferred until expansion time; the store holds no Pi
-representation (single source of truth).
-
-### 3.2 Expansion
-
-`expandPreviousResponseInput(body)`:
-
-```text
-no previous_response_id          → body unchanged
-unknown previous_response_id    → body unchanged (fail-open)
-known previous_response_id      → {...body, input: [...stored.items, ...inputItems(body.input)]}
-```
-
-Fail-open means an unknown id degrades to the naked increment; Codex will
-re-send the full history itself.
-
-### 3.3 Saving
-
-`rememberResponseState(request, response)` saves when **all** hold:
-
-```text
-request is an object
-response.id is a non-empty string
-response.output is an array
-response.status is "completed" or "incomplete"
-  ("incomplete" saved only when incomplete_details.reason === "max_output_tokens")
-```
-
-**`store: false` is ignored**: every legal response is saved (Q8a). This is a
-local proxy cache, unrelated to OpenAI server-side storage.
-
-**Expansion-failure protection (Q8/D8)**: a request whose own
-`previous_response_id` failed to expand is **not saved**. Its input is a naked
-increment; saving it would replay a truncated conversation.
-
-### 3.4 Durability
-
-#### 3.4.1 Snapshot File
-
-Default path: `<config-dir>/.luckytoken/state/openai-responses.json`, overridable
-via `clientProtocols["openai-responses"].stateFile` (resolved relative to the
-config directory).
-
-Format:
+Non-streaming error:
 
 ```json
 {
-  "version": 2,
-  "states": [
-    ["resp_abc", { "createdAt": 1723456789, "items": [ /* wire items */ ] }]
-  ]
+  "error": {
+    "message": "...",
+    "type": "...",
+    "code": null,
+    "param": null
+  }
 }
 ```
 
-#### 3.4.2 Write Strategy
+The adapter keeps type and code distinct, uses validated protocol-neutral failure facts, preserves safe upstream status/request/retry facts, bounds/redacts body-derived messages, and forwards only a fixed safe header allowlist. It never reparses a concrete Provider error string or reads shared mutable observer state.
 
-```text
-debounced 2s after mutation (setTimeout unref'd)
-single-flight gate (no same-process concurrent writes)
-atomic: tmp file (<name>.<pid>.<seq>.tmp) + rename
-tmp mode 0600
-write failures swallowed (cache, not source of truth)
-flush() on graceful shutdown / test hook
-```
+Every final failed request submits Responses-local structured facts to the protocol-neutral per-request failure journal. The generic sink does not know Responses conversion policy, and the Responses adapter does not read another protocol's log facts.
 
-#### 3.4.3 Load Strategy
+## 12. Native passthrough conformance
 
-```text
-lazy load on first store access
-missing file             → empty state
-file > 32MB              → refuse parse, empty state
-corrupt / unparseable    → backup as <file>.corrupt, empty state
-orphan tmp cleanup       → matching pattern, pid not alive, mtime > 15min
-```
+Native Responses passthrough must independently test:
 
-Loading never crashes the server (isolation failure philosophy, cf. cc-switch
-session-manager §8.2).
+- exact target endpoint/base path behavior;
+- model/selector rewrite policy;
+- authorization isolation;
+- handle, hosted tool, store/background and future-field fidelity;
+- status/body/headers;
+- completed/incomplete/failed SSE lifecycle;
+- retry/cancellation/body failure;
+- transport header safety;
+- failure logging.
 
-#### 3.4.4 Bounds
+It must never be used to claim coverage for Responses↔Pi conversion.
 
-```text
-MAX_ENTRIES = 1000 (FIFO eviction of oldest by createdAt)
-snapshot file 32MB parse ceiling
-no TTL (local cache; entry cap bounds disk)
-```
+## 13. Configuration and composition
 
----
+The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds Auth, state store, resolvers, notices, execution, and rendering without copying Responses business rules into Runtime.
 
-## 4. Pi IR Boundary
+## 14. Evidence note
 
-The session state, expansion, and wire conversion are **entirely the Client
-Protocol adapter's responsibility**. The Provider sees only the expanded full
-history converted to Pi IR:
-
-```text
-Responses Wire (increment)
-        ↕
-adapter (state + expansion + conversion)
-        ↕
-Pi Context (full history)   ← Provider's only view
-```
-
-The adapter must never import, inspect, name, or make decisions from any
-concrete Provider or upstream protocol. No second IR is introduced.
-
----
-
-## 5. Composition and Authentication
-
-### 5.1 Registration
-
-`openai-responses` is an **optional** Client Protocol: it is registered when
-present in `clientProtocols`, skipped otherwise. `anthropic-messages` remains
-required. The composition root binds a handler with its own `Auth` instance and
-its own token file (`clientProtocols["openai-responses"].authFile`).
-
-### 5.2 Auth Isolation
-
-Each Client Protocol handler receives its own generic `Auth` instance and
-immutable startup token authority (AGENTS.md). Anthropic and OpenAI Responses
-never share auth state or token files.
-
----
-
-## 6. Decision Record
-
-Decisions confirmed during the grilling session (2026-08-12):
-
-| # | Decision |
-|---|---|
-| D1 | Durable disk snapshot; history survives process restart |
-| D2 | Store raw wire items, not Pi Context (single source of truth) |
-| D3 | opencodex snapshot mode: 2s debounce + atomic tmp/rename + close flush |
-| D4 | 1000 entries FIFO + 32MB file ceiling; **no TTL** |
-| D5 | Default `.luckytoken/state/openai-responses.json`, overridable `stateFile` |
-| D6 | Single-instance assumption; no cross-process locking |
-| D7 | Unconditional save: ignore `store:false` |
-| D8 | Expansion-failure turn is not saved (anti-poisoning) |
-| D9 | Fail-open expansion on unknown `previous_response_id` |
-| D10 | Corrupt snapshot → backup + empty start, never crash |
-| D11 | Echo `previous_response_id` in response; do not echo `store` |
-| D12 | Optional protocol registration; independent auth + stateFile |
-
----
-
-## 7. Out of Scope (v1)
-
-```text
-per-delta SSE streaming (atomic sequences only)
-WS (WebSocket) channel
-multi-instance shared state
-compaction / reasoning-replay caches (opencodex advanced features)
-encrypted payload handling
-metrics / system routes
-```
+The repository's 27 captured fixtures are sanitized acceptance samples, not a complete wire corpus. They cover a narrow successful Codex CLI shape and do not cover images, files, previous_response_id, conversation, prompt, error status, partial items, or incomplete/failed SSE. Future protocol claims require field-level assertions or new authenticated captures.
