@@ -71,6 +71,9 @@ export interface ResponsesInvocation {
     /** Tool names declared as freeform `custom` tools; their calls must
      *  round-trip as `custom_tool_call` output items. */
     freeformToolNames?: ReadonlySet<string>;
+    /** Reverse metadata for flattened namespace tools, retained only for
+     *  request-local response echo. Never placed into model context. */
+    namespaceReverse?: Readonly<Record<string, { namespace: string; child: string }>>;
     /** Source metadata retained only for request-local response echo. Never
      *  placed into model context. */
     metadataEcho?: Readonly<Record<string, string>>;
@@ -109,6 +112,39 @@ export const FORCED_TOOL_CHOICE_DROPPED_NOTICE_CODE =
   "openai-responses_forced_tool_choice_dropped";
 export const REFERENCE_UNRESOLVED_NOTICE_CODE =
   "openai-responses_reference_unresolved";
+export const INPUT_FILE_DROPPED_NOTICE_CODE =
+  "openai-responses_input_file_dropped";
+export const CUSTOM_INPUT_COMPAT_NOTICE_CODE =
+  "openai-responses_custom_input_compat";
+export const NAMESPACE_COLLISION_NOTICE_CODE =
+  "openai-responses_namespace_collision";
+
+/** Separator for the reversible Responses-owned namespace flattening scheme.
+ *  A flattened name is `<namespace>.<child>`; the reverse map in render state
+ *  recovers the original namespace/child pair for output rendering. */
+export const NAMESPACE_SEPARATOR = ".";
+
+/** Responses-owned marker id for the versioned textSignature envelope.
+ *  `phase` is preserved here, never injected into model-visible text. */
+export const RESPONSES_TEXT_SIGNATURE_ID = "openai-responses";
+/** Responses-owned authority for reasoning continuity envelopes. Only an
+ *  envelope with this authority may restore `encrypted_content`; a foreign
+ *  arbitrary Provider signature is never treated as Responses continuity. */
+export const RESPONSES_CONTINUITY_AUTHORITY = "openai-responses";
+
+export interface ResponsesTextSignatureV1 {
+  readonly v: 1;
+  readonly id: typeof RESPONSES_TEXT_SIGNATURE_ID;
+  readonly phase: string;
+}
+
+export interface ResponsesContinuityEnvelopeV1 {
+  readonly v: 1;
+  readonly id: typeof RESPONSES_CONTINUITY_AUTHORITY;
+  readonly authority: typeof RESPONSES_CONTINUITY_AUTHORITY;
+  readonly item_id?: string;
+  readonly encrypted_content: string;
+}
 
 const DEFAULT_POLICY: ResponseRequestConversionPolicy = Object.freeze({
   privilegedMessages: "first",
@@ -202,26 +238,110 @@ function parseContentParts(content: unknown): TextContent[] {
       typeof raw.text === "string"
     ) {
       parts.push({ type: "text", text: raw.text });
+      continue;
+    }
+    // A refusal carries visible text semantics; preserve it as deterministic
+    // textual degradation rather than silently dropping the refusal.
+    if (type === "refusal" && typeof raw.refusal === "string") {
+      parts.push({ type: "text", text: raw.refusal });
     }
   }
   return parts;
 }
 
-function parseImageParts(content: unknown): ImageContent[] {
+/** A base64 data URL must carry a MIME type and well-formed base64 content;
+ *  malformed data URLs/MIME are a conversion error, never a silent skip. */
+function parseDataUrlImage(
+  imageUrl: string,
+  field: string,
+): ImageContent {
+  const match = /^data:([^;]+);base64,(.*)$/su.exec(imageUrl);
+  if (match === null) {
+    throw new InvalidRequest(
+      `${field} must be a data URL with a MIME type and base64 payload`,
+    );
+  }
+  const mimeType = match[1] ?? "";
+  const data = match[2] ?? "";
+  if (mimeType.length === 0) {
+    throw new InvalidRequest(`${field} data URL must include a MIME type`);
+  }
+  if (data.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) {
+    throw new InvalidRequest(`${field} data URL base64 payload is malformed`);
+  }
+  return { type: "image", mimeType, data };
+}
+
+/** Parse inline base64 data images. A non-data URL or a file_id is not
+ *  materialized here: those require the trusted Responses-owned resolver and
+ *  are handled by the async entry. */
+function parseInlineImages(content: unknown): ImageContent[] {
   if (!Array.isArray(content)) return [];
   const parts: ImageContent[] = [];
   for (const raw of content) {
     if (!isRecord(raw) || raw.type !== "input_image") continue;
     const imageUrl = raw.image_url;
-    if (typeof imageUrl !== "string" || !imageUrl.startsWith("data:")) continue;
-    const match = /^data:([^;]+);base64,(.*)$/su.exec(imageUrl);
-    if (match === null) continue;
-    const mimeType = match[1] ?? "";
-    const data = match[2] ?? "";
-    if (mimeType.length === 0 || data.length === 0) continue;
-    parts.push({ type: "image", mimeType, data });
+    if (typeof imageUrl === "string" && imageUrl.startsWith("data:")) {
+      parts.push(parseDataUrlImage(imageUrl, "input_image.image_url"));
+    }
   }
   return parts;
+}
+
+/** Parse images inside tool outputs. A tool output image that is directly
+ *  materialized as a data URL maps to Pi ToolResult images on the Client
+ *  side; a remote/file_id output image is not fetchable here and is dropped
+ *  with the surrounding text retained. `output_image` and
+ *  `computer_screenshot` both carry `image_url`. */
+function parseOutputImageParts(content: unknown): ImageContent[] {
+  if (!Array.isArray(content)) return [];
+  const parts: ImageContent[] = [];
+  for (const raw of content) {
+    if (!isRecord(raw)) continue;
+    if (raw.type !== "output_image" && raw.type !== "computer_screenshot") {
+      continue;
+    }
+    const imageUrl = raw.image_url;
+    if (typeof imageUrl === "string" && imageUrl.startsWith("data:")) {
+      parts.push(
+        parseDataUrlImage(imageUrl, `${String(raw.type)}.image_url`),
+      );
+    }
+  }
+  return parts;
+}
+
+/** Extract images that need the trusted Responses-owned resolver: a
+ *  `file_id` handle or a remote (non-data) URL. */
+function collectResolvableImages(content: unknown): Array<{
+  raw: Record<string, unknown>;
+  path: string;
+}> {
+  if (!Array.isArray(content)) return [];
+  const images: Array<{ raw: Record<string, unknown>; path: string }> = [];
+  for (const [index, raw] of content.entries()) {
+    if (!isRecord(raw) || raw.type !== "input_image") continue;
+    const fileId = raw.file_id;
+    const imageUrl = raw.image_url;
+    if (typeof fileId === "string" && fileId.length > 0) {
+      images.push({
+        raw,
+        path: `$.input[?image=${index}].file_id`,
+      });
+      continue;
+    }
+    if (
+      typeof imageUrl === "string" &&
+      imageUrl.length > 0 &&
+      !imageUrl.startsWith("data:")
+    ) {
+      images.push({
+        raw,
+        path: `$.input[?image=${index}].image_url`,
+      });
+    }
+  }
+  return images;
 }
 
 function parseToolArguments(raw: unknown): Record<string, unknown> {
@@ -236,9 +356,39 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
   }
 }
 
+/** A custom tool grammar maps directly to Pi constrainedSampling grammar
+ *  variants (Lark → openai_lark, regex → openai_regex); an unknown grammar
+ *  variant type is a conversion error, never a silent drop. */
+function convertCustomGrammar(
+  grammar: unknown,
+  name: string,
+): Tool["constrainedSampling"] {
+  if (grammar === undefined || grammar === null) return undefined;
+  if (!isRecord(grammar) || typeof grammar.type !== "string") {
+    throw new InvalidRequest(`custom tool ${name} grammar must be an object`);
+  }
+  if (grammar.type === "lark" && typeof grammar.grammar === "string") {
+    return {
+      type: "grammar",
+      variants: { openai_lark: grammar.grammar },
+    };
+  }
+  if (grammar.type === "regex" && typeof grammar.regex === "string") {
+    return {
+      type: "grammar",
+      variants: { openai_regex: grammar.regex },
+    };
+  }
+  throw new InvalidRequest(
+    `custom tool ${name} grammar variant is not supported: ${String(grammar.type)}`,
+  );
+}
+
 function convertTools(
   value: unknown,
   freeformNames?: Set<string>,
+  namespaceReverse?: Record<string, { namespace: string; child: string }>,
+  notices?: ConversionNotice[],
 ): Tool[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
@@ -252,8 +402,15 @@ function convertTools(
     description: string,
     rawParameters: unknown,
     strict?: unknown,
+    constrainedSampling?: Tool["constrainedSampling"],
   ): void => {
-    if (names.has(name)) return;
+    // Duplicate names after flattening are an error: the reversible
+    // namespace scheme must remain unambiguous.
+    if (names.has(name)) {
+      throw new InvalidRequest(
+        `tool name collision after namespace flattening: ${name}`,
+      );
+    }
     names.add(name);
     // Codex clients may send tool definitions whose `parameters` is absent,
     // non-object, or missing the `type` marker (e.g. built-in shell/apply
@@ -271,13 +428,65 @@ function convertTools(
     };
     if (strict === true) {
       tool.constrainedSampling = { type: "json_schema", strict: "require" };
+    } else if (constrainedSampling !== undefined) {
+      tool.constrainedSampling = constrainedSampling;
     }
     tools.push(tool);
+  };
+
+  /** Flatten one namespace child under `<namespace>.<child>`, recording the
+   *  reverse mapping in request-local render state. */
+  const pushNamespaceChild = (
+    namespace: string,
+    inner: unknown,
+  ): void => {
+    if (!isRecord(inner) || typeof inner.name !== "string" || inner.name.length === 0) {
+      return;
+    }
+    const childName = inner.name;
+    const flatName = `${namespace}${NAMESPACE_SEPARATOR}${childName}`;
+    const description =
+      typeof inner.description === "string" ? inner.description : "";
+    if (inner.type === "function") {
+      pushFunction(
+        flatName,
+        description,
+        inner.parameters,
+        inner.strict,
+        convertCustomGrammar(inner.grammar, flatName),
+      );
+    } else if (inner.type === "custom") {
+      freeformNames?.add(flatName);
+      pushFunction(
+        flatName,
+        description,
+        {
+          type: "object",
+          properties: {
+            input: {
+              type: "string",
+              description: "Raw tool input.",
+            },
+          },
+          required: ["input"],
+        },
+        undefined,
+        convertCustomGrammar(inner.grammar, flatName),
+      );
+    }
+    namespaceReverse![flatName] = { namespace, child: childName };
   };
 
   for (const [index, candidate] of value.entries()) {
     if (!isRecord(candidate)) {
       throw new InvalidRequest(`tools[${index}] must be an object`);
+    }
+    // defer_loading that requires tool-search discovery is a Core v1
+    // conversion error; it never silently becomes a normal executable tool.
+    if (candidate.defer_loading === true) {
+      throw new InvalidRequest(
+        "defer_loading tool discovery is not supported by Core conversion v1",
+      );
     }
     const type = candidate.type;
     const name = candidate.name;
@@ -285,48 +494,112 @@ function convertTools(
       typeof candidate.description === "string" ? candidate.description : "";
 
     if (type === "function" && typeof name === "string" && name.length > 0) {
-      pushFunction(name, description, candidate.parameters, candidate.strict);
+      pushFunction(
+        name,
+        description,
+        candidate.parameters,
+        candidate.strict,
+        convertCustomGrammar(candidate.grammar, name),
+      );
       continue;
     }
     if (type === "custom" && typeof name === "string" && name.length > 0) {
       // Freeform custom tool (e.g. apply_patch): expose as a function with a
       // single string `input` carrying the raw tool body.
       freeformNames?.add(name);
-      pushFunction(name, description, {
-        type: "object",
-        properties: {
-          input: {
-            type: "string",
-            description: "Raw tool input.",
+      pushFunction(
+        name,
+        description,
+        {
+          type: "object",
+          properties: {
+            input: {
+              type: "string",
+              description: "Raw tool input.",
+            },
           },
+          required: ["input"],
         },
-        required: ["input"],
-      });
+        undefined,
+        convertCustomGrammar(candidate.grammar, name),
+      );
       continue;
     }
-    if (type === "namespace" && Array.isArray(candidate.tools)) {
+    if (type === "namespace" && typeof name === "string" && name.length > 0) {
       // MCP tools arrive grouped under a namespace tool; flatten inner
-      // function tools (opencodex behavior).
+      // function/custom tools with the reversible Responses-owned scheme.
+      if (!Array.isArray(candidate.tools)) {
+        throw new InvalidRequest(
+          `namespace tool ${name} must have a tools array`,
+        );
+      }
       for (const inner of candidate.tools) {
-        if (
-          isRecord(inner) &&
-          inner.type === "function" &&
-          typeof inner.name === "string" &&
-          inner.name.length > 0
-        ) {
-          pushFunction(
-            inner.name,
-            typeof inner.description === "string" ? inner.description : "",
-            inner.parameters,
-          );
-        }
+        pushNamespaceChild(name, inner);
+      }
+      void notices;
+      continue;
+    }
+    // ---- Ticket 16: complete installed tool-definition family matrix ----
+    // Client/BYOT executable families (local shell, shell, apply patch,
+    // computer/computer_use, mcp) map into the Pi catalog as documented
+    // action/operation schemas. Provider/server-hosted declarations
+    // (file_search, web_search/preview, image_generation, code_interpreter)
+    // are dropped: advertising them as executable Pi tools would mislead the
+    // model. tool_search is a Core v1 conversion error, not a plain unknown.
+    if (
+      (type === "local_shell" ||
+        type === "shell" ||
+        type === "apply_patch" ||
+        type === "computer" ||
+        type === "computer_use" ||
+        type === "mcp") &&
+      typeof name === "string" &&
+      name.length > 0
+    ) {
+      if (type === "apply_patch") {
+        freeformNames?.add(name);
+      }
+      if (type === "apply_patch") {
+        pushFunction(
+          name,
+          description,
+          {
+            type: "object",
+            properties: {
+              input: {
+                type: "string",
+                description: "Raw patch input.",
+              },
+            },
+            required: ["input"],
+          },
+          undefined,
+          convertCustomGrammar(candidate.grammar, name),
+        );
+      } else {
+        // MCP tools carry their argument schema under `arguments`; other
+        // Client/BYOT families use `parameters`.
+        const rawSchema =
+          type === "mcp" ? candidate.arguments : candidate.parameters;
+        pushFunction(
+          name,
+          description,
+          rawSchema ?? { type: "object" },
+          candidate.strict,
+          convertCustomGrammar(candidate.grammar, name),
+        );
       }
       continue;
     }
-    // OpenAI-hosted server-side tools (web_search, image_generation, ...) and
-    // tool_search are intentionally skipped: the local Provider cannot
-    // execute them, and listing them would mislead the model. Tools with a
-    // non-string name are also skipped (opencodex parity).
+    // A bare tool_search tool declaration (without defer_loading) is a
+    // hosted discovery capability, dropped like other hosted declarations:
+    // the local Provider cannot execute it and advertising it would mislead
+    // the model. A defer_loading=true that requires discovery is an error
+    // (handled at the top of this loop); tool_search_call/output input items
+    // are Core v1 conversion errors in the message converter.
+    // OpenAI-hosted server-side tools (web_search, image_generation, ...) are
+    // intentionally skipped for the same reason. Tools with a non-string name
+    // are also skipped (opencodex parity).
   }
   return tools;
 }
@@ -408,6 +681,7 @@ function parseToolChoice(value: unknown): string | undefined {
 export function validateResponsesRequest(
   value: unknown,
   freeformNames?: Set<string>,
+  namespaceReverse?: Record<string, { namespace: string; child: string }>,
 ): ValidatedResponsesRequest {
   if (!isRecord(value)) {
     throw new InvalidRequest("Request body must be a JSON object");
@@ -518,7 +792,7 @@ export function validateResponsesRequest(
     }
     metadataUserId = userValue;
   }
-  const tools = convertTools(value.tools, freeformNames);
+  const tools = convertTools(value.tools, freeformNames, namespaceReverse);
   const toolChoice = parseToolChoice(value.tool_choice);
   const background = optionalBoolean(value.background, "background") ?? false;
   const conversationPresent = value.conversation !== undefined;
@@ -574,10 +848,12 @@ function convertMessages(
   additionalTools: unknown[],
   policy: ResponseRequestConversionPolicy,
   notices: ConversionNotice[],
+  executableNames?: ReadonlySet<string>,
 ): Message[] {
   const messages: Message[] = [];
   const pendingReasoning: ThinkingContent[] = [];
   const assistantIndex = new Map<string, string>();
+  const resolvedCallIds = new Set<string>();
   let seenFirstUser = false;
   const privilegedMode = policy.privilegedMessages;
 
@@ -602,6 +878,64 @@ function convertMessages(
     }
   };
 
+  /** Reasoning pending without an assistant carrier is preserved as its own
+   *  reasoning-only assistant message; trailing reasoning never disappears. */
+  const flushPendingReasoning = (): void => {
+    if (pendingReasoning.length === 0) return;
+    flushAssistant([...pendingReasoning]);
+    pendingReasoning.length = 0;
+  };
+
+  /** Close every call that is still unresolved at a semantic history
+   *  boundary (a new user turn or the end of input) per the frozen
+   *  unresolvedToolCall policy. */
+  const closeUnresolvedCalls = (): void => {
+    if (policy.unresolvedToolCall === "error") {
+      for (const [callId] of assistantIndex) {
+        if (!resolvedCallIds.has(callId)) {
+          throw new InvalidRequest(
+            `unresolved function_call has no result: ${callId}`,
+          );
+        }
+      }
+      return;
+    }
+    for (const [callId, name] of assistantIndex) {
+      repairUnresolvedCall(callId, name);
+    }
+  };
+
+  /** Close a known missing call with the Responses-owned synthetic result
+   *  when the configured policy is xrepair. The synthetic result preserves
+   *  call ID and tool name, is isError, and never replaces a real result. */
+  const repairUnresolvedCall = (
+    callId: string,
+    name: string,
+  ): void => {
+    if (resolvedCallIds.has(callId)) return;
+    resolvedCallIds.add(callId);
+    notices.push(
+      requestNotice(
+        "openai-responses_unresolved_call_repaired",
+        "xrepair",
+        `$.input[?call_id=${callId}]`,
+      ),
+    );
+    messages.push({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: name,
+      content: [
+        {
+          type: "text",
+          text: "No result — the tool call did not complete (interrupted or lost).",
+        },
+      ],
+      isError: true,
+      timestamp: receivedAt,
+    });
+  };
+
   const pushUser = (text: string): void => {
     messages.push({
       role: "user",
@@ -623,8 +957,39 @@ function convertMessages(
     switch (type) {
       case "message": {
         const role = rawItem.role;
+        // Historical message status: absent/completed convert normally;
+        // in_progress is a structured lifecycle error; incomplete preserves
+        // representable content only and never injects notice text or guesses
+        // length.
+        const status = rawItem.status;
+        if (status !== undefined && status !== null) {
+          if (typeof status !== "string" || status.length === 0) {
+            throw new InvalidRequest("message status must be a non-empty string");
+          }
+          if (status === "in_progress") {
+            throw new InvalidRequest(
+              "a message with status in_progress cannot be converted",
+            );
+          }
+          if (status !== "completed" && status !== "incomplete") {
+            throw new InvalidRequest(
+              `message status is not supported: ${status}`,
+            );
+          }
+        }
+        // A file_id or remote image URL can only be materialized through the
+        // trusted Responses-owned resolver. The async entry resolves these
+        // before conversion, so any that survive to this point mean no
+        // resolver handled them: that is a conversion error, never a silent
+        // skip or a fabricated placeholder.
+        const unresolvableImages = collectResolvableImages(rawItem.content);
+        if (unresolvableImages.length > 0) {
+          throw new InvalidRequest(
+            `input_image ${unresolvableImages[0]?.path} requires a trusted Responses-owned resolver`,
+          );
+        }
         const content = parseContentParts(rawItem.content);
-        const images = parseImageParts(rawItem.content);
+        const images = parseInlineImages(rawItem.content);
         if (role === "system" || role === "developer") {
           const text = content.map((part) => part.text).join("");
           const promote =
@@ -639,7 +1004,46 @@ function convertMessages(
         }
         if (role === "user") {
           seenFirstUser = true;
-          pendingReasoning.length = 0;
+          // A semantic history boundary: any call opened earlier that never
+          // received a result is closed now (or errors under the frozen
+          // policy).
+          closeUnresolvedCalls();
+          // A reasoning item followed by a user message has no assistant
+          // carrier; it is preserved as its own reasoning-only assistant
+          // message so it never disappears.
+          flushPendingReasoning();
+          // Generic non-image files have no Pi FileContent: they are dropped
+          // and recorded as a fixed known degradation without fabricating a
+          // marker or an empty message. A message that carried only files is
+          // dropped entirely.
+          const fileParts = Array.isArray(rawItem.content)
+            ? rawItem.content.filter(
+                (part): part is Record<string, unknown> =>
+                  isRecord(part) && part.type === "input_file",
+              )
+            : [];
+          if (fileParts.length > 0) {
+            notices.push(
+              requestNotice(
+                INPUT_FILE_DROPPED_NOTICE_CODE,
+                "ignore",
+                `$.input[?role=user].content[?type=input_file]`,
+              ),
+            );
+          }
+          const nonFileParts = Array.isArray(rawItem.content)
+            ? rawItem.content.filter(
+                (part) => !isRecord(part) || part.type !== "input_file",
+              )
+            : [];
+          if (
+            fileParts.length > 0 &&
+            nonFileParts.length === 0 &&
+            content.length === 0 &&
+            images.length === 0
+          ) {
+            continue;
+          }
           const blocks = [...content, ...images];
           messages.push({
             role: "user",
@@ -649,6 +1053,22 @@ function convertMessages(
           continue;
         }
         if (role === "assistant") {
+          const phase = rawItem.phase;
+          // Message `phase` is preserved in a versioned Responses-owned text
+          // signature; it is never injected into model-visible text.
+          if (
+            typeof phase === "string" &&
+            phase.length > 0 &&
+            content.length > 0
+          ) {
+            const envelope: ResponsesTextSignatureV1 = {
+              v: 1,
+              id: RESPONSES_TEXT_SIGNATURE_ID,
+              phase,
+            };
+            const signature = JSON.stringify(envelope);
+            content[0] = { ...content[0], textSignature: signature } as TextContent;
+          }
           const blocks: Array<TextContent | ThinkingContent | ToolCall> = [
             ...pendingReasoning,
             ...content,
@@ -673,15 +1093,91 @@ function convertMessages(
               .join("")
           : "";
         const thinking = summary || content;
-        if (thinking.length > 0) {
-          pendingReasoning.push({ type: "thinking", thinking });
+        if (thinking.length > 0 || typeof rawItem.encrypted_content === "string") {
+          const block: ThinkingContent = { type: "thinking", thinking };
+          // Responses-native continuity state enters a versioned
+          // provenance-bearing envelope. Only this adapter's authority may
+          // restore `encrypted_content`; an arbitrary foreign signature never
+          // does.
+          const encrypted = rawItem.encrypted_content;
+          if (typeof encrypted === "string" && encrypted.length > 0) {
+            const envelope: ResponsesContinuityEnvelopeV1 = {
+              v: 1,
+              id: RESPONSES_CONTINUITY_AUTHORITY,
+              authority: RESPONSES_CONTINUITY_AUTHORITY,
+              ...(typeof rawItem.id === "string"
+                ? { item_id: rawItem.id }
+                : {}),
+              encrypted_content: encrypted,
+            };
+            block.thinkingSignature = JSON.stringify(envelope);
+          }
+          // Trailing reasoning after an assistant message attaches to that
+          // assistant turn and never disappears.
+          const last = messages.at(-1);
+          if (last?.role === "assistant") {
+            (
+              last.content as Array<TextContent | ThinkingContent | ToolCall>
+            ).push(block);
+          } else {
+            pendingReasoning.push(block);
+          }
         }
         continue;
       }
       case "function_call":
-      case "custom_tool_call": {
+      case "custom_tool_call":
+      case "local_shell_call":
+      case "shell_call":
+      case "apply_patch_call":
+      case "computer_call":
+      case "mcp_call": {
+        // computer and MCP calls map structurally only when the execution
+        // ownership is Client/BYOT, i.e. the name appears in the executable
+        // Client catalog. A provider-hosted form degrades to an ordered
+        // content/transcript drop and is never advertised as a Pi tool.
+        if (type === "computer_call" || type === "mcp_call") {
+          const name = rawItem.name;
+          const owned =
+            typeof name === "string" && executableNames?.has(name) === true;
+          if (!owned) {
+            pendingReasoning.length = 0;
+            continue;
+          }
+        }
+        // Structured tool status: absent/completed are eligible;
+        // in_progress/incomplete/unknown structured status is an error.
+        const status = rawItem.status;
+        if (status !== undefined && status !== null) {
+          if (typeof status !== "string" || status.length === 0) {
+            throw new InvalidRequest("tool call status must be a non-empty string");
+          }
+          if (status !== "completed" && status !== "in_progress") {
+            throw new InvalidRequest(
+              `tool call status is not supported: ${status}`,
+            );
+          }
+          if (status === "in_progress") {
+            throw new InvalidRequest(
+              "a tool call with status in_progress cannot be converted",
+            );
+          }
+        }
         const callId = nonEmptyString(rawItem.call_id, "function_call.call_id");
         const name = nonEmptyString(rawItem.name, "function_call.name");
+        if (type === "custom_tool_call") {
+          // Custom freeform input uses the approved {input:string}
+          // compatibility representation with a Responses-local notice.
+          notices.push(
+            requestNotice(
+              CUSTOM_INPUT_COMPAT_NOTICE_CODE,
+              "degrade",
+              `$.input[?call_id=${callId}]`,
+            ),
+          );
+        }
+        // local_shell/shell/apply_patch/computer/mcp calls are Client/BYOT
+        // structured tool calls: their arguments arrive as JSON.
         const argumentsJson =
           type === "custom_tool_call"
             ? { input: typeof rawItem.input === "string" ? rawItem.input : "" }
@@ -706,7 +1202,44 @@ function convertMessages(
         continue;
       }
       case "function_call_output":
-      case "custom_tool_call_output": {
+      case "custom_tool_call_output":
+      case "local_shell_call_output":
+      case "shell_call_output":
+      case "apply_patch_call_output":
+      case "computer_call_output": {
+        // A provider-hosted computer output has no correlated structured
+        // call in the executable catalog; it degrades to a transcript drop.
+        if (type === "computer_call_output") {
+          const callId = rawItem.call_id;
+          if (
+            typeof callId !== "string" ||
+            !assistantIndex.has(callId) ||
+            !(executableNames?.has(assistantIndex.get(callId) ?? "") === true)
+          ) {
+            pendingReasoning.length = 0;
+            continue;
+          }
+        }
+        // Structured tool output status: absent/completed are eligible;
+        // in_progress/incomplete/unknown structured status is an error.
+        const status = rawItem.status;
+        if (status !== undefined && status !== null) {
+          if (typeof status !== "string" || status.length === 0) {
+            throw new InvalidRequest(
+              "tool output status must be a non-empty string",
+            );
+          }
+          if (status !== "completed" && status !== "in_progress") {
+            throw new InvalidRequest(
+              `tool output status is not supported: ${status}`,
+            );
+          }
+          if (status === "in_progress") {
+            throw new InvalidRequest(
+              "a tool output with status in_progress cannot be converted",
+            );
+          }
+        }
         const callId = nonEmptyString(
           rawItem.call_id,
           "function_call_output.call_id",
@@ -729,24 +1262,41 @@ function convertMessages(
           pendingReasoning.length = 0;
           continue;
         }
+        // A duplicate result for an already-resolved call is a fixed error.
+        if (resolvedCallIds.has(callId)) {
+          throw new InvalidRequest(
+            `function_call_output has a duplicate result for call_id: ${callId}`,
+          );
+        }
+        resolvedCallIds.add(callId);
         const output = rawItem.output;
+        const outputParts = Array.isArray(output) ? output : [];
         const text =
           typeof output === "string"
             ? output
-            : Array.isArray(output)
-              ? output
-                  .filter(isRecord)
-                  .filter(
-                    (part) => part.type === "input_text" || part.type === "text",
-                  )
-                  .map((part) => (typeof part.text === "string" ? part.text : ""))
-                  .join("\n")
-              : "";
+            : outputParts
+                .filter(isRecord)
+                .filter(
+                  (part) => part.type === "input_text" || part.type === "text",
+                )
+                .map((part) => (typeof part.text === "string" ? part.text : ""))
+                .join("\n");
+        // Output images remain Pi ToolResult images on the Client side.
+        const images = parseOutputImageParts(outputParts);
+        const content: Array<TextContent | ImageContent> =
+          text.length === 0 && images.length === 0
+            ? []
+            : [
+                ...(text.length === 0
+                  ? []
+                  : ([{ type: "text", text }] as TextContent[])),
+                ...images,
+              ];
         const result: ToolResultMessage = {
           role: "toolResult",
           toolCallId: callId,
           toolName,
-          content: text.length === 0 ? [] : [{ type: "text", text }],
+          content,
           isError: false,
           timestamp: receivedAt,
         };
@@ -787,11 +1337,41 @@ function convertMessages(
         });
         continue;
       }
+      // ---- Ticket 16: complete installed input-item family matrix ----
+      // Provider/server-hosted lifecycle families degrade to ordered
+      // content/transcript or a deterministic drop; they are never advertised
+      // as executable Pi tools.
       case "web_search_call":
       case "web_search_tool_call":
-      case "tool_search_call":
+      case "file_search_call":
+      case "code_interpreter_call":
+      case "image_generation_call":
       case "compaction_trigger":
+        pendingReasoning.length = 0;
         continue;
+      // MCP list/approval lifecycles have no Pi approval lifecycle. Only
+      // model-visible decision text survives as a deterministic transcript;
+      // pure metadata drops. Credentials/headers never enter Pi.
+      case "mcp_list_tools": {
+        pendingReasoning.length = 0;
+        continue;
+      }
+      case "mcp_approval_request":
+      case "mcp_approval_response": {
+        const decision = rawItem.decision;
+        if (typeof decision === "string" && decision.length > 0) {
+          pushUser(decision);
+        }
+        pendingReasoning.length = 0;
+        continue;
+      }
+      // tool_search is a Core v1 conversion error: deferred dynamic discovery
+      // is unsupported. It is not a plain unknown discriminator.
+      case "tool_search_call":
+      case "tool_search_output":
+        throw new InvalidRequest(
+          "tool_search lifecycle is not supported by Core conversion v1",
+        );
       case "additional_tools": {
         const additional = rawItem.tools;
         if (Array.isArray(additional)) {
@@ -814,6 +1394,12 @@ function convertMessages(
     }
   }
 
+  // Trailing pending reasoning (no following assistant/user message) is
+  // preserved as a reasoning-only assistant message.
+  flushPendingReasoning();
+  // End of input is a semantic history boundary; close unresolved calls.
+  closeUnresolvedCalls();
+
   return messages;
 }
 
@@ -822,6 +1408,13 @@ function convertMessages(
  * awaiting the narrow resolver, preserving source order. Unresolvable
  * references become notices rather than fabricated fallbacks. The caller's
  * abort signal is forwarded so resolution can be cancelled.
+ *
+ * `input_image.file_id` and remote image URLs are resolved through the same
+ * trusted Responses-owned resolver capability. The resolver receives an
+ * explicit Responses authority context and the caller's abort signal plus
+ * size/MIME/redirect limits so it can never over-fetch. Resolved items are
+ * re-inspected for inline images; an image that stays unresolved is dropped
+ * from the message without a fabricated placeholder.
  */
 async function resolveLuckyReferences(
   items: readonly unknown[],
@@ -850,30 +1443,95 @@ async function resolveLuckyReferences(
         type === "context_compaction") &&
       isRecord(envelope) &&
       typeof envelope.authority === "string";
-    if (!isReference && !isCompaction) {
-      expanded.push(rawItem);
+    if (isReference || isCompaction) {
+      if (!isRecord(envelope) || typeof envelope.authority !== "string") {
+        expanded.push(rawItem); // External reference; the core errors on it.
+        continue;
+      }
+      try {
+        const resolved = await resolver.resolveItemReference(rawItem, {
+          authority: envelope.authority,
+          ...(signal === undefined ? {} : { signal }),
+          limits: limits ?? DEFAULT_REFERENCE_LIMITS,
+        });
+        expanded.push(...resolved);
+      } catch {
+        notices.push(
+          requestNotice(
+            REFERENCE_UNRESOLVED_NOTICE_CODE,
+            "ignore",
+            `$.input[?id=${String(rawItem.id)}]`,
+          ),
+        );
+      }
       continue;
     }
-    if (!isRecord(envelope) || typeof envelope.authority !== "string") {
-      expanded.push(rawItem); // External reference; the core errors on it.
-      continue;
-    }
-    try {
-      const resolved = await resolver.resolveItemReference(rawItem, {
-        authority: envelope.authority,
-        ...(signal === undefined ? {} : { signal }),
-        limits: limits ?? DEFAULT_REFERENCE_LIMITS,
+    if (type === "message") {
+      const content = rawItem.content;
+      const resolvableImages = collectResolvableImages(content);
+      if (resolvableImages.length === 0) {
+        expanded.push(rawItem);
+        continue;
+      }
+      // A message that only carried images keeps its position; a message
+      // that also has text keeps the text. Resolved images become inline
+      // data images in place; unresolved ones are dropped with a notice.
+      const resolvedParts: unknown[] = Array.isArray(content)
+        ? content.filter((part) => !isRecord(part) || part.type !== "input_image")
+        : [];
+      let resolvedAny = false;
+      for (const image of resolvableImages) {
+        try {
+          const resolved = await resolver.resolveItemReference(image.raw, {
+            authority: RESPONSES_CONTINUITY_AUTHORITY,
+            ...(signal === undefined ? {} : { signal }),
+            limits: limits ?? DEFAULT_REFERENCE_LIMITS,
+          });
+          for (const item of resolved) {
+            if (isRecord(item) && item.type === "input_image") {
+              // Keep the resolved data-URL form so the normal message
+              // converter parses it into Pi image bytes in place.
+              resolvedParts.push(item);
+              resolvedAny = true;
+              continue;
+            }
+            // A resolver may return a full message item carrying the image;
+            // splice its content parts into the message in place.
+            if (
+              isRecord(item) &&
+              (item.type === "message" || typeof item.role === "string") &&
+              Array.isArray(item.content)
+            ) {
+              resolvedParts.push(...item.content);
+              resolvedAny = true;
+            }
+          }
+        } catch {
+          notices.push(
+            requestNotice(
+              REFERENCE_UNRESOLVED_NOTICE_CODE,
+              "ignore",
+              image.path,
+            ),
+          );
+        }
+      }
+      if (!resolvedAny && resolvedParts.length === 0 && typeof content === "string") {
+        expanded.push(rawItem);
+        continue;
+      }
+      if (resolvedParts.length === 0 && !resolvedAny) {
+        // Image-only message that could not be resolved: drop it rather than
+        // fabricate an empty message or a placeholder.
+        continue;
+      }
+      expanded.push({
+        ...rawItem,
+        content: resolvedParts,
       });
-      expanded.push(...resolved);
-    } catch {
-      notices.push(
-        requestNotice(
-          REFERENCE_UNRESOLVED_NOTICE_CODE,
-          "ignore",
-          `$.input[?id=${String(rawItem.id)}]`,
-        ),
-      );
+      continue;
     }
+    expanded.push(rawItem);
   }
   return expanded;
 }
@@ -945,6 +1603,8 @@ function buildInvocation(
   notices: ConversionNotice[],
   policy: ResponseRequestConversionPolicy,
   inputForPromotion: unknown = validated.input,
+  namespaceReverse: Record<string, { namespace: string; child: string }> =
+    Object.create(null),
 ): ResponsesInvocation {
   const context: Context = { messages };
   // Source metadata is retained only for request-local response echo; it is
@@ -968,14 +1628,16 @@ function buildInvocation(
   if (promptParts.length > 0) {
     context.systemPrompt = promptParts.join("\n");
   }
+  // Namespace flattening already happened during validation; the reverse map
+  // is retained only for request-local response echo.
   const mergedTools =
     validated.tools === undefined
       ? additionalTools.length === 0
         ? undefined
-        : convertTools(additionalTools, freeformNames)
+        : convertTools(additionalTools, freeformNames, namespaceReverse, notices)
       : [
           ...validated.tools,
-          ...(convertTools(additionalTools, freeformNames) ?? []),
+          ...(convertTools(additionalTools, freeformNames, namespaceReverse, notices) ?? []),
         ];
   const filtered = applyToolChoiceFilter(
     value,
@@ -1018,6 +1680,9 @@ function buildInvocation(
         ? {}
         : { toolChoice: filtered.effective }),
       ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
+      ...(Object.keys(namespaceReverse).length > 0
+        ? { namespaceReverse: Object.freeze(namespaceReverse) }
+        : {}),
       ...(metadataEcho === undefined ? {} : { metadataEcho }),
     },
     notices: Object.freeze(notices),
@@ -1051,7 +1716,13 @@ export function convertResponsesRequest(
   policy: ResponseRequestConversionPolicy = DEFAULT_POLICY,
 ): ResponsesInvocation {
   const freeformNames = new Set<string>();
-  const validated = validateResponsesRequest(value, freeformNames);
+  const namespaceReverse: Record<string, { namespace: string; child: string }> =
+    Object.create(null);
+  const validated = validateResponsesRequest(
+    value,
+    freeformNames,
+    namespaceReverse,
+  );
   const notices: ConversionNotice[] = [];
   const reasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
@@ -1060,6 +1731,11 @@ export function convertResponsesRequest(
   );
   if (reasoning !== undefined) validated.reasoning = reasoning;
   const additionalTools: unknown[] = [];
+  const executableNames = collectExecutableNames(
+    value,
+    freeformNames,
+    namespaceReverse,
+  );
   const messages = convertMessages(
     validated.input,
     validated.selector,
@@ -1067,6 +1743,7 @@ export function convertResponsesRequest(
     additionalTools,
     policy,
     notices,
+    executableNames,
   );
   return buildInvocation(
     value,
@@ -1076,6 +1753,8 @@ export function convertResponsesRequest(
     messages,
     notices,
     policy,
+    validated.input,
+    namespaceReverse,
   );
 }
 
@@ -1098,7 +1777,13 @@ export async function convertResponsesRequestAsync(
   }>,
 ): Promise<ResponsesInvocation> {
   const freeformNames = new Set<string>();
-  const validated = validateResponsesRequest(value, freeformNames);
+  const namespaceReverse: Record<string, { namespace: string; child: string }> =
+    Object.create(null);
+  const validated = validateResponsesRequest(
+    value,
+    freeformNames,
+    namespaceReverse,
+  );
   const notices: ConversionNotice[] = [];
   const reasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
@@ -1107,6 +1792,11 @@ export async function convertResponsesRequestAsync(
   );
   if (reasoning !== undefined) validated.reasoning = reasoning;
   const additionalTools: unknown[] = [];
+  const executableNames = collectExecutableNames(
+    value,
+    freeformNames,
+    namespaceReverse,
+  );
   const rawItems: readonly unknown[] =
     typeof validated.input === "string"
       ? [{ role: "user", content: validated.input }]
@@ -1125,6 +1815,7 @@ export async function convertResponsesRequestAsync(
     additionalTools,
     policy,
     notices,
+    executableNames,
   );
   return buildInvocation(
     value,
@@ -1135,7 +1826,72 @@ export async function convertResponsesRequestAsync(
     notices,
     policy,
     expandedItems,
+    namespaceReverse,
   );
+}
+
+/**
+ * Collect the executable Client/BYOT tool names from the request's tool
+ * catalog (top-level tools plus additional_tools). Namespace children are
+ * flattened with the same reversible scheme the tool converter uses, so
+ * ownership classification is by catalog membership — never by a concrete
+ * Provider or tool-name guess. computer/mcp calls map structurally only when
+ * their name is in this catalog; everything else is provider-hosted.
+ */
+function collectExecutableNames(
+  value: unknown,
+  freeformNames: Set<string>,
+  namespaceReverse: Record<string, { namespace: string; child: string }>,
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  const collect = (raw: unknown): void => {
+    if (!Array.isArray(raw)) return;
+    for (const candidate of raw) {
+      if (!isRecord(candidate)) continue;
+      const type = candidate.type;
+      const name = candidate.name;
+      if (typeof name !== "string" || name.length === 0) continue;
+      if (type === "namespace" && typeof name === "string") {
+        if (!Array.isArray(candidate.tools)) continue;
+        for (const inner of candidate.tools) {
+          if (
+            isRecord(inner) &&
+            typeof inner.name === "string" &&
+            inner.name.length > 0
+          ) {
+            const flat = `${name}${NAMESPACE_SEPARATOR}${inner.name}`;
+            names.add(flat);
+            namespaceReverse[flat] = { namespace: name, child: inner.name };
+          }
+        }
+        continue;
+      }
+      // function/custom/local_shell/shell/apply_patch/computer/mcp are
+      // Client/BYOT executable families when declared in the catalog.
+      if (
+        type === "function" ||
+        type === "custom" ||
+        type === "local_shell" ||
+        type === "shell" ||
+        type === "apply_patch" ||
+        type === "computer" ||
+        type === "computer_use" ||
+        type === "mcp"
+      ) {
+        names.add(name);
+        if (type === "custom") freeformNames.add(name);
+      }
+    }
+  };
+  collect(isRecord(value) ? value.tools : undefined);
+  if (isRecord(value) && Array.isArray(value.input)) {
+    for (const item of value.input) {
+      if (isRecord(item) && item.type === "additional_tools") {
+        collect(item.tools);
+      }
+    }
+  }
+  return names;
 }
 
 function collectPromotedSegments(

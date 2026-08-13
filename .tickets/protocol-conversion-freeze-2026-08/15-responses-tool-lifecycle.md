@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — configuration; 02 — notices/journal; 13 — Responses prompts/options/handles.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,18 +16,18 @@ Correlation and reverse-family maps are request-local and destroyed after respon
 
 ## Acceptance criteria
 
-- [ ] Function definitions preserve name/description/parameters/strict into Pi Tool.
-- [ ] Custom definitions use the approved freeform object schema; Lark/regex grammar maps to Pi constrainedSampling variants.
-- [ ] Function arguments: missing/blank→{}; valid object→lossless object; invalid JSON/non-object→conversion error.
-- [ ] Custom call freeform input maps to `{input:string}` with a Responses-local notice and reverses to custom output family.
-- [ ] Namespace uses a reversible Responses-owned naming scheme, supports function/custom children, detects collisions, and retains reverse metadata only in render state.
-- [ ] status absent/completed is eligible; in_progress/incomplete/unknown structured status errors.
-- [ ] Duplicate result fixed error; orphan output follows Responses-local error|ignore default error; ignore emits notice.
-- [ ] Unresolved call follows Responses-local error|xrepair default xrepair using its own frozen literal/helper/tests.
-- [ ] Real result identity/content/error semantics are never altered by repair.
-- [ ] Output images remain Pi ToolResult images on the Client side.
-- [ ] Tests cover round-trip family reversal, collisions, argument cases, orphan/duplicate/unresolved, multiple calls, ordering, and concurrency.
-- [ ] No Anthropic/CommandCode repair helper or configuration is imported.
+- [x] Function definitions preserve name/description/parameters/strict into Pi Tool.
+- [x] Custom definitions use the approved freeform object schema; Lark/regex grammar maps to Pi constrainedSampling variants.
+- [x] Function arguments: missing/blank→{}; valid object→lossless object; invalid JSON/non-object→conversion error.
+- [x] Custom call freeform input maps to `{input:string}` with a Responses-local notice and reverses to custom output family.
+- [x] Namespace uses a reversible Responses-owned naming scheme, supports function/custom children, detects collisions, and retains reverse metadata only in render state.
+- [x] status absent/completed is eligible; in_progress/incomplete/unknown structured status errors.
+- [x] Duplicate result fixed error; orphan output follows Responses-local error|ignore default error; ignore emits notice.
+- [x] Unresolved call follows Responses-local error|xrepair default xrepair using its own frozen literal/helper/tests.
+- [x] Real result identity/content/error semantics are never altered by repair.
+- [x] Output images remain Pi ToolResult images on the Client side.
+- [x] Tests cover round-trip family reversal, collisions, argument cases, orphan/duplicate/unresolved, multiple calls, ordering, and concurrency.
+- [x] No Anthropic/CommandCode repair helper or configuration is imported.
 
 ## Out of scope
 
