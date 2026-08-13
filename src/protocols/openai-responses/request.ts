@@ -27,6 +27,9 @@ export interface ResponsesInvocation {
   renderState: {
     clientModel: string;
     stream: boolean;
+    /** Tool names declared as freeform `custom` tools; their calls must
+     *  round-trip as `custom_tool_call` output items. */
+    freeformToolNames?: ReadonlySet<string>;
   };
 }
 
@@ -135,7 +138,10 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
   }
 }
 
-function convertTools(value: unknown): Tool[] | undefined {
+function convertTools(
+  value: unknown,
+  freeformNames?: Set<string>,
+): Tool[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
     throw new InvalidRequest("tools must be an array when present");
@@ -187,6 +193,7 @@ function convertTools(value: unknown): Tool[] | undefined {
     if (type === "custom" && typeof name === "string" && name.length > 0) {
       // Freeform custom tool (e.g. apply_patch): expose as a function with a
       // single string `input` carrying the raw tool body.
+      freeformNames?.add(name);
       pushFunction(name, description, {
         type: "object",
         properties: {
@@ -247,7 +254,10 @@ function convertReasoning(value: unknown): string | undefined {
   return effort;
 }
 
-export function validateResponsesRequest(value: unknown): ValidatedResponsesRequest {
+export function validateResponsesRequest(
+  value: unknown,
+  freeformNames?: Set<string>,
+): ValidatedResponsesRequest {
   if (!isRecord(value)) {
     throw new InvalidRequest("Request body must be a JSON object");
   }
@@ -291,7 +301,7 @@ export function validateResponsesRequest(value: unknown): ValidatedResponsesRequ
   if (topP !== undefined) {
     // Validated but not converted (no Pi option for top_p in the closed set).
   }
-  const tools = convertTools(value.tools);
+  const tools = convertTools(value.tools, freeformNames);
   const reasoning = convertReasoning(value.reasoning);
   const instructions =
     value.instructions === undefined
@@ -435,9 +445,12 @@ function convertMessages(
         const callId = nonEmptyString(rawItem.call_id, "function_call_output.call_id");
         const toolName = assistantIndex.get(callId);
         if (toolName === undefined) {
-          throw new InvalidRequest(
-            `function_call_output references an unknown tool call id: ${callId}`,
-          );
+          // Codex real clients send tool-result increments that may reference
+          // a call from an earlier response (or an incomplete replay).
+          // Rejecting the whole turn would kill the conversation, so an
+          // orphan output is tolerated: it is dropped from the Pi context.
+          pendingReasoning = [];
+          continue;
         }
         const output = rawItem.output;
         const text =
@@ -506,7 +519,8 @@ export function convertResponsesRequest(
   value: unknown,
   receivedAt: number,
 ): ResponsesInvocation {
-  const validated = validateResponsesRequest(value);
+  const freeformNames = new Set<string>();
+  const validated = validateResponsesRequest(value, freeformNames);
   const additionalTools: unknown[] = [];
   const messages = convertMessages(
     validated.input,
@@ -522,8 +536,11 @@ export function convertResponsesRequest(
     validated.tools === undefined
       ? additionalTools.length === 0
         ? undefined
-        : convertTools(additionalTools)
-      : [...validated.tools, ...(convertTools(additionalTools) ?? [])];
+        : convertTools(additionalTools, freeformNames)
+      : [
+          ...validated.tools,
+          ...(convertTools(additionalTools, freeformNames) ?? []),
+        ];
   if (mergedTools !== undefined && mergedTools.length > 0) {
     context.tools = mergedTools;
   }
@@ -545,6 +562,7 @@ export function convertResponsesRequest(
     renderState: {
       clientModel: validated.selector,
       stream: validated.stream,
+      ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
     },
   };
 }

@@ -168,22 +168,27 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     ]);
   });
 
-  it("rejects an orphan function_call_output", () => {
-    expect(() =>
-      convertResponsesRequest(
-        {
-          model: "m",
-          input: [
-            {
-              type: "function_call_output",
-              call_id: "call_missing",
-              output: "x",
-            },
-          ],
-        },
-        1,
-      ),
-    ).toThrow("references an unknown tool call id");
+  it("drops an orphan function_call_output instead of failing the turn", () => {
+    // Codex real clients send tool-result increments that may reference a
+    // call from an earlier response (or an incomplete replay). Rejecting the
+    // whole turn with 400 would kill the conversation, so an orphan output
+    // must be tolerated: it is dropped from the Pi context.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_missing",
+            output: "x",
+          },
+          { type: "message", role: "user", content: "continue" },
+        ],
+      },
+      1,
+    );
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.messages[0]?.role).toBe("user");
   });
 
   it("degrades compaction items to user text", () => {

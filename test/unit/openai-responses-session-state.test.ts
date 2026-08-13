@@ -159,6 +159,84 @@ describe("OpenAI Responses session state", () => {
     });
   });
 
+  it("drops orphan function_call_output items when saving (storage hygiene)", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    // The request input carries a tool-result increment whose call_id has no
+    // preceding function_call in the same batch (Codex replay shape). The
+    // stored history must not retain it, or a later expansion would replay a
+    // poisoned chain.
+    await state.remember(
+      {
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_orphan",
+            output: "result",
+          },
+          { type: "message", role: "user", content: "continue" },
+        ],
+      },
+      completedResponse("resp_clean", [{ type: "message", role: "assistant", content: [] }]),
+    );
+
+    const expanded = await state.expand({
+      input: "next",
+      previous_response_id: "resp_clean",
+    });
+    const items = (expanded as { input: unknown[] }).input;
+    const types = items.map((item) =>
+      typeof item === "object" && item !== null && "type" in item
+        ? (item as { type: string }).type
+        : "message",
+    );
+    expect(types).toEqual(["message", "message", "message"]);
+  });
+
+  it("self-heals orphan items already on disk at load time", async () => {
+    const { stateFile, create } = await fixtureState();
+    // Simulate a snapshot written by an older version (or a crashed writer)
+    // that contains an orphan function_call_output.
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      stateFile,
+      JSON.stringify({
+        version: 2,
+        states: [
+          [
+            "resp_legacy",
+            {
+              createdAt: 1_786_400_000,
+              items: [
+                {
+                  type: "function_call_output",
+                  call_id: "call_legacy_orphan",
+                  output: "stale result",
+                },
+                { role: "user", content: "history" },
+              ],
+            },
+          ],
+        ],
+      }),
+      "utf8",
+    );
+
+    const state = create();
+    const expanded = await state.expand({
+      input: "next",
+      previous_response_id: "resp_legacy",
+    });
+    const items = (expanded as { input: unknown[] }).input;
+    const types = items.map((item) =>
+      typeof item === "object" && item !== null && "type" in item
+        ? (item as { type: string }).type
+        : "message",
+    );
+    // The orphan output must be gone; the user history message remains.
+    expect(types).toEqual(["message", "message"]);
+  });
+
   it("evicts oldest entries past the entry cap", async () => {
     const { create } = await fixtureState({ maxEntries: 2 });
     const state = create();

@@ -34,6 +34,15 @@ export interface ResponsesFunctionCallOutputItem {
   status: "completed";
 }
 
+export interface ResponsesCustomToolCallOutputItem {
+  type: "custom_tool_call";
+  id: string;
+  call_id: string;
+  name: string;
+  input: string;
+  status: "completed";
+}
+
 export interface ResponsesReasoningOutputItem {
   type: "reasoning";
   id: string;
@@ -43,6 +52,7 @@ export interface ResponsesReasoningOutputItem {
 export type ResponsesOutputItem =
   | ResponsesMessageOutputItem
   | ResponsesFunctionCallOutputItem
+  | ResponsesCustomToolCallOutputItem
   | ResponsesReasoningOutputItem;
 
 export interface ResponsesResponseObject {
@@ -112,6 +122,7 @@ function convertUsage(message: AssistantMessage): ResponsesUsage {
 function convertOutput(
   message: AssistantMessage,
   responseId: string,
+  freeformToolNames: ReadonlySet<string>,
 ): ResponsesOutputItem[] {
   const output: ResponsesOutputItem[] = [];
   let textBlockIndex = 0;
@@ -174,14 +185,30 @@ function convertOutput(
         "Pi toolCall.arguments did not serialize",
       );
     }
-    output.push({
-      type: "function_call",
-      id: `fc_${responseId}_${toolCallIndex}`,
-      call_id: callId,
-      name,
-      arguments: argumentsJson,
-      status: "completed",
-    });
+    if (freeformToolNames.has(name)) {
+      // Freeform custom tools (e.g. apply_patch) must round-trip as
+      // `custom_tool_call` with a raw `input` string, not as a JSON
+      // `function_call`. Codex rejects a freeform tool invoked as
+      // function_call ("incompatible payload").
+      const input = argumentsValue.input;
+      output.push({
+        type: "custom_tool_call",
+        id: `ctc_${responseId}_${toolCallIndex}`,
+        call_id: callId,
+        name,
+        input: typeof input === "string" ? input : argumentsJson,
+        status: "completed",
+      });
+    } else {
+      output.push({
+        type: "function_call",
+        id: `fc_${responseId}_${toolCallIndex}`,
+        call_id: callId,
+        name,
+        arguments: argumentsJson,
+        status: "completed",
+      });
+    }
     toolCallIndex += 1;
   }
   return output;
@@ -220,9 +247,10 @@ export function convertAssistantMessageToResponses(
   responseId: string,
   createdAt: number,
   previousResponseId: string | undefined,
+  freeformToolNames: ReadonlySet<string> = new Set(),
 ): ResponsesResponseObject {
   assertMessageEnvelope(message);
-  const output = convertOutput(message, responseId);
+  const output = convertOutput(message, responseId, freeformToolNames);
   const { status, incomplete_details } = convertStopReason(message.stopReason);
   const response: ResponsesResponseObject = {
     id: responseId,

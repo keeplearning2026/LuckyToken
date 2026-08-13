@@ -102,6 +102,118 @@ describe("OpenAI Responses serving", () => {
     expect(roles).toEqual(["user", "assistant", "user"]);
   });
 
+  it("tolerates an orphan function_call_output in an expanded increment", async () => {
+    const upstreamBodies: unknown[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      const request = new Request(input, init);
+      upstreamBodies.push(JSON.parse(await request.text()));
+      return commandCodeText("answered");
+    };
+    const { runtime } = await start({ fetch });
+
+    // First turn: normal conversation, saved to state.
+    const first = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "hello" }],
+        },
+        "client-token",
+      ),
+    );
+    expect(first.status).toBe(200);
+    const firstJson = await first.json();
+
+    // Second turn: Codex sends a tool-result increment whose call_id has no
+    // preceding function_call in the same batch (real client replay shape).
+    // This must NOT 400 the whole turn.
+    const second = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [
+            {
+              type: "function_call_output",
+              call_id: "call_orphan",
+              output: "tool result",
+            },
+            { type: "message", role: "user", content: "continue" },
+          ],
+          previous_response_id: firstJson.id,
+        },
+        "client-token",
+      ),
+    );
+    expect(second.status).toBe(200);
+
+    // The upstream history must not contain the orphan tool output (storage
+    // hygiene dropped it on save).
+    const lastUpstream = upstreamBodies.at(-1) as {
+      params?: { messages?: unknown[] };
+    };
+    const upstreamText = JSON.stringify(lastUpstream?.params?.messages ?? []);
+    expect(upstreamText).not.toContain("call_orphan");
+  });
+
+  it("preserves full history across a multi-turn previous_response_id chain", async () => {
+    const upstreamBodies: unknown[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      const request = new Request(input, init);
+      upstreamBodies.push(JSON.parse(await request.text()));
+      return commandCodeText("answered");
+    };
+    const { runtime } = await start({ fetch });
+
+    // Turn 1: root.
+    const t1 = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "MARKER_ONE" }],
+        },
+        "client-token",
+      ),
+    );
+    expect(t1.status).toBe(200);
+    const t1Json = await t1.json();
+
+    // Turn 2: chains onto turn 1.
+    const t2 = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "MARKER_TWO" }],
+          previous_response_id: t1Json.id,
+        },
+        "client-token",
+      ),
+    );
+    expect(t2.status).toBe(200);
+    const t2Json = await t2.json();
+
+    // Turn 3: chains onto turn 2; the upstream must receive BOTH markers
+    // (full history), not just the latest increment.
+    const t3 = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "MARKER_THREE" }],
+          previous_response_id: t2Json.id,
+        },
+        "client-token",
+      ),
+    );
+    expect(t3.status).toBe(200);
+
+    const lastUpstream = upstreamBodies.at(-1) as {
+      params?: { messages?: unknown[] };
+    };
+    const upstreamText = JSON.stringify(lastUpstream?.params?.messages ?? []);
+    expect(upstreamText).toContain("MARKER_ONE");
+    expect(upstreamText).toContain("MARKER_TWO");
+    expect(upstreamText).toContain("MARKER_THREE");
+  });
+
   it("rejects an invalid client token with 401", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),

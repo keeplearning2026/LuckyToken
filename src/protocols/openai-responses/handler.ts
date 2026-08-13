@@ -211,8 +211,13 @@ async function handleOpenAIResponses(
             | string
             | undefined)
         : undefined,
+      invocation.renderState.freeformToolNames,
     );
-    rememberAfterSuccess(dependencies, body, rendered);
+    // Save the EXPANDED body (full history + increment), so each stored
+    // entry contains the complete conversation up to this response. A later
+    // `previous_response_id` expansion then reproduces the full history;
+    // saving the raw (unexpanded) increment would drop all earlier turns.
+    rememberAfterSuccess(dependencies, expanded, rendered);
 
     const prepared = invocation.renderState.stream
       ? renderResponsesSse(rendered)

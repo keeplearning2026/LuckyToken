@@ -95,6 +95,42 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Storage hygiene for saved history: drop `function_call_output` items whose
+ * `call_id` has no preceding `function_call` in the same batch. Codex real
+ * clients send tool-result increments that may reference a call from an
+ * earlier response; retaining the orphan would poison the chain for later
+ * expansion (the converter tolerates orphans, but the store should not
+ * persist them).
+ */
+function sanitizeStoredItems(items: readonly unknown[]): unknown[] {
+  const seenCallIds = new Set<string>();
+  const sanitized: unknown[] = [];
+  for (const item of items) {
+    if (!isRecord(item)) {
+      sanitized.push(item);
+      continue;
+    }
+    const type = item.type;
+    const callId = item.call_id;
+    if (
+      (type === "function_call_output" || type === "custom_tool_call_output") &&
+      typeof callId === "string" &&
+      !seenCallIds.has(callId)
+    ) {
+      continue;
+    }
+    if (
+      (type === "function_call" || type === "custom_tool_call") &&
+      typeof callId === "string"
+    ) {
+      seenCallIds.add(callId);
+    }
+    sanitized.push(item);
+  }
+  return sanitized;
+}
+
 async function cleanupOrphanTemps(stateFile: string): Promise<void> {
   const directory = dirname(stateFile);
   const baseName = stateFile.split(/[\\/]/u).at(-1) ?? stateFile;
@@ -175,9 +211,20 @@ export function createResponseSessionState(
         const items = value.items;
         if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) continue;
         if (!Array.isArray(items)) continue;
-        states.set(id, { createdAt, items });
+        // Load-time self-healing: sanitize orphan tool outputs even when they
+        // come from disk (e.g. written by an older version or a crashed
+        // writer). If anything changed, the snapshot is rewritten with the
+        // clean data on the next persist.
+        const sanitized = sanitizeStoredItems(items);
+        states.set(id, { createdAt, items: sanitized });
+        if (sanitized.length !== items.length) {
+          stateRevision += 1;
+        }
       }
       evictIfNeeded();
+      if (stateRevision > 0) {
+        schedulePersist();
+      }
     } catch {
       // Corrupt snapshot: back it up and start empty. Never crash the server.
       try {
@@ -273,7 +320,10 @@ export function createResponseSessionState(
       }
       states.set(id, {
         createdAt: now(),
-        items: [...responseInputItems(request.input), ...output],
+        items: sanitizeStoredItems([
+          ...responseInputItems(request.input),
+          ...output,
+        ]),
       });
       stateRevision += 1;
       evictIfNeeded();

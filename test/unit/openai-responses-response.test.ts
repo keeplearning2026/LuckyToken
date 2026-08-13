@@ -128,6 +128,37 @@ describe("OpenAI Responses Pi → wire response conversion", () => {
     });
   });
 
+  it("maps freeform (custom) tool calls to custom_tool_call output items", () => {
+    const response = convertAssistantMessageToResponses(
+      assistantMessage({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_patch",
+            name: "apply_patch",
+            arguments: { input: "*** Begin Patch\n..." },
+          },
+        ],
+      }),
+      "m",
+      "resp_freeform",
+      1,
+      undefined,
+      new Set(["apply_patch"]),
+    );
+    expect(response.output).toEqual([
+      {
+        type: "custom_tool_call",
+        id: "ctc_resp_freeform_0",
+        call_id: "call_patch",
+        name: "apply_patch",
+        input: "*** Begin Patch\n...",
+        status: "completed",
+      },
+    ]);
+  });
+
   it("renders error responses in the Responses error shape", () => {
     const prepared = renderResponsesError(400, "invalid_request_error", "bad input");
     expect(prepared.status).toBe(400);
