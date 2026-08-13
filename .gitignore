@@ -6,4 +6,4 @@ CommandcodeAPIKey.txt
 **/auth.json
 .online-artifacts/
 .temp
-,temp/
+temp/
