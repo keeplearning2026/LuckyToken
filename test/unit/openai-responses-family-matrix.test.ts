@@ -155,6 +155,33 @@ describe("16: every known Responses input-item family", () => {
     expect(invocation.context.tools).toBeUndefined();
   });
 
+  it("does not emit a transcript for an in-progress hosted file_search_call", () => {
+    // A hosted call that is still in_progress/searching has no determinate
+    // results; emitting its partial results would mislead. It drops like
+    // lifecycle metadata.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "file_search_call",
+            id: "fs_live",
+            queries: ["find"],
+            status: "in_progress",
+            results: [{ text: "partial result" }],
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts).toEqual(["keep"]);
+  });
+
   it("preserves file_search_call result text as ordered transcript", () => {
     // Hosted file-search history with representable result text degrades to
     // ordered transcript content; it never advertises an executable Pi tool.
@@ -763,6 +790,29 @@ describe("16: every known Responses input-item family", () => {
     expect(invocation.context.tools).toBeUndefined();
   });
 
+  it("does not emit a transcript for an in-progress hosted code_interpreter_call", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "code_interpreter_call",
+            id: "ci_live",
+            status: "in_progress",
+            outputs: [{ type: "logs", logs: "partial log" }],
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts).toEqual(["keep"]);
+  });
+
   it("preserves code_interpreter_call log output as ordered transcript", () => {
     // Hosted code-interpreter history with representable log output degrades
     // to an ordered transcript; it never advertises an executable Pi tool.
@@ -998,6 +1048,72 @@ describe("16: every known Responses input-item family", () => {
     ]);
   });
 
+  it("marks the correlated result isError when an mcp_call carries an error", () => {
+    // A failed mcp_call (error field present) must not lose its error
+    // semantics: the correlated function_call_output result is isError.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_fail",
+            name: "db_query",
+            arguments: '{"sql":"bad"}',
+            error: "tool crashed: invalid sql",
+          },
+          {
+            type: "function_call_output",
+            call_id: "mc_fail",
+            output: "partial",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "mc_fail",
+      toolName: "db_query",
+      isError: true,
+      content: [{ type: "text", text: "partial" }],
+    });
+    // The raw error text is lifecycle metadata; it never enters Pi.
+    expect(JSON.stringify(invocation.context)).not.toContain("invalid sql");
+  });
+
+  it("marks the result isError false when an mcp_call has no error", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_ok",
+            name: "db_query",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "mc_ok",
+            output: "ok",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({ isError: false });
+  });
+
   it("degrades provider-hosted mcp_call to ordered transcript without Pi tool", () => {
     const invocation = convertResponsesRequest(
       {
@@ -1078,6 +1194,70 @@ const INSTALLED_TOOL_FAMILIES = [
 describe("16: every known Responses tool-definition family", () => {
   it("enumerates the complete installed tool-definition union so a new SDK family triggers review", () => {
     expect(INSTALLED_TOOL_FAMILIES.length).toBe(15);
+  });
+
+  it("divides the tool-definition union into client-owned vs hosted exactly", () => {
+    // Client/BYOT executable families map into the Pi catalog; hosted
+    // declarations drop and are never advertised.
+    const clientOwned = [
+      ["function", "fn"],
+      ["custom", "ct"],
+      ["local_shell", undefined],
+      ["shell", undefined],
+      ["apply_patch", undefined],
+      ["computer", undefined],
+      ["computer_use_preview", undefined],
+      ["mcp", "db"],
+    ] as const;
+    for (const [type, name] of clientOwned) {
+      const tool: Record<string, unknown> = { type };
+      if (name !== undefined) tool.name = name;
+      const invocation = convertResponsesRequest(
+        { model: "m", input: "x", tools: [tool] },
+        1,
+        policy(),
+      );
+      const expectedName =
+        name ?? (type === "computer_use_preview" ? "computer" : type);
+      expect(invocation.context.tools?.map((t) => t.name)).toContain(
+        expectedName,
+      );
+    }
+    const hosted = [
+      "file_search",
+      "web_search",
+      "web_search_preview",
+      "image_generation",
+      "code_interpreter",
+      "tool_search",
+    ];
+    for (const type of hosted) {
+      const invocation = convertResponsesRequest(
+        { model: "m", input: "x", tools: [{ type }] },
+        1,
+        policy(),
+      );
+      expect(invocation.context.tools).toBeUndefined();
+    }
+    // Namespace groups client-owned children.
+    const ns = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [
+          {
+            type: "namespace",
+            name: "ns",
+            tools: [
+              { type: "function", name: "child", parameters: { type: "object" } },
+            ],
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(ns.context.tools?.map((t) => t.name)).toEqual(["ns.child"]);
   });
 
   it("classifies every installed tool-definition family explicitly", () => {

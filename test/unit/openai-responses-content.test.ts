@@ -1275,8 +1275,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
     });
 
     it("restores encrypted_content when the envelope authority is the Responses authority", () => {
-      // A Lucky-owned envelope with the Responses authority is verified and
-      // its encrypted_content enters the versioned envelope.
+      // A Lucky-owned envelope with the Responses authority and a verified
+      // schema version/id restores encrypted_content.
       const invocation = convertResponsesRequest(
         {
           model: "m",
@@ -1285,7 +1285,12 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               type: "reasoning",
               id: "rs_owned",
               encrypted_content: "owned-secret-bytes",
-              envelope: { authority: "openai-responses", version: 1 },
+              envelope: {
+                v: 1,
+                id: "openai-responses",
+                authority: "openai-responses",
+                encrypted_content: "owned-secret-bytes",
+              },
               summary: [{ type: "summary_text", text: "visible part" }],
             },
             {
@@ -1316,6 +1321,120 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         authority: "openai-responses",
         encrypted_content: "owned-secret-bytes",
       });
+    });
+
+    it("refuses a tampered envelope with the Responses authority but a wrong schema version", () => {
+      // A claimed Responses envelope must verify its schema version and id;
+      // a tampered envelope (authority correct, version/id wrong) is not
+      // verified and its encrypted_content is not restored.
+      for (const envelope of [
+        { v: 999, id: "openai-responses", authority: "openai-responses" },
+        { v: 1, id: "someone-else", authority: "openai-responses" },
+        { v: 1, id: "openai-responses", authority: "other-authority" },
+      ]) {
+        const invocation = convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                id: "rs_tampered",
+                encrypted_content: "tampered-bytes",
+                envelope,
+                summary: [{ type: "summary_text", text: "visible part" }],
+              },
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "answer" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+        const assistant = invocation.context.messages.find(
+          (m) => m.role === "assistant",
+        );
+        const thinking = (
+          assistant?.content as Array<{
+            type: string;
+            thinkingSignature?: string;
+            thinking: string;
+          }>
+        ).find((b) => b.type === "thinking");
+        expect(thinking?.thinking).toBe("visible part");
+        expect(thinking?.thinkingSignature).toBeUndefined();
+      }
+    });
+
+    it("refuses a structurally invalid envelope claiming the Responses authority", () => {
+      // A non-object or authority-less envelope is never verified. null is
+      // equivalent to absence (SDK-native encrypted_content is trusted).
+      for (const envelope of ["openai-responses", 42, {}]) {
+        const invocation = convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                id: "rs_invalid",
+                encrypted_content: "invalid-bytes",
+                envelope,
+                summary: [{ type: "summary_text", text: "visible part" }],
+              },
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "answer" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+        const assistant = invocation.context.messages.find(
+          (m) => m.role === "assistant",
+        );
+        const thinking = (
+          assistant?.content as Array<{
+            type: string;
+            thinkingSignature?: string;
+          }>
+        ).find((b) => b.type === "thinking");
+        expect(thinking?.thinkingSignature).toBeUndefined();
+      }
+      // A null envelope is treated as absent: the SDK-native encrypted
+      // content restores.
+      const nullEnvelope = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_null",
+              encrypted_content: "null-bytes",
+              envelope: null,
+              summary: [{ type: "summary_text", text: "visible part" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const nullThinking = (
+        nullEnvelope.context.messages.find(
+          (m) => m.role === "assistant",
+        )?.content as Array<{ thinkingSignature?: string }>
+      ).find((b) => b.thinkingSignature !== undefined);
+      expect(JSON.parse(String(nullThinking?.thinkingSignature))).toMatchObject(
+        { encrypted_content: "null-bytes" },
+      );
     });
 
     it("keeps a thinkingSignature only when the item carries encrypted_content", () => {

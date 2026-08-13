@@ -1310,6 +1310,47 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       });
     });
 
+    it("records a notice when an output image is a file_id reference", () => {
+      // A historical output image referenced by file_id cannot be
+      // materialized by the Client; it drops with a recorded notice, never
+      // silently.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_img",
+              name: "render",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_img",
+              output: [
+                { type: "input_text", text: "result text" },
+                { type: "output_image", file_id: "file_img_ref" },
+              ],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const result = invocation.context.messages.find(
+        (m) => m.role === "toolResult",
+      );
+      expect(result).toMatchObject({
+        toolCallId: "call_img",
+        content: [{ type: "text", text: "result text" }],
+      });
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_output_image_unresolved",
+        ),
+      ).toBe(true);
+    });
+
     it("drops a non-data remote output image and keeps the text", () => {
       const invocation = convertResponsesRequest(
         {

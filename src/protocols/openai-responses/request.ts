@@ -118,6 +118,8 @@ export const CUSTOM_INPUT_COMPAT_NOTICE_CODE =
   "openai-responses_custom_input_compat";
 export const INCOMPLETE_MESSAGE_NOTICE_CODE =
   "openai-responses_incomplete_message";
+export const OUTPUT_IMAGE_UNRESOLVED_NOTICE_CODE =
+  "openai-responses_output_image_unresolved";
 export const NAMESPACE_COLLISION_NOTICE_CODE =
   "openai-responses_namespace_collision";
 
@@ -916,6 +918,7 @@ function convertMessages(
   const pendingReasoning: ThinkingContent[] = [];
   const assistantIndex = new Map<string, string>();
   const resolvedCallIds = new Set<string>();
+  const failedCallIds = new Set<string>();
   let seenFirstUser = false;
   const privilegedMode = policy.privilegedMessages;
 
@@ -1234,14 +1237,23 @@ function convertMessages(
           // continuity.
           const encrypted = rawItem.encrypted_content;
           const sourceEnvelope = rawItem.envelope;
-          const foreignClaim =
-            isRecord(sourceEnvelope) &&
-            typeof sourceEnvelope.authority === "string" &&
-            sourceEnvelope.authority !== RESPONSES_CONTINUITY_AUTHORITY;
+          // Without a Lucky-owned envelope, encrypted_content is the SDK's
+          // native Responses field and is trusted. When an envelope is
+          // present it must verify: the Responses authority, schema version
+          // 1, and the Responses id. A foreign authority, a wrong version, a
+          // wrong id, or a structurally invalid envelope is never verified;
+          // its encrypted_content is not restored as Responses continuity.
+          const verifiedEnvelope =
+            sourceEnvelope === undefined ||
+            sourceEnvelope === null ||
+            (isRecord(sourceEnvelope) &&
+              sourceEnvelope.v === 1 &&
+              sourceEnvelope.id === RESPONSES_CONTINUITY_AUTHORITY &&
+              sourceEnvelope.authority === RESPONSES_CONTINUITY_AUTHORITY);
           if (
             typeof encrypted === "string" &&
             encrypted.length > 0 &&
-            !foreignClaim
+            verifiedEnvelope
           ) {
             const envelope: ResponsesContinuityEnvelopeV1 = {
               v: 1,
@@ -1312,6 +1324,12 @@ function convertMessages(
             ? nonEmptyString(rawItem.id, "mcp_call.id")
             : nonEmptyString(rawItem.call_id, "function_call.call_id");
         const name = nonEmptyString(rawItem.name, "function_call.name");
+        // An mcp_call with an error string is a failed tool invocation; the
+        // correlated result must carry isError so the error semantics are
+        // never lost.
+        if (type === "mcp_call" && typeof rawItem.error === "string") {
+          failedCallIds.add(callId);
+        }
         if (type === "custom_tool_call") {
           // Custom freeform input uses the approved {input:string}
           // compatibility representation with a Responses-local notice.
@@ -1475,6 +1493,27 @@ function convertMessages(
               })();
         // Output images remain Pi ToolResult images on the Client side.
         const images = parseOutputImageParts(outputParts);
+        // A historical output image referenced by file_id/remote URL cannot
+        // be materialized here; it drops with a recorded notice, never
+        // silently.
+        const unresolvedOutputImages = outputParts.filter(
+          (part) =>
+            isRecord(part) &&
+            (part.type === "output_image" ||
+              part.type === "computer_screenshot") &&
+            (typeof part.file_id === "string" ||
+              (typeof part.image_url === "string" &&
+                !part.image_url.startsWith("data:"))),
+        );
+        if (unresolvedOutputImages.length > 0) {
+          notices.push(
+            requestNotice(
+              OUTPUT_IMAGE_UNRESOLVED_NOTICE_CODE,
+              "ignore",
+              `$.input[?call_id=${callId}].output[?type=output_image]`,
+            ),
+          );
+        }
         const content: Array<TextContent | ImageContent> =
           text.length === 0 && images.length === 0
             ? []
@@ -1489,7 +1528,9 @@ function convertMessages(
           toolCallId: callId,
           toolName,
           content,
-          isError: false,
+          // A failed mcp_call (error field present) marks the correlated
+          // result isError so the failure semantics are preserved.
+          isError: failedCallIds.has(callId),
           timestamp: receivedAt,
         };
         messages.push(result);
@@ -1540,6 +1581,16 @@ function convertMessages(
         // turn; it survives as a reasoning-only assistant.
         continue;
       case "image_generation_call": {
+        // A hosted call still in progress (in_progress/generating) has no
+        // determinate result; lifecycle-only metadata drops.
+        const hostedStatus = rawItem.status;
+        if (
+          hostedStatus === "in_progress" ||
+          hostedStatus === "generating" ||
+          hostedStatus === "searching"
+        ) {
+          continue;
+        }
         // Hosted image-generation history: a result that is directly
         // materialized as a data URL (MIME-bearing) within Client image
         // limits maps to a Pi image. A bare base64 result carries no MIME, so
@@ -1561,6 +1612,15 @@ function convertMessages(
         continue;
       }
       case "file_search_call": {
+        // A hosted call still in progress (in_progress/searching) has no
+        // determinate results; lifecycle-only metadata drops.
+        const hostedStatus = rawItem.status;
+        if (
+          hostedStatus === "in_progress" ||
+          hostedStatus === "searching"
+        ) {
+          continue;
+        }
         // Hosted file-search history: representable result text degrades to
         // an ordered transcript; pure metadata (file ids, filenames, scores)
         // never enters Pi.
@@ -1575,6 +1635,15 @@ function convertMessages(
         continue;
       }
       case "code_interpreter_call": {
+        // A hosted call still in progress (in_progress/interpreting) has no
+        // determinate output; lifecycle-only metadata drops.
+        const hostedStatus = rawItem.status;
+        if (
+          hostedStatus === "in_progress" ||
+          hostedStatus === "interpreting"
+        ) {
+          continue;
+        }
         // Hosted code-interpreter history: representable log output degrades
         // to an ordered transcript; images and pure lifecycle metadata
         // (container id, code) never enter Pi.
