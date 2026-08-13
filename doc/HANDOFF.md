@@ -20,6 +20,24 @@
 - 新增真实 Provider 线上套件 `npm run test:online-responses`（`test/online/run-openai-responses.ts`），
   覆盖：36 JSON + 14 SSE + 5 取消（并发 5）+ 链式展开 + 重启恢复 + 工具轮次 +
   store:false + 认证隔离 + 模型发现。真实 CommandCode 上游，全绿。
+- 新增 **Codex CLI 真实客户端线上套件** `npm run test:online-codex`
+  （`test/online/run-codex-cli.ts`）：自托管当前代码的服务（随机端口 + 干净
+  stateFile），spawn 真实 `codex -p luckytoken exec`，覆盖一次性对话、多轮
+  `resume`、工具往返、重启恢复、取消、随机组合；17 场景覆盖矩阵，服务端快照
+  健康检查（无孤儿、usage 形状）。
+- 新增 **Codex 请求样本回放测试**（`test/integration/openai-responses-replay.test.ts` +
+  `test/fixtures/codex-cli-requests/`）：固化 27 个真实 Codex CLI 请求（清洗后），
+  离线回放验证「官方客户端真实形状」的协议转换，不依赖网络/Codex CLI。
+- 本次线上测试暴露并 TDD 修复的真实 bug：
+  1. 孤儿 `function_call_output` 曾致整轮 400 → 转换层宽容丢弃 + 存储层清洗 +
+     加载时自愈（磁盘遗留孤儿自动清洗写回）；
+  2. apply_patch 等 freeform 工具曾输出 `function_call` 致 Codex
+     "incompatible payload" → 输出 `custom_tool_call`（`input` 字段），
+     `freeformToolNames` 从 request 传到 response；
+  3. 多轮 `previous_response_id` 链曾丢历史（remember 存未展开增量）→
+     remember 存展开后完整历史（真实 Codex 3 轮 resume 跨轮记忆已验证）；
+  4. 重启后 resume 曾连旧端口 → restart 回调返回新 baseUrl；
+  5. Codex 退出码 -1 偶发崩溃（MCP shutdown 竞态）→ 断言以协议结果为准。
 - 新增共享 `src/protocols/options.ts`（中立 composeOptions，两个协议共用）与
   `src/protocols/upstream-failure.ts`（中立上游 HTTP 失败映射），消除跨协议 import。
 - 当前分支 `codex/openai-responses-protocol`，提交历史：
@@ -102,13 +120,15 @@ npm run build
 git diff --check
 ```
 
-当前离线测试 **479 个全绿**（certification 6 + vitest 479）。
+当前离线测试 **516 个全绿**（certification 6 + vitest 510，含 29 个 Codex
+样本回放测试）。
 
 真实在线 gate（需授权 + 真实 key，产生真实调用与费用）：
 
 ```powershell
 npm run test:online            # Anthropic 通道线上套件（既有）
 npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
+npm run test:online-codex      # Codex CLI 真实客户端套件（新增，自托管服务）
 ```
 
 `npm test` 不访问真实 CommandCode。涉及协议、Pi revision 或 serving boundary 变化时，
@@ -138,6 +158,22 @@ npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
   拒绝放在 `[model_providers]` 里），所以 catalog 通过独立 profile 提供；
   `env_key` 让 Codex 从环境变量读 LuckyToken token，不触碰 `auth.json` 的
   OpenAI key。
+- **CommandCode 4 个模型对外可发现 + Codex 可选**（用户已确认）：`deepseek-v4-flash`、
+  `deepseek-v4-pro`、`gpt-5.6-luna`、`Qwen/Qwen3.7-Flash`，selector 契约
+  `provider/model_id`（首个斜杠分割，model_id 可含斜杠）。`/v1/models` 已暴露
+  （`DISCOVERED_PROVIDERS` 含 provider 全部模型）；Codex 侧
+  `~/.codex/luckytoken-catalog.json` 含 4 个条目（用户主目录，非仓库）。
+  注意：`gpt-5.6-luna` 当前上游返回 "not available in your region"（502，
+  稳定地区限制），保留在 catalog。
+- **Codex 配置与对话历史的 provider 隔离**（已实证）：桌面应用与 CLI 共享
+  `~/.codex/config.toml`；对话历史存 `state_5.sqlite` 的 `threads` 表，
+  **按 `model_provider` 列区分**（有 `idx_threads_provider` 索引），内容在
+  `~/.codex/sessions/.../rollout-*.jsonl`（按会话 id 匹配，全在）。
+  opencodex 时代的会话标签是 `openai`（它借用 openai 身份注入 base_url）；
+  改用 luckytoken 后 UI 按 provider 过滤，旧记录不丢但被隐藏。
+- **opencodex 会持续接管 `~/.codex/config.toml`**：它运行在 10100 端口，自动
+  注入 `model`/`model_catalog_json`/`openai_base_url` 并删除 luckytoken 的
+  provider/catalog 文件。要让 LuckyToken 稳定生效需先停 opencodex。
 - 单实例假设：快照不做跨进程锁；多实例共享历史是后续分布式问题。
 - SSE 为原子合成序列，首版不做逐 delta 流式。
 - opencodex 的重量级设施（spill、加密 payload、compaction 缓存、metrics）未移植，
@@ -156,8 +192,9 @@ npm run test:online-responses  # OpenAI Responses 通道线上套件（新增）
 
 **候选下一步**：
 
-- 用真实 Codex CLI 指向 `http://127.0.0.1:3000` 做端到端验证（`/v1/models` 发现 +
-  `/v1/responses` 增量续会话）；
+- 若需 LuckyToken 在 Codex 默认生效：先停 opencodex（10100 端口），再重建
+  `~/.codex/luckytoken-catalog.json` 与 `[model_providers.luckytoken]`
+  （本次会话已做过，被 opencodex 覆盖删除）；
 - 若需要，把 OpenAI Responses 纳入 serving certification 范围（当前不在）；
 - 方案 C（按已配置凭据过滤模型）若用户提出再实现。
 - **与 opencodex 的全面对比已完成**（交付物
