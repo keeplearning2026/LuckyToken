@@ -120,15 +120,15 @@ function nonEmptyString(value: unknown, field: string): string {
 }
 
 function optionalNonNegativeInt(value: unknown, field: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new InvalidRequest(`${field} must be a non-negative safe integer`);
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new InvalidRequest(`${field} must be a positive safe integer`);
   }
   return value as number;
 }
 
 function optionalFiniteNumber(value: unknown, field: string): number | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new InvalidRequest(`${field} must be a finite number when present`);
   }
@@ -136,7 +136,7 @@ function optionalFiniteNumber(value: unknown, field: string): number | undefined
 }
 
 function optionalBoolean(value: unknown, field: string): boolean | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") {
     throw new InvalidRequest(`${field} must be a boolean when present`);
   }
@@ -324,7 +324,7 @@ function convertReasoning(
   futureReasoningEffort: ResponseRequestConversionPolicy["futureReasoningEffort"],
   notices: ConversionNotice[],
 ): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) {
     throw new InvalidRequest("reasoning must be an object when present");
   }
@@ -392,16 +392,21 @@ export function validateResponsesRequest(
   const previousResponseId = value.previous_response_id;
   if (
     previousResponseId !== undefined &&
+    previousResponseId !== null &&
     (typeof previousResponseId !== "string" || previousResponseId.length === 0)
   ) {
     throw new InvalidRequest(
       "previous_response_id must be a non-empty string when present",
     );
   }
-  if (value.store !== undefined && typeof value.store !== "boolean") {
+  if (
+    value.store !== undefined &&
+    value.store !== null &&
+    typeof value.store !== "boolean"
+  ) {
     throw new InvalidRequest("store must be a boolean when present");
   }
-  if (value.tool_choice !== undefined) {
+  if (value.tool_choice !== undefined && value.tool_choice !== null) {
     const toolChoice = value.tool_choice;
     if (
       typeof toolChoice !== "string" &&
@@ -448,12 +453,12 @@ export function validateResponsesRequest(
   const safetyIdentifier = value.safety_identifier;
   const userValue = value.user;
   let metadataUserId: string | undefined;
-  if (safetyIdentifier !== undefined) {
+  if (safetyIdentifier !== undefined && safetyIdentifier !== null) {
     if (typeof safetyIdentifier !== "string") {
       throw new InvalidRequest("safety_identifier must be a string when present");
     }
     metadataUserId = safetyIdentifier;
-  } else if (userValue !== undefined) {
+  } else if (userValue !== undefined && userValue !== null) {
     if (typeof userValue !== "string") {
       throw new InvalidRequest("user must be a string when present");
     }
@@ -465,7 +470,7 @@ export function validateResponsesRequest(
   const conversationPresent = value.conversation !== undefined;
   const promptPresent = value.prompt !== undefined;
   const instructions =
-    value.instructions === undefined
+    value.instructions === undefined || value.instructions === null
       ? undefined
       : typeof value.instructions === "string"
         ? value.instructions
@@ -495,7 +500,7 @@ export function validateResponsesRequest(
 /** Validate the reasoning field shape; the effort matrix is applied in the
  *  conversion entries where the policy and notices are available. */
 function validateReasoningShape(value: unknown): void {
-  if (value === undefined) return;
+  if (value === undefined || value === null) return;
   if (!isRecord(value)) {
     throw new InvalidRequest("reasoning must be an object when present");
   }
@@ -868,6 +873,7 @@ function buildInvocation(
   messages: Message[],
   notices: ConversionNotice[],
   policy: ResponseRequestConversionPolicy,
+  inputForPromotion: unknown = validated.input,
 ): ResponsesInvocation {
   const context: Context = { messages };
   // Source metadata is retained only for request-local response echo; it is
@@ -875,12 +881,14 @@ function buildInvocation(
   const metadataEcho = collectMetadataEcho(value);
   // Top-level instructions always lead the Pi systemPrompt; promoted input
   // privileged segments follow in source order, joined by one newline.
+  // `inputForPromotion` is the already-resolved item list so privileged
+  // segments materialized through the resolver are promoted too.
   const promptParts: string[] = [];
   if (validated.instructions !== undefined) {
     promptParts.push(validated.instructions);
   }
   const promoted = collectPromotedSegments(
-    validated.input,
+    inputForPromotion,
     policy.privilegedMessages,
   );
   for (const segment of promoted) {
@@ -1046,6 +1054,7 @@ export async function convertResponsesRequestAsync(
     messages,
     notices,
     policy,
+    expandedItems,
   );
 }
 

@@ -525,3 +525,77 @@ describe("12: Responses local response state", () => {
     ]);
   });
 });
+
+describe("12 recheck: snapshot byte units stay mutually compatible", () => {
+  it("round-trips a non-ASCII history through the snapshot file", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-utf8-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile });
+      const chinese = "中文内容".repeat(500);
+      await state.remember(
+        { input: chinese },
+        { id: "resp_utf8", status: "completed", output: [] },
+      );
+      await state.flush();
+      // The on-disk file must load in a fresh instance (write-side and
+      // load-side caps use the same UTF-8 byte unit).
+      const second = createResponseSessionState({ stateFile });
+      const expanded = await second.expand({
+        input: "next",
+        previous_response_id: "resp_utf8",
+      });
+      expect(
+        (expanded as { input: unknown[] }).input[0],
+      ).toMatchObject({ role: "user", content: chinese });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: load-side entry caps stay closed", () => {
+  it("clips oversized entries at load time to the same bound the writer uses", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-closed-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      // Hand-written snapshot with an entry carrying more items than the
+      // writer would ever emit (MAX_ENTRY_ITEMS = 1000).
+      const hugeItems = Array.from({ length: 2000 }, (_, i) => ({
+        role: "user",
+        content: `item-${i}`,
+      }));
+      await writeFile(
+        stateFile,
+        JSON.stringify({
+          version: 3,
+          states: [
+            [
+              "resp_huge",
+              { createdAt: Date.now(), items: hugeItems },
+            ],
+          ],
+        }),
+        "utf8",
+      );
+      const state = createResponseSessionState({ stateFile });
+      const expanded = (await state.expand({
+        input: "next",
+        previous_response_id: "resp_huge",
+      })) as { input: unknown[] };
+      // The loaded entry is clipped to the writer's item bound, so the
+      // expansion cannot exceed the closed contract.
+      expect(expanded.input).toHaveLength(1000 + 1);
+      await state.flush();
+      expect(JSON.parse(await readFile(stateFile, "utf8")).states[0][1].items).toHaveLength(1000);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

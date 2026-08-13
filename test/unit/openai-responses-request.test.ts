@@ -55,7 +55,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     );
     expect(() =>
       validateResponsesRequest({ model: "m", input: "x", max_output_tokens: -1 }),
-    ).toThrow("max_output_tokens must be a non-negative safe integer");
+    ).toThrow("max_output_tokens must be a positive safe integer");
   });
 
   it("attaches reasoning items to the next assistant message", () => {
@@ -986,5 +986,32 @@ describe("13: Responses privileged prompts, options, and handles", () => {
         (n) => n.code === "openai-responses_unknown_input_item_ignored",
       ),
     ).toBe(true);
+  });
+});
+
+describe("13 recheck: resolved references keep privileged promotion", () => {
+  it("promotes system/developer items returned by the resolver in full mode", async () => {
+    const invocation = await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_sys",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+          { type: "message", role: "user", content: "hi" },
+        ],
+      },
+      1,
+      policy({ privilegedMessages: "full" }),
+      {
+        resolveItemReference: async () => [
+          { type: "message", role: "system", content: "resolved rules" },
+        ],
+      },
+    );
+    expect(invocation.context.systemPrompt).toContain("resolved rules");
+    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user"]);
   });
 });

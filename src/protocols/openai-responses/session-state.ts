@@ -154,7 +154,9 @@ function cloneStoredItems(items: readonly unknown[]): unknown[] {
 
 function approximateBytes(value: unknown): number {
   if (value === null || value === undefined) return 0;
-  if (typeof value === "string") return value.length;
+  if (typeof value === "string") {
+    return new TextEncoder().encode(value).byteLength;
+  }
   if (typeof value === "number" || typeof value === "boolean") return 8;
   if (Array.isArray(value)) {
     let total = 0;
@@ -296,11 +298,13 @@ export function createResponseSessionState(
         if (!Array.isArray(items)) continue;
         // Load-time self-healing: sanitize orphan tool outputs even when they
         // come from disk (e.g. written by an older version or a crashed
-        // writer). If anything changed, the snapshot is rewritten with the
-        // clean data on the next persist.
+        // writer), and clip to the writer's per-entry item bound so the
+        // closed contract holds from disk as well. If anything changed, the
+        // snapshot is rewritten with the clean data on the next persist.
         const sanitized = sanitizeStoredItems(items);
-        states.set(id, { createdAt, items: sanitized });
-        if (sanitized.length !== items.length) {
+        const clipped = sanitized.slice(0, MAX_ENTRY_ITEMS);
+        states.set(id, { createdAt, items: clipped });
+        if (clipped.length !== items.length) {
           stateRevision += 1;
         }
       }
@@ -347,8 +351,11 @@ export function createResponseSessionState(
         version: SNAPSHOT_SCHEMA_VERSION,
         states: snapshotEntries(),
       });
-      if (body.length > MAX_SNAPSHOT_FILE_BYTES) {
-        // Closed contract: never write a snapshot the next load refuses.
+      // Closed contract: never write a snapshot the next load refuses. The
+      // load side caps by UTF-8 file bytes (stat().size), so the write side
+      // must use the same unit — code-unit length would undercount non-ASCII
+      // content and could write a snapshot the next load quarantines.
+      if (new TextEncoder().encode(body).byteLength > MAX_SNAPSHOT_FILE_BYTES) {
         // The admission rules keep normal entries far below this bound; this
         // guard only prevents pathological input from breaking the invariant.
         return;
