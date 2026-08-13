@@ -258,7 +258,6 @@ function validateCacheControl(
 
 function validateMessages(
   messages: unknown,
-  unsupported: string[],
 ): {
   messages: Array<Record<string, unknown>>;
   hasImages: boolean;
@@ -292,7 +291,7 @@ function validateMessages(
     for (const block of message.content) {
       const role: "user" | "assistant" =
         message.role === "system" ? "user" : message.role;
-      validateContentBlock(block, unsupported, facts, role);
+      validateContentBlock(block, facts, role);
       if (isAssistantTurn && isRecord(block) && block.type === "tool_use") {
         const id = block.id as string;
         if (assistantCallIds.has(id)) {
@@ -312,7 +311,6 @@ function validateMessages(
 
 function validateContentBlock(
   block: unknown,
-  unsupported: string[],
   facts: { hasImages: boolean; hasThinking: boolean },
   role: "user" | "assistant",
 ): void {
@@ -355,8 +353,9 @@ function validateContentBlock(
         throw new InvalidRequest("image blocks require a source object");
       }
       if (block.source.type !== "base64") {
-        unsupported.push(`unsupported image source: ${block.source.type}`);
-        return;
+        throw new UnsupportedFeature(
+          `unsupported image source: ${String(block.source.type)}`,
+        );
       }
       if (
         typeof block.source.media_type !== "string" ||
@@ -368,7 +367,7 @@ function validateContentBlock(
         );
       }
       if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(block.source.media_type)) {
-        unsupported.push(
+        throw new UnsupportedFeature(
           `unsupported image media type: ${block.source.media_type}`,
         );
       }
@@ -385,6 +384,9 @@ function validateContentBlock(
         throw new InvalidRequest(
           "tool_use requires non-empty id and name strings and object input",
         );
+      }
+      if (role !== "assistant") {
+        throw new InvalidRequest("tool_use is valid only in an assistant turn");
       }
       return;
     case "tool_result": {
@@ -423,19 +425,21 @@ function validateContentBlock(
           }
           if (
             nestedBlock.type !== "text" &&
-            nestedBlock.type !== "image"
+            nestedBlock.type !== "image" &&
+            nestedBlock.type !== "document" &&
+            nestedBlock.type !== "search_result"
           ) {
             throw new InvalidRequest(
-              "tool_result block-list content supports text, image, and tool_reference blocks only",
+              "tool_result block-list content supports text, image, document, search_result, and tool_reference blocks only",
             );
           }
-          validateContentBlock(nestedBlock, unsupported, facts, role);
+          validateContentBlock(nestedBlock, facts, role);
         }
       }
       return;
     }
     case "document":
-      validateDocumentBlock(block, unsupported);
+      validateDocumentBlock(block);
       return;
     case "search_result":
       validateSearchResultBlock(block);
@@ -481,10 +485,7 @@ function validateContentBlock(
   }
 }
 
-function validateDocumentBlock(
-  block: Record<string, unknown>,
-  unsupported: string[],
-): void {
+function validateDocumentBlock(block: Record<string, unknown>): void {
   if (!isRecord(block.source) || typeof block.source.type !== "string") {
     throw new InvalidRequest("document blocks require a source object");
   }
@@ -519,8 +520,11 @@ function validateDocumentBlock(
     return;
   }
   if (sourceType === "base64" || sourceType === "url") {
-    unsupported.push(`document source requires resolution: ${sourceType}`);
-    return;
+    // No resolver capability is installed for this source family, so the
+    // source is treated as unsupported-known (frozen §4.3), not as malformed.
+    throw new UnsupportedFeature(
+      `document source requires resolution: ${sourceType}`,
+    );
   }
   throw new InvalidRequest(`document source type is not supported: ${sourceType}`);
 }
@@ -549,9 +553,8 @@ export function validateAnthropicSourceRequest(
     throw new InvalidRequest("max_tokens must be a non-negative safe integer");
   }
 
-  const unsupported: string[] = [];
   validateOptionalFieldShapes(value);
-  const messageFacts = validateMessages(messages, unsupported);
+  const messageFacts = validateMessages(messages);
   const tools = validateAnthropicTools(value.tools);
   const systemPrompt = validateSystem(value.system);
   const metadataUserId = validateMetadata(value.metadata);
@@ -639,7 +642,13 @@ function convertDocumentBlock(
   if (source.type === "text") {
     return { type: "text", text: source.data as string };
   }
-  throw new Error("Resolver-dependent document reached conversion");
+  // url/base64 document sources are resolver-dependent and cannot be
+  // materialized without a resolver capability, which is not installed.
+  // Report precisely as a Client conversion failure (§4.3 known-family
+  // rule) instead of surfacing a bare internal error at the HTTP boundary.
+  throw new UnsupportedFeature(
+    `document source requires resolution: ${String(source.type)}`,
+  );
 }
 
 function convertSearchResultBlock(
@@ -756,6 +765,8 @@ function convertBlock(
       return convertDocumentBlock(block);
     case "search_result":
       return convertSearchResultBlock(block);
+    case "document-resolver-required":
+      return convertDocumentBlock(block);
     case "server_tool_use":
       return {
         type: "transcript",
@@ -1084,9 +1095,13 @@ export function convertValidatedAnthropicRequestWithPolicy(
       } else if (block.type === "transcript") {
         ordinary.push({ type: "text", text: block.text });
       } else if (block.type === "toolUse") {
-        throw new Error("tool_use reached a user conversion invariant");
+        throw new InvalidRequest(
+          "tool_use is valid only in an assistant turn",
+        );
       } else if (block.type === "thinking") {
-        throw new Error("thinking reached a user conversion invariant");
+        throw new InvalidRequest(
+          "thinking is valid only in an assistant turn",
+        );
       } else {
         ordinary.push(block);
       }

@@ -679,7 +679,46 @@ describe("08: Anthropic known content and tools", () => {
         ]),
         1,
       ),
-    ).toThrow(/Resolver-dependent/u);
+    ).toThrow(/requires resolution/u);
+  });
+
+  it("fails an unsupported image source or media type as a precise client error", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
+        body([
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "url", url: "https://example.test/a.png" },
+              },
+            ],
+          },
+        ]),
+        1,
+      ),
+    ).toThrow(/unsupported image source/u);
+    expect(() =>
+      parseAnthropicTextInvocation(
+        body([
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/avif",
+                  data: "AAAA",
+                },
+              },
+            ],
+          },
+        ]),
+        1,
+      ),
+    ).toThrow(/unsupported image media type/u);
   });
 
   it("keeps server-hosted tool calls and results out of the client tool catalog", () => {
@@ -786,6 +825,25 @@ describe("08: Anthropic known content and tools", () => {
     expect(() =>
       parseAnthropicTextInvocation(malformed, 1),
     ).toThrow(/non-empty/u);
+  });
+
+  it("fails resolver-dependent document sources precisely instead of with a bare error", () => {
+    for (const source of [
+      { type: "url", url: "https://example.test/doc.pdf" },
+      { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQ=" },
+    ]) {
+      expect(() =>
+        parseAnthropicTextInvocation(
+          body([
+            {
+              role: "user",
+              content: [{ type: "document", source }],
+            },
+          ]),
+          1,
+        ),
+      ).toThrow(/resolution|Resolver/u);
+    }
   });
 
   it("keeps all client tools in the catalog when tool_reference is present", () => {

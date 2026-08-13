@@ -239,21 +239,20 @@ describe("Anthropic conversation conversion", () => {
       ],
     });
 
-    const validated = validateAnthropicSourceRequest({
-      model: "client-model",
-      max_tokens: 32,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "url", url: "https://example.test/a.png" } },
-          ],
-        },
-      ],
-    });
-    expect(() => convertValidatedAnthropicRequest(validated, 100)).toThrow(
-      UnsupportedFeature,
-    );
+    expect(() =>
+      validateAnthropicSourceRequest({
+        model: "client-model",
+        max_tokens: 32,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "url", url: "https://example.test/a.png" } },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(UnsupportedFeature);
     expect(() =>
       validateAnthropicSourceRequest({
         model: "client-model",
@@ -267,6 +266,6 @@ describe("Anthropic conversation conversion", () => {
           },
         ],
       }),
-    ).not.toThrow();
+    ).toThrow(UnsupportedFeature);
   });
 });
