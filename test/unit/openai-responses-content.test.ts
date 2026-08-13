@@ -331,6 +331,70 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         ),
       ).toThrow(/MIME|mime|image/i);
     });
+
+    it("errors on a data URL whose MIME is not an image MIME", () => {
+      // An input_image data URL must carry an image MIME; a text/plain or
+      // application/octet-stream payload is a malformed image, not a silent
+      // acceptance.
+      for (const mime of ["text/plain", "application/json", "application/octet-stream"]) {
+        expect(() =>
+          convertResponsesRequest(
+            {
+              model: "m",
+              input: [
+                {
+                  type: "message",
+                  role: "user",
+                  content: [
+                    {
+                      type: "input_image",
+                      image_url: `data:${mime};base64,AAAA`,
+                    },
+                  ],
+                },
+              ],
+            },
+            1,
+            policy(),
+          ),
+        ).toThrow(/MIME|mime|image/i);
+      }
+    });
+
+    it("accepts common image MIME types on data URLs", () => {
+      for (const mime of [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "image/svg+xml",
+        "image/x-icon",
+      ]) {
+        const invocation = convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  {
+                    type: "input_image",
+                    image_url: `data:${mime};base64,AAAA`,
+                  },
+                ],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+        expect(invocation.context.messages[0]).toMatchObject({
+          role: "user",
+          content: [{ type: "image", mimeType: mime }],
+        });
+      }
+    });
   });
 
   describe("file_id and remote image URLs require a trusted resolver", () => {
@@ -500,6 +564,58 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       expect(texts).toEqual(["keep me"]);
     });
 
+    it("stops resolving further images once the caller signal has aborted", async () => {
+      // Cancellation must cleanly terminate request-local resolution: after
+      // the signal aborts, no further resolver calls happen and the
+      // conversion rejects rather than degrading.
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      const controller = new AbortController();
+      let calls = 0;
+      const promise = convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_image", file_id: "file_a" },
+                { type: "input_image", file_id: "file_b" },
+              ],
+            },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async (_reference, context) => {
+            calls += 1;
+            // Abort the caller signal on the first call, as a cancelled
+            // upstream fetch would; the second image must never be resolved.
+            if (calls === 1) {
+              queueMicrotask(() =>
+                controller.abort(new Error("upstream cancelled")),
+              );
+            }
+            context.signal?.throwIfAborted();
+            return [
+              {
+                type: "input_image",
+                image_url:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+              },
+            ];
+          },
+        },
+        controller.signal,
+      );
+      await expect(promise).rejects.toThrow(/cancelled|aborted/);
+      // The abort propagates as a rejection, never a degradable notice.
+      expect(calls).toBeLessThanOrEqual(2);
+    });
+
     it("passes abort signal and limits to image resolution", async () => {
       const { convertResponsesRequestAsync } = await import(
         "../../src/protocols/openai-responses/request.js"
@@ -532,6 +648,88 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       );
       expect(received.signal).toBe(controller.signal);
       expect(received.limits).toMatchObject({ maxBytes: 4096, maxRedirects: 1 });
+    });
+
+    it("degrades a resolver-returned un-materialized image instead of double-erroring", async () => {
+      // A resolver that returns the image still as a file_id/URL (not
+      // materialized to a data URL) must degrade with a notice, never cause
+      // the message converter to re-raise a resolver-required error.
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      const invocation = await convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_image", file_id: "file_unresolved" }],
+            },
+            { type: "message", role: "user", content: "keep me" },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async () => [
+            { type: "input_image", file_id: "file_unresolved" },
+          ],
+        },
+      );
+      expect(invocation.context.messages).toHaveLength(1);
+      expect(invocation.context.messages[0]).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: "keep me" }],
+      });
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_reference_unresolved",
+        ),
+      ).toBe(true);
+    });
+
+    it("degrades un-materialized image parts inside a resolver-returned message item", async () => {
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      const invocation = await convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_image", file_id: "file_msg" }],
+            },
+            { type: "message", role: "user", content: "keep me" },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async () => [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "see image" },
+                { type: "input_image", file_id: "file_msg" },
+              ],
+            },
+          ],
+        },
+      );
+      const userTexts = invocation.context.messages
+        .filter((m) => m.role === "user")
+        .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+      // The text survives; the un-materialized image degrades with a notice.
+      expect(userTexts).toEqual(["see image", "keep me"]);
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_reference_unresolved",
+        ),
+      ).toBe(true);
     });
 
     it("drops an image-only message when the resolver returns no usable image", async () => {
@@ -1125,6 +1323,40 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       const texts = JSON.stringify(invocation.context.messages);
       expect(texts).not.toContain("incomplete");
       expect(texts).not.toContain("length");
+    });
+
+    it("preserves reasoning across hosted drop and transcript items", () => {
+      // Pending reasoning must survive hosted drops and transcript items
+      // (web_search/file_search/mcp approval) that follow it; it is preserved
+      // as a reasoning-only assistant at the next semantic boundary.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "kept-thought" }],
+            },
+            { type: "web_search_call", id: "ws_1" },
+            {
+              type: "mcp_approval_request",
+              id: "mar_1",
+              decision: "approved",
+            },
+            { type: "message", role: "user", content: "keep" },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistants = invocation.context.messages.filter(
+        (m) => m.role === "assistant",
+      );
+      expect(assistants).toHaveLength(1);
+      const thinking = (
+        assistants[0]?.content as Array<{ thinking: string }>
+      )[0];
+      expect(thinking?.thinking).toBe("kept-thought");
     });
 
     it("records a non-model-visible diagnostic for incomplete reasoning", () => {

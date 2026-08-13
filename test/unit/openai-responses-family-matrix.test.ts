@@ -74,6 +74,45 @@ describe("16: every known Responses input-item family", () => {
     expect(INSTALLED_INPUT_ITEM_FAMILIES.length).toBe(26);
   });
 
+  it("classifies every installed input-item family explicitly, never as unknown", () => {
+    // Every family in the closed-world table must have an explicit conversion
+    // outcome; a family that fell through to the unknown-input-item branch
+    // would throw under the default error policy. Families that are Core
+    // errors (tool_search) also throw, which is their defined outcome.
+    const definedErrors = new Set(["tool_search_call", "tool_search_output"]);
+    const outcomes: Array<[string, "ok" | "error"]> = [];
+    for (const family of INSTALLED_INPUT_ITEM_FAMILIES) {
+      try {
+        convertResponsesRequest(
+          { model: "m", input: [{ type: family, id: "probe" }] },
+          1,
+          policy(),
+        );
+        outcomes.push([family, "ok"]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (definedErrors.has(family)) {
+          outcomes.push([family, "error"]);
+        } else if (/Unsupported input item type/u.test(message)) {
+          throw new Error(
+            `family ${family} fell through to the unknown-input-item branch`,
+          );
+        } else {
+          // A structured validation error (e.g. missing required field) is
+          // still an explicit known-family outcome.
+          outcomes.push([family, "error"]);
+        }
+      }
+    }
+    // No family may fall through to the unknown branch (that throws above);
+    // the tool_search families are defined Core conversion errors.
+    expect(outcomes.length).toBe(INSTALLED_INPUT_ITEM_FAMILIES.length);
+    expect(outcomes.filter(([, o]) => o === "ok").length).toBeGreaterThan(10);
+    for (const family of definedErrors) {
+      expect(outcomes).toContainEqual([family, "error"]);
+    }
+  });
+
   it("rejects a future unknown SDK family as a Core conversion error by default", () => {
     expect(() =>
       convertResponsesRequest(
@@ -1039,6 +1078,53 @@ const INSTALLED_TOOL_FAMILIES = [
 describe("16: every known Responses tool-definition family", () => {
   it("enumerates the complete installed tool-definition union so a new SDK family triggers review", () => {
     expect(INSTALLED_TOOL_FAMILIES.length).toBe(15);
+  });
+
+  it("classifies every installed tool-definition family explicitly", () => {
+    // Every family in the closed-world tool table must have a defined
+    // outcome: mapped, dropped, or Core error. A family that throws a
+    // generic unknown error (rather than a defined outcome) is a gap.
+    const outcomes: Array<[string, "mapped" | "dropped" | "error"]> = [];
+    for (const type of INSTALLED_TOOL_FAMILIES) {
+      try {
+        const invocation = convertResponsesRequest(
+          { model: "m", input: "x", tools: [{ type, name: `${type}_probe` }] },
+          1,
+          policy(),
+        );
+        const mapped =
+          invocation.context.tools?.some((t) => t.name === `${type}_probe`) ??
+          false;
+        outcomes.push([type, mapped ? "mapped" : "dropped"]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          /tool_search|unsupported|defer|must have a tools array/u.test(message)
+        ) {
+          outcomes.push([type, "error"]);
+        } else {
+          throw new Error(
+            `tool family ${type} threw an unexpected error: ${message}`,
+          );
+        }
+      }
+    }
+    expect(outcomes.length).toBe(INSTALLED_TOOL_FAMILIES.length);
+    // Client/BYOT executable families map; hosted families drop; tool_search
+    // is a defined Core error.
+    expect(outcomes).toContainEqual(["function", "mapped"]);
+    expect(outcomes).toContainEqual(["custom", "mapped"]);
+    expect(outcomes).toContainEqual(["local_shell", "mapped"]);
+    expect(outcomes).toContainEqual(["shell", "mapped"]);
+    expect(outcomes).toContainEqual(["apply_patch", "mapped"]);
+    expect(outcomes).toContainEqual(["computer", "mapped"]);
+    expect(outcomes).toContainEqual(["file_search", "dropped"]);
+    expect(outcomes).toContainEqual(["web_search", "dropped"]);
+    expect(outcomes).toContainEqual(["image_generation", "dropped"]);
+    expect(outcomes).toContainEqual(["code_interpreter", "dropped"]);
+    // A bare tool_search declaration drops; defer_loading that requires
+    // discovery is the defined Core error (covered separately).
+    expect(outcomes).toContainEqual(["tool_search", "dropped"]);
   });
 
   it("maps function/custom/namespace/local_shell/shell/apply_patch tools into Pi", () => {

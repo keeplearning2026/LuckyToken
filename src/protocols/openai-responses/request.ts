@@ -268,6 +268,13 @@ function parseDataUrlImage(
   if (mimeType.length === 0) {
     throw new InvalidRequest(`${field} data URL must include a MIME type`);
   }
+  // An input_image data URL must carry an image MIME; a non-image payload is
+  // a malformed image, never a silent acceptance.
+  if (!/^image\//u.test(mimeType.toLowerCase())) {
+    throw new InvalidRequest(
+      `${field} data URL MIME must be an image MIME: ${mimeType}`,
+    );
+  }
   if (
     data.length === 0 ||
     data.length % 4 !== 0 ||
@@ -1066,7 +1073,8 @@ function convertMessages(
             // Degraded to a user message, preserving source order.
             pushUser(text);
           }
-          pendingReasoning.length = 0;
+          // A privileged/degraded message does not consume pending reasoning
+          // from a preceding turn; it survives as a reasoning-only assistant.
           continue;
         }
         if (role === "user") {
@@ -1380,7 +1388,9 @@ function convertMessages(
               `$.input[?call_id=${callId}]`,
             ),
           );
-          pendingReasoning.length = 0;
+          // An ignored orphan output does not consume pending reasoning that
+          // belongs to an earlier turn; it survives as a reasoning-only
+          // assistant at the next semantic boundary.
           continue;
         }
         // A duplicate result for an already-resolved call is a fixed error.
@@ -1463,7 +1473,8 @@ function convertMessages(
             "compaction with foreign encrypted content cannot be converted",
           );
         }
-        pendingReasoning.length = 0;
+        // A compaction boundary preserves pending reasoning from the
+        // preceding turn; it is not consumed by the drop.
         continue;
       }
       case "item_reference": {
@@ -1478,7 +1489,6 @@ function convertMessages(
         const text =
           content.map((part) => part.text).join("") ||
           "(sub-agent message received)";
-        pendingReasoning.length = 0;
         messages.push({
           role: "user",
           content: [{ type: "text", text }],
@@ -1493,7 +1503,8 @@ function convertMessages(
       case "web_search_call":
       case "web_search_tool_call":
       case "compaction_trigger":
-        pendingReasoning.length = 0;
+        // Hosted drops do not consume pending reasoning from a preceding
+        // turn; it survives as a reasoning-only assistant.
         continue;
       case "image_generation_call": {
         // Hosted image-generation history: a result that is directly
@@ -1514,7 +1525,6 @@ function convertMessages(
             });
           }
         }
-        pendingReasoning.length = 0;
         continue;
       }
       case "file_search_call": {
@@ -1529,7 +1539,6 @@ function convertMessages(
             }
           }
         }
-        pendingReasoning.length = 0;
         continue;
       }
       case "code_interpreter_call": {
@@ -1544,14 +1553,12 @@ function convertMessages(
             }
           }
         }
-        pendingReasoning.length = 0;
         continue;
       }
       // MCP list/approval lifecycles have no Pi approval lifecycle. Only
       // model-visible decision text survives as a deterministic transcript;
       // pure metadata drops. Credentials/headers never enter Pi.
       case "mcp_list_tools": {
-        pendingReasoning.length = 0;
         continue;
       }
       case "mcp_approval_request":
@@ -1560,7 +1567,6 @@ function convertMessages(
         if (typeof decision === "string" && decision.length > 0) {
           pushUser(decision);
         }
-        pendingReasoning.length = 0;
         continue;
       }
       // tool_search is a Core v1 conversion error: deferred dynamic discovery
@@ -1592,11 +1598,12 @@ function convertMessages(
     }
   }
 
+  // End of input is a semantic history boundary; close unresolved calls so
+  // synthetic results precede any trailing reasoning-only assistant.
+  closeUnresolvedCalls();
   // Trailing pending reasoning (no following assistant/user message) is
   // preserved as a reasoning-only assistant message.
   flushPendingReasoning();
-  // End of input is a semantic history boundary; close unresolved calls.
-  closeUnresolvedCalls();
 
   return messages;
 }
@@ -1627,6 +1634,13 @@ async function resolveLuckyReferences(
 ): Promise<unknown[]> {
   const expanded: unknown[] = [];
   for (const rawItem of items) {
+    // Cancellation cleanly terminates request-local resolution: once the
+    // caller signal aborts, no further resolver calls happen.
+    if (signal !== undefined && signal.aborted === true) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("aborted");
+    }
     if (!isRecord(rawItem)) {
       expanded.push(rawItem);
       continue;
@@ -1653,7 +1667,12 @@ async function resolveLuckyReferences(
           limits: limits ?? DEFAULT_REFERENCE_LIMITS,
         });
         expanded.push(...resolved);
-      } catch {
+      } catch (error) {
+        // Cancellation propagates: an aborted resolver call is not a
+        // degradable failure, it terminates the whole resolution.
+        if (signal !== undefined && signal.aborted === true) {
+          throw error instanceof Error ? error : new Error("aborted");
+        }
         notices.push(
           requestNotice(
             REFERENCE_UNRESOLVED_NOTICE_CODE,
@@ -1687,6 +1706,23 @@ async function resolveLuckyReferences(
           });
           for (const item of resolved) {
             if (isRecord(item) && item.type === "input_image") {
+              // A resolver-returned image that is still a file_id/remote URL
+              // was not materialized: degrade with a notice instead of
+              // pushing it back so the converter double-errors.
+              const imageUrl = item.image_url;
+              if (
+                typeof imageUrl !== "string" ||
+                !imageUrl.startsWith("data:")
+              ) {
+                notices.push(
+                  requestNotice(
+                    REFERENCE_UNRESOLVED_NOTICE_CODE,
+                    "ignore",
+                    image.path,
+                  ),
+                );
+                continue;
+              }
               // Keep the resolved data-URL form so the normal message
               // converter parses it into Pi image bytes in place.
               resolvedParts.push(item);
@@ -1694,17 +1730,44 @@ async function resolveLuckyReferences(
               continue;
             }
             // A resolver may return a full message item carrying the image;
-            // splice its content parts into the message in place.
+            // splice its content parts into the message in place. Parts that
+            // are still un-materialized images degrade with a notice rather
+            // than double-erroring in the message converter.
             if (
               isRecord(item) &&
               (item.type === "message" || typeof item.role === "string") &&
               Array.isArray(item.content)
             ) {
-              resolvedParts.push(...item.content);
-              resolvedAny = true;
+              let addedAny = false;
+              for (const part of item.content) {
+                if (isRecord(part) && part.type === "input_image") {
+                  const imageUrl = part.image_url;
+                  if (
+                    typeof imageUrl !== "string" ||
+                    !imageUrl.startsWith("data:")
+                  ) {
+                    notices.push(
+                      requestNotice(
+                        REFERENCE_UNRESOLVED_NOTICE_CODE,
+                        "ignore",
+                        image.path,
+                      ),
+                    );
+                    continue;
+                  }
+                }
+                resolvedParts.push(part);
+                addedAny = true;
+              }
+              resolvedAny = resolvedAny || addedAny;
             }
           }
-        } catch {
+        } catch (error) {
+          // Cancellation propagates: an aborted resolver call is not a
+          // degradable failure, it terminates the whole resolution.
+          if (signal !== undefined && signal.aborted === true) {
+            throw error instanceof Error ? error : new Error("aborted");
+          }
           notices.push(
             requestNotice(
               REFERENCE_UNRESOLVED_NOTICE_CODE,

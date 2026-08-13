@@ -711,6 +711,41 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       ).toThrow(/duplicate|already has a result/i);
     });
 
+    it("does not drop pending reasoning when an orphan output is ignored", () => {
+      // An ignored orphan output must not consume pending reasoning that
+      // belongs to an earlier turn; the reasoning survives as its own
+      // reasoning-only assistant.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "orphan-thought" }],
+            },
+            { type: "function_call_output", call_id: "no_call", output: "x" },
+            { type: "message", role: "user", content: "keep" },
+          ],
+        },
+        1,
+        policy({ orphanToolOutput: "ignore" }),
+      );
+      const thinkingBlocks = invocation.context.messages.flatMap((m) =>
+        m.role === "assistant"
+          ? (m.content as Array<{ type: string }>).filter(
+              (b) => b.type === "thinking",
+            )
+          : [],
+      );
+      expect(thinkingBlocks).toHaveLength(1);
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      expect(
+        (assistant?.content as Array<{ thinking: string }>)[0]?.thinking,
+      ).toBe("orphan-thought");
+    });
+
     it("errors on an orphan output by default and ignores with a notice", () => {
       expect(() =>
         convertResponsesRequest(
@@ -781,6 +816,152 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       expect(
         invocation.notices.some((n) => n.code === "openai-responses_unresolved_call_repaired"),
       ).toBe(true);
+    });
+
+    it("keeps trailing reasoning attached to the call's assistant across xrepair", () => {
+      // Reasoning that follows a function_call belongs to the same assistant
+      // turn. When the call is xrepaired at the user boundary, the reasoning
+      // must stay on that assistant, not split into a new assistant after the
+      // synthetic result.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "lookup",
+              arguments: "{}",
+            },
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "thinking after call" }],
+            },
+            { type: "message", role: "user", content: "continue" },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const messages = invocation.context.messages;
+      expect(messages.map((m) => m.role)).toEqual([
+        "assistant",
+        "toolResult",
+        "user",
+      ]);
+      const assistant = messages[0];
+      expect(assistant?.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "lookup",
+          arguments: {},
+        },
+        { type: "thinking", thinking: "thinking after call" },
+      ]);
+    });
+
+    it("orders xrepair results before trailing reasoning-only assistants", () => {
+      // At end of input the synthetic result for a missing call must precede
+      // any trailing reasoning-only assistant, preserving the tool lifecycle
+      // order (assistant calls → results → later reasoning).
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "a",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_1",
+              output: "real",
+            },
+            {
+              type: "function_call",
+              call_id: "call_2",
+              name: "b",
+              arguments: "{}",
+            },
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "trailing thought" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      // The reasoning after call_2 attaches to call_2's assistant turn, and
+      // call_2's synthetic result follows that assistant in order.
+      const repairIndex = invocation.context.messages.findIndex(
+        (m) => m.role === "toolResult" && m.toolCallId === "call_2",
+      );
+      expect(repairIndex).toBeGreaterThanOrEqual(0);
+      expect(invocation.context.messages[repairIndex]).toMatchObject({
+        toolCallId: "call_2",
+        toolName: "b",
+        isError: true,
+      });
+      const call2Assistant = invocation.context.messages[repairIndex - 1];
+      expect(call2Assistant?.role).toBe("assistant");
+      const blocks = call2Assistant?.content as Array<{ type: string }>;
+      expect(blocks.some((b) => b.type === "thinking")).toBe(true);
+    });
+
+    it("keeps end-of-input xrepair before a detached trailing reasoning assistant", () => {
+      // When reasoning arrives after a tool result (no assistant carrier), it
+      // becomes its own reasoning-only assistant at the end of input; the
+      // synthetic result for the still-missing call must precede it.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "a",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_1",
+              output: "real",
+            },
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "detached thought" }],
+            },
+            {
+              type: "function_call",
+              call_id: "call_2",
+              name: "b",
+              arguments: "{}",
+            },
+            { type: "message", role: "user", content: "continue" },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const roles = invocation.context.messages.map((m) => m.role);
+      const repairIndex = roles.lastIndexOf("toolResult");
+      const reasoningIndex = roles.lastIndexOf("assistant");
+      // The repair for call_2 precedes the detached reasoning-only assistant,
+      // which in turn precedes the user message.
+      expect(repairIndex).toBeGreaterThan(reasoningIndex);
+      expect(invocation.context.messages[repairIndex]).toMatchObject({
+        toolCallId: "call_2",
+        isError: true,
+      });
+      const reasoningAssistant = invocation.context.messages[reasoningIndex];
+      expect(
+        (reasoningAssistant?.content as Array<{ type: string }>)[0]?.type,
+      ).toBe("thinking");
+      expect(roles.at(-1)).toBe("user");
     });
 
     it("errors on an unresolved call under unresolvedToolCall=error", () => {
@@ -966,6 +1147,83 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         "second_tool",
         "first_tool",
       ]);
+    });
+
+    it("handles concurrent async conversions without cross-request state", async () => {
+      // Interleaved async conversions with a shared resolver must not leak
+      // freeform names, namespace maps, or notices between requests.
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      const conversions = Array.from({ length: 10 }, (_, i) =>
+        convertResponsesRequestAsync(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  { type: "input_image", file_id: `file_${i}` },
+                ],
+              },
+            ],
+            tools: [
+              { type: "custom", name: `custom_${i}` },
+              {
+                type: "namespace",
+                name: `ns_${i}`,
+                tools: [
+                  { type: "function", name: "child", parameters: { type: "object" } },
+                ],
+              },
+            ],
+          },
+          i,
+          policy(),
+          {
+            resolveItemReference: async (reference) => {
+              // Interleave: yield so other conversions run mid-flight.
+              await new Promise((resolve) => setTimeout(resolve, 1));
+              const fileId = reference.file_id as string;
+              return [
+                {
+                  type: "input_image",
+                  image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+                },
+              ];
+            },
+          },
+        ),
+      );
+      const results = await Promise.all(conversions);
+      for (const [i, invocation] of results.entries()) {
+        const tools = invocation.context.tools?.map((t) => t.name) ?? [];
+        expect(tools).toContain(`custom_${i}`);
+        expect(tools).toContain(`ns_${i}.child`);
+        expect(invocation.renderState.freeformToolNames).toEqual(
+          new Set([`custom_${i}`]),
+        );
+        expect(invocation.renderState.namespaceReverse).toEqual({
+          [`ns_${i}.child`]: { namespace: `ns_${i}`, child: "child" },
+        });
+        // No cross-request leakage of another conversion's names.
+        for (const [j, other] of results.entries()) {
+          if (j === i) continue;
+          const otherNames = Object.keys(
+            other.renderState.namespaceReverse ?? {},
+          );
+          expect(otherNames).not.toContain(`ns_${i}.child`);
+        }
+        const image = (
+          invocation.context.messages[0]?.content as Array<{
+            type: string;
+            mimeType?: string;
+          }>
+        )[0];
+        expect(image?.type).toBe("image");
+      }
     });
 
     it("handles concurrent independent conversions without cross-request state", () => {
