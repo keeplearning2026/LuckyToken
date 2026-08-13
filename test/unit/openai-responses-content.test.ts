@@ -1437,6 +1437,53 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       );
     });
 
+    it("never injects signature envelopes into model-visible text", () => {
+      // textSignature/thinkingSignature are metadata; they must never appear
+      // inside the model-visible text/thinking strings.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            { role: "user", content: "u" },
+            {
+              type: "reasoning",
+              id: "rs_1",
+              encrypted_content: "state-bytes",
+              summary: [{ type: "summary_text", text: "visible thought" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: "visible answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      const blocks = assistant?.content as Array<{
+        type: string;
+        text?: string;
+        thinking?: string;
+        textSignature?: string;
+        thinkingSignature?: string;
+      }>;
+      const thinking = blocks.find((b) => b.type === "thinking");
+      const text = blocks.find((b) => b.type === "text");
+      expect(thinking?.thinking).toBe("visible thought");
+      expect(thinking?.thinking).not.toContain("state-bytes");
+      expect(thinking?.thinking).not.toContain("openai-responses");
+      expect(thinking?.thinkingSignature).toContain("state-bytes");
+      expect(text?.text).toBe("visible answer");
+      expect(text?.text).not.toContain("final_answer");
+      expect(text?.text).not.toContain("openai-responses");
+      expect(text?.textSignature).toContain("final_answer");
+    });
+
     it("keeps a thinkingSignature only when the item carries encrypted_content", () => {
       const invocation = convertResponsesRequest(
         {

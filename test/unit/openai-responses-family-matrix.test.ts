@@ -1579,6 +1579,28 @@ describe("16: every known Responses tool-definition family", () => {
     ).toBe(true);
   });
 
+  it("errors on a forced tool choice depending on any dropped hosted tool", () => {
+    for (const hosted of [
+      "web_search",
+      "file_search",
+      "code_interpreter",
+      "image_generation",
+    ]) {
+      expect(() =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: "x",
+            tools: [{ type: hosted, name: hosted }],
+            tool_choice: { type: "function", name: hosted },
+          },
+          1,
+          policy(),
+        ),
+      ).toThrow(/unavailable tool/);
+    }
+  });
+
   it("errors on a forced tool choice depending on a dropped hosted tool", () => {
     expect(() =>
       convertResponsesRequest(
@@ -1671,6 +1693,33 @@ describe("16: every known Responses tool-definition family", () => {
           input: "x",
           tools: [
             { type: "function", name: "lazy", parameters: { type: "object" }, defer_loading: true },
+          ],
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/defer|discovery|tool.search/i);
+  });
+
+  it("rejects defer_loading on a namespace child as a Core conversion error", () => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [
+            {
+              type: "namespace",
+              name: "ns",
+              tools: [
+                {
+                  type: "function",
+                  name: "lazy",
+                  parameters: { type: "object" },
+                  defer_loading: true,
+                },
+              ],
+            },
           ],
         },
         1,

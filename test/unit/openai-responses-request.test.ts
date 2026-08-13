@@ -914,6 +914,64 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(receivedSignal).toBe(controller.signal);
   });
 
+  it("rejects an envelope with an empty authority without calling the resolver", async () => {
+    // A Lucky-owned envelope must carry a non-empty authority; an empty
+    // authority is not verified, never reaches the resolver, and the core
+    // errors on the reference (no fail-open).
+    let resolverCalls = 0;
+    await expect(
+      convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "item_reference",
+              id: "item_empty",
+              envelope: { authority: "", version: 1 },
+            },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async () => {
+            resolverCalls += 1;
+            return [];
+          },
+        },
+      ),
+    ).rejects.toThrow(/item_reference/);
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("rejects a non-object envelope without calling the resolver", async () => {
+    let resolverCalls = 0;
+    await expect(
+      convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "compaction",
+              id: "comp_1",
+              encrypted_content: "bytes",
+              envelope: "not-an-object",
+            },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async () => {
+            resolverCalls += 1;
+            return [];
+          },
+        },
+      ),
+    ).rejects.toThrow();
+    expect(resolverCalls).toBe(0);
+  });
+
   it("passes the envelope authority into the resolver context", async () => {
     let receivedAuthority: string | undefined;
     await convertResponsesRequestAsync(

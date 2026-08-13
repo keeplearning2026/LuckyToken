@@ -481,6 +481,13 @@ function convertTools(
     if (!isRecord(inner) || typeof inner.name !== "string" || inner.name.length === 0) {
       return;
     }
+    // defer_loading that requires tool-search discovery is a Core v1
+    // conversion error even for namespace children.
+    if (inner.defer_loading === true) {
+      throw new InvalidRequest(
+        "defer_loading tool discovery is not supported by Core conversion v1",
+      );
+    }
     const childName = inner.name;
     const flatName = `${namespace}${NAMESPACE_SEPARATOR}${childName}`;
     const description =
@@ -1750,21 +1757,26 @@ async function resolveLuckyReferences(
     const type =
       rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
     const envelope = rawItem.envelope;
-    const isReference = type === "item_reference";
+    // A verified Lucky-owned envelope carries a non-empty authority; an
+    // empty, non-object, or missing envelope is never passed to the resolver
+    // (the core errors on it).
+    const verifiedEnvelope =
+      isRecord(envelope) &&
+      typeof envelope.authority === "string" &&
+      envelope.authority.length > 0;
+    const isReference = type === "item_reference" && verifiedEnvelope;
     const isCompaction =
       (type === "compaction" ||
         type === "compaction_summary" ||
         type === "context_compaction") &&
-      isRecord(envelope) &&
-      typeof envelope.authority === "string";
+      verifiedEnvelope;
     if (isReference || isCompaction) {
-      if (!isRecord(envelope) || typeof envelope.authority !== "string") {
-        expanded.push(rawItem); // External reference; the core errors on it.
-        continue;
-      }
+      const envelopeAuthority = isRecord(envelope)
+        ? envelope.authority
+        : undefined;
       try {
         const resolved = await resolver.resolveItemReference(rawItem, {
-          authority: envelope.authority,
+          authority: nonEmptyString(envelopeAuthority, "envelope.authority"),
           ...(signal === undefined ? {} : { signal }),
           limits: limits ?? DEFAULT_REFERENCE_LIMITS,
         });
