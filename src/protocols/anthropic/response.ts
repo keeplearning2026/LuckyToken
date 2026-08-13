@@ -459,11 +459,23 @@ function resolveStopReason(
   if (message.stopReason === "length") {
     return { stopReason: "max_tokens", mismatch: false };
   }
-  const hasToolUse = projected.some((block) => block.type === "tool_use");
-  if (hasToolUse) {
-    return { stopReason: "tool_use", mismatch: message.stopReason !== "toolUse" };
+  if (
+    message.stopReason === "stop" ||
+    message.stopReason === "toolUse"
+  ) {
+    const hasToolUse = projected.some((block) => block.type === "tool_use");
+    if (hasToolUse) {
+      return { stopReason: "tool_use", mismatch: message.stopReason !== "toolUse" };
+    }
+    return { stopReason: "end_turn", mismatch: message.stopReason !== "stop" };
   }
-  return { stopReason: "end_turn", mismatch: message.stopReason !== "stop" };
+  // pending/error/aborted/deferred and any future stop reason are not
+  // committed success terminals; projecting them into a legal Anthropic
+  // stop_reason would fabricate success. They are handled by execution/error
+  // boundaries and must never reach the converter.
+  throw new OutboundResponseFidelityFailure(
+    `Unsupported Pi stop reason: ${String(message.stopReason)}`,
+  );
 }
 
 function assertMessageEnvelope(message: AssistantMessage): void {

@@ -251,4 +251,28 @@ describe("09: Pi-to-Anthropic response projection", () => {
       ),
     ).toBe(true);
   });
+
+  it("rejects non-committed Pi stop reasons instead of fabricating success", () => {
+    for (const stopReason of ["pending", "error", "aborted", "deferred"]) {
+      expect(() =>
+        convertAssistantMessageToAnthropicWithPolicy(
+          message({ stopReason: stopReason as AssistantMessage["stopReason"] }),
+          { selector: "client-selector" },
+          policy(),
+        ),
+      ).toThrow(OutboundResponseFidelityFailure);
+    }
+  });
+
+  it("never maps an unknown future stop reason to a successful terminal", () => {
+    expect(() =>
+      convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          stopReason: "future-reason" as AssistantMessage["stopReason"],
+        }),
+        { selector: "client-selector" },
+        policy({ unknownPiContent: "ignore" }),
+      ),
+    ).toThrow(OutboundResponseFidelityFailure);
+  });
 });
