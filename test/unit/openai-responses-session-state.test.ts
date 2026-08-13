@@ -871,3 +871,116 @@ describe("12 recheck: prototype pollution in stored items", () => {
     }
   });
 });
+
+describe("12 recheck: store:false combined with previous_response_id", () => {
+  it("store:false=honor does not save, but prior history still expands", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfp-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile, storeFalsePolicy: "honor" });
+      const complete = (id: string, output: unknown[] = []) => ({ id, status: "completed", output });
+      // First turn saved normally.
+      await state.remember({ input: "first" }, complete("resp_1"));
+      // Second turn: store:false=honor with a valid previous_response_id.
+      await state.remember(
+        { input: "second", store: false, previous_response_id: "resp_1" },
+        complete("resp_2"),
+      );
+      await state.flush();
+      // resp_1 is expandable; resp_2 was not stored.
+      expect(await state.expand({ input: "x", previous_response_id: "resp_1" })).toMatchObject({
+        input: expect.any(Array),
+      });
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_2" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("store:false=memory keeps a chain expandable in-process", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfm-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile, storeFalsePolicy: "memory" });
+      const complete = (id: string, output: unknown[] = []) => ({ id, status: "completed", output });
+      await state.remember({ input: "first", store: false }, complete("resp_m1"));
+      await state.remember(
+        { input: "second", store: false, previous_response_id: "resp_m1" },
+        complete("resp_m2"),
+      );
+      // Chain expands in-process (memory entries are visible). The store
+      // remembers the increment input ("second"); the handler stores the
+      // expanded body, but at the store level the entry carries its input.
+      const expanded = await state.expand({ input: "tail", previous_response_id: "resp_m2" });
+      expect((expanded as { input: unknown[] }).input).toHaveLength(2);
+      // Stored items are raw wire items (string input → {role, content}),
+      // converted to Pi later; the store keeps them verbatim.
+      expect((expanded as { input: unknown[] }).input[0]).toMatchObject({
+        role: "user",
+        content: "second",
+      });
+      // Nothing was written to disk.
+      const { access } = await import("node:fs/promises");
+      await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: snapshot version mismatches are not fail-open", () => {
+  it("ignores an unknown future version snapshot (referenced IDs error)", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ver-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      await writeFile(
+        stateFile,
+        JSON.stringify({
+          version: 99,
+          states: [["resp_future", { createdAt: Date.now(), items: [{ role: "user", content: "x" }] }]],
+        }),
+        "utf8",
+      );
+      const state = createResponseSessionState({ stateFile });
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_future" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a missing version field (referenced IDs error, no fail-open)", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-nover-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      await writeFile(
+        stateFile,
+        JSON.stringify({
+          states: [["resp_nover", { createdAt: Date.now(), items: [{ role: "user", content: "x" }] }]],
+        }),
+        "utf8",
+      );
+      const state = createResponseSessionState({ stateFile });
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_nover" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

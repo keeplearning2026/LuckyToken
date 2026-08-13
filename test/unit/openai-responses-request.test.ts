@@ -1374,3 +1374,317 @@ describe("13 recheck: resolver failure branches", () => {
     expect(receivedSignal).toBe(controller.signal);
   });
 });
+
+describe("13 recheck: privileged mode extreme combinations", () => {
+  it("promotes all system/developer when there is no user message (first mode)", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "system", content: "s1" },
+          { type: "message", role: "developer", content: "d1" },
+          { type: "message", role: "system", content: "s2" },
+        ],
+      },
+      1,
+      policy({ privilegedMessages: "first" }),
+    );
+    expect(invocation.context.systemPrompt).toBe("s1\nd1\ns2");
+    expect(invocation.context.messages).toHaveLength(0);
+  });
+
+  it("joins consecutive system messages with single newlines (no blank lines)", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "system", content: "a" },
+          { type: "message", role: "system", content: "b" },
+          { type: "message", role: "system", content: "c" },
+          { type: "message", role: "user", content: "u" },
+        ],
+      },
+      1,
+      policy({ privilegedMessages: "full" }),
+    );
+    expect(invocation.context.systemPrompt).toBe("a\nb\nc");
+    expect(invocation.context.systemPrompt).not.toContain("\n\n");
+  });
+
+  it("preserves exact segment text including internal newlines", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "developer", content: "line1\nline2\n\nline4" },
+          { type: "message", role: "user", content: "u" },
+        ],
+      },
+      1,
+      policy({ privilegedMessages: "first" }),
+    );
+    // Exact segment text is not rewritten; segments join with one newline.
+    expect(invocation.context.systemPrompt).toBe("line1\nline2\n\nline4");
+  });
+
+  it("degrades every system/developer to user in user mode even without user messages", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "system", content: "s1" },
+          { type: "message", role: "developer", content: "d1" },
+        ],
+      },
+      1,
+      policy({ privilegedMessages: "user" }),
+    );
+    expect(invocation.context.systemPrompt).toBeUndefined();
+    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(
+      invocation.context.messages.map(
+        (m) => (m.content as Array<{ text: string }>)[0]?.text,
+      ),
+    ).toEqual(["s1", "d1"]);
+  });
+});
+
+describe("13 recheck: effort full matrix", () => {
+  it("maps every known effort value exactly", () => {
+    const cases: Array<[string, string | undefined]> = [
+      ["none", undefined],
+      ["minimal", "minimal"],
+      ["low", "low"],
+      ["medium", "medium"],
+      ["high", "high"],
+      ["xhigh", "xhigh"],
+      ["max", "max"],
+      ["ultra", "max"],
+    ];
+    for (const [effort, expected] of cases) {
+      const invocation = convertResponsesRequest(
+        { model: "m", input: "x", reasoning: { effort } },
+        1,
+        policy(),
+      );
+      expect(invocation.options.reasoning).toBe(expected);
+    }
+  });
+
+  it("maps future effort per every futureReasoningEffort policy", () => {
+    const max = convertResponsesRequest(
+      { model: "m", input: "x", reasoning: { effort: "future-level" } },
+      1,
+      policy({ futureReasoningEffort: "max" }),
+    );
+    expect(max.options.reasoning).toBe("max");
+    expect(
+      max.notices.some((n) => n.code === "openai-responses_future_effort"),
+    ).toBe(true);
+
+    const omit = convertResponsesRequest(
+      { model: "m", input: "x", reasoning: { effort: "future-level" } },
+      1,
+      policy({ futureReasoningEffort: "omit" }),
+    );
+    expect(omit.options.reasoning).toBeUndefined();
+    expect(
+      omit.notices.some((n) => n.code === "openai-responses_future_effort"),
+    ).toBe(true);
+
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", reasoning: { effort: "future-level" } },
+        1,
+        policy({ futureReasoningEffort: "error" }),
+      ),
+    ).toThrow(/reasoning\.effort/);
+  });
+});
+
+describe("13 recheck: tool_choice full combination matrix", () => {
+  const tools = [
+    { type: "function", name: "a", parameters: { type: "object" } },
+    { type: "function", name: "b", parameters: { type: "object" } },
+    { type: "custom", name: "apply_patch" },
+  ];
+
+  it("none clears the catalog regardless of tools", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: "none" },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.renderState.toolChoice).toBe("none");
+    expect(invocation.notices).toEqual([]);
+  });
+
+  it("auto keeps the full catalog", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: "auto" },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.renderState.toolChoice).toBeUndefined();
+  });
+
+  it("absence/null keeps the full catalog with no effective choice", () => {
+    const absent = convertResponsesRequest(
+      { model: "m", input: "x", tools },
+      1,
+      policy(),
+    );
+    expect(absent.context.tools?.map((t) => t.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(absent.renderState.toolChoice).toBeUndefined();
+    const nulled = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: null },
+      1,
+      policy(),
+    );
+    expect(nulled.context.tools?.map((t) => t.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+  });
+
+  it("allowed filters deterministically and records the effective choice", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: ["a", "b"] } },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
+    expect(invocation.renderState.toolChoice).toBe("allowed");
+  });
+
+  it("allowed with an unknown name filters it out", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: ["a", "zzz"] } },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
+  });
+
+  it("allowed with an empty list clears the catalog but records allowed", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: [] } },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.renderState.toolChoice).toBe("allowed");
+  });
+
+  it("forced with an available tool drops the control with a notice", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: { type: "function", name: "a" } },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.renderState.toolChoice).toBeUndefined();
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
+      ),
+    ).toBe(true);
+  });
+
+  it("forced with an unavailable tool errors", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", tools, tool_choice: { type: "function", name: "zzz" } },
+        1,
+        policy(),
+      ),
+    ).toThrow(/tool_choice requires an unavailable tool/);
+  });
+
+  it("required string behaves like a dropped forced control", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", tools, tool_choice: "required" },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.renderState.toolChoice).toBeUndefined();
+    expect(invocation.notices).toEqual([]);
+  });
+});
+
+describe("13 recheck: resolver returns malformed items", () => {
+  it("skips non-object resolver results without crashing", async () => {
+    const invocation = await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_malformed",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+          { type: "message", role: "user", content: "after" },
+        ],
+      },
+      1,
+      policy(),
+      {
+        resolveItemReference: async () => [
+          "not-an-object",
+          42,
+          { type: "message", role: "user", content: "valid-resolved" },
+        ],
+      },
+    );
+    const texts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(texts).toEqual(["valid-resolved", "after"]);
+  });
+
+  it("applies unknownInputItem policy to unknown resolver result types", async () => {
+    const invocation = await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_unknown",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+        ],
+      },
+      1,
+      policy({ unknownInputItem: "ignore" }),
+      {
+        resolveItemReference: async () => [{ type: "future_family", data: 1 }],
+      },
+    );
+    expect(invocation.context.messages).toHaveLength(0);
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_unknown_input_item_ignored",
+      ),
+    ).toBe(true);
+  });
+});
