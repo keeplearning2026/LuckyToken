@@ -737,3 +737,137 @@ describe("12 recheck: memory-only store leaves no file behind", () => {
     }
   });
 });
+
+describe("12 recheck: TTL boundary values", () => {
+  it("accepts an entry exactly at the TTL boundary", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ttlb-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      let current = 1_000_000;
+      const state = createResponseSessionState({
+        stateFile,
+        now: () => current,
+        ttlMs: 100,
+      });
+      await state.remember(
+        { input: "at-boundary" },
+        { id: "resp_boundary", status: "completed", output: [] },
+      );
+      current += 100; // exactly at TTL: still valid
+      const expanded = await state.expand({
+        input: "next",
+        previous_response_id: "resp_boundary",
+      });
+      expect((expanded as { input: unknown[] }).input).toHaveLength(2);
+      current += 1; // past TTL: expired
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_boundary" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an entry exactly at maxEntries with eviction of the oldest", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-cap-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile, maxEntries: 2 });
+      await state.remember(
+        { input: "one" },
+        { id: "resp_1", status: "completed", output: [] },
+      );
+      await state.remember(
+        { input: "two" },
+        { id: "resp_2", status: "completed", output: [] },
+      );
+      // Exactly at capacity: adding a third evicts the oldest (resp_1).
+      await state.remember(
+        { input: "three" },
+        { id: "resp_3", status: "completed", output: [] },
+      );
+      expect(state.size()).toBe(2);
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_1" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+      await expect(
+        state.expand({ input: "x", previous_response_id: "resp_3" }),
+      ).resolves.toMatchObject({ input: expect.any(Array) });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: quarantine then reload", () => {
+  it("recovers cleanly after a corrupt snapshot is quarantined and new data is written", async () => {
+    const { mkdtemp, writeFile, readFile, access, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-quar-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      await writeFile(stateFile, "{ corrupt", "utf8");
+      // First load quarantines the corrupt file.
+      const first = createResponseSessionState({ stateFile });
+      await expect(
+        first.expand({ input: "x", previous_response_id: "resp_any" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+      await expect(access(`${stateFile}.corrupt`)).resolves.toBeUndefined();
+
+      // New successful data is written as a fresh snapshot.
+      await first.remember(
+        { input: "fresh" },
+        { id: "resp_fresh", status: "completed", output: [] },
+      );
+      await first.flush();
+      const onDisk = JSON.parse(await readFile(stateFile, "utf8"));
+      expect(onDisk.states.map((e: [string, unknown]) => e[0])).toEqual(["resp_fresh"]);
+
+      // A fresh instance loads the new snapshot and ignores the quarantine.
+      const second = createResponseSessionState({ stateFile });
+      const expanded = await second.expand({
+        input: "tail",
+        previous_response_id: "resp_fresh",
+      });
+      expect((expanded as { input: unknown[] }).input).toHaveLength(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: prototype pollution in stored items", () => {
+  it("does not pollute the expansion when stored items carry __proto__ keys", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-proto-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile });
+      const hostile = JSON.parse(
+        '{"role":"user","content":"hi","__proto__":{"polluted":true}}',
+      ) as Record<string, unknown>;
+      await state.remember(
+        { input: [hostile] },
+        { id: "resp_proto", status: "completed", output: [] },
+      );
+      const expanded = (await state.expand({
+        input: "next",
+        previous_response_id: "resp_proto",
+      })) as { input: unknown[] };
+      const first = expanded.input[0] as Record<string, unknown>;
+      expect(Object.getPrototypeOf(first)).toBeNull();
+      expect((first as Record<string, unknown>).polluted).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -1029,7 +1029,9 @@ function collectMetadataEcho(value: unknown): Readonly<Record<string, string>> |
   if (!isRecord(value)) return undefined;
   const metadata = value.metadata;
   if (!isRecord(metadata)) return undefined;
-  const echo: Record<string, string> = {};
+  // A null-prototype object: hostile keys such as "__proto__" or
+  // "constructor" from JSON.parse input can never pollute its prototype.
+  const echo: Record<string, string> = Object.create(null);
   for (const [key, entry] of Object.entries(metadata)) {
     if (typeof entry === "string") echo[key] = entry;
   }

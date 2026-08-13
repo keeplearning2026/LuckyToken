@@ -143,7 +143,9 @@ function cloneStoredItems(items: readonly unknown[]): unknown[] {
   const clone = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map((entry) => clone(entry));
     if (isRecord(value)) {
-      const result: Record<string, unknown> = {};
+      // Null-prototype result so hostile keys ("__proto__", "constructor")
+      // from stored wire items can never pollute the returned expansion.
+      const result: Record<string, unknown> = Object.create(null);
       for (const [key, entry] of Object.entries(value)) {
         result[key] = clone(entry);
       }

@@ -1244,3 +1244,133 @@ describe("13 recheck: temperature range is validated", () => {
     expect(valid.options.samplingParams).toEqual({ top_p: 0.5 });
   });
 });
+
+describe("13 recheck: prototype pollution resistance", () => {
+  it("does not let metadata __proto__/constructor keys pollute the echo object", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        metadata: {
+          __proto__: { polluted: true },
+          constructor: "ctor-value",
+          normal: "safe",
+        },
+      },
+      1,
+      policy(),
+    );
+    const echo = invocation.renderState.metadataEcho ?? {};
+    expect(Object.keys(echo).sort()).toEqual(["constructor", "normal"]);
+    // The echo object is null-prototype: hostile keys cannot pollute it.
+    expect(Object.getPrototypeOf(echo)).toBeNull();
+    expect((echo as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("13 recheck: prototype pollution via JSON.parse input", () => {
+  it("does not pollute when metadata arrives from JSON.parse with __proto__ as own key", () => {
+    const raw = '{"model":"m","input":"x","metadata":{"__proto__":{"polluted":true},"constructor":"ctor-value","normal":"safe"}}';
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const invocation = convertResponsesRequest(value, 1, policy());
+    const echo = invocation.renderState.metadataEcho ?? {};
+    const keys = Object.keys(echo).sort();
+    // __proto__ as an own key must not be echoed as an own property, and the
+    // echo object is null-prototype so hostile keys cannot pollute it.
+    expect(keys).toEqual(["constructor", "normal"]);
+    expect(Object.getPrototypeOf(echo)).toBeNull();
+    expect((echo as Record<string, unknown>).polluted).toBeUndefined();
+    // The source object must not have been mutated either.
+    expect((value as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("13 recheck: resolver failure branches", () => {
+  it("resolves a failing reference to a notice while keeping later items", async () => {
+    const invocation = await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_fail",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+          { type: "message", role: "user", content: "keep me" },
+        ],
+      },
+      1,
+      policy(),
+      {
+        resolveItemReference: async () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_reference_unresolved",
+      ),
+    ).toBe(true);
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.messages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "keep me" }],
+    });
+  });
+
+  it("passes custom limits through to the resolver context", async () => {
+    let receivedLimits: unknown;
+    await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_limits",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+        ],
+      },
+      1,
+      policy(),
+      {
+        resolveItemReference: async (_ref, context) => {
+          receivedLimits = context.limits;
+          return [];
+        },
+      },
+      undefined,
+      { maxBytes: 1234, maxRedirects: 2 },
+    );
+    expect(receivedLimits).toMatchObject({ maxBytes: 1234, maxRedirects: 2 });
+  });
+
+  it("forwards the abort signal even when custom limits are given", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "ref_sig",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+        ],
+      },
+      1,
+      policy(),
+      {
+        resolveItemReference: async (_ref, context) => {
+          receivedSignal = context.signal;
+          return [];
+        },
+      },
+      controller.signal,
+      { maxBytes: 99 },
+    );
+    expect(receivedSignal).toBe(controller.signal);
+  });
+});
