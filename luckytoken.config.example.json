@@ -5,12 +5,63 @@
   },
   "clientProtocols": {
     "anthropic-messages": {
-      "authFile": "client-auth/anthropic-messages.json"
+      "authFile": "client-auth/anthropic-messages.json",
+      "conversion": {
+        "request": {
+          "unknownContent": "error",
+          "unresolvedToolCall": "xrepair",
+          "localCacheControl": "ignore"
+        },
+        "response": { "unknownPiContent": "error" }
+      }
     },
     "openai-responses": {
       "authFile": "client-auth/openai-responses.json",
-      "stateFile": "state/openai-responses.json"
+      "stateFile": "state/openai-responses.json",
+      "conversion": {
+        "request": {
+          "privilegedMessages": "first",
+          "unknownInputItem": "error",
+          "orphanToolOutput": "error",
+          "unresolvedToolCall": "xrepair",
+          "futureReasoningEffort": "max"
+        },
+        "response": {
+          "unknownPiContent": "error",
+          "storeFalse": "honor"
+        }
+      }
     }
+  },
+  "providerAdapters": {
+    "commandcode-private": {
+      "conversion": {
+        "request": { "syntheticMissingToolResultOutputType": "text" },
+        "response": { "pauseTurn": "stop", "unknownEvent": "error" }
+      },
+      "request": {
+        "transport": {
+          "timeoutMs": null,
+          "maxRetries": 0,
+          "maxRetryDelayMs": 60000
+        }
+      },
+      "response": {
+        "errorCapture": {
+          "bodyReadTimeoutMs": 5000,
+          "maxBodyBytes": 65536,
+          "maxClientMessageChars": 4096
+        }
+      }
+    }
+  },
+  "failureLogging": {
+    "directory": "logs/failed-requests",
+    "detail": "safe",
+    "maxFileBytes": 1048576,
+    "retentionDays": 30,
+    "maxFiles": 1000,
+    "logCancellation": true
   },
   "pi": {
     "directory": "pi"

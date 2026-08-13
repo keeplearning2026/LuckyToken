@@ -1,17 +1,24 @@
 import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
+import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
+import { parseCommandCodeConfiguration } from "./providers/commandcode-private/configuration.js";
+import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
+import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
+
+export interface ClientProtocolCliConfiguration {
+  readonly authFile: string;
+  readonly stateFile?: string;
+  readonly adapterConfiguration?: unknown;
+}
+
 export interface LuckyTokenCliConfig {
   readonly configPath: string;
   readonly server: { readonly host: string; readonly port: number };
   readonly clientProtocols: Readonly<
     Record<
       string,
-      {
-        readonly authFile: string;
-        /** Optional session-state snapshot path (OpenAI Responses protocol). */
-        readonly stateFile?: string;
-      }
+      ClientProtocolCliConfiguration
     >
   >;
   readonly pi: {
@@ -23,6 +30,8 @@ export interface LuckyTokenCliConfig {
     readonly maxRequestBytes: number;
     readonly requestTimeoutMs: number;
   };
+  readonly providerAdapters: Readonly<Record<string, unknown>>;
+  readonly failureLogging: FailureLoggingConfiguration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -102,13 +111,15 @@ export async function loadLuckyTokenCliConfig(
   const root = requireRecord(parsed, "LuckyToken config root");
   assertKeys(
     root,
-    ["server", "clientProtocols", "pi", "limits"],
+    ["server", "clientProtocols", "providerAdapters", "failureLogging", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
   const clientProtocols = requireRecord(root.clientProtocols, "clientProtocols");
   const pi = requireRecord(root.pi, "pi");
   const limits = root.limits === undefined ? {} : requireRecord(root.limits, "limits");
+  const providerAdapters = root.providerAdapters === undefined ? {} : requireRecord(root.providerAdapters, "providerAdapters");
+  assertKeys(providerAdapters, ["commandcode-private"], "providerAdapters");
   assertKeys(server, ["host", "port"], "server");
   assertKeys(pi, ["directory", "modelsJson"], "pi");
   assertKeys(limits, ["maxRequestBytes", "requestTimeoutMs"], "limits");
@@ -132,6 +143,7 @@ export async function loadLuckyTokenCliConfig(
     {
       readonly authFile: string;
       readonly stateFile?: string;
+      readonly adapterConfiguration?: unknown;
     }
   >;
   const authFiles = new Set<string>();
@@ -147,7 +159,7 @@ export async function loadLuckyTokenCliConfig(
     );
     assertKeys(
       protocol,
-      ["authFile", "stateFile"],
+      ["authFile", "stateFile", "conversion"],
       `clientProtocols.${protocolId}`,
     );
     const authFile = fromConfigDirectory(
@@ -180,9 +192,24 @@ export async function loadLuckyTokenCliConfig(
             ),
             directory,
           );
+    const adapterConfiguration = protocolId === "anthropic-messages"
+      ? parseAnthropicConfiguration(
+          protocol.conversion === undefined ? {} : { conversion: protocol.conversion },
+          `clientProtocols.${protocolId}`,
+        )
+      : protocolId === "openai-responses"
+        ? parseOpenAIResponsesConfiguration(
+            protocol.conversion === undefined ? {} : { conversion: protocol.conversion },
+            `clientProtocols.${protocolId}`,
+          )
+        : undefined;
+    if (adapterConfiguration === undefined && protocol.conversion !== undefined) {
+      throw new Error(`clientProtocols.${protocolId}.conversion requires an installed adapter parser`);
+    }
     resolvedClientProtocols[protocolId] = Object.freeze({
       authFile,
       ...(stateFile === undefined ? {} : { stateFile }),
+      ...(adapterConfiguration === undefined ? {} : { adapterConfiguration }),
     });
   }
   Object.freeze(resolvedClientProtocols);
@@ -212,6 +239,12 @@ export async function loadLuckyTokenCliConfig(
         Number.MAX_SAFE_INTEGER,
       ),
     }),
+    providerAdapters: Object.freeze(Object.assign(Object.create(null), {
+      "commandcode-private": parseCommandCodeConfiguration(
+        providerAdapters["commandcode-private"] ?? {},
+      ),
+    })) as Readonly<Record<string, unknown>>,
+    failureLogging: parseFailureLoggingConfiguration(root.failureLogging, directory),
   };
   return Object.freeze(result);
 }

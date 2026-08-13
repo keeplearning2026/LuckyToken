@@ -8,6 +8,10 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { createAuth } from "./auth.js";
+import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
+import { bindCommandCodeConfiguration, type CommandCodeConfiguration } from "./providers/commandcode-private/configuration.js";
+import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
+import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import { loadFileClientTokenAuthority } from "./client-auth/file-token-store.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
 import {
@@ -48,6 +52,7 @@ export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
+  readonly commandCodeConfiguration?: CommandCodeConfiguration;
   /** Optional models.json path; absent means no user-registered providers. */
   readonly modelsJsonPath?: string;
   /**
@@ -88,6 +93,7 @@ export async function createConfiguredPiModels(
   });
   registerLuckyTokenProviders(mutableModels, {
     fetch: options.fetch,
+    ...(options.commandCodeConfiguration === undefined ? {} : { commandCodeConfiguration: options.commandCodeConfiguration }),
     ...(modelsJson === undefined ? {} : { modelsJson }),
     ...(options.httpObserver === undefined
       ? {}
@@ -135,6 +141,10 @@ export async function createConfiguredLuckyTokenComposition(
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const httpObserver = new HttpObserver(options.fetch);
+  const invocationDiagnostics = createInvocationDiagnosticsFactory({
+    configuration: config.failureLogging,
+    now,
+  });
   const { models } = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
     ...(config.pi.modelsJson === undefined
@@ -144,6 +154,9 @@ export async function createConfiguredLuckyTokenComposition(
       ? {}
       : { credentials: options.credentials }),
     fetch: options.fetch,
+    commandCodeConfiguration: bindCommandCodeConfiguration(
+      config.providerAdapters[commandCodePrivateProviderId],
+    ),
     httpObserver,
     ...(options.projectSnapshot === undefined
       ? {}
@@ -218,6 +231,8 @@ export async function createConfiguredLuckyTokenComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
+    configuration: bindAnthropicConfiguration(anthropicConfig.adapterConfiguration),
+    invocationDiagnostics,
     httpObserver,
     ...(options.createMessageId === undefined
       ? {}
@@ -254,6 +269,10 @@ export async function createConfiguredLuckyTokenComposition(
     const responses = createOpenAIResponsesHandler({
       models,
       auth: responsesAuth,
+      configuration: bindOpenAIResponsesConfiguration(
+        openaiResponsesConfig.adapterConfiguration,
+      ),
+      invocationDiagnostics,
       stateFile,
       httpObserver,
       maxRequestBytes: config.limits.maxRequestBytes,

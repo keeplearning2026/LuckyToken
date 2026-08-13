@@ -7,6 +7,16 @@ import { randomUUID } from "node:crypto";
 
 import type { Auth } from "../../auth.js";
 import {
+  createNoopInvocationDiagnosticsFactory,
+  type InvocationDiagnostics,
+  type InvocationDiagnosticsFactory,
+} from "../../invocation-diagnostics/index.js";
+import {
+  bindAnthropicConfiguration,
+  parseAnthropicConfiguration,
+  type AnthropicConfiguration,
+} from "./configuration.js";
+import {
   execute,
   ExecutionAbortedError,
   freezePiInvocation,
@@ -52,6 +62,8 @@ export const anthropicMessagesProtocolId = "anthropic-messages";
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;
+  readonly configuration?: AnthropicConfiguration;
+  readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   /**
    * Optional invocation HTTP observer shared with provider composition. When
    * provided, the handler uses it instead of creating its own, so provider
@@ -72,6 +84,8 @@ export interface AnthropicMessagesHandlerOptions {
 interface AnthropicMessagesDependencies {
   readonly models: Models;
   readonly auth: Auth;
+  readonly configuration: AnthropicConfiguration;
+  readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly httpObserver?: HttpObserver;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
@@ -126,12 +140,14 @@ async function readRawBody(
 async function handleAnthropicMessages(
   dependencies: AnthropicMessagesDependencies,
   request: Request,
+  diagnostics: InvocationDiagnostics,
 ): Promise<Response> {
   // Invocation-local HTTP observer. Created before the try so the catch can
   // read the latest upstream HTTP outcome after `execute` throws.
   const httpObserver = dependencies.httpObserver ?? new HttpObserver();
   try {
     request.signal.throwIfAborted();
+    diagnostics.checkpoint({ stage: "client-validation" });
     const receivedAt = dependencies.now();
     if (!hasJsonContentType(request.headers)) {
       return toResponse(
@@ -171,6 +187,7 @@ async function handleAnthropicMessages(
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
     const selector = extractAnthropicModelSelector(body);
+    diagnostics.checkpoint({ stage: "model-resolution", selector });
     const model = resolveModel(dependencies.models, selector);
     if (model.api === "anthropic-messages") {
       return passthroughBranch(
@@ -189,6 +206,7 @@ async function handleAnthropicMessages(
       dependencies.modelValidityPolicy,
     );
     const invocation = convertValidatedAnthropicRequest(validatedRequest, receivedAt);
+    diagnostics.checkpoint({ stage: "pi-composition", selector });
     const piOptions = composeOptions(
       invocation.options,
       {
@@ -213,6 +231,7 @@ async function handleAnthropicMessages(
       invocation.context,
       piOptions,
     );
+    diagnostics.checkpoint({ stage: "client-render", selector });
     request.signal.throwIfAborted();
     const target = renderAnthropicTextMessage(
       message,
@@ -286,6 +305,32 @@ async function handleAnthropicMessages(
     return toResponse(
       renderAnthropicError(500, "api_error", "Internal server error"),
     );
+  }
+}
+
+async function handleAnthropicMessagesWithDiagnostics(
+  dependencies: AnthropicMessagesDependencies,
+  request: Request,
+): Promise<Response> {
+  const diagnostics = dependencies.invocationDiagnostics.begin(anthropicMessagesProtocolId);
+  try {
+    const response = await handleAnthropicMessages(dependencies, request, diagnostics);
+    if (response.status >= 400) {
+      await diagnostics.fail({
+        classification: response.status >= 500 ? "runtime-failure" : "client-failure",
+        clientStatus: response.status,
+      });
+    } else {
+      await diagnostics.succeed();
+    }
+    return response;
+  } catch (error) {
+    await diagnostics.fail({
+      classification: request.signal.aborted ? "caller-cancellation" : "unhandled-failure",
+      cancellation: request.signal.aborted,
+      error,
+    });
+    throw error;
   }
 }
 
@@ -371,6 +416,12 @@ export function createAnthropicMessagesHandler(
   const dependencies: AnthropicMessagesDependencies = Object.freeze({
     models: options.models,
     auth: options.auth,
+    configuration:
+      options.configuration === undefined
+        ? parseAnthropicConfiguration()
+        : bindAnthropicConfiguration(options.configuration),
+    invocationDiagnostics:
+      options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     ...(options.httpObserver === undefined
       ? {}
       : { httpObserver: options.httpObserver }),
@@ -383,6 +434,7 @@ export function createAnthropicMessagesHandler(
   return Object.freeze({
     method: "POST",
     pathname: "/v1/messages",
-    handle: (request: Request) => handleAnthropicMessages(dependencies, request),
+    handle: (request: Request) =>
+      handleAnthropicMessagesWithDiagnostics(dependencies, request),
   });
 }

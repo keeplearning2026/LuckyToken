@@ -78,12 +78,17 @@ function requireNonNegativeInteger(value: unknown, field: string): number {
 
 export function resolveCommandCodeExecutionControls(
   options: SimpleStreamOptions | undefined,
+  defaults: Readonly<{
+    timeoutMs: number | null;
+    maxRetries: number;
+    maxRetryDelayMs: number;
+  }> = { timeoutMs: null, maxRetries: 0, maxRetryDelayMs: DEFAULT_MAX_RETRY_DELAY_MS },
 ): CommandCodeExecutionControls {
   const maxRetries = requireNonNegativeInteger(
-    options?.maxRetries ?? 0,
+    options?.maxRetries ?? defaults.maxRetries,
     "maxRetries",
   );
-  const timeoutMs = options?.timeoutMs;
+  const timeoutMs = options?.timeoutMs ?? defaults.timeoutMs ?? undefined;
   if (
     timeoutMs !== undefined &&
     (!Number.isSafeInteger(timeoutMs) ||
@@ -94,7 +99,7 @@ export function resolveCommandCodeExecutionControls(
       `timeoutMs must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}`,
     );
   }
-  const maxRetryDelayMs = options?.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+  const maxRetryDelayMs = options?.maxRetryDelayMs ?? defaults.maxRetryDelayMs;
   if (
     !Number.isSafeInteger(maxRetryDelayMs) ||
     maxRetryDelayMs < 0 ||

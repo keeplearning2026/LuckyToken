@@ -41,12 +41,18 @@ describe("LuckyToken CLI configuration", () => {
     );
 
     const config = await loadLuckyTokenCliConfig(path);
-    expect(config).toEqual({
+    expect(config).toMatchObject({
       configPath: resolve(path),
       server: { host: "127.0.0.1", port: 0 },
       clientProtocols: {
         "anthropic-messages": {
           authFile: resolve(directory, "client-auth/anthropic-messages.json"),
+          adapterConfiguration: {
+            conversion: {
+              request: { unknownContent: "error", unresolvedToolCall: "xrepair", localCacheControl: "ignore" },
+              response: { unknownPiContent: "error" },
+            },
+          },
         },
         "future-client-protocol": {
           authFile: resolve(directory, "client-auth/future-client-protocol.json"),
@@ -55,6 +61,8 @@ describe("LuckyToken CLI configuration", () => {
       pi: { directory: resolve(directory, "pi") },
       limits: { maxRequestBytes: 32 * 1024 * 1024, requestTimeoutMs: 120_000 },
     });
+    expect(config.providerAdapters["commandcode-private"]).toBeDefined();
+    expect(config.failureLogging.directory).toBe(resolve(directory, "logs/failed-requests"));
     expect(Object.getPrototypeOf(config.clientProtocols)).toBeNull();
     expect(config.clientProtocols["toString"]).toBeUndefined();
   });

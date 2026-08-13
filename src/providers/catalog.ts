@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import type { HttpObserver } from "../http-observer.js";
 import { createCommandCodePrivateProvider } from "./commandcode-private/provider.js";
+import type { CommandCodeConfiguration } from "./commandcode-private/configuration.js";
 import { COMMANDCODE_MODELS } from "./commandcode-private/models.js";
 import {
   modelsJsonApiKeyAuth,
@@ -35,6 +36,7 @@ export { COMMANDCODE_DEFAULT_MODEL_ID as commandCodePrivateDefaultModelId } from
  */
 
 export interface LuckyTokenProviderDependencies {
+  readonly commandCodeConfiguration?: CommandCodeConfiguration;
   readonly fetch: FetchFunction;
   /**
    * Optional invocation HTTP observer shared with the Client Protocol
@@ -66,6 +68,7 @@ export function registerLuckyTokenProviders(
   }
 
   const provider = createCommandCodePrivateProvider({
+    ...(dependencies.commandCodeConfiguration === undefined ? {} : { configuration: dependencies.commandCodeConfiguration }),
     fetch: dependencies.httpObserver?.observedFetch ?? dependencies.fetch,
     now: dependencies.now ?? Date.now,
     projectSnapshot: dependencies.projectSnapshot ?? createNodeProjectSnapshot(),

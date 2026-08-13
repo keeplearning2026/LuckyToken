@@ -17,6 +17,10 @@ import {
   MalformedExecutionStreamError,
   UnsupportedExecutionOutcomeError,
 } from "../../src/execution.js";
+import {
+  createUpstreamFailureDiagnostic,
+  createUpstreamFailureFact,
+} from "../../src/protocols/upstream-failure.js";
 
 const usage: Usage = {
   input: 0,
@@ -193,6 +197,115 @@ describe("Core atomic execution", () => {
     );
     await expect(
       execute(inconsistent.models, model, context, { maxTokens: 10 }),
+    ).rejects.toBeInstanceOf(MalformedExecutionStreamError);
+  });
+
+  it("preserves the complete neutral Provider fact by identity through Pi execution", async () => {
+    const failure = createUpstreamFailureFact({
+      kind: "upstream_stream",
+      status: 503,
+      providerType: "opaque_type",
+      providerCode: "opaque_code",
+      message: "safe provider failure",
+      headers: { "request-id": "req-123", "retry-after": "2" },
+      retryable: true,
+      attemptCount: 2,
+      snapshot: {
+        capturedBytes: 12,
+        totalBytes: 40,
+        truncated: true,
+      },
+    });
+    const failedMessage = message("error", "human fallback only");
+    failedMessage.diagnostics = [
+      createUpstreamFailureDiagnostic(failure, 1),
+    ];
+    const fixture = modelsFor(
+      streamFrom([
+        { type: "error", reason: "error", error: failedMessage },
+      ]),
+    );
+
+    try {
+      await execute(fixture.models, model, context, { maxTokens: 10 });
+      throw new Error("expected execution failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ExecutionFailure);
+      expect((error as ExecutionFailure).diagnostic).toBe(
+        "human fallback only",
+      );
+      expect((error as ExecutionFailure).failure).toBe(failure);
+    }
+
+    expect(context.messages).toEqual([
+      { role: "user", content: "hello", timestamp: 1 },
+    ]);
+    expect(context.messages).not.toContain(failedMessage);
+  });
+
+  it("keeps caller cancellation structurally distinct from upstream abort", async () => {
+    const callerCancellation = createUpstreamFailureFact({
+      kind: "caller_cancellation",
+      message: "caller disconnected",
+    });
+    const cancelledMessage = message("aborted");
+    cancelledMessage.diagnostics = [
+      createUpstreamFailureDiagnostic(callerCancellation, 1),
+    ];
+    const cancelled = modelsFor(
+      streamFrom([
+        {
+          type: "error",
+          reason: "aborted",
+          error: cancelledMessage,
+        },
+      ]),
+    );
+
+    try {
+      await execute(cancelled.models, model, context, { maxTokens: 10 });
+      throw new Error("expected caller cancellation");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ExecutionAbortedError);
+      expect((error as ExecutionAbortedError).failure).toBe(callerCancellation);
+    }
+
+    const upstreamAbort = createUpstreamFailureFact({
+      kind: "upstream_stream",
+      message: "upstream event named abort",
+    });
+    const upstreamMessage = message("error", "upstream abort");
+    upstreamMessage.diagnostics = [
+      createUpstreamFailureDiagnostic(upstreamAbort, 2),
+    ];
+    const upstream = modelsFor(
+      streamFrom([
+        { type: "error", reason: "error", error: upstreamMessage },
+      ]),
+    );
+
+    await expect(
+      execute(upstream.models, model, context, { maxTokens: 10 }),
+    ).rejects.toMatchObject({
+      failure: upstreamAbort,
+      reason: "error",
+    });
+
+    const mislabeledMessage = message("aborted");
+    mislabeledMessage.diagnostics = [
+      createUpstreamFailureDiagnostic(upstreamAbort, 3),
+    ];
+    const mislabeled = modelsFor(
+      streamFrom([
+        {
+          type: "error",
+          reason: "aborted",
+          error: mislabeledMessage,
+        },
+      ]),
+    );
+    await expect(
+      execute(mislabeled.models, model, context, { maxTokens: 10 }),
     ).rejects.toBeInstanceOf(MalformedExecutionStreamError);
   });
 

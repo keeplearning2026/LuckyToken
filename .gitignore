@@ -5,3 +5,5 @@ CommandcodeAPIKey.txt
 .luckytoken/
 **/auth.json
 .online-artifacts/
+.temp
+,temp/

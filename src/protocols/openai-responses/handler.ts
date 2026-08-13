@@ -7,6 +7,16 @@ import { randomUUID } from "node:crypto";
 
 import type { Auth } from "../../auth.js";
 import {
+  createNoopInvocationDiagnosticsFactory,
+  type InvocationDiagnostics,
+  type InvocationDiagnosticsFactory,
+} from "../../invocation-diagnostics/index.js";
+import {
+  bindOpenAIResponsesConfiguration,
+  parseOpenAIResponsesConfiguration,
+  type OpenAIResponsesConfiguration,
+} from "./configuration.js";
+import {
   execute,
   ExecutionAbortedError,
   freezePiInvocation,
@@ -41,6 +51,8 @@ export const openaiResponsesProtocolId = "openai-responses";
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;
+  readonly configuration?: OpenAIResponsesConfiguration;
+  readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly stateFile: string;
   readonly shutdownSignal?: AbortSignal;
   /**
@@ -62,6 +74,8 @@ export interface OpenAIResponsesHandlerOptions {
 interface OpenAIResponsesDependencies {
   readonly models: Models;
   readonly auth: Auth;
+  readonly configuration: OpenAIResponsesConfiguration;
+  readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly sessionState: ResponseSessionState;
   readonly httpObserver?: HttpObserver;
   readonly maxRequestBytes: number;
@@ -131,10 +145,12 @@ function rememberAfterSuccess(
 async function handleOpenAIResponses(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
+  diagnostics: InvocationDiagnostics,
 ): Promise<Response> {
   const httpObserver = dependencies.httpObserver ?? new HttpObserver();
   try {
     request.signal.throwIfAborted();
+    diagnostics.checkpoint({ stage: "client-validation" });
     if (!hasJsonContentType(request.headers)) {
       return toResponse(
         renderResponsesError(
@@ -182,6 +198,10 @@ async function handleOpenAIResponses(
     );
 
     const invocation = convertResponsesRequest(expanded, dependencies.now());
+    diagnostics.checkpoint({
+      stage: "model-resolution",
+      selector: invocation.selector,
+    });
     const model = resolveModel(dependencies.models, invocation.selector);
     const piOptions = composeInvocationOptions(
       invocation,
@@ -195,6 +215,7 @@ async function handleOpenAIResponses(
       },
       dependencies.routerDefaults,
     );
+    diagnostics.checkpoint({ stage: "pi-execution", selector: invocation.selector });
     freezePiInvocation(model, invocation.context, piOptions);
     const message = await execute(
       dependencies.models,
@@ -203,6 +224,7 @@ async function handleOpenAIResponses(
       piOptions,
     );
     request.signal.throwIfAborted();
+    diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });
 
     const rendered = convertAssistantMessageToResponses(
       message,
@@ -279,6 +301,32 @@ async function handleOpenAIResponses(
   }
 }
 
+async function handleOpenAIResponsesWithDiagnostics(
+  dependencies: OpenAIResponsesDependencies,
+  request: Request,
+): Promise<Response> {
+  const diagnostics = dependencies.invocationDiagnostics.begin(openaiResponsesProtocolId);
+  try {
+    const response = await handleOpenAIResponses(dependencies, request, diagnostics);
+    if (response.status >= 400) {
+      await diagnostics.fail({
+        classification: response.status >= 500 ? "runtime-failure" : "client-failure",
+        clientStatus: response.status,
+      });
+    } else {
+      await diagnostics.succeed();
+    }
+    return response;
+  } catch (error) {
+    await diagnostics.fail({
+      classification: request.signal.aborted ? "caller-cancellation" : "unhandled-failure",
+      cancellation: request.signal.aborted,
+      error,
+    });
+    throw error;
+  }
+}
+
 function renderResponsesJson(
   target: ResponsesResponseObject,
 ): PreparedHttpResponse {
@@ -326,6 +374,12 @@ export function createOpenAIResponsesHandler(
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
     auth: options.auth,
+    configuration:
+      options.configuration === undefined
+        ? parseOpenAIResponsesConfiguration()
+        : bindOpenAIResponsesConfiguration(options.configuration),
+    invocationDiagnostics:
+      options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     sessionState,
     ...(options.httpObserver === undefined
       ? {}
@@ -338,6 +392,7 @@ export function createOpenAIResponsesHandler(
   return Object.freeze({
     method: "POST",
     pathname: "/v1/responses",
-    handle: (request: Request) => handleOpenAIResponses(dependencies, request),
+    handle: (request: Request) =>
+      handleOpenAIResponsesWithDiagnostics(dependencies, request),
   });
 }

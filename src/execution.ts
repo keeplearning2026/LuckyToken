@@ -5,6 +5,11 @@ import type {
   Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import {
+  createUpstreamFailureFact,
+  findUpstreamFailureFact,
+  type UpstreamFailureFact,
+} from "./protocols/upstream-failure.js";
 
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
@@ -65,7 +70,19 @@ export async function execute(
     const event = next.value;
     if (event.type === "error") {
       if (event.reason === "aborted") {
-        throw new ExecutionAbortedError(signal?.reason);
+        const diagnosticFailure = findUpstreamFailureFact(
+          event.error.diagnostics,
+        );
+        if (
+          diagnosticFailure !== undefined &&
+          diagnosticFailure.kind !== "caller_cancellation"
+        ) {
+          throw new MalformedExecutionStreamError(
+            "Pi aborted terminal carried a non-cancellation failure",
+          );
+        }
+        const failure = diagnosticFailure ?? createCallerCancellationFact();
+        throw new ExecutionAbortedError(signal?.reason, failure);
       }
       if (event.reason !== "error") {
         throw new MalformedExecutionStreamError(
@@ -77,9 +94,16 @@ export async function execute(
           "Pi error terminal reason did not match its AssistantMessage",
         );
       }
+      const failure = findUpstreamFailureFact(event.error.diagnostics);
+      if (failure?.kind === "caller_cancellation") {
+        throw new MalformedExecutionStreamError(
+          "Pi error terminal carried a caller-cancellation failure",
+        );
+      }
       throw new ExecutionFailure(
         "Pi execution reported an error",
         event.error.errorMessage,
+        failure,
       );
     }
     if (event.type === "done") {
@@ -109,23 +133,41 @@ export async function execute(
 
 export class ExecutionAbortedError extends Error {
   readonly reason: unknown;
+  readonly failure: UpstreamFailureFact;
 
-  constructor(reason?: unknown) {
+  constructor(
+    reason?: unknown,
+    failure: UpstreamFailureFact = createCallerCancellationFact(),
+  ) {
     super("Pi execution was aborted");
     this.name = "ExecutionAbortedError";
     this.reason = reason;
+    this.failure = failure;
   }
+}
+
+function createCallerCancellationFact(): UpstreamFailureFact {
+  return createUpstreamFailureFact({
+    kind: "caller_cancellation",
+    message: "Request was cancelled by its caller",
+  });
 }
 
 export class ExecutionFailure extends Error {
   readonly kind: string = "ExecutionFailure";
   readonly reason = "error";
   readonly diagnostic: unknown;
+  readonly failure: UpstreamFailureFact | undefined;
 
-  constructor(message: string, diagnostic?: unknown) {
+  constructor(
+    message: string,
+    diagnostic?: unknown,
+    failure?: UpstreamFailureFact,
+  ) {
     super(message, diagnostic instanceof Error ? { cause: diagnostic } : undefined);
     this.name = "ExecutionFailure";
     this.diagnostic = diagnostic;
+    this.failure = failure;
   }
 }
 

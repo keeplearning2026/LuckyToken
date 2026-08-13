@@ -36,6 +36,11 @@ import {
 } from "./semantic.js";
 import { cloneLosslessJsonObject } from "./json.js";
 import { COMMANDCODE_API_ID, COMMANDCODE_PROVIDER_ID } from "./model.js";
+import {
+  bindCommandCodeConfiguration,
+  parseCommandCodeConfiguration,
+  type CommandCodeConfiguration,
+} from "./configuration.js";
 
 const PROVIDER_ID = COMMANDCODE_PROVIDER_ID;
 const API_ID = COMMANDCODE_API_ID;
@@ -43,6 +48,7 @@ const MISSING_TOOL_RESULT =
   "No result — the tool call did not complete (interrupted or lost).";
 
 export interface CommandCodePrivateProviderOptions {
+  readonly configuration?: CommandCodeConfiguration;
   /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
   apiKey?: string;
   fetch?: FetchFunction;
@@ -866,6 +872,7 @@ function createCommandCodeStream(
   createSessionId: () => string,
   traceContext: CommandCodeTraceContextCapability | undefined,
   sleep: ((delayMs: number, signal: AbortSignal) => Promise<void>) | undefined,
+  configuration: CommandCodeConfiguration,
 ): StreamFunction<typeof API_ID, SimpleStreamOptions> {
   return (model, context, options): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
@@ -874,7 +881,10 @@ function createCommandCodeStream(
     const run = async (): Promise<void> => {
       try {
         options?.signal?.throwIfAborted();
-        const controls = resolveCommandCodeExecutionControls(options);
+        const controls = resolveCommandCodeExecutionControls(
+          options,
+          configuration.request.transport,
+        );
         const prepared = await prepareCommandCodeRequest(
           model,
           context,
@@ -972,6 +982,9 @@ function deepFreezeProviderData<T>(value: T, seen = new Set<object>()): T {
 export function createCommandCodePrivateProvider(
   options: CommandCodePrivateProviderOptions,
 ): Provider<typeof API_ID> {
+  const configuration = options.configuration === undefined
+    ? parseCommandCodeConfiguration()
+    : bindCommandCodeConfiguration(options.configuration);
   const configuredApiKey = options.apiKey?.trim();
   if (options.apiKey !== undefined && configuredApiKey?.length === 0) {
     throw new Error("CommandCode API key must be non-empty");
@@ -996,6 +1009,7 @@ export function createCommandCodePrivateProvider(
     options.createSessionId ?? randomUUID,
     traceContext,
     options.sleep,
+    configuration,
   );
   return createProvider({
     id: PROVIDER_ID,

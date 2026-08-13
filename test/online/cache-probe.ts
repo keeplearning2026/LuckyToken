@@ -114,7 +114,7 @@ async function main(): Promise<void> {
     const sessionId = randomUUID();
     const sharedHeaders = { "x-session-id": sessionId };
 
-    const request = (system: string, label: string) =>
+    const request = (system: string) =>
       client.messages.create(
         {
           model: MODEL,
@@ -125,15 +125,15 @@ async function main(): Promise<void> {
         { headers: sharedHeaders },
       );
 
-    const before = await request(systemBase, "before");
+    const before = await request(systemBase);
     console.log(usageRow("request-1 identical system", before.usage));
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000));
 
-    const mid = await request(systemBase, "mid");
+    const mid = await request(systemBase);
     console.log(usageRow("request-2 identical system", mid.usage));
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000));
 
-    const changed = await request(`${systemBase}!`, "changed");
+    const changed = await request(`${systemBase}!`);
     console.log(usageRow("request-3 system+1 char", changed.usage));
 
     for (let index = 0; index < capture.rawJsonlByRequest.length; index += 1) {
