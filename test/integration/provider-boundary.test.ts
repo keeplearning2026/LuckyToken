@@ -124,6 +124,7 @@ describe("Pi Models provider boundary", () => {
       auth,
       createMessageId: () => "msg_provider_boundary",
       now: () => 1_786_400_000_000,
+      maxRequestBytes: 1_048_576,
     });
     const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
 
@@ -198,6 +199,7 @@ describe("Pi Models provider boundary", () => {
       auth,
       createMessageId: () => "msg_commandcode_through_pi",
       now: () => 1_786_400_000_000,
+      maxRequestBytes: 1_048_576,
     });
     const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
 

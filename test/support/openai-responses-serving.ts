@@ -105,9 +105,7 @@ export async function createOpenAIResponsesServingTestComposition(
       ? {}
       : { createResponseId: options.createResponseId }),
     ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.maxRequestBytes === undefined
-      ? {}
-      : { maxRequestBytes: options.maxRequestBytes }),
+    maxRequestBytes: options.maxRequestBytes ?? 32 * 1024 * 1024,
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,

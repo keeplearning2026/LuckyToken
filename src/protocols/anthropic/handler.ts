@@ -61,7 +61,10 @@ export interface AnthropicMessagesHandlerOptions {
   readonly httpObserver?: HttpObserver;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
-  readonly maxRequestBytes?: number;
+  /** Request body byte ceiling. Single source of truth: the composition root
+   *  passes `config.limits.maxRequestBytes`; this handler consumes it and
+   *  never supplies its own default. */
+  readonly maxRequestBytes: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
 }
@@ -373,7 +376,7 @@ export function createAnthropicMessagesHandler(
       : { httpObserver: options.httpObserver }),
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
-    maxRequestBytes: options.maxRequestBytes ?? 1_048_576,
+    maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,
   });

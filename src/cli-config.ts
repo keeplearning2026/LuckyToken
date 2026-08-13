@@ -199,7 +199,7 @@ export async function loadLuckyTokenCliConfig(
     limits: Object.freeze({
       maxRequestBytes: safeInteger(
         limits.maxRequestBytes,
-        1_048_576,
+        32 * 1024 * 1024,
         "limits.maxRequestBytes",
         1,
         Number.MAX_SAFE_INTEGER,

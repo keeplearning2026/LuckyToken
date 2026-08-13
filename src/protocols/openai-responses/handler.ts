@@ -50,7 +50,10 @@ export interface OpenAIResponsesHandlerOptions {
    * handler.
    */
   readonly httpObserver?: HttpObserver;
-  readonly maxRequestBytes?: number;
+  /** Request body byte ceiling. Single source of truth: the composition root
+   *  passes `config.limits.maxRequestBytes`; this handler consumes it and
+   *  never supplies its own default. */
+  readonly maxRequestBytes: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly createResponseId?: () => string;
   readonly now?: () => number;
@@ -327,7 +330,7 @@ export function createOpenAIResponsesHandler(
     ...(options.httpObserver === undefined
       ? {}
       : { httpObserver: options.httpObserver }),
-    maxRequestBytes: options.maxRequestBytes ?? 1_048_576,
+    maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),
     now: options.now ?? Date.now,

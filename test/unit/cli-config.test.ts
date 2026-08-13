@@ -53,7 +53,7 @@ describe("LuckyToken CLI configuration", () => {
         },
       },
       pi: { directory: resolve(directory, "pi") },
-      limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: 120_000 },
+      limits: { maxRequestBytes: 32 * 1024 * 1024, requestTimeoutMs: 120_000 },
     });
     expect(Object.getPrototypeOf(config.clientProtocols)).toBeNull();
     expect(config.clientProtocols["toString"]).toBeUndefined();
