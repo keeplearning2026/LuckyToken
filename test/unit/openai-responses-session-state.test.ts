@@ -712,3 +712,28 @@ describe("12 recheck: concurrent interleaving stays consistent", () => {
     }
   });
 });
+
+describe("12 recheck: memory-only store leaves no file behind", () => {
+  it("flush after only memory-only entries creates no snapshot file", async () => {
+    const { mkdtemp, access, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-nofile-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({
+        stateFile,
+        storeFalsePolicy: "memory",
+      });
+      await state.remember(
+        { input: "only memory", store: false },
+        { id: "resp_mem", status: "completed", output: [] },
+      );
+      await state.flush();
+      // memory stores process-only: no snapshot file may exist at all.
+      await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -139,16 +139,20 @@ async function readRawBody(
     : undefined;
 }
 
-function rememberAfterSuccess(
+async function rememberAfterSuccess(
   dependencies: OpenAIResponsesDependencies,
   diagnostics: InvocationDiagnostics,
   rawBody: unknown,
   rendered: ResponsesResponseObject,
-): void {
+): Promise<void> {
   // Anti-poisoning + save conditions live inside sessionState.remember.
   // store:false=persist surfaces a request-local notice through the current
-  // invocation's diagnostics.
-  void dependencies.sessionState.remember(rawBody, rendered, (code) => {
+  // invocation's diagnostics. The notice is emitted synchronously inside
+  // remember before its first await, so awaiting remember here guarantees
+  // the notice lands before the invocation finalizes. This does NOT wait for
+  // the debounced disk commit — the first response still returns without
+  // waiting for persistence.
+  await dependencies.sessionState.remember(rawBody, rendered, (code) => {
     diagnostics.notice({
       adapter: openaiResponsesProtocolId,
       direction: "request",
@@ -266,7 +270,7 @@ async function handleOpenAIResponses(
     // entry contains the complete conversation up to this response. A later
     // `previous_response_id` expansion then reproduces the full history;
     // saving the raw (unexpanded) increment would drop all earlier turns.
-    rememberAfterSuccess(dependencies, diagnostics, expanded, rendered);
+    await rememberAfterSuccess(dependencies, diagnostics, expanded, rendered);
 
     const prepared = invocation.renderState.stream
       ? renderResponsesSse(rendered)

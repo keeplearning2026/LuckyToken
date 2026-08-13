@@ -350,8 +350,10 @@ function convertReasoning(
   }
   const effort = value.effort;
   if (effort === undefined || effort === null) return undefined;
-  if (typeof effort !== "string") {
-    throw new InvalidRequest("reasoning.effort must be a string when present");
+  if (typeof effort !== "string" || effort.trim().length === 0) {
+    throw new InvalidRequest(
+      "reasoning.effort must be a non-empty string when present",
+    );
   }
   if (effort === "none") {
     // Documented explicit-off degradation: omission is not claimed to be an
@@ -445,6 +447,25 @@ export function validateResponsesRequest(
         "tool_choice must be a string or object when present",
       );
     }
+    if (
+      isRecord(toolChoice) &&
+      toolChoice.type === "allowed" &&
+      !Array.isArray(toolChoice.allowed_tools)
+    ) {
+      throw new InvalidRequest(
+        "tool_choice.allowed_tools must be an array when present",
+      );
+    }
+    if (
+      isRecord(toolChoice) &&
+      toolChoice.type === "allowed" &&
+      Array.isArray(toolChoice.allowed_tools) &&
+      toolChoice.allowed_tools.some((entry) => typeof entry !== "string")
+    ) {
+      throw new InvalidRequest(
+        "tool_choice.allowed_tools must contain only strings",
+      );
+    }
   }
   validateReasoningShape(value.reasoning);
   if (value.background === true) {
@@ -465,7 +486,13 @@ export function validateResponsesRequest(
     "max_output_tokens",
   );
   const temperature = optionalFiniteNumber(value.temperature, "temperature");
+  if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
+    throw new InvalidRequest("temperature must be within 0 through 2");
+  }
   const topP = optionalFiniteNumber(value.top_p, "top_p");
+  if (topP !== undefined && (topP < 0 || topP > 1)) {
+    throw new InvalidRequest("top_p must be within 0 through 1");
+  }
   const cacheRetentionValue = value.prompt_cache_retention;
   let cacheRetention: "short" | "long" | undefined;
   if (cacheRetentionValue !== undefined && cacheRetentionValue !== null) {
@@ -533,8 +560,10 @@ function validateReasoningShape(value: unknown): void {
   }
   const effort = value.effort;
   if (effort === undefined || effort === null) return;
-  if (typeof effort !== "string") {
-    throw new InvalidRequest("reasoning.effort must be a string when present");
+  if (typeof effort !== "string" || effort.trim().length === 0) {
+    throw new InvalidRequest(
+      "reasoning.effort must be a non-empty string when present",
+    );
   }
 }
 

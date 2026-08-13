@@ -1143,3 +1143,104 @@ describe("13 recheck: forced tool_choice drop is documented", () => {
     expect(allowed.notices).toEqual([]);
   });
 });
+
+describe("13 recheck: malformed effort is rejected, not degraded", () => {
+  it("rejects an empty-string reasoning.effort as invalid", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", reasoning: { effort: "" } },
+        1,
+        policy(),
+      ),
+    ).toThrow(/reasoning\.effort/);
+  });
+
+  it("rejects a whitespace-only reasoning.effort as invalid", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", reasoning: { effort: "   " } },
+        1,
+        policy(),
+      ),
+    ).toThrow(/reasoning\.effort/);
+  });
+});
+
+describe("13 recheck: malformed allowed_tools is rejected", () => {
+  it("rejects a non-array allowed_tools instead of silently clearing the catalog", () => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+          tool_choice: { type: "allowed", allowed_tools: "not-an-array" },
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/allowed_tools/);
+  });
+
+  it("rejects an allowed_tools array with a non-string entry", () => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+          tool_choice: { type: "allowed", allowed_tools: ["a", 42] },
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/allowed_tools/);
+  });
+});
+
+describe("13 recheck: temperature range is validated", () => {
+  it("accepts temperature within the valid range", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", temperature: 1.5 },
+      1,
+      policy(),
+    );
+    expect(invocation.options.temperature).toBe(1.5);
+  });
+
+  it("rejects temperature below 0", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", temperature: -0.5 },
+        1,
+        policy(),
+      ),
+    ).toThrow(/temperature/);
+  });
+
+  it("rejects temperature above 2", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", temperature: 2.5 },
+        1,
+        policy(),
+      ),
+    ).toThrow(/temperature/);
+  });
+
+  it("validates top_p within 0..1", () => {
+    expect(() =>
+      convertResponsesRequest(
+        { model: "m", input: "x", top_p: 1.5 },
+        1,
+        policy(),
+      ),
+    ).toThrow(/top_p/);
+    const valid = convertResponsesRequest(
+      { model: "m", input: "x", top_p: 0.5 },
+      1,
+      policy(),
+    );
+    expect(valid.options.samplingParams).toEqual({ top_p: 0.5 });
+  });
+});
