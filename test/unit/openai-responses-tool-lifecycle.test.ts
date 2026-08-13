@@ -1344,6 +1344,219 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
     });
   });
 
+  describe("duplicate/orphan error|ignore full matrix", () => {
+    it("errors on duplicate results under both orphan policies", () => {
+      for (const orphanToolOutput of ["error", "ignore"] as const) {
+        expect(() =>
+          convertResponsesRequest(
+            {
+              model: "m",
+              input: [
+                {
+                  type: "function_call",
+                  call_id: "c1",
+                  name: "f",
+                  arguments: "{}",
+                },
+                {
+                  type: "function_call_output",
+                  call_id: "c1",
+                  output: "first",
+                },
+                {
+                  type: "function_call_output",
+                  call_id: "c1",
+                  output: "second",
+                },
+              ],
+            },
+            1,
+            policy({ orphanToolOutput }),
+          ),
+        ).toThrow(/duplicate/);
+      }
+    });
+
+    it("errors on duplicate custom outputs under both orphan policies", () => {
+      for (const orphanToolOutput of ["error", "ignore"] as const) {
+        expect(() =>
+          convertResponsesRequest(
+            {
+              model: "m",
+              input: [
+                {
+                  type: "custom_tool_call",
+                  call_id: "c2",
+                  name: "ct",
+                  input: "x",
+                },
+                {
+                  type: "custom_tool_call_output",
+                  call_id: "c2",
+                  output: "r1",
+                },
+                {
+                  type: "custom_tool_call_output",
+                  call_id: "c2",
+                  output: "r2",
+                },
+              ],
+            },
+            1,
+            policy({ orphanToolOutput }),
+          ),
+        ).toThrow(/duplicate/);
+      }
+    });
+
+    it("errors on orphan output under error policy and ignores under ignore policy", () => {
+      // error policy: the orphan rejects the whole request.
+      expect(() =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [{ type: "function_call_output", call_id: "ghost", output: "x" }],
+          },
+          1,
+          policy({ orphanToolOutput: "error" }),
+        ),
+      ).toThrow(/unknown call_id/);
+      // ignore policy: the orphan drops with a notice; the rest survives.
+      const ignored = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            { type: "function_call_output", call_id: "ghost", output: "x" },
+            { type: "message", role: "user", content: "keep" },
+          ],
+        },
+        1,
+        policy({ orphanToolOutput: "ignore" }),
+      );
+      expect(ignored.context.messages).toHaveLength(1);
+      expect(
+        ignored.notices.some(
+          (n) => n.code === "openai-responses_orphan_tool_output_ignored",
+        ),
+      ).toBe(true);
+    });
+
+    it("ignores orphan custom outputs under the ignore policy", () => {
+      const ignored = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            { type: "custom_tool_call_output", call_id: "ghost", output: "x" },
+            { type: "message", role: "user", content: "keep" },
+          ],
+        },
+        1,
+        policy({ orphanToolOutput: "ignore" }),
+      );
+      expect(ignored.context.messages).toHaveLength(1);
+      expect(
+        ignored.notices.some(
+          (n) => n.code === "openai-responses_orphan_tool_output_ignored",
+        ),
+      ).toBe(true);
+    });
+
+    it("ignoring an orphan never removes a real correlated result", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "c1",
+              name: "f",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "c1",
+              output: "real",
+            },
+            { type: "function_call_output", call_id: "ghost", output: "x" },
+          ],
+        },
+        1,
+        policy({ orphanToolOutput: "ignore" }),
+      );
+      const results = invocation.context.messages.filter(
+        (m) => m.role === "toolResult",
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        toolCallId: "c1",
+        content: [{ type: "text", text: "real" }],
+      });
+    });
+  });
+
+  describe("namespace custom child round-trips through conversion and output", () => {
+    it("converts a namespace custom call and reverses it to custom_tool_call with namespace", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [
+            {
+              type: "namespace",
+              name: "crm",
+              tools: [{ type: "custom", name: "freeform" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+        "crm.freeform",
+      ]);
+      expect(invocation.renderState.namespaceReverse).toEqual({
+        "crm.freeform": { namespace: "crm", child: "freeform" },
+      });
+      expect(invocation.renderState.freeformToolNames).toEqual(
+        new Set(["crm.freeform"]),
+      );
+      // The reverse metadata stays out of model context and options.
+      expect(invocation.context).not.toHaveProperty("namespaceReverse");
+      expect(invocation.options).not.toHaveProperty("namespaceReverse");
+      // Output reversal restores the child name and namespace.
+      const response = convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_nsc",
+              name: "crm.freeform",
+              arguments: { input: "raw" },
+            },
+          ],
+        }),
+        "m",
+        "resp_1",
+        1,
+        undefined,
+        invocation.renderState.freeformToolNames,
+        invocation.renderState.namespaceReverse,
+      );
+      expect(response.output).toEqual([
+        {
+          type: "custom_tool_call",
+          id: "ctc_resp_1_0",
+          call_id: "call_nsc",
+          name: "freeform",
+          namespace: "crm",
+          input: "raw",
+          status: "completed",
+        },
+      ]);
+    });
+  });
+
   describe("namespace reverse render state round-trips to output", () => {
     it("keeps the reverse metadata request-local and echoes no namespace into Pi", () => {
       const invocation = convertResponsesRequest(

@@ -30,6 +30,7 @@ export interface ResponsesFunctionCallOutputItem {
   id: string;
   call_id: string;
   name: string;
+  namespace?: string;
   arguments: string;
   status: "completed";
 }
@@ -39,6 +40,7 @@ export interface ResponsesCustomToolCallOutputItem {
   id: string;
   call_id: string;
   name: string;
+  namespace?: string;
   input: string;
   status: "completed";
 }
@@ -123,6 +125,7 @@ function convertOutput(
   message: AssistantMessage,
   responseId: string,
   freeformToolNames: ReadonlySet<string>,
+  namespaceReverse: Readonly<Record<string, { namespace: string; child: string }>>,
 ): ResponsesOutputItem[] {
   const output: ResponsesOutputItem[] = [];
   let textBlockIndex = 0;
@@ -185,6 +188,12 @@ function convertOutput(
         "Pi toolCall.arguments did not serialize",
       );
     }
+    // A namespace-flattened name reverses to the SDK shape: the child name
+    // plus a namespace field, so the client can map the call back to the
+    // original namespace tool.
+    const reverse = namespaceReverse[name];
+    const outputName = reverse?.child ?? name;
+    const namespace = reverse?.namespace;
     if (freeformToolNames.has(name)) {
       // Freeform custom tools (e.g. apply_patch) must round-trip as
       // `custom_tool_call` with a raw `input` string, not as a JSON
@@ -195,7 +204,8 @@ function convertOutput(
         type: "custom_tool_call",
         id: `ctc_${responseId}_${toolCallIndex}`,
         call_id: callId,
-        name,
+        name: outputName,
+        ...(namespace === undefined ? {} : { namespace }),
         input: typeof input === "string" ? input : argumentsJson,
         status: "completed",
       });
@@ -204,7 +214,8 @@ function convertOutput(
         type: "function_call",
         id: `fc_${responseId}_${toolCallIndex}`,
         call_id: callId,
-        name,
+        name: outputName,
+        ...(namespace === undefined ? {} : { namespace }),
         arguments: argumentsJson,
         status: "completed",
       });
@@ -248,9 +259,17 @@ export function convertAssistantMessageToResponses(
   createdAt: number,
   previousResponseId: string | undefined,
   freeformToolNames: ReadonlySet<string> = new Set(),
+  namespaceReverse: Readonly<
+    Record<string, { namespace: string; child: string }>
+  > = {},
 ): ResponsesResponseObject {
   assertMessageEnvelope(message);
-  const output = convertOutput(message, responseId, freeformToolNames);
+  const output = convertOutput(
+    message,
+    responseId,
+    freeformToolNames,
+    namespaceReverse,
+  );
   const { status, incomplete_details } = convertStopReason(message.stopReason);
   const response: ResponsesResponseObject = {
     id: responseId,

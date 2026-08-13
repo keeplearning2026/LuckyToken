@@ -865,6 +865,214 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         expect.objectContaining({ content: expect.arrayContaining([expect.objectContaining({ type: "image" })]) }),
       );
     });
+
+    it("materializes an input_file whose file_data is an image data URL", () => {
+      // A provable image file (file_data already materialized as an image
+      // data URL) maps to Pi image bytes; it is not a generic drop.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_file",
+                  file_id: "file_img",
+                  file_data:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+                },
+              ],
+            },
+            { type: "message", role: "user", content: "after" },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const images = invocation.context.messages.flatMap((m) =>
+        m.role === "user"
+          ? (m.content as Array<{ type: string }>).filter(
+              (b) => b.type === "image",
+            )
+          : [],
+      );
+      expect(images).toHaveLength(1);
+      expect(images[0]).toMatchObject({ mimeType: "image/png" });
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_input_file_dropped",
+        ),
+      ).toBe(false);
+    });
+
+    it("drops an input_file whose file_data is not an image data URL", () => {
+      // A non-image file_data (plain text, or a data URL with a non-image
+      // MIME) is a generic non-image file: drop and record.
+      for (const fileData of [
+        "plain file content",
+        "data:text/plain;base64,aGVsbG8=",
+      ]) {
+        const invocation = convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  { type: "input_file", file_id: "f", file_data: fileData },
+                ],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+        expect(invocation.context.messages).toHaveLength(0);
+        expect(
+          invocation.notices.some(
+            (n) => n.code === "openai-responses_input_file_dropped",
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("drops an input_file with only file_url or file_id (no materialized data)", () => {
+      // A remote file handle cannot be proven an image without the trusted
+      // resolver; it is a generic non-image drop.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_file", file_url: "https://cdn.test/report.pdf" },
+              ],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      expect(invocation.context.messages).toHaveLength(0);
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_input_file_dropped",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("status full value matrix across item families", () => {
+    it("message: absent/completed convert; in_progress errors; incomplete preserves; unknown errors", () => {
+      const convert = (status: unknown): unknown =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "assistant",
+                ...(status === undefined ? {} : { status }),
+                content: [{ type: "output_text", text: "a" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+      expect(convert(undefined)).toBeDefined();
+      expect(convert("completed")).toBeDefined();
+      expect(() => convert("in_progress")).toThrow(/in_progress/);
+      expect(convert("incomplete")).toBeDefined();
+      expect(() => convert("queued")).toThrow(/status/);
+      expect(() => convert("")).toThrow(/status/);
+    });
+
+    it("call/output: absent/completed convert; in_progress/incomplete/unknown all error", () => {
+      const convertCall = (status: unknown): unknown =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "function_call",
+                call_id: "c1",
+                name: "f",
+                arguments: "{}",
+                ...(status === undefined ? {} : { status }),
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+      expect(convertCall(undefined)).toBeDefined();
+      expect(convertCall("completed")).toBeDefined();
+      expect(() => convertCall("in_progress")).toThrow(/in_progress/);
+      expect(() => convertCall("incomplete")).toThrow(/status/);
+      expect(() => convertCall("queued")).toThrow(/status/);
+      const convertOutput = (status: unknown): unknown =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "function_call",
+                call_id: "c1",
+                name: "f",
+                arguments: "{}",
+              },
+              {
+                type: "function_call_output",
+                call_id: "c1",
+                output: "r",
+                ...(status === undefined ? {} : { status }),
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+      expect(convertOutput(undefined)).toBeDefined();
+      expect(convertOutput("completed")).toBeDefined();
+      expect(() => convertOutput("in_progress")).toThrow(/in_progress/);
+      expect(() => convertOutput("incomplete")).toThrow(/status/);
+      expect(() => convertOutput("queued")).toThrow(/status/);
+    });
+
+    it("reasoning: absent/completed convert; in_progress errors; incomplete preserves; unknown errors", () => {
+      const convert = (status: unknown): unknown =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                ...(status === undefined ? {} : { status }),
+                summary: [{ type: "summary_text", text: "t" }],
+              },
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "a" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+      expect(convert(undefined)).toBeDefined();
+      expect(convert("completed")).toBeDefined();
+      expect(() => convert("in_progress")).toThrow(/in_progress/);
+      expect(convert("incomplete")).toBeDefined();
+      expect(() => convert("queued")).toThrow(/status/);
+      expect(() => convert("")).toThrow(/status/);
+    });
   });
 
   describe("reasoning continuity", () => {
@@ -1022,6 +1230,92 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       ).find((b) => b.type === "thinking");
       // No foreign signature exists here, so no envelope is fabricated.
       expect(thinking?.thinkingSignature).toBeUndefined();
+    });
+
+    it("refuses to restore encrypted_content claimed by a foreign authority envelope", () => {
+      // A reasoning item whose envelope claims a foreign authority must not
+      // have its encrypted_content re-wrapped as Responses continuity: an
+      // arbitrary Provider signature is never emitted as Responses
+      // encrypted content.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_foreign",
+              encrypted_content: "foreign-secret-bytes",
+              envelope: { authority: "foreign-provider", version: 1 },
+              summary: [{ type: "summary_text", text: "visible part" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      const thinking = (
+        assistant?.content as Array<{
+          type: string;
+          thinkingSignature?: string;
+          thinking: string;
+        }>
+      ).find((b) => b.type === "thinking");
+      // The visible reasoning survives; the foreign opaque state does not
+      // enter a Responses-owned envelope.
+      expect(thinking?.thinking).toBe("visible part");
+      expect(thinking?.thinkingSignature).toBeUndefined();
+    });
+
+    it("restores encrypted_content when the envelope authority is the Responses authority", () => {
+      // A Lucky-owned envelope with the Responses authority is verified and
+      // its encrypted_content enters the versioned envelope.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_owned",
+              encrypted_content: "owned-secret-bytes",
+              envelope: { authority: "openai-responses", version: 1 },
+              summary: [{ type: "summary_text", text: "visible part" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      const thinking = (
+        assistant?.content as Array<{
+          type: string;
+          thinkingSignature?: string;
+        }>
+      ).find((b) => b.type === "thinking");
+      const envelope = JSON.parse(
+        String(thinking?.thinkingSignature),
+      ) as Record<string, unknown>;
+      expect(envelope).toMatchObject({
+        v: 1,
+        id: "openai-responses",
+        authority: "openai-responses",
+        encrypted_content: "owned-secret-bytes",
+      });
     });
 
     it("keeps a thinkingSignature only when the item carries encrypted_content", () => {

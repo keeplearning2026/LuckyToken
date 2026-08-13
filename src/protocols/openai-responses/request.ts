@@ -1089,7 +1089,9 @@ function convertMessages(
           flushPendingReasoning();
           // Generic non-image files have no Pi FileContent: they are dropped
           // and recorded as a fixed known degradation without fabricating a
-          // marker or an empty message. A message that carried only files is
+          // marker or an empty message. A provable image file whose
+          // `file_data` is already materialized as an image data URL maps to
+          // Pi image bytes. A message that carried only non-image files is
           // dropped entirely.
           const fileParts = Array.isArray(rawItem.content)
             ? rawItem.content.filter(
@@ -1097,14 +1099,33 @@ function convertMessages(
                   isRecord(part) && part.type === "input_file",
               )
             : [];
+          const materializedFileImages: ImageContent[] = [];
           if (fileParts.length > 0) {
-            notices.push(
-              requestNotice(
-                INPUT_FILE_DROPPED_NOTICE_CODE,
-                "ignore",
-                `$.input[?role=user].content[?type=input_file]`,
-              ),
-            );
+            for (const part of fileParts) {
+              const fileData = part.file_data;
+              if (
+                typeof fileData === "string" &&
+                fileData.startsWith("data:")
+              ) {
+                try {
+                  materializedFileImages.push(
+                    parseDataUrlImage(fileData, "input_file.file_data"),
+                  );
+                } catch {
+                  // A malformed or non-image file_data is a generic
+                  // non-image file: falls through to the drop below.
+                }
+              }
+            }
+            if (materializedFileImages.length < fileParts.length) {
+              notices.push(
+                requestNotice(
+                  INPUT_FILE_DROPPED_NOTICE_CODE,
+                  "ignore",
+                  `$.input[?role=user].content[?type=input_file]`,
+                ),
+              );
+            }
           }
           const nonFileParts = Array.isArray(rawItem.content)
             ? rawItem.content.filter(
@@ -1115,11 +1136,12 @@ function convertMessages(
             fileParts.length > 0 &&
             nonFileParts.length === 0 &&
             content.length === 0 &&
-            images.length === 0
+            images.length === 0 &&
+            materializedFileImages.length === 0
           ) {
             continue;
           }
-          const blocks = [...content, ...images];
+          const blocks = [...content, ...images, ...materializedFileImages];
           messages.push({
             role: "user",
             content: blocks,
@@ -1207,9 +1229,20 @@ function convertMessages(
           // Responses-native continuity state enters a versioned
           // provenance-bearing envelope. Only this adapter's authority may
           // restore `encrypted_content`; an arbitrary foreign signature never
-          // does.
+          // does. An envelope that claims a foreign authority blocks the
+          // restore: the opaque state is not re-wrapped as Responses
+          // continuity.
           const encrypted = rawItem.encrypted_content;
-          if (typeof encrypted === "string" && encrypted.length > 0) {
+          const sourceEnvelope = rawItem.envelope;
+          const foreignClaim =
+            isRecord(sourceEnvelope) &&
+            typeof sourceEnvelope.authority === "string" &&
+            sourceEnvelope.authority !== RESPONSES_CONTINUITY_AUTHORITY;
+          if (
+            typeof encrypted === "string" &&
+            encrypted.length > 0 &&
+            !foreignClaim
+          ) {
             const envelope: ResponsesContinuityEnvelopeV1 = {
               v: 1,
               id: RESPONSES_CONTINUITY_AUTHORITY,

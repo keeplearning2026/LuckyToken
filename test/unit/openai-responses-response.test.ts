@@ -166,4 +166,102 @@ describe("OpenAI Responses Pi → wire response conversion", () => {
       error: { type: "invalid_request_error", message: "bad input" },
     });
   });
+
+  it("restores the namespace on a flattened namespace tool call output", () => {
+    // A namespace-flattened function call (ns.child) reverses to the SDK
+    // shape: name "child" plus a namespace field, so the client can map it
+    // back to the original namespace tool.
+    const response = convertAssistantMessageToResponses(
+      assistantMessage({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_ns",
+            name: "crm.read",
+            arguments: { id: "1" },
+          },
+        ],
+      }),
+      "m",
+      "resp_ns",
+      1,
+      undefined,
+      new Set(),
+      { "crm.read": { namespace: "crm", child: "read" } },
+    );
+    expect(response.output).toEqual([
+      {
+        type: "function_call",
+        id: "fc_resp_ns_0",
+        call_id: "call_ns",
+        name: "read",
+        namespace: "crm",
+        arguments: '{"id":"1"}',
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("restores the namespace on a flattened namespace custom tool call output", () => {
+    // A namespace custom child (ns.freeform) reverses to a custom_tool_call
+    // with the child name and namespace field.
+    const response = convertAssistantMessageToResponses(
+      assistantMessage({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_nsc",
+            name: "crm.freeform",
+            arguments: { input: "raw input" },
+          },
+        ],
+      }),
+      "m",
+      "resp_nsc",
+      1,
+      undefined,
+      new Set(["crm.freeform"]),
+      { "crm.freeform": { namespace: "crm", child: "freeform" } },
+    );
+    expect(response.output).toEqual([
+      {
+        type: "custom_tool_call",
+        id: "ctc_resp_nsc_0",
+        call_id: "call_nsc",
+        name: "freeform",
+        namespace: "crm",
+        input: "raw input",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("keeps non-namespace tool names unchanged when no reverse metadata exists", () => {
+    const response = convertAssistantMessageToResponses(
+      assistantMessage({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "plain_fn",
+            arguments: {},
+          },
+        ],
+      }),
+      "m",
+      "resp_plain",
+      1,
+      undefined,
+      new Set(),
+      {},
+    );
+    expect(response.output[0]).toMatchObject({
+      type: "function_call",
+      name: "plain_fn",
+    });
+    expect(response.output[0]).not.toHaveProperty("namespace");
+  });
 });
