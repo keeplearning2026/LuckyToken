@@ -35,13 +35,29 @@ export interface ResponseRequestConversionPolicy {
  * Narrow Responses-owned resolver capability for LuckyToken-provable opaque
  * references/envelopes. Only the Responses adapter may install one; it never
  * borrows a Provider credential and never leaks a Responses handle into Pi.
+ * The resolver receives an explicit authorization context, the caller's abort
+ * signal, and bounded size/redirect limits so it can never over-fetch.
  */
 export interface ResponseReferenceResolver {
   resolveItemReference(
     reference: Readonly<Record<string, unknown>>,
-    context: { readonly authority: string; readonly signal?: AbortSignal },
+    context: {
+      readonly authority: string;
+      readonly signal?: AbortSignal;
+      readonly limits?: Readonly<{
+        maxBytes?: number;
+        maxMimeTypes?: readonly string[];
+        maxRedirects?: number;
+      }>;
+    },
   ): Promise<readonly unknown[]>;
 }
+
+/** Default bound for a reference resolution; a narrow adapter may tighten it. */
+export const DEFAULT_REFERENCE_LIMITS = Object.freeze({
+  maxBytes: 16 * 1024 * 1024,
+  maxRedirects: 5,
+});
 
 export interface ResponsesInvocation {
   selector: string;
@@ -84,9 +100,13 @@ export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
 export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
 
 export const FUTURE_EFFORT_NOTICE_CODE = "openai-responses_future_effort";
+export const EFFORT_NONE_OMITTED_NOTICE_CODE =
+  "openai-responses_effort_none_omitted";
 export const ULTRA_ALIAS_NOTICE_CODE = "openai-responses_effort_ultra_alias";
 export const UNKNOWN_INPUT_ITEM_IGNORED_NOTICE_CODE =
   "openai-responses_unknown_input_item_ignored";
+export const FORCED_TOOL_CHOICE_DROPPED_NOTICE_CODE =
+  "openai-responses_forced_tool_choice_dropped";
 export const REFERENCE_UNRESOLVED_NOTICE_CODE =
   "openai-responses_reference_unresolved";
 
@@ -333,7 +353,14 @@ function convertReasoning(
   if (typeof effort !== "string") {
     throw new InvalidRequest("reasoning.effort must be a string when present");
   }
-  if (effort === "none") return undefined;
+  if (effort === "none") {
+    // Documented explicit-off degradation: omission is not claimed to be an
+    // explicit Provider off, and the caller asked for none.
+    notices.push(
+      requestNotice(EFFORT_NONE_OMITTED_NOTICE_CODE, "degrade", "$.reasoning.effort"),
+    );
+    return undefined;
+  }
   if (effort === "ultra") {
     notices.push(
       requestNotice(ULTRA_ALIAS_NOTICE_CODE, "degrade", "$.reasoning.effort"),
@@ -772,6 +799,11 @@ async function resolveLuckyReferences(
   resolver: ResponseReferenceResolver,
   notices: ConversionNotice[],
   signal?: AbortSignal,
+  limits?: Readonly<{
+    maxBytes?: number;
+    maxMimeTypes?: readonly string[];
+    maxRedirects?: number;
+  }>,
 ): Promise<unknown[]> {
   const expanded: unknown[] = [];
   for (const rawItem of items) {
@@ -801,6 +833,7 @@ async function resolveLuckyReferences(
       const resolved = await resolver.resolveItemReference(rawItem, {
         authority: envelope.authority,
         ...(signal === undefined ? {} : { signal }),
+        limits: limits ?? DEFAULT_REFERENCE_LIMITS,
       });
       expanded.push(...resolved);
     } catch {
@@ -821,6 +854,7 @@ function applyToolChoiceFilter(
   mergedTools: Tool[] | undefined,
   toolChoice: string | undefined,
   freeformNames: Set<string>,
+  notices: ConversionNotice[],
 ): { tools: Tool[] | undefined; effective: string | undefined } {
   let effectiveTools = mergedTools;
   let effectiveToolChoice: string | undefined;
@@ -845,6 +879,7 @@ function applyToolChoiceFilter(
     effectiveToolChoice = "allowed";
   } else if (toolChoice === "forced") {
     // Unsupported forced control: drop unless it requires an unavailable tool.
+    // This is an explicit hard-control degradation, so it emits a notice.
     const choice = (value as Record<string, unknown>).tool_choice as
       | Record<string, unknown>
       | undefined;
@@ -859,6 +894,13 @@ function applyToolChoiceFilter(
         );
       }
     }
+    notices.push(
+      requestNotice(
+        FORCED_TOOL_CHOICE_DROPPED_NOTICE_CODE,
+        "degrade",
+        "$.tool_choice",
+      ),
+    );
     // Dropped: no generic Pi control. effectiveToolChoice stays unset.
   }
   void freeformNames;
@@ -911,6 +953,7 @@ function buildInvocation(
     mergedTools,
     validated.toolChoice,
     freeformNames,
+    notices,
   );
   if (filtered.tools !== undefined && filtered.tools.length > 0) {
     context.tools = filtered.tools;
@@ -1017,6 +1060,11 @@ export async function convertResponsesRequestAsync(
   policy: ResponseRequestConversionPolicy,
   resolver: ResponseReferenceResolver,
   signal?: AbortSignal,
+  limits?: Readonly<{
+    maxBytes?: number;
+    maxMimeTypes?: readonly string[];
+    maxRedirects?: number;
+  }>,
 ): Promise<ResponsesInvocation> {
   const freeformNames = new Set<string>();
   const validated = validateResponsesRequest(value, freeformNames);
@@ -1037,6 +1085,7 @@ export async function convertResponsesRequestAsync(
     resolver,
     notices,
     signal,
+    limits,
   );
   const messages = convertMessages(
     expandedItems,

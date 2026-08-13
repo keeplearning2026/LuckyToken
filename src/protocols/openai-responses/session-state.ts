@@ -66,6 +66,8 @@ export class ResponseStateConversionFailure extends Error {
 export interface ResponseStateEntry {
   readonly createdAt: number;
   readonly items: readonly unknown[];
+  /** Memory-only entries are excluded from the snapshot (store:false=memory). */
+  readonly memoryOnly: boolean;
 }
 
 export interface ResponseSessionState {
@@ -303,7 +305,8 @@ export function createResponseSessionState(
         // snapshot is rewritten with the clean data on the next persist.
         const sanitized = sanitizeStoredItems(items);
         const clipped = sanitized.slice(0, MAX_ENTRY_ITEMS);
-        states.set(id, { createdAt, items: clipped });
+        // Entries loaded from disk are never memory-only.
+        states.set(id, { createdAt, items: clipped, memoryOnly: false });
         if (clipped.length !== items.length) {
           stateRevision += 1;
         }
@@ -330,9 +333,10 @@ export function createResponseSessionState(
     return loadPromise;
   };
 
-  const snapshotEntries = (): Array<[string, ResponseStateEntry]> => {
-    const entries: Array<[string, ResponseStateEntry]> = [];
+  const snapshotEntries = (): Array<[string, { createdAt: number; items: unknown[] }]> => {
+    const entries: Array<[string, { createdAt: number; items: unknown[] }]> = [];
     for (const [id, entry] of states) {
+      if (entry.memoryOnly) continue;
       entries.push([id, { createdAt: entry.createdAt, items: [...entry.items] }]);
     }
     return entries;
@@ -409,22 +413,28 @@ export function createResponseSessionState(
       }
       // Anti-poisoning: a request whose own previous_response_id failed to
       // expand carries a naked increment. Saving it would replay a truncated
-      // conversation, so skip it.
+      // conversation, so skip it. A TTL-expired entry is treated the same as
+      // an unknown one — an expand would reject it, so a chain built on it
+      // must not be admitted.
       const previousId = request.previous_response_id;
-      if (
-        typeof previousId === "string" &&
-        previousId.length > 0 &&
-        !states.has(previousId)
-      ) {
-        return;
+      if (typeof previousId === "string" && previousId.length > 0) {
+        const previous = states.get(previousId);
+        const expired =
+          previous !== undefined && now() - previous.createdAt > ttlMs;
+        if (previous === undefined || expired) {
+          return;
+        }
       }
       // store:false follows the configured policy. honor stores nothing;
-      // memory keeps only a process-local entry; persist stores despite the
-      // caller's false and reports a notice.
+      // memory keeps only a process-local entry (never on disk); persist
+      // stores despite the caller's false and reports a notice.
+      let memoryOnly = false;
       if (request.store === false) {
         if (storeFalsePolicy === "honor") return;
         if (storeFalsePolicy === "persist") {
           notice?.("openai-responses_store_false_persisted");
+        } else {
+          memoryOnly = true;
         }
       }
       const items = sanitizeStoredItems([
@@ -440,10 +450,13 @@ export function createResponseSessionState(
       states.set(id, {
         createdAt: now(),
         items: items.slice(0, MAX_ENTRY_ITEMS),
+        memoryOnly,
       });
       stateRevision += 1;
       evictIfNeeded();
-      schedulePersist();
+      if (!memoryOnly) {
+        schedulePersist();
+      }
     },
 
     async expand(body: unknown): Promise<unknown> {

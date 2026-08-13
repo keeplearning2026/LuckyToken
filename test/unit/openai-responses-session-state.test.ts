@@ -599,3 +599,116 @@ describe("12 recheck: load-side entry caps stay closed", () => {
     }
   });
 });
+
+describe("12 recheck: memory store:false never touches disk", () => {
+  it("keeps store:false=memory entries process-only (no disk write)", async () => {
+    const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-mem-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({
+        stateFile,
+        storeFalsePolicy: "memory",
+      });
+      await state.remember(
+        { input: "process only", store: false },
+        { id: "resp_mem", status: "completed", output: [] },
+      );
+      // Even a normal (store:true) entry schedules a persist; the memory-only
+      // entry must not drag a snapshot to disk.
+      await state.remember(
+        { input: "normal", store: true },
+        { id: "resp_normal", status: "completed", output: [] },
+      );
+      await state.flush();
+      const onDisk = JSON.parse(await readFile(stateFile, "utf8"));
+      const ids = onDisk.states.map((entry: [string, unknown]) => entry[0]);
+      expect(ids).toEqual(["resp_normal"]);
+      expect(ids).not.toContain("resp_mem");
+      // And a fresh instance must not see the memory-only entry.
+      const second = createResponseSessionState({ stateFile });
+      await expect(
+        second.expand({ input: "x", previous_response_id: "resp_mem" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: TTL-expired entries poison nothing", () => {
+  it("never saves an increment whose previous_response_id has already expired", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ttl-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      let current = 1_000_000;
+      const state = createResponseSessionState({
+        stateFile,
+        now: () => current,
+        ttlMs: 100,
+      });
+      const complete = (id: string, output: unknown[] = []) => ({
+        id,
+        status: "completed",
+        output,
+      });
+      await state.remember(
+        { input: "old" },
+        complete("resp_old"),
+      );
+      current += 101; // old entry is now TTL-expired in memory.
+
+      // A follow-up increment referencing the expired ID must be rejected by
+      // the anti-poisoning admission, not saved.
+      await state.remember(
+        { input: "increment", previous_response_id: "resp_old" },
+        complete("resp_chain"),
+      );
+      await state.flush();
+      expect(state.size()).toBe(1); // only resp_old remains (no resp_chain)
+      await expect(
+        state.expand({ input: "y", previous_response_id: "resp_chain" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("12 recheck: concurrent interleaving stays consistent", () => {
+  it("handles interleaved remember/expand/flush without corruption or crashes", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-conc-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({ stateFile });
+      const complete = (id: string) => ({ id, status: "completed", output: [] });
+      // Fire a mix of remembers, expansions, and flushes without awaiting
+      // between them; the store must never corrupt or throw spuriously.
+      await Promise.all([
+        state.remember({ input: "a" }, complete("resp_a")),
+        state.expand({ input: "x", previous_response_id: "resp_a" }).catch(() => undefined),
+        state.remember({ input: "b" }, complete("resp_b")),
+        state.flush(),
+        state.expand({ input: "y", previous_response_id: "resp_b" }).catch(() => undefined),
+        state.remember({ input: "c" }, complete("resp_c")),
+        state.flush(),
+        state.expand({ input: "z", previous_response_id: "resp_c" }).catch(() => undefined),
+      ]);
+      // All three entries survive and are expandable.
+      for (const id of ["resp_a", "resp_b", "resp_c"]) {
+        const expanded = await state.expand({ input: "tail", previous_response_id: id });
+        expect((expanded as { input: unknown[] }).input).toHaveLength(2);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

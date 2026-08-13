@@ -648,14 +648,19 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     }
   });
 
-  it("maps none to omission and absent/null to omission without notices", () => {
+  it("maps none to omission (documented degradation) and absent/null without notices", () => {
     const none = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: "none" } },
       1,
       policy(),
     );
     expect(none.options.reasoning).toBeUndefined();
-    expect(none.notices).toEqual([]);
+    // none is a documented explicit-off degradation: a notice is emitted.
+    expect(
+      none.notices.some(
+        (n) => n.code === "openai-responses_effort_none_omitted",
+      ),
+    ).toBe(true);
     const absent = convertResponsesRequest(
       { model: "m", input: "x" },
       1,
@@ -1013,5 +1018,128 @@ describe("13 recheck: resolved references keep privileged promotion", () => {
     );
     expect(invocation.context.systemPrompt).toContain("resolved rules");
     expect(invocation.context.messages.map((m) => m.role)).toEqual(["user"]);
+  });
+});
+
+describe("13 recheck: effort none is a documented degradation", () => {
+  it("emits a notice for reasoning.effort=none (explicit off degradation)", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", reasoning: { effort: "none" } },
+      1,
+      policy(),
+    );
+    expect(invocation.options.reasoning).toBeUndefined();
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_effort_none_omitted",
+      ),
+    ).toBe(true);
+  });
+
+  it("emits no notice for absent or null reasoning", () => {
+    const absent = convertResponsesRequest(
+      { model: "m", input: "x" },
+      1,
+      policy(),
+    );
+    expect(absent.notices).toEqual([]);
+    const nulled = convertResponsesRequest(
+      { model: "m", input: "x", reasoning: null },
+      1,
+      policy(),
+    );
+    expect(nulled.notices).toEqual([]);
+    const effortNull = convertResponsesRequest(
+      { model: "m", input: "x", reasoning: { effort: null } },
+      1,
+      policy(),
+    );
+    expect(effortNull.notices).toEqual([]);
+  });
+});
+
+describe("13 recheck: resolver receives explicit limits", () => {
+  it("passes size/MIME/redirect limits into the resolver context", async () => {
+    let receivedLimits: unknown;
+    await convertResponsesRequestAsync(
+      {
+        model: "m",
+        input: [
+          {
+            type: "item_reference",
+            id: "item_owned_5",
+            envelope: { authority: "luckytoken", version: 1 },
+          },
+        ],
+      },
+      1,
+      policy(),
+      {
+        resolveItemReference: async (_reference, context) => {
+          receivedLimits = context.limits;
+          return [];
+        },
+      },
+    );
+    expect(receivedLimits).toMatchObject({
+      maxBytes: expect.any(Number),
+    });
+  });
+});
+
+describe("13 recheck: forced tool_choice drop is documented", () => {
+  it("emits a notice when an unsupported forced tool_choice is dropped", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+        tool_choice: { type: "function", name: "a" },
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
+      ),
+    ).toBe(true);
+  });
+
+  it("emits no notice for tool_choice none/auto/allowed", () => {
+    const none = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+        tool_choice: "none",
+      },
+      1,
+      policy(),
+    );
+    expect(none.notices).toEqual([]);
+    const auto = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+        tool_choice: "auto",
+      },
+      1,
+      policy(),
+    );
+    expect(auto.notices).toEqual([]);
+    const allowed = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
+        tool_choice: { type: "allowed", allowed_tools: ["a"] },
+      },
+      1,
+      policy(),
+    );
+    expect(allowed.notices).toEqual([]);
   });
 });
