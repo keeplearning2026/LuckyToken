@@ -116,6 +116,8 @@ export const INPUT_FILE_DROPPED_NOTICE_CODE =
   "openai-responses_input_file_dropped";
 export const CUSTOM_INPUT_COMPAT_NOTICE_CODE =
   "openai-responses_custom_input_compat";
+export const INCOMPLETE_MESSAGE_NOTICE_CODE =
+  "openai-responses_incomplete_message";
 export const NAMESPACE_COLLISION_NOTICE_CODE =
   "openai-responses_namespace_collision";
 
@@ -266,7 +268,11 @@ function parseDataUrlImage(
   if (mimeType.length === 0) {
     throw new InvalidRequest(`${field} data URL must include a MIME type`);
   }
-  if (data.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) {
+  if (
+    data.length === 0 ||
+    data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)
+  ) {
     throw new InvalidRequest(`${field} data URL base64 payload is malformed`);
   }
   return { type: "image", mimeType, data };
@@ -358,7 +364,12 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
 
 /** A custom tool grammar maps directly to Pi constrainedSampling grammar
  *  variants (Lark → openai_lark, regex → openai_regex); an unknown grammar
- *  variant type is a conversion error, never a silent drop. */
+ *  variant type is a conversion error, never a silent drop.
+ *
+ *  The installed SDK models custom-tool grammar under `format` as
+ *  {type:"grammar", definition, syntax:"lark"|"regex"}; an older `grammar`
+ *  field shape ({type:"lark"|"regex", grammar|regex}) is also accepted.
+ */
 function convertCustomGrammar(
   grammar: unknown,
   name: string,
@@ -366,6 +377,24 @@ function convertCustomGrammar(
   if (grammar === undefined || grammar === null) return undefined;
   if (!isRecord(grammar) || typeof grammar.type !== "string") {
     throw new InvalidRequest(`custom tool ${name} grammar must be an object`);
+  }
+  if (grammar.type === "grammar" && typeof grammar.syntax === "string") {
+    // SDK shape: {type:"grammar", definition, syntax}.
+    const definition = grammar.definition;
+    if (typeof definition !== "string" || definition.length === 0) {
+      throw new InvalidRequest(
+        `custom tool ${name} grammar definition must be a non-empty string`,
+      );
+    }
+    if (grammar.syntax === "lark") {
+      return { type: "grammar", variants: { openai_lark: definition } };
+    }
+    if (grammar.syntax === "regex") {
+      return { type: "grammar", variants: { openai_regex: definition } };
+    }
+    throw new InvalidRequest(
+      `custom tool ${name} grammar syntax is not supported: ${String(grammar.syntax)}`,
+    );
   }
   if (grammar.type === "lark" && typeof grammar.grammar === "string") {
     return {
@@ -452,8 +481,9 @@ function convertTools(
         flatName,
         description,
         inner.parameters,
-        inner.strict,
-        convertCustomGrammar(inner.grammar, flatName),
+        // The installed SDK defaults function `strict` to true.
+        inner.strict ?? true,
+        convertCustomGrammar(inner.format ?? inner.grammar, flatName),
       );
     } else if (inner.type === "custom") {
       freeformNames?.add(flatName);
@@ -471,7 +501,7 @@ function convertTools(
           required: ["input"],
         },
         undefined,
-        convertCustomGrammar(inner.grammar, flatName),
+        convertCustomGrammar(inner.format ?? inner.grammar, flatName),
       );
     }
     namespaceReverse![flatName] = { namespace, child: childName };
@@ -498,8 +528,10 @@ function convertTools(
         name,
         description,
         candidate.parameters,
-        candidate.strict,
-        convertCustomGrammar(candidate.grammar, name),
+        // The installed SDK defaults function `strict` to true; absent strict
+        // maps to Pi constrainedSampling require.
+        candidate.strict ?? true,
+        convertCustomGrammar(candidate.format ?? candidate.grammar, name),
       );
       continue;
     }
@@ -521,7 +553,7 @@ function convertTools(
           required: ["input"],
         },
         undefined,
-        convertCustomGrammar(candidate.grammar, name),
+        convertCustomGrammar(candidate.format ?? candidate.grammar, name),
       );
       continue;
     }
@@ -547,21 +579,37 @@ function convertTools(
     // are dropped: advertising them as executable Pi tools would mislead the
     // model. tool_search is a Core v1 conversion error, not a plain unknown.
     if (
-      (type === "local_shell" ||
-        type === "shell" ||
-        type === "apply_patch" ||
-        type === "computer" ||
-        type === "computer_use" ||
-        type === "mcp") &&
-      typeof name === "string" &&
-      name.length > 0
+      type === "local_shell" ||
+      type === "shell" ||
+      type === "apply_patch" ||
+      type === "computer" ||
+      type === "computer_use" ||
+      type === "computer_use_preview" ||
+      type === "mcp"
     ) {
+      // The installed SDK models computer/computer_use_preview, apply_patch,
+      // local_shell and shell without a name field; they map to deterministic
+      // Responses-owned names so call ownership can be classified.
+      // Viewport/environment fields without Pi slots drop.
+      const effectiveName =
+        (type === "computer" || type === "computer_use_preview") &&
+        (typeof name !== "string" || name.length === 0)
+          ? "computer"
+          : (type === "apply_patch" ||
+              type === "local_shell" ||
+              type === "shell") &&
+              (typeof name !== "string" || name.length === 0)
+            ? type
+            : typeof name === "string" && name.length > 0
+              ? name
+              : undefined;
+      if (effectiveName === undefined) continue;
       if (type === "apply_patch") {
-        freeformNames?.add(name);
+        freeformNames?.add(effectiveName);
       }
       if (type === "apply_patch") {
         pushFunction(
-          name,
+          effectiveName,
           description,
           {
             type: "object",
@@ -574,7 +622,7 @@ function convertTools(
             required: ["input"],
           },
           undefined,
-          convertCustomGrammar(candidate.grammar, name),
+          convertCustomGrammar(candidate.format ?? candidate.grammar, effectiveName),
         );
       } else {
         // MCP tools carry their argument schema under `arguments`; other
@@ -582,11 +630,11 @@ function convertTools(
         const rawSchema =
           type === "mcp" ? candidate.arguments : candidate.parameters;
         pushFunction(
-          name,
+          effectiveName,
           description,
           rawSchema ?? { type: "object" },
           candidate.strict,
-          convertCustomGrammar(candidate.grammar, name),
+          convertCustomGrammar(candidate.format ?? candidate.grammar, effectiveName),
         );
       }
       continue;
@@ -672,7 +720,14 @@ function parseToolChoice(value: unknown): string | undefined {
   if (type === "allowed") {
     return "allowed";
   }
-  if (type === "function" || type === "custom" || type === "namespace") {
+  if (
+    type === "function" ||
+    type === "custom" ||
+    type === "namespace" ||
+    type === "mcp" ||
+    type === "shell" ||
+    type === "apply_patch"
+  ) {
     return "forced";
   }
   throw new InvalidRequest(`unsupported tool_choice.type: ${String(type)}`);
@@ -976,6 +1031,18 @@ function convertMessages(
               `message status is not supported: ${status}`,
             );
           }
+          if (status === "incomplete") {
+            // A non-model-visible request-local diagnostic records the
+            // incomplete status; notice text is never injected into the
+            // model-visible content.
+            notices.push(
+              requestNotice(
+                INCOMPLETE_MESSAGE_NOTICE_CODE,
+                "degrade",
+                `$.input[?type=message&status=incomplete]`,
+              ),
+            );
+          }
         }
         // A file_id or remote image URL can only be materialized through the
         // trusted Responses-owned resolver. The async entry resolves these
@@ -1080,6 +1147,40 @@ function convertMessages(
         throw new InvalidRequest(`message role is not supported: ${String(role)}`);
       }
       case "reasoning": {
+        // Reasoning items carry their own lifecycle status
+        // (in_progress|completed|incomplete in the SDK). in_progress is a
+        // structured lifecycle error; incomplete preserves representable
+        // content without injecting notice text or guessing length; absent/
+        // completed convert normally.
+        const status = rawItem.status;
+        if (status !== undefined && status !== null) {
+          if (typeof status !== "string" || status.length === 0) {
+            throw new InvalidRequest(
+              "reasoning status must be a non-empty string",
+            );
+          }
+          if (status === "in_progress") {
+            throw new InvalidRequest(
+              "a reasoning item with status in_progress cannot be converted",
+            );
+          }
+          if (status !== "completed" && status !== "incomplete") {
+            throw new InvalidRequest(
+              `reasoning status is not supported: ${status}`,
+            );
+          }
+          if (status === "incomplete") {
+            // A non-model-visible request-local diagnostic records the
+            // incomplete reasoning status.
+            notices.push(
+              requestNotice(
+                INCOMPLETE_MESSAGE_NOTICE_CODE,
+                "degrade",
+                `$.input[?type=reasoning&status=incomplete]`,
+              ),
+            );
+          }
+        }
         const summary = Array.isArray(rawItem.summary)
           ? rawItem.summary
               .filter(isRecord)
@@ -1163,7 +1264,12 @@ function convertMessages(
             );
           }
         }
-        const callId = nonEmptyString(rawItem.call_id, "function_call.call_id");
+        // The installed SDK models mcp_call with `id` as the tool-call key
+        // (no separate call_id field); other families carry call_id.
+        const callId =
+          type === "mcp_call"
+            ? nonEmptyString(rawItem.id, "mcp_call.id")
+            : nonEmptyString(rawItem.call_id, "function_call.call_id");
         const name = nonEmptyString(rawItem.name, "function_call.name");
         if (type === "custom_tool_call") {
           // Custom freeform input uses the approved {input:string}
@@ -1177,11 +1283,23 @@ function convertMessages(
           );
         }
         // local_shell/shell/apply_patch/computer/mcp calls are Client/BYOT
-        // structured tool calls: their arguments arrive as JSON.
-        const argumentsJson =
-          type === "custom_tool_call"
-            ? { input: typeof rawItem.input === "string" ? rawItem.input : "" }
-            : parseToolArguments(rawItem.arguments);
+        // structured tool calls. The installed SDK models local_shell/shell/
+        // computer with a structured `action` object, apply_patch with an
+        // `operation` object, and mcp/function with a JSON `arguments` string.
+        // Structured objects map losslessly; otherwise the legacy JSON
+        // arguments string applies.
+        let argumentsJson: Record<string, unknown>;
+        if (type === "custom_tool_call") {
+          argumentsJson = {
+            input: typeof rawItem.input === "string" ? rawItem.input : "",
+          };
+        } else if (isRecord(rawItem.action)) {
+          argumentsJson = { ...rawItem.action };
+        } else if (isRecord(rawItem.operation)) {
+          argumentsJson = { ...rawItem.operation };
+        } else {
+          argumentsJson = parseToolArguments(rawItem.arguments);
+        }
         const toolCall: ToolCall = {
           type: "toolCall",
           id: callId,
@@ -1240,10 +1358,13 @@ function convertMessages(
             );
           }
         }
-        const callId = nonEmptyString(
-          rawItem.call_id,
-          "function_call_output.call_id",
-        );
+        // The installed SDK models local_shell_call_output with `id` as the
+        // correlation key (no separate call_id field); other output families
+        // carry call_id.
+        const callId =
+          type === "local_shell_call_output"
+            ? nonEmptyString(rawItem.id, "local_shell_call_output.id")
+            : nonEmptyString(rawItem.call_id, "function_call_output.call_id");
         const toolName = assistantIndex.get(callId);
         if (toolName === undefined) {
           // Orphan output follows the frozen orphanToolOutput policy.
@@ -1270,17 +1391,45 @@ function convertMessages(
         }
         resolvedCallIds.add(callId);
         const output = rawItem.output;
-        const outputParts = Array.isArray(output) ? output : [];
+        // The installed SDK models computer_call_output.output as a single
+        // screenshot object (an array form is tolerated for compatibility);
+        // other output families use a string or an array.
+        const outputParts =
+          type === "computer_call_output"
+            ? isRecord(output)
+              ? [output]
+              : Array.isArray(output)
+                ? output
+                : []
+            : Array.isArray(output)
+              ? output
+              : [];
         const text =
           typeof output === "string"
             ? output
-            : outputParts
-                .filter(isRecord)
-                .filter(
-                  (part) => part.type === "input_text" || part.type === "text",
-                )
-                .map((part) => (typeof part.text === "string" ? part.text : ""))
-                .join("\n");
+            : (() => {
+                const texts: string[] = [];
+                for (const part of outputParts) {
+                  if (!isRecord(part)) continue;
+                  if (
+                    (part.type === "input_text" || part.type === "text") &&
+                    typeof part.text === "string"
+                  ) {
+                    texts.push(part.text);
+                    continue;
+                  }
+                  // The installed SDK models shell_call_output.output as an
+                  // array of {stdout, stderr, outcome} chunks; representable
+                  // stdout/stderr degrades to ordered transcript content.
+                  if (typeof part.stdout === "string") {
+                    texts.push(part.stdout);
+                  }
+                  if (typeof part.stderr === "string" && part.stderr.length > 0) {
+                    texts.push(part.stderr);
+                  }
+                }
+                return texts.join("\n");
+              })();
         // Output images remain Pi ToolResult images on the Client side.
         const images = parseOutputImageParts(outputParts);
         const content: Array<TextContent | ImageContent> =
@@ -1343,12 +1492,61 @@ function convertMessages(
       // as executable Pi tools.
       case "web_search_call":
       case "web_search_tool_call":
-      case "file_search_call":
-      case "code_interpreter_call":
-      case "image_generation_call":
       case "compaction_trigger":
         pendingReasoning.length = 0;
         continue;
+      case "image_generation_call": {
+        // Hosted image-generation history: a result that is directly
+        // materialized as a data URL (MIME-bearing) within Client image
+        // limits maps to a Pi image. A bare base64 result carries no MIME, so
+        // it drops rather than guessing a format; the result is never
+        // advertised as an executable Pi tool.
+        const result = rawItem.result;
+        if (typeof result === "string" && result.startsWith("data:")) {
+          const images = parseInlineImages([
+            { type: "input_image", image_url: result },
+          ]);
+          if (images.length > 0) {
+            messages.push({
+              role: "user",
+              content: images,
+              timestamp: receivedAt,
+            });
+          }
+        }
+        pendingReasoning.length = 0;
+        continue;
+      }
+      case "file_search_call": {
+        // Hosted file-search history: representable result text degrades to
+        // an ordered transcript; pure metadata (file ids, filenames, scores)
+        // never enters Pi.
+        const results = rawItem.results;
+        if (Array.isArray(results)) {
+          for (const entry of results) {
+            if (isRecord(entry) && typeof entry.text === "string") {
+              pushUser(entry.text);
+            }
+          }
+        }
+        pendingReasoning.length = 0;
+        continue;
+      }
+      case "code_interpreter_call": {
+        // Hosted code-interpreter history: representable log output degrades
+        // to an ordered transcript; images and pure lifecycle metadata
+        // (container id, code) never enter Pi.
+        const outputs = rawItem.outputs;
+        if (Array.isArray(outputs)) {
+          for (const entry of outputs) {
+            if (isRecord(entry) && typeof entry.logs === "string") {
+              pushUser(entry.logs);
+            }
+          }
+        }
+        pendingReasoning.length = 0;
+        continue;
+      }
       // MCP list/approval lifecycles have no Pi approval lifecycle. Only
       // model-visible decision text survives as a deterministic transcript;
       // pure metadata drops. Credentials/headers never enter Pi.
@@ -1850,8 +2048,7 @@ function collectExecutableNames(
       if (!isRecord(candidate)) continue;
       const type = candidate.type;
       const name = candidate.name;
-      if (typeof name !== "string" || name.length === 0) continue;
-      if (type === "namespace" && typeof name === "string") {
+      if (type === "namespace" && typeof name === "string" && name.length > 0) {
         if (!Array.isArray(candidate.tools)) continue;
         for (const inner of candidate.tools) {
           if (
@@ -1867,7 +2064,10 @@ function collectExecutableNames(
         continue;
       }
       // function/custom/local_shell/shell/apply_patch/computer/mcp are
-      // Client/BYOT executable families when declared in the catalog.
+      // Client/BYOT executable families when declared in the catalog. The
+      // installed SDK models the computer and apply_patch tools without a
+      // name; they map to the deterministic "computer"/"apply_patch" names
+      // like the tool converter does.
       if (
         type === "function" ||
         type === "custom" ||
@@ -1876,10 +2076,24 @@ function collectExecutableNames(
         type === "apply_patch" ||
         type === "computer" ||
         type === "computer_use" ||
+        type === "computer_use_preview" ||
         type === "mcp"
       ) {
-        names.add(name);
-        if (type === "custom") freeformNames.add(name);
+        const effectiveName =
+          (type === "computer" || type === "computer_use_preview") &&
+          (typeof name !== "string" || name.length === 0)
+            ? "computer"
+            : (type === "apply_patch" ||
+                type === "local_shell" ||
+                type === "shell") &&
+                (typeof name !== "string" || name.length === 0)
+              ? type
+              : typeof name === "string" && name.length > 0
+                ? name
+                : undefined;
+        if (effectiveName === undefined) continue;
+        names.add(effectiveName);
+        if (type === "custom") freeformNames.add(effectiveName);
       }
     }
   };

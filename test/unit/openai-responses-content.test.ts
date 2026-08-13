@@ -285,6 +285,32 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       ).toThrow(/base64/i);
     });
 
+    it("errors on base64 whose length is not a multiple of four", () => {
+      // RFC 4648 base64 payloads are 4-character groups; a length that is not
+      // a multiple of 4 cannot decode and must be a conversion error.
+      expect(() =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  {
+                    type: "input_image",
+                    image_url: "data:image/png;base64,AAAAA",
+                  },
+                ],
+              },
+            ],
+          },
+          1,
+          policy(),
+        ),
+      ).toThrow(/base64/i);
+    });
+
     it("errors on a data URL with no MIME type", () => {
       expect(() =>
         convertResponsesRequest(
@@ -1030,8 +1056,153 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       expect(texts).not.toContain("incomplete");
       expect(texts).not.toContain("length");
       expect(texts).not.toContain("notice");
-      // Notices are conversion notices, not model-visible text.
-      expect(invocation.notices).toHaveLength(0);
+      // A non-model-visible request-local diagnostic records the incomplete
+      // status; notice text is never injected into model-visible content.
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_incomplete_message",
+        ),
+      ).toBe(true);
+    });
+
+    it("errors on an in_progress reasoning item", () => {
+      // SDK reasoning items carry status in_progress|completed|incomplete;
+      // in_progress reasoning is a structured lifecycle error, never a
+      // silent acceptance of partial thinking.
+      expect(() =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                id: "rs_live",
+                status: "in_progress",
+                summary: [{ type: "summary_text", text: "still thinking" }],
+              },
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "answer" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        ),
+      ).toThrow(/in_progress/);
+    });
+
+    it("preserves representable content of an incomplete reasoning item", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_partial",
+              status: "incomplete",
+              summary: [{ type: "summary_text", text: "partial reasoning" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      expect(assistant?.content).toContainEqual({
+        type: "thinking",
+        thinking: "partial reasoning",
+      });
+      // No notice text or guessed length enters model-visible content.
+      const texts = JSON.stringify(invocation.context.messages);
+      expect(texts).not.toContain("incomplete");
+      expect(texts).not.toContain("length");
+    });
+
+    it("records a non-model-visible diagnostic for incomplete reasoning", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_partial",
+              status: "incomplete",
+              summary: [{ type: "summary_text", text: "partial reasoning" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_incomplete_message",
+        ),
+      ).toBe(true);
+    });
+
+    it("converts completed reasoning items normally", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "reasoning",
+              id: "rs_done",
+              status: "completed",
+              summary: [{ type: "summary_text", text: "done thinking" }],
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "answer" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (m) => m.role === "assistant",
+      );
+      expect(assistant?.content).toContainEqual({
+        type: "thinking",
+        thinking: "done thinking",
+      });
+    });
+
+    it("errors on an unknown reasoning status", () => {
+      expect(() =>
+        convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                id: "rs_weird",
+                status: "queued",
+                summary: [{ type: "summary_text", text: "x" }],
+              },
+            ],
+          },
+          1,
+          policy(),
+        ),
+      ).toThrow(/status/);
     });
   });
 });

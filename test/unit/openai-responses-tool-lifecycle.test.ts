@@ -79,7 +79,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       ]);
     });
 
-    it("maps strict:false and absent strict without constrainedSampling", () => {
+    it("maps strict:false without constrainedSampling", () => {
       const loose = convertResponsesRequest(
         {
           model: "m",
@@ -97,6 +97,12 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         policy(),
       );
       expect(loose.context.tools?.[0]?.constrainedSampling).toBeUndefined();
+    });
+
+    it("treats absent strict as the SDK default of strict:true", () => {
+      // The installed SDK documents `strict` defaulting to true; an absent
+      // strict maps to Pi constrainedSampling require rather than silently
+      // degrading caller intent.
       const absent = convertResponsesRequest(
         {
           model: "m",
@@ -106,7 +112,10 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(absent.context.tools?.[0]?.constrainedSampling).toBeUndefined();
+      expect(absent.context.tools?.[0]?.constrainedSampling).toEqual({
+        type: "json_schema",
+        strict: "require",
+      });
     });
 
     it("normalizes a non-object parameters into an object schema", () => {
@@ -188,6 +197,61 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
               type: "custom",
               name: "regex_tool",
               grammar: { type: "regex", regex: "^[a-z]+$" },
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+        type: "grammar",
+        variants: { openai_regex: "^[a-z]+$" },
+      });
+    });
+
+    it("maps the SDK format-field Lark grammar to Pi constrainedSampling openai_lark", () => {
+      // The installed SDK models custom-tool grammar under `format` as
+      // {type:"grammar", definition, syntax:"lark"|"regex"}; it must map to
+      // Pi constrainedSampling without being silently dropped.
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [
+            {
+              type: "custom",
+              name: "grammar_tool",
+              format: {
+                type: "grammar",
+                definition: "start: letter+",
+                syntax: "lark",
+              },
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+        type: "grammar",
+        variants: { openai_lark: "start: letter+" },
+      });
+    });
+
+    it("maps the SDK format-field regex grammar to Pi constrainedSampling openai_regex", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [
+            {
+              type: "custom",
+              name: "regex_tool",
+              format: {
+                type: "grammar",
+                definition: "^[a-z]+$",
+                syntax: "regex",
+              },
             },
           ],
         },

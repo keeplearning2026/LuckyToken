@@ -116,6 +116,48 @@ describe("16: every known Responses input-item family", () => {
     expect(invocation.context.tools).toBeUndefined();
   });
 
+  it("preserves file_search_call result text as ordered transcript", () => {
+    // Hosted file-search history with representable result text degrades to
+    // ordered transcript content; it never advertises an executable Pi tool.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "file_search_call",
+            id: "fs_1",
+            queries: ["find the bug"],
+            status: "completed",
+            results: [
+              {
+                file_id: "file_1",
+                filename: "bug.js",
+                text: "the bug is on line 42",
+              },
+              { file_id: "file_2", filename: "notes.md", text: "see readme" },
+            ],
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts).toEqual([
+      "the bug is on line 42",
+      "see readme",
+      "keep",
+    ]);
+    expect(invocation.context.tools).toBeUndefined();
+    // Pure metadata (file ids, filenames) never enters Pi.
+    const serialized = JSON.stringify(invocation.context);
+    expect(serialized).not.toContain("file_1");
+    expect(serialized).not.toContain("bug.js");
+  });
+
   it("errors on tool_search_call as a Core conversion error (not a plain unknown)", () => {
     expect(() =>
       convertResponsesRequest(
@@ -167,6 +209,102 @@ describe("16: every known Responses input-item family", () => {
     ]);
   });
 
+  it("maps the SDK action object of local_shell_call losslessly into arguments", () => {
+    // The installed SDK models local_shell_call with a structured `action`
+    // object, not a JSON `arguments` string. The action must map losslessly
+    // into the Pi ToolCall arguments.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "local_shell_call",
+            id: "lsc_1",
+            call_id: "call_sh",
+            name: "local_shell",
+            action: { type: "exec", command: "ls -la", timeout_ms: 5000 },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_sh",
+        name: "local_shell",
+        arguments: { type: "exec", command: "ls -la", timeout_ms: 5000 },
+      },
+    ]);
+  });
+
+  it("maps the SDK action object of shell_call losslessly into arguments", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "shell_call",
+            id: "sc_1",
+            call_id: "call_sh2",
+            name: "shell",
+            action: { type: "exec", command: "pwd" },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_sh2",
+        name: "shell",
+        arguments: { type: "exec", command: "pwd" },
+      },
+    ]);
+  });
+
+  it("maps the SDK action object of apply_patch_call losslessly into arguments", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "apply_patch_call",
+            id: "apc_1",
+            call_id: "call_p2",
+            name: "apply_patch",
+            action: { type: "apply_patch", patch: "*** Begin Patch" },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_p2",
+        name: "apply_patch",
+        arguments: { type: "apply_patch", patch: "*** Begin Patch" },
+      },
+    ]);
+  });
+
   it("maps local_shell_call_output to a structured Pi ToolResult", () => {
     const invocation = convertResponsesRequest(
       {
@@ -180,9 +318,44 @@ describe("16: every known Responses input-item family", () => {
             arguments: '{"command":"ls"}',
           },
           {
+            // The SDK correlates local_shell_call_output by `id` (= call_id).
             type: "local_shell_call_output",
-            id: "lsco_1",
+            id: "call_sh",
+            output: "file1\nfile2",
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "call_sh",
+      toolName: "local_shell",
+      content: [{ type: "text", text: "file1\nfile2" }],
+    });
+  });
+
+  it("maps an id-keyed SDK local_shell_call_output to the correlated ToolResult", () => {
+    // The installed SDK models local_shell_call_output with `id` as the
+    // correlation key (no separate call_id field).
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "local_shell_call",
+            id: "lsc_1",
             call_id: "call_sh",
+            name: "local_shell",
+            action: { type: "exec", command: "ls" },
+          },
+          {
+            type: "local_shell_call_output",
+            id: "call_sh",
             output: "file1\nfile2",
             status: "completed",
           },
@@ -259,6 +432,92 @@ describe("16: every known Responses input-item family", () => {
       toolName: "shell",
       content: [{ type: "text", text: "/workspace" }],
     });
+  });
+
+  it("maps the SDK stdout/stderr chunk output of shell_call_output into text", () => {
+    // The installed SDK models shell_call_output.output as an array of
+    // {stdout, stderr, outcome} chunks; the representable text degrades to
+    // ordered transcript content, never dropped.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "shell_call",
+            call_id: "call_sh2",
+            name: "shell",
+            action: { type: "exec", command: "ls" },
+          },
+          {
+            type: "shell_call_output",
+            call_id: "call_sh2",
+            output: [
+              {
+                stdout: "file1\nfile2",
+                stderr: "",
+                outcome: { type: "exit", exit_code: 0 },
+              },
+              {
+                stdout: "warning line",
+                stderr: "error line",
+                outcome: { type: "exit", exit_code: 1 },
+              },
+            ],
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    const text = (result?.content as Array<{ text: string }>)[0]?.text;
+    expect(text).toContain("file1\nfile2");
+    expect(text).toContain("warning line");
+    expect(text).toContain("error line");
+  });
+
+  it("maps the SDK operation object of apply_patch_call losslessly into arguments", () => {
+    // The installed SDK models apply_patch_call with a structured
+    // `operation` object (not action/arguments); it must map losslessly.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "apply_patch_call",
+            call_id: "call_p",
+            name: "apply_patch",
+            operation: {
+              type: "update_file",
+              file_path: "src/main.ts",
+              old_string: "const a = 1",
+              new_string: "const a = 2",
+            },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_p",
+        name: "apply_patch",
+        arguments: {
+          type: "update_file",
+          file_path: "src/main.ts",
+          old_string: "const a = 1",
+          new_string: "const a = 2",
+        },
+      },
+    ]);
   });
 
   it("maps apply_patch_call to a structured Pi ToolCall", () => {
@@ -410,6 +669,45 @@ describe("16: every known Responses input-item family", () => {
     });
   });
 
+  it("maps the SDK single-object computer_call_output screenshot to Pi images", () => {
+    // The installed SDK models computer_call_output.output as a single
+    // screenshot object, not an array. It must map to Pi ToolResult images.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "computer", name: "computer" }],
+        input: [
+          {
+            type: "computer_call",
+            id: "cc_1",
+            call_id: "call_cc",
+            name: "computer",
+            status: "completed",
+          },
+          {
+            type: "computer_call_output",
+            id: "cco_1",
+            call_id: "call_cc",
+            output: {
+              type: "computer_screenshot",
+              image_url:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+            },
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "call_cc",
+      content: [{ type: "image", mimeType: "image/png" }],
+    });
+  });
+
   it("degrades provider-hosted code_interpreter_call to transcript", () => {
     const invocation = convertResponsesRequest(
       {
@@ -426,12 +724,99 @@ describe("16: every known Responses input-item family", () => {
     expect(invocation.context.tools).toBeUndefined();
   });
 
+  it("preserves code_interpreter_call log output as ordered transcript", () => {
+    // Hosted code-interpreter history with representable log output degrades
+    // to an ordered transcript; it never advertises an executable Pi tool.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "code_interpreter_call",
+            id: "ci_1",
+            code: "print(1)",
+            container_id: "cont_1",
+            status: "completed",
+            outputs: [
+              { type: "logs", logs: "1\n" },
+              { type: "image", image_url: "https://cdn.test/plot.png" },
+            ],
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts).toEqual(["1\n", "keep"]);
+    expect(invocation.context.tools).toBeUndefined();
+    // Pure lifecycle metadata (container id, code) never enters Pi.
+    const serialized = JSON.stringify(invocation.context);
+    expect(serialized).not.toContain("cont_1");
+  });
+
   it("degrades provider-hosted image_generation_call to transcript", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
         input: [
           { type: "image_generation_call", id: "ig_1" },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("materializes a directly present data-URL image_generation_call result", () => {
+    // A hosted image-generation result that is directly materialized as a
+    // data URL within Client image limits maps to a Pi image; it is never
+    // advertised as an executable Pi tool.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "image_generation_call",
+            id: "ig_1",
+            status: "completed",
+            result:
+              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content);
+    expect(userTexts[0]).toMatchObject([{ type: "image", mimeType: "image/png" }]);
+    expect(userTexts[1]).toEqual([{ type: "text", text: "keep" }]);
+    expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("drops a bare base64 image_generation_call result without inventing a MIME", () => {
+    // The SDK models `result` as bare base64 without a MIME type; Pi
+    // ImageContent requires a MIME, so a MIME-less result drops rather than
+    // guessing a format.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "image_generation_call",
+            id: "ig_1",
+            status: "completed",
+            result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          },
           { type: "message", role: "user", content: "keep" },
         ],
       },
@@ -533,6 +918,45 @@ describe("16: every known Responses input-item family", () => {
     const call = assistant?.content?.[0] as { type: string; name: string };
     expect(call?.type).toBe("toolCall");
     expect(call?.name).toBe("db_query");
+  });
+
+  it("maps the SDK id-only mcp_call into a structured Pi ToolCall", () => {
+    // The installed SDK models mcp_call with `id` as the tool-call key (no
+    // separate call_id field) plus a JSON `arguments` string. It must map to
+    // a structured Pi ToolCall whose id is the SDK id.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [
+          {
+            type: "mcp",
+            name: "db_query",
+            arguments: { type: "object" },
+          },
+        ],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_sdk_1",
+            name: "db_query",
+            arguments: '{"sql":"select 1"}',
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "mc_sdk_1",
+        name: "db_query",
+        arguments: { sql: "select 1" },
+      },
+    ]);
   });
 
   it("degrades provider-hosted mcp_call to ordered transcript without Pi tool", () => {
@@ -648,6 +1072,53 @@ describe("16: every known Responses tool-definition family", () => {
     ]);
   });
 
+  it("maps name-less SDK local_shell and shell tool declarations into the Pi catalog", () => {
+    // The installed SDK models local_shell and shell without a name field;
+    // they map to deterministic Responses-owned names with documented action
+    // schemas so calls round-trip as structured ToolCalls.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "local_shell" }, { type: "shell" }],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "local_shell",
+      "shell",
+    ]);
+    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+      type: "object",
+    });
+  });
+
+  it("maps a name-less SDK apply_patch tool declaration into the Pi catalog", () => {
+    // The installed SDK models apply_patch without a name field; the adapter
+    // maps it to the deterministic "apply_patch" freeform name so calls
+    // round-trip as custom_tool_call output items.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "apply_patch" }],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      "apply_patch",
+    ]);
+    expect(invocation.context.tools?.[0]?.parameters).toMatchObject({
+      type: "object",
+      properties: { input: { type: "string" } },
+    });
+    expect(invocation.renderState.freeformToolNames).toEqual(
+      new Set(["apply_patch"]),
+    );
+  });
+
   it("drops provider-hosted tool declarations (file_search/web_search/image_generation/code_interpreter)", () => {
     const invocation = convertResponsesRequest(
       {
@@ -694,6 +1165,64 @@ describe("16: every known Responses tool-definition family", () => {
       "computer",
       "computer_use",
     ]);
+  });
+
+  it("maps a name-less SDK computer tool declaration into the Pi catalog", () => {
+    // The installed SDK models the computer tool without a name field
+    // (type: "computer" / "computer_use_preview"). The adapter maps it to a
+    // deterministic Responses-owned name so computer_call ownership can be
+    // classified; viewport/environment fields without Pi slots drop.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [
+          {
+            type: "computer_use_preview",
+            display_width: 1024,
+            display_height: 768,
+            environment: "linux",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["computer"]);
+    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+      type: "object",
+    });
+    // Viewport/environment fields never enter Pi.
+    const serialized = JSON.stringify(invocation.context);
+    expect(serialized).not.toContain("display_width");
+    expect(serialized).not.toContain("linux");
+  });
+
+  it("classifies a computer_call as Client/BYOT when a name-less computer tool is declared", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "computer" }],
+        input: [
+          {
+            type: "computer_call",
+            id: "cc_1",
+            call_id: "call_cc",
+            name: "computer",
+            action: { type: "click", x: 10, y: 20 },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    const call = assistant?.content?.[0] as { type: string; name: string };
+    expect(call?.type).toBe("toolCall");
+    expect(call?.name).toBe("computer");
   });
 
   it("maps mcp tools after adapter-owned schema resolution", () => {
@@ -744,6 +1273,44 @@ describe("16: every known Responses tool-definition family", () => {
     const serialized = JSON.stringify(invocation.context);
     expect(serialized).not.toContain("hidden");
     expect(serialized).not.toContain("authorization");
+  });
+
+  it("accepts SDK name-less shell/apply_patch forced tool choices as dropped controls", () => {
+    // The installed SDK models shell/apply_patch forced choices without a
+    // name; they are unsupported forced controls that drop with a notice,
+    // never an unknown-type error.
+    for (const choice of [{ type: "shell" }, { type: "apply_patch" }]) {
+      const invocation = convertResponsesRequest(
+        { model: "m", input: "x", tool_choice: choice },
+        1,
+        policy(),
+      );
+      expect(invocation.context.tools).toBeUndefined();
+      expect(
+        invocation.notices.some(
+          (n) => n.code === "openai-responses_forced_tool_choice_dropped",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("drops a declared-client mcp forced tool choice with a notice", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        tool_choice: { type: "mcp", name: "db_query" },
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["db_query"]);
+    expect(
+      invocation.notices.some(
+        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
+      ),
+    ).toBe(true);
   });
 
   it("errors on a forced tool choice depending on a dropped hosted tool", () => {
