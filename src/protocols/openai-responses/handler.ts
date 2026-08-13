@@ -265,6 +265,7 @@ async function handleOpenAIResponses(
             | undefined)
         : undefined,
       invocation.renderState.freeformToolNames,
+      invocation.renderState.namespaceReverse,
     );
     // Save the EXPANDED body (full history + increment), so each stored
     // entry contains the complete conversation up to this response. A later
