@@ -1623,7 +1623,9 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       policy(),
     );
     expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
-    expect(invocation.renderState.toolChoice).toBe("allowed");
+    // The SDK has no bare "allowed" tool_choice string; the filter is
+    // auto-mode filtering, so the effective echo is "auto".
+    expect(invocation.renderState.toolChoice).toBe("auto");
   });
 
   it("allowed with an unknown name filters it out", () => {
@@ -1635,14 +1637,14 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
   });
 
-  it("allowed with an empty list clears the catalog but records allowed", () => {
+  it("allowed with an empty list clears the catalog but records the effective auto", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: [] } },
       1,
       policy(),
     );
     expect(invocation.context.tools).toBeUndefined();
-    expect(invocation.renderState.toolChoice).toBe("allowed");
+    expect(invocation.renderState.toolChoice).toBe("auto");
   });
 
   it("forced with an available tool drops the control with a notice", () => {

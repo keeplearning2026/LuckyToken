@@ -133,7 +133,8 @@ export interface ResponsesResponseObject {
  * A rendered tool definition that describes only what actually took effect.
  * Hosted declarations that were dropped, forced choices, and parallel flags
  * never appear here. A freeform custom tool echoes under `custom` with the
- * documented {input:string} compatibility schema.
+ * SDK CustomTool shape: {type,name,description?,format?} — never a made-up
+ * `input_schema` field the target type does not have.
  */
 export interface ResponsesEchoTool {
   readonly type: "function" | "custom";
@@ -141,7 +142,7 @@ export interface ResponsesEchoTool {
   readonly namespace?: string;
   readonly description: string;
   readonly parameters?: Readonly<Record<string, unknown>>;
-  readonly input_schema?: Readonly<Record<string, unknown>>;
+  readonly format?: { readonly type: "text" };
   readonly strict?: boolean;
 }
 
@@ -230,11 +231,17 @@ function convertUsage(message: AssistantMessage): ResponsesUsage {
     usage.reasoning === undefined
       ? 0
       : requireCount(usage.reasoning, "usage.reasoning");
-  const total = requireCount(usage.totalTokens, "usage.totalTokens");
+  // Pi totalTokens does not have one cross-provider meaning: some providers
+  // include cacheRead/cacheWrite in it and some do not. The Responses target
+  // contract is total_tokens = input_tokens + output_tokens (input already
+  // includes cached tokens), so total is derived, never blindly echoed, and
+  // the wire object can never self-contradict.
+  requireCount(usage.totalTokens, "usage.totalTokens");
+  const inputTokens = input + cacheRead + cacheWrite;
   const result: ResponsesUsage = {
-    input_tokens: input + cacheRead + cacheWrite,
+    input_tokens: inputTokens,
     output_tokens: output,
-    total_tokens: total,
+    total_tokens: inputTokens + output,
     input_tokens_details: { cached_tokens: cacheRead },
     output_tokens_details: { reasoning_tokens: reasoning },
   };
@@ -465,7 +472,14 @@ export function convertAssistantMessageToResponses(
     output,
     parallel_tool_calls: true,
     temperature: renderState.temperature ?? null,
-    tool_choice: renderState.toolChoice ?? "auto",
+    // The SDK Response tool_choice has no bare "allowed" string; the
+    // allowed_tools filter is auto-mode filtering, so any residual "allowed"
+    // render-state value is normalized to the legal "auto" echo. Never echo a
+    // non-target value as effective.
+    tool_choice:
+      renderState.toolChoice === undefined || renderState.toolChoice === "allowed"
+        ? "auto"
+        : renderState.toolChoice,
     tools: (renderState.tools ?? []).map((tool) => Object.freeze({ ...tool })),
     top_p: renderState.topP ?? null,
     usage: convertUsage(message),

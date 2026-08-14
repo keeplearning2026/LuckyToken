@@ -42,6 +42,7 @@ import {
 } from "./response.js";
 import {
   mapUpstreamFailureFact,
+  redactMessage,
   SAFE_RESPONSE_HEADERS,
 } from "./error-rendering.js";
 import type { UpstreamFailureFact } from "../upstream-failure.js";
@@ -365,7 +366,9 @@ async function handleOpenAIResponses(
         return renderResponsesErrorResponse({
           status: mapping.status,
           type: mapping.type,
-          message: mapping.message,
+          // The legacy observer body-derived message is bounded and redacted
+          // here; it must never echo a credential fragment.
+          message: redactMessage(mapping.message),
           code: null,
           param: null,
           safeHeaders,
@@ -503,21 +506,18 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
     if (seen.has(key)) continue;
     seen.add(key);
     const freeform = freeformNames?.has(tool.name) === true;
-    // A freeform custom tool is echoed under its own `custom` type with the
-    // documented {input:string} compatibility schema; ordinary functions
-    // echo as strict function declarations.
+    // A freeform custom tool is echoed under its own `custom` type. The
+    // installed SDK models CustomTool as {type,name,description?,format?}
+    // with no `input_schema` field; the freeform input contract is the SDK
+    // `format: {type:"text"}` shape. Ordinary functions echo as strict
+    // function declarations.
     if (freeform) {
       tools.push({
         type: "custom",
         name,
         ...(reverse === undefined ? {} : { namespace: reverse.namespace }),
         description: tool.description,
-        input_schema: {
-          type: "object",
-          properties: { input: { type: "string" } },
-          required: ["input"],
-          additionalProperties: false,
-        },
+        format: { type: "text" },
       });
       continue;
     }

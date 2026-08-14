@@ -66,7 +66,7 @@ export interface ResponsesInvocation {
   renderState: {
     clientModel: string;
     stream: boolean;
-    /** Effective tool_choice that actually took effect (auto/none/allowed). */
+    /** Effective tool_choice that actually took effect (auto/none). */
     toolChoice?: string;
     /** Tool names declared as freeform `custom` tools; their calls must
      *  round-trip as `custom_tool_call` output items. */
@@ -2082,7 +2082,11 @@ function applyToolChoiceFilter(
       effectiveTools === undefined
         ? undefined
         : effectiveTools.filter((tool) => names.has(tool.name));
-    effectiveToolChoice = "allowed";
+    // The allowed_tools filter is auto-mode filtering: the SDK Response
+    // tool_choice has no bare "allowed" string (only
+    // 'none'|'auto'|'required' or the ToolChoiceAllowed object), so the
+    // effective echo is "auto" with the already-filtered catalog.
+    effectiveToolChoice = "auto";
   } else if (toolChoice === "forced") {
     // Unsupported forced control: drop unless it requires an unavailable tool.
     // This is an explicit hard-control degradation, so it emits a notice.

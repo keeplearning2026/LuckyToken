@@ -708,6 +708,126 @@ describe("OpenAI Responses serving", () => {
     expect(json.tools).toEqual([]);
   });
 
+  it("echoes custom tools in the SDK CustomTool shape, never inventing input_schema", async () => {
+    // The installed SDK models a custom tool as
+    // {type:'custom', name, description?, format?} — there is no input_schema
+    // field on CustomTool. An effective echo must not invent wire fields the
+    // target type does not have (ticket 17: echo effective normalized tools).
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("answered"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          tools: [
+            // strict:false keeps the function tool out of CommandCode's
+            // constrained-sampling requirement path (the mock provider
+            // rejects require).
+            {
+              type: "function",
+              name: "lookup",
+              parameters: { type: "object" },
+              strict: false,
+            },
+            { type: "custom", name: "apply_patch" },
+          ],
+          tool_choice: "auto",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { tools: Array<Record<string, unknown>> };
+    const byName = new Map(json.tools.map((tool) => [tool.name, tool]));
+    const custom = byName.get("apply_patch");
+    expect(custom).toBeDefined();
+    expect(custom!.type).toBe("custom");
+    // SDK CustomTool has no input_schema field; a freeform custom tool is
+    // expressed through the SDK's `format` slot or omitted entirely.
+    expect(custom).not.toHaveProperty("input_schema");
+    // The function tool keeps its SDK FunctionTool shape.
+    const fn = byName.get("lookup");
+    expect(fn).toMatchObject({
+      type: "function",
+      name: "lookup",
+      parameters: { type: "object" },
+    });
+  });
+
+  it("echoes tool_choice allowed filtering as the SDK auto value, never a raw allowed string", async () => {
+    // The SDK Response.tool_choice accepts 'none'|'auto'|'required' or the
+    // ToolChoiceAllowed object; a bare "allowed" string is not a legal wire
+    // value. The allowed_tools filter is auto-mode filtering, so the
+    // effective echo is "auto" with the filtered catalog (ticket 17: echo
+    // effective normalized controls).
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("answered"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          tools: [
+            // strict:false keeps the function tools out of CommandCode's
+            // constrained-sampling requirement path.
+            {
+              type: "function",
+              name: "lookup",
+              parameters: { type: "object" },
+              strict: false,
+            },
+            {
+              type: "function",
+              name: "other",
+              parameters: { type: "object" },
+              strict: false,
+            },
+          ],
+          tool_choice: { type: "allowed", allowed_tools: ["lookup"] },
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as {
+      tool_choice: string;
+      tools: Array<{ name: string }>;
+    };
+    expect(json.tool_choice).toBe("auto");
+    expect(json.tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
+  it("redacts and bounds a pre-commit body-derived message", async () => {
+    // AC7: unsafe body text is bounded and redacted even on the pre-commit
+    // error path. A credential-looking fragment must never be echoed.
+    const fetch: FetchFunction = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            type: "api_error",
+            message: "Bearer sk-secret-token-12345678 failed",
+          },
+        }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { message: string } };
+    expect(body.error.message).not.toContain("sk-secret-token-12345678");
+  });
+
   it("exposes the resolved model through GET /v1/models without auth", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),
