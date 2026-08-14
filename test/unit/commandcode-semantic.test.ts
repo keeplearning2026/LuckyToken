@@ -7,6 +7,14 @@ import {
   captureCommandCodeResponseAuthority,
   convertCommittedCommandCodeResult,
 } from "../../src/providers/commandcode-private/semantic.js";
+import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
+}
 
 function model(): Model<string> {
   return {
@@ -27,7 +35,7 @@ function result(
   rawUsage: Record<string, unknown> | undefined,
   overrides: Partial<CommandCodeResult> = {},
 ): CommandCodeResult {
-  return {
+  return deepFreeze({
     content: [],
     finish: { type: "finish", finishReason: "stop" },
     ...(rawUsage === undefined ? {} : { rawUsage }),
@@ -39,7 +47,7 @@ function result(
     },
     notices: [],
     ...overrides,
-  };
+  });
 }
 
 describe("committed CommandCode to Pi semantics", () => {
@@ -127,14 +135,53 @@ describe("committed CommandCode to Pi semantics", () => {
     });
   });
 
-  it("validates reasoning as an output subset and ignores raw totalTokens", () => {
+  it("rejects a mutable value at the committed-result seam", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const mutable: CommandCodeResult = {
+      content: [],
+      finish: { type: "finish", finishReason: "stop" },
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      notices: [],
+    };
+
+    const message = convertCommittedCommandCodeResult(mutable, authority);
+    expect(message.stopReason).toBe("error");
+    expect(findUpstreamFailureFact(message.diagnostics)?.kind).toBe("conversion");
+  });
+
+  it("captures an owned pricing snapshot without freezing caller-owned model fields", () => {
+    const selected = model();
+    const authority = captureCommandCodeResponseAuthority(selected, () => 10);
+
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(Object.isFrozen(authority.pricingModel)).toBe(true);
+    expect(Object.isFrozen(selected.input)).toBe(false);
+    selected.input.push("image");
+    expect(authority.pricingModel.input).toEqual(["text"]);
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid response timestamp %s at authority capture",
+    (timestamp) => {
+      expect(() =>
+        captureCommandCodeResponseAuthority(model(), () => timestamp),
+      ).toThrow("response timestamp must be a non-negative safe integer");
+    },
+  );
+
+  it("validates reasoning as an output subset and consumes raw totalTokens", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result({
         inputTokens: 4,
         outputTokens: 6,
         outputTokenDetails: { reasoningTokens: 3 },
-        totalTokens: 999,
+        totalTokens: 10,
       }),
       authority,
     );
@@ -172,6 +219,26 @@ describe("committed CommandCode to Pi semantics", () => {
       },
     },
     { name: "fractional output", raw: { inputTokens: 1, outputTokens: 1.5 } },
+    {
+      name: "derived total overflow",
+      raw: { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 },
+    },
+    {
+      name: "inconsistent source total",
+      raw: { inputTokens: 1, outputTokens: 1, totalTokens: 999 },
+    },
+    {
+      name: "inconsistent explicit input partition",
+      raw: {
+        inputTokens: 11,
+        inputTokenDetails: {
+          noCacheTokens: 5,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+        },
+        outputTokens: 1,
+      },
+    },
   ])("uses zero failure accounting for $name", ({ raw }) => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(result(raw), authority);
@@ -186,13 +253,18 @@ describe("committed CommandCode to Pi semantics", () => {
         totalTokens: 0,
       },
     });
+    expect(findUpstreamFailureFact(message.diagnostics)).toMatchObject({
+      kind: "conversion",
+      providerCode: "INVALID_COMMITTED_RESULT",
+      retryable: false,
+    });
   });
 
-  it("ignores raw inputTokens when an explicit noCache partition is present", () => {
+  it("cross-checks raw inputTokens when an explicit noCache partition is present", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result({
-        inputTokens: 11,
+        inputTokens: 10,
         inputTokenDetails: {
           noCacheTokens: 5,
           cacheReadTokens: 3,
@@ -211,17 +283,84 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(message.stopReason).toBe("stop");
   });
 
-  it("does not read top-level reasoningTokens as an alias", () => {
+  it("consumes and cross-checks known cache and reasoning aliases", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result({
         inputTokens: 1,
+        inputTokenDetails: { cacheReadTokens: 1 },
+        cachedInputTokens: 1,
         outputTokens: 2,
-        reasoningTokens: 3,
+        outputTokenDetails: { reasoningTokens: 1, textTokens: 1 },
+        reasoningTokens: 1,
+        totalTokens: 3,
       }),
       authority,
     );
-    expect(message.usage.reasoning).toBeUndefined();
+    expect(message.usage).toMatchObject({
+      input: 0,
+      cacheRead: 1,
+      output: 2,
+      reasoning: 1,
+      totalTokens: 3,
+    });
+    expect(message.usage.cacheWrite1h).toBeUndefined();
+  });
+
+  it("uses known top-level aliases when nested details are absent", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const message = convertCommittedCommandCodeResult(
+      result({
+        inputTokens: 4,
+        cachedInputTokens: 1,
+        outputTokens: 3,
+        reasoningTokens: 2,
+        totalTokens: 7,
+      }),
+      authority,
+    );
+
+    expect(message.usage).toMatchObject({
+      input: 3,
+      cacheRead: 1,
+      output: 3,
+      reasoning: 2,
+      totalTokens: 7,
+    });
+  });
+
+  it.each([
+    {
+      name: "cache-read alias conflict",
+      raw: {
+        inputTokens: 3,
+        inputTokenDetails: { cacheReadTokens: 1 },
+        cachedInputTokens: 2,
+        outputTokens: 1,
+      },
+    },
+    {
+      name: "reasoning alias conflict",
+      raw: {
+        inputTokens: 1,
+        outputTokens: 2,
+        outputTokenDetails: { reasoningTokens: 1 },
+        reasoningTokens: 2,
+      },
+    },
+    {
+      name: "text and reasoning output conflict",
+      raw: {
+        inputTokens: 1,
+        outputTokens: 4,
+        outputTokenDetails: { textTokens: 2, reasoningTokens: 1 },
+      },
+    },
+  ])("rejects $name", ({ raw }) => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const message = convertCommittedCommandCodeResult(result(raw), authority);
+    expect(message.stopReason).toBe("error");
+    expect(findUpstreamFailureFact(message.diagnostics)?.kind).toBe("conversion");
   });
 
   it("preserves ordered content and finish diagnostics without signatures", () => {
@@ -246,6 +385,10 @@ describe("committed CommandCode to Pi semantics", () => {
             rawFinishReason: "raw-tool-reason",
           },
           systemPromptTokens: 99,
+          responseIdentity: {
+            responseId: "response-2",
+            responseModel: "wire-model",
+          },
         },
       ),
       authority,
@@ -253,6 +396,9 @@ describe("committed CommandCode to Pi semantics", () => {
 
     expect(message).toMatchObject({
       stopReason: "toolUse",
+      timestamp: 10,
+      responseId: "response-2",
+      responseModel: "wire-model",
       rawStopReason: "raw-tool-reason",
       content: [
         { type: "text", text: "text" },
@@ -271,18 +417,37 @@ describe("committed CommandCode to Pi semantics", () => {
   });
 
   it.each([
-    ["length", "length"],
-    ["stop", "stop"],
-  ])("maps finish %s to %s", (finishReason, expected) => {
+    ["length", false, "length"],
+    ["length", true, "length"],
+    ["stop", false, "stop"],
+    ["stop", true, "toolUse"],
+    ["tool-calls", false, "stop"],
+    ["tool-calls", true, "toolUse"],
+  ])("maps finish %s with tool=%s to %s", (finishReason, withTool, expected) => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result(undefined, {
+        content: withTool
+          ? [{ type: "tool_use", id: "call", toolName: "tool", input: {} }]
+          : [],
         finish: { type: "finish", finishReason },
       }),
       authority,
     );
     expect(message.stopReason).toBe(expected);
     expect(message.rawStopReason).toBe(finishReason);
+    const mismatch = message.diagnostics?.find(
+      (diagnostic) => {
+        const notice = diagnostic.details?.notice as
+          | { code?: unknown }
+          | undefined;
+        return (
+          diagnostic.type === "luckytoken.conversion_notice.v1" &&
+          notice?.code === "finish_content_mismatch_degraded"
+        );
+      },
+    );
+    expect(mismatch !== undefined).toBe(withTool !== (finishReason === "tool-calls"));
   });
 
   it.each(["content-filter", "error", "other", "future-reason", undefined])(
@@ -412,11 +577,11 @@ describe("committed CommandCode to Pi semantics", () => {
     }
   });
 
-  it("fails reasoning from a non-reasoning route and converts ordinary tool calls", () => {
+  it("preserves received reasoning from a non-reasoning route and converts ordinary tool calls", () => {
     const nonReasoning = model();
     nonReasoning.reasoning = false;
     const authority = captureCommandCodeResponseAuthority(nonReasoning, () => 10);
-    const failed = convertCommittedCommandCodeResult(
+    const reasoning = convertCommittedCommandCodeResult(
       result(
         { inputTokens: 1, outputTokens: 1 },
         {
@@ -426,7 +591,10 @@ describe("committed CommandCode to Pi semantics", () => {
       ),
       authority,
     );
-    expect(failed).toMatchObject({ content: [], stopReason: "error" });
+    expect(reasoning).toMatchObject({
+      content: [{ type: "thinking", thinking: "hidden" }],
+      stopReason: "stop",
+    });
 
     const tool = convertCommittedCommandCodeResult(
       result(
@@ -451,6 +619,71 @@ describe("committed CommandCode to Pi semantics", () => {
         { type: "toolCall", id: "call", name: "tool", arguments: {} },
       ],
     });
+  });
+
+  it("omits absent response identity and deep-freezes every returned message", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const notice = Object.freeze({
+      adapter: "commandcode-private",
+      direction: "response" as const,
+      code: "fixture_notice",
+      action: "degrade" as const,
+    });
+    const message = convertCommittedCommandCodeResult(
+      result(
+        { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        {
+          content: [
+            {
+              type: "tool_use",
+              id: "call",
+              toolName: "tool",
+              input: { nested: [1, { exact: true }] },
+            },
+          ],
+          finish: { type: "finish", finishReason: "tool-calls" },
+        },
+      ),
+      authority,
+      [notice],
+    );
+
+    expect(message).not.toHaveProperty("responseId");
+    expect(message).not.toHaveProperty("responseModel");
+    expect(Object.isFrozen(message)).toBe(true);
+    expect(Object.isFrozen(message.content)).toBe(true);
+    expect(Object.isFrozen(message.content[0])).toBe(true);
+    expect(Object.isFrozen((message.content[0] as { arguments: object }).arguments)).toBe(true);
+    expect(Object.isFrozen(message.usage)).toBe(true);
+    expect(Object.isFrozen(message.usage.cost)).toBe(true);
+    expect(Object.isFrozen(message.diagnostics)).toBe(true);
+    expect(Object.isFrozen(message.diagnostics?.[0])).toBe(true);
+  });
+
+  it("deep-freezes conversion errors and preserves neutral failure beside notices", () => {
+    const authority = captureCommandCodeResponseAuthority(model(), () => 10);
+    const notice = Object.freeze({
+      adapter: "commandcode-private",
+      direction: "response" as const,
+      code: "fixture_notice",
+      action: "degrade" as const,
+    });
+    const message = convertCommittedCommandCodeResult(
+      result({ inputTokens: 1, outputTokens: 1, totalTokens: 999 }),
+      authority,
+      [notice],
+    );
+
+    expect(message.stopReason).toBe("error");
+    expect(findUpstreamFailureFact(message.diagnostics)?.kind).toBe("conversion");
+    expect(
+      message.diagnostics?.some(
+        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+      ),
+    ).toBe(true);
+    expect(Object.isFrozen(message)).toBe(true);
+    expect(Object.isFrozen(message.diagnostics)).toBe(true);
+    expect(Object.isFrozen(message.diagnostics?.[0])).toBe(true);
   });
 
   it("uses deep pre-hook tier pricing and Pi one-hour cache-write semantics", () => {

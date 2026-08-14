@@ -1875,18 +1875,23 @@ Provider invocation 开始时就 snapshot response identity、timestamp 和 pric
 Conversion 只在 assembler commit 后发生：
 
 - CommandCode text → Pi `TextContent`；
-- reasoning → Pi `ThinkingContent`，但 model 必须是 certified reasoning model；
+- reasoning → Pi `ThinkingContent`；已经收到的可表示内容不会因为 model catalog 的
+  `reasoning:false` 请求能力声明而被拒绝；
 - client-owned tool use → Pi `ToolCall`，ID/name/lossless JSON arguments 保留；
+- last finish-step identity → Pi `responseId` / `responseModel`；没有来源时省略；
 - `providerExecuted`/`dynamic` 等 server-owned 元数据在 assembler 阶段已不保留，
   这里不再读取或检查；
-- usage 按文档 §5.3 构造：`noCacheTokens` 优先（存在即权威，不读 `inputTokens`
-  做一致性校验），否则 `inputTokens − cacheRead − cacheWrite`；reasoning 只来自
-  `outputTokenDetails.reasoningTokens`（不读顶层 `reasoningTokens` alias）；
-  用 captured pricing model 算 cost；
-- finish 按文档 §6.4 只映射两个精确分支：`tool-calls → toolUse`、
-  `length → length`；**其他/缺失 finishReason → `stop`**（不维护 whitelist、
-  不报错、不读 rawFinishReason 分类；pause-stop 走同一 converter，raw reason 只作为
-  non-model-visible fact 保留）。
+- usage 消费 final finish 的 raw total 与已知 alias：`inputTokens` 与显式
+  `noCache + cacheRead + cacheWrite` 分区互相校验，nested/top-level cache-read 与
+  reasoning aliases 必须一致，source `totalTokens` 必须等于 Pi components；当前 wire
+  没有 one-hour cache-write split，因此不猜测 `cacheWrite1h`；最后用 captured pricing
+  model 算 cost；
+- finish 的 `length` 优先；否则由实际转换后的 ToolCall content 决定 `toolUse` / `stop`。
+  Wire category 与内容不一致时只产生 non-model-visible diagnostic，原始 reason 仍保留；
+  pause-stop 走同一个 converter。
+
+Converter 只接受 immutable committed result，并返回 deep-frozen Pi message。任何 content
+或 usage 不一致都产生 neutral `kind:"conversion"` error terminal，不重放 partial success。
 
 Replay 在完整 `AssistantMessage` 已知后生成 Pi start/content/done events。任何 error 或
 abort 只发 Pi error terminal；如果 signal 在 replay 前 abort，已完成内容也被丢弃并

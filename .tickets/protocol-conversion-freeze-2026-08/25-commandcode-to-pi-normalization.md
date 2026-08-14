@@ -4,7 +4,7 @@
 
 **Blocked by:** 24 — CommandCode JSONL lifecycle.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,20 +16,19 @@ CommandCode wire structures cease at this seam. Only Pi content/usage/identity/r
 
 ## Acceptance criteria
 
-- [ ] Text maps to Pi TextContent and reasoning maps to Pi ThinkingContent even when model.reasoning=false.
-- [ ] ToolCall preserves ID/name and lossless object arguments.
-- [ ] Last finish-step response identity maps to responseId/responseModel; absent identity remains omitted.
-- [ ] Pi timestamp uses the documented request/response lifetime authority, not ambiguous server metadata.
-- [ ] Final finish usage maps input/output/cacheRead/cacheWrite/cacheWrite1h/reasoning/total and known aliases with integer/nonnegative/consistency validation.
-- [ ] Source total/aliases are consumed and cross-checked rather than ignored/recomputed blindly.
-- [ ] length remains length; otherwise actual ToolCall content determines toolUse/stop.
-- [ ] Raw finish reason is preserved; content/finish mismatch creates non-model-visible diagnostic.
-- [ ] pause=stop committed results pass through the same converter and validations.
-- [ ] Invalid content/usage produces a neutral conversion failure with no partial Pi success events.
-- [ ] Tests cover all content/usage/identity/terminal combinations and immutable output.
-- [ ] No Anthropic/Responses types, selectors, or render rules enter the module.
+- [x] Text maps to Pi TextContent and reasoning maps to Pi ThinkingContent even when model.reasoning=false.
+- [x] ToolCall preserves ID/name and lossless object arguments.
+- [x] Last finish-step response identity maps to responseId/responseModel; absent identity remains omitted.
+- [x] Pi timestamp uses the documented request/response lifetime authority, not ambiguous server metadata.
+- [x] Final finish usage maps input/output/cacheRead/cacheWrite/reasoning/total and known aliases with integer/nonnegative/consistency validation. Pi `cacheWrite1h` is set only when the CommandCode wire defines an authoritative one-hour split; the currently evidenced wire has no such field, so it remains omitted rather than guessed from `cacheWriteTokens`.
+- [x] Source total/aliases are consumed and cross-checked rather than ignored/recomputed blindly.
+- [x] length remains length; otherwise actual ToolCall content determines toolUse/stop.
+- [x] Raw finish reason is preserved; content/finish mismatch creates non-model-visible diagnostic.
+- [x] pause=stop committed results pass through the same converter and validations.
+- [x] Invalid content/usage produces a neutral conversion failure with no partial Pi success events.
+- [x] Tests cover all content/usage/identity/terminal combinations and immutable output.
+- [x] No Anthropic/Responses types, selectors, or render rules enter the module.
 
 ## Out of scope
 
 Event replay and failure transport (26).
-

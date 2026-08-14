@@ -367,10 +367,12 @@ Preserve and validate all target-backed token facts:
 - cached input/read tokens;
 - cache-write tokens where present;
 - reasoning tokens;
-- one-hour cache tokens where present;
+- one-hour cache tokens only where the CommandCode wire provides an authoritative retention split;
 - total tokens and known aliases.
 
 The final finish total usage is authoritative. Direct total/alias fields are consumed and cross-checked rather than ignored; derived totals are used only where source fields are absent. Require non-negative finite integers and enforce target invariants such as reasoning≤output and consistent totals.
+
+The currently evidenced CommandCode schema exposes `cacheWriteTokens` but no one-hour retention split. Therefore Pi `cacheWrite1h` is omitted. Treating all cache writes as one-hour writes would invent a provider fact.
 
 Pi cost is computed only where a trusted model cost contract applies; it is not taken from arbitrary wire metadata.
 
@@ -452,11 +454,8 @@ Retry rules:
 
 ## 15. Current implementation gaps
 
-Remaining gaps after tickets 20–24:
+Remaining gaps after tickets 20–25:
 
-- reasoning content may be rejected by model.reasoning=false;
-- stop reason is not content-normalized;
-- total token aliases are ignored/recomputed;
 - stream error facts are flattened through semantic/execution;
 
 These are implementation gaps against this frozen method.

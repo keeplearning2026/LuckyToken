@@ -2552,7 +2552,7 @@ export interface FinishEvent
 | `other` | provider-specific reason not covered above |
 | missing or future unknown string | tolerant fallback |
 
-Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。只有 exact `tool-calls` 和 exact `length` 得到 special normalized result；其余全部 fallback 到 `end_turn`。
+Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。对 LuckyToken 的 Pi boundary，只有 exact `length` 直接决定 normalized result；其他值由已提交的实际 ToolCall content 决定 `toolUse` / `stop`。Exact `tool-calls` 只参与 wire/content consistency diagnostic，不能替代实际内容。
 
 `finishReason:"error"` 仍然是一个正常 `type:"finish"` event，source client 不会仅因该 value throw。只有独立的 `type:"error"` event 才进入 stream error path。
 
@@ -2565,14 +2565,14 @@ const returnedRawFinishReason =
   event.rawFinishReason ?? event.finishReason;
 ~~~
 
-可能的 mapping example：
+当前 Pi mapping：
 
 ~~~text
-wire finishReason       stopReason
-──────────────────────  ─────────────────────────
-"tool-calls"            "tool_calls"/"tool_use"
-"length"                "max_tokens"
-other / missing          "end_turn"
+condition                               Pi stopReason
+──────────────────────────────────────  ─────────────
+finishReason === "length"               "length"
+otherwise + committed ToolCall exists   "toolUse"
+otherwise                               "stop"
 ~~~
 
 ### 8.1.3 收到后的处理，参考处理
@@ -2583,15 +2583,15 @@ other / missing          "end_turn"
 2. 用该 event 的 `totalUsage`、`systemPromptTokens` 完整替换 current extracted metadata；字段 missing 时分别重置为 missing/zero view。
 3. 不停止 physical read；继续处理后续 lines，直到 EOF。
 4. 同一 HTTP response 出现多个 `finish` 时，后一个 event 完整覆盖前一个，不能混合不同 finish 的字段。
-5. EOF 既没有 `finish` 也没有 `abort` 时，rollback 并抛 `CommandCodeTransportError`（`status: 502`、`retryable: true`、`midStream: true`）；即使存在 open block 也相同。
+5. EOF 既没有 `finish` 也没有 `abort` 时，rollback 并抛 neutral `CommandCodeTransportError`（`kind:"transport"`、`phase:"unexpected_eof"`、`retryable:true`，不虚构 upstream HTTP status）；即使存在 open block 也相同。
 6. EOF 已有 `finish` 但仍有 open block 时，抛 `INVALID_BLOCK_LIFECYCLE` protocol error。
-7. 所有 block 已关闭，且 EOF 时最后一个 finish 的 `rawFinishReason ?? finishReason` exact 等于 `pause_turn`，rollback 并抛 `CommandCodePauseTurnError`。
+7. 所有 block 已关闭，且 EOF 时最后一个 finish 的 exact `rawFinishReason` 等于 `pause_turn`，应用 Provider `pauseTurn` policy：`stop` 保留 staged result 并添加 degradation notice；`error` rollback 并抛 neutral non-retryable `CommandCodePauseTurnError`。
 
 按 `rawFinishReason` 展开：
 
 | Received `rawFinishReason` | 当前 profile behavior |
 |---|---|
-| `pause_turn` | EOF 后抛 non-retryable `CommandCodePauseTurnError`；不发送 continuation |
+| `pause_turn` | `pauseTurn=stop`（default）提交普通结果并添加 notice；`pauseTurn=error` rollback 后抛 non-retryable `CommandCodePauseTurnError`；均不发送 continuation |
 | other non-empty string | 保存到 final `FinishEvent`，交给 diagnostics/B-specific conversion；不改变 derived stop reason |
 | missing | 使用 `finishReason` 作为 returned raw reason |
 
@@ -2605,7 +2605,7 @@ other / missing          "end_turn"
 |---|---|
 | 保存完整 final `FinishEvent` | 后续仍需原始 `finishReason`、`rawFinishReason`、usage |
 | `rawFinishReason = rawFinishReason ?? finishReason` | 与 source result 一致 |
-| exact `tool-calls` / `length` / fallback normalization | 提供 source-compatible derived `stopReason` |
+| exact `length` + actual ToolCall content normalization | 产生内部一致的 Pi `stopReason`；wire/content mismatch 只进入 diagnostic |
 | finish 后读到 physical EOF | 防止漏掉 trailing events，并确认 response 有 semantic terminal event |
 | final finish usage normalization | 同时提供 raw object 与 normalized view |
 
@@ -2640,7 +2640,7 @@ export async function decodeOneCommandCodeResponse(
 }
 ~~~
 
-当前 profile 不设置通用 finish-acceptance helper。Application/B-specific adapter 直接读取并保留 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`；若需要 derived stop reason，只能在对应 boundary 按本节 exact mapping 计算，不能覆盖原始字段。
+当前 profile 不设置通用 finish-acceptance helper。Application/B-specific adapter 直接读取并保留 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`；derived stop reason 只能在对应 boundary 按实际 target contract 计算，不能覆盖原始字段。LuckyToken 的 Pi mapping 使用本节 content-derived 规则。
 
 ## 8.2 Usage
 
@@ -2673,6 +2673,8 @@ Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 mis
 - future provider fields
 
 `systemPromptTokens` 位于 finish 顶层，不在 `totalUsage` 内。
+
+进入 Pi boundary 时，`cachedInputTokens` 与 `inputTokenDetails.cacheReadTokens`、顶层 `reasoningTokens` 与 `outputTokenDetails.reasoningTokens` 分别是已知 aliases：任一可单独供值，同时存在必须相等。显式 `noCacheTokens` 与 `inputTokens` 同时存在时，必须满足 `inputTokens = noCache + cacheRead + cacheWrite`；source `totalTokens` 同样必须与全部 Pi token components 一致。所有分量与派生和都必须是 non-negative safe integer。当前 schema 没有 one-hour cache retention split，因此 Pi `cacheWrite1h` 保持 absent，不能从普通 `cacheWriteTokens` 猜测。
 
 同一个 HTTP response 多次出现 `finish` 时，最后一个 finish event 完整决定 final metadata。最后一个 event 缺少 `totalUsage` 时 `rawUsage` 为 `undefined`、normalized usage 为四个零；缺少 `systemPromptTokens` 时 extracted value 为 `undefined`。
 
@@ -2787,15 +2789,7 @@ Conversion boundary：
 
 5. 不得把 CommandCode raw `{"type":"finish",...}` JSON line直接当作 B event；“转换”与“原样转发”是两种不同操作。
 
-   mapping example：
-
-   ~~~text
-   wire finishReason       stopReason
-   ──────────────────────  ─────────────────────────
-   "tool-calls"            "tool_calls"/"tool_use"
-   "length"                "max_tokens"
-   other / missing          "end_turn"
-   ~~~
+   LuckyToken 的具体 Pi mapping 由 `PI AI IR-Commandcode Private Conversion.md` 冻结，并采用 §8.1.2 的 content-derived normalization；未知 Protocol B 不能复用该 target-specific 规则。
 
 
 ## 9.3 Reasoning policy
@@ -2809,6 +2803,8 @@ Protocol B 可能：
 - 只支持 opaque/encrypted reasoning：不能把 plain source reasoning 冒充 native opaque item。
 
 不要无条件把 reasoning 拼进 visible assistant text，这会改变 response semantics。
+
+LuckyToken 当前 target 是 Pi AI IR，具有独立 `ThinkingContent`，因此 CommandCode reasoning 直接映射为 Thinking；已经收到的 representable content 不受 model catalog `reasoning:false` 请求能力标记限制。
 
 ## 9.4 真正 SSE framing
 

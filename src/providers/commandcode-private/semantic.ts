@@ -11,11 +11,15 @@ import {
 } from "@earendil-works/pi-ai";
 
 import type { CommandCodeResult } from "./assembler.js";
+import { COMMANDCODE_PROVIDER_ID } from "./constants.js";
 import { cloneLosslessJsonObject } from "./json.js";
 import { createConversionNoticeDiagnostic } from "../../execution-facts.js";
 import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 import { createUpstreamFailureDiagnostic } from "../../protocols/upstream-failure.js";
-import { CommandCodeNeutralFailureError } from "./failure.js";
+import {
+  commandCodeNeutralFailure,
+  CommandCodeNeutralFailureError,
+} from "./failure.js";
 
 export interface CommandCodeResponseAuthority {
   api: string;
@@ -25,23 +29,63 @@ export interface CommandCodeResponseAuthority {
   pricingModel: Model<string>;
 }
 
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
+}
+
+function requireDeepFrozen(
+  value: unknown,
+  field: string,
+  seen = new Set<object>(),
+): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) return;
+  if (!Object.isFrozen(value)) {
+    throw new Error(`${field} must be immutable`);
+  }
+  seen.add(value);
+  for (const [name, nested] of Object.entries(value)) {
+    requireDeepFrozen(nested, `${field}.${name}`, seen);
+  }
+}
+
 export function captureCommandCodeResponseAuthority(
   model: Model<string>,
   now: () => number,
 ): CommandCodeResponseAuthority {
+  const responseTimestamp = now();
+  if (!Number.isSafeInteger(responseTimestamp) || responseTimestamp < 0) {
+    throw new TypeError(
+      "CommandCode response timestamp must be a non-negative safe integer",
+    );
+  }
   const cost = {
     ...model.cost,
     ...(model.cost.tiers === undefined
       ? {}
       : { tiers: model.cost.tiers.map((tier) => ({ ...tier })) }),
   };
-  return {
+  const pricingModel: Model<string> = {
+    id: model.id,
+    name: model.name,
+    api: model.api,
+    provider: model.provider,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: [...model.input],
+    cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+  };
+  return deepFreeze({
     api: model.api,
     provider: model.provider,
     modelId: model.id,
-    responseTimestamp: now(),
-    pricingModel: { ...model, cost },
-  };
+    responseTimestamp,
+    pricingModel,
+  });
 }
 
 export function zeroUsage(): Usage {
@@ -74,6 +118,32 @@ function requireCount(value: unknown, field: string): number {
   return value as number;
 }
 
+function optionalCount(
+  record: Readonly<Record<string, unknown>> | undefined,
+  field: string,
+): number | undefined {
+  if (record === undefined || !Object.hasOwn(record, field)) return undefined;
+  return requireCount(record[field], field);
+}
+
+function requireSameCount(
+  left: number | undefined,
+  right: number | undefined,
+  fields: string,
+): void {
+  if (left !== undefined && right !== undefined && left !== right) {
+    throw new Error(`${fields} must agree`);
+  }
+}
+
+function safeTokenSum(field: string, ...values: readonly number[]): number {
+  const sum = values.reduce((total, value) => total + value, 0);
+  if (!Number.isSafeInteger(sum)) {
+    throw new Error(`${field} exceeds the safe-integer range`);
+  }
+  return sum;
+}
+
 function convertUsage(
   result: CommandCodeResult,
   authority: CommandCodeResponseAuthority,
@@ -90,56 +160,99 @@ function convertUsage(
   }
   const outputDetails = isRecord(rawOutputDetails) ? rawOutputDetails : undefined;
 
-  const cacheReadPresent =
-    inputDetails !== undefined && Object.hasOwn(inputDetails, "cacheReadTokens");
-  const cacheWritePresent =
-    inputDetails !== undefined && Object.hasOwn(inputDetails, "cacheWriteTokens");
-  const cacheRead = requireCount(
-    cacheReadPresent
-      ? inputDetails.cacheReadTokens
-      : result.usage.cacheReadTokens,
+  const normalizedInput = requireCount(result.usage.inputTokens, "inputTokens");
+  const normalizedOutput = requireCount(result.usage.outputTokens, "outputTokens");
+  const normalizedCacheRead = requireCount(
+    result.usage.cacheReadTokens,
     "cacheReadTokens",
   );
-  const cacheWrite = requireCount(
-    cacheWritePresent
-      ? inputDetails.cacheWriteTokens
-      : result.usage.cacheWriteTokens,
+  const normalizedCacheWrite = requireCount(
+    result.usage.cacheWriteTokens,
     "cacheWriteTokens",
   );
-  const rawInputPresent = raw !== undefined && Object.hasOwn(raw, "inputTokens");
-  const noCachePresent =
-    inputDetails !== undefined && Object.hasOwn(inputDetails, "noCacheTokens");
+  const nestedCacheRead = optionalCount(inputDetails, "cacheReadTokens");
+  const aliasedCacheRead = optionalCount(raw, "cachedInputTokens");
+  requireSameCount(
+    nestedCacheRead,
+    aliasedCacheRead,
+    "cacheReadTokens and cachedInputTokens",
+  );
+  const cacheRead = nestedCacheRead ?? aliasedCacheRead ?? normalizedCacheRead;
+  const cacheWrite =
+    optionalCount(inputDetails, "cacheWriteTokens") ?? normalizedCacheWrite;
+  const rawInput = optionalCount(raw, "inputTokens");
+  const noCache = optionalCount(inputDetails, "noCacheTokens");
   let input: number;
-  if (noCachePresent) {
-    input = requireCount(inputDetails?.noCacheTokens, "noCacheTokens");
-  } else {
-    const totalInput = requireCount(
-      rawInputPresent ? raw?.inputTokens : result.usage.inputTokens,
-      "inputTokens",
+  if (noCache !== undefined) {
+    input = noCache;
+    const partitionedInput = safeTokenSum(
+      "CommandCode input token partition",
+      input,
+      cacheRead,
+      cacheWrite,
     );
-    if (totalInput < cacheRead + cacheWrite) {
+    if (
+      rawInput !== undefined &&
+      rawInput !== partitionedInput
+    ) {
+      throw new Error(
+        "inputTokens must equal noCacheTokens plus cache read and cache write",
+      );
+    }
+  } else {
+    const totalInput = rawInput ?? normalizedInput;
+    const cachedInput = safeTokenSum(
+      "CommandCode cached input tokens",
+      cacheRead,
+      cacheWrite,
+    );
+    if (totalInput < cachedInput) {
       throw new Error("CommandCode cached input exceeds total input");
     }
-    input = totalInput - cacheRead - cacheWrite;
+    input = totalInput - cachedInput;
   }
 
-  const output = requireCount(
-    raw !== undefined && Object.hasOwn(raw, "outputTokens")
-      ? raw.outputTokens
-      : result.usage.outputTokens,
-    "outputTokens",
+  const output = optionalCount(raw, "outputTokens") ?? normalizedOutput;
+  const nestedReasoning = optionalCount(outputDetails, "reasoningTokens");
+  const aliasedReasoning = optionalCount(raw, "reasoningTokens");
+  requireSameCount(
+    nestedReasoning,
+    aliasedReasoning,
+    "outputTokenDetails.reasoningTokens and reasoningTokens",
   );
-  const outputReasoningPresent =
-    outputDetails !== undefined && Object.hasOwn(outputDetails, "reasoningTokens");
-  const reasoningCandidate = outputReasoningPresent
-    ? outputDetails.reasoningTokens
-    : undefined;
-  let reasoning: number | undefined;
-  if (reasoningCandidate !== undefined) {
-    reasoning = requireCount(reasoningCandidate, "reasoningTokens");
+  const reasoning = nestedReasoning ?? aliasedReasoning;
+  if (reasoning !== undefined) {
     if (reasoning > output) {
       throw new Error("CommandCode reasoning tokens exceed output tokens");
     }
+  }
+  const text = optionalCount(outputDetails, "textTokens");
+  if (text !== undefined && text > output) {
+    throw new Error("CommandCode text tokens exceed output tokens");
+  }
+  if (text !== undefined && reasoning !== undefined) {
+    const detailedOutput = safeTokenSum(
+      "CommandCode detailed output tokens",
+      text,
+      reasoning,
+    );
+    if (detailedOutput !== output) {
+      throw new Error(
+        "CommandCode text and reasoning token details must equal output tokens",
+      );
+    }
+  }
+
+  const computedTotal = safeTokenSum(
+    "CommandCode totalTokens",
+    input,
+    cacheRead,
+    cacheWrite,
+    output,
+  );
+  const sourceTotal = optionalCount(raw, "totalTokens");
+  if (sourceTotal !== undefined && sourceTotal !== computedTotal) {
+    throw new Error("CommandCode totalTokens must agree with token components");
   }
 
   const usage: Usage = {
@@ -147,7 +260,7 @@ function convertUsage(
     output,
     cacheRead,
     cacheWrite,
-    totalTokens: input + cacheRead + cacheWrite + output,
+    totalTokens: sourceTotal ?? computedTotal,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   if (reasoning !== undefined) usage.reasoning = reasoning;
@@ -156,16 +269,10 @@ function convertUsage(
 
 function convertContent(
   result: CommandCodeResult,
-  authority: CommandCodeResponseAuthority,
 ): Array<TextContent | ThinkingContent | ToolCall> {
   return result.content.map((block) => {
     if (block.type === "text") return { type: "text", text: block.text };
     if (block.type === "reasoning") {
-      if (!authority.pricingModel.reasoning) {
-        throw new Error(
-          "CommandCode emitted reasoning for a non-reasoning certified route",
-        );
-      }
       return { type: "thinking", thinking: block.text };
     }
     return {
@@ -180,10 +287,12 @@ function convertContent(
   });
 }
 
-function stopReason(result: CommandCodeResult): Extract<StopReason, "stop" | "length" | "toolUse"> {
-  if (result.finish.finishReason === "tool-calls") return "toolUse";
+function stopReason(
+  result: CommandCodeResult,
+  content: readonly (TextContent | ThinkingContent | ToolCall)[],
+): Extract<StopReason, "stop" | "length" | "toolUse"> {
   if (result.finish.finishReason === "length") return "length";
-  return "stop";
+  return content.some((block) => block.type === "toolCall") ? "toolUse" : "stop";
 }
 
 function baseMessage(
@@ -204,10 +313,14 @@ function addDiagnostics(
   message: AssistantMessage,
   result: CommandCodeResult,
   notices: readonly ConversionNotice[],
-): void {
-  const diagnostics = [...notices, ...result.notices].map((notice) =>
+  semanticNotices: readonly ConversionNotice[] = [],
+): AssistantMessage {
+  const diagnostics = [
+    ...(message.diagnostics ?? []),
+    ...[...notices, ...result.notices, ...semanticNotices].map((notice) =>
     createConversionNoticeDiagnostic(notice, message.timestamp),
-  );
+    ),
+  ];
   if (result.systemPromptTokens !== undefined) {
     diagnostics.push(
       {
@@ -217,9 +330,34 @@ function addDiagnostics(
       },
     );
   }
-  if (diagnostics.length > 0) message.diagnostics = diagnostics;
   const rawReason = result.finish.rawFinishReason ?? result.finish.finishReason;
-  if (rawReason !== undefined) message.rawStopReason = rawReason;
+  return deepFreeze({
+    ...message,
+    ...(diagnostics.length === 0 ? {} : { diagnostics }),
+    ...(rawReason === undefined ? {} : { rawStopReason: rawReason }),
+  });
+}
+
+function conversionFailure(cause: unknown): CommandCodeNeutralFailureError {
+  return commandCodeNeutralFailure(
+    {
+      kind: "conversion",
+      providerType: "commandcode_to_pi",
+      providerCode: "INVALID_COMMITTED_RESULT",
+      message: "CommandCode response could not be converted to Pi IR",
+      retryable: false,
+    },
+    cause,
+  );
+}
+
+function mismatchNotice(): ConversionNotice {
+  return Object.freeze({
+    adapter: COMMANDCODE_PROVIDER_ID,
+    direction: "response",
+    code: "finish_content_mismatch_degraded",
+    action: "degrade",
+  });
 }
 
 export function createCommandCodeFailureMessage(
@@ -239,7 +377,7 @@ export function createCommandCodeFailureMessage(
       createUpstreamFailureDiagnostic(error.failure, message.timestamp),
     ];
   }
-  return message;
+  return deepFreeze(message);
 }
 
 export function convertCommittedCommandCodeResult(
@@ -247,44 +385,53 @@ export function convertCommittedCommandCodeResult(
   authority: CommandCodeResponseAuthority,
   notices: readonly ConversionNotice[] = [],
 ): AssistantMessage {
-  let committedStopReason: Extract<StopReason, "stop" | "length" | "toolUse">;
   try {
-    committedStopReason = stopReason(result);
+    requireDeepFrozen(result, "CommandCode committed result");
   } catch (error) {
-    const failed = createCommandCodeFailureMessage(authority, error);
-    addDiagnostics(failed, result, notices);
-    return failed;
+    return createCommandCodeFailureMessage(authority, conversionFailure(error));
   }
 
   let trustworthyUsage: Usage;
   try {
     trustworthyUsage = convertUsage(result, authority);
   } catch (error) {
-    const failed = createCommandCodeFailureMessage(authority, error);
-    addDiagnostics(failed, result, notices);
-    return failed;
+    const failed = createCommandCodeFailureMessage(
+      authority,
+      conversionFailure(error),
+    );
+    return addDiagnostics(failed, result, notices);
   }
 
   let content: Array<TextContent | ThinkingContent | ToolCall>;
   try {
-    content = convertContent(result, authority);
+    content = convertContent(result);
   } catch (error) {
     const failed = createCommandCodeFailureMessage(
       authority,
-      error,
+      conversionFailure(error),
       trustworthyUsage,
     );
-    addDiagnostics(failed, result, notices);
-    return failed;
+    return addDiagnostics(failed, result, notices);
   }
+
+  const committedStopReason = stopReason(result, content);
+  const contentHasTool = content.some((block) => block.type === "toolCall");
+  const wireClaimsTool = result.finish.finishReason === "tool-calls";
+  const semanticNotices =
+    contentHasTool === wireClaimsTool ? [] : [mismatchNotice()];
 
   const message: AssistantMessage = {
     ...baseMessage(authority, trustworthyUsage),
     content,
     stopReason: committedStopReason,
+    ...(result.responseIdentity === undefined
+      ? {}
+      : {
+          responseId: result.responseIdentity.responseId,
+          responseModel: result.responseIdentity.responseModel,
+        }),
   };
-  addDiagnostics(message, result, notices);
-  return message;
+  return addDiagnostics(message, result, notices, semanticNotices);
 }
 
 function clonePartial(message: AssistantMessage): AssistantMessage {
