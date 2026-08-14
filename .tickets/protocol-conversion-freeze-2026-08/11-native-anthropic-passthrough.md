@@ -51,4 +51,28 @@ substantive gap fixed:
   failure journal on a final upstream failure, and HTTP-boundary cancellation
   that aborts upstream work without writing a closed response.
 
+## Second re-verification note (2026-08-13)
+
+Second full re-verification of every acceptance criterion found and fixed
+two remaining transport-semantics gaps:
+
+- **Base-path prefix was dropped.** `new URL("/v1/messages", model.baseUrl)`
+  is an absolute-path replacement: a configured base path such as
+  `https://host/prefix` silently became `https://host/v1/messages`, losing
+  the prefix. The Anthropic SDK resolves `baseURL + path` by concatenation,
+  so this diverged from the SDK's endpoint semantics (architecture §1.2:
+  "URL construction preserves the configured base path unless the upstream
+  contract explicitly defines an absolute endpoint"). Fixed with an
+  Anthropic-owned `joinEndpoint` that preserves the prefix.
+- **Qualified Lucky selectors leaked upstream.** The client selector
+  (`provider/model_id`, e.g. `my-anthropic/claude-sonnet`) was forwarded
+  verbatim in the body; the upstream wire addresses models by their bare
+  model id and cannot resolve a Lucky selector. Acceptance criterion: "no
+  qualified Lucky selector leaks unless intentionally supported" — nothing
+  documented or tested that as intentional. Fixed with an Anthropic-owned
+  `rewriteModelSelector` that replaces the body `model` field with the
+  registered `model.id` (byte-identical when the selector already equals the
+  model id). Tests: base-path preservation, selector rewrite, byte-identity
+  when unchanged.
+
 No Responses passthrough classifier/config/test/helper is imported.

@@ -40,6 +40,22 @@ describe("19: Responses passthrough architecture isolation", () => {
     expect(source).not.toContain("anthropic-messages");
   });
 
+  it("imports no Anthropic passthrough config or renderer module", async () => {
+    // The architecture test proves isolation across the whole Responses
+    // module: configuration (config type), SSE renderer, and error renderer
+    // must not import or name the Anthropic profile.
+    for (const file of [
+      "src/protocols/openai-responses/configuration.ts",
+      "src/protocols/openai-responses/sse.ts",
+      "src/protocols/openai-responses/error-rendering.ts",
+    ]) {
+      const source = await readFile(file, "utf8");
+      expect(source).not.toMatch(/protocols[\\/]anthropic/u);
+      expect(source).not.toMatch(/anthropic-messages/u);
+      expect(source).not.toMatch(/anthropic-pass/u);
+    }
+  });
+
   it("does not share conformance tests with the Anthropic passthrough profile", async () => {
     const responsesTests = await readFile(
       "test/unit/openai-responses-passthrough-contract.test.ts",

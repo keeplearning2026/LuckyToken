@@ -154,8 +154,10 @@ describe("passthrough routing", () => {
       );
       expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("sk-gateway");
       const upstreamBody = await upstreamRequests[0]?.text();
+      // The qualified Lucky selector is rewritten to the registered model id:
+      // a Lucky selector must never leak to the upstream wire.
       expect(JSON.parse(upstreamBody ?? "{}")).toMatchObject({
-        model: "my-anthropic/claude-sonnet",
+        model: "claude-sonnet",
         top_p: 0.9,
       });
     } finally {

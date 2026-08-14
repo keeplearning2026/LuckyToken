@@ -25,13 +25,16 @@ import {
  * shared with (or imported from) the Anthropic passthrough profile.
  */
 
-function responsesModel(api = "openai-responses"): Model<string> {
+function responsesModel(
+  api = "openai-responses",
+  baseUrl = "https://responses.example.com",
+): Model<string> {
   return {
     id: "gpt-5",
     name: "gpt-5",
     api,
     provider: "my-responses",
-    baseUrl: "https://responses.example.com",
+    baseUrl,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -180,8 +183,9 @@ describe("19: native Responses passthrough contract", () => {
       const upstreamBody = JSON.parse(
         (await upstreamRequests[0]?.text()) ?? "{}",
       ) as Record<string, unknown>;
+      // The qualified Lucky selector is rewritten to the registered model id.
       expect(upstreamBody).toMatchObject({
-        model: "my-responses/gpt-5",
+        model: "gpt-5",
         input: "hi",
         future_field: { opaque: true },
       });
@@ -253,7 +257,11 @@ describe("19: native Responses passthrough contract", () => {
       const upstreamBody = JSON.parse(
         (await upstreamRequests[0]?.text()) ?? "{}",
       ) as Record<string, unknown>;
-      expect(upstreamBody).toEqual(JSON.parse(rawBody));
+      // Everything except the qualified selector is preserved verbatim; the
+      // selector itself is rewritten to the registered model id.
+      const expected = JSON.parse(rawBody) as Record<string, unknown>;
+      expected.model = "gpt-5";
+      expect(upstreamBody).toEqual(expected);
     } finally {
       restore();
     }
@@ -484,6 +492,94 @@ describe("19: native Responses passthrough contract", () => {
         ),
       );
       expect(response.status).toBeGreaterThanOrEqual(500);
+    } finally {
+      restore();
+    }
+  });
+
+  it("preserves a configured base-path prefix on the endpoint", async () => {
+    const model = responsesModel("openai-responses", "https://responses.example.com/api");
+    const upstreamRequests: Request[] = [];
+    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+      upstreamRequests.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    try {
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(
+          JSON.stringify({
+            model: "my-responses/gpt-5",
+            input: "hi",
+          }),
+        ),
+      );
+      expect(response.status).toBe(200);
+      expect(upstreamRequests[0]?.url).toBe(
+        "https://responses.example.com/api/v1/responses",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("rewrites a qualified Lucky selector to the registered model id", async () => {
+    const model = responsesModel();
+    const upstreamRequests: Request[] = [];
+    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+      upstreamRequests.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    try {
+      const rawBody = JSON.stringify({
+        model: "my-responses/gpt-5",
+        input: "hi",
+        future_field: { opaque: true },
+      });
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(rawBody),
+      );
+      expect(response.status).toBe(200);
+      const upstreamBody = JSON.parse(
+        (await upstreamRequests[0]?.text()) ?? "{}",
+      ) as Record<string, unknown>;
+      // The qualified Lucky selector is rewritten to the registered model id;
+      // a Lucky selector must never leak to the upstream wire.
+      expect(upstreamBody).toEqual({
+        model: "gpt-5",
+        input: "hi",
+        future_field: { opaque: true },
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the raw body byte-identical when the selector already equals the model id", async () => {
+    const model = responsesModel();
+    const upstreamRequests: Request[] = [];
+    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+      upstreamRequests.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    try {
+      const rawBody = JSON.stringify({ model: "gpt-5", input: "hi" });
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(rawBody),
+      );
+      expect(response.status).toBe(200);
+      expect(await upstreamRequests[0]?.text()).toBe(rawBody);
     } finally {
       restore();
     }

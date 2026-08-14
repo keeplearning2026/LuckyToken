@@ -109,14 +109,57 @@ function buildUpstreamHeaders(
 }
 
 /**
- * Forward an Anthropic Messages request verbatim to an upstream Anthropic
- * endpoint under the native passthrough profile.
+ * Join a configured base URL with a fixed endpoint path, preserving any
+ * base-path prefix. The Anthropic SDK resolves `baseURL + "/v1/messages"` by
+ * string concatenation, so a configured `https://host/prefix` requests
+ * `https://host/prefix/v1/messages`; an absolute `new URL` would silently drop
+ * the prefix. This mirrors the SDK's concatURL semantics (architecture §1.2:
+ * "URL construction preserves the configured base path unless the upstream
+ * contract explicitly defines an absolute endpoint").
+ */
+function joinEndpoint(baseUrl: string, path: string): string {
+  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  return `${base}${path}`;
+}
+
+/**
+ * Replace the `model` field of a raw Anthropic request body with the
+ * registered model id.
  *
- * The client's raw request body is sent unchanged, authenticated with the
- * upstream `x-api-key`. Only approved end-to-end headers cross; hop-by-hop,
- * cookie, auth, and stale content-length/encoding headers never do. The
- * upstream response is buffered once, its headers filtered to the safe set,
- * and returned for atomic delivery.
+ * The client selector is a LuckyToken `provider/model_id` string; the
+ * upstream wire addresses models by their bare model id. Forwarding the
+ * qualified selector would leak a Lucky selector to the upstream, which
+ * cannot resolve it. When the selector already equals the model id the raw
+ * body is returned byte-identical. When the body has no `model` field it is
+ * passed through untouched (a legal Anthropic request must carry one, but
+ * this module never fabricates fields).
+ */
+function rewriteModelSelector(rawBody: string, modelId: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return rawBody;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return rawBody;
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.model !== "string") return rawBody;
+  if (record.model === modelId) return rawBody;
+  return JSON.stringify({ ...record, model: modelId });
+}
+
+/**
+ * Forward an Anthropic Messages request to an upstream Anthropic endpoint
+ * under the native passthrough profile.
+ *
+ * The client's raw request body is sent with the upstream `x-api-key` and the
+ * model selector rewritten to the registered model id (no qualified Lucky
+ * selector crosses the boundary). Only approved end-to-end headers cross;
+ * hop-by-hop, cookie, auth, and stale content-length/encoding headers never
+ * do. The upstream response is buffered once, its headers filtered to the
+ * safe set, and returned for atomic delivery.
  */
 export async function passthroughAnthropicRequest(
   options: PassthroughAnthropicRequestOptions,
@@ -127,11 +170,12 @@ export async function passthroughAnthropicRequest(
       `No API key configured for passthrough provider: ${model.provider}`,
     );
   }
-  const endpoint = new URL("/v1/messages", model.baseUrl).toString();
+  const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
+  const forwardedBody = rewriteModelSelector(rawBody, model.id);
   const upstream = await fetchImpl(endpoint, {
     method: "POST",
     headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
-    body: rawBody,
+    body: forwardedBody,
     signal,
   });
   let body: Uint8Array<ArrayBuffer>;

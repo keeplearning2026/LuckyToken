@@ -7,13 +7,16 @@ import {
   passthroughRequestHeaders,
 } from "../../src/protocols/anthropic/passthrough.js";
 
-function model(api = "anthropic-messages"): Model<string> {
+function model(
+  api = "anthropic-messages",
+  baseUrl = "https://gateway.example.com",
+): Model<string> {
   return {
     id: "claude",
     name: "claude",
     api,
     provider: "fixture-provider",
-    baseUrl: "https://gateway.example.com",
+    baseUrl,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -157,5 +160,64 @@ describe("11: native Anthropic passthrough contract", () => {
       }),
     ).rejects.toThrow(/api key/i);
     expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves a configured base-path prefix on the endpoint", async () => {
+    const baseFetch = vi.fn(async (input: RequestInfo | URL) => {
+      void input;
+      return new Response("{}", { status: 200 });
+    });
+    await passthroughAnthropicRequest({
+      model: model("anthropic-messages", "https://gateway.example.com/api"),
+      rawBody: '{"model":"claude","max_tokens":1,"messages":[]}',
+      apiKey: "upstream-key",
+      signal: new AbortController().signal,
+      fetch: baseFetch as unknown as FetchFunction,
+    });
+    const call = baseFetch.mock.calls[0] as
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    expect(String(call?.[0])).toBe(
+      "https://gateway.example.com/api/v1/messages",
+    );
+  });
+
+  it("rewrites a qualified Lucky selector to the registered model id", async () => {
+    const baseFetch = vi.fn(async (input: RequestInfo | URL) => {
+      void input;
+      return new Response("{}", { status: 200 });
+    });
+    await passthroughAnthropicRequest({
+      model: model(),
+      rawBody: '{"model":"fixture-provider/claude","max_tokens":1,"messages":[]}',
+      apiKey: "upstream-key",
+      signal: new AbortController().signal,
+      fetch: baseFetch as unknown as FetchFunction,
+    });
+    const call = baseFetch.mock.calls[0] as
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    expect(call?.[1]?.body).toBe(
+      '{"model":"claude","max_tokens":1,"messages":[]}',
+    );
+  });
+
+  it("keeps the raw body byte-identical when the selector already equals the model id", async () => {
+    const rawBody = '{"model":"claude","max_tokens":1,"messages":[]}';
+    const baseFetch = vi.fn(async (input: RequestInfo | URL) => {
+      void input;
+      return new Response("{}", { status: 200 });
+    });
+    await passthroughAnthropicRequest({
+      model: model(),
+      rawBody,
+      apiKey: "upstream-key",
+      signal: new AbortController().signal,
+      fetch: baseFetch as unknown as FetchFunction,
+    });
+    const call = baseFetch.mock.calls[0] as
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    expect(call?.[1]?.body).toBe(rawBody);
   });
 });

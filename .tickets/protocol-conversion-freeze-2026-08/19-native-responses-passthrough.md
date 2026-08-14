@@ -33,3 +33,32 @@ Opaque native handles remain inside same-authority wire traffic and never enter 
 
 Responses conversion and Anthropic passthrough.
 
+## Re-verification note (2026-08-13)
+
+Full re-verification of every acceptance criterion after the ticket was
+marked completed. Two transport-semantics gaps were found and fixed, and one
+architecture-test gap was closed:
+
+- **Base-path prefix was dropped.** `new URL("/v1/responses", model.baseUrl)`
+  replaced the configured path absolutely; a base URL such as
+  `https://host/prefix` silently lost `/prefix`. Fixed with a
+  Responses-owned `joinEndpoint` that preserves the prefix (architecture
+  §1.2.7).
+- **Qualified Lucky selectors leaked upstream.** The client selector
+  (`my-responses/gpt-5`) was forwarded verbatim; the upstream wire addresses
+  models by bare model id. Fixed with a Responses-owned
+  `rewriteModelSelector` replacing the body `model` field with the registered
+  `model.id` (byte-identical when unchanged). Tests: base-path preservation,
+  selector rewrite, byte-identity when unchanged, and the future-field /
+  native-handle verbatim test now asserts the rewritten selector.
+- **Architecture test now proves config/renderer isolation.** The existing
+  architecture test checked only `passthrough.ts`/`handler.ts`/contract test
+  imports; it now also verifies `configuration.ts`, `sse.ts`, and
+  `error-rendering.ts` import no Anthropic passthrough module (acceptance
+  criterion "Architecture tests prove no Anthropic passthrough
+  module/config/test import").
+
+Passthrough success is never counted as Responses↔Pi conversion coverage:
+the conformance record's scope describes only the conversion route, and no
+conversion test imports passthrough behavior.
+
