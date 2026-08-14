@@ -64,6 +64,7 @@ import {
   isAnthropicNativePassthroughModel,
   passthroughAnthropicRequest,
   passthroughRequestHeaders,
+  type PassthroughAnthropicResult,
 } from "./passthrough.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
@@ -414,17 +415,34 @@ async function passthroughBranch(
       ),
     );
   }
-  const upstream = await raceWithRequestSignal(
-    passthroughAnthropicRequest({
-      model,
-      rawBody,
-      apiKey,
-      signal: request.signal,
-      fetch: fetchImpl,
-      upstreamHeaders: passthroughRequestHeaders(request),
-    }),
-    request.signal,
-  );
+  let upstream: PassthroughAnthropicResult;
+  try {
+    upstream = await raceWithRequestSignal(
+      passthroughAnthropicRequest({
+        model,
+        rawBody,
+        apiKey,
+        signal: request.signal,
+        fetch: fetchImpl,
+        upstreamHeaders: passthroughRequestHeaders(request),
+      }),
+      request.signal,
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "kind" in error &&
+      error.kind === "AnthropicPassthroughBodyReadError"
+    ) {
+      // Pre-commit upstream body-read failure: the upstream response never
+      // committed, so this is a legal non-streaming Anthropic error (upstream
+      // failure), never a raw exception.
+      return toResponse(
+        renderAnthropicError(502, "api_error", error.message),
+      );
+    }
+    throw error;
+  }
   request.signal.throwIfAborted();
   if (upstream.status >= 400) {
     await diagnostics.fail({

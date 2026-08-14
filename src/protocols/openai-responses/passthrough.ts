@@ -1,6 +1,6 @@
 import type { FetchFunction, Model } from "@earendil-works/pi-ai";
 
-export interface PassthroughAnthropicRequestOptions {
+export interface PassthroughResponsesRequestOptions {
   readonly model: Model<string>;
   readonly rawBody: string;
   readonly apiKey: string | undefined;
@@ -9,31 +9,27 @@ export interface PassthroughAnthropicRequestOptions {
   readonly upstreamHeaders?: Readonly<Record<string, string>>;
 }
 
-export interface PassthroughAnthropicResult {
+export interface PassthroughResponsesResult {
   readonly status: number;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: Uint8Array<ArrayBuffer>;
 }
 
 /**
- * Declared wire compatibility for native Anthropic passthrough.
+ * Declared wire compatibility for native Responses passthrough.
  *
- * Selection is based on the Pi model's declared API (`anthropic-messages`),
- * never on a concrete Provider name or provider-private fields. This is the
- * only place that knows the compatibility rule; the handler routes on the
- * result.
+ * Selection is based on the Pi model's declared API (`openai-responses`),
+ * never on a concrete Provider name or provider-private fields. Codex and
+ * Azure Responses variants are distinct wire protocols and are not selected
+ * here; they are not "the same protocol" merely because they share the
+ * Responses name family.
  */
-export function isAnthropicNativePassthroughModel(
+export function isResponsesNativePassthroughModel(
   model: Model<string>,
 ): boolean {
-  return model.api === "anthropic-messages";
+  return model.api === "openai-responses";
 }
 
-const FORWARDED_REQUEST_HEADERS = new Set([
-  "anthropic-beta",
-  "anthropic-user-profile-id",
-  "x-stainless-*",
-]);
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -49,10 +45,11 @@ const HOP_BY_HOP = new Set([
   "content-encoding",
 ]);
 
-const FORBIDDEN_RESPONSE_HEADERS = new Set([
-  "set-cookie",
-  "cookie",
+const FORBIDDEN_HEADERS = new Set([
   "authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
   "proxy-authorization",
   "www-authenticate",
 ]);
@@ -60,15 +57,15 @@ const FORBIDDEN_RESPONSE_HEADERS = new Set([
 function isSafeForwardedRequestHeader(name: string): boolean {
   const lower = name.toLowerCase();
   if (HOP_BY_HOP.has(lower)) return false;
-  if (FORBIDDEN_RESPONSE_HEADERS.has(lower)) return false;
+  if (FORBIDDEN_HEADERS.has(lower)) return false;
   if (lower.startsWith("x-stainless-")) return true;
-  return FORWARDED_REQUEST_HEADERS.has(lower);
+  return false;
 }
 
 function isSafeResponseHeader(name: string): boolean {
   const lower = name.toLowerCase();
   if (HOP_BY_HOP.has(lower)) return false;
-  if (FORBIDDEN_RESPONSE_HEADERS.has(lower)) return false;
+  if (FORBIDDEN_HEADERS.has(lower)) return false;
   return true;
 }
 
@@ -92,14 +89,13 @@ function buildUpstreamHeaders(
   upstreamHeaders: Readonly<Record<string, string>> | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "x-api-key": apiKey,
+    authorization: `Bearer ${apiKey}`,
     "content-type": "application/json",
-    "anthropic-version": "2023-06-01",
   };
   if (upstreamHeaders !== undefined) {
     for (const [name, value] of Object.entries(upstreamHeaders)) {
       const lower = name.toLowerCase();
-      if (HOP_BY_HOP.has(lower) || FORBIDDEN_RESPONSE_HEADERS.has(lower)) {
+      if (HOP_BY_HOP.has(lower) || FORBIDDEN_HEADERS.has(lower)) {
         continue;
       }
       headers[lower] = value;
@@ -109,25 +105,25 @@ function buildUpstreamHeaders(
 }
 
 /**
- * Forward an Anthropic Messages request verbatim to an upstream Anthropic
- * endpoint under the native passthrough profile.
+ * Forward a Responses request verbatim to a compatible upstream under the
+ * native passthrough profile.
  *
- * The client's raw request body is sent unchanged, authenticated with the
- * upstream `x-api-key`. Only approved end-to-end headers cross; hop-by-hop,
- * cookie, auth, and stale content-length/encoding headers never do. The
- * upstream response is buffered once, its headers filtered to the safe set,
- * and returned for atomic delivery.
+ * The client's raw body is sent unchanged with the upstream bearer
+ * credential. Only approved end-to-end headers cross; hop-by-hop, cookie,
+ * auth, and stale content-length/encoding headers never do. The upstream
+ * response is buffered once, its headers filtered to the safe set, and
+ * returned for atomic delivery.
  */
-export async function passthroughAnthropicRequest(
-  options: PassthroughAnthropicRequestOptions,
-): Promise<PassthroughAnthropicResult> {
+export async function passthroughResponsesRequest(
+  options: PassthroughResponsesRequestOptions,
+): Promise<PassthroughResponsesResult> {
   const { model, rawBody, apiKey, signal, fetch: fetchImpl } = options;
   if (apiKey === undefined || apiKey.length === 0) {
     throw new Error(
       `No API key configured for passthrough provider: ${model.provider}`,
     );
   }
-  const endpoint = new URL("/v1/messages", model.baseUrl).toString();
+  const endpoint = new URL("/v1/responses", model.baseUrl).toString();
   const upstream = await fetchImpl(endpoint, {
     method: "POST",
     headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
@@ -140,11 +136,11 @@ export async function passthroughAnthropicRequest(
   } catch (error) {
     // The upstream response never committed to the client (pre-commit). A
     // body-read/stream failure follows the pre-commit error lifecycle: the
-    // handler turns it into a legal Anthropic error, never a raw exception.
+    // handler turns it into a legal Responses error, never a raw exception.
     // Caller cancellation keeps its own identity so the handler can rethrow
     // it as cancellation rather than as a body failure.
     if (signal.aborted) throw error;
-    throw new AnthropicPassthroughBodyReadError(error);
+    throw new ResponsesPassthroughBodyReadError(error);
   }
   return {
     status: upstream.status,
@@ -153,21 +149,15 @@ export async function passthroughAnthropicRequest(
   };
 }
 
-export function passthroughRequestHeaders(
-  request: Request,
-): Readonly<Record<string, string>> {
-  return filterHeaders(request.headers, isSafeForwardedRequestHeader);
-}
-
 /**
  * A pre-commit failure while reading the upstream response body. The
  * upstream response bytes never committed to the client, so this follows the
- * pre-commit error lifecycle: the handler renders a legal Anthropic error
+ * pre-commit error lifecycle: the handler renders a legal Responses error
  * instead of a raw transport exception. Request-local; never crosses into a
  * shared boundary.
  */
-export class AnthropicPassthroughBodyReadError extends Error {
-  readonly kind = "AnthropicPassthroughBodyReadError";
+export class ResponsesPassthroughBodyReadError extends Error {
+  readonly kind = "ResponsesPassthroughBodyReadError";
 
   constructor(cause: unknown) {
     super(
@@ -176,6 +166,12 @@ export class AnthropicPassthroughBodyReadError extends Error {
       }`,
       { cause },
     );
-    this.name = "AnthropicPassthroughBodyReadError";
+    this.name = "ResponsesPassthroughBodyReadError";
   }
+}
+
+export function passthroughResponsesRequestHeaders(
+  request: Request,
+): Readonly<Record<string, string>> {
+  return filterHeaders(request.headers, isSafeForwardedRequestHeader);
 }

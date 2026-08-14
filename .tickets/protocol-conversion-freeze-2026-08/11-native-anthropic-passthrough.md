@@ -33,3 +33,22 @@ Inbound raw body and approved headers flow directly to the compatible upstream a
 ## Out of scope
 
 Anthropic↔Pi conversion and Responses native passthrough.
+
+## Re-verification note (2026-08-13)
+
+Re-verified every acceptance criterion against code and tests after the
+ticket was marked completed. The completed status was confirmed with one
+substantive gap fixed:
+
+- Pre-commit upstream body-read failure previously fell through to a generic
+  500 with an empty body instead of a legal Anthropic error. Fixed:
+  `passthroughAnthropicRequest` wraps the body read in a Responses-style
+  pre-commit marker (`AnthropicPassthroughBodyReadError`) and the handler's
+  passthrough branch renders 502 `api_error`; caller cancellation keeps its
+  own identity.
+- Added certification tests for: byte-for-byte SSE fidelity, pre-commit
+  body-read failure, `x-stainless-*` approved request headers, one bounded
+  failure journal on a final upstream failure, and HTTP-boundary cancellation
+  that aborts upstream work without writing a closed response.
+
+No Responses passthrough classifier/config/test/helper is imported.

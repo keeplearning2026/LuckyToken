@@ -1,5 +1,6 @@
 import type {
   FetchFunction,
+  Model,
   Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
@@ -48,6 +49,7 @@ import {
 import type { UpstreamFailureFact } from "../upstream-failure.js";
 import {
   convertResponsesRequest,
+  extractResponsesModelSelector,
   type ResponsesInvocation,
 } from "./request.js";
 import { renderResponsesSse } from "./sse.js";
@@ -56,6 +58,12 @@ import {
   ResponseStateConversionFailure,
   type ResponseSessionState,
 } from "./session-state.js";
+import {
+  isResponsesNativePassthroughModel,
+  passthroughResponsesRequest,
+  passthroughResponsesRequestHeaders,
+  type PassthroughResponsesResult,
+} from "./passthrough.js";
 
 export const openaiResponsesProtocolId = "openai-responses";
 
@@ -221,6 +229,23 @@ async function handleOpenAIResponses(
     }
     const body: unknown = JSON.parse(rawBody);
 
+    // Native passthrough selection happens before any conversion or local
+    // state expansion: a model declared Responses-wire-compatible forwards
+    // the raw request verbatim to the upstream endpoint, never through Pi.
+    const selector = extractResponsesModelSelector(body);
+    diagnostics.checkpoint({ stage: "model-resolution", selector });
+    const model = resolveModel(dependencies.models, selector);
+    if (isResponsesNativePassthroughModel(model)) {
+      return passthroughBranch(
+        dependencies,
+        httpObserver.observedFetch,
+        request,
+        model,
+        rawBody,
+        diagnostics,
+      );
+    }
+
     // Expand previous_response_id into the full input. Unknown/expired/
     // evicted/corrupt/unresolvable IDs throw a typed conversion error.
     const expanded = await raceWithRequestSignal(
@@ -236,11 +261,6 @@ async function handleOpenAIResponses(
     for (const notice of invocation.notices) {
       diagnostics.notice(notice);
     }
-    diagnostics.checkpoint({
-      stage: "model-resolution",
-      selector: invocation.selector,
-    });
-    const model = resolveModel(dependencies.models, invocation.selector);
     const piOptions = composeInvocationOptions(
       invocation,
       {
@@ -422,6 +442,79 @@ async function handleOpenAIResponsesWithDiagnostics(
     });
     throw error;
   }
+}
+
+/**
+ * Passthrough branch: forward the client's raw Responses request verbatim to
+ * the upstream endpoint and return its response unchanged (buffered atomic).
+ *
+ * Owns the full passthrough lifecycle: upstream auth resolution, forwarding,
+ * and verbatim response return (status + headers + body) for both success
+ * and upstream HTTP failure. Selection precedes conversion; the client always
+ * sees the upstream response as-is.
+ */
+async function passthroughBranch(
+  dependencies: OpenAIResponsesDependencies,
+  fetchImpl: FetchFunction,
+  request: Request,
+  model: Model<string>,
+  rawBody: string,
+  diagnostics: InvocationDiagnostics,
+): Promise<Response> {
+  const auth = await raceWithRequestSignal(
+    dependencies.models.getAuth(model),
+    request.signal,
+  );
+  const apiKey = auth?.auth.apiKey;
+  if (apiKey === undefined) {
+    return toResponse(
+      renderResponsesError(
+        502,
+        "api_error",
+        `Provider is not configured: ${model.provider}`,
+      ),
+    );
+  }
+  let upstream: PassthroughResponsesResult;
+  try {
+    upstream = await raceWithRequestSignal(
+      passthroughResponsesRequest({
+        model,
+        rawBody,
+        apiKey,
+        signal: request.signal,
+        fetch: fetchImpl,
+        upstreamHeaders: passthroughResponsesRequestHeaders(request),
+      }),
+      request.signal,
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "kind" in error &&
+      error.kind === "ResponsesPassthroughBodyReadError"
+    ) {
+      // Pre-commit upstream body-read failure: the upstream response never
+      // committed, so this is a legal non-streaming Responses error.
+      return toResponse(renderResponsesError(502, "api_error", error.message));
+    }
+    throw error;
+  }
+  request.signal.throwIfAborted();
+  if (upstream.status >= 400) {
+    await diagnostics.fail({
+      classification: "runtime-failure",
+      stage: "native-passthrough",
+      clientStatus: upstream.status,
+      ...(upstream.headers["request-id"] === undefined
+        ? {}
+        : { safeIds: { requestId: upstream.headers["request-id"] } }),
+    });
+  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...upstream.headers },
+  });
 }
 
 function renderResponsesJson(

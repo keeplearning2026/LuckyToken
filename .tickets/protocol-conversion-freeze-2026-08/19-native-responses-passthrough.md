@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — adapter-owned configuration; 02 — request-local notices/journal.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -18,16 +18,16 @@ Opaque native handles remain inside same-authority wire traffic and never enter 
 
 ## Acceptance criteria
 
-- [ ] Selection uses declared Responses wire compatibility, not concrete Provider-name branches.
-- [ ] Native conversation/prompt/item references, file IDs, compaction/encrypted state, hosted tools, background, store, and future fields pass without conversion loss.
-- [ ] Endpoint/base-path, model selector rewrite, and upstream auth authority are explicit/tested.
-- [ ] Status/body and completed/incomplete/failed SSE are preserved.
-- [ ] Hop-by-hop, cookie/auth, stale length/encoding, and unsafe headers never cross.
-- [ ] Cancellation and pre/post commit body failure follow Responses native lifecycle.
-- [ ] Conversion/passthrough tests and metrics identify profile independently.
-- [ ] Final failure writes one bounded safe journal.
-- [ ] Architecture tests prove no Anthropic passthrough module/config/test import.
-- [ ] Passthrough success is never counted as Responses↔Pi coverage.
+- [x] Selection uses declared Responses wire compatibility, not concrete Provider-name branches.
+- [x] Native conversation/prompt/item references, file IDs, compaction/encrypted state, hosted tools, background, store, and future fields pass without conversion loss.
+- [x] Endpoint/base-path, model selector rewrite, and upstream auth authority are explicit/tested.
+- [x] Status/body and completed/incomplete/failed SSE are preserved.
+- [x] Hop-by-hop, cookie/auth, stale length/encoding, and unsafe headers never cross.
+- [x] Cancellation and pre/post commit body failure follow Responses native lifecycle.
+- [x] Conversion/passthrough tests and metrics identify profile independently.
+- [x] Final failure writes one bounded safe journal.
+- [x] Architecture tests prove no Anthropic passthrough module/config/test import.
+- [x] Passthrough success is never counted as Responses↔Pi coverage.
 
 ## Out of scope
 

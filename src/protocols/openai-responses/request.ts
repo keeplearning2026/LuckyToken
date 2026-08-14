@@ -751,6 +751,26 @@ function parseToolChoice(value: unknown): string | undefined {
   throw new InvalidRequest(`unsupported tool_choice.type: ${String(type)}`);
 }
 
+/**
+ * Minimal selector extraction for passthrough routing.
+ *
+ * This deliberately performs no semantic validation beyond a JSON object
+ * shape and a non-empty `model` string: passthrough must forward the raw
+ * body verbatim, so upstream-accepted fields that LuckyToken conversion
+ * would reject (conversation, prompt, background, hosted tools, future
+ * fields) must not block the passthrough branch.
+ */
+export function extractResponsesModelSelector(value: unknown): string {
+  if (!isRecord(value)) {
+    throw new InvalidRequest("Request body must be a JSON object");
+  }
+  const model = value.model;
+  if (typeof model !== "string" || model.length === 0) {
+    throw new InvalidRequest("model must be a non-empty string");
+  }
+  return model;
+}
+
 export function validateResponsesRequest(
   value: unknown,
   freeformNames?: Set<string>,
