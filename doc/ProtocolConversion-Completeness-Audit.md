@@ -8,6 +8,9 @@
 > 与缺失 neutral failure producer 的代码事实仅描述 `2863af2` 基线；当前实现已删除
 > observer side channel，权威合同见 Protocol Conversion Architecture and Policy 及各
 > Conversion Method。以下旧证据保留用于解释 contraction 起因，不得当作当前行为。
+> 2026-08-14 的当前实现还将 CommandCode 移入
+> `packages/provider-commandcode-private/`，通过 Provider Package Contract 从
+> `node_modules` 加载；最终 Distribution 证据已记录为 `online-passed`。
 >
 > 本文严格区分两件事：**该审计基线的代码事实**与**当时已冻结、尚待实现的转换方法**。基线代码事实优先于更早的报告、规划文档和参考对比文档，但不代表当前 HEAD。本文不把测试通过等同于语义完整。
 
@@ -315,8 +318,8 @@
       "conversion": { "request": {}, "response": {} }
     }
   },
-  "providerAdapters": {
-    "commandcode-private": {
+  "providerPackages": {
+    "@luckytoken/provider-commandcode-private": {
       "conversion": { "request": {}, "response": {} },
       "request": { "transport": {} },
       "response": { "errorCapture": {} }

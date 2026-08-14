@@ -179,8 +179,8 @@ There is no global `error | ignore | xrepair` switch.
       "response": {}
     }
   },
-  "providerAdapters": {
-    "commandcode-private": {
+  "providerPackages": {
+    "@luckytoken/provider-commandcode-private": {
       "conversion": {
         "request": {},
         "response": {}
@@ -199,9 +199,9 @@ There is no global `error | ignore | xrepair` switch.
 
 Rules:
 
-- Each adapter parses, validates, defaults, snapshots, and freezes its own policy.
+- Each Client Protocol or Provider Package parses, validates, defaults, snapshots, and freezes its own policy.
 - Invalid values or unknown configuration keys fail startup.
-- Composition locates and binds a capability but does not copy its business rules.
+- Composition locates and binds a capability through the standard Pi Provider path but does not copy its business rules.
 - Client Protocol configuration cannot name or inspect a Provider.
 - Provider configuration cannot name or inspect a Client Protocol.
 - Timeouts, retries, and read limits belong to the adapter that performs the operation. They are grouped by request/response ownership and are not mislabeled as semantic conversion policy.

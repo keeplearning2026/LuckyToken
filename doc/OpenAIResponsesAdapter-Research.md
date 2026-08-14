@@ -169,7 +169,7 @@ export interface Context {
 - `toolResult` 消息：`toolCallId` + `isError` + content（text 块）
 - assistant 消息：`stopReason`（stop/length/toolUse/error/aborted）+ api/provider/model 身份
 
-CommandCode provider 的 `convertCommandCodeMessages`（`src/providers/commandcode-private/provider.ts`）展示了 Pi Message → 上游的完整处理，反过来就是 Responses items → Pi Message 的映射参照。
+CommandCode provider 的 `convertCommandCodeMessages`（`packages/provider-commandcode-private/src/provider.ts`）展示了 Pi Message → 上游的完整处理，反过来就是 Responses items → Pi Message 的映射参照。
 
 ## 6. 移植方案（最小架构）
 

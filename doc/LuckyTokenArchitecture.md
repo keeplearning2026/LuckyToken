@@ -1,8 +1,8 @@
 # LuckyToken 实现架构说明
 
 **文档性质：** 当前实现的维护者地图（implementation architecture map）<br>
-**对应代码：** `src/` 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
-**源码基线：** commit `46db639`（2026-08-11）<br>
+**对应代码：** `src/` Core 与 `packages/` Provider Package 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
+**源码基线：** commit `41007a5`（2026-08-14，CommandCode Provider Package）<br>
 **架构规范：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)<br>
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
@@ -66,8 +66,8 @@ flowchart LR
 
 ## 1.0 小白导读：LuckyToken 是什么
 
-可以把 LuckyToken 想成一家“翻译兼转运服务”。Agent 只会按 Anthropic 的格式
-下单，而当前外部模型服务使用 CommandCode 的格式。LuckyToken 不替模型思考，
+可以把 LuckyToken 想成一家“翻译兼转运服务”。Agent 按 Anthropic 或 OpenAI
+Responses 格式下单，而当前外部模型服务使用 CommandCode 的格式。LuckyToken 不替模型思考，
 只负责验票、翻译、转交、确认结果完整，再按 Agent 能理解的格式送回来。
 
 ```mermaid
@@ -85,10 +85,10 @@ flowchart LR
 ## 1.1 当前对外功能
 
 LuckyToken 当前是一个本地模型协议桥接服务。它在 loopback TCP 上提供 Anthropic
-Messages API endpoint，让能够配置自定义 Anthropic base URL 的 Agent 使用本地
-token 调用服务；服务把请求转换为 Pi AI runtime contract，再由注册到 Pi
-`Models` 的 CommandCode Private Provider 调用真实 CommandCode 上游，最后把 Pi
-结果重新渲染为 Anthropic JSON 或 Atomic SSE。
+Messages 与 OpenAI Responses endpoints，让 Claude Code、Codex CLI 等 Agent 使用
+各协议独立的本地 token 调用服务；服务把请求转换为 Pi AI runtime contract，再由
+注册到 Pi `Models` 的 Provider 调用真实上游，最后把 Pi 结果重新渲染为对应协议的
+JSON 或 Atomic SSE。`GET /v1/models` 还提供已加载 external Providers 的模型发现。
 
 > **小白理解：** Agent 连接的是你电脑上的本地地址，但真正回答问题的是远端模型。
 > LuckyToken 像中间服务台：Agent 不需要知道远端供应商的专用格式，远端供应商也不
@@ -97,8 +97,8 @@ token 调用服务；服务把请求转换为 Pi AI runtime contract，再由注
 当前完整路径是：
 
 ```text
-Anthropic Agent
-  POST /v1/messages
+Claude Code / Codex CLI
+  POST /v1/messages or POST /v1/responses
         │
         ▼
 Node HTTP adapter
@@ -107,7 +107,7 @@ Node HTTP adapter
 Runtime route selection
         │
         ▼
-Anthropic Messages handler + its own Auth
+selected Client Protocol handler + its own Auth
         │ Model + Context + ModelsSimpleStreamOptions
         ▼
 Pi Models / Pi AI IR
@@ -131,7 +131,7 @@ CommandCode content assembler / semantic converter
 Pi execution consumer
         │ committed AssistantMessage
         ▼
-Anthropic renderer
+selected Client Protocol renderer
         │ JSON or Atomic SSE bytes
         ▼
 WHATWG Response → Node ServerResponse → Agent
@@ -139,7 +139,8 @@ WHATWG Response → Node ServerResponse → Agent
 
 当前已经实现的产品操作包括：
 
-- 启动本地 Anthropic `/v1/messages` listener；
+- 启动本地 Anthropic `/v1/messages`、OpenAI Responses `/v1/responses` 与
+  model discovery `/v1/models` routes；
 - 使用每个 Client Protocol 独立的 global/project token 认证本地 Agent；
 - 把 project token 绑定的唯一绝对目录投影为 Pi
   `Options.metadata.projectDir`；
@@ -152,10 +153,13 @@ WHATWG Response → Node ServerResponse → Agent
   Anthropic endpoint 按 `provider/model_id` selector 访问；
 - 支持 Anthropic text、history、thinking replay、tool call/tool result、JSON 与
   Atomic SSE；
+- 支持 Responses incremental input、`previous_response_id` 的有界持久化展开、
+  Responses JSON/Atomic SSE、Codex tool shapes 与 `store:false` policy；
 - 支持 `output_config.effort` → Pi reasoning 映射、`metadata.user_id` 透传、
   `max_tokens=0` 保留；未知 effort 降级为 Pi reasoning default；
-- 支持 Claude Code 等真实 Anthropic Agent 接入（其发送的 `context_management`、
-  `thinking`、`tool_choice`、`top_p` 等标准扩展字段按"只读所需"原则忽略）；
+- 支持 Claude Code 等真实 Anthropic Agent 接入；recognized fields 按冻结转换方法
+  直接转换或显式 omit/degrade，例如 `top_p` 与 thinking budget 进入 Pi，
+  `tool_choice` 无 Pi 表示时不伪造控制；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
 - Provider 通过受信任的 neutral Pi diagnostic 提供有界 upstream failure facts；
   Execution 把已验证 fact 保存在 `ExecutionFailure.failure`，Anthropic/Responses
@@ -167,27 +171,26 @@ WHATWG Response → Node ServerResponse → Agent
 ## 1.2 当前没有实现的能力
 
 > **小白理解：** 这一节相当于产品包装上的“暂不支持”。它防止我们把“设计上可以
-> 扩展”误解为“今天打开软件就能使用”。例如 OpenAI Responses 在架构上有位置，
-> 但当前并没有对应服务窗口。
+> 扩展”误解为“今天打开软件就能使用”。
 
 下列内容不能从现有架构图误读为已实现：
 
-- OpenAI Responses Client Protocol；
 - TLS、公网暴露、反向代理配置、多租户或管理后台；
-- Agent loop、工具实际执行、会话持久化、TUI；
-- `/health`、`/v1/models` 或其他未认证 endpoint；
+- Agent loop、工具实际执行或 TUI；
+- `/health` 或除 `/v1/models` 外的其他未认证 endpoint；
 - 跨 Client Protocol 共享本地 token；
+- Provider Package 自动扫描/安装、热加载或插件市场；
 - 把 Client Protocol 请求直接转换为 CommandCode 请求的旁路；
 - 在 LuckyToken 中重新实现一套与 Pi 平行的通用 LLM IR。
 
-以后增加 OpenAI Responses 时，应新增独立 route、handler、Auth snapshot、token
-file、conversion tests 和一个 composition binding；不得修改 Anthropic handler，
-也不得修改 CommandCode Provider 来识别 OpenAI 术语。
+以后增加新的 Client Protocol 时，应新增独立 route、handler、Auth snapshot、token
+file、conversion tests 和一个 composition binding；不得修改现有 handler，也不得
+修改 concrete Provider 来识别新 Client 术语。
 
 ## 1.3 第一原则：Pi 是唯一共享语义边界
 
-> **小白理解：** 两个翻译员不直接研究对方的语言。左边翻译员只负责“Anthropic
-> → 标准中间稿”，右边翻译员只负责“标准中间稿 → CommandCode”。这样以后换掉任意
+> **小白理解：** 两侧翻译员不直接研究对方的语言。左边各 Client Protocol 只负责
+> “自己的 wire → 标准中间稿”，右边只负责“标准中间稿 → CommandCode”。这样以后换掉任意
 > 一边，另一边不用跟着重写。
 
 系统的核心不是“Anthropic 转 CommandCode”，而是两条互相独立的转换：
@@ -1256,8 +1259,8 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 ## 6.2 Provider model data — 内置模型目录，单一权威来源
 
 > **小白理解：** 供应商的商品目录（模型 id、能力、容量）直接写在 LuckyToken 的
-> Provider 模块里，用户不需要任何 `models.json`。这就像 Pi 内置的 deepseek/anthropic
-> provider 一样——`login` 填 API key 就能用。
+> Provider Package 里，用户不需要任何 `models.json`。安装并配置 package 后，
+> `login` 填 API key 就能用。
 
 CommandCode Private Provider Package 内置 **33 个模型**，全部硬编码在
 `packages/provider-commandcode-private/src/models.ts`（`COMMANDCODE_MODEL_SOURCES`），这是
@@ -1361,6 +1364,20 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
   "clientProtocols": {
     "anthropic-messages": {
       "authFile": "client-auth/anthropic-messages.json"
+    },
+    "openai-responses": {
+      "authFile": "client-auth/openai-responses.json",
+      "stateFile": "state/openai-responses.json",
+      "conversion": {
+        "response": { "storeFalse": "honor" }
+      }
+    }
+  },
+  "providerPackages": {
+    "@luckytoken/provider-commandcode-private": {
+      "conversion": {},
+      "request": {},
+      "response": {}
     }
   },
   "pi": { "directory": "pi" },
@@ -1375,7 +1392,7 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
 | --- | --- |
 | 功能 | 验证 deployment location/binding/limits；把所有 relative path 按 config 所在目录解析；返回 frozen snapshot |
 | 输入 | 必须显式提供的 config path |
-| 输出 | host/port、protocol→authFile、Pi directory、limits |
+| 输出 | host/port、protocol-specific config、package root→opaque config、Pi directory/modelsJson、limits |
 | 谁使用它 | top-level CLI；composition 接收已验证 snapshot |
 | 它使用谁 | Node path/file/stat |
 
@@ -1384,8 +1401,9 @@ file 都失败。Protocol map 使用 null-prototype object，并由 consumer 做
 lookup，避免 `__proto__`/inherited-name 污染。
 
 Config loader 可以解析未来 protocol ID，但当前 concrete composition 会拒绝
-“configured but not installed”的 protocol。也就是说，配置 grammar generic，不代表
-OpenAI Responses handler 已实现。
+“configured but not installed”的 protocol。Provider Package specifier 只允许 npm 根包名
+或 scoped 根包名；相对/绝对路径、URL、Node builtin 与 package subpath 都失败。
+旧 `providerAdapters.commandcode-private` 配置不保留兼容分支，直接报错。
 
 ## 6.5 Pi/Provider composition — `src/composition.ts`
 
@@ -1397,7 +1415,7 @@ OpenAI Responses handler 已实现。
 
 ```ts
 createConfiguredPiModels(options)
-  → { models: Pi.Models }
+  → { models: Pi.Models, externalProviderIds: readonly string[] }
 
 createConfiguredLuckyTokenComposition(options)
   → { runtime: LuckyTokenRuntime, certification: ServingCertificationManifest }
@@ -1412,7 +1430,7 @@ createConfiguredLuckyTokenComposition(options)
 
 | 输入 | 输出/行为 |
 | --- | --- |
-| `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
+| `piDirectory` / `modelsJson` | 定位 `auth.json` 与可选用户自定义 Pi Provider 目录 |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
 | `providerPackages` | package 根名 → package-private raw configuration |
 | required bound `fetch` | 通过最小 host capability 交给 external Provider；不使用 ambient fallback |
@@ -1424,6 +1442,13 @@ auth（API key login）都封装在 `@luckytoken/provider-commandcode-private` �
 Core 不 import 或 special-case 该实现；`package-loader.ts` 只认 Provider Package
 Contract 和固定 `providerPackage` 导出。配置 package 根名后不需要 `models.json`，
 `login` 填 API key 即可 serve。
+
+Loader 先导入、验证并暂存同批全部 package，随后对 Pi builtins、`models.json` 和同批
+Provider 做 ID 冲突检查，全部成功后才调用 `models.setProvider()`，因此失败不会留下
+半注册状态。package 缺失、固定导出缺失、契约版本不匹配、同步/异步 factory 失败、
+非法 Pi Provider 或 ID 冲突都使启动失败。缺少 API key 不阻止装配或 `serve`；真实
+调用时由 Pi credential/auth 路径报告。`serve`、`login`、`logout` 走同一加载路径，
+`client-token` 只解析配置而不动态 import package。
 
 ### `createConfiguredLuckyTokenComposition()`
 
@@ -1469,16 +1494,17 @@ Distribution certification 验证 package、动态加载与线上证据，不进
 certifyServingComposition(facts): ServingCertificationManifest
 ```
 
-这个模块不是 request processor。它在 startup 检查当前具体组合是否仍符合冻结的
-model identity、endpoint、Auth policy、Provider registration、limits、cancellation、
-source profile、conversion revisions 与 conformance hash。
+Core certification 不是 request processor。它在 startup 检查 provider-neutral 的
+Client Protocol、实际 Provider IDs、注册顺序与 limits。Provider/Distribution
+certification 另行绑定 CommandCode model、endpoint、Auth、转换 revision、package
+identity 与 conformance hash。
 
 | 输入 | 当前 bound facts 的只读描述，不是 live service objects |
 | --- | --- |
 | 输出 | deep-frozen `CERTIFIED` 或 `FAILED` manifest |
 | 配套文件 | `test/fixtures/certification/serving-conformance-v2.json` 与 certification tests |
 | 谁使用它 | composition root；失败时阻止启动 |
-| 它使用谁 | Pi model shape、Anthropic option policy type、CommandCode compatibility type |
+| 它使用谁 | provider-neutral composition facts；CommandCode-specific facts只存在于测试/分发认证 |
 
 Certification 可以看见左右两侧是为了证明一个具体 serving route，但不能进行协议
 转换。Injected test Auth 不会被错误标记为 file-snapshot isolation；只有真实
@@ -1549,7 +1575,7 @@ flowchart LR
     OK --> OUT["Pi 标准结果与事件"]
 ```
 
-这个部门不知道最初的客户讲 Anthropic 还是未来的 OpenAI Responses；它只接收 Pi。
+这个部门不知道最初的客户讲 Anthropic 还是 OpenAI Responses；它只接收 Pi。
 同样，Client Protocol 也不知道这里使用 CommandCode。这就是左右两侧解耦的实际落点。
 
 目录 `packages/provider-commandcode-private/src/` 是完整 Pi ↔ CommandCode capability。它从
@@ -1944,8 +1970,8 @@ flowchart TD
     Stream --> Models
 ```
 
-配套规范是 [CommandCode Private Protocol](./Protocols/CommandCode%20Private%20Protocol.md)
-与 [Pi ↔ CommandCode Provider Conversion Method](./Protocols/LuckyToken%20CommandCode%20Private%20Provider%20Conversion%20Method.md)。
+配套规范是 [CommandCode Private Protocol](./Protocols/commandcode%20private%20protocol.md)
+与 [Pi ↔ CommandCode Provider Conversion Method](./Protocols/PI%20AI%20IR-Commandcode%20Private%20Conversion.md)。
 
 ---
 
@@ -1962,6 +1988,8 @@ flowchart LR
     OP["操作者"] --> CFG["config.json\n部署地址簿"]
     CT["client-token CLI"] --> CA["Client Protocol 门卡文件"]
     PI["Pi login / refresh"] --> PA["auth.json\nProvider 凭证"]
+    RESP["Responses handler"] --> STATE["state/openai-responses.json\n会话展开状态"]
+    DIAG["Invocation diagnostics"] --> LOGS["logs/failed-requests\n失败证据"]
     APP["其他 Node 程序"] --> API["Package public API\nAuth / Runtime / Server 等"]
 ```
 
@@ -1980,11 +2008,25 @@ flowchart LR
 │   lifetime: one startup snapshot
 │
 ├── client-auth/
-│   └── anthropic-messages.json
-│       owner: Client Auth file capability
-│       writer: client-token CLI
-│       reader: startup authority loader
-│       runtime form: immutable authorize(token) closure
+│   owner: per-Client-Protocol Auth file capability
+│   writer: client-token CLI
+│   reader: startup authority loader
+│   runtime form: one immutable authorize(token) closure per protocol
+│   │
+│   ├── anthropic-messages.json
+│   └── openai-responses.json
+│
+├── state/
+│   └── openai-responses.json
+│       owner: OpenAI Responses session-state capability
+│       writer/reader: serving-time atomic snapshot lifecycle
+│       runtime form: bounded previous_response_id authority
+│
+├── logs/
+│   └── failed-requests/*.json
+│       owner: invocation diagnostics capability
+│       writer: final request-failure journal
+│       runtime form: bounded/redacted per-request evidence
 │
 └── pi/
     └── auth.json
@@ -2000,6 +2042,8 @@ frequency、secret level 和 lifetime 不同：
 | --- | --- | --- | --- | --- |
 | `config.json` | 静态 deployment | 否 | 否 | 重启 |
 | protocol token file | 低频管理 | 是 | 否 | 重启后新 snapshot |
+| Responses state snapshot | 动态协议状态 | 含会话内容 | 是 | 内存 commit；持久化异步/关闭时 flush |
+| failure journal | 动态诊断证据 | safe/full policy 决定 | 只写 | 每个最终失败请求 |
 | `auth.json` | 动态 Pi credential | 是 | 由 Pi auth operations 读取 | login/logout/refresh contract |
 
 所有 `.luckytoken/`、任意 `auth.json`、`CommandcodeAPIKey.txt` 和
@@ -2018,8 +2062,10 @@ frequency、secret level 和 lifetime 不同：
 | `test/fixtures/certification/*.json` | immutable source-validity/serving coverage record | 只作为 startup certification 绑定证据 |
 | `test/fixtures/commandcode-golden-request.json` | Provider request regression authority | 否 |
 
-Online artifact 不是 runtime log store；production path 当前没有 conversation/request
-persistence 或集中 logging subsystem。
+Online artifact 不是 runtime log store。Production persistence 分成两个窄 owner：
+Responses session state 只保存其 `previous_response_id` 展开所需的有界 wire items；
+invocation diagnostics 只为最终失败写有界/脱敏 journal。二者都不是跨协议的通用
+conversation store 或全量 request logging subsystem。
 
 ## 8.3 Package/public module seams
 
@@ -2217,18 +2263,20 @@ flowchart TB
     O --> G["全部 gate 通过\n当前组合才算完成"]
 ```
 
-## 10.1 四层验证
+## 10.1 五层验证
 
-> **小白理解：** 四层不是重复做同一件事。Unit 回答“一个转换规则对不对”，
+> **小白理解：** 五层不是重复做同一件事。Unit 回答“一个转换规则对不对”，
 > Integration 回答“模块接线对不对”，Certification 回答“现在启动的是不是测试过的
-> 那套组合”，Online 回答“真实外部世界是否也按协议工作”。日常测试不会花在线额度。
+> 那套组合”，Distribution 回答“真实 tarball/node_modules 能否加载”，Online 回答
+> “真实客户端与上游是否也按协议工作”。日常测试不会花在线额度。
 
 | 层次 | 目的 | 代表文件 | 是否访问真实 CommandCode |
 | --- | --- | --- | --- |
 | Unit | 单个 parser/converter/assembler/lifecycle invariant | `test/unit/*.test.ts` | 否 |
 | Integration | 多模块真实路径、fixture transport、真实 TCP/SDK/CLI subprocess | `test/integration/*.test.ts` | 否；只在最外部 fetch boundary 注入 fixture |
 | Certification | spec hash、immutable conformance record、serving composition identity | `test/certification/*.test.mjs` | 否 |
-| Online | 真实 listener + 官方 Anthropic SDK + Pi + 真实 CommandCode | `test/online/*` | 是，显式 `npm run test:online` |
+| Distribution | workspace build/pack、干净临时安装、真实 `node_modules` 动态加载 | `test/distribution/package-smoke.test.mjs` | 否 |
+| Online | direct Pi IR + Anthropic/Responses + Codex CLI/Claude Code + 真实 CommandCode | `test/online/*` | 是，五组显式命令 |
 
 普通 `npm test` 不读取真实 key、不自动产生费用。Online runner 独立读取被忽略的
 `CommandcodeAPIKey.txt`，默认模型是 `commandcode-private/deepseek/deepseek-v4-flash`，保存脱敏的完整
@@ -2264,16 +2312,17 @@ per-Client-Protocol Auth isolation
 - global/project facts 到真实 Provider request 的传播由 online conformance 拥有；
 - healthy upstream 无法稳定制造的 protocol fault 不伪造成 online case。
 
-## 10.3 Online 测试的数据路径
+## 10.3 Online 测试的数据路径与当前证据
 
 > **小白理解：** 在线测试走的就是用户实际路径：官方 Anthropic SDK 连接本地端口，
 > 穿过正式 Runtime、Auth、Pi 和 Provider，最后访问真实 CommandCode。捕获器只坐在
 > 最外侧网络出口复印证据，不替换 LuckyToken 内部模块。
 
 ```text
-official Anthropic SDK
+official Anthropic SDK / Codex CLI / Claude Code
 → real loopback TCP
-→ production Runtime/Auth/Anthropic/Pi/Provider
+→ production Runtime/Auth/Client Protocol/Pi
+→ installed CommandCode Provider (registered at startup by the generic loader)
 → capturing fetch wrapper
 → real https://api.commandcode.ai
 ```
@@ -2283,23 +2332,12 @@ Capturing wrapper 位于 Provider 的 external transport boundary，不 mock Luc
 Provider JSONL 和 physical EOF。Secret 值不得出现在 artifact；summary 只记录数量、
 失败分类和 latency。
 
-标准 `test/online/run-commandcode.ts` 之外，还有两个深度在线套件（同样显式运行、
-不纳入 `npm test`）：
-
-- `test/online/deep-online.ts`：覆盖标准套件之外的场景——多轮历史对话、system
-  prompt、五种 reasoning effort、复杂工具 schema（含 `$schema`）、并行工具调用、
-  长输出、流式、工具结果往返、未知 effort 降级、空消息数组、并发突发、
-  `top_p`/`stop_sequences` 忽略、system block `cache_control` 忽略。断言以
-  "请求成功且 content 非空"为准，允许模型合法的 thinking-only 响应。
-- `test/online/event-coverage.ts`：验证**所有 CommandCode 正常生命周期 event type
-  都真实出现且不报错**：`start`、`start-step`、`finish-step`、`provider-metadata`、
-  `text-start/delta/end`、`reasoning-start/delta/end`、
-  `tool-input-start/delta/end`、`tool-call`、`finish` 共 15 种。`abort`/`error`/
-  response-side `tool-result` 是失败/边缘事件，不强求出现。捕获器记录每个 event
-  type 的出现次数，缺任一必需类型即失败。
-
-真实在线测试是黄金标准：它证明 Anthropic 侧"只转换指定字段"和 CommandCode 侧
-"只有指定 event type 进入 content"在真实上游上成立，且不依赖 fixture 推断。
+2026-08-14 Distribution certification 记录为 `online-passed`：Direct Pi IR 23/23、
+Anthropic 60/60、OpenAI Responses 60/60、Codex CLI 60/60（20 场景 × 3）、Claude
+Code 51/51（17 场景 × 3）。Codex CLI 版本为 `0.147.0`，Claude Code 为 `2.1.210`。
+脱敏摘要保存在 `test/fixtures/certification/online-validation-2026-08-14.json`，详细
+artifacts 位于被忽略的 `.online-artifacts/`。Direct probe 从 package factory 导入；
+其余套件通过通用 loader 从 `node_modules` 加载，不回退到旧源码 import。
 
 ## 10.4 完成 gate
 
@@ -2314,8 +2352,13 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run test:distribution
 git diff --check
+npx tsx test/online/pi-commandcode-ir-probe.ts
 npm run test:online
+npm run test:online-responses
+npm run test:online-codex -- 3
+npm run test:online-claude -- 3
 ```
 
 涉及协议、Pi revision、Provider model/endpoint、Auth policy 或 serving boundary 的修改
@@ -2351,8 +2394,8 @@ flowchart LR
 
 | 原则 | 当前实现证据 | 结论 |
 | --- | --- | --- |
-| Pi 是唯一左右语义边界 | Anthropic 与 CommandCode 目录零互相 import；共同类型只来自 Pi | 符合 |
-| High cohesion / low coupling | Anthropic、Client Auth、Pi config/credential、CommandCode 各自拥有行为+状态+测试 | 符合 |
+| Pi 是唯一左右语义边界 | Anthropic/Responses 与 CommandCode package 零互相 import；共同语义类型只来自 Pi | 符合 |
+| High cohesion / low coupling | 两个 Client Protocol、Client Auth、Pi config/credential、Provider Package 各自拥有行为+状态+测试 | 符合 |
 | Capability cohesion | token schema/mutation/authority 在一个模块；Provider JSONL state 全在 Provider 目录 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；handler 只有 method/path/handle；Auth 只有 `resolve(headers)` | 符合 |
 | Information lifecycle | raw token/file JSON/Client Wire/Provider JSONL 都有明确死亡点；只传播窄 Pi facts | 符合 |
@@ -2368,12 +2411,12 @@ flowchart LR
 ## 11.2 Composition root 为什么可以看见两侧
 
 > **小白理解：** 装配工必须同时看见插头和插座，才能把它们接起来；这不等于装配工
-> 可以替两边处理业务。`composition.ts` 可以创建并连接 Anthropic、Pi、CommandCode，
+> 可以替两边处理业务。`composition.ts` 可以创建 Client Protocol、Pi 和通用 package loader，
 > 但不能写“看到某个 Anthropic 字段就生成某个 CommandCode 字段”的翻译规则。
 
-`composition.ts` 同时 import Anthropic handler 与 CommandCode Provider，看起来是唯一
-“左右都可见”的生产文件。这是允许的 composition-root visibility：它只做
-construction/registration/certification，没有 message/content/usage/tool conversion。
+`composition.ts` import 两个 Client Protocol handler、Pi catalog、Provider Package
+Contract/loader，但不 import CommandCode 实现。它只做 construction、通用动态加载、
+registration 和 provider-neutral certification，没有 message/content/usage/tool conversion。
 
 判断它是否越界的标准是：
 
@@ -2387,7 +2430,7 @@ construction/registration/certification，没有 message/content/usage/tool conv
 ## 11.3 需要持续关注的边界压力
 
 > **小白理解：** 这些项目不是偷偷欠下的 bug，而是已经明确选择的取舍。例如 Atomic
-> SSE 更安全但不是实时吐字，单模型组合更简单但还没覆盖多 Provider。未来改变取舍
+> SSE 更安全但不是实时吐字，package 动态加载也刻意不扩展为插件市场。未来改变取舍
 > 时，应在真正拥有该功能的模块内演进，不能用跨层捷径绕过去。
 
 这些不是被隐藏的功能，而是当前明确 trade-off：
@@ -2397,9 +2440,9 @@ construction/registration/certification，没有 message/content/usage/tool conv
    和完整 body buffering。若未来要求 progressive streaming，必须重新设计跨三层
    terminal/rollback contract，不能在 `server.ts` 里简单 pipe chunks。
 
-2. **当前 concrete composition 只安装一个 Client Protocol 和一个
-   CommandCode model。** 这使当前代码简单且可认证；增加更多实现时，应增加独立
-   binding/factory，而不是把 `composition.ts` 扩成包含转换语义的中央 switch。
+2. **Provider Package loader 只支持显式配置的 npm 根包。** 不自动扫描、安装、热加载，
+   也不提供插件市场。新增 Provider 应实现同一个 package seam，让通用 loader 返回
+   标准 Pi Provider，而不是把 `composition.ts` 扩成 provider-specific switch。
 
 3. **Client token mutation 按非并发 administrative operation 设计。** 没有 watcher/
    lock；运行 snapshot 不热更新。当前写入是该 capability 内的直接文件写，进程在写入
@@ -2419,14 +2462,12 @@ construction/registration/certification，没有 message/content/usage/tool conv
    concurrent OAuth refresh/login/logout；Client token CLI 没有同样并发需求。是否加锁
    必须由 capability 自己的真实 lifecycle 决定。
 
-7. **"只读所需、其他忽略"是显式取舍，不是偷懒。** Anthropic 请求的未转换字段
-   （`top_p`、`thinking`、`tool_choice`、`context_management` 及未来字段）被静默
-   忽略，因为维护"已知 vs 未知"清单无法预知未来客户端。代价是：如果某天某个
-   **被忽略的字段**承载了必须保留的语义（例如未来 Anthropic 用 `thinking` 控制
-   推理预算），当前代码不会自动发现。缓解：这类字段必须先在转换文档 1-7 章获得
-   明确的 Source→Target 规则，才会进入 Pi 状态；在获得规则前，忽略是协议约定的
-   行为，不是 bug。CommandCode 响应侧同理：只有三种 content 生命周期进入 content，
-   `tool-result` 等 no-op 事件不产生语义。
+7. **Recognized 与 future-unknown 必须分开处理。** 已识别 Anthropic 字段按冻结方法
+   direct map、omit+notice/degrade 或 fail；例如 `top_p` 与 thinking budget 进入 Pi，
+   `tool_choice` 没有 Pi 表示时不得伪造控制。未来未知字段只按 owning Client Protocol
+   的 unknown-family policy 处理，不能猜语义或借 Provider 行为反推。CommandCode
+   响应侧同理：只有规范定义的 content 生命周期进入 content，no-op/未知事件按
+   Provider-owned policy 处理。
 
 8. **Provider HTTP 错误只通过 neutral fact 选择性保真。** Provider 在自己的
    transport boundary 有界采集并清洗 status、safe message/type/code、snapshot metadata
@@ -2472,32 +2513,32 @@ flowchart TB
     REG -. "不修改 Client Protocol 翻译" .-> CPI
 ```
 
-## 12.1 增加 OpenAI Responses Client Protocol
+## 12.1 增加新的 Client Protocol
 
-> **小白理解：** OpenAI Responses 应当像新开一扇独立服务门：有自己的路由、解析、
-> 返回格式、门卡文件和测试，只在中间使用相同 Pi 插座。它不能借用 Anthropic 的
+> **小白理解：** 新 Client Protocol 应当像新开一扇独立服务门：有自己的路由、解析、
+> 返回格式、门卡文件和测试，只在中间使用相同 Pi 插座。它不能借用已有协议的
 > 门卡或让 Runtime 把协议名称塞进通用 Auth。
 
-应新增：
+现有 OpenAI Responses 实现是可复用的结构模板；新增另一协议时应新增平行目录：
 
 ```text
-src/protocols/openai-responses/
+src/protocols/<new-client-protocol>/
   profile/request/options/response/stream/handler...
 
-.luckytoken/client-auth/openai-responses.json
+.luckytoken/client-auth/<new-client-protocol>.json
 
 composition binding:
   protocol ID → its auth file → its Auth → its handler
 
 tests:
-  OpenAI wire ↔ Pi + route/Auth isolation + SDK/TCP
+  new Client wire ↔ Pi + route/Auth isolation + SDK/TCP
 ```
 
 不得修改：
 
 ```text
-CommandCode Provider conversion
-Anthropic parser/renderer/token file
+concrete Provider conversion
+existing Client Protocol parser/renderer/token files
 generic Auth.resolve signature
 Runtime to pass a protocol ID into Auth
 Pi public contracts
@@ -2520,9 +2561,12 @@ Provider.auth
 Provider.getModels()
 ```
 
-然后在 startup composition 用 `models.setProvider()` 注册，并为其静态 model config、
-credential method、request/response conversion、retry/cancel/online conformance 添加
-独立模块和测试。不得修改 Anthropic/OpenAI adapters 来识别该 Provider。
+将它包装为根入口固定导出 `providerPackage` 的 workspace/npm 包，依赖
+`@luckytoken/provider-contract/package`，并在 `providerPackages` 中以 npm 根包名配置。
+通用 loader 会完成版本/Provider 验证、冲突预检和 Pi 注册；无需修改 composition 或
+增加 provider-specific 分支。静态 model config、credential method、request/response
+conversion、retry/cancel/online conformance 仍由新包独立拥有和测试。不得修改
+Anthropic/OpenAI adapters 来识别该 Provider。
 
 ## 12.3 增加更多 CommandCode models
 
@@ -2530,10 +2574,10 @@ credential method、request/response conversion、retry/cancel/online conformanc
 > 翻译。先让 Pi 的模型目录、名称消歧、Provider catalog 和认证清单支持多项；实际
 > 请求仍携带已经选定的那个 Pi `Model`。
 
-当前 certified composition 要求 `models.json` 中恰好一个 CommandCode model。要支持
-多个 model，修改范围应限于 Pi model-config/composition、model resolution ambiguity
-policy、Provider model catalog 与 certification；CommandCode wire conversion 应继续
-只消费 invocation 中已 resolved 的 `Model`。
+当前 33 个 CommandCode models 的唯一权威来源是 Provider Package 的 `models.ts`。
+增删模型只应修改 package-owned catalog、model resolution/certification 期望及对应
+测试；不需要在 `models.json` 复制条目。CommandCode wire conversion 应继续只消费
+invocation 中已 resolved 的 `Model`。
 
 ## 12.4 更新 Pi
 

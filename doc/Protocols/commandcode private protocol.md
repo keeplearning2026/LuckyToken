@@ -1486,7 +1486,7 @@ Duplicate start、closed id 后又来的 start/delta/end、以及 end without op
 
 ## 7.4 Historical TypeScript sketch（non-normative）
 
-下面的长代码块是冻结 Tickets 20–26 前的历史草图，保留作来源对照，不是当前实现合同。它关于 `rawEvents` retention、finish-step no-op、fixed pause error、unknown-event fixed error、primitive tool input 和 local-only failures 的行为均已被本节 7.1–7.3 与冻结 conversion method 取代；实现必须以当前 `src/providers/commandcode-private/assembler.ts` 的公开 seam 和对应测试为准。
+下面的长代码块是冻结 Tickets 20–26 前的历史草图，保留作来源对照，不是当前实现合同。它关于 `rawEvents` retention、finish-step no-op、fixed pause error、unknown-event fixed error、primitive tool input 和 local-only failures 的行为均已被本节 7.1–7.3 与冻结 conversion method 取代；实现必须以当前 `packages/provider-commandcode-private/src/assembler.ts` 的公开 seam 和对应测试为准。
 
 ~~~ts
 type UnknownRecord = Record<string, unknown>;

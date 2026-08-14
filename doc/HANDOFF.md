@@ -4,6 +4,14 @@
 > 数量、`store:false`、certification v1 和待办描述不代表 Ticket 20–28 完成后的合同。
 > 当前事实以 `doc/Protocols/` 的冻结规范、`doc/LuckyTokenArchitecture.md`、
 > `serving-conformance-v2.json` 与当前 ticket completion evidence 为准。
+>
+> **2026-08-14 current pointer:** `main` baseline `41007a5` delivers CommandCode
+> through `@luckytoken/provider-contract` and
+> `@luckytoken/provider-commandcode-private`, loaded generically from
+> `node_modules`. Distribution evidence is `online-passed` (Direct 23/23,
+> Anthropic 60/60, Responses 60/60, Codex 60/60, Claude 51/51). All old source
+> paths, discovery constants, session policies, and evidence-status statements
+> below remain part of this historical snapshot only.
 
 **交接基线：** `ac9fa9a`（`fix: record tool-call ids when appending to an existing assistant turn`）<br>
 **记录日期：** 2026-08-12<br>

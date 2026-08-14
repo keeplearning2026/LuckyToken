@@ -6,7 +6,7 @@ Governing revision marker retained for serving certification. This frozen docume
 
 Status: **Frozen normative design**
 
-Owner: `commandcode-private` Provider adapter.
+Owner: `@luckytoken/provider-commandcode-private` Provider Package.
 Boundary: Pi public Provider contracts ↔ CommandCode private wire.
 
 ## 1. Independence and authority
@@ -37,8 +37,8 @@ Suggested configuration:
 
 ```json
 {
-  "providerAdapters": {
-    "commandcode-private": {
+  "providerPackages": {
+    "@luckytoken/provider-commandcode-private": {
       "conversion": {
         "request": {
           "syntheticMissingToolResultOutputType": "text"
@@ -465,6 +465,9 @@ Response cloning or unbounded observer reads are forbidden.
 
 Tickets 20–26 implement this Provider method, including structured stream/HTTP failures,
 retry attempt diagnostics, execution fact promotion, bounded capture, and request-local
-isolation. The current contraction removes the remaining Client observer side channel;
-Ticket 28 owns full-route certification. Online CommandCode evidence was not run for this
-completion and remains evidence-insufficient.
+isolation. The current contraction removes the remaining Client observer side channel.
+The implementation is now delivered by the package named above without changing these
+conversion rules. The 2026-08-14 distribution certification records `online-passed`:
+direct Pi IR 23/23, Anthropic 60/60, Responses 60/60, Codex CLI 60/60, and Claude Code
+51/51. Exact pause-resubmission semantics remain separately evidence-insufficient as
+stated in §11.3; the successful matrix does not invent a fixture it did not observe.

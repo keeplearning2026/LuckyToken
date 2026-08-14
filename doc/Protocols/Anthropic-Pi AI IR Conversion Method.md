@@ -425,6 +425,8 @@ compatibility, prefill degradation, thinking budgets and cache controls,
 redacted/missing-signature behavior, empty content, JSON/SSE usage, and
 request-local failure isolation.
 
-Real-upstream execution remains separate evidence. When it is not run, the
-certification record says `EVIDENCE_INSUFFICIENT`; offline certification never
-claims that paid/live profile passed.
+Real-upstream execution remains separate evidence from deterministic conversion
+tests. The 2026-08-14 distribution record is `online-passed`: the Anthropic
+route completed 60/60 real CommandCode cases and Claude Code completed 51/51
+(17 scenarios × 3) through the installed Provider Package. Native Anthropic
+passthrough is a separate profile and is not claimed by that CommandCode matrix.

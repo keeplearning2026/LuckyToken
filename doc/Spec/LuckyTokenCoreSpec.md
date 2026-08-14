@@ -1,6 +1,6 @@
-# LuckyToken Core Architecture Specification v5.8
+# LuckyToken Core Architecture Specification v5.9
 
-**Status:** FROZEN — Observer Side Channel Removed
+**Status:** FROZEN — External Provider Package Composition
 
 本文件描述 LuckyToken 的 Core Architecture。
 
@@ -1447,7 +1447,10 @@ Deployment / Router Configuration
                 │
         ├── create Client Protocol implementations
         │   └── bind one Auth authority per handler
-        ├── create Providers
+        ├── prepare Provider sources
+        │   ├── Pi built-ins
+        │   ├── models.json
+        │   └── configured external Provider Packages
         │
         ├── optionally provide custom Pi stores/context
         │   ├── CredentialStore?
@@ -1459,8 +1462,8 @@ Deployment / Router Configuration
         │        ▼
         │      Models
         │        ▲
-        │        │ setProvider(...)
-        │        └──────── Providers
+        │        │ setProvider(...), after staged validation
+        │        └──────── standard Pi Providers
         │
         ├── bind Router policy/defaults
         └── start HTTP runtime
@@ -1503,6 +1506,28 @@ register Providers
 publish stable runtime objects to request handling
 start runtime
 ```
+
+External Provider Packages are a construction/loading seam around the same Pi
+`Provider` contract, not a second registry or semantic model. Core accepts a
+configuration map keyed only by npm root package names (including scoped root
+names). It imports the fixed root export `providerPackage`, validates the
+versioned Provider Package Contract, supplies the narrow host capabilities
+`fetch` / `now` / `createUuid`, and receives one standard Pi `Provider`.
+
+Registration order is frozen:
+
+```text
+Pi built-in Providers
+→ models.json Providers
+→ external Provider Packages
+```
+
+The external loading phase imports, constructs, validates, and stages the whole
+configured batch before committing any of it. It checks collisions against
+already registered Providers and within the staged batch. Package import,
+contract/export/version, package-owned configuration, synchronous/asynchronous
+factory, Pi Provider shape, or identity failure therefore aborts startup
+without a partially registered external batch.
 
 它不 owns：
 
@@ -2598,7 +2623,7 @@ Architecture 不为 hypothetical future integrations 提前占 Provider identity
 
 ---
 
-## 4.4 Built-in 与 LuckyToken-Specific Providers
+## 4.4 Built-in、models.json 与 External Provider Packages
 
 如果 Pi built-in Provider 已满足 upstream integration requirement，应直接复用：
 
@@ -2621,6 +2646,23 @@ LuckyToken-specific integration
       Models
 ```
 
+An external integration may be delivered as an npm/workspace Provider Package:
+
+```text
+npm root package
+  └── fixed providerPackage export (contract v1)
+        └── createProvider(narrow host + opaque package config)
+              └── Pi Provider
+                    └── Models
+```
+
+The Provider Package Contract only standardizes safe construction and loading.
+It does not own model semantics, replace `Models`, or wrap the Pi Provider at
+request time. Package-private configuration is opaque to Core and validated by
+the owning package. Shared neutral diagnostics are exported by the same
+contract package so Core and external Providers use one trusted runtime marker
+identity.
+
 Custom Provider 不构成建立第二个 LuckyToken-wide Provider framework 的理由。
 
 因此不要先创建：
@@ -2640,6 +2682,10 @@ Generic architecture contract 就是：
 ```text
 Pi Provider
 ```
+
+The versioned `LuckyTokenProviderPackage` construction seam is not a
+`ProviderFactoryRegistry`: there is no lookup by semantic type, scanning,
+auto-installation, hot reload, plugin market, or alternative dispatch path.
 
 Implementation 可以使用 Pi construction helpers，也可以直接实现 Provider contract，取决于哪个更简单。
 
@@ -5890,7 +5936,7 @@ Provider Boundary 只 owns 这段 upstream-specific transition。
 > - **Authoritative Tool Completion**：只有后续 `tool-call` event 才建立 completed invocation。
 > - **Keyed Temporary State**：因为多个 tool ID 可以 interleave，partial state 必须按 tool identity 隔离。
 
-LuckyToken 当前维护一个 concrete Pi Provider：
+LuckyToken 当前维护一个 concrete Pi Provider，由私有 workspace/npm package 交付：
 
 ```text
 CommandCode Private Provider
@@ -5901,6 +5947,11 @@ CommandCode Private Protocol
         ▼
 POST /alpha/generate
 ```
+
+Package `@luckytoken/provider-commandcode-private` owns the model catalog,
+configuration validation, factory, Pi ↔ CommandCode conversion, and upstream
+lifecycle. Core imports only `@luckytoken/provider-contract`; it must not
+import, instantiate, or special-case the CommandCode implementation.
 
 本章只讨论这个 integration。
 
@@ -6947,7 +6998,10 @@ Deployment / Router Configuration
                 │
         ├── Client Protocol implementations
         │   └── bind one Auth authority per handler
-        ├── Providers
+        ├── Provider sources
+        │   ├── Pi built-ins
+        │   ├── models.json
+        │   └── configured npm root packages
         │
         ├── optional Pi customizations
         │   ├── CredentialStore?
@@ -6959,8 +7013,8 @@ Deployment / Router Configuration
         │        ▼
         │      Models
         │        ▲
-        │        │ setProvider(...)
-        │        └──────── Providers
+        │        │ staged validation → setProvider(...)
+        │        └──────── standard Pi Providers
         │
         ├── Router policy/defaults
         └── HTTP runtime
@@ -6985,6 +7039,24 @@ models.setProvider(provider)
 ```
 
 进入 `Models` provider collection，而不是 `createModels()` 的 required constructor dependency。
+
+External package loading obeys one atomic sequence:
+
+```text
+validate npm root specifier
+→ import fixed package root
+→ assert providerPackage contract version
+→ create and validate Provider
+→ stage entire batch and check all IDs
+→ register external Providers
+```
+
+Relative/absolute paths, URLs, Node builtins, and package subpaths are rejected.
+`serve`, `login`, and `logout` use the same configured Pi-model construction
+path. `client-token` parses deployment configuration to find Client Auth files
+but does not dynamically import Provider Packages. A missing upstream API key
+does not block `serve`; Pi Provider credential resolution reports it on the
+first real invocation.
 
 Normal request 依赖已经 constructed/bound 的 runtime objects，不依赖 startup parsing state，也不通过 service locator 重新发现 dependency。
 
@@ -7113,6 +7185,7 @@ Summary：
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
 | **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
 | **Auth** | auth policy/config; credential/project lookup capability; session-resolution policy; fallback identity capability | Auth-owned mutable lookup/index/cache state only if any | `resolve(headers)` | Model; Context; Pi Options; Provider wire |
+| **Provider Package Loader** | versioned Package Contract; dynamic import capability; narrow host capabilities; Pi `MutableModels` | staged external Providers only during startup | `loadProviderPackages` | Client wire; Provider-native wire; package-private configuration semantics |
 | **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | inbound Auth; Client wire; generic whole-request object |
 | **CommandCode Private Provider** | endpoint/config; compatibility policy; Project Snapshot; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object |
 
@@ -7174,6 +7247,18 @@ LuckyToken Core's primary inference dependency is `Models.streamSimple(...)`, bu
 Pi built-in Provider implementations remain Pi-owned.
 
 A LuckyToken-specific Provider, such as the CommandCode Private Provider, implements the same Pi Provider contract, while its own implementation dependency closure is LuckyToken-owned.
+
+The Provider Package Contract has two intentionally small exports:
+
+```text
+@luckytoken/provider-contract/package
+  contract version + host capabilities + create input + assertion
+
+@luckytoken/provider-contract/diagnostics
+  trusted neutral failures/notices/attempts/execution facts
+```
+
+Neither export defines Provider wire types or a new common IR.
 
 ## 11.4 Fact Flow Contract Map
 
@@ -7362,6 +7447,16 @@ Current Core 不 live-forward upstream/Pi deltas to downstream Client wire。
 ## 11.6 Concrete CommandCode Private Extension
 
 ```text
+Startup:
+  @luckytoken/provider-commandcode-private
+          │ fixed providerPackage export
+          ▼
+  Generic Provider Package Loader
+          │ validated Pi Provider
+          ▼
+        Pi Models registration
+
+Request:
                     Pi Invocation
                          │
          ┌───────────────┴────────────────┐
@@ -7401,6 +7496,11 @@ Current Core 不 live-forward upstream/Pi deltas to downstream Client wire。
 ```
 
 CommandCode Private vocabulary 不进入 Generic Core。
+
+The package root additionally exposes the existing direct Pi Provider factory
+and its option/policy types plus the necessary `ProjectSnapshot` type. Those
+exports support direct Pi integration and characterization; production Core
+uses only the fixed `providerPackage` export through the generic loader.
 
 `projectDir` 的 flow 是：
 
@@ -7590,3 +7690,28 @@ LuckyToken Core Architecture v5.8
 v5.8 的 correction 不改变 Pi 作为唯一 conversion semantic boundary。它删除
 Client-side transport observation，让 detecting Provider 拥有 failure acquisition，
 并让每个 Client Protocol 只负责把 trusted neutral fact 映射为自己的 wire error。
+
+### v5.9 Frozen Status
+
+```text
+LuckyToken Core Architecture v5.9
+        │
+        ├── v5.8 protocol and diagnostic semantics preserved
+        │      ├── Pi remains the only shared semantic boundary
+        │      └── observer side channel remains removed
+        │
+        └── external Provider construction is package-delivered
+               ├── one versioned, narrow Provider Package Contract
+               ├── npm root package specifiers only
+               ├── fixed providerPackage root export
+               ├── staged validation and atomic external registration
+               ├── builtins → models.json → external packages order
+               ├── shared trusted diagnostics runtime identity
+               └── no Core import or special-case of CommandCode
+```
+
+v5.9 changes delivery and startup composition, not conversion semantics. Every
+external package still returns the standard Pi `Provider`; Pi AI IR remains the
+only shared semantic boundary. CommandCode request/response mappings, defaults,
+wire shape, diagnostics, tool-call relationships, and atomic stream behavior
+remain frozen.

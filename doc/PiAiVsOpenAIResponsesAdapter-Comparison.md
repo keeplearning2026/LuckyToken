@@ -681,8 +681,8 @@ Pi 的 `strict` 只是软提示。
   `node_modules/@earendil-works/pi-ai/dist/types.d.ts`。
 - LuckyToken：`src/protocols/openai-responses/request.ts`、`response.ts`、
   `sse.ts`、`session-state.ts`、`handler.ts`、`src/protocols/options.ts`、
-  `src/execution.ts`、`src/providers/commandcode-private/{provider,semantic,
-  assembler}.ts`、`src/protocols/upstream-failure.ts`。
+  `src/execution.ts`、`packages/provider-commandcode-private/src/{provider,semantic,
+  assembler}.ts`、`packages/provider-contract/src/diagnostics.ts`。
 - 参考实现：`D:\project\opencodex\src\server\responses-json-events.ts`、
   `src/responses/reasoning-envelope.ts`。
 - 样本：`test/fixtures/codex-cli-requests/*.json`（27 个文件，普查见第 2 节）。

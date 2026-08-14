@@ -552,5 +552,7 @@ identity/usage, and completed/incomplete/failed SSE contracts.
 The 27 sanitized Codex CLI request fixtures additionally prove, one fixture at
 a time, developer prompt delivery, effective tools/options, Lark grammar
 handling, `store:false=honor`, and message/tool correlation through the public
-route. Real-upstream execution remains separate evidence and is recorded as
-`EVIDENCE_INSUFFICIENT` when it is not run.
+route. The 2026-08-14 distribution record is `online-passed`: the Responses
+route completed 60/60 real CommandCode cases and Codex CLI completed 60/60
+(20 scenarios × 3) through the installed Provider Package. Native Responses
+passthrough remains a separately certified profile.

@@ -18,6 +18,7 @@ npm run typecheck
 npm run lint
 npm run test
 npm run test:integration
+npm run test:distribution
 npm run build
 ```
 
@@ -52,6 +53,27 @@ The CommandCode Private Provider is installed as the private workspace package
 through the standard Pi Provider contract. Configure it under
 `providerPackages`; no `models.json` entry is needed. Users authenticate with
 `login` (API key only) and are then ready to serve.
+
+```json
+{
+  "providerPackages": {
+    "@luckytoken/provider-commandcode-private": {
+      "conversion": {},
+      "request": {},
+      "response": {}
+    }
+  }
+}
+```
+
+Only npm root package names (including scoped root names) are accepted. Package
+import, contract/export validation, factory construction, and Provider ID
+collision checks all complete before external Providers are registered. Pi
+built-ins are registered first, then `models.json`, then external packages.
+`serve`, `login`, and `logout` use this same loader; `client-token` only parses
+configuration. The legacy `providerAdapters.commandcode-private` key is an
+error. A missing Provider API key does not block `serve`; the standard Pi auth
+path reports it when a model is invoked.
 
 Create local files from the committed placeholders:
 
@@ -259,12 +281,31 @@ through the `/v1/responses` endpoint with genuine Codex-style incremental
 semantics: `previous_response_id` chaining with upstream history-expansion
 evidence, durable snapshot recovery across a simulated process restart, atomic
 SSE lifecycle, function_call → function_call_output tool round-trips,
-`store:false` unconditional saving, client cancellation, per-protocol Auth
-isolation, and concurrent isolation.
+the configured `store:false` policy (`honor` by default, or explicit `memory` /
+`persist`), typed unknown/expired/evicted continuation failures, client
+cancellation, per-protocol Auth isolation, and concurrent isolation.
 
 ```powershell
 npm run test:online-responses
 ```
+
+The full online distribution matrix also exercises the direct packaged Pi
+factory and both real clients. Except for the direct IR characterization probe,
+these runners load CommandCode through the generic loader from `node_modules`:
+
+```powershell
+npx tsx test/online/pi-commandcode-ir-probe.ts
+npm run test:online
+npm run test:online-responses
+npm run test:online-codex -- 3
+npm run test:online-claude -- 3
+```
+
+The 2026-08-14 distribution record is `online-passed`: direct IR 23/23,
+Anthropic 60/60, Responses 60/60, Codex CLI 60/60 (20 scenarios × 3), and
+Claude Code 51/51 (17 scenarios × 3). The sanitized record is
+`test/fixtures/certification/online-validation-2026-08-14.json`; detailed wire
+artifacts remain ignored under `.online-artifacts/`.
 
 Malformed known events, unknown future events, terminal-less EOF, retry timing,
 UTF-8/chunk splitting, and unsupported image capability gates remain

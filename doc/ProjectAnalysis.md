@@ -2,12 +2,12 @@
 
 **文档性质：** 对 LuckyToken 项目的一份整体性认识与地图（overview & map），
 面向新读者、维护者与 Agent 的快速上下文建立。<br>
-**对应代码：** `src/` 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
-**源码基线：** 2026-08-14 Ticket 28 full-route certification baseline；具体提交以当前 `git log` 为准。<br>
+**对应代码：** `src/` Core 与 `packages/` Provider Package 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
+**源码基线：** commit `41007a5`（2026-08-14，CommandCode Provider Package）<br>
 **权威规范：** [LuckyTokenCoreSpec](./Spec/LuckyTokenCoreSpec.md) 拥有
 architecture/ownership；[LuckyTokenArchitecture](./LuckyTokenArchitecture.md) 是
 实现架构说明。<br>
-**交接基线：** [HANDOFF.md](./HANDOFF.md)（当前交接状态、工作树与未决事项）<br>
+**历史交接：** [HANDOFF.md](./HANDOFF.md)（2026-08-12 快照，不是当前 authority）<br>
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
 > 本文是「先读什么、项目做什么、模块怎么连」的导览，不替代也不复制
@@ -53,7 +53,7 @@ Client Protocol adapter        (src/protocols/anthropic/ · src/protocols/openai
     ↕
 Pi runtime contracts           (Models, Context, ModelsSimpleStreamOptions, ...)
     ↕
-Provider adapter               (src/providers/commandcode-private/)
+Provider Package               (packages/provider-commandcode-private/)
     ↕
 Upstream Wire (CommandCode JSONL)
 ```
@@ -132,9 +132,10 @@ flowchart LR
   Provider 只看到展开后的完整 Pi 历史（历史拼接是 Client Protocol 的职责，不是第二 IR）。
 - 会话历史**持久化到磁盘**（`stateFile`，默认 `<config-dir>/state/openai-responses.json`），
   重启后 Codex 续会话不丢。
-- 会话状态语义：无条件保存（忽略 `store:false`）、fail-open 展开、展开失败的那一轮不保存
-  （防污染）、1000 条 FIFO 上限、32MB 快照解析上限、2s 防抖原子写（tmp+rename）、
-  损坏快照备份 `.corrupt` 后空启动、shutdown flush。
+- 会话状态语义：`store:false` 由 `honor|memory|persist` 策略决定（默认 `honor`）；
+  unknown/expired/evicted/unresolvable `previous_response_id` 产生 typed conversion error；
+  1000 条、24h TTL、单条 1000 items / 256KiB、32MB 快照解析上限、2s 防抖原子写
+  （tmp+rename）、损坏快照备份 `.corrupt` 后空启动、shutdown flush。
 - Codex 工具形状由 adapter 归一化：OpenAI 托管工具（`web_search`、`image_generation`）跳过、
   自由 `custom` 工具暴露为单输入函数、`namespace` 组扁平化、非对象 tool `parameters`
   包装为 JSON Schema 对象。
@@ -143,7 +144,7 @@ flowchart LR
 ### 3.3 模型发现 `GET /v1/models`
 
 - 无认证的跨协议元数据端点（`src/models-discovery.ts`），不绑定任何 Client Protocol 的 Auth。
-- 只暴露 LuckyToken 自有 provider（当前 `DISCOVERED_PROVIDERS = {"commandcode-private"}`，方案 B）。
+- 只暴露本次由通用 loader 成功加载的 external Provider IDs；不硬编码 CommandCode。
 - wire 格式（Responses list shape）由 `src/protocols/openai-responses/models.ts` 拥有；
   `models-discovery.ts` 只持有暴露策略。
 
@@ -205,32 +206,34 @@ flowchart LR
 | 文件 | 职责 |
 | --- | --- |
 | `src/protocols/options.ts` | 中立的 `composeOptions`，Anthropic 与 OpenAI Responses 共用；只接收窄 invocation facts |
-| `src/protocols/upstream-failure.ts` | neutral upstream failure fact schema、sanitization 与 trusted Pi diagnostic lookup；不包含 Client-specific 映射 |
+| `packages/provider-contract/src/diagnostics.ts` | Core 与外部 Provider Package 共享的 neutral failure/notices/attempts/execution facts 及 trusted runtime markers；不包含 Client-specific 映射 |
 
 ### 4.6 Pi 集成与 Composition
 
 | 文件 | 职责 |
 | --- | --- |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` 实现（proper-lockfile + 重试，0600/0700）；`.luckytoken/pi/auth.json` 唯一运行时所有者 |
-| `src/composition.ts` | 组合根：构建 Pi `Models`、注册 provider、绑定每个协议独立的 Auth + token authority、跑 serving certification（CERTIFIED 才启动） |
+| `src/composition.ts` | 组合根：构建 Pi `Models`，按 builtins → `models.json` → external packages 注册，绑定每个协议独立 Auth，运行 provider-neutral Core certification |
 | `src/cli-config.ts` | 严格配置 schema；相对路径解析；auth-file 唯一性 |
 | `src/model-resolution.ts` | `selectorTool`（parse/format）+ `resolveModel`：`provider/model_id` 第一斜杠约定，精确匹配、歧义报错 |
-| `src/models-discovery.ts` | `GET /v1/models` 无认证发现端点；暴露策略 |
-| `src/commandcode-serving-certification.ts` | 冻结 serving manifest（规范身份+sha256、策略、覆盖率、验证命令、`SERVING_CONFORMANCE_REVISION`），漂移即失败关闭 |
+| `src/models-discovery.ts` | `GET /v1/models` 无认证发现端点；只接收 loader 返回的 external Provider IDs |
+| `src/core-serving-certification.ts` | provider-neutral Core runtime certification；记录 Client Protocol、实际 Provider IDs、注册顺序与 limits |
 | `src/cli.ts` | CLI：`serve` / `login` / `logout` / `client-token`；Pi `Provider.auth` 交互 |
 
 ### 4.7 Provider 层
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/providers/catalog.ts` | **唯一 import 具体 Provider 实现的模块**；注册 Pi built-in providers + CommandCode Private + `models.json` providers |
+| `packages/provider-contract/` | 版本化 Provider Package 构造 seam，以及共享 diagnostics runtime；不创建第二套 registry 或 IR |
+| `src/providers/catalog.ts` | 注册 Pi built-in providers 与 `models.json` providers；不 import 具体 external Provider |
 | `src/providers/models-json.ts` / `models-json-schema.ts` | 用户自定义 provider（`baseUrl` + `api` + `apiKey` + `models`）解析与注册；不覆盖内置 provider id |
-| `src/providers/commandcode-private/provider.ts` | Pi `Provider`：`auth.apiKey` + `api.stream/streamSimple`；构建请求、校验、执行尝试、重放 Pi 事件；`x-command-code-version: 1.9.0` 等头部 |
-| `src/providers/commandcode-private/project.ts` | `projectDir` 快照 → CommandCode `config`（git 分支/状态/提交，工作区作用域） |
-| `src/providers/commandcode-private/assembler.ts` | 原子 JSONL 事件组装（text/reasoning/tool 槽按 id 键控，生命周期校验，usage 归一化） |
-| `src/providers/commandcode-private/attempts.ts` | 重试策略（retry-after / 指数退避 / 上限），尝试级 AbortController，traceparent |
-| `src/providers/commandcode-private/semantic.ts` | CommandCode 结果 → Pi `AssistantMessage`（usage 对账、reasoning→thinking、工具调用克隆、stop-reason 映射） |
-| `src/providers/commandcode-private/models.ts` / `model.ts` / `constants.ts` / `json.ts` | 33 个模型的唯一目录（官方 1.9.0 数据）；内置默认模型与 provider/api id；严格无损 JSON 克隆 |
+| `src/providers/package-loader.ts` | 从 npm 根包名动态导入固定 `providerPackage`，验证/暂存全部 Provider、预检冲突后原子注册，并返回 external IDs |
+| `packages/provider-commandcode-private/src/provider.ts` | Pi `Provider`：`auth.apiKey` + `api.stream/streamSimple`；构建请求、校验、执行尝试、重放 Pi 事件；`x-command-code-version: 1.9.0` 等头部 |
+| `packages/provider-commandcode-private/src/project.ts` | `projectDir` 快照 → CommandCode `config`（git 分支/状态/提交，工作区作用域） |
+| `packages/provider-commandcode-private/src/assembler.ts` | 原子 JSONL 事件组装（text/reasoning/tool 槽按 id 键控，生命周期校验，usage 归一化） |
+| `packages/provider-commandcode-private/src/attempts.ts` | 重试策略（retry-after / 指数退避 / 上限），尝试级 AbortController，traceparent |
+| `packages/provider-commandcode-private/src/semantic.ts` | CommandCode 结果 → Pi `AssistantMessage`（usage 对账、reasoning→thinking、工具调用克隆、stop-reason 映射） |
+| `packages/provider-commandcode-private/src/models.ts` / `model.ts` / `constants.ts` / `json.ts` | 33 个模型的唯一目录（官方 1.9.0 数据）；内置默认模型与 provider/api id；严格无损 JSON 克隆 |
 
 ---
 
@@ -257,12 +260,13 @@ model_id，model_id 本身可以包含斜杠。
 | Unit | `test/unit/` | 纯函数与单模块行为 |
 | Integration | `test/integration/` | 注入 fixture transport，不访问真实服务 |
 | Certification | `test/certification/`，`node --test` | 哈希锁定规范身份、五个 profile、架构 import 边界与 serving manifest，漂移即失败 |
-| Online | `test/online/`（6 文件），`npm run test:online` 与 `npm run test:online-responses` | 需授权；真实 loopback + 官方 Anthropic SDK / Codex 风格增量语义；证据写入 `.online-artifacts/` |
+| Distribution | `npm run test:distribution` | pack 三个 workspace tarball，在干净临时目录从真实 `node_modules` 加载并运行 |
+| Online | `test/online/`，五组命令 | direct IR、Anthropic、Responses、Codex CLI ×3、Claude Code ×3；证据写入 `.online-artifacts/` |
 
 - `npm test` = certification + vitest run；Ticket 28 完成证据记录在对应 ticket 与
   `serving-conformance-v2.json`，避免在导览中固化易过期的测试数量。
 - `npm run typecheck` / `lint` / `build` 分别用 tsconfig / eslint / tsconfig.build。
-- online 套件（`run-commandcode.ts` + `run-openai-responses.ts`）显式运行、不纳入
+- online 套件显式运行、不纳入
   `npm test`；malformed/unknown/EOF/分块等故障注入留在确定性的离线用例中。
 
 ---
@@ -271,15 +275,14 @@ model_id，model_id 本身可以包含斜杠。
 
 ### 当前状态
 
-- 当前 full-route 收缩分支为 `codex/protocol-conversion-20-28`；提交边界按 Ticket 20–28
-  分开保留。
+- `main` 当前基线已将 CommandCode 实现交付为两个私有 workspace/npm 包，并通过
+  通用 loader 从 `node_modules` 加载。
 - 生产组合提供两个 Client Protocol + `GET /v1/models`；Anthropic 与 OpenAI Responses
   各自独立 Auth 实例与 token 文件，认证隔离已被测试锁定（anthropic token 打
   `/v1/responses` → 401，反之亦然）。
 - 无 `TODO` / `FIXME` 残留；`.tickets/` 两个工作链
   （`refactor-2026-08` 14 项 + `openai-responses-2026-08` 5 项）标记为完成。
-- 当前工作树未跟踪文件（用户所有，勿动）：`codex 配置方法.md`、`,temp/`。
-  `.luckytoken/`、所有 `auth.json`、`CommandcodeAPIKey.txt`、`.online-artifacts/`
+- `.luckytoken/`、所有 `auth.json`、`CommandcodeAPIKey.txt`、`.online-artifacts/`
   均被 `.gitignore` 排除。
 
 ### 已知取舍（显式记录，非 bug）
@@ -288,19 +291,20 @@ model_id，model_id 本身可以包含斜杠。
   缓冲被接受。Responses 与 Anthropic 两侧都是 Atomic。
 - **`store:false` 由 Responses-owned policy 决定**：默认 `honor` 不写内存或磁盘；
   `memory` 与 `persist` 是显式配置模式，后者产生 request-local notice。
-- **`/v1/models` 只暴露 `commandcode-private`**（方案 B）。方案 C（按已配置凭据过滤）
-  需在 discovery handler 查询 `CredentialStore`，当前未实现。
+- **`/v1/models` 只暴露 loader 成功加载的 external Providers**；它不按 credential
+  过滤，缺少 API key 只在真实调用时由 Pi auth path 报错。
 - **单实例假设**：会话快照无跨进程锁；Client token 变更是非并发管理操作，运行时使用
   不可变启动快照（改后需重启）。
 - **Client→Pi 可表达 ≠ Provider 端到端可表达**：无 Provider 表示的已识别字段按冻结
   policy 明确 omit/degrade 并记录 notice；会破坏有效性、安全或工具关联时 fail-closed。
   例如 CommandCode 将 required strict constrained sampling 降级为普通工具并记录
   Provider-local notice，而不是伪造上游约束。
-- **Pi built-in providers 全部注册**；`models.json` 不能覆盖内置 provider id。
-- **Serving certification v2 分别绑定五个 profile**：Anthropic conversion/native
-  passthrough、Responses conversion/native passthrough、CommandCode Provider。离线 gate
-  为 `CERTIFIED`；本轮未运行的真实上游入口逐 profile 记录为
-  `EVIDENCE_INSUFFICIENT`，不冒充在线通过。
+- **注册顺序固定**为 Pi builtins → `models.json` → external packages；任何 ID 冲突在
+  external package 提交前失败，避免半注册。
+- **Core 与 Distribution certification 分离**：运行时只认证 provider-neutral Core；
+  Provider/Distribution 认证验证 package、动态加载、冻结协议和线上证据。2026-08-14
+  记录为 `online-passed`：Direct 23/23、Anthropic 60/60、Responses 60/60、Codex
+  60/60、Claude 51/51。
 - **Codex CLI 集成在用户侧**（`~/.codex/` 三文件：`config.toml`、
   `luckytoken.config.toml`、`luckytoken-catalog.json`），不是仓库内容；README 有完整
   配置说明。
@@ -317,14 +321,14 @@ Ticket 23 已统一 owning authority、实现与测试：CommandCode endpoint �
 
 1. [AGENTS.md](../AGENTS.md) —— 工作原则与不可破坏的边界；
 2. [README.md](../README.md) —— 安装、配置、登录、运行；
-3. [HANDOFF.md](./HANDOFF.md) —— 当前交接基线（工作树、验证结果、未决事项）；
-4. [LuckyTokenArchitecture.md](./LuckyTokenArchitecture.md) —— 实现架构地图
+3. [LuckyTokenArchitecture.md](./LuckyTokenArchitecture.md) —— 当前实现架构地图
    （含小白导读）；
-5. [LuckyTokenCoreSpec.md](./Spec/LuckyTokenCoreSpec.md) —— 规范性架构；
-6. 涉及协议时再进入 [Protocols](./Protocols/) 下的 Protocol Spec 与
+4. [LuckyTokenCoreSpec.md](./Spec/LuckyTokenCoreSpec.md) —— 规范性架构；
+5. 涉及协议时再进入 [Protocols](./Protocols/) 下的 Protocol Spec 与
    Conversion Method；
-7. 需要修改代码时按需查阅 `src/` 对应模块与 `test/` 对应测试。
+6. 需要修改代码时按需查阅 `src/`、`packages/` 与 `test/`；历史背景再查
+   [HANDOFF.md](./HANDOFF.md)。
 
 ---
 
-*本文基于对 `ac9fa9a` 源码基线的整体分析整理；如与权威规范冲突，以权威规范为准。*
+*本文基于 `41007a5` 源码基线整理；如与权威规范冲突，以权威规范为准。*
