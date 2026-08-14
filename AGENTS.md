@@ -1,378 +1,125 @@
-# LuckyToken Agent Instructions
-
 ## Project
 
 Repository:
 
-```
+```text
 keeplearning2026/LuckyToken
 ```
 
-LuckyToken is a TypeScript-oriented project involving protocol conversion, model/provider integration, streaming, tool calls, authentication, configuration, and related runtime behavior.
-
-The repository also contains Pi / Pi Agent source used as a **reference and extraction source**.
-
-Do not assume Pi Agent architecture should be copied into LuckyToken.
-
-## Working Principles
-
-### Read context first
-
-Before changing code, inspect the relevant:
-
-- source files;
-- tests;
-- protocol specs;
-- architecture docs;
-- reference implementations.
-
-Do not make important changes from isolated snippets when the surrounding call chain is available.
-
-If source behavior conflicts with a spec, report the discrepancy.
-
-### Prefer simple designs
-
-Use the smallest architecture that correctly solves the problem.
-
-Avoid unnecessary:
-
-- managers;
-- registries;
-- wrappers;
-- intermediate representations;
-- generic frameworks;
-- duplicated state.
-
-Every abstraction should solve a real problem.
-
-Prefer clear data flow and explicit contracts.
-
-### High cohesion, low coupling
-
-Each module should:
-
-- own a clear responsibility;
-- know only what it needs;
-- expose a small contract;
-- keep related information and processing together.
-
-Information should not travel through unrelated modules without a reason.
-
-### Capability cohesion
-
-Keep one capability's behavior, data semantics, persistent files, in-memory
-state, code module, and tests together under one owner.
-
-- Other modules receive only the narrow facts or operations they consume; they
-  do not receive the capability's file schema, mutable store, classification
-  state, or full configuration object.
-- Configuration/composition may locate and bind a capability, but must not copy
-  its business rules into a central switch.
-- A capability should be replaceable or removable by changing its own module,
-  files, tests, and one composition binding, without cleanup across Runtime,
-  Client Protocols, Pi, or Providers.
-- Do not move related information through unrelated modules merely because a
-  shared config/context object is convenient.
-
-### Pi IR boundary is the first principle
-
-Pi is the single shared semantic boundary between Client Protocols and
-Providers. Treat it like a compiler IR that shields both sides:
+LuckyToken is a protocol-conversion project built around this boundary:
 
 ```text
-Client Wire
-    ↕
-Client Protocol adapter
-    ↕
-Pi runtime contracts / Models
-    ↕
-Provider adapter
-    ↕
-Upstream Wire
+Anthropic / OpenAI Responses / other client protocols
+                         ↕
+                      Pi AI IR
+                         ↕
+                    Pi Providers
 ```
 
-The two conversion directions must remain independent:
+## Response Style
 
-- A Client Protocol adapter owns only its Client Wire ↔ Pi conversion. It may
-  use Pi contracts, but must not import, inspect, name, or make decisions from
-  any concrete Provider or upstream protocol.
-- A Provider adapter owns only its Pi ↔ Upstream conversion. It may implement
-  Pi Provider contracts, but must not import, inspect, name, or make decisions
-  from Anthropic, OpenAI Responses, or any other Client Protocol.
-- Runtime and HTTP routing may coordinate Client Protocol handlers with Pi,
-  but must not absorb a concrete Client Protocol's semantic policy or a
-  concrete Provider's configuration.
-- Adding, replacing, or removing a Client Protocol must not require Provider
-  changes. Adding, replacing, or removing a Provider must not require Client
-  Protocol changes.
-- Do not create a cross-side conversion, shared protocol DTO, or second IR to
-  bypass Pi.
+Answer the core conclusion first, then give only the necessary evidence.
 
-Composition roots and conformance/certification code may see both sides only to
-construct, bind, and verify a concrete route. They must not perform conversion
-or let one side's terminology, state, or policy leak into the other side.
+Be concise by default. Focus on issues that affect correctness, protocol contracts, information boundaries, or architecture decisions. Do not repeat background or expand a full checklist unless explicitly requested.
 
-### Model selector contract
+## Evidence and Design
 
-Model selectors follow the `provider/model_id` convention: the first slash
-splits the provider id from the model id, and everything after the first slash
-is the model id (which may itself contain slashes).
+Before important conclusions or changes, inspect the relevant source, tests, protocol specifications, architecture documents, and reference implementations.
 
-- A selector is resolved against the full registered provider collection
-  (LuckyToken-owned providers plus Pi built-in providers), never against a
-  single provider.
-- Resolution is exact: first-slash split into `provider` + `model_id`
-  (which covers the canonical `provider/id` form, since the split yields the
-  same provider and full `model.id`), matched against the catalog, then bare
-  `model.id` fallback. Ambiguous or unknown selectors fail explicitly; there
-  is no fuzzy fallback.
-- A model id may contain slashes (for example the CommandCode built-in model id
-  is `deepseek/deepseek-v4-flash`), so the qualified selector
-  `commandcode-private/deepseek/deepseek-v4-flash` is distinct from the Pi
-  built-in deepseek selector `deepseek/deepseek-v4-flash`.
-- All providers in the collection are equally addressable through the
-  Anthropic endpoint by selector; no provider implementation is exposed to
-  callers beyond its provider id and model ids.
-- Only `selectorTool` knows the selector string format; `selectorTool.parse`
-  (split) and `selectorTool.format` (join) are the two directions of one
-  capability in `model-resolution.ts`. Everywhere else a selector is an
-  opaque string: it is passed through, matched as a whole, or echoed back —
-  never split, joined, trimmed, or pattern-matched. If the selector format
-  changes, only `selectorTool` (and its tests) need to change.
+Clearly distinguish:
 
-### Client Protocol Auth isolation
+- confirmed facts;
+- current implementation behavior;
+- inference or uncertainty;
+- proposed design.
 
-Inbound client authorization is isolated per Client Protocol handler.
+Current specifications are working documents. They may be corrected when source evidence or real requirements justify a change.
 
-- Runtime selects a handler by its HTTP method/path; it does not pass protocol
-  identity into Auth.
-- Each handler receives its own generic `Auth` instance and immutable startup
-  token authority. Anthropic, OpenAI Responses, and future Client Protocols do
-  not import, enumerate, or inspect one another.
-- Client token files contain only global/project token scopes. They do not
-  contain Client Protocol wire state, Pi state, Provider state, or a duplicate
-  protocol marker.
-- Only the composition root binds a configured auth file to a concrete handler.
-- After authorization, raw credentials, token scope, file paths, and lookup
-  representation end their lifecycle. Only `sessionId` and `projectDir?` may
-  continue into Pi option composition.
+Prefer the simplest design that is correct. Do not add abstractions, layers, wrappers, registries, or intermediate state unless they solve a demonstrated problem and reduce total complexity.
 
-### Information lifecycle
+## Architecture Principles
 
-For important state, understand:
+Code must be modular.
 
-- where it is created;
-- who owns it;
-- where it is transformed;
-- who needs it;
-- when it should be discarded.
+Each module must have:
 
-Avoid keeping multiple representations of the same fact alive unnecessarily.
+- one clear responsibility;
+- explicit inputs and outputs;
+- a small and stable contract;
+- clear ownership and lifecycle of its information.
 
-## Specifications
+Design for high cohesion and low coupling.
 
-Protocol specs, conversion specs, and architecture specs are different concerns.
+Information should remain with the module that creates, maintains, and uses it. Other modules should receive only the minimum facts or operations they need. Do not pass broad configuration, mutable state, or internal representations through unrelated modules for convenience.
 
-- Protocol specs describe protocol structure, semantics, lifecycle, and invariants.
-- Conversion specs describe mappings between protocols.
-- Architecture specs describe ownership, modules, and information flow.
+Prefer one authoritative representation of a fact at each lifecycle stage. Boundary-specific representations are valid when they represent genuinely different protocols, but duplicate semantic models without a clear purpose should be avoided.
 
-Current specs are working documents and may change.
+Keep model-visible semantics separate from credentials, transport details, logging, timing, request IDs, and other infrastructure state.
 
-Do not preserve an existing spec merely because it already exists.
+## Protocol Conversion Usability
 
-## Pi / Pi Agent Reuse
+Protocol conversion should preserve usability while always producing a valid target-protocol result.
 
-Before implementing model, provider, auth, credential, configuration, streaming, or related infrastructure from scratch, inspect the Pi / Pi Agent source included in the repository.
+For conversion from protocol A to protocol B:
 
-Reuse mature code when it reduces total complexity.
+1. If a clear semantic mapping exists, convert it directly.
+2. If a recognized A field has no representation in B, omit it and emit a warning.
+3. If omitting it would make the result invalid or break security, permissions, tool-call relationships, or other critical semantics, fail the conversion.
+4. If B needs a value that A does not provide, use only a default explicitly defined by B or by the adapter contract.
+5. If an optional B field has no valid source or defined default, omit it.
+6. If a required B field still cannot be constructed, fail with an explicit error.
 
-### The `pi-agent` tree is immutable
+Never invent defaults or repair malformed semantic state by guessing.
 
-Everything under `pi-agent/` is vendored upstream material. It is a hard
-constraint that **nothing under `pi-agent/` may be modified in any way**: no
-source edits, no local patches, no generated-file edits, no config edits, no
-new files, no deletions, no formatting changes, no dependency changes.
+These rules apply in both directions:
 
-- Treat every `pi-agent/` path as read-only reference material.
-- Consume Pi AI only through its public exported contracts, including
-  `Models`, `Provider`, `Provider.auth`, `CredentialStore`, and Pi
-  message/event types.
-- Put LuckyToken-specific Client Protocol adapters, Provider adapters,
-  credential persistence, CLI interaction, configuration, and composition in
-  LuckyToken-owned modules outside the vendored package.
-- Do not copy Pi Coding Agent TUI, session, or command architecture merely to
-  expose a Pi AI capability. Build the smallest LuckyToken-owned shell around
-  the Pi AI public interface.
-- Upstream updates arrive by replacing `pi-agent/` with a reviewed upstream
-  revision, never by accumulating local changes.
-- If an upstream defect makes a required invariant impossible, record the
-  exact contract gap and obtain an explicit architectural decision before
-  working around it from LuckyToken-owned code. Never patch `pi-agent/`.
-
-When extracting code:
-
-1. identify the exact capability needed;
-2. inspect its dependencies;
-3. extract the smallest coherent subset;
-4. avoid unrelated Agent/TUI/session code;
-5. minimize local modifications;
-6. preserve upstream provenance where useful.
-
-Optimize for **minimum total complexity**, not maximum reuse.
-
-## Protocol Work
-
-When changing protocol-related code, inspect the complete relevant path:
-
-- request parsing;
-- message/content conversion;
-- model/options;
-- tools;
-- provider request generation;
-- streaming;
-- terminal handling;
-- errors;
-- cancellation;
-- tests and fixtures.
-
-Do not let one protocol's types leak unnecessarily into another protocol or provider module.
-
-## Streaming
-
-Treat streaming as a lifecycle:
-
-```
-start
-→ content
-→ terminal success / failure
+```text
+Request:  Client Protocol → Pi AI IR → Pi Provider
+Response: Pi Provider → Pi AI IR → Client Protocol
 ```
 
-For structured content, reason about start, deltas, completion, and failure explicitly.
+## Isolation Principle
 
-Do not assume EOF means success when the protocol defines a semantic terminal event.
+Pi AI IR is the only shared semantic boundary between external client protocols and Pi Providers.
 
-Malformed known events and unknown future events are different conditions.
+- A client-protocol adapter owns only Client Wire ↔ Pi AI IR conversion.
+- A provider adapter owns only Pi AI IR ↔ Provider Wire conversion.
+- Client-protocol code must not depend on concrete providers or provider-native types.
+- Provider code must not depend on Anthropic, OpenAI Responses, or other client-protocol types.
+- Provider-specific or client-protocol-specific fields must not leak into the common Pi AI IR merely for convenience.
+- Runtime and composition code may connect the two sides, but must not perform cross-side semantic conversion.
 
-## Tool Calls
+The CommandCode private provider must implement and register through the same Pi Provider contract and invocation path as Pi built-in providers. It is a LuckyToken implementation detail. External protocol adapters and public interfaces may use it only through the standard Pi model/provider path and must not directly instantiate, import, or special-case its private implementation.
 
-Tool calls are structured semantic state.
+## Reference Principle
 
-Preserve:
+Before rebuilding an existing capability, inspect the `pi-ai` package in the repository's `pi-agent` source.
 
-- tool-call IDs;
-- tool names;
-- arguments;
-- ordering;
-- tool-call/tool-result relationships.
+Pi AI implementations of:
 
-Never treat partial tool input as a completed tool call.
+```text
+Pi AI IR → provider-native request
+provider-native response → Pi AI IR
+```
 
-Do not repair malformed tool state through guessing unless required by the protocol.
+are mirror references for LuckyToken's external protocol conversion. Do not assume the transformations are strictly reversible; check missing fields, explicit defaults, information loss, and semantic differences.
 
-## Abort / Cancellation
+Relevant external references project i:
 
-Cancellation must cleanly terminate request-local state.
+- reference/cc-switch
+- reference/opencodex
 
-After cancellation:
+When they address the same problem, compare their actual problem, information flow, module boundaries, conversion strategy, provider extension model, advantages, limitations, and applicability.
 
-- discard incomplete state;
-- do not preserve partial tool calls;
-- cancel upstream work when possible;
-- do not write to closed responses;
-- do not leak state into another request;
-- distinguish cancellation from ordinary failure.
+Reference projects are evidence and design sources, not architectures LuckyToken must copy. Final decisions must follow LuckyToken's actual requirements, correctness, isolation, and minimum total complexity.
 
-## Context and Cache Stability
-
-Keep model-visible semantics separate from infrastructure information.
-
-Do not unnecessarily place these into model context:
-
-- credentials;
-- HTTP headers;
-- request IDs;
-- timing;
-- logging data;
-- debug text;
-- transport metadata.
-
-Avoid unnecessary message reordering, timestamps, random IDs, unstable tool schemas, or dynamic data in stable prompt prefixes.
-
-## Configuration
-
-Prefer clear configuration over scattered hardcoded conditionals when behavior is genuinely configurable.
-
-Protocol correctness rules should remain invariants rather than configuration options.
-
-## Code Style
-
-Prefer:
-
-- TypeScript;
-- explicit types;
-- discriminated unions;
-- small focused modules;
-- pure functions where practical;
-- visible control flow;
-- minimal dependencies;
-- straightforward tests.
-
-Avoid unrelated refactoring and broad formatting changes.
-
-## Before Implementing
+## Implementation Rule
 
 For non-trivial changes:
 
-1. understand the real problem;
-2. inspect the relevant source and reference code;
-3. identify information ownership and lifecycle;
-4. identify affected contracts and invariants;
-5. choose the smallest coherent change;
-6. determine how it will be tested.
+1. identify the real problem and information flow;
+2. identify information ownership, contracts, lifecycle, and failure conditions;
+3. choose the smallest coherent change;
+4. add or update tests for the intended semantic behavior.
 
-Do not rush into implementation while major architectural assumptions remain unclear.
-
-## Testing
-
-Tests should protect semantic behavior and important invariants.
-
-For protocol/runtime changes, consider relevant cases such as:
-
-- text;
-- images;
-- reasoning/thinking;
-- tool calls;
-- tool results;
-- malformed input;
-- interleaved streaming;
-- terminal success;
-- provider errors;
-- unexpected EOF;
-- abort/cancellation.
-
-Use existing repository test and validation commands rather than inventing replacements.
-
-## Reference Source Rule
-
-Directories containing copied Pi / Pi Agent source are reference material unless LuckyToken explicitly depends on them.
-
-The `pi-agent/` tree is immutable: nothing under it may be modified (see
-"The `pi-agent` tree is immutable" above). Other reference-source directories
-must not be modified casually either.
-
-Prefer implementing or extracting the required capability into LuckyToken-owned modules rather than gradually turning the reference tree into production code.
-
-## Final Principle
-
-Build the smallest system in which:
-
-- protocol correctness;
-- information ownership;
-- module boundaries;
-- streaming lifecycle;
-- tool identity;
-- cancellation;
-- maintenance
-
-are easy to understand and verify.
+Prefer explicit TypeScript types, small focused modules, visible control flow, pure functions where practical, and minimal dependencies. Avoid unrelated refactoring.
