@@ -100,11 +100,38 @@ export type ResponsesOutputItem =
   | ResponsesCustomToolCallOutputItem
   | ResponsesReasoningOutputItem;
 
+/**
+ * The SDK `ResponseError` shape carried inside a failed Response object. The
+ * installed SDK models it as exactly `code` + `message`: `code` is a required
+ * enum (never null, never an arbitrary string) and there is no `type`/`param`
+ * field (those belong to the non-streaming ErrorObject envelope, which this
+ * adapter renders separately). A failed terminal therefore always carries a
+ * legal enum code — an upstream failure collapses to the SDK-mandated
+ * `server_error` mapping, matching how the Responses API maps internal errors.
+ */
+export type ResponsesErrorCode =
+  | "server_error"
+  | "rate_limit_exceeded"
+  | "invalid_prompt"
+  | "vector_store_timeout"
+  | "invalid_image"
+  | "invalid_image_format"
+  | "invalid_base64_image"
+  | "invalid_image_url"
+  | "image_too_large"
+  | "image_too_small"
+  | "image_parse_error"
+  | "image_content_policy_violation"
+  | "invalid_image_mode"
+  | "image_file_too_large"
+  | "unsupported_image_media_type"
+  | "empty_image_file"
+  | "failed_to_download_image"
+  | "image_file_not_found";
+
 export interface ResponsesError {
-  message: string;
-  type: string;
-  code: string | null;
-  param: string | null;
+  readonly code: ResponsesErrorCode;
+  readonly message: string;
 }
 
 export type ResponsesStatus = "completed" | "incomplete" | "failed";
@@ -122,7 +149,10 @@ export interface ResponsesResponseObject {
   output: ResponsesOutputItem[];
   parallel_tool_calls: boolean;
   temperature: number | null;
-  tool_choice: string;
+  /** Only legal SDK tool_choice values are echoed; the target union is
+   *  'none' | 'auto' | 'required' (or an allowed/function object). A residual
+   *  render value that is not a legal echo normalizes to "auto". */
+  tool_choice: "auto" | "none" | "required";
   tools: ResponsesEchoTool[];
   top_p: number | null;
   usage: ResponsesUsage;
@@ -135,16 +165,32 @@ export interface ResponsesResponseObject {
  * never appear here. A freeform custom tool echoes under `custom` with the
  * SDK CustomTool shape: {type,name,description?,format?} — never a made-up
  * `input_schema` field the target type does not have.
+ *
+ * The two shapes mirror the installed SDK exactly: a function echo always
+ * carries `parameters` (the SDK FunctionTool field is required) and a
+ * `strict` boolean; a custom echo never carries parameters/strict (the SDK
+ * CustomTool has no such fields) and instead optionally carries `format`.
  */
-export interface ResponsesEchoTool {
-  readonly type: "function" | "custom";
+export interface ResponsesEchoFunctionTool {
+  readonly type: "function";
   readonly name: string;
   readonly namespace?: string;
   readonly description: string;
-  readonly parameters?: Readonly<Record<string, unknown>>;
-  readonly format?: { readonly type: "text" };
-  readonly strict?: boolean;
+  readonly parameters: Readonly<Record<string, unknown>>;
+  readonly strict: boolean;
 }
+
+export interface ResponsesEchoCustomTool {
+  readonly type: "custom";
+  readonly name: string;
+  readonly namespace?: string;
+  readonly description: string;
+  readonly format?: { readonly type: "text" };
+}
+
+export type ResponsesEchoTool =
+  | ResponsesEchoFunctionTool
+  | ResponsesEchoCustomTool;
 
 /**
  * Immutable Responses-owned render facts, frozen at request conversion and
@@ -413,9 +459,11 @@ function convertStopReason(
           message.errorMessage.length > 0
             ? message.errorMessage
             : "Upstream provider failed",
-        type: "api_error",
-        code: null,
-        param: null,
+        // The SDK Response error code is a required enum; an internal/
+        // upstream failure maps to the SDK-mandated `server_error`, never a
+        // null or arbitrary string (the openai 6.x SDK types
+        // ResponseError.code as a required enum).
+        code: "server_error",
       },
       incomplete_details: null,
     };
@@ -433,6 +481,18 @@ function assertMessageEnvelope(message: AssistantMessage): void {
     );
   }
   convertStopReason(message.stopReason, message);
+}
+
+/**
+ * Map a request-local render tool_choice to the legal SDK echo. Only the
+ * target union 'none' | 'auto' | 'required' is echoed; any residual value
+ * (including the request-local "allowed" filter marker, which the SDK models
+ * as an allowed_tools object rather than a bare string) normalizes to the
+ * SDK default "auto". A non-target value is never echoed as effective.
+ */
+function normalizeEchoedToolChoice(value: string | undefined): "auto" | "none" | "required" {
+  if (value === "none" || value === "required") return value;
+  return "auto";
 }
 
 export function convertAssistantMessageToResponses(
@@ -476,10 +536,7 @@ export function convertAssistantMessageToResponses(
     // allowed_tools filter is auto-mode filtering, so any residual "allowed"
     // render-state value is normalized to the legal "auto" echo. Never echo a
     // non-target value as effective.
-    tool_choice:
-      renderState.toolChoice === undefined || renderState.toolChoice === "allowed"
-        ? "auto"
-        : renderState.toolChoice,
+    tool_choice: normalizeEchoedToolChoice(renderState.toolChoice),
     tools: (renderState.tools ?? []).map((tool) => Object.freeze({ ...tool })),
     top_p: renderState.topP ?? null,
     usage: convertUsage(message),

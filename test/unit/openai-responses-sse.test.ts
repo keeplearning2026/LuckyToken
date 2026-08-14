@@ -149,9 +149,9 @@ describe("OpenAI Responses SSE rendering", () => {
       status: "failed",
       error: {
         message: "upstream broke",
-        type: "api_error",
-        code: null,
-        param: null,
+        // The SDK Response error is exactly {code, message}; a failed
+        // terminal carries the required enum code, never a null code.
+        code: "server_error",
       },
     });
     const frames = new TextDecoder()
@@ -164,11 +164,34 @@ describe("OpenAI Responses SSE rendering", () => {
     expect(terminal.response.status).toBe("failed");
     expect(terminal.response.error).toEqual({
       message: "upstream broke",
-      type: "api_error",
-      code: null,
-      param: null,
+      code: "server_error",
     });
+    // The SDK ResponseError has exactly {code, message}; a failed terminal
+    // never carries a type/param field or a null code.
+    expect(Object.keys(terminal.response.error)).toEqual(["message", "code"]);
     expect(terminal.response.incomplete_details).toBeNull();
+  });
+
+  it("failed terminal error is passed through without shape corruption", () => {
+    // The SSE renderer is a pass-through for the already-formed Response
+    // error; the SDK-required {code,message} shape and enum code are
+    // guaranteed by the Response converter (covered in the converter tests).
+    // This test locks the pass-through: a failed terminal built by the
+    // converter carries the enum code and exactly two keys on the wire.
+    const body = renderResponsesSse({
+      ...responseObject(),
+      status: "failed",
+      error: { code: "rate_limit_exceeded", message: "throttled" },
+    });
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.response.error).toEqual({
+      code: "rate_limit_exceeded",
+      message: "throttled",
+    });
   });
 
   it("emits completed with error/incomplete_details null", () => {
