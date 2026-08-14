@@ -12,6 +12,8 @@ import {
 
 import type { CommandCodeResult } from "./assembler.js";
 import { cloneLosslessJsonObject } from "./json.js";
+import { createConversionNoticeDiagnostic } from "../../execution-facts.js";
+import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 
 export interface CommandCodeResponseAuthority {
   api: string;
@@ -199,16 +201,21 @@ function baseMessage(
 function addDiagnostics(
   message: AssistantMessage,
   result: CommandCodeResult,
+  notices: readonly ConversionNotice[],
 ): void {
+  const diagnostics = notices.map((notice) =>
+    createConversionNoticeDiagnostic(notice, message.timestamp),
+  );
   if (result.systemPromptTokens !== undefined) {
-    message.diagnostics = [
+    diagnostics.push(
       {
         type: "commandcode.system_prompt_tokens",
         timestamp: message.timestamp,
         details: { systemPromptTokens: result.systemPromptTokens },
       },
-    ];
+    );
   }
+  if (diagnostics.length > 0) message.diagnostics = diagnostics;
   const rawReason = result.finish.rawFinishReason ?? result.finish.finishReason;
   if (rawReason !== undefined) message.rawStopReason = rawReason;
 }
@@ -230,13 +237,14 @@ export function createCommandCodeFailureMessage(
 export function convertCommittedCommandCodeResult(
   result: CommandCodeResult,
   authority: CommandCodeResponseAuthority,
+  notices: readonly ConversionNotice[] = [],
 ): AssistantMessage {
   let committedStopReason: Extract<StopReason, "stop" | "length" | "toolUse">;
   try {
     committedStopReason = stopReason(result);
   } catch (error) {
     const failed = createCommandCodeFailureMessage(authority, error);
-    addDiagnostics(failed, result);
+    addDiagnostics(failed, result, notices);
     return failed;
   }
 
@@ -245,7 +253,7 @@ export function convertCommittedCommandCodeResult(
     trustworthyUsage = convertUsage(result, authority);
   } catch (error) {
     const failed = createCommandCodeFailureMessage(authority, error);
-    addDiagnostics(failed, result);
+    addDiagnostics(failed, result, notices);
     return failed;
   }
 
@@ -258,7 +266,7 @@ export function convertCommittedCommandCodeResult(
       error,
       trustworthyUsage,
     );
-    addDiagnostics(failed, result);
+    addDiagnostics(failed, result, notices);
     return failed;
   }
 
@@ -267,7 +275,7 @@ export function convertCommittedCommandCodeResult(
     content,
     stopReason: committedStopReason,
   };
-  addDiagnostics(message, result);
+  addDiagnostics(message, result, notices);
   return message;
 }
 

@@ -921,7 +921,7 @@ export type ToolMessage = {
 ```
 
 - `toolCallId: string`：必须与配对的 `tool-call.toolCallId` 相同。
-- `toolName: string`：规范发 `""`；非空也被接受。
+- `toolName: string`：wire 接受空或非空；LuckyToken Pi conversion 对真实结果保留非空 Pi toolName。
 - `output.type: "text"`：工具成功输出；`"error-text"`：工具失败/被拒/中断。
 - `output.value: string`：工具输出纯文本。多行以 `\n` 连接（多行/长文本均接受）。结构化数据（JSON）应转成字符串。
 - `output` 必须是单个对象 `{type, value}`。数组、裸字符串、缺失均被拒绝。
@@ -935,7 +935,7 @@ export type ToolMessage = {
 {
   "type": "tool-result",
   "toolCallId": "call_1",
-  "toolName": "",
+  "toolName": "read_file",
   "output": {
     "type": "text",
     "value": "No result — the tool call did not complete (interrupted or lost)."
@@ -944,7 +944,8 @@ export type ToolMessage = {
 ```
 
 - `toolCallId`：与被补的 `tool-call.toolCallId` 相同（保证配对）。
-- `output.type`：`"text"`（不是 `error-text`）。
+- `toolName`：使用 pending tool call 的原始名称。
+- `output.type`：由 Provider-local `syntheticMissingToolResultOutputType` 决定，默认 `"text"`，也可为 `"error-text"`。
 
 ### 4. 禁止类型（服务端拒绝）
 
@@ -3226,7 +3227,7 @@ AI 在生成实现前必须逐项确认：
 - [ ] `memory/taste/skills` 明确发送 `null`。
 - [ ] permission mapping 默认 `standard`。
 - [ ] request-side `tool-call.input` 必须是 JSON object，但不按工具 `input_schema` 校验键名、值类型或必填字段。
-- [ ] request-side `tool-result.toolName` 可为空或非空；成功使用 `text`、真实失败使用 `error-text`、synthetic 占位固定使用 `text`。
+- [ ] request-side wire 接受空或非空 `tool-result.toolName`；LuckyToken conversion 对真实结果保留非空 Pi name、synthetic 使用 pending call name。成功使用 `text`、真实失败使用 `error-text`、synthetic 使用 Provider-local `text|error-text` policy（默认 `text`）。
 - [ ] `max_tokens` 必填；caller/options 优先，model catalog 对明确 `maxOutputTokens` 使用模型值，否则使用官方 CLI 默认 64000。
 - [ ] `stream` 是 literal `true`。
 - [ ] unknown non-empty `reasoning_effort` normalize 为 `max`，仅在 model capability 支持时发送。

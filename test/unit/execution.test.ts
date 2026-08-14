@@ -18,6 +18,10 @@ import {
   UnsupportedExecutionOutcomeError,
 } from "../../src/execution.js";
 import {
+  createConversionNoticeDiagnostic,
+  type ExecutionFactsSink,
+} from "../../src/execution-facts.js";
+import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
 } from "../../src/protocols/upstream-failure.js";
@@ -241,6 +245,31 @@ describe("Core atomic execution", () => {
       { role: "user", content: "hello", timestamp: 1 },
     ]);
     expect(context.messages).not.toContain(failedMessage);
+  });
+
+  it("submits trusted Provider conversion notices through the narrow facts sink", async () => {
+    const notice = Object.freeze({
+      adapter: "commandcode-private",
+      direction: "request" as const,
+      code: "missing_tool_result_xrepair",
+      jsonPath: "$.messages",
+      action: "xrepair" as const,
+    });
+    const complete = message("stop");
+    complete.diagnostics = [createConversionNoticeDiagnostic(notice, 1)];
+    const fixture = modelsFor(
+      streamFrom([{ type: "done", reason: "stop", message: complete }]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+    };
+
+    await execute(fixture.models, model, context, { maxTokens: 10 }, sink);
+
+    expect(sink.notice).toHaveBeenCalledOnce();
+    expect(sink.notice).toHaveBeenCalledWith(notice);
+    expect(sink.attempt).not.toHaveBeenCalled();
   });
 
   it("keeps caller cancellation structurally distinct from upstream abort", async () => {

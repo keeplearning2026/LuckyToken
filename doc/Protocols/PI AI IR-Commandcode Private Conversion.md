@@ -177,7 +177,7 @@ Process `Context.messages` in order. Preserve text, reasoning, tool calls, and r
 
 ### 6.2 UserMessage
 
-Convert Pi text to CommandCode user text in order. Convert Pi image only if CommandCode has a real image representation; current target does not, so user images are dropped as known unsupported auxiliary content unless dropping leaves a target-invalid required message. In that latter case use the target-required empty/default representation, not invented descriptive text.
+Convert Pi text to CommandCode user text in order. The current CommandCode target accepts a data-URL image block, so Pi images map losslessly when the selected model declares image input. A text-only selected model cannot accept the image and conversion fails rather than silently removing core user content.
 
 Pi text signatures/provenance and diagnostics have no CommandCode user-message field and are dropped.
 
@@ -446,14 +446,9 @@ Retry rules:
 
 ## 15. Current implementation gaps
 
-At audit time:
+Remaining gaps after tickets 20–21:
 
-- historical error/aborted content is skipped and pending/deferred is rejected based on stopReason;
-- real and synthetic ToolResult toolName is empty;
-- real `isError` is not fixed to text/error-text mapping;
-- ToolResult image throws instead of dropping;
 - constrainedSampling.require throws instead of availability degradation;
-- options.deferred true/object throws instead of sync omission;
 - reasoning content may be rejected by model.reasoning=false;
 - finish-step identity is ignored;
 - stop reason is not content-normalized;
@@ -462,6 +457,6 @@ At audit time:
 - stream error facts are flattened through semantic/execution;
 - wire abort becomes ordinary error but old documentation calls it Pi aborted;
 - onPayload is revalidated in code, while old documentation claimed otherwise;
-- endpoint/project/max-token documentation did not match code before tickets 20 and 23.
+- endpoint documentation remains pending Ticket 23.
 
 These are implementation gaps against this frozen method.

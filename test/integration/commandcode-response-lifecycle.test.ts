@@ -11,6 +11,7 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../src/providers/commandcode-private/provider.js";
+import { parseCommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
 import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
 
 it("converts and replays a committed mixed CommandCode response in order", async () => {
@@ -115,4 +116,103 @@ it("converts and replays a committed mixed CommandCode response in order", async
     reason: "toolUse",
     message: result,
   });
+});
+
+it("carries Provider-local missing-result notices on the Pi terminal", async () => {
+  const model: Model<typeof commandCodePrivateApiId> = {
+    id: "model",
+    name: "model",
+    api: commandCodePrivateApiId,
+    provider: commandCodePrivateProviderId,
+    baseUrl: "https://fixture.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 100,
+  };
+  const usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  const context: Context = {
+    messages: [
+      {
+        role: "assistant",
+        api: "luckytoken-client-history",
+        provider: "luckytoken-client",
+        model: "client-model",
+        content: [{ type: "toolCall", id: "lost", name: "lookup", arguments: {} }],
+        usage,
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+    ],
+  };
+  let requestBody: unknown;
+  const fetch: FetchFunction = async (request) => {
+    requestBody = JSON.parse(await new Request(request).text());
+    return new Response(
+      JSON.stringify({
+        type: "finish",
+        finishReason: "stop",
+        totalUsage: { inputTokens: 0, outputTokens: 0 },
+      }),
+    );
+  };
+  const provider = createCommandCodePrivateProvider({
+    apiKey: "key",
+    fetch,
+    model,
+    now: () => 10,
+    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+    configuration: parseCommandCodeConfiguration({
+      conversion: {
+        request: { syntheticMissingToolResultOutputType: "error-text" },
+      },
+    }),
+  });
+
+  const result = await provider
+    .streamSimple(model, context, {
+      maxTokens: 20,
+      sessionId: "00000000-0000-4000-8000-000000000110",
+    })
+    .result();
+
+  expect(requestBody).toMatchObject({
+    params: {
+      messages: [
+        { role: "assistant" },
+        {
+          role: "tool",
+          content: [
+            {
+              toolCallId: "lost",
+              toolName: "lookup",
+              output: { type: "error-text" },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  expect(result.diagnostics).toEqual([
+    expect.objectContaining({
+      type: "luckytoken.conversion_notice.v1",
+      details: {
+        notice: {
+          adapter: "commandcode-private",
+          direction: "request",
+          code: "missing_tool_result_xrepair",
+          jsonPath: "$.messages",
+          action: "xrepair",
+        },
+      },
+    }),
+  ]);
 });

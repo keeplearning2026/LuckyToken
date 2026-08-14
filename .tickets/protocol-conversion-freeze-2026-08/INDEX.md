@@ -22,7 +22,7 @@
 | 18 | Render Responses atomic SSE and protocol errors | 02, 03, 17 | ready-for-agent |
 | 19 | Implement and certify native Responses passthrough | 01, 02 | ready-for-agent |
 | 20 | Align CommandCode scalar options and synchronous execution | 01, 02, 04 | completed |
-| 21 | Convert Pi messages and CommandCode-local missing results | 02, 20 | ready-for-agent |
+| 21 | Convert Pi messages and CommandCode-local missing results | 02, 20 | completed |
 | 22 | Convert CommandCode tools and degrade constrained sampling | 02, 20 | ready-for-agent |
 | 23 | Certify CommandCode request authority and payload hooks | 20, 21, 22 | ready-for-agent |
 | 24 | Rebuild CommandCode JSONL event, identity, pause, and abort lifecycle | 01, 02, 03 | ready-for-agent |

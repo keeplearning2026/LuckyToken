@@ -256,6 +256,10 @@ async function handleAnthropicMessages(
       model,
       invocation.context,
       piOptions,
+      {
+        notice: (notice) => diagnostics.notice(notice),
+        attempt: (attempt) => diagnostics.attempt(attempt),
+      },
     );
     diagnostics.checkpoint({ stage: "client-render", selector });
     request.signal.throwIfAborted();

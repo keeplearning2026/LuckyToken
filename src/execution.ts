@@ -10,6 +10,10 @@ import {
   findUpstreamFailureFact,
   type UpstreamFailureFact,
 } from "./protocols/upstream-failure.js";
+import {
+  submitExecutionFacts,
+  type ExecutionFactsSink,
+} from "./execution-facts.js";
 
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
@@ -44,6 +48,7 @@ export async function execute(
   model: Model<string>,
   context: Context,
   options: ModelsSimpleStreamOptions,
+  factsSink?: ExecutionFactsSink,
 ): Promise<AssistantMessage> {
   const stream = models.streamSimple(model, context, options);
   const iterator = stream[Symbol.asyncIterator]();
@@ -69,6 +74,7 @@ export async function execute(
     }
     const event = next.value;
     if (event.type === "error") {
+      submitExecutionFacts(event.error.diagnostics, factsSink);
       if (event.reason === "aborted") {
         const diagnosticFailure = findUpstreamFailureFact(
           event.error.diagnostics,
@@ -107,6 +113,7 @@ export async function execute(
       );
     }
     if (event.type === "done") {
+      submitExecutionFacts(event.message.diagnostics, factsSink);
       if (event.reason === "deferred") {
         throw new UnsupportedExecutionOutcomeError(
           "Pi deferred completion is outside LuckyToken Core v1",

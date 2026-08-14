@@ -15,6 +15,7 @@ import {
 import slugify from "@sindresorhus/slugify";
 import { randomUUID } from "node:crypto";
 
+import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 import {
   classifyProjectDir,
   createEmptyServerConfig,
@@ -82,29 +83,58 @@ interface PendingToolCall {
   name: string;
 }
 
-function missingToolResult(call: PendingToolCall): Record<string, unknown> {
+type CommandCodeRequestConversionPolicy =
+  CommandCodeConfiguration["conversion"]["request"];
+
+const DEFAULT_REQUEST_CONVERSION_POLICY: CommandCodeRequestConversionPolicy =
+  Object.freeze({ syntheticMissingToolResultOutputType: "text" });
+
+function missingToolResult(
+  call: PendingToolCall,
+  outputType: "text" | "error-text",
+): Record<string, unknown> {
   return {
     role: "tool",
     content: [
       {
         type: "tool-result",
         toolCallId: call.id,
-        toolName: "",
-        output: { type: "text", value: MISSING_TOOL_RESULT },
+        toolName: call.name,
+        output: { type: outputType, value: MISSING_TOOL_RESULT },
       },
     ],
   };
 }
 
-export function convertCommandCodeMessages(
+interface CommandCodeMessageConversion {
+  readonly messages: Array<Record<string, unknown>>;
+  readonly notices: readonly ConversionNotice[];
+}
+
+function convertCommandCodeMessageHistory(
   model: Model<typeof API_ID>,
   context: Context,
-): Array<Record<string, unknown>> {
+  policy: CommandCodeRequestConversionPolicy = DEFAULT_REQUEST_CONVERSION_POLICY,
+): CommandCodeMessageConversion {
   const converted: Array<Record<string, unknown>> = [];
+  const notices: ConversionNotice[] = [];
   let pending = new Map<string, PendingToolCall>();
 
   const flushMissingResults = (): void => {
-    for (const call of pending.values()) converted.push(missingToolResult(call));
+    for (const call of pending.values()) {
+      converted.push(
+        missingToolResult(call, policy.syntheticMissingToolResultOutputType),
+      );
+      notices.push(
+        Object.freeze({
+          adapter: PROVIDER_ID,
+          direction: "request",
+          code: "missing_tool_result_xrepair",
+          jsonPath: "$.messages",
+          action: "xrepair",
+        }),
+      );
+    }
     pending = new Map();
   };
 
@@ -114,19 +144,19 @@ export function convertCommandCodeMessages(
       if (call === undefined) {
         throw new Error(`Orphan or duplicate Pi ToolResult: ${message.toolCallId}`);
       }
-      const textParts = message.content.map((block) => {
-        if (block.type !== "text") {
-          throw new Error("CommandCode tool results do not support image content");
-        }
-        return block.text;
-      });
+      if (message.toolName.length === 0) {
+        throw new Error("CommandCode ToolResult toolName must be non-empty");
+      }
+      const textParts = message.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text);
       converted.push({
         role: "tool",
         content: [
           {
             type: "tool-result",
             toolCallId: message.toolCallId,
-            toolName: "",
+            toolName: message.toolName,
             output: {
               type: message.isError ? "error-text" : "text",
               value: textParts.join("\n"),
@@ -161,46 +191,20 @@ export function convertCommandCodeMessages(
       continue;
     }
 
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
-      continue;
-    }
-    if (
-      message.stopReason !== "stop" &&
-      message.stopReason !== "length" &&
-      message.stopReason !== "toolUse"
-    ) {
-      throw new Error(`Unsupported historical stop state: ${message.stopReason}`);
-    }
-    const sameTarget =
-      message.api === model.api &&
-      message.provider === model.provider &&
-      message.model === model.id;
     const calls: PendingToolCall[] = [];
     const seenCallIds = new Set<string>();
-    const content = message.content.map((block) => {
+    const content = message.content
+      .filter((block) => block.type !== "thinking" || block.redacted !== true)
+      .map((block) => {
       if (block.type === "text") {
-        if (sameTarget && (block.textSignature?.length ?? 0) > 0) {
-          throw new Error("CommandCode cannot preserve same-target text continuity");
-        }
         return { type: "text" as const, text: block.text };
       }
       if (block.type === "thinking") {
-        if (block.redacted === true) {
-          throw new Error("CommandCode cannot represent redacted thinking");
-        }
-        if (sameTarget && (block.thinkingSignature?.length ?? 0) > 0) {
-          throw new Error(
-            "CommandCode cannot preserve same-target thinking continuity",
-          );
-        }
         return { type: "reasoning" as const, text: block.thinking };
       }
       const extended = block as typeof block & { namespace?: unknown };
       if (extended.namespace !== undefined) {
         throw new Error("CommandCode cannot map a ToolCall namespace");
-      }
-      if (sameTarget && (block.thoughtSignature?.length ?? 0) > 0) {
-        throw new Error("CommandCode cannot preserve same-target ToolCall continuity");
       }
       if (seenCallIds.has(block.id)) {
         throw new Error(`Duplicate Pi ToolCall id in one turn: ${block.id}`);
@@ -217,13 +221,21 @@ export function convertCommandCodeMessages(
         toolName: block.name,
         input,
       };
-    });
+      });
     converted.push({ role: "assistant", content });
     pending = new Map(calls.map((call) => [call.id, call]));
   }
 
   flushMissingResults();
-  return converted;
+  return { messages: converted, notices: Object.freeze(notices) };
+}
+
+export function convertCommandCodeMessages(
+  model: Model<typeof API_ID>,
+  context: Context,
+  policy: CommandCodeRequestConversionPolicy = DEFAULT_REQUEST_CONVERSION_POLICY,
+): Array<Record<string, unknown>> {
+  return convertCommandCodeMessageHistory(model, context, policy).messages;
 }
 
 export function convertCommandCodeTools(
@@ -314,6 +326,7 @@ function resolvePermissionMode(value: string | undefined): string {
 export interface BuiltCommandCodeBody {
   body: Record<string, unknown>;
   supportedReasoningEfforts: ReadonlySet<string>;
+  notices: readonly ConversionNotice[];
 }
 
 const UUID_PATTERN =
@@ -662,8 +675,14 @@ export function buildCommandCodeBody(
   config: ServerConfig,
   sessionId: string,
   compatibility: CommandCodeCompatibilityPolicy,
+  requestConversion: CommandCodeRequestConversionPolicy =
+    DEFAULT_REQUEST_CONVERSION_POLICY,
 ): BuiltCommandCodeBody {
-  const messages = convertCommandCodeMessages(model, context);
+  const conversion = convertCommandCodeMessageHistory(
+    model,
+    context,
+    requestConversion,
+  );
   const maxTokensCandidate = options?.maxTokens ?? model.maxTokens;
   if (
     !Number.isSafeInteger(maxTokensCandidate) ||
@@ -682,7 +701,7 @@ export function buildCommandCodeBody(
 
   const params: Record<string, unknown> = {
     model: model.id,
-    messages,
+    messages: conversion.messages,
     tools: convertCommandCodeTools(context.tools),
     max_tokens: maxTokensCandidate,
     stream: true,
@@ -692,6 +711,7 @@ export function buildCommandCodeBody(
   if (reasoning.effort !== undefined) params.reasoning_effort = reasoning.effort;
 
   return {
+    notices: conversion.notices,
     supportedReasoningEfforts: reasoning.supportedEfforts,
     body: {
       config,
@@ -773,6 +793,7 @@ export interface CommandCodePreparationDependencies {
   compatibility: CommandCodeCompatibilityPolicy;
   createSessionId: () => string;
   traceContext?: CommandCodeTraceContextCapability;
+  requestConversion?: CommandCodeRequestConversionPolicy;
 }
 
 export async function prepareCommandCodeRequest(
@@ -823,6 +844,7 @@ export async function prepareCommandCodeRequest(
     callbackConfig,
     sessionId,
     dependencies.compatibility,
+    dependencies.requestConversion,
   );
 
   let effectivePayload: unknown = built.body;
@@ -853,6 +875,7 @@ export async function prepareCommandCodeRequest(
     endpoint,
     headers: Object.freeze({ ...headers }),
     bodyText: serialized,
+    conversionNotices: built.notices,
     signal,
     fetchImpl: options?.fetch ?? dependencies.boundFetch ?? globalThis.fetch,
     ...(logicalTraceId === undefined
@@ -891,6 +914,7 @@ function createCommandCodeStream(
             projectSnapshot,
             compatibility,
             createSessionId,
+            requestConversion: configuration.conversion.request,
             ...(traceContext === undefined ? {} : { traceContext }),
           },
         );
@@ -907,6 +931,7 @@ function createCommandCodeStream(
         const finalMessage = convertCommittedCommandCodeResult(
           result,
           responseAuthority,
+          prepared.conversionNotices,
         );
         replayCommandCodeAssistantMessage(
           stream,

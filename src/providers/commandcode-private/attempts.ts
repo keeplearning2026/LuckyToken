@@ -10,6 +10,7 @@ import {
   isRetryableCommandCodeResponseError,
   type CommandCodeResult,
 } from "./assembler.js";
+import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
@@ -30,6 +31,7 @@ export interface PreparedCommandCodeRequest {
   readonly signal: AbortSignal;
   readonly fetchImpl: FetchFunction;
   readonly logicalTraceId?: string;
+  readonly conversionNotices?: readonly ConversionNotice[];
 }
 
 export interface CommandCodeExecutionControls {

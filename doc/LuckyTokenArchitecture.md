@@ -1623,8 +1623,8 @@ convertCommandCodeMessages(model, context)
 convertCommandCodeTools(context.tools)
   → CommandCode wire tools[]
 
-buildCommandCodeBody(model, context, options, config, sessionId, compatibility)
-  → { body, supportedReasoningEfforts }
+buildCommandCodeBody(model, context, options, config, sessionId, compatibility, requestPolicy)
+  → { body, supportedReasoningEfforts, notices }
 ```
 
 ### Message conversion
@@ -1638,12 +1638,13 @@ buildCommandCodeBody(model, context, options, config, sessionId, compatibility)
 | assistant toolCall | `tool-call`，精确保留 ID/name/lossless JSON input |
 | ToolResultMessage | adjacent `role:"tool"` 的 `tool-result`，error 映射为 `error-text` |
 
-Provider 检查历史 message 的 target identity 与 continuity fields。CommandCode 无法
-保留的 same-target text/thinking/tool signatures、**redacted thinking（无论 same 还是
-cross target 都拒绝）**、tool namespace、image tool result 都 fail closed。
-`ToolResultMessage.toolName` 不读取、不比较、不校验——tool result correlation 只认
-`toolCallId`（CommandCode wire 的 `toolName` 固定为 `""`）。Failed/aborted historical
-assistant messages 不进入上游 history。
+Historical `AssistantMessage.stopReason` 对 CommandCode request 是 targetless fact，所有
+当前或未来值都被忽略，content 仍按顺序转换并独立校验。无 target slot 的 text/thinking/
+tool signatures 被丢弃；redacted thinking 只丢弃该 block，不影响同一消息的其他内容。
+ToolResult image 被丢弃、文字保留，image-only 使用空字符串保持 correlation。
+真实 ToolResult 保留 Pi `toolCallId`、非空 `toolName` 与 `isError`；synthetic result 使用
+pending call ID/name 和 Provider request policy 的 `text|error-text`。每次 missing-result
+修复还会产生 request-local、非模型可见的 Provider notice。
 
 如果 Pi history 含 tool call 但结果丢失，Provider 按 CommandCode wire 要求生成一个
 与原 call ID 配对的明确 missing-result block，而不是删除 tool call 或猜测结果。

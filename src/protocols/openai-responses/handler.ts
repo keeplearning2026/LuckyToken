@@ -280,6 +280,10 @@ async function handleOpenAIResponses(
       model,
       invocation.context,
       piOptions,
+      {
+        notice: (notice) => diagnostics.notice(notice),
+        attempt: (attempt) => diagnostics.attempt(attempt),
+      },
     );
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });

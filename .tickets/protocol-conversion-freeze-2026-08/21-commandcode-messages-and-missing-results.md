@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — notices/journal; 20 — scalar options/synchronous execution.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,17 +16,17 @@ Pending call state contains ID/name/order only and dies after request constructi
 
 ## Acceptance criteria
 
-- [ ] Every historical AssistantMessage stopReason value, including pending/error/aborted/deferred/future runtime strings, is ignored as a targetless field while content is still converted.
-- [ ] Text, ordinary thinking, and ToolCall content preserve order and target-valid values.
-- [ ] Redacted thinking/signatures/provenance with no target representation drop without fabricating plaintext; other message content remains.
-- [ ] ToolCall preserves ID/name/lossless object arguments; malformed content still errors independently of stopReason.
-- [ ] Real ToolResult preserves toolCallId and non-empty toolName.
-- [ ] Real isError=false maps text; isError=true maps error-text; real content is never replaced by synthetic policy.
-- [ ] ToolResult images drop, text remains; image-only result emits empty string and remains paired.
-- [ ] Missing result repair triggers only for a known unresolved call at adjacency/history boundaries and uses Provider-local configured text|error-text default text.
-- [ ] Synthetic result uses pending call ID/name and exactly `No result — the tool call did not complete (interrupted or lost).`; it never repairs orphan/duplicate/mismatched results.
-- [ ] Tests cover all historical stop reasons, mixed content, real/synthetic results, image-only, multiple calls, malformed states, and ordering.
-- [ ] No Client Protocol repair code/config/state is imported.
+- [x] Every historical AssistantMessage stopReason value, including pending/error/aborted/deferred/future runtime strings, is ignored as a targetless field while content is still converted.
+- [x] Text, ordinary thinking, and ToolCall content preserve order and target-valid values.
+- [x] Redacted thinking/signatures/provenance with no target representation drop without fabricating plaintext; other message content remains.
+- [x] ToolCall preserves ID/name/lossless object arguments; malformed content still errors independently of stopReason.
+- [x] Real ToolResult preserves toolCallId and non-empty toolName.
+- [x] Real isError=false maps text; isError=true maps error-text; real content is never replaced by synthetic policy.
+- [x] ToolResult images drop, text remains; image-only result emits empty string and remains paired.
+- [x] Missing result repair triggers only for a known unresolved call at adjacency/history boundaries and uses Provider-local configured text|error-text default text.
+- [x] Synthetic result uses pending call ID/name and exactly `No result — the tool call did not complete (interrupted or lost).`; it never repairs orphan/duplicate/mismatched results.
+- [x] Tests cover all historical stop reasons, mixed content, real/synthetic results, image-only, multiple calls, malformed states, and ordering.
+- [x] No Client Protocol repair code/config/state is imported.
 
 ## Out of scope
 

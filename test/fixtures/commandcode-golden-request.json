@@ -72,7 +72,7 @@
             {
               "type": "tool-result",
               "toolCallId": "call_a",
-              "toolName": "",
+              "toolName": "lookup",
               "output": { "type": "text", "value": "A" }
             }
           ]
@@ -83,7 +83,7 @@
             {
               "type": "tool-result",
               "toolCallId": "call_b",
-              "toolName": "",
+              "toolName": "lookup",
               "output": { "type": "error-text", "value": "B failed" }
             }
           ]
