@@ -58,6 +58,7 @@ describe("OpenAI Responses serving", () => {
         stateFile?: string;
         configuration?: OpenAIResponsesConfiguration;
         invocationDiagnostics?: InvocationDiagnosticsFactory;
+        maxRequestBytes?: number;
       },
   ) {
     const composition = await createOpenAIResponsesServingTestComposition({
@@ -338,6 +339,47 @@ describe("OpenAI Responses serving", () => {
     expect(response.status).toBe(400);
   });
 
+  it("returns 400 for a non-JSON request body", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("unused"),
+    });
+    const response = await runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer client-token",
+          "content-type": "application/json",
+        },
+        body: "{not json",
+      }),
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      error: { type: string; message: string };
+    };
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(body.error.message).toContain("not valid JSON");
+  });
+
+  it("returns 413 when the request body exceeds the configured byte ceiling", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("unused"),
+      maxRequestBytes: 64,
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "x".repeat(10_000),
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: { type: string } };
+    expect(body.error.type).toBe("request_too_large");
+  });
+
   it("returns 404 for an unknown model selector", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),
@@ -349,6 +391,103 @@ describe("OpenAI Responses serving", () => {
       ),
     );
     expect(response.status).toBe(404);
+  });
+
+  it("renders an incomplete SSE terminal with clean created snapshot when upstream stops on length", async () => {
+    // The provider commits a length terminal: the adapter forms an
+    // incomplete Response and the SSE sequence must carry the terminal-only
+    // incomplete_details only on the response.incomplete event — never on the
+    // response.created snapshot (which claims in_progress).
+    const fetch: FetchFunction = async () =>
+      new Response(
+        [
+          JSON.stringify({ type: "text-start", id: "0" }),
+          JSON.stringify({ type: "text-delta", id: "0", text: "partial" }),
+          JSON.stringify({ type: "text-end", id: "0" }),
+          JSON.stringify({
+            type: "finish",
+            finishReason: "length",
+            totalUsage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+          }),
+          "",
+        ].join("\n"),
+      );
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          stream: true,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const frames = (await response.text())
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("data: ") && frame !== "data: [DONE]")
+      .map((frame) => JSON.parse(frame.replace(/^data: /, "")) as {
+        type: string;
+        response: {
+          status: string;
+          error: unknown;
+          incomplete_details: unknown;
+        };
+      });
+    expect(frames.map((f) => f.type)).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.incomplete",
+    ]);
+    expect(frames[0]!.response.status).toBe("in_progress");
+    expect(frames[0]!.response.error).toBeNull();
+    expect(frames[0]!.response.incomplete_details).toBeNull();
+    const terminal = frames[2]!;
+    expect(terminal.response.status).toBe("incomplete");
+    expect(terminal.response.error).toBeNull();
+    expect(terminal.response.incomplete_details).toEqual({
+      reason: "max_output_tokens",
+    });
+  });
+
+  it("returns a non-streaming error for an upstream error terminal, never response.failed", async () => {
+    // An upstream provider failure surfaces as a Pi error terminal before any
+    // Response object is formed; the adapter returns the non-streaming error
+    // envelope and must not fabricate a response.failed SSE terminal.
+    const fetch: FetchFunction = async () =>
+      new Response(
+        [
+          JSON.stringify({ type: "text-start", id: "0" }),
+          JSON.stringify({ type: "text-delta", id: "0", text: "partial" }),
+          JSON.stringify({
+            type: "finish",
+            finishReason: "error",
+            errorMessage: "upstream exploded",
+            totalUsage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+          }),
+          "",
+        ].join("\n"),
+      );
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          stream: true,
+        },
+        "client-token",
+      ),
+    );
+    // The error surfaces as a non-2xx JSON error, never as a 200 SSE stream
+    // with response.failed (no Response object has been formed).
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const text = JSON.stringify(await response.json());
+    expect(text).not.toContain("response.failed");
+    expect(text).not.toContain("response.completed");
+    expect(text).not.toContain("[DONE]");
   });
 
   it("renders SSE when stream is requested", async () => {
@@ -461,6 +600,93 @@ describe("OpenAI Responses serving", () => {
     expect(upstreamSignal?.aborted).toBe(true);
   });
 
+  it("writes one caller-cancellation journal record on client cancellation", async () => {
+    const { mkdtemp, readdir, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-cancel-journal-"));
+    const { createInvocationDiagnosticsFactory } = await import(
+      "../../src/invocation-diagnostics/index.js"
+    );
+    const { parseFailureLoggingConfiguration } = await import(
+      "../../src/invocation-diagnostics/configuration.js"
+    );
+    const configuration = parseFailureLoggingConfiguration(
+      {
+        directory,
+        maxFiles: 10,
+        maxFileBytes: 64 * 1024,
+        retentionDays: 1,
+        detail: "safe",
+        logCancellation: true,
+      },
+      directory,
+    );
+    const factory = createInvocationDiagnosticsFactory({
+      configuration,
+      createRequestId: () => "22222222-2222-4222-8222-222222222222",
+    });
+    let upstreamSignal: AbortSignal | undefined;
+    const fetch: FetchFunction = async (_input, init) => {
+      upstreamSignal = init?.signal as AbortSignal | undefined;
+      return await new Promise<Response>(() => undefined);
+    };
+    const { runtime } = await start({ fetch, invocationDiagnostics: factory });
+    const controller = new AbortController();
+    const handling = runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer client-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "cancel me",
+        }),
+        signal: controller.signal,
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (upstreamSignal !== undefined) resolve();
+        else setTimeout(check, 5);
+      };
+      check();
+    });
+    controller.abort(new Error("client cancelled"));
+    await expect(handling).rejects.toMatchObject({
+      name: "HttpRequestAbortedError",
+    });
+
+    // Exactly one journal record, classified as caller-cancellation. The
+    // handler's diagnostics.fail() continues after the HTTP layer aborts the
+    // awaited handle(), so the record lands asynchronously: poll for it.
+    let journalFile: string | undefined;
+    for (let attempt = 0; attempt < 40 && journalFile === undefined; attempt += 1) {
+      const days = await readdir(directory);
+      const day = days.find((entry) => /^\d{4}-\d{2}-\d{2}$/u.test(entry));
+      if (day !== undefined) {
+        const files = await readdir(join(directory, day));
+        if (files.length > 0) journalFile = join(directory, day, files[0]!);
+      }
+      if (journalFile === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    expect(journalFile).toBeDefined();
+    expect(journalFile!.endsWith("22222222-2222-4222-8222-222222222222.json")).toBe(
+      true,
+    );
+    const journal = JSON.parse(
+      await readFile(journalFile!, "utf8"),
+    ) as { classification: string; selector?: string };
+    expect(journal.classification).toBe("caller-cancellation");
+    expect(journal.selector).toContain("deepseek");
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it("maps a non-2xx upstream HTTP failure to a status-mapped error", async () => {
     const fetch: FetchFunction = async () =>
       new Response(
@@ -519,6 +745,36 @@ describe("OpenAI Responses serving", () => {
     expect(text).not.toContain("response.failed");
     expect(text).not.toContain("response.completed");
     expect(text).not.toContain("[DONE]");
+  });
+
+  it("returns non-2xx JSON for a pre-commit failure in non-streaming mode too", async () => {
+    // The pre-commit failure contract is mode-independent: a non-stream
+    // request also receives the JSON error envelope, never a fabricated
+    // Response object with status failed.
+    const fetch: FetchFunction = async () =>
+      new Response(
+        JSON.stringify({ error: { message: "upstream down" } }),
+        { status: 502, headers: { "content-type": "application/json" } },
+      );
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(502);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = (await response.json()) as {
+      error: { type: string; status?: string };
+    };
+    expect(body.error.type).toBe("api_error");
+    // A bare JSON error envelope, not a Response object carrying status.
+    expect(body).not.toHaveProperty("status");
+    expect(JSON.stringify(body)).not.toContain("response.failed");
   });
 
   it("preserves safe request-id/retry headers on non-streaming errors", async () => {
@@ -651,6 +907,27 @@ describe("OpenAI Responses serving", () => {
     expect(terminal.response.error).toBeNull();
     expect(terminal.response.incomplete_details).toBeNull();
     expect(text).toContain("data: [DONE]");
+  });
+
+  it("echoes an explicit temperature of zero as effective, never as absence", async () => {
+    // temperature:0 is a legal target value and must be echoed as 0 — it is
+    // not the same as an absent temperature (which renders null).
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("answered"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          temperature: 0,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { temperature: number | null };
+    expect(json.temperature).toBe(0);
   });
 
   it("echoes effective normalized controls in the response object", async () => {

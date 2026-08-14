@@ -490,6 +490,38 @@ function assertMessageEnvelope(message: AssistantMessage): void {
  * as an allowed_tools object rather than a bare string) normalizes to the
  * SDK default "auto". A non-target value is never echoed as effective.
  */
+/** Deep-clone and deep-freeze the echoed tools so no shared reference to the
+ *  caller's render state can survive into the wire object. */
+function deepFreezeTools(tools: readonly ResponsesEchoTool[]): ResponsesEchoTool[] {
+  return tools.map((tool) => {
+    if (tool.type === "function") {
+      const clone: ResponsesEchoFunctionTool = {
+        ...tool,
+        parameters: deepFreeze(tool.parameters) as Readonly<
+          Record<string, unknown>
+        >,
+      };
+      return Object.freeze(clone) as ResponsesEchoTool;
+    }
+    return Object.freeze({ ...tool }) as ResponsesEchoTool;
+  });
+}
+
+/** Recursively clone and freeze a plain value tree (null-prototype-safe). */
+function deepFreeze(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((entry) => deepFreeze(entry)));
+  }
+  if (isRecord(value)) {
+    const result: Record<string, unknown> = Object.create(null);
+    for (const [key, entry] of Object.entries(value)) {
+      result[key] = deepFreeze(entry);
+    }
+    return Object.freeze(result);
+  }
+  return value;
+}
+
 function normalizeEchoedToolChoice(value: string | undefined): "auto" | "none" | "required" {
   if (value === "none" || value === "required") return value;
   return "auto";
@@ -537,7 +569,10 @@ export function convertAssistantMessageToResponses(
     // render-state value is normalized to the legal "auto" echo. Never echo a
     // non-target value as effective.
     tool_choice: normalizeEchoedToolChoice(renderState.toolChoice),
-    tools: (renderState.tools ?? []).map((tool) => Object.freeze({ ...tool })),
+    // Deep-snapshot the echoed tools: a hostile caller that later mutates the
+    // shared tool schema (e.g. the nested `parameters` object) in place must
+    // never corrupt the already-rendered wire object.
+    tools: deepFreezeTools(renderState.tools ?? []),
     top_p: renderState.topP ?? null,
     usage: convertUsage(message),
   };

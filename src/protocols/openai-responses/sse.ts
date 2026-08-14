@@ -32,7 +32,17 @@ export function renderResponsesSse(
     `data: ${JSON.stringify({
       type: "response.created",
       sequence_number: sequence,
-      response: { ...response, status: "in_progress", output: [] },
+      // The created snapshot claims in_progress: terminal-only fields
+      // (error/incomplete_details) are cleared here and belong exclusively to
+      // the later status-matching terminal event, so no event can leak a
+      // terminal fact before the terminal.
+      response: {
+        ...response,
+        status: "in_progress",
+        error: null,
+        incomplete_details: null,
+        output: [],
+      },
     })}\n\n`,
   );
   sequence += 1;

@@ -124,6 +124,54 @@ describe("OpenAI Responses SSE rendering", () => {
     });
   });
 
+  it("keeps terminal-only fields null on the response.created snapshot", () => {
+    // The created snapshot claims in_progress: it must not leak the
+    // terminal-only fields (error/incomplete_details) that belong to the
+    // later status-matching terminal event.
+    const body = renderResponsesSse({
+      ...responseObject(),
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+    });
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const created = JSON.parse(frames[0]!.replace(/^data: /, ""));
+    expect(created.type).toBe("response.created");
+    expect(created.response.status).toBe("in_progress");
+    expect(created.response.error).toBeNull();
+    expect(created.response.incomplete_details).toBeNull();
+    // The terminal still carries the real incomplete details.
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.response.status).toBe("incomplete");
+    expect(terminal.response.incomplete_details).toEqual({
+      reason: "max_output_tokens",
+    });
+  });
+
+  it("keeps terminal-only fields null on the created snapshot for a failed response", () => {
+    const body = renderResponsesSse({
+      ...responseObject(),
+      status: "failed",
+      error: { message: "upstream broke", code: "server_error" },
+    });
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const created = JSON.parse(frames[0]!.replace(/^data: /, ""));
+    expect(created.response.status).toBe("in_progress");
+    expect(created.response.error).toBeNull();
+    expect(created.response.incomplete_details).toBeNull();
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.response.status).toBe("failed");
+    expect(terminal.response.error).toEqual({
+      message: "upstream broke",
+      code: "server_error",
+    });
+  });
+
   it("emits the status-matching terminal: incomplete has details/error null", () => {
     const body = renderResponsesSse({
       ...responseObject(),
