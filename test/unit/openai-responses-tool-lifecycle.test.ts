@@ -1206,10 +1206,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           i,
           policy(),
           {
-            resolveItemReference: async (reference) => {
+            resolveItemReference: async () => {
               // Interleave: yield so other conversions run mid-flight.
               await new Promise((resolve) => setTimeout(resolve, 1));
-              const fileId = reference.file_id as string;
               return [
                 {
                   type: "input_image",

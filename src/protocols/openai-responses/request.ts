@@ -1308,24 +1308,38 @@ function convertMessages(
         // computer and MCP calls map structurally only when the execution
         // ownership is Client/BYOT, i.e. the name appears in the executable
         // Client catalog. A provider-hosted form degrades to an ordered
-        // content/transcript drop and is never advertised as a Pi tool.
+        // content/transcript drop and is never advertised as a Pi tool. The
+        // installed SDK models ResponseComputerToolCall without a `name`
+        // field; a name-less computer_call is Client/BYOT when the
+        // deterministic "computer" executable name is in the catalog.
         if (type === "computer_call" || type === "mcp_call") {
           const name = rawItem.name;
           const owned =
-            typeof name === "string" && executableNames?.has(name) === true;
+            (typeof name === "string" && executableNames?.has(name) === true) ||
+            (type === "computer_call" &&
+              (typeof name !== "string" || name.length === 0) &&
+              executableNames?.has("computer") === true);
           if (!owned) {
             pendingReasoning.length = 0;
             continue;
           }
         }
         // Structured tool status: absent/completed are eligible;
-        // in_progress/incomplete/unknown structured status is an error.
+        // in_progress/incomplete/unknown structured status is an error. The
+        // installed SDK models mcp_call.status additionally as `calling`
+        // (non-terminal, errors like in_progress) and `failed` (a defined
+        // terminal lifecycle with an error string; the correlated result
+        // carries isError and representable content).
         const status = rawItem.status;
         if (status !== undefined && status !== null) {
           if (typeof status !== "string" || status.length === 0) {
             throw new InvalidRequest("tool call status must be a non-empty string");
           }
-          if (status !== "completed" && status !== "in_progress") {
+          if (type === "mcp_call" && status === "failed") {
+            // A terminal failed lifecycle: eligible like completed; the
+            // error semantics are carried by the correlated isError result.
+            // (`calling` is not eligible and falls into the error branch.)
+          } else if (status !== "completed" && status !== "in_progress") {
             throw new InvalidRequest(
               `tool call status is not supported: ${status}`,
             );
@@ -1342,7 +1356,25 @@ function convertMessages(
           type === "mcp_call"
             ? nonEmptyString(rawItem.id, "mcp_call.id")
             : nonEmptyString(rawItem.call_id, "function_call.call_id");
-        const name = nonEmptyString(rawItem.name, "function_call.name");
+        // The installed SDK models computer_call, local_shell_call,
+        // shell_call and apply_patch_call without a `name` field; a name-less
+        // call maps to its deterministic Responses-owned family name so the
+        // structured ToolCall/ToolResult round-trip. Other families require
+        // a name.
+        const name =
+          (type === "computer_call" ||
+            type === "local_shell_call" ||
+            type === "shell_call" ||
+            type === "apply_patch_call") &&
+          (typeof rawItem.name !== "string" || rawItem.name.length === 0)
+            ? type === "computer_call"
+              ? "computer"
+              : type === "local_shell_call"
+                ? "local_shell"
+                : type === "shell_call"
+                  ? "shell"
+                  : "apply_patch"
+            : nonEmptyString(rawItem.name, "function_call.name");
         // An mcp_call with an error string is a failed tool invocation; the
         // correlated result must carry isError so the error semantics are
         // never lost.
@@ -1400,6 +1432,25 @@ function convertMessages(
           flushAssistant([...pendingReasoning, toolCall]);
         }
         pendingReasoning.length = 0;
+        // The installed SDK models mcp_call with an optional `output` string
+        // carrying the tool result inline. A present output is a real
+        // correlated result: it becomes the ToolResult immediately (never a
+        // synthetic missing-result repair) and the call is marked resolved so
+        // a later output item for the same id is a duplicate.
+        if (type === "mcp_call" && typeof rawItem.output === "string") {
+          resolvedCallIds.add(callId);
+          messages.push({
+            role: "toolResult",
+            toolCallId: callId,
+            toolName: name,
+            content:
+              rawItem.output.length === 0
+                ? []
+                : [{ type: "text", text: rawItem.output }],
+            isError: failedCallIds.has(callId),
+            timestamp: receivedAt,
+          });
+        }
         continue;
       }
       case "function_call_output":
@@ -1422,7 +1473,12 @@ function convertMessages(
           }
         }
         // Structured tool output status: absent/completed are eligible;
-        // in_progress/incomplete/unknown structured status is an error.
+        // in_progress/incomplete/unknown structured status is an error. An
+        // incomplete tool output is a partial result that must never be
+        // treated as a completed tool result. The installed SDK models
+        // apply_patch_call_output.status additionally as `failed` (a defined
+        // terminal lifecycle with representable output; the correlated
+        // result carries isError so the failure semantics are never lost).
         const status = rawItem.status;
         if (status !== undefined && status !== null) {
           if (typeof status !== "string" || status.length === 0) {
@@ -1430,7 +1486,13 @@ function convertMessages(
               "tool output status must be a non-empty string",
             );
           }
-          if (status !== "completed" && status !== "in_progress") {
+          if (
+            type === "apply_patch_call_output" &&
+            status === "failed"
+          ) {
+            // A terminal failed lifecycle: eligible like completed; the
+            // error semantics are carried by the correlated isError result.
+          } else if (status !== "completed" && status !== "in_progress") {
             throw new InvalidRequest(
               `tool output status is not supported: ${status}`,
             );
@@ -1552,9 +1614,12 @@ function convertMessages(
           toolCallId: callId,
           toolName,
           content,
-          // A failed mcp_call (error field present) marks the correlated
-          // result isError so the failure semantics are preserved.
-          isError: failedCallIds.has(callId),
+          // A failed mcp_call (error field present) or a failed
+          // apply_patch_call_output marks the correlated result isError so
+          // the failure semantics are preserved.
+          isError:
+            failedCallIds.has(callId) ||
+            (type === "apply_patch_call_output" && status === "failed"),
           timestamp: receivedAt,
         };
         messages.push(result);
@@ -1605,13 +1670,16 @@ function convertMessages(
         // turn; it survives as a reasoning-only assistant.
         continue;
       case "image_generation_call": {
-        // A hosted call still in progress (in_progress/generating) has no
-        // determinate result; lifecycle-only metadata drops.
+        // A hosted call still in progress (in_progress/generating) or one
+        // that failed (the installed SDK models status failed) has no
+        // determinate result; lifecycle-only metadata drops. A failed call
+        // never materializes a result it does not possess.
         const hostedStatus = rawItem.status;
         if (
           hostedStatus === "in_progress" ||
           hostedStatus === "generating" ||
-          hostedStatus === "searching"
+          hostedStatus === "searching" ||
+          hostedStatus === "failed"
         ) {
           continue;
         }
@@ -1636,12 +1704,14 @@ function convertMessages(
         continue;
       }
       case "file_search_call": {
-        // A hosted call still in progress (in_progress/searching) has no
+        // A hosted call still in progress (in_progress/searching) or one
+        // that failed (the installed SDK models status failed) has no
         // determinate results; lifecycle-only metadata drops.
         const hostedStatus = rawItem.status;
         if (
           hostedStatus === "in_progress" ||
-          hostedStatus === "searching"
+          hostedStatus === "searching" ||
+          hostedStatus === "failed"
         ) {
           continue;
         }
@@ -1659,12 +1729,14 @@ function convertMessages(
         continue;
       }
       case "code_interpreter_call": {
-        // A hosted call still in progress (in_progress/interpreting) has no
+        // A hosted call still in progress (in_progress/interpreting) or one
+        // that failed (the installed SDK models status failed) has no
         // determinate output; lifecycle-only metadata drops.
         const hostedStatus = rawItem.status;
         if (
           hostedStatus === "in_progress" ||
-          hostedStatus === "interpreting"
+          hostedStatus === "interpreting" ||
+          hostedStatus === "failed"
         ) {
           continue;
         }
@@ -1688,10 +1760,23 @@ function convertMessages(
         continue;
       }
       case "mcp_approval_request":
+        // A request has no model-visible decision text; pure lifecycle
+        // metadata (arguments, server label) drops.
+        continue;
       case "mcp_approval_response": {
-        const decision = rawItem.decision;
-        if (typeof decision === "string" && decision.length > 0) {
-          pushUser(decision);
+        // The installed SDK models the decision as `approve: boolean` plus an
+        // optional `reason` string. The model-visible decision fact degrades
+        // to a deterministic transcript: the reason when present, otherwise a
+        // deterministic approve/denied text so the decision is never silently
+        // lost. Pure lifecycle metadata (approval_request_id, approve flag)
+        // never enters Pi.
+        const reason = rawItem.reason;
+        if (typeof reason === "string" && reason.length > 0) {
+          pushUser(reason);
+        } else if (rawItem.approve === true) {
+          pushUser("MCP tool call approved");
+        } else if (rawItem.approve === false) {
+          pushUser("MCP tool call denied");
         }
         continue;
       }

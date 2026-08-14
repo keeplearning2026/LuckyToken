@@ -275,6 +275,54 @@ describe("16: every known Responses input-item family", () => {
     ]);
   });
 
+  it("maps a name-less SDK local_shell_call to the deterministic local_shell name", () => {
+    // The installed SDK models ResponseInputItem.LocalShellCall without a
+    // `name` field; the adapter maps it to the deterministic Responses-owned
+    // name so call ownership round-trips as a structured ToolCall.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "local_shell" }],
+        input: [
+          {
+            type: "local_shell_call",
+            id: "lsc_1",
+            call_id: "call_sh",
+            action: { type: "exec", commands: ["ls"] },
+            status: "completed",
+          },
+          {
+            type: "local_shell_call_output",
+            id: "call_sh",
+            output: "file1",
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_sh",
+        name: "local_shell",
+        arguments: { type: "exec", commands: ["ls"] },
+      },
+    ]);
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "call_sh",
+      toolName: "local_shell",
+      content: [{ type: "text", text: "file1" }],
+    });
+  });
+
   it("maps the SDK action object of local_shell_call losslessly into arguments", () => {
     // The installed SDK models local_shell_call with a structured `action`
     // object, not a JSON `arguments` string. The action must map losslessly
@@ -469,6 +517,40 @@ describe("16: every known Responses input-item family", () => {
     ]);
   });
 
+  it("maps a name-less SDK shell_call to the deterministic shell name", () => {
+    // The installed SDK models ResponseFunctionShellToolCall without a
+    // `name` field; the adapter maps it to the deterministic Responses-owned
+    // name so call ownership round-trips as a structured ToolCall.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "shell" }],
+        input: [
+          {
+            type: "shell_call",
+            id: "sc_1",
+            call_id: "call_sh2",
+            action: { type: "exec", commands: ["pwd"] },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_sh2",
+        name: "shell",
+        arguments: { type: "exec", commands: ["pwd"] },
+      },
+    ]);
+  });
+
   it("maps shell_call_output to a structured Pi ToolResult", () => {
     const invocation = convertResponsesRequest(
       {
@@ -615,6 +697,49 @@ describe("16: every known Responses input-item family", () => {
     ]);
   });
 
+  it("maps a name-less SDK apply_patch_call to the deterministic apply_patch name", () => {
+    // The installed SDK models ResponseInputItem.ApplyPatchCall without a
+    // `name` field; the adapter maps it to the deterministic Responses-owned
+    // name so call ownership round-trips as a structured ToolCall.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "apply_patch" }],
+        input: [
+          {
+            type: "apply_patch_call",
+            call_id: "call_p",
+            operation: {
+              type: "update_file",
+              file_path: "a.ts",
+              old_string: "x",
+              new_string: "y",
+            },
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_p",
+        name: "apply_patch",
+        arguments: {
+          type: "update_file",
+          file_path: "a.ts",
+          old_string: "x",
+          new_string: "y",
+        },
+      },
+    ]);
+  });
+
   it("maps apply_patch_call_output to a structured Pi ToolResult", () => {
     const invocation = convertResponsesRequest(
       {
@@ -646,6 +771,49 @@ describe("16: every known Responses input-item family", () => {
     });
   });
 
+  it("accepts the SDK apply_patch_call_output status failed as an isError result", () => {
+    // The installed SDK models apply_patch_call_output.status as
+    // completed|failed. failed is a defined terminal lifecycle with
+    // representable output; it maps to an isError ToolResult so the failure
+    // semantics are never lost.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "apply_patch" }],
+        input: [
+          {
+            type: "apply_patch_call",
+            call_id: "call_p",
+            operation: {
+              type: "update_file",
+              file_path: "a.ts",
+              old_string: "x",
+              new_string: "y",
+            },
+            status: "completed",
+          },
+          {
+            type: "apply_patch_call_output",
+            call_id: "call_p",
+            output: "patch failed: conflict",
+            status: "failed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "call_p",
+      toolName: "apply_patch",
+      isError: true,
+      content: [{ type: "text", text: "patch failed: conflict" }],
+    });
+  });
+
   it("maps computer_call as a generic Pi ToolCall when execution ownership is Client/BYOT", () => {
     const invocation = convertResponsesRequest(
       {
@@ -672,6 +840,54 @@ describe("16: every known Responses input-item family", () => {
     const call = assistant?.content?.[0] as { type: string; name: string };
     expect(call?.type).toBe("toolCall");
     expect(call?.name).toBe("computer");
+  });
+
+  it("classifies a name-less SDK computer_call as Client/BYOT when a computer tool is declared", () => {
+    // The installed SDK models ResponseComputerToolCall without a `name`
+    // field; the adapter must classify it as Client/BYOT when the
+    // deterministic "computer" executable name is in the catalog, so the
+    // structured ToolCall/ToolResult are never lost to a hosted drop.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "computer" }],
+        input: [
+          {
+            type: "computer_call",
+            id: "cc_1",
+            call_id: "call_cc",
+            action: { type: "click", x: 10, y: 20 },
+            status: "completed",
+          },
+          {
+            type: "computer_call_output",
+            id: "cco_1",
+            call_id: "call_cc",
+            output: {
+              type: "computer_screenshot",
+              image_url:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+            },
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const assistant = invocation.context.messages.find(
+      (m) => m.role === "assistant",
+    );
+    const call = assistant?.content?.[0] as { type: string; name: string };
+    expect(call?.type).toBe("toolCall");
+    expect(call?.name).toBe("computer");
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "call_cc",
+      toolName: "computer",
+      content: [{ type: "image", mimeType: "image/png" }],
+    });
   });
 
   it("degrades provider-hosted computer call to ordered content without advertising a Pi tool", () => {
@@ -917,6 +1133,9 @@ describe("16: every known Responses input-item family", () => {
   });
 
   it("preserves MCP approval decision text as model-visible transcript only", () => {
+    // A request carries no decision text; the response decision (approve/
+    // reason) survives as a deterministic transcript. Pure lifecycle
+    // metadata drops; no executable approval tool is advertised.
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -924,12 +1143,16 @@ describe("16: every known Responses input-item family", () => {
           {
             type: "mcp_approval_request",
             id: "mar_1",
-            decision: "The user approved access to the database",
+            name: "db_query",
+            arguments: "{}",
+            server_label: "db-server",
           },
           {
             type: "mcp_approval_response",
             id: "mars_1",
-            decision: "Approved",
+            approval_request_id: "mar_1",
+            approve: true,
+            reason: "The user approved access to the database",
           },
           { type: "message", role: "user", content: "keep" },
         ],
@@ -938,19 +1161,21 @@ describe("16: every known Responses input-item family", () => {
       policy(),
     );
     // Decision text survives as a deterministic transcript; pure lifecycle
-    // metadata drops; no executable approval tool is advertised.
+    // metadata (arguments, server label) drops; no executable approval tool
+    // is advertised.
     const userTexts = invocation.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual([
       "The user approved access to the database",
-      "Approved",
       "keep",
     ]);
     expect(invocation.context.tools).toBeUndefined();
     expect(invocation.context.messages).not.toContainEqual(
       expect.objectContaining({ role: "assistant" }),
     );
+    // Pure lifecycle metadata (arguments, server label) never enters Pi.
+    expect(JSON.stringify(invocation.context)).not.toContain("db-server");
   });
 
   it("drops pure MCP list metadata but keeps model-visible content if present", () => {
@@ -974,6 +1199,64 @@ describe("16: every known Responses input-item family", () => {
     );
     expect(invocation.context.messages).toHaveLength(1);
     expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("preserves the SDK mcp_approval_response approve/reason decision as model-visible transcript", () => {
+    // The installed SDK models mcp_approval_response with `approve: boolean`
+    // and an optional `reason` string — there is no `decision` field. The
+    // model-visible decision text degrades to a deterministic transcript;
+    // pure lifecycle metadata (approval_request_id, approve flag) drops.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "mcp_approval_response",
+            id: "mars_1",
+            approval_request_id: "mar_1",
+            approve: true,
+            reason: "user clicked approve",
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts).toEqual(["user clicked approve", "keep"]);
+    expect(invocation.context.tools).toBeUndefined();
+    // Pure lifecycle metadata (approval_request_id) never enters Pi.
+    expect(JSON.stringify(invocation.context)).not.toContain("mar_1");
+  });
+
+  it("degrades a reason-less SDK mcp_approval_response to a deterministic decision text", () => {
+    // Without a reason, the approve boolean is the only model-visible
+    // decision fact; it degrades to a deterministic text so the decision is
+    // never silently lost.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "mcp_approval_response",
+            id: "mars_2",
+            approval_request_id: "mar_2",
+            approve: false,
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const userTexts = invocation.context.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
+    expect(userTexts[0]).toContain("denied");
+    expect(userTexts[1]).toBe("keep");
   });
 
   it("maps client-owned mcp_call to structured ToolCall semantics", () => {
@@ -1773,6 +2056,244 @@ describe("16: every known Responses tool-definition family", () => {
             output: [
               { type: "input_text", text: "screenshot taken" },
             ],
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("maps an SDK mcp_call with an embedded output into a correlated ToolResult", () => {
+    // The installed SDK models mcp_call with an optional `output` string
+    // carrying the tool result. A completed call with an embedded output
+    // must produce a real correlated ToolResult — never the synthetic
+    // "No result" repair for a result that is present.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_out",
+            name: "db_query",
+            arguments: '{"sql":"select 1"}',
+            output: "the query result",
+            status: "completed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const messages = invocation.context.messages;
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    const result = messages.find((m) => m.role === "toolResult");
+    expect(result).toMatchObject({
+      toolCallId: "mc_out",
+      toolName: "db_query",
+      isError: false,
+      content: [{ type: "text", text: "the query result" }],
+    });
+    // No synthetic repair was emitted for the present result.
+    expect(JSON.stringify(messages)).not.toContain("No result");
+  });
+
+  it("marks the correlated result isError when an embedded-output mcp_call carries an error", () => {
+    // A failed mcp_call (error field present) with an embedded output must
+    // not lose its error semantics.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_err",
+            name: "db_query",
+            arguments: "{}",
+            output: "partial output",
+            error: "tool crashed",
+            status: "failed",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "mc_err",
+      toolName: "db_query",
+      isError: true,
+      content: [{ type: "text", text: "partial output" }],
+    });
+    // The raw error text is lifecycle metadata; it never enters Pi.
+    expect(JSON.stringify(invocation.context)).not.toContain("tool crashed");
+  });
+
+  it("accepts the SDK mcp_call status failed as a completed-with-error lifecycle", () => {
+    // The installed SDK models mcp_call.status as
+    // in_progress|completed|incomplete|calling|failed. failed is a defined
+    // terminal lifecycle status, not a malformed unknown.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+        input: [
+          {
+            type: "mcp_call",
+            id: "mc_fail",
+            name: "db_query",
+            arguments: "{}",
+            status: "failed",
+            error: "boom",
+          },
+          {
+            type: "function_call_output",
+            call_id: "mc_fail",
+            output: "partial",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+    const result = invocation.context.messages.find(
+      (m) => m.role === "toolResult",
+    );
+    expect(result).toMatchObject({
+      toolCallId: "mc_fail",
+      toolName: "db_query",
+      isError: true,
+    });
+  });
+
+  it("errors on the SDK mcp_call status calling like an in-progress call", () => {
+    // calling is a non-terminal lifecycle status; like in_progress it cannot
+    // be converted as a committed call.
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
+          input: [
+            {
+              type: "mcp_call",
+              id: "mc_call",
+              name: "db_query",
+              arguments: "{}",
+              status: "calling",
+            },
+          ],
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/status/);
+  });
+
+  it("errors on the SDK computer_call_output status incomplete like a partial tool output", () => {
+    // The installed SDK models computer_call_output.status as
+    // in_progress|completed|incomplete. incomplete is a partial tool output
+    // that must never be treated as a completed tool result (ticket 15).
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          tools: [{ type: "computer", name: "computer" }],
+          input: [
+            {
+              type: "computer_call",
+              id: "cc_1",
+              call_id: "call_cc",
+              name: "computer",
+              status: "completed",
+            },
+            {
+              type: "computer_call_output",
+              id: "cco_1",
+              call_id: "call_cc",
+              status: "incomplete",
+              output: {
+                type: "computer_screenshot",
+                image_url:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+              },
+            },
+          ],
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/status/);
+  });
+
+  it("drops a hosted web_search_call with the SDK status failed as lifecycle metadata", () => {
+    // The installed SDK models web_search_call.status as
+    // in_progress|searching|completed|failed. failed is a terminal hosted
+    // status with no determinate results; it drops like lifecycle metadata
+    // and never advertises a Pi tool.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "web_search_call", id: "ws_fail", status: "failed" },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("drops a hosted image_generation_call with the SDK status failed as lifecycle metadata", () => {
+    // The installed SDK models image_generation_call.status as
+    // in_progress|completed|generating|failed. failed is a terminal hosted
+    // status with no determinate result; it drops like lifecycle metadata
+    // and never materializes a result it does not possess.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "image_generation_call",
+            id: "ig_fail",
+            status: "failed",
+            result:
+              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          },
+          { type: "message", role: "user", content: "keep" },
+        ],
+      },
+      1,
+      policy(),
+    );
+    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.context.tools).toBeUndefined();
+  });
+
+  it("drops a hosted code_interpreter_call with the SDK status failed as lifecycle metadata", () => {
+    // The installed SDK models code_interpreter_call.status as
+    // in_progress|completed|incomplete|interpreting|failed. failed is a
+    // terminal hosted status with no determinate output; it drops.
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "code_interpreter_call",
+            id: "ci_fail",
+            status: "failed",
+            outputs: [{ type: "logs", logs: "partial log" }],
           },
           { type: "message", role: "user", content: "keep" },
         ],
