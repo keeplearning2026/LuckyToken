@@ -98,8 +98,10 @@ export function deleteSessionRow(db: SqliteDatabase, sessionId: string) {
 	sql`DELETE FROM sessions WHERE id = ${sessionId}`.run(db);
 }
 
-function parseSessionName(value: string | null, sessionId: string): string | undefined {
-	if (value === null) return undefined;
+function parseSessionName(value: string | null, sessionId: string): string {
+	if (value === null) {
+		throw new SessionError("storage", `Invalid SQLite session ${sessionId}: name must be a string`);
+	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(value);

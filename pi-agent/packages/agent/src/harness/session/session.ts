@@ -147,7 +147,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		return this.storage.getName();
 	}
 
-	async setName(name: string | undefined): Promise<void> {
+	async setName(name: string): Promise<void> {
 		await this.storage.setName(name);
 	}
 
@@ -223,7 +223,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		return this.queryLog(options);
 	}
 
-	/** Returns the lane's current leaf, or null when empty. Throws when the lane does not exist. */
 	private async getLeafIdForLane(lane: string): Promise<string | null> {
 		const pointer = (await this.getLanes()).find((candidate) => candidate.lane === lane);
 		if (!pointer) throw new SessionError("invalid_lane", `Lane not found: ${lane}`);
@@ -236,18 +235,14 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		return this.storage.findEntries(resultLimit === query.limit ? query : { ...query, limit: resultLimit });
 	}
 
-	/**
-	 * Queries from `query.start` toward the root, defaulting to the lane's current leaf.
-	 * `resultLimit` lets single-entry queries cap results without changing the caller's query.
-	 */
 	private async queryBranchEntries(
-		defaultLane: string,
+		lane: string,
 		query: EntryQuery & BranchBounds = {},
 		resultLimit = query.limit,
 	): Promise<Entry[]> {
 		assertValidLimit(query.limit);
 		assertValidCursor(query.cursor?.afterSeq);
-		const start = query.start ?? (await this.getLeafIdForLane(defaultLane));
+		const start = query.start ?? (await this.getLeafIdForLane(lane));
 		if (start === null) return [];
 		const storageQuery = resultLimit === query.limit ? query : { ...query, limit: resultLimit };
 		return this.storage.findEntriesOnBranch({ ...storageQuery, start });

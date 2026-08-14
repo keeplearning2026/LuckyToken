@@ -316,16 +316,8 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 				const visibleRows = Math.min(imageMetadata.rows, clipBottom - row);
 				if (visibleRows < imageMetadata.rows) line = cropKittyImageLine(line, 0, visibleRows);
 			}
-			// Fast path: a full-width box painting onto an untouched row can use the
-			// source line reference directly. Compositing here would rebuild the row
-			// string through ANSI/grapheme segmentation every frame; padding is
-			// unnecessary because rows are written with erase-line and the final
-			// width clamp still truncates over-wide lines.
-			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
-				screen[row] = line;
-			} else {
-				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
-			}
+			if (isImageLine(line) && box.rect.x === 0 && box.rect.width >= totalWidth) screen[row] = line;
+			else screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
 		}
 	}
 	for (const child of box.children) paintBox(child, screen, totalWidth);

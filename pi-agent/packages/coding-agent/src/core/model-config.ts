@@ -117,7 +117,6 @@ const OpenAIResponsesCompatSchema = Type.Object({
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 	supportsStrictMode: Type.Optional(Type.Boolean()),
 	supportsOpenAIGrammarTools: Type.Optional(Type.Boolean()),
-	supportsAdditionalTools: Type.Optional(Type.Boolean()),
 	supportsToolSearch: Type.Optional(Type.Boolean()),
 });
 

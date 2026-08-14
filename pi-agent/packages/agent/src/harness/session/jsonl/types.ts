@@ -6,7 +6,6 @@ export type JsonlSessionRepoFileSystem = Pick<
 	| "absolutePath"
 	| "joinPath"
 	| "readTextFile"
-	| "readTextLines"
 	| "writeFile"
 	| "appendFile"
 	| "renameFile"

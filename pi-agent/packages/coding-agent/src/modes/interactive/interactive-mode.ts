@@ -92,7 +92,7 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
-import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
+import type { TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -776,13 +776,13 @@ export class InteractiveMode {
 		}
 	}
 
-	private stopInteractiveTui(fullscreenExitOutput: FullscreenExitOutput): void {
-		if (this.renderer.mode === "fullscreen" && fullscreenExitOutput === "transcript") {
+	private stopInteractiveTui(): void {
+		if (this.renderer.mode === "fullscreen") {
 			while (this.renderer.hasOverlayEntries) this.renderer.hideOverlay();
 			this.switchTuiMode("regular", false, false);
 			this.renderer.renderNow();
 		}
-		this.ui.stop({ preserveScreen: this.renderer.mode === "fullscreen" });
+		this.ui.stop();
 	}
 
 	private switchTuiMode(mode: TuiMode, restoreProgress = true, startRenderer = true): boolean {
@@ -1950,7 +1950,7 @@ export class InteractiveMode {
 		const message = error instanceof Error ? error.message : String(error);
 		this.showError(`${prefix}: ${message}`);
 		stopThemeWatcher();
-		this.stop("transcript");
+		this.stop();
 		process.exit(1);
 	}
 
@@ -4409,7 +4409,6 @@ export class InteractiveMode {
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					tuiMode: this.ui.mode,
-					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -4565,9 +4564,6 @@ export class InteractiveMode {
 						this.settingsManager.setTuiMode(mode);
 						if (!this.activeStatusIndicator) this.statusContainer.clear();
 						this.showStatus(`TUI mode: ${mode}`);
-					},
-					onFullscreenExitOutputChange: (output) => {
-						this.settingsManager.setFullscreenExitOutput(output);
 					},
 					onFullscreenScrollbarChange: (mode) => {
 						this.settingsManager.setFullscreenScrollbar(mode);
@@ -6377,7 +6373,7 @@ export class InteractiveMode {
 		}
 	}
 
-	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+	stop(): void {
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
@@ -6391,7 +6387,7 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.stopInteractiveTui(fullscreenExitOutput);
+			this.stopInteractiveTui();
 			this.isInitialized = false;
 		}
 		this.unregisterSignalHandlers();

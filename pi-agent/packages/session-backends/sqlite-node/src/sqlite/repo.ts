@@ -532,14 +532,7 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 	}
 
 	async findEntries(query: EntryQuery = {}): Promise<Entry[]> {
-		const sqlType = query.type ?? (query.customType === undefined ? undefined : "custom");
-		const sqlLimit = query.customType === undefined ? query.limit : undefined;
-		const rows = readEntryRows(this.db, this.metadata.id, {
-			cursor: query.cursor,
-			limit: sqlLimit,
-			order: query.order,
-			type: sqlType,
-		});
+		const rows = readEntryRows(this.db, this.metadata.id, { order: query.order });
 		const entries = rows.map(decodeEntry).filter((entry) => matchesEntryQuery(entry, query));
 		return query.limit === undefined ? entries : entries.slice(0, query.limit);
 	}
@@ -606,7 +599,7 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 							kind: "fact" as const,
 							seq: row.seq,
 							fact: "name" as const,
-							name: row.value === null ? undefined : (JSON.parse(row.value) as string),
+							name: JSON.parse(row.value ?? "null") as string,
 						};
 					return {
 						kind: "fact" as const,
@@ -627,10 +620,10 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 		return row?.value === undefined || row.value === null ? undefined : (JSON.parse(row.value) as string);
 	}
 
-	async setName(name: string | undefined): Promise<void> {
+	async setName(name: string): Promise<void> {
 		return this.enqueueWrite(() => {
 			const seq = getNextSequence(this.db, this.metadata.id);
-			appendFact(this.db, this.metadata.id, seq, "name", null, name === undefined ? null : JSON.stringify(name));
+			appendFact(this.db, this.metadata.id, seq, "name", null, JSON.stringify(name));
 			advanceSequence(this.db, this.metadata.id, seq);
 		});
 	}
