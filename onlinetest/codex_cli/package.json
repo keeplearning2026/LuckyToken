@@ -1,0 +1,8 @@
+{
+  "name": "luckytoken-online-codex-cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx ../../test/online/run-codex-cli.ts"
+  }
+}

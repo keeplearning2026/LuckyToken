@@ -47,8 +47,11 @@ function recordFailure(summary: OnlineSummary, category: string): void {
 
 function failureCategory(error: unknown, totalSignal: AbortSignal): string {
   if (totalSignal.aborted) return "suite_timeout";
-  if (error instanceof Error && /^online_[a-z0-9_]+$/u.test(error.message)) {
-    return error.message;
+  if (error instanceof Error) {
+    const onlineCategory = /^(online_[a-z0-9_]+)(?::|$)/u.exec(error.message)?.[1];
+    if (onlineCategory !== undefined) return onlineCategory;
+    const safeName = error.name.replace(/[^A-Za-z0-9_-]/gu, "");
+    if (safeName.length > 0 && safeName !== "Error") return safeName;
   }
   if (typeof error === "object" && error !== null) {
     if ("status" in error && typeof error.status === "number") {
@@ -472,10 +475,11 @@ function createOnlineTestPlan(): readonly OnlineTestJob[] {
 async function runPool(
   jobsToRun: readonly OnlineTestJob[],
   worker: (job: OnlineTestJob) => Promise<void>,
+  concurrency: number,
 ): Promise<void> {
   let cursor = 0;
   await Promise.all(
-    Array.from({ length: DEFAULT_CONCURRENCY }, async () => {
+    Array.from({ length: concurrency }, async () => {
       while (cursor < jobsToRun.length) {
         const job = jobsToRun[cursor];
         cursor += 1;
@@ -523,7 +527,13 @@ function createCapturingFetch(base: FetchFunction): {
   };
 }
 
-export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
+export async function runOpenAIResponsesOnlineSuite(
+  args: readonly string[] = [],
+): Promise<void> {
+  const concurrency = args.length === 0 ? DEFAULT_CONCURRENCY : Number(args[0]);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 20) {
+    throw new Error("Responses online concurrency must be an integer from 1 to 20");
+  }
   const apiKey = (await readFile("CommandcodeAPIKey.txt", "utf8")).trim();
   if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
@@ -641,31 +651,38 @@ export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
     const cancellationJobs = createOnlineTestPlan().filter(
       (job) => job.kind === "cancel-recovery",
     );
-    await runPool(cancellationJobs, (job) =>
-      runCancellationJob(
-        hangingOrigin,
-        origin,
-        responsesToken,
-        job.marker,
-        totalSignal,
-        summary,
-      ),
+    await runPool(
+      cancellationJobs,
+      (job) =>
+        runCancellationJob(
+          hangingOrigin,
+          origin,
+          responsesToken,
+          job.marker,
+          totalSignal,
+          summary,
+        ),
+      concurrency,
     );
     await hangingServer.close();
 
     const pressureJobs = createOnlineTestPlan().filter(
       (job) => job.kind !== "cancel-recovery",
     );
-    await runPool(pressureJobs, (job) => {
-      switch (job.kind) {
-        case "json":
-          return runJsonJob(origin, responsesToken, job.marker, totalSignal, summary);
-        case "sse":
-          return runSseJob(origin, responsesToken, job.marker, totalSignal, summary);
-        case "cancel-recovery":
-          return Promise.resolve();
-      }
-    });
+    await runPool(
+      pressureJobs,
+      (job) => {
+        switch (job.kind) {
+          case "json":
+            return runJsonJob(origin, responsesToken, job.marker, totalSignal, summary);
+          case "sse":
+            return runSseJob(origin, responsesToken, job.marker, totalSignal, summary);
+          case "cancel-recovery":
+            return Promise.resolve();
+        }
+      },
+      concurrency,
+    );
 
     // ---- Conformance: capture upstream requests ----
     const capture = createCapturingFetch(globalThis.fetch);
@@ -822,7 +839,8 @@ export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
       throw new Error("online_tool_result_round_trip");
     }
 
-    // store:false is still saved (unconditional save semantics).
+    // The default `honor` policy obeys store:false: the response remains
+    // usable for the current call, but its id cannot seed a later chain.
     const storeFalseTurn = await postResponses(
       conformanceOrigin,
       responsesToken,
@@ -835,20 +853,33 @@ export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
       requestSignal(totalSignal),
     );
     validateResponsesResult(storeFalseTurn, "LT_RESP_STORE_FALSE");
-    const storeFalseChain = await postResponses(
-      conformanceOrigin,
-      responsesToken,
-      {
+    const dispatchedBeforeStoreFalseFollowUp = capture.exchanges.length;
+    const storeFalseFollowUp = await fetch(`${conformanceOrigin}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${responsesToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
         model: DEFAULT_MODEL,
         input: promptFor("LT_RESP_STORE_FALSE_NEXT"),
         previous_response_id: storeFalseTurn.id,
         max_output_tokens: SUCCESS_MAX_TOKENS,
-      },
-      requestSignal(totalSignal),
-    );
-    validateResponsesResult(storeFalseChain, "LT_RESP_STORE_FALSE_NEXT");
-    if (storeFalseChain.previous_response_id !== storeFalseTurn.id) {
-      throw new Error("online_store_false_not_saved");
+      }),
+      signal: requestSignal(totalSignal),
+    });
+    const storeFalseError = (await storeFalseFollowUp.json()) as {
+      error?: { type?: string; message?: string };
+    };
+    if (
+      storeFalseFollowUp.status !== 400 ||
+      storeFalseError.error?.type !== "invalid_request_error" ||
+      !storeFalseError.error.message?.includes("not a known local response")
+    ) {
+      throw new Error("online_store_false_was_saved");
+    }
+    if (capture.exchanges.length !== dispatchedBeforeStoreFalseFollowUp) {
+      throw new Error("online_store_false_follow_up_dispatched");
     }
 
     // Restart recovery: close server, create a fresh composition on the SAME
@@ -885,7 +916,7 @@ export async function runOpenAIResponsesOnlineSuite(): Promise<void> {
 
     const report = {
       model: DEFAULT_MODEL,
-      concurrency: DEFAULT_CONCURRENCY,
+      concurrency,
       attemptedRequests: summary.attemptedRequests,
       successfulJson: summary.successfulJson,
       successfulSse: summary.successfulSse,
@@ -907,9 +938,11 @@ if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  void runOpenAIResponsesOnlineSuite().catch((error: unknown) => {
+  void runOpenAIResponsesOnlineSuite(process.argv.slice(2)).catch((error: unknown) => {
     const category = failureCategory(error, new AbortController().signal);
-    process.stderr.write(`Online suite failed: ${category}\n`);
+    const detail =
+      error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`Online suite failed: ${category}\n${detail}\n`);
     process.exitCode = 1;
   });
 }

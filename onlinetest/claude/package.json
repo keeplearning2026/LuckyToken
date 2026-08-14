@@ -1,0 +1,8 @@
+{
+  "name": "luckytoken-online-claude-cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx ../../test/online/run-claude-cli.ts"
+  }
+}

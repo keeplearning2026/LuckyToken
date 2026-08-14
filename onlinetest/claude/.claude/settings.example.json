@@ -1,0 +1,16 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:GENERATED_PORT",
+    "ANTHROPIC_AUTH_TOKEN": "GENERATED_LOCAL_CLIENT_TOKEN",
+    "ANTHROPIC_MODEL": "commandcode-private/deepseek/deepseek-v4-flash",
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "model": "commandcode-private/deepseek/deepseek-v4-flash",
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "enabledPlugins": {},
+  "skipDangerousModePermissionPrompt": true
+}

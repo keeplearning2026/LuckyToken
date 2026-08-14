@@ -36,17 +36,20 @@
  *   - `codex` CLI on PATH (verified at startup)
  *   - `CommandcodeAPIKey.txt` in the repo root (git-ignored), read into
  *     memory only
- *   - `~/.codex/config.toml` with `[model_providers.luckytoken]` and
- *     `luckytoken.config.toml` profile (see README "Using the OpenAI
- *     Responses endpoint from the Codex CLI")
+ *   - `~/.codex/luckytoken-catalog.json` with the target model metadata.
+ *
+ * The suite copies only that target catalog entry into a temporary
+ * `CODEX_HOME` and writes its own provider/profile configuration. User MCPs,
+ * credentials, sessions, skills, and default model settings are not loaded.
  */
 
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
@@ -64,9 +67,110 @@ const CODEX_EXEC_TIMEOUT_MS = 90_000;
 
 const CODEX_PROFILE = "luckytoken";
 const CODEX_PROMPT_ENV_KEY = "LUCKYTOKEN_API_KEY";
+const CODEX_HOME_ENV_KEY = "CODEX_HOME";
 // `codex` on Windows is a .ps1/.cmd shim; spawn the underlying Node entry
 // directly to avoid shell-resolution EPERM/EINVAL.
-const CODEX_JS = "C:\\Users\\huich\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
+const CODEX_JS = join(
+  process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"),
+  "npm",
+  "node_modules",
+  "@openai",
+  "codex",
+  "bin",
+  "codex.js",
+);
+const REPOSITORY_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+
+function codexProviderOverrides(baseUrl: string): readonly string[] {
+  const stringOverride = (key: string, value: string): readonly string[] =>
+    Object.freeze(["-c", `${key}=${JSON.stringify(value)}`]);
+  return Object.freeze([
+    ...stringOverride(`model_providers.${CODEX_PROFILE}.name`, "LuckyToken"),
+    ...stringOverride(`model_providers.${CODEX_PROFILE}.base_url`, baseUrl),
+    ...stringOverride(`model_providers.${CODEX_PROFILE}.wire_api`, "responses"),
+    "-c",
+    `model_providers.${CODEX_PROFILE}.requires_openai_auth=true`,
+    ...stringOverride(
+      `model_providers.${CODEX_PROFILE}.env_key`,
+      CODEX_PROMPT_ENV_KEY,
+    ),
+    ...stringOverride("model_provider", CODEX_PROFILE),
+    ...stringOverride("model", DEFAULT_MODEL),
+  ]);
+}
+
+async function prepareIsolatedCodexHome(
+  directory: string,
+  baseUrl: string,
+): Promise<string> {
+  const inheritedCodexHome = process.env[CODEX_HOME_ENV_KEY]?.trim();
+  const sourceCodexHome =
+    inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
+      ? inheritedCodexHome
+      : join(homedir(), ".codex");
+  const sourceCatalogPath = join(sourceCodexHome, "luckytoken-catalog.json");
+  const sourceCatalog = JSON.parse(
+    await readFile(sourceCatalogPath, "utf8"),
+  ) as unknown;
+  if (
+    typeof sourceCatalog !== "object" ||
+    sourceCatalog === null ||
+    Array.isArray(sourceCatalog) ||
+    !("models" in sourceCatalog) ||
+    !Array.isArray(sourceCatalog.models)
+  ) {
+    throw new Error("codex_model_catalog_invalid");
+  }
+  const modelEntry = sourceCatalog.models.find(
+    (candidate) =>
+      typeof candidate === "object" &&
+      candidate !== null &&
+      !Array.isArray(candidate) &&
+      "slug" in candidate &&
+      candidate.slug === DEFAULT_MODEL,
+  );
+  if (modelEntry === undefined) {
+    throw new Error("codex_model_catalog_missing_target");
+  }
+
+  const codexHome = join(directory, "codex-home");
+  await mkdir(codexHome, { recursive: true });
+  const catalogPath = join(codexHome, "luckytoken-catalog.json");
+  await writeFile(
+    catalogPath,
+    `${JSON.stringify({ models: [modelEntry] }, null, 2)}\n`,
+    "utf8",
+  );
+  const quoted = (value: string): string => JSON.stringify(value);
+  await writeFile(
+    join(codexHome, "config.toml"),
+    [
+      `[model_providers.${CODEX_PROFILE}]`,
+      `name = ${quoted("LuckyToken")}`,
+      `base_url = ${quoted(baseUrl)}`,
+      `wire_api = ${quoted("responses")}`,
+      "requires_openai_auth = true",
+      `env_key = ${quoted(CODEX_PROMPT_ENV_KEY)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    join(codexHome, `${CODEX_PROFILE}.config.toml`),
+    [
+      `model_provider = ${quoted(CODEX_PROFILE)}`,
+      `model = ${quoted(DEFAULT_MODEL)}`,
+      `model_catalog_json = ${quoted(catalogPath)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return codexHome;
+}
 
 interface CodexExecResult {
   readonly exitCode: number | null;
@@ -179,6 +283,8 @@ async function runCodexExec(
   extraEnv: Record<string, string> = {},
   mode: "new" | "resume" = "new",
 ): Promise<CodexExecResult> {
+  const codexHome = extraEnv[CODEX_HOME_ENV_KEY];
+  if (codexHome === undefined) throw new Error("codex_home_missing");
   const outputFile = join(artifactDir, `${marker}.final.md`);
   const stdoutFile = join(artifactDir, `${marker}.events.jsonl`);
   const stderrFile = join(artifactDir, `${marker}.stderr.log`);
@@ -191,8 +297,8 @@ async function runCodexExec(
           "exec",
           "resume",
           "--last",
-          "-c",
-          `model_providers.${CODEX_PROFILE}.base_url=${baseUrl}`,
+          ...codexProviderOverrides(baseUrl),
+          "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
           outputFile,
@@ -203,8 +309,8 @@ async function runCodexExec(
           "-p",
           CODEX_PROFILE,
           "exec",
-          "-c",
-          `model_providers.${CODEX_PROFILE}.base_url=${baseUrl}`,
+          ...codexProviderOverrides(baseUrl),
+          "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
           outputFile,
@@ -345,13 +451,19 @@ function abortPromise(
  */
 function assertCodexResult(
   result: CodexExecResult,
-  marker: string,
+  expectedText: string | undefined,
   summary: OnlineSummary,
+  requiredItemType?: string,
+  minimumRequiredItems = 1,
+  requireFailedCommand = false,
 ): void {
   if (result.timedOut) {
     throw new Error("codex_exec_timeout");
   }
   if (result.events.length === 0) {
+    if (result.exitCode !== 0) {
+      throw new Error(`codex_exit_${result.exitCode ?? "null"}`);
+    }
     throw new Error("codex_no_json_events");
   }
 
@@ -381,6 +493,41 @@ function assertCodexResult(
   }
   if (agentText.trim().length === 0) {
     throw new Error("codex_no_agent_message");
+  }
+  if (expectedText !== undefined && !agentText.includes(expectedText)) {
+    throw new Error("codex_expected_text_missing");
+  }
+  if (
+    requiredItemType !== undefined &&
+    result.events.filter(
+      (event) =>
+        event.type === "item.completed" &&
+        typeof event.payload.item === "object" &&
+        event.payload.item !== null &&
+        (event.payload.item as { type?: string }).type === requiredItemType,
+    ).length < minimumRequiredItems
+  ) {
+    throw new Error("codex_required_item_missing");
+  }
+  if (
+    requireFailedCommand &&
+    !result.events.some((event) => {
+      if (
+        event.type !== "item.completed" ||
+        typeof event.payload.item !== "object" ||
+        event.payload.item === null
+      ) {
+        return false;
+      }
+      const item = event.payload.item as { type?: string; exit_code?: unknown };
+      return (
+        item.type === "command_execution" &&
+        typeof item.exit_code === "number" &&
+        item.exit_code !== 0
+      );
+    })
+  ) {
+    throw new Error("codex_failed_command_missing");
   }
   // The Codex CLI occasionally exits non-zero during MCP shutdown even after
   // a fully completed turn (verified: turn.completed present, final message
@@ -499,6 +646,11 @@ async function assertSnapshotHealthy(stateFile: string): Promise<void> {
 interface Scenario {
   readonly id: string;
   readonly prompt: string;
+  readonly expectedText?: string;
+  readonly requiredItemType?: string;
+  readonly minimumRequiredItems?: number;
+  readonly requireFailedCommand?: boolean;
+  readonly requiredCustomTool?: string;
   /** Extra Codex flags for this scenario (e.g. tool usage). */
   readonly extraArgs?: readonly string[];
   /**
@@ -523,29 +675,34 @@ function directedScenarios(): readonly Scenario[] {
       id: "chain_basic",
       prompt:
         "Reply with exactly: CHAIN_BASIC_OK. Do not explain, do not use tools.",
+      expectedText: "CHAIN_BASIC_OK",
     }),
     Object.freeze({
       id: "chain_long",
       prompt:
         "Reply with exactly: CHAIN_LONG_OK, then repeat the exact string " +
         "'abcdefghij' ten times on one line. Do not explain.",
+      expectedText: "CHAIN_LONG_OK",
     }),
     Object.freeze({
       id: "no_tools",
       prompt:
         "Reply with exactly: NO_TOOLS_OK. Do not use any tools, do not explain.",
+      expectedText: "NO_TOOLS_OK",
     }),
     Object.freeze({
       id: "reasoning",
       prompt:
         "Think step by step, then reply with exactly: REASONING_OK. " +
         "Do not use tools, do not explain.",
+      expectedText: "REASONING_OK",
     }),
     Object.freeze({
       id: "long_text",
       prompt:
         "Write a paragraph of at least 200 words about protocol conversion. " +
         "End with the exact token: LONG_TEXT_OK. Do not use tools.",
+      expectedText: "LONG_TEXT_OK",
     }),
 
     // --- wire: tool items ---
@@ -554,13 +711,46 @@ function directedScenarios(): readonly Scenario[] {
       prompt:
         "Use the shell_command tool to run: echo TOOL_SHELL_OK. " +
         "Then reply with exactly the tool output. Do not explain.",
+      expectedText: "TOOL_SHELL_OK",
+      requiredItemType: "command_execution",
     }),
     Object.freeze({
       id: "tool_apply_patch",
       prompt:
-        "Use the apply_patch tool to create a file named codex_cli_probe.txt " +
-        "containing exactly TOOL_APPLY_PATCH_OK. Then reply with exactly that string. " +
+        "Use the apply_patch tool to create codex_cli_probe.txt containing exactly " +
+        "TOOL_APPLY_PATCH_OK. Then reply with exactly: TOOL_APPLY_PATCH_OK. " +
         "Do not explain.",
+      expectedText: "TOOL_APPLY_PATCH_OK",
+      requiredItemType: "file_change",
+      requiredCustomTool: "apply_patch",
+    }),
+    Object.freeze({
+      id: "tool_shell_error",
+      prompt:
+        "Use shell_command to run a command that writes EXPECTED_TOOL_FAILURE " +
+        "to stderr and exits with code 7. The failure is expected. Then reply " +
+        "with exactly: TOOL_ERROR_RECOVERED_OK. Do not retry or explain.",
+      expectedText: "TOOL_ERROR_RECOVERED_OK",
+      requiredItemType: "command_execution",
+      requireFailedCommand: true,
+    }),
+    Object.freeze({
+      id: "tool_unicode",
+      prompt:
+        "Use shell_command to output exactly UNICODE_汉字_🙂_OK. " +
+        "Then reply with exactly: UNICODE_汉字_🙂_OK. Do not explain.",
+      expectedText: "UNICODE_汉字_🙂_OK",
+      requiredItemType: "command_execution",
+    }),
+    Object.freeze({
+      id: "parallel_shell_tools",
+      prompt:
+        "In one tool round, call shell_command twice: one command outputs " +
+        "PARALLEL_A_OK and the other outputs PARALLEL_B_OK. After both finish, " +
+        "reply with exactly: PARALLEL_TOOLS_OK. Do not explain.",
+      expectedText: "PARALLEL_TOOLS_OK",
+      requiredItemType: "command_execution",
+      minimumRequiredItems: 2,
     }),
 
     // --- wire: incremental chaining (previous_response_id) ---
@@ -569,6 +759,7 @@ function directedScenarios(): readonly Scenario[] {
       prompt:
         "This is a multi-turn chain. Turn 1: reply with exactly: MULTI_TURN_1_OK. " +
         "Do not use tools, do not explain. Also memorize this token: MT_MEMORY_SEED.",
+      expectedText: "MULTI_TURN_1_OK",
       special: "multi_turn",
       turns: 3,
     }),
@@ -578,8 +769,10 @@ function directedScenarios(): readonly Scenario[] {
       id: "multi_turn_tool",
       prompt:
         "This is a multi-turn tool session. Turn 1: use the shell_command tool " +
-        "to create a file named multi_turn_probe.txt containing exactly: MULTI_TURN_TOOL_1. " +
-        "Do not explain.",
+        "to create multi_turn_probe.txt containing exactly: MULTI_TURN_TOOL_1. " +
+        "Then reply with exactly: MULTI_TURN_TOOL_1_OK. Do not explain.",
+      expectedText: "MULTI_TURN_TOOL_1_OK",
+      requiredItemType: "command_execution",
       special: "multi_turn",
       turns: 3,
     }),
@@ -590,6 +783,7 @@ function directedScenarios(): readonly Scenario[] {
       prompt:
         "This is a restart-recovery probe. Reply with exactly: RESTART_RECOVERY_OK. " +
         "Do not use tools, do not explain.",
+      expectedText: "RESTART_RECOVERY_OK",
       special: "restart",
     }),
 
@@ -618,7 +812,7 @@ function randomScenarios(count: number): readonly Scenario[] {
     (marker: string) =>
       `Use the shell_command tool to run: echo ${marker}. Then reply with exactly the output.`,
     (marker: string) =>
-      `Use the apply_patch tool to write ${marker} to a file named probe.txt, ` +
+      `Use the apply_patch tool to write ${marker} to probe.txt, ` +
       `then reply with exactly ${marker}.`,
   ];
   const scenarios: Scenario[] = [];
@@ -630,7 +824,23 @@ function randomScenarios(count: number): readonly Scenario[] {
     const template = useTool
       ? (toolTemplate ?? toolTemplates[0]!)
       : (plainTemplate ?? templates[0]!);
-    scenarios.push(Object.freeze({ id: `random_${index + 1}`, prompt: template(marker) }));
+    scenarios.push(
+      Object.freeze({
+        id: `random_${index + 1}`,
+        prompt: template(marker),
+        expectedText: marker,
+        ...(useTool
+          ? {
+              ...(index % toolTemplates.length === 0
+                ? { requiredItemType: "command_execution" }
+                : {
+                    requiredItemType: "file_change",
+                    requiredCustomTool: "apply_patch",
+                  }),
+            }
+          : {}),
+      }),
+    );
   }
   return Object.freeze(scenarios);
 }
@@ -726,6 +936,56 @@ function createCapturingRuntime(
   });
 }
 
+async function assertCapturedCustomToolRoundTrip(
+  artifactDir: string,
+  marker: string,
+  toolName: string,
+): Promise<void> {
+  const requestsDir = join(artifactDir, "requests");
+  const requestNames = (await readdir(requestsDir)).filter(
+    (name) => name.startsWith(`${marker}_`) && name.endsWith(".json"),
+  );
+  const callIds = new Set<string>();
+  const outputIds = new Set<string>();
+
+  for (const requestName of requestNames) {
+    const captured: unknown = JSON.parse(
+      await readFile(join(requestsDir, requestName), "utf8"),
+    );
+    if (typeof captured !== "object" || captured === null) continue;
+    const body = (captured as { body?: unknown }).body;
+    if (typeof body !== "object" || body === null) continue;
+    const input = (body as { input?: unknown }).input;
+    if (!Array.isArray(input)) continue;
+
+    for (const item of input) {
+      if (typeof item !== "object" || item === null) continue;
+      const record = item as {
+        type?: unknown;
+        name?: unknown;
+        call_id?: unknown;
+      };
+      if (
+        record.type === "custom_tool_call" &&
+        record.name === toolName &&
+        typeof record.call_id === "string"
+      ) {
+        callIds.add(record.call_id);
+      }
+      if (
+        record.type === "custom_tool_call_output" &&
+        typeof record.call_id === "string"
+      ) {
+        outputIds.add(record.call_id);
+      }
+    }
+  }
+
+  if (![...callIds].some((callId) => outputIds.has(callId))) {
+    throw new Error("codex_custom_tool_round_trip_missing");
+  }
+}
+
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
@@ -734,7 +994,9 @@ export async function runCodexCliOnlineSuite(
     throw new Error("batches must be a positive integer");
   }
 
-  const apiKey = (await readFile("CommandcodeAPIKey.txt", "utf8")).trim();
+  const apiKey = (
+    await readFile(join(REPOSITORY_ROOT, "CommandcodeAPIKey.txt"), "utf8")
+  ).trim();
   if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
   console.error("[codex-suite] apiKey loaded");
 
@@ -810,6 +1072,10 @@ export async function runCodexCliOnlineSuite(
   const origin = server.origin;
   // Codex's `base_url` includes the `/v1` prefix (matching config.toml).
   let codexBaseUrl = `${origin}/v1`;
+  const codexHome = await prepareIsolatedCodexHome(directory, codexBaseUrl);
+  const codexEnvironment = Object.freeze({
+    [CODEX_HOME_ENV_KEY]: codexHome,
+  });
   console.error(`[codex-suite] server listening at ${codexBaseUrl}`);
 
   // Sanity: the self-hosted endpoint must expose the resolved selector.
@@ -859,6 +1125,7 @@ export async function runCodexCliOnlineSuite(
             sessionDir,
             artifactDir,
             marker,
+            codexEnvironment,
             totalSignal,
           );
         } else if (scenario.special === "restart") {
@@ -869,6 +1136,7 @@ export async function runCodexCliOnlineSuite(
             sessionDir,
             artifactDir,
             marker,
+            codexEnvironment,
             totalSignal,
             stateFile,
             async () => {
@@ -896,6 +1164,7 @@ export async function runCodexCliOnlineSuite(
             sessionDir,
             artifactDir,
             marker,
+            codexEnvironment,
             totalSignal,
           );
         } else {
@@ -907,14 +1176,30 @@ export async function runCodexCliOnlineSuite(
             artifactDir,
             marker,
             requestSignal(totalSignal),
+            codexEnvironment,
           );
-          assertCodexResult(result, marker, summary);
+          assertCodexResult(
+            result,
+            scenario.expectedText,
+            summary,
+            scenario.requiredItemType,
+            scenario.minimumRequiredItems,
+            scenario.requireFailedCommand,
+          );
+        }
+        if (scenario.requiredCustomTool !== undefined) {
+          await assertCapturedCustomToolRoundTrip(
+            artifactDir,
+            marker,
+            scenario.requiredCustomTool,
+          );
         }
         summary.successful += 1;
         const elapsed = performance.now() - startedAt;
         summary.latenciesMs.push(elapsed);
         matrix.push({ id: scenario.id, status: "pass", ms: Math.round(elapsed) });
       } catch (error) {
+        summary.failed += 1;
         const category = failureCategory(error, totalSignal);
         if (category === "unknown_failure") {
           process.stderr.write(
@@ -989,6 +1274,7 @@ async function runMultiTurnSession(
   cwd: string,
   artifactDir: string,
   marker: string,
+  codexEnvironment: Record<string, string>,
   totalSignal: AbortSignal,
 ): Promise<void> {
   const turns = scenario.turns ?? 3;
@@ -1020,10 +1306,22 @@ async function runMultiTurnSession(
       artifactDir,
       `${marker}_t${turn}`,
       requestSignal(totalSignal),
-      {},
+      codexEnvironment,
       isFirst ? "new" : "resume",
     );
-    assertCodexResult(result, `${marker}_t${turn}`, perTurn);
+    const expectedText = isFirst
+      ? scenario.expectedText
+      : turn === 2
+        ? "MULTI_TURN_2_OK"
+        : scenario.id === "multi_turn_chain"
+          ? "MT_MEMORY_SEED"
+          : "MULTI_TURN_3_OK";
+    assertCodexResult(
+      result,
+      expectedText,
+      perTurn,
+      isFirst ? scenario.requiredItemType : undefined,
+    );
     if (turn === turns && scenario.id === "multi_turn_chain") {
       // Cross-turn memory: the final turn must reproduce the seed token,
       // proving the adapter replayed the FULL history (not just the latest
@@ -1048,6 +1346,7 @@ async function runRestartRecoveryScenario(
   cwd: string,
   artifactDir: string,
   marker: string,
+  codexEnvironment: Record<string, string>,
   totalSignal: AbortSignal,
   stateFile: string,
   restart: () => Promise<string>,
@@ -1060,8 +1359,9 @@ async function runRestartRecoveryScenario(
     artifactDir,
     `${marker}_t1`,
     requestSignal(totalSignal),
+    codexEnvironment,
   );
-  assertCodexResult(first, `${marker}_t1`, emptySummary());
+  assertCodexResult(first, scenario.expectedText, emptySummary());
 
   // Kill the server WITHOUT flushing state (simulates a crash).
   const newBaseUrl = await restart();
@@ -1075,10 +1375,14 @@ async function runRestartRecoveryScenario(
     artifactDir,
     `${marker}_t2`,
     requestSignal(totalSignal),
-    {},
+    codexEnvironment,
     "resume",
   );
-  assertCodexResult(second, `${marker}_t2`, emptySummary());
+  assertCodexResult(
+    second,
+    "RESTART_RECOVERY_CONTINUED_OK",
+    emptySummary(),
+  );
   await assertSnapshotHealthy(stateFile);
 }
 
@@ -1095,8 +1399,11 @@ async function runCancellationScenario(
   cwd: string,
   artifactDir: string,
   marker: string,
+  codexEnvironment: Record<string, string>,
   totalSignal: AbortSignal,
 ): Promise<void> {
+  const codexHome = codexEnvironment[CODEX_HOME_ENV_KEY];
+  if (codexHome === undefined) throw new Error("codex_home_missing");
   const outputFile = join(artifactDir, `${marker}_cancel.final.md`);
   const child = spawn(
     process.execPath,
@@ -1104,8 +1411,8 @@ async function runCancellationScenario(
       "-p",
       CODEX_PROFILE,
       "exec",
-      "-c",
-      `model_providers.${CODEX_PROFILE}.base_url=${baseUrl}`,
+      ...codexProviderOverrides(baseUrl),
+      "--dangerously-bypass-approvals-and-sandbox",
       "--json",
       "-o",
       outputFile,
@@ -1114,7 +1421,11 @@ async function runCancellationScenario(
     ]],
     {
       cwd,
-      env: { ...process.env, [CODEX_PROMPT_ENV_KEY]: token },
+      env: {
+        ...process.env,
+        [CODEX_PROMPT_ENV_KEY]: token,
+        ...codexEnvironment,
+      },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     },
@@ -1139,8 +1450,9 @@ async function runCancellationScenario(
     artifactDir,
     `${marker}_followup`,
     requestSignal(totalSignal),
+    codexEnvironment,
   );
-  assertCodexResult(followUp, `${marker}_followup`, emptySummary());
+  assertCodexResult(followUp, "CANCEL_FOLLOWUP_OK", emptySummary());
 }
 
 // Direct invocation: `tsx test/online/run-codex-cli.ts [batches]`

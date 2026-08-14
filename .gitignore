@@ -9,3 +9,5 @@ CommandcodeAPIKey.txt
 temp/
 .task/
 reference/
+onlinetest/*/.runs/
+onlinetest/claude/.claude/settings.json

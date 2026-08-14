@@ -39,7 +39,8 @@
     "test": "npm run test:certification && vitest run",
     "test:online": "tsx test/online/run-commandcode.ts",
     "test:online-responses": "tsx test/online/run-openai-responses.ts",
-    "test:online-codex": "tsx test/online/run-codex-cli.ts",
+    "test:online-codex": "npm --prefix onlinetest/codex_cli test --",
+    "test:online-claude": "npm --prefix onlinetest/claude test --",
     "test:certification": "node --test test/certification/*.test.mjs",
     "test:unit": "vitest run test/unit --passWithNoTests",
     "test:integration": "vitest run test/integration"

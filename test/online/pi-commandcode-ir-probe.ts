@@ -10,11 +10,13 @@ import {
   type ModelsSimpleStreamOptions,
   type ToolCall,
 } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { createNodeProjectSnapshot } from "../../src/providers/commandcode-private/project.js";
 import { createCommandCodePrivateProvider } from "../../src/providers/commandcode-private/provider.js";
 import { COMMANDCODE_MODELS } from "../../src/providers/commandcode-private/models.js";
+import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
 
 /**
  * Direct Pi AI IR <-> CommandCode private provider online probe.
@@ -44,10 +46,16 @@ interface CaseResult {
 }
 
 const results: CaseResult[] = [];
+const requestedCases = new Set(
+  process.argv.slice(2).map((value) => value.trim()).filter((value) => value.length > 0),
+);
+const caseFilterActive = requestedCases.size > 0;
 let activeCaseSignal: AbortSignal | undefined;
 let suiteStartedAt = 0;
 
 async function run(name: string, fn: () => Promise<void>): Promise<void> {
+  if (caseFilterActive && !requestedCases.has(name)) return;
+  requestedCases.delete(name);
   if (suiteStartedAt === 0) suiteStartedAt = Date.now();
   if (Date.now() - suiteStartedAt > SUITE_TIMEOUT_MS) {
     results.push({ name, ok: false, detail: "suite wall-clock timeout" });
@@ -447,18 +455,35 @@ async function main(): Promise<void> {
     if (!textOf(message).includes(marker)) fail(`marker missing`);
   });
 
-  await run("historical thinking with same-target signature rejected", async () => {
-    await expectPiError(
-      runtime.models.streamSimple(
-        runtime.model,
+  await run("historical same-target thinking signature is dropped", async () => {
+    const captured = captureFetch();
+    const models2 = createModels({ credentials });
+    models2.setProvider(
+      createCommandCodePrivateProvider({
+        models: COMMANDCODE_MODELS,
+        fetch: captured.fetch,
+        now: Date.now,
+        projectSnapshot: createNodeProjectSnapshot(),
+      }),
+    );
+    const model2 = models2
+      .getModels()
+      .find(
+        (entry) =>
+          entry.provider === "commandcode-private" && entry.id === MODEL_ID,
+      );
+    if (model2 === undefined) fail("model2 not registered");
+    await collect(
+      models2.streamSimple(
+        model2,
         {
           messages: [
             { role: "user", content: "Think.", timestamp: 1 },
             {
               role: "assistant",
-              api: runtime.model.api,
-              provider: runtime.model.provider,
-              model: runtime.model.id,
+              api: model2.api,
+              provider: model2.provider,
+              model: model2.id,
               content: [
                 {
                   type: "thinking",
@@ -475,8 +500,14 @@ async function main(): Promise<void> {
         },
         runtime.options({ maxTokens: 64 }),
       ),
-      /continuity|signature|cannot preserve/u,
     );
+    const wire = JSON.stringify(captured.bodies[0]);
+    if (!wire.includes('"type":"reasoning"')) {
+      fail("same-target reasoning content was dropped");
+    }
+    if (wire.includes("opaque-signature")) {
+      fail("same-target signature leaked into CommandCode wire");
+    }
   });
 
   await run("tool call and result round trip", async () => {
@@ -707,7 +738,7 @@ async function main(): Promise<void> {
   });
 
   await run("orphan tool result rejected", async () => {
-    await expectPiError(
+    await expectPiConversionFailure(
       runtime.models.streamSimple(
         runtime.model,
         {
@@ -724,14 +755,30 @@ async function main(): Promise<void> {
         },
         runtime.options({ maxTokens: 64 }),
       ),
-      /orphan|duplicate/u,
     );
   });
 
-  await run("tool result with image content rejected", async () => {
-    await expectPiError(
-      runtime.models.streamSimple(
-        runtime.model,
+  await run("tool result image content is filtered", async () => {
+    const captured = captureFetch();
+    const models2 = createModels({ credentials });
+    models2.setProvider(
+      createCommandCodePrivateProvider({
+        models: COMMANDCODE_MODELS,
+        fetch: captured.fetch,
+        now: Date.now,
+        projectSnapshot: createNodeProjectSnapshot(),
+      }),
+    );
+    const model2 = models2
+      .getModels()
+      .find(
+        (entry) =>
+          entry.provider === "commandcode-private" && entry.id === MODEL_ID,
+      );
+    if (model2 === undefined) fail("model2 not registered");
+    await collect(
+      models2.streamSimple(
+        model2,
         {
           messages: [
             { role: "user", content: "Use tool.", timestamp: 1 },
@@ -761,12 +808,18 @@ async function main(): Promise<void> {
         },
         runtime.options({ maxTokens: 64 }),
       ),
-      /image/u,
     );
+    const wire = JSON.stringify(captured.bodies[0]);
+    if (!wire.includes('"toolCallId":"img_1"')) {
+      fail("image-only ToolResult correlation was lost");
+    }
+    if (!wire.includes('"value":""') || wire.includes('"type":"image"')) {
+      fail("image-only ToolResult did not degrade to empty text");
+    }
   });
 
   await run("malformed toolCall arguments rejected", async () => {
-    await expectPiError(
+    await expectPiConversionFailure(
       runtime.models.streamSimple(
         runtime.model,
         {
@@ -794,7 +847,6 @@ async function main(): Promise<void> {
         },
         runtime.options({ maxTokens: 64 }),
       ),
-      /arguments|object/u,
     );
   });
 
@@ -1073,6 +1125,14 @@ async function main(): Promise<void> {
 
   await run("caller cancellation aborts cleanly", async () => {
     const controller = new AbortController();
+    let markDispatched: (() => void) | undefined;
+    const dispatched = new Promise<void>((resolvePromise) => {
+      markDispatched = resolvePromise;
+    });
+    const observedFetch: FetchFunction = async (input, init) => {
+      markDispatched?.();
+      return globalThis.fetch(input, init);
+    };
     const stream = runtime.models.streamSimple(
       runtime.model,
       {
@@ -1088,9 +1148,10 @@ async function main(): Promise<void> {
         sessionId: `ir-probe-cancel-${Date.now()}`,
         signal: controller.signal,
         maxTokens: 4096,
+        fetch: observedFetch,
       },
     );
-    const outcome = await (async () => {
+    const outcomePromise = (async () => {
       for await (const event of stream) {
         if (event.type === "done") {
           return { status: "done" as const };
@@ -1101,10 +1162,70 @@ async function main(): Promise<void> {
       }
       return { status: "eof" as const };
     })();
-    controller.abort(new Error("ir probe cancellation"));
-    if (outcome.status === "error" && outcome.reason !== "aborted") {
-      fail(`error terminal reason is not aborted: ${outcome.reason}`);
+    let dispatchTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        dispatched,
+        new Promise<never>((_resolve, reject) => {
+          dispatchTimer = setTimeout(
+            () => reject(new Error("cancellation dispatch timeout")),
+            30_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (dispatchTimer !== undefined) clearTimeout(dispatchTimer);
     }
+    controller.abort(new Error("ir probe cancellation"));
+    const outcome = await outcomePromise;
+    if (outcome.status !== "error" || outcome.reason !== "aborted") {
+      fail(`expected aborted terminal, got: ${JSON.stringify(outcome)}`);
+    }
+  });
+
+  await run("real HTTP authentication failure retains neutral facts", async () => {
+    const stream = runtime.models.streamSimple(
+      runtime.model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "This request must fail authentication before generation.",
+            timestamp: 1,
+          },
+        ],
+      },
+      runtime.options({
+        apiKey: `invalid-online-probe-${randomUUID()}`,
+        maxRetries: 0,
+        maxTokens: 16,
+      }),
+    );
+    for await (const event of stream) {
+      if (event.type === "done") {
+        fail("invalid upstream credential unexpectedly succeeded");
+      }
+      if (event.type !== "error") continue;
+      const fact = findUpstreamFailureFact(event.error.diagnostics);
+      if (
+        fact?.kind !== "http" ||
+        (fact.status !== 401 && fact.status !== 403) ||
+        fact.retryable !== false ||
+        fact.attemptCount !== 1
+      ) {
+        fail(`incomplete neutral HTTP fact: ${JSON.stringify(fact)}`);
+      }
+      if (
+        fact.snapshot === undefined ||
+        fact.snapshot.capturedBytes < 1 ||
+        typeof fact.snapshot.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(fact.snapshot.sha256)
+      ) {
+        fail(`missing bounded HTTP snapshot: ${JSON.stringify(fact.snapshot)}`);
+      }
+      return;
+    }
+    fail("invalid upstream credential ended without an error terminal");
   });
 
   // ---------- E. usage / identity ----------
@@ -1134,6 +1255,9 @@ async function main(): Promise<void> {
   });
 
   const failed = results.filter((result) => !result.ok);
+  if (caseFilterActive && requestedCases.size > 0) {
+    fail(`Unknown Pi IR probe case(s): ${[...requestedCases].join(", ")}`);
+  }
   console.log(
     `\nPi IR <-> CommandCode probe: ${results.length - failed.length}/${results.length} passed`,
   );
@@ -1156,6 +1280,32 @@ function zeroUsage(): AssistantMessage["usage"] {
   };
 }
 
+async function expectPiConversionFailure(
+  stream: AssistantMessageEventStream,
+): Promise<void> {
+  for await (const event of stream) {
+    if (event.type === "done") {
+      fail(`expected error terminal, got done: ${textOf(event.message)}`);
+    }
+    if (event.type !== "error") continue;
+    if (
+      event.reason !== "error" ||
+      event.error.errorMessage !== "CommandCode request conversion failed"
+    ) {
+      fail(
+        `unexpected Pi conversion terminal: reason=${event.reason} ` +
+          `message=${event.error.errorMessage ?? ""}`,
+      );
+    }
+    const fact = findUpstreamFailureFact(event.error.diagnostics);
+    if (fact?.kind !== "conversion" || fact.retryable !== false) {
+      fail(`missing neutral conversion fact: ${JSON.stringify(fact)}`);
+    }
+    return;
+  }
+  fail("stream ended without a conversion error terminal");
+}
+
 async function expectPiError(
   stream: AssistantMessageEventStream,
   pattern: RegExp,
@@ -1164,7 +1314,10 @@ async function expectPiError(
     const message = await collect(stream);
     fail(`expected error terminal, got done: ${textOf(message)}`);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("expected error terminal")) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("expected error terminal")
+    ) {
       throw error;
     }
     if (error instanceof Error && !pattern.test(error.message)) {
