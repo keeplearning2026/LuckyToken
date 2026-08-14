@@ -37,6 +37,7 @@ function result(
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     },
+    notices: [],
     ...overrides,
   };
 }
@@ -326,7 +327,12 @@ describe("committed CommandCode to Pi semantics", () => {
           {
             content: [
               { type: "text", id: "discarded", text: "partial" },
-              { type: "tool_use", id: "call", toolName: "tool", input },
+              {
+                type: "tool_use",
+                id: "call",
+                toolName: "tool",
+                input: input as never,
+              },
             ],
           },
         ),
@@ -386,7 +392,12 @@ describe("committed CommandCode to Pi semantics", () => {
           { inputTokens: 4, outputTokens: 2 },
           {
             content: [
-              { type: "tool_use", id: "call", toolName: "tool", input },
+              {
+                type: "tool_use",
+                id: "call",
+                toolName: "tool",
+                input: input as never,
+              },
             ],
             finish: { type: "finish", finishReason: "tool-calls" },
           },

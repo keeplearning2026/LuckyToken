@@ -8,13 +8,17 @@ import {
   CommandCodeStreamError,
   CommandCodeTransportError,
 } from "../../src/providers/commandcode-private/assembler.js";
+import { CommandCodeNeutralFailureError } from "../../src/providers/commandcode-private/failure.js";
 
 function line(event: Record<string, unknown>): string {
   return JSON.stringify(event);
 }
 
-function assemble(events: Array<Record<string, unknown>>) {
-  const assembler = new CommandCodeContentAssembler();
+function assemble(
+  events: Array<Record<string, unknown>>,
+  policy?: { pauseTurn: "stop" | "error"; unknownEvent: "error" | "ignore" },
+) {
+  const assembler = new CommandCodeContentAssembler(policy);
   for (const event of events) assembler.consumeRawLine(line(event));
   return assembler.finalizeAfterTransportEnd();
 }
@@ -67,11 +71,21 @@ describe("CommandCode atomic content assembler", () => {
       { type: "tool-input-start", id: "tool", toolName: "start-name" },
       { type: "tool-input-delta", id: "tool", delta: "{\"preview\":true}" },
       { type: "tool-input-end", id: "tool" },
-      { type: "tool-call", toolCallId: "tool", toolName: "final", args: 7 },
+      {
+        type: "tool-call",
+        toolCallId: "tool",
+        toolName: "final",
+        args: { exact: 7 },
+      },
       { type: "finish", finishReason: "tool-calls" },
     ]);
     expect(fromArgs.content).toEqual([
-      { type: "tool_use", id: "tool", toolName: "final", input: 7 },
+      {
+        type: "tool_use",
+        id: "tool",
+        toolName: "final",
+        input: { exact: 7 },
+      },
     ]);
 
     const defaulted = assemble([
@@ -88,18 +102,16 @@ describe("CommandCode atomic content assembler", () => {
       input: {},
     });
 
-    const explicitNull = assemble([
-      { type: "tool-input-start", id: "tool", toolName: "start" },
-      { type: "tool-input-end", id: "tool" },
-      { type: "tool-call", toolCallId: "tool", toolName: "final", input: null },
-      { type: "finish", finishReason: "tool-calls" },
-    ]);
-    expect(explicitNull.content[0]).toEqual({
-      type: "tool_use",
-      id: "tool",
-      toolName: "final",
-      input: null,
-    });
+    for (const input of [null, 7, "value", [], true]) {
+      expect(() =>
+        assemble([
+          { type: "tool-input-start", id: "tool", toolName: "start" },
+          { type: "tool-input-end", id: "tool" },
+          { type: "tool-call", toolCallId: "tool", toolName: "final", input },
+          { type: "finish", finishReason: "tool-calls" },
+        ]),
+      ).toThrow(CommandCodeProtocolError);
+    }
   });
 
   it("does not preserve server-execution and dynamic-tool facts in the committed response", () => {
@@ -195,22 +207,71 @@ describe("CommandCode atomic content assembler", () => {
     }).toThrow(CommandCodeProtocolError);
   });
 
-  it("distinguishes known ignored events from unknown and malformed events", () => {
-    expect(
-      assemble([
-        { type: "start", arbitrary: true },
-        { type: "start-step" },
-        { type: "provider-metadata", provider: "x" },
-        { type: "finish-step", usage: { ignored: true } },
-        { type: "tool-result", toolCallId: "ignored" },
-        { type: "finish", finishReason: "stop" },
-      ]).content,
-    ).toEqual([]);
+  it("validates known non-content events and commits last finish-step identity", () => {
+    const result = assemble([
+      { type: "start", arbitrary: true },
+      { type: "start-step", request: {} },
+      { type: "provider-metadata", providerMetadata: { provider: "x" } },
+      {
+        type: "finish-step",
+        usage: { ignored: true },
+        response: { id: "response-1", modelId: "model-1" },
+      },
+      {
+        type: "finish-step",
+        usage: { mustNotWin: true },
+        response: { id: "response-2", modelId: "model-2" },
+      },
+      { type: "tool-result", toolCallId: "ignored", output: {} },
+      {
+        type: "finish",
+        finishReason: "stop",
+        totalUsage: { inputTokens: 2, outputTokens: 3 },
+      },
+    ]);
+
+    expect(result.content).toEqual([]);
+    expect(result.responseIdentity).toEqual({
+      responseId: "response-2",
+      responseModel: "model-2",
+    });
+    expect(result.rawUsage).toEqual({ inputTokens: 2, outputTokens: 3 });
+  });
+
+  it("applies unknown-event policy without allowing an ignored event to finish", () => {
+    expect(() => assemble([{ type: "future-event" }])).toThrow(
+      CommandCodeProtocolError,
+    );
+
+    const ignored = assemble(
+      [{ type: "future-event", bounded: true }, { type: "finish" }],
+      { pauseTurn: "stop", unknownEvent: "ignore" },
+    );
+    expect(ignored.notices).toEqual([
+      {
+        adapter: "commandcode-private",
+        direction: "response",
+        code: "unknown_event_ignored",
+        action: "ignore",
+      },
+    ]);
+
+    const noFinish = new CommandCodeContentAssembler({
+      pauseTurn: "stop",
+      unknownEvent: "ignore",
+    });
+    noFinish.consumeRawLine(line({ type: "future-event" }));
+    expect(() => noFinish.finalizeAfterTransportEnd()).toThrow(
+      CommandCodeTransportError,
+    );
 
     for (const raw of [
-      line({ type: "future-event" }),
       line({ type: "text-start" }),
       line({ type: "finish", totalUsage: [] }),
+      line({ type: "finish-step", response: {} }),
+      line({ type: "start-step", request: [] }),
+      line({ type: "provider-metadata", providerMetadata: [] }),
+      line({ type: "tool-result", toolCallId: "" }),
       "data: {}",
       "[DONE]",
       "42",
@@ -248,7 +309,7 @@ describe("CommandCode atomic content assembler", () => {
     });
   });
 
-  it("classifies EOF, open blocks, pause, abort, and stream errors", () => {
+  it("classifies EOF, open blocks, pause policies, abort, and stream errors", () => {
     const truncated = new CommandCodeContentAssembler();
     truncated.consumeRawLine(line({ type: "text-start", id: "x" }));
     expect(() => truncated.finalizeAfterTransportEnd()).toThrow(
@@ -268,14 +329,59 @@ describe("CommandCode atomic content assembler", () => {
       );
     }
 
+    const paused = assemble([
+      { type: "text-start", id: "pause" },
+      { type: "text-delta", id: "pause", text: "retained" },
+      { type: "text-end", id: "pause" },
+      {
+        type: "finish-step",
+        response: { id: "pause-id", modelId: "pause-model" },
+      },
+      {
+        type: "finish",
+        finishReason: "stop",
+        rawFinishReason: "pause_turn",
+        totalUsage: { inputTokens: 1, outputTokens: 2 },
+      },
+    ]);
+    expect(paused.content).toEqual([
+      { type: "text", id: "pause", text: "retained" },
+    ]);
+    expect(paused.responseIdentity).toEqual({
+      responseId: "pause-id",
+      responseModel: "pause-model",
+    });
+    expect(paused.notices).toContainEqual({
+      adapter: "commandcode-private",
+      direction: "response",
+      code: "pause_turn_degraded",
+      action: "degrade",
+    });
+
     expect(() =>
-      assemble([{ type: "finish", rawFinishReason: "pause_turn" }]),
+      assemble(
+        [{ type: "finish", rawFinishReason: "pause_turn" }],
+        { pauseTurn: "error", unknownEvent: "error" },
+      ),
     ).toThrow(CommandCodePauseTurnError);
 
+    expect(
+      assemble([{ type: "finish", finishReason: "pause_turn" }]).notices,
+    ).toEqual([]);
+
     const aborted = new CommandCodeContentAssembler();
-    expect(() => aborted.consumeRawLine(line({ type: "abort" }))).toThrow(
-      CommandCodeAbortError,
-    );
+    try {
+      aborted.consumeRawLine(line({ type: "abort" }));
+      throw new Error("expected abort failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CommandCodeAbortError);
+      expect(error).toBeInstanceOf(CommandCodeNeutralFailureError);
+      expect((error as CommandCodeAbortError).failure).toMatchObject({
+        kind: "upstream_stream",
+        providerType: "abort",
+        retryable: false,
+      });
+    }
 
     for (const retryable of [false, true]) {
       const failed = new CommandCodeContentAssembler();
@@ -292,5 +398,148 @@ describe("CommandCode atomic content assembler", () => {
         expect((error as CommandCodeStreamError).retryable).toBe(retryable);
       }
     }
+
+    for (const statusCode of [429, 200, 299, 600, 429.5]) {
+      const failed = new CommandCodeContentAssembler();
+      try {
+        failed.consumeRawLine(
+          line({
+            type: "error",
+            error: {
+              message: "failed\nwithout controls",
+              statusCode,
+              type: "rate_limit",
+              code: "quota_exhausted",
+              isRetryable: true,
+              body: { mustNotCross: true },
+            },
+            isRetryable: true,
+          }),
+        );
+        throw new Error("expected stream error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(CommandCodeStreamError);
+        expect((error as CommandCodeStreamError).failure).toMatchObject({
+          kind: "upstream_stream",
+          ...(statusCode === 429 ? { status: 429 } : {}),
+          providerType: "rate_limit",
+          providerCode: "quota_exhausted",
+          message: "failed without controls",
+          retryable: true,
+        });
+        expect((error as CommandCodeStreamError).message).toBe(
+          (error as CommandCodeStreamError).failure.message,
+        );
+        if (statusCode !== 429) {
+          expect((error as CommandCodeStreamError).failure.status).toBeUndefined();
+        }
+        expect(JSON.stringify((error as CommandCodeStreamError).failure)).not
+          .toContain("mustNotCross");
+      }
+    }
+  });
+
+  it("deep-freezes committed results without sharing response state", () => {
+    const first = assemble([
+      { type: "tool-input-start", id: "tool", toolName: "preview" },
+      { type: "tool-input-end", id: "tool" },
+      {
+        type: "tool-call",
+        toolCallId: "tool",
+        toolName: "final",
+        input: { nested: { exact: true } },
+      },
+      {
+        type: "finish-step",
+        response: { id: "first", modelId: "first-model" },
+      },
+      {
+        type: "finish",
+        totalUsage: { inputTokenDetails: { cacheReadTokens: 1 } },
+      },
+    ]);
+    const second = assemble([
+      {
+        type: "finish-step",
+        response: { id: "second", modelId: "second-model" },
+      },
+      { type: "finish" },
+    ]);
+
+    expect(first.responseIdentity?.responseId).toBe("first");
+    expect(second.responseIdentity?.responseId).toBe("second");
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.content)).toBe(true);
+    expect(Object.isFrozen(first.content[0])).toBe(true);
+    expect(
+      Object.isFrozen(
+        (first.content[0] as unknown as { input: { nested: object } }).input
+          .nested,
+      ),
+    ).toBe(true);
+    expect(Object.isFrozen(first.finish)).toBe(true);
+    expect(Object.isFrozen(first.rawUsage)).toBe(true);
+    expect(Object.isFrozen(first.usage)).toBe(true);
+    expect(Object.isFrozen(first.responseIdentity)).toBe(true);
+    expect(Object.isFrozen(first.notices)).toBe(true);
+  });
+
+  it("isolates interleaved assemblers and clears every staged fact on rollback", () => {
+    const first = new CommandCodeContentAssembler({
+      pauseTurn: "stop",
+      unknownEvent: "ignore",
+    });
+    const second = new CommandCodeContentAssembler();
+    first.consumeRawLine(line({ type: "text-start", id: "first" }));
+    second.consumeRawLine(line({ type: "text-start", id: "second" }));
+    first.consumeRawLine(
+      line({ type: "text-delta", id: "first", text: "A" }),
+    );
+    second.consumeRawLine(
+      line({ type: "text-delta", id: "second", text: "B" }),
+    );
+    first.consumeRawLine(line({ type: "text-end", id: "first" }));
+    second.consumeRawLine(line({ type: "text-end", id: "second" }));
+    first.consumeRawLine(line({ type: "future-event" }));
+    first.consumeRawLine(
+      line({
+        type: "finish-step",
+        response: { id: "first-id", modelId: "first-model" },
+      }),
+    );
+    second.consumeRawLine(
+      line({
+        type: "finish-step",
+        response: { id: "second-id", modelId: "second-model" },
+      }),
+    );
+    first.consumeRawLine(line({ type: "finish" }));
+    second.consumeRawLine(line({ type: "finish" }));
+
+    expect(first.finalizeAfterTransportEnd()).toMatchObject({
+      content: [{ text: "A" }],
+      responseIdentity: { responseId: "first-id" },
+      notices: [{ code: "unknown_event_ignored" }],
+    });
+    expect(second.finalizeAfterTransportEnd()).toMatchObject({
+      content: [{ text: "B" }],
+      responseIdentity: { responseId: "second-id" },
+      notices: [],
+    });
+
+    const rolledBack = new CommandCodeContentAssembler({
+      pauseTurn: "stop",
+      unknownEvent: "ignore",
+    });
+    rolledBack.consumeRawLine(line({ type: "text-start", id: "discarded" }));
+    rolledBack.consumeRawLine(line({ type: "future-event" }));
+    expect(() =>
+      rolledBack.consumeRawLine(line({ type: "text-delta", id: "discarded" })),
+    ).toThrow(CommandCodeProtocolError);
+    rolledBack.consumeRawLine(line({ type: "finish" }));
+    expect(rolledBack.finalizeAfterTransportEnd()).toMatchObject({
+      content: [],
+      notices: [],
+    });
   });
 });

@@ -11,9 +11,10 @@ export class CommandCodeNeutralFailureError extends Error {
     input: UpstreamFailureFactInput,
     options?: ErrorOptions,
   ) {
-    super(input.message, options);
+    const failure = createUpstreamFailureFact(input);
+    super(failure.message, options);
     this.name = "CommandCodeNeutralFailureError";
-    this.failure = createUpstreamFailureFact(input);
+    this.failure = failure;
   }
 }
 

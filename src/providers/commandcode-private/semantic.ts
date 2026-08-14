@@ -205,7 +205,7 @@ function addDiagnostics(
   result: CommandCodeResult,
   notices: readonly ConversionNotice[],
 ): void {
-  const diagnostics = notices.map((notice) =>
+  const diagnostics = [...notices, ...result.notices].map((notice) =>
     createConversionNoticeDiagnostic(notice, message.timestamp),
   );
   if (result.systemPromptTokens !== undefined) {

@@ -380,7 +380,7 @@ flowchart LR
 | CommandCode request JSON | CommandCode Provider | upstream transport | transport 不再需要 body 后 |
 | partial JSONL/tool state | CommandCode assembler | Provider stream | content completion、terminal、abort 或 error 后 |
 | Anthropic 未转换字段（`top_p`、`thinking`、`context_management` 等） | Anthropic handler | 读取所需字段时 | 不进入任何 Pi 状态；在 validation 读取阶段即死亡 |
-| CommandCode no-op 事件（`start`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | assembler 接受但忽略 | 不进入 committed content/finish state |
+| CommandCode non-content 事件（`start`、`start-step`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | validate-then-drop；仅 finish-step last id/modelId 成为 response identity | committed result 建立前，其余 metadata/header/body 销毁 |
 | CommandCode `providerExecuted`/`dynamic` 元数据 | CommandCode assembler | event 校验阶段 | committed response 建立前；不保留 |
 
 这张表是判断“信息是否到处飞”的主要依据：一个模块可以透明传递 Pi contract
@@ -1827,22 +1827,28 @@ finish/rawUsage      terminal candidate
   `text-start/delta/end`、`reasoning-start/delta/end`、
   `tool-input-start/delta/end + tool-call`；且只有 `*-start` reserve ordered slot；
   delta/end 不能重排；
-- 其他事件按协议分类：`start`、`start-step`、`finish-step`、`provider-metadata`、
-  response-side `tool-result` 是 **accepted no-op**（不进入 content、不改变状态）；
-  `finish` 只决定终止 reason 与 final usage；`abort`/`error` 立即失败；
+- 其他事件按协议分类：`start`、`start-step`、`provider-metadata`、response-side
+  `tool-result` validate-then-drop；`finish-step` 额外 stage 最后一个合法 response
+  id/modelId pair，但其 usage 不覆盖 final finish；`finish` 决定终止 reason 与 final
+  usage；`abort`/`error` 立即产生 neutral failure；
 - `providerExecuted`/`dynamic` 等 server-owned 元数据**不读取、不校验、不保留**
   （协议文档 §2.8）：`tool-input-start`/`tool-call` 只消费 `id`/`toolName`/
   `toolCallId`/`input` 等转换所需字段，这些额外字段的生命周期在 event 消费时即
   结束，不进入 committed response；
 - text/reasoning 必须 start → delta* → end，结束时不能是空内容；
 - tool 必须 `tool-input-start → delta* → input-end → authoritative tool-call`；
-- partial tool preview 不是 completed tool input；只有 final `tool-call` materialize；
+- partial tool preview 不是 completed tool input；只有 final `tool-call` 的 lossless JSON
+  object materialize；primitive/null/array input fail closed；
 - known malformed lifecycle/field/non-JSON line 是 non-retryable protocol error；
-- unknown future event 不猜测语义，rollback 后 fail closed；
-- `abort`、stream error、pause_turn 都无成功 result；
+- unknown future event 不猜测语义，使用 Provider `error|ignore` policy（default error）；
+  ignore 只留下 bounded response notice，仍不能代替 finish；
+- `abort`、stream error 无成功 result；exact raw `pause_turn` 在 closed slots/EOF 后使用
+  `stop|error` policy（default stop），stop 保留 committed facts并添加 degrade notice；
 - final `finish` 覆盖 earlier finish/usage，但不能代替 physical EOF；
 - EOF 无 finish 是 retryable transport error；EOF 时还有 open slot 是 protocol error；
-- 任意 failure 都清空 slots/maps/terminal state，避免 partial state 泄漏。
+- 任意 failure 都清空 slots/maps/terminal/identity/notices，避免 partial state 泄漏；
+- successful `CommandCodeResult` 的 content/tool input/finish/raw usage/identity/notices
+  均 deep-frozen，交错或并发 response 不共享状态。
 
 Assembler 输出仍是 Provider-local `CommandCodeResult`，生命周期只到 semantic
 conversion；它不是 Pi contract，也不离开 Provider 目录。
@@ -1879,7 +1885,8 @@ Conversion 只在 assembler commit 后发生：
   用 captured pricing model 算 cost；
 - finish 按文档 §6.4 只映射两个精确分支：`tool-calls → toolUse`、
   `length → length`；**其他/缺失 finishReason → `stop`**（不维护 whitelist、
-  不报错、不读 rawFinishReason 分类；pause_turn 已在 assembler commit 前失败）。
+  不报错、不读 rawFinishReason 分类；pause-stop 走同一 converter，raw reason 只作为
+  non-model-visible fact 保留）。
 
 Replay 在完整 `AssistantMessage` 已知后生成 Pi start/content/done events。任何 error 或
 abort 只发 Pi error terminal；如果 signal 在 replay 前 abort，已完成内容也被丢弃并

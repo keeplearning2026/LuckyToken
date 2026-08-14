@@ -9,6 +9,7 @@ import {
   CommandCodeProtocolError,
   isRetryableCommandCodeResponseError,
   type CommandCodeResult,
+  type CommandCodeResponsePolicy,
 } from "./assembler.js";
 import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 
@@ -45,6 +46,7 @@ export interface CommandCodeAttemptDependencies {
   now(): number;
   traceContext?: CommandCodeTraceContextCapability;
   sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+  responsePolicy?: CommandCodeResponsePolicy;
 }
 
 class RetryableAttemptError extends Error {
@@ -256,6 +258,7 @@ function consumeDecodedLines(
 export async function consumeCommandCodeResponse(
   response: Response,
   signal: AbortSignal,
+  responsePolicy?: CommandCodeResponsePolicy,
 ): Promise<CommandCodeResult> {
   if (response.body === null) {
     throw new RetryableAttemptError(
@@ -265,7 +268,7 @@ export async function consumeCommandCodeResponse(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const assembler = new CommandCodeContentAssembler();
+  const assembler = new CommandCodeContentAssembler(responsePolicy);
   let buffer = "";
   try {
     while (true) {
@@ -400,6 +403,7 @@ async function runAttempt(
     const result = await consumeCommandCodeResponse(
       receivedResponse,
       scope.signal,
+      dependencies.responsePolicy,
     );
     bodyConsumed = true;
     scope.signal.throwIfAborted();

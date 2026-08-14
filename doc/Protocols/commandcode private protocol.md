@@ -25,7 +25,7 @@ CommandCode bare JSON Lines response
         ↓
 Atomic ID-indexed Ordered Block Assembler
         ↓
-content[] A + finish + usage + rawEvents
+immutable content[] A + finish + final usage + response identity/notices
         ├── no conversion → return content[] A，结束
         │
         └── conversion required
@@ -1293,8 +1293,8 @@ Rules：
 - `tool-input-end` 只结束 input delta lifecycle，不 materialize tool block。
 - final `tool-call.toolCallId` 应与前述 `id` 相同。
 - final `tool-call.toolName` 是 authoritative value，无条件覆盖 matching `tool-input-start.toolName`。
-- `tool-call.input ?? tool-call.args ?? {}` 是 authoritative final input。
-- Response consumer 按 Source 行为保留该 final input，不验证它是否为 object；因此 response-side `ContentBlockA.input` 保持 `unknown`。这不会放宽第 5.2 节的 request-side object contract。
+- authoritative final input 按 own-property precedence 选择：存在 `input` 就使用 `input`；否则存在 `args` 就使用 `args`；两者都缺失才使用 `{}`。已存在但非法的 `input` 不得回退到 `args` 修复。
+- Response consumer 必须 clone lossless JSON object。Explicit null、array、string、number、boolean 或任何非 lossless JSON tree 都是 malformed known event；preview delta 永不参与 materialization。
 
 ### Metadata and terminal events
 
@@ -1358,12 +1358,12 @@ Other events：
 
 | Event | Semantic action |
 |---|---|
-| `start` | raw preserve，semantic ignore |
-| `start-step` | raw preserve，semantic ignore |
-| `provider-metadata` | raw preserve，semantic ignore |
-| `finish-step` | raw preserve，semantic ignore；不是 final usage source |
-| response-side `tool-result` | raw preserve，推荐 content ignore |
-| unknown event | raw preserve 后抛 non-retryable protocol error；不得推测 semantics |
+| `start` | validate known shape，semantic drop |
+| `start-step` | validate request/warnings shape，semantic drop |
+| `provider-metadata` | validate object，semantic drop |
+| `finish-step` | validate response；stage last non-empty response id/modelId；usage 不是 final usage source |
+| response-side `tool-result` | validate known shape，semantic drop |
+| unknown event | Provider policy `error|ignore`（default `error`）；ignore 只记录 bounded notice，不能代替 finish |
 
 Final usage 只取自最后一个 `finish` event。若最后一个 finish 缺少 `totalUsage`，raw usage 为 missing、normalized usage 为四个零；不能沿用更早 finish 的 usage。`finish-step.usage` 可以有更多 provider metadata，但不能取代 final `finish.totalUsage`。
 
@@ -1378,12 +1378,12 @@ Final usage 只取自最后一个 `finish` event。若最后一个 finish 缺少
 每个 HTTP response 创建独立 staging area：
 
 ~~~text
-rawEvents[]
-
 textById       Map<string, TextSlot>
 reasoningById  Map<string, ReasoningSlot>
 toolById       Map<string, ToolSlot>
 slots[]        start-event arrival order
+responseIdentity?  last valid finish-step id/modelId pair
+responseNotices[]  bounded unknown/pause policy facts
 ~~~
 
 必须满足：
@@ -1396,13 +1396,13 @@ slots[]        start-event arrival order
 6. `text-end` / `reasoning-end` 关闭的 block 若 trim 后为空，抛 `EMPTY_CONTENT_BLOCK` protocol error；不能 omission 或伪造内容。
 7. response-side `tool-result` 不进入 content。
 8. 每个 `finish` 完整覆盖之前的 finish/usage/systemPromptTokens；仍需等 physical EOF。
-9. `abort` 立即 rollback，然后抛 typed abort error 并取消 body；不返回 result。
-10. `error` 立即失败，不返回 result。**另外未知type都error,这样简洁一些。**
-11. malformed/unknown event 保存在 `rawEvents` 后抛 non-retryable protocol error，不得修改 semantic state。
+9. `abort` 立即 rollback，构造 neutral upstream-stream abort failure 并取消 body；不返回 result。
+10. `error` 立即构造 neutral upstream-stream failure，不返回 result。
+11. malformed known event 抛 neutral non-retryable protocol failure；unknown event 使用 `error|ignore` policy，ignore 不保留原 event body。
 12. EOF 时若没有 `finish`（也没有已经触发异常的 `abort`），先 rollback 并抛 `CommandCodeTransportError`；即使存在 unfinished block 也以该 transport error 为准。
 13. EOF 时已有 `finish` 但仍存在 unfinished block 是 protocol error；不能猜测 completion、自动 close 或 materialize incomplete tool。
-14. EOF 时所有 block 已关闭，但 final finish 的 effective raw reason 为 `pause_turn`，则 rollback 并抛 typed pause-turn error。
-15. 只有 closed blocks + final non-pause `finish` + physical EOF 才返回 successful `CommandCodeResult`。
+14. EOF 时所有 block 已关闭后，仅 exact `finish.rawFinishReason === "pause_turn"` 触发 `pauseTurn` policy：`stop`（default）保留内容并添加 notice；`error` rollback 并抛 neutral non-retryable protocol failure。
+15. 只有 closed blocks + valid final `finish` + physical EOF，并通过 pause policy，才返回 successful `CommandCodeResult`。
 
 Buffered router MUST 在 assembler commit 前不向 Protocol B client 发送任何 semantic bytes。这是 abort 能真正 rollback 的前提。
 
@@ -1432,7 +1432,7 @@ export interface ToolUseContentBlock {
   type: "tool_use";
   id: string;
   toolName: string;
-  input: unknown;
+  input: Readonly<Record<string, LosslessJsonValue>>;
 }
 
 export type ContentBlockA =
@@ -1440,33 +1440,21 @@ export type ContentBlockA =
   | ReasoningContentBlock
   | ToolUseContentBlock;
 
-export interface RawEventRecord {
-  sequence: number;
-  rawLine: string;
-  event?: Record<string, unknown> & { type: string };
-  parseError?: string;
-}
-
-export interface ProtocolWarning {
-  sequence: number;
-  code: string;
-  message: string;
-  eventType?: string;
-  id?: string;
-}
-
 export interface CommandCodeResult {
-  content: ContentBlockA[];
-  finish: FinishEvent;
-  rawUsage?: CommandCodeUsage;
-  usage: NormalizedUsage;
-  systemPromptTokens?: number;
-  rawEvents: RawEventRecord[];
-  warnings: ProtocolWarning[];
+  readonly content: readonly ContentBlockA[];
+  readonly finish: Readonly<FinishEvent>;
+  readonly rawUsage?: Readonly<CommandCodeUsage>;
+  readonly usage: Readonly<NormalizedUsage>;
+  readonly systemPromptTokens?: number;
+  readonly responseIdentity?: Readonly<{
+    responseId: string;
+    responseModel: string;
+  }>;
+  readonly notices: readonly ConversionNotice[];
 }
 ~~~
 
-`content[]` 只保存 model semantic blocks。Successful result 中的 finish、usage、provider metadata 和 warnings 是 response-level state；abort/pause/protocol/transport failure 只存在于 typed error path，不进入 `CommandCodeResult`。
+`content[]` 只保存 model semantic blocks。Successful result 只保留 closed-world finish、final usage、最后一个 finish-step identity 和 bounded policy notices；provider metadata、response headers、raw event bodies 全部销毁。所有嵌套对象递归冻结。abort/protocol/transport failure 与 pause-error 只存在于 neutral typed error path，不进入 `CommandCodeResult`。
 
 ## 7.3 Reducer table
 
@@ -1481,18 +1469,22 @@ export interface CommandCodeResult {
 | `tool-input-start(id)` | reserve tool placeholder；保存 toolName |
 | `tool-input-delta(id)` | require open tool start；append raw input preview |
 | `tool-input-end(id)` | require open tool start；set `inputStreamEnded=true` |
-| `tool-call(toolCallId)` | require open, input-ended tool start；用 final toolName 无条件覆盖 start toolName；写 authoritative input；close |
-| `tool-result` | raw only |
+| `tool-call(toolCallId)` | require open, input-ended tool start；用 final toolName 无条件覆盖 start toolName；clone lossless JSON object input；close |
+| `tool-result` | validate then drop |
+| `finish-step` | validate response object；stage last id/modelId pair；drop headers/provider metadata/step usage |
 | `finish` | replace finish/usage/systemPromptTokens；continue reading |
-| `abort` | rollback；throw typed abort error；no result |
-| `error` | throw；no commit |
-| unknown/malformed | raw preserve；throw typed protocol error |
+| `abort` | rollback；neutral upstream-stream abort failure；no result |
+| `error` | neutral upstream-stream failure；no commit |
+| unknown | `error|ignore` policy；ignore adds bounded notice and still requires finish |
+| malformed known event | neutral protocol failure |
 | EOF without `finish`/`abort` | rollback；throw `CommandCodeTransportError`（status 502、retryable true、midStream true）；即使有 open block 也相同 |
-| EOF after final `finish` | require all blocks closed；`pause_turn` throws；otherwise return success |
+| EOF after final `finish` | require all blocks closed；apply exact-raw pause policy；otherwise return success |
 
 Duplicate start、closed id 后又来的 start/delta/end、以及 end without open block 都是 protocol error。实现不能为 malformed stream 引入 occurrence key、自动修复 lifecycle 或重排 slot。
 
-## 7.4 TypeScript reference implementation参考
+## 7.4 Historical TypeScript sketch（non-normative）
+
+下面的长代码块是冻结 Tickets 20–26 前的历史草图，保留作来源对照，不是当前实现合同。它关于 `rawEvents` retention、finish-step no-op、fixed pause error、unknown-event fixed error、primitive tool input 和 local-only failures 的行为均已被本节 7.1–7.3 与冻结 conversion method 取代；实现必须以当前 `src/providers/commandcode-private/assembler.ts` 的公开 seam 和对应测试为准。
 
 ~~~ts
 type UnknownRecord = Record<string, unknown>;
@@ -2540,11 +2532,11 @@ export interface FinishEvent
 | Field | Source-side meaning | 收到后的用途 |
 |---|---|---|
 | `finishReason` | CommandCode/gateway 层的 finish category | 用 exact string comparison 计算 derived stop reason；协议转换时交给 B-specific mapping |
-| `rawFinishReason` | provider/service 保留的 raw reason | 优先作为 diagnostic reason；exact `pause_turn` 在当前 profile 中是 unsupported error |
+| `rawFinishReason` | provider/service 保留的 raw reason | 保留为 diagnostic reason；exact `pause_turn` 触发 Provider `stop|error` policy（default stop） |
 | `totalUsage` | final token usage | 计算 normalized usage；不是 reason field |
 | `systemPromptTokens` | system prompt token count | 单独保存；不是 reason field |
 
-`finish-step` event 也可能出现 `finishReason`、`rawFinishReason` 和 `usage`，但 source consumer 完全忽略 `finish-step`。只有 `type:"finish"` 决定 completion、最终 reason 和 final usage。
+`finish-step` event 也可能出现 `finishReason`、`rawFinishReason`、`usage`、`providerMetadata` 和 `response`。Consumer 验证这些已知字段，只保留最后一个合法 `response.id/modelId` pair；timestamp、headers、provider metadata 与 step usage 在校验后丢弃。只有 `type:"finish"` 决定 completion、最终 reason 和 final usage。
 
 ### 8.1.2 Defined values 与 open raw values
 
@@ -2626,7 +2618,7 @@ Current-profile policy 与不属于本层的 behavior：
 | stop hooks、follow-up queue、steering | 属于 CommandCode agent runtime |
 | `max_turns`、run-level stop reason | 属于多轮 agent loop，不是单次 model response |
 | CommandCode telemetry/UI event | 不属于 wire protocol output |
-| `pause_turn` continuation | 当前 profile 明确作为 non-retryable error |
+| `pause_turn` continuation | 不实现 continuation；Provider policy 选择 ordinary stop degradation（default）或 non-retryable error |
 | multiple finish 的 field-by-field carry-forward | 当前 profile 使用 complete last-event replacement，避免混合 metadata |
 
 推荐 result usage：
@@ -2691,7 +2683,7 @@ Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 mis
 - 不是 request body field。
 - 不是 CommandCode client 发给 upstream 的取消 HTTP request。
 - 表示本 response 被有意终止。
-- Atomic implementation 必须丢弃当前 response 的 staged content、pending tool、finish 与 usage，然后抛 `CommandCodeAbortError`。
+- Atomic implementation 必须丢弃当前 response 的 staged content、pending tool、finish、identity、usage 与 notices，然后产生 neutral `kind:"upstream_stream"` / `providerType:"abort"` failure。
 - Router 不应把 partial content 转成 Protocol B content。
 
 Consumer 不返回 `{committed:false, aborted:true}` result。`CommandCodeResult` 只表示已经成功提交的 response。
@@ -2713,7 +2705,7 @@ Trigger：
 }
 ~~~
 
-当前 profile 不实现 continuation。Assembler 仍读到 physical EOF，以最后一个 finish 为准；若 effective raw reason exact 为 `pause_turn`，它 rollback semantic state 并抛 non-retryable `CommandCodePauseTurnError`。Router 不得转换或发布该 response 的 partial content。
+当前 profile 不实现 continuation。Assembler 仍读到 physical EOF，以最后一个 finish 为准；只有 exact `finish.rawFinishReason === "pause_turn"` 才触发 Provider `pauseTurn` policy。`stop`（default）保留已闭合 content、last finish-step identity 与 final finish usage，添加 non-model-visible degrade notice，再走普通 semantic validation；`error` rollback 全部 staged state 并产生 neutral non-retryable protocol failure。`finishReason:"pause_turn"` 但 raw field 缺失时不得猜测为 pause。
 
 ---
 
@@ -2752,7 +2744,7 @@ content[] B + finish/usage B
 - `finishReason A`、`rawFinishReason A` 与 `usage A` 必须进入 B-specific finish/usage converter，不能作为 A event 原样转发。
 - 本文不定义它们在 B 中的 field name、value、nesting、event type 或 event position；这些只能由确定版本的 Protocol B schema 决定。
 - `finish` 和 `usage` 都是 response-level metadata，不放入 `content[] B`。
-- `rawEvents` 只用于 debug，不参加 A → B conversion。
+- Raw JSONL/event bodies 不进入 committed result。若 deployment 需要 debug capture，必须由独立、bounded、redacted recorder 拥有，不能借 Provider semantic state 透传。
 
 如果 Protocol B 对 tool-call ID 有 prefix、length 或 character set 限制，必须维护 stable bidirectional mapping，并至少保存到下一次 B request-side tool result 转回 A tool result 完成。不能在 response 和下一次 request 中分别随机生成 ID。
 
@@ -2785,7 +2777,7 @@ resultA.rawUsage              # original totalUsage object
 
 Conversion boundary：
 
-1. `consumeCommandCodeResponse()` 只返回成功的 final A result；abort、pause、unknown、malformed、stream error 和 terminal-missing transport error 已经抛错，不进入 B conversion。
+1. `consumeCommandCodeResponse()` 只返回成功的 final A result；abort、pause-error、unknown-error、malformed、stream error 和 terminal-missing transport error 已经产生 neutral failure，不进入 B conversion。pause-stop 与 unknown-ignore 通过 bounded notices 随成功 result 进入普通 conversion。
 
 2. 把原始 `finishA.finishReason`、`finishA.rawFinishReason`、raw/normalized usage 和 `systemPromptTokens` 一起传入 `convertFinish()`。
 
@@ -2968,7 +2960,7 @@ export async function adaptCommandCodeToProtocolB<
 }
 ~~~
 
-`adaptCommandCodeToProtocolB()` 只接收一个 physical upstream response。`pause_turn` 不产生 logical parts；它由 A consumer 作为 non-retryable error 交给 `errorResponse()`。
+`adaptCommandCodeToProtocolB()` 只接收一个 physical upstream response。`pause_turn` 不产生 continuation parts；pause-stop 仍作为一个 committed A result 走普通转换，pause-error 作为 neutral non-retryable failure 交给 `errorResponse()`。
 
 ## 9.6 其他
 
@@ -3054,8 +3046,8 @@ export interface ProtocolBCodec<
 | A stream `error`，B headers 未发送 | B-specific non-2xx error |
 | A `CommandCodeTransportError`（EOF 既无 finish 也无 abort） | retry A；exhausted 后 B-specific non-2xx error |
 | A unknown/malformed/lifecycle error | non-retryable B-specific non-2xx error |
-| A `abort` | rollback A；抛 non-retryable abort error；不要发送 content B |
-| A final `pause_turn` | rollback A；抛 non-retryable pause-turn error；不要发送 content B |
+| A `abort` | rollback A；neutral upstream-stream abort failure；不要发送 content B |
+| A final `pause_turn` | `stop` policy 提交并普通转换；`error` policy rollback + neutral non-retryable protocol failure |
 | `content[] A` → `content[] B` conversion failure | B-specific non-2xx error |
 | B result validation/serialization failure | B-specific non-2xx error |
 | downstream disconnect | cancel A fetch signal when possible |
@@ -3194,17 +3186,18 @@ Normalized usage：
 {"type":"abort"}
 ~~~
 
-Thrown error：
+Neutral failure：
 
 ~~~json
 {
-  "name": "CommandCodeAbortError",
+  "kind": "upstream_stream",
+  "providerType": "abort",
   "message": "CommandCode response emitted abort",
   "retryable": false
 }
 ~~~
 
-Assembler 在抛错前 rollback；不存在 successful `CommandCodeResult`，`partial` 不进入 `content[] A`、`content[] B` 或 Protocol B SSE。Error 的 `rawEvents` 仍保留到 `abort` event。
+Assembler 在产生 failure 前 rollback；不存在 successful `CommandCodeResult`，`partial` 不进入 `content[] A`、`content[] B` 或 Protocol B SSE。Raw events/provider metadata 不跨 public failure seam。
 
 ---
 
@@ -3231,7 +3224,7 @@ AI 在生成实现前必须逐项确认：
 - [ ] request-side wire 接受空或非空 `tool-result.toolName`；LuckyToken conversion 对真实结果保留非空 Pi name、synthetic 使用 pending call name。成功使用 `text`、真实失败使用 `error-text`、synthetic 使用 Provider-local `text|error-text` policy（默认 `text`）。
 - [ ] `max_tokens` 必填；caller/options 优先，model catalog 对明确 `maxOutputTokens` 使用模型值，否则使用官方 CLI 默认 64000。
 - [ ] `stream` 是 literal `true`。
-- [ ] unknown non-empty `reasoning_effort` normalize 为 `max`，仅在 model capability 支持时发送。
+- [ ] Pi reasoning 先按 selected model 的 thinking-level map/capability clamp；只发送 model 支持的 CommandCode effort，off/absence omission。
 
 ## Response A
 
@@ -3243,15 +3236,16 @@ AI 在生成实现前必须逐项确认：
 - [ ] 只有 start event 创建 slot；slot order 是 start-event arrival sequence。
 - [ ] delta/end/tool-call missing start 与 duplicate/closed lifecycle 抛 protocol error；已有 finish 时的 unfinished EOF 也抛 protocol error。
 - [ ] response text/reasoning block trim 后为空时抛 `EMPTY_CONTENT_BLOCK`，不能静默 omission。
-- [ ] non-JSON、invalid event/field 与 unknown type raw preserve 后抛 non-retryable protocol error。
+- [ ] non-JSON、invalid known event/field 产生 neutral non-retryable protocol failure；unknown type 使用 `error|ignore` policy，ignore 不保留 event body且不能代替 finish。
 - [ ] tool start 占位；final tool-call materialize，并用 final toolName 无条件覆盖 start toolName。
-- [ ] response-side tool-result raw preserve、semantic ignore。
+- [ ] response-side tool-result validate then drop。
+- [ ] finish-step 验证 response object，最后一个合法 id/modelId pair last-wins；step usage 不覆盖 final finish usage。
 - [ ] finish 后继续读取到 EOF。
 - [ ] multiple finish 以最后一个完整 event 覆盖 finish/usage/systemPromptTokens。
 - [ ] final finish.totalUsage raw preserve并 normalized。
-- [ ] abort rollback、抛 `CommandCodeAbortError` 并取消 body。
-- [ ] final `pause_turn` 在 EOF 后 rollback 并抛 `CommandCodePauseTurnError`。
-- [ ] stream error 不返回 result；EOF 既无 finish 也无 abort 时 rollback 并抛 `CommandCodeTransportError`（status 502、retryable true、midStream true），即使有 open block 也相同。
+- [ ] abort rollback、产生 neutral upstream-stream abort failure 并取消 body。
+- [ ] final exact-raw `pause_turn` 在 EOF/closed-slots 后应用 `stop|error` policy（default stop）。
+- [ ] stream error 不返回 result；EOF 既无 finish 也无 abort 时 rollback 并产生 retryable neutral transport/unexpected_eof failure，即使有 open block也相同；没有 verified upstream status 时 Client 层只可使用 generic fallback。
 
 ## Conversion and response B
 
@@ -3262,7 +3256,7 @@ AI 在生成实现前必须逐项确认：
 - [ ] tool-call ID 跨 response/request stable。
 - [ ] reasoning 使用 explicit target policy。
 - [ ] 正确读取 A wire `finishReason` 与 `rawFinishReason`；不把内部 `stopReason` 误写成 wire field。
-- [ ] A consumer 已拒绝 `pause_turn`；失败 response 不进入 B conversion。
+- [ ] pause-stop 走普通 A→B conversion；pause-error 不进入 B conversion。
 - [ ] Final `finishReason A`、`rawFinishReason A`、usage 与 `systemPromptTokens` 全部交给 B-specific `convertFinish()`。
 - [ ] 不在通用 adapter 中假定 B 的 reason value、token field、nesting 或 event position。
 - [ ] 不把 CommandCode raw finish JSON line直接当作 B event。
@@ -3288,8 +3282,8 @@ v1.0 推荐唯一主路径：
 6. Reject malformed, unknown, or invalid block lifecycles.
 7. Replace finish metadata atomically on every finish event.
 8. Return success only on final non-pause finish + physical EOF.
-9. Roll back and throw on abort/pause/error or terminal-missing transport failure.
-10. Produce content[] A plus final finish/usage/rawEvents.
+9. Roll back and emit neutral failure on abort/error, pause-error, malformed protocol, or terminal-missing transport failure.
+10. Produce an immutable content[] A plus final finish/usage, last finish-step identity, and bounded notices; retain no raw event bodies.
 11. If no conversion is required, return content[] A and stop.
 12. If conversion is required, convert content[] A directly to content[] B.
 13. Pass finishReason/rawFinishReason/usage A through B-specific conversion.

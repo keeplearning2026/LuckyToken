@@ -452,15 +452,11 @@ Retry rules:
 
 ## 15. Current implementation gaps
 
-Remaining gaps after tickets 20–23:
+Remaining gaps after tickets 20–24:
 
 - reasoning content may be rejected by model.reasoning=false;
-- finish-step identity is ignored;
 - stop reason is not content-normalized;
 - total token aliases are ignored/recomputed;
-- pause_turn always rolls back/errors;
 - stream error facts are flattened through semantic/execution;
-- wire abort becomes ordinary error but old documentation calls it Pi aborted;
-- onPayload is revalidated in code, while old documentation claimed otherwise;
 
 These are implementation gaps against this frozen method.

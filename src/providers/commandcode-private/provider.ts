@@ -1005,6 +1005,7 @@ function createCommandCodeStream(
           controls,
           {
             now,
+            responsePolicy: configuration.conversion.response,
             ...(traceContext === undefined ? {} : { traceContext }),
             ...(sleep === undefined ? {} : { sleep }),
           },

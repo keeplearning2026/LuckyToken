@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — configuration; 02 — notices/journal; 03 — neutral failure contract.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,18 @@ Text/reasoning/tool slots and previews are attempt-local. Tool preview never bec
 
 ## Acceptance criteria
 
-- [ ] Complete known event matrix is implemented/tested: text/reasoning start-delta-end, tool-input lifecycle, authoritative tool-call, finish-step, finish, error, abort, start/start-step/provider-metadata/tool-result.
-- [ ] Partial/overlapping/duplicate block lifecycle and malformed known events fail; partial tool arguments never commit.
-- [ ] Last valid finish-step response id/modelId is staged for Pi identity; final finish usage remains authoritative.
-- [ ] Physical EOF succeeds only after valid finish and all modeled slots close.
-- [ ] Unknown event uses CommandCode-local error|ignore default error; ignore records notice/diagnostic but cannot replace finish.
-- [ ] pause_turn occurs only after closed slots/final finish and applies Provider-local stop|error default stop.
-- [ ] pause=stop retains content/identity/usage/raw reason and runs normal semantic validation; pause=error rolls back and yields neutral nonretryable failure.
-- [ ] Wire abort produces neutral upstream-provider abort failure, never Pi caller-aborted solely by name.
-- [ ] Caller signal cancellation discards incomplete state and remains structurally distinct.
-- [ ] Tests cover every event, multi-step identity, pause both policies with text/tool calls, abort/cancel distinction, EOF, rollback completeness, and concurrency.
-- [ ] No Client Protocol concept appears in assembler interfaces/tests.
+- [x] Complete known event matrix is implemented/tested: text/reasoning start-delta-end, tool-input lifecycle, authoritative tool-call, finish-step, finish, error, abort, start/start-step/provider-metadata/tool-result.
+- [x] Partial/overlapping/duplicate block lifecycle and malformed known events fail; partial tool arguments never commit.
+- [x] Last valid finish-step response id/modelId is staged for Pi identity; final finish usage remains authoritative.
+- [x] Physical EOF succeeds only after valid finish and all modeled slots close.
+- [x] Unknown event uses CommandCode-local error|ignore default error; ignore records notice/diagnostic but cannot replace finish.
+- [x] pause_turn occurs only after closed slots/final finish and applies Provider-local stop|error default stop.
+- [x] pause=stop retains content/identity/usage/raw reason and runs normal semantic validation; pause=error rolls back and yields neutral nonretryable failure.
+- [x] Wire abort produces neutral upstream-provider abort failure, never Pi caller-aborted solely by name.
+- [x] Caller signal cancellation discards incomplete state and remains structurally distinct.
+- [x] Tests cover every event, multi-step identity, pause both policies with text/tool calls, abort/cancel distinction, EOF, rollback completeness, and concurrency.
+- [x] No Client Protocol concept appears in assembler interfaces/tests.
 
 ## Out of scope
 
 Pi content/usage/terminal projection after commit (25).
-

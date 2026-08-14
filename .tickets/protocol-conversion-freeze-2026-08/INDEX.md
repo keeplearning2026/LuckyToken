@@ -25,7 +25,7 @@
 | 21 | Convert Pi messages and CommandCode-local missing results | 02, 20 | completed |
 | 22 | Convert CommandCode tools and degrade constrained sampling | 02, 20 | completed |
 | 23 | Certify CommandCode request authority and payload hooks | 20, 21, 22 | completed |
-| 24 | Rebuild CommandCode JSONL event, identity, pause, and abort lifecycle | 01, 02, 03 | ready-for-agent |
+| 24 | Rebuild CommandCode JSONL event, identity, pause, and abort lifecycle | 01, 02, 03 | completed |
 | 25 | Convert CommandCode success into normalized Pi responses | 24 | ready-for-agent |
 | 26 | Move CommandCode failures and retries onto the neutral contract | 03, 23, 24, 25 | ready-for-agent |
 | 27 | Remove the shared HTTP observer and legacy error side channels | 10, 18, 26 | ready-for-agent |
