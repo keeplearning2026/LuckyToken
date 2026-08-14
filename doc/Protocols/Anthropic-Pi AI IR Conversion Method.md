@@ -415,18 +415,16 @@ It MUST have separate certification for:
 - SSE/body-read failure and cancellation;
 - failure logging without copying credentials or unbounded body data.
 
-## 13. Current implementation gaps
+## 13. Certification status
 
-At audit time, implementation differs from this frozen method in at least these places:
+The earlier implementation-gap list was closed by the frozen Tickets 05–10 and
+is no longer a statement of current behavior. Ticket 28 binds this document by
+content hash and certifies the Anthropic conversion profile separately from
+native passthrough. Owning tests cover mixed content/result order, system
+compatibility, prefill degradation, thinking budgets and cache controls,
+redacted/missing-signature behavior, empty content, JSON/SSE usage, and
+request-local failure isolation.
 
-- top-level thinking, top_p/top_k, and cache retention are validated/dropped rather than mapped;
-- mixed ordinary/tool_result ordering is rejected/reordered;
-- message-level system handling differs;
-- final assistant prefill is rejected;
-- server-tool known families are not classified consistently;
-- redacted outbound thinking is dropped;
-- missing thinking signature silently uses empty string without notice;
-- response stop/content consistency is not normalized;
-- atomic SSE start repeats final usage;
-
-These gaps are implementation work; they do not change the normative decisions above.
+Real-upstream execution remains separate evidence. When it is not run, the
+certification record says `EVIDENCE_INSUFFICIENT`; offline certification never
+claims that paid/live profile passed.

@@ -539,20 +539,18 @@ Passthrough requirements:
 - independent tests from conversion mode;
 - one failure journal on final failure.
 
-## 16. Current implementation gaps
+## 16. Certification status
 
-At audit time:
+The earlier implementation-gap list was closed by frozen Tickets 12–18 and is
+no longer a statement of current behavior. Ticket 28 binds this document by
+content hash and certifies the Responses conversion profile separately from
+native passthrough. Owning tests cover privileged prompt delivery, option
+mapping, all closed-world item/tool families, argument errors, images/files,
+reasoning-only history, previous-response hit/miss/store policies, response
+identity/usage, and completed/incomplete/failed SSE contracts.
 
-- input system/developer text is collected then discarded;
-- top_p, cache retention and metadata mappings are incomplete;
-- minimal reasoning is rejected later by the protocol-neutral Pi option composer;
-- invalid function arguments are rewritten to `{}`;
-- many known item/tool families are conflated with unknown/drop/error;
-- tool_search handling is asymmetric;
-- compaction is converted into fabricated byte-length text;
-- remote image/file handles are silently skipped;
-- response envelope/usage defaults are incomplete;
-- SSE always emits completed and has no sequence_number;
-- session unknown IDs fail open and store:false persists;
-
-These are implementation gaps against this frozen method.
+The 27 sanitized Codex CLI request fixtures additionally prove, one fixture at
+a time, developer prompt delivery, effective tools/options, Lark grammar
+handling, `store:false=honor`, and message/tool correlation through the public
+route. Real-upstream execution remains separate evidence and is recorded as
+`EVIDENCE_INSUFFICIENT` when it is not run.

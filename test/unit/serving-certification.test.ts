@@ -79,17 +79,21 @@ describe("serving composition certification", () => {
     const manifest = certifyServingComposition(facts());
 
     expect(manifest).toMatchObject({
-      schemaVersion: "luckytoken-serving-certification-manifest-v1",
+      schemaVersion: "luckytoken-serving-certification-manifest-v2",
+      certificationBasis: "offline",
       result: "CERTIFIED",
       failures: [],
       identity: {
         core: {
           specification: "LuckyToken Core Architecture Specification v5.8",
-          servingComposition: "luckytoken-serving-composition-v2",
+          servingComposition: "luckytoken-full-route-serving-composition-v3",
         },
         conversions: {
+          architecturePolicy: "Protocol Conversion Architecture and Policy",
           anthropicPi:
             "Anthropic-Pi AI IR Conversion Method (Part I/II/III)",
+          openaiResponsesPi:
+            "OpenAI Responses-Pi AI IR Conversion Method",
           piCommandCode:
             "PI AI IR-Commandcode Private Conversion (Part I/II)",
         },
@@ -174,8 +178,40 @@ describe("serving composition certification", () => {
         servingReadinessAndIsolation: "verified",
         localLoopbackHttpBoundary: "verified",
         piConfigurationCredentialCli: "verified",
-        realProviderOnlineConformance: "verified",
+        realProviderOnlineConformance: "evidence-insufficient",
         perClientProtocolAuthIsolation: "verified",
+      },
+      profiles: {
+        anthropicConversion: {
+          id: "anthropic-conversion",
+          seam: "POST /v1/messages conversion",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "evidence-insufficient",
+        },
+        anthropicNativePassthrough: {
+          id: "anthropic-native-passthrough",
+          seam: "POST /v1/messages native passthrough",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "evidence-insufficient",
+        },
+        responsesConversion: {
+          id: "responses-conversion",
+          seam: "POST /v1/responses conversion",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "evidence-insufficient",
+        },
+        responsesNativePassthrough: {
+          id: "responses-native-passthrough",
+          seam: "POST /v1/responses native passthrough",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "evidence-insufficient",
+        },
+        commandCodeProvider: {
+          id: "commandcode-provider",
+          seam: "Pi Provider commandcode-private",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "evidence-insufficient",
+        },
       },
       verification: {
         commands: [
@@ -184,8 +220,33 @@ describe("serving composition certification", () => {
           "npm run lint",
           "npm run build",
           "git diff --check",
-          "npm run test:online",
         ],
+        onlineEvidence: {
+          status: "evidence-insufficient",
+          attempted: false,
+          gaps: [
+            expect.objectContaining({
+              profiles: ["anthropic-conversion", "commandcode-provider"],
+              entrypoint: "npm run test:online",
+            }),
+            expect.objectContaining({
+              profiles: ["responses-conversion", "commandcode-provider"],
+              entrypoint: "npm run test:online-responses",
+            }),
+            expect.objectContaining({
+              profiles: ["responses-conversion", "commandcode-provider"],
+              entrypoint: "npm run test:online-codex",
+            }),
+            expect.objectContaining({
+              profiles: ["anthropic-native-passthrough"],
+              entrypoint: null,
+            }),
+            expect.objectContaining({
+              profiles: ["responses-native-passthrough"],
+              entrypoint: null,
+            }),
+          ],
+        },
         result: "CERTIFIED",
       },
     });

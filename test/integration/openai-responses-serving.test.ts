@@ -662,22 +662,23 @@ describe("OpenAI Responses serving", () => {
     // Exactly one journal record, classified as caller-cancellation. The
     // handler's diagnostics.fail() continues after the HTTP layer aborts the
     // awaited handle(), so the record lands asynchronously: poll for it.
+    const expectedJournalName = "22222222-2222-4222-8222-222222222222.json";
     let journalFile: string | undefined;
     for (let attempt = 0; attempt < 40 && journalFile === undefined; attempt += 1) {
       const days = await readdir(directory);
       const day = days.find((entry) => /^\d{4}-\d{2}-\d{2}$/u.test(entry));
       if (day !== undefined) {
         const files = await readdir(join(directory, day));
-        if (files.length > 0) journalFile = join(directory, day, files[0]!);
+        if (files.includes(expectedJournalName)) {
+          journalFile = join(directory, day, expectedJournalName);
+        }
       }
       if (journalFile === undefined) {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }
     expect(journalFile).toBeDefined();
-    expect(journalFile!.endsWith("22222222-2222-4222-8222-222222222222.json")).toBe(
-      true,
-    );
+    expect(journalFile!.endsWith(expectedJournalName)).toBe(true);
     const journal = JSON.parse(
       await readFile(journalFile!, "utf8"),
     ) as { classification: string; selector?: string };

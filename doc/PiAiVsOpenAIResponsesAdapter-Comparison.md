@@ -1,6 +1,6 @@
 # LuckyToken 的 OpenAI Responses 转换 vs Pi AI 官方实现——完备性对照报告
 
-> **历史对比，非当前规范。** 独立复核已证伪本文若干核心结论，尤其是“27 个样本每个字段都正确处理”、`top_p` 无 Pi 对应、system/developer 已进入 systemPrompt、encrypted reasoning/refusal 无 Pi 对应、namespace 完整、`text.format` 可直接映顶层 constrainedSampling、SSE 完整一致。当前权威结论见 [`ProtocolConversion-Completeness-Audit.md`](./ProtocolConversion-Completeness-Audit.md) 和 [`OpenAI Responses-Pi AI IR Conversion Method.md`](./Protocols/OpenAI%20Responses-Pi%20AI%20IR%20Conversion%20Method.md)。本文只保留为审计过程材料，不得作为实现合同。
+> **历史对比，非当前规范。** 独立复核已证伪本文若干核心结论，尤其是“27 个样本每个字段都正确处理”、`top_p` 无 Pi 对应、system/developer 已进入 systemPrompt、encrypted reasoning/refusal 无 Pi 对应、namespace 完整、`text.format` 可直接映顶层 constrainedSampling、SSE 完整一致。本文关于 `HttpObserver` 和 HTTP/stream failure 丢失的描述也只代表 Ticket 27 前基线；当前 conversion 只消费 trusted neutral Pi diagnostics。当前权威结论见 [`ProtocolConversion-Completeness-Audit.md`](./ProtocolConversion-Completeness-Audit.md)、[`Protocol Conversion Architecture and Policy.md`](./Protocols/Protocol%20Conversion%20Architecture%20and%20Policy.md) 和 [`OpenAI Responses-Pi AI IR Conversion Method.md`](./Protocols/OpenAI%20Responses-Pi%20AI%20IR%20Conversion%20Method.md)。本文只保留为审计过程材料，不得作为实现合同。
 
 **日期：** 2026-08-12
 **性质：** 只读审计，未修改任何代码。

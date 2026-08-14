@@ -3,7 +3,7 @@
 **文档性质：** 对 LuckyToken 项目的一份整体性认识与地图（overview & map），
 面向新读者、维护者与 Agent 的快速上下文建立。<br>
 **对应代码：** `src/` 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
-**源码基线：** commit `ac9fa9a`（2026-08-12，分支 `codex/openai-responses-protocol`）<br>
+**源码基线：** 2026-08-14 Ticket 28 full-route certification baseline；具体提交以当前 `git log` 为准。<br>
 **权威规范：** [LuckyTokenCoreSpec](./Spec/LuckyTokenCoreSpec.md) 拥有
 architecture/ownership；[LuckyTokenArchitecture](./LuckyTokenArchitecture.md) 是
 实现架构说明。<br>
@@ -254,13 +254,13 @@ model_id，model_id 本身可以包含斜杠。
 
 | 层 | 位置 / 命令 | 说明 |
 | --- | --- | --- |
-| Unit | `test/unit/`（44 文件） | 纯函数与单模块行为 |
-| Integration | `test/integration/`（28 文件） | 注入 fixture `fetch`，不访问真实服务 |
-| Certification | `test/certification/`（2 文件），`node --test` | 哈希锁定规范身份与 serving manifest，漂移即失败 |
+| Unit | `test/unit/` | 纯函数与单模块行为 |
+| Integration | `test/integration/` | 注入 fixture transport，不访问真实服务 |
+| Certification | `test/certification/`，`node --test` | 哈希锁定规范身份、五个 profile、架构 import 边界与 serving manifest，漂移即失败 |
 | Online | `test/online/`（6 文件），`npm run test:online` 与 `npm run test:online-responses` | 需授权；真实 loopback + 官方 Anthropic SDK / Codex 风格增量语义；证据写入 `.online-artifacts/` |
 
-- `npm test` = certification + vitest run。当前验证全绿：
-  `typecheck` ✅，certification **6/6** ✅，vitest **482/482**（72 文件）✅。
+- `npm test` = certification + vitest run；Ticket 28 完成证据记录在对应 ticket 与
+  `serving-conformance-v2.json`，避免在导览中固化易过期的测试数量。
 - `npm run typecheck` / `lint` / `build` 分别用 tsconfig / eslint / tsconfig.build。
 - online 套件（`run-commandcode.ts` + `run-openai-responses.ts`）显式运行、不纳入
   `npm test`；malformed/unknown/EOF/分块等故障注入留在确定性的离线用例中。
@@ -271,8 +271,8 @@ model_id，model_id 本身可以包含斜杠。
 
 ### 当前状态
 
-- 当前分支 `codex/openai-responses-protocol`；最新提交 `ac9fa9a`
-  （`fix: record tool-call ids when appending to an existing assistant turn`）。
+- 当前 full-route 收缩分支为 `codex/protocol-conversion-20-28`；提交边界按 Ticket 20–28
+  分开保留。
 - 生产组合提供两个 Client Protocol + `GET /v1/models`；Anthropic 与 OpenAI Responses
   各自独立 Auth 实例与 token 文件，认证隔离已被测试锁定（anthropic token 打
   `/v1/responses` → 401，反之亦然）。
@@ -286,19 +286,21 @@ model_id，model_id 本身可以包含斜杠。
 
 - **Atomic SSE 而非实时流**：先完整提交上游结果再渲染 SSE；首 token 延迟与全量
   缓冲被接受。Responses 与 Anthropic 两侧都是 Atomic。
-- **`store:false` 被无条件忽略**（本地代理缓存语义，与 OpenAI 服务器存储无关）。
+- **`store:false` 由 Responses-owned policy 决定**：默认 `honor` 不写内存或磁盘；
+  `memory` 与 `persist` 是显式配置模式，后者产生 request-local notice。
 - **`/v1/models` 只暴露 `commandcode-private`**（方案 B）。方案 C（按已配置凭据过滤）
   需在 discovery handler 查询 `CredentialStore`，当前未实现。
 - **单实例假设**：会话快照无跨进程锁；Client token 变更是非并发管理操作，运行时使用
   不可变启动快照（改后需重启）。
-- **"只读所需、其他忽略"**：Anthropic 未转换字段（`top_p`、`thinking`、
-  `context_management` 等）静默忽略；保持显式失败而非丢字段假装支持。
-- **Client→Pi 可表达 ≠ Provider 端到端可表达**：如 `strict:true` 可转换为 Pi
-  constrained sampling，但 CommandCode Provider 拒绝 required strict 语义；图像保真
-  不在默认认证策略内 → 显式 fail-closed。
+- **Client→Pi 可表达 ≠ Provider 端到端可表达**：无 Provider 表示的已识别字段按冻结
+  policy 明确 omit/degrade 并记录 notice；会破坏有效性、安全或工具关联时 fail-closed。
+  例如 CommandCode 将 required strict constrained sampling 降级为普通工具并记录
+  Provider-local notice，而不是伪造上游约束。
 - **Pi built-in providers 全部注册**；`models.json` 不能覆盖内置 provider id。
-- **OpenAI Responses 尚未纳入 serving certification 范围**：`serving-conformance-v1.json`
-  当前只锁定 Anthropic 组合；若纳入需同步 certification record 与 hash。
+- **Serving certification v2 分别绑定五个 profile**：Anthropic conversion/native
+  passthrough、Responses conversion/native passthrough、CommandCode Provider。离线 gate
+  为 `CERTIFIED`；本轮未运行的真实上游入口逐 profile 记录为
+  `EVIDENCE_INSUFFICIENT`，不冒充在线通过。
 - **Codex CLI 集成在用户侧**（`~/.codex/` 三文件：`config.toml`、
   `luckytoken.config.toml`、`luckytoken-catalog.json`），不是仓库内容；README 有完整
   配置说明。

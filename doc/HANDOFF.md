@@ -1,8 +1,13 @@
 # LuckyToken 项目交接说明
 
+> **历史交接快照（非当前权威）**：本文固定在 2026-08-12 的 `ac9fa9a`，其中测试
+> 数量、`store:false`、certification v1 和待办描述不代表 Ticket 20–28 完成后的合同。
+> 当前事实以 `doc/Protocols/` 的冻结规范、`doc/LuckyTokenArchitecture.md`、
+> `serving-conformance-v2.json` 与当前 ticket completion evidence 为准。
+
 **交接基线：** `ac9fa9a`（`fix: record tool-call ids when appending to an existing assistant turn`）<br>
 **记录日期：** 2026-08-12<br>
-**用途：** 让新的维护者或 Agent 不依赖先前对话，也能从当前实现继续工作。
+**用途：** 保存当时的交接背景；不得作为当前实现状态或验收 authority。
 
 ## 1. 当前状态
 

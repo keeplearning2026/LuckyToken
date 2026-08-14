@@ -1449,9 +1449,10 @@ wire forwarding。Conversion invocation 不接收 composition 注入的 custom f
 Provider failure 只通过 trusted neutral Pi diagnostics 跨越 execution boundary。
 `createConfiguredPiModels()` 不把 infrastructure 对象作为公共返回值泄漏。
 
-当前 production composition 有意只认证一个 `anthropic-messages` handler 和一个
-`commandcode-private` model。未来扩展时应增加独立 binding/registration，而不是在
-现有 handler/Provider 内加入跨协议 switch。
+当前 production composition 分别认证 `anthropic-messages`、`openai-responses` 两个
+Client Protocol profile，以及 `commandcode-private` Provider；两个 native passthrough
+profile 另列，不能拿 conversion 证据替代。未来扩展时应增加独立
+binding/registration，而不是在现有 handler/Provider 内加入跨协议 switch。
 
 ## 6.6 Serving certification — `src/commandcode-serving-certification.ts`
 
@@ -1470,7 +1471,7 @@ source profile、conversion revisions 与 conformance hash。
 | 输入 | 当前 bound facts 的只读描述，不是 live service objects |
 | --- | --- |
 | 输出 | deep-frozen `CERTIFIED` 或 `FAILED` manifest |
-| 配套文件 | `test/fixtures/certification/serving-conformance-v1.json` 与 certification tests |
+| 配套文件 | `test/fixtures/certification/serving-conformance-v2.json` 与 certification tests |
 | 谁使用它 | composition root；失败时阻止启动 |
 | 它使用谁 | Pi model shape、Anthropic option policy type、CommandCode compatibility type |
 

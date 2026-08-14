@@ -5,9 +5,15 @@ import type {
   Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Auth } from "../../src/auth.js";
+import { createInvocationAttemptDiagnostic } from "../../src/execution-facts.js";
+import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
+import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import {
   createUpstreamFailureDiagnostic,
@@ -96,18 +102,18 @@ const sessionState: ResponseSessionState = {
   size: () => 0,
 };
 
-function responsesRequest(): Request {
+function responsesRequest(content = "hello"): Request {
   return new Request("https://luckytoken.test/v1/responses", {
     method: "POST",
     headers: {
       authorization: "Bearer client",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model: "provider/model", input: "hello" }),
+    body: JSON.stringify({ model: "provider/model", input: content }),
   });
 }
 
-function anthropicRequest(): Request {
+function anthropicRequest(content = "hello"): Request {
   return new Request("https://luckytoken.test/v1/messages", {
     method: "POST",
     headers: {
@@ -118,7 +124,7 @@ function anthropicRequest(): Request {
     body: JSON.stringify({
       model: "provider/model",
       max_tokens: 10,
-      messages: [{ role: "user", content: "hello" }],
+      messages: [{ role: "user", content }],
     }),
   });
 }
@@ -340,5 +346,167 @@ describe("Provider execution boundary", () => {
     expect(laterBody).toContain("Upstream provider failed");
     expect(laterBody).not.toContain("req-first");
     expect(laterBody).not.toContain("req-second");
+  });
+
+  it("writes one isolated journal per failed Anthropic/Responses route and none for success", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-cross-route-journal-"));
+    try {
+      const configuration = parseFailureLoggingConfiguration(
+        { directory: "journals", maxFiles: 10 },
+        root,
+      );
+      const requestIds = [
+        "44444444-4444-4444-8444-444444444441",
+        "44444444-4444-4444-8444-444444444442",
+        "44444444-4444-4444-8444-444444444443",
+      ];
+      const invocationDiagnostics = createInvocationDiagnosticsFactory({
+        configuration,
+        createRequestId: () => requestIds.shift()!,
+        now: () => Date.UTC(2026, 7, 14),
+      });
+      const selected = model("fixture-api");
+      let started = 0;
+      let release!: () => void;
+      const bothStarted = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const streamSimple = vi.fn((_model: unknown, context: unknown) => {
+        const serialized = JSON.stringify(context);
+        if (serialized.includes("successful-later-request")) {
+          return terminalStream(message("fixture-api"));
+        }
+        const anthropicFailure = serialized.includes("anthropic-journal-marker");
+        const fact = createUpstreamFailureFact({
+          kind: "http",
+          status: anthropicFailure ? 429 : 503,
+          message: anthropicFailure ? "anthropic throttled" : "responses unavailable",
+          headers: {
+            "x-request-id": anthropicFailure
+              ? "upstream-anthropic"
+              : "upstream-responses",
+          },
+          attemptCount: 1,
+        });
+        const attempt = Object.freeze({
+          attempt: 1,
+          classification: "http",
+          stage: "response_headers",
+          status: anthropicFailure ? 429 : 503,
+          retryable: false,
+          safeIds: Object.freeze({
+            "x-request-id": anthropicFailure
+              ? "upstream-anthropic"
+              : "upstream-responses",
+          }),
+        });
+        const failed = { ...message("fixture-api"), stopReason: "error" as const };
+        failed.errorMessage = "generic fallback";
+        failed.diagnostics = [
+          createInvocationAttemptDiagnostic(attempt, 1),
+          createUpstreamFailureDiagnostic(fact, 1),
+        ];
+        let emitted = false;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              if (emitted) return { done: true as const, value: undefined };
+              emitted = true;
+              started += 1;
+              if (started === 2) release();
+              await bothStarted;
+              return {
+                done: false as const,
+                value: {
+                  type: "error" as const,
+                  reason: "error" as const,
+                  error: failed,
+                },
+              };
+            },
+          }),
+        } as AssistantMessageEventStream;
+      });
+      const models = {
+        getModels: () => [selected],
+        streamSimple,
+      } as unknown as Models;
+      const anthropic = createAnthropicMessagesHandler({
+        models,
+        auth,
+        invocationDiagnostics,
+        maxRequestBytes: 1024,
+        now: () => 1,
+      });
+      const responses = createOpenAIResponsesHandler({
+        models,
+        auth,
+        invocationDiagnostics,
+        stateFile: join(root, "responses-state.json"),
+        sessionState,
+        maxRequestBytes: 1024,
+        now: () => 1,
+      });
+
+      const [anthropicResponse, responsesResponse] = await Promise.all([
+        anthropic.handle(anthropicRequest("anthropic-journal-marker")),
+        responses.handle(responsesRequest("responses-journal-marker")),
+      ]);
+      expect(anthropicResponse.status).toBe(429);
+      expect(responsesResponse.status).toBe(503);
+      expect(
+        (await responses.handle(responsesRequest("successful-later-request"))).status,
+      ).toBe(200);
+
+      const journalFiles = (await readdir(configuration.directory, {
+        recursive: true,
+      }))
+        .filter((entry) => entry.endsWith(".json"))
+        .map((entry) => join(configuration.directory, entry));
+      expect(journalFiles).toHaveLength(2);
+      const journals = await Promise.all(
+        journalFiles.map(async (path) =>
+          JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>,
+        ),
+      );
+      const byProtocol = Object.fromEntries(
+        journals.map((journal) => [journal.clientProtocol, journal]),
+      );
+      expect(byProtocol["anthropic-messages"]).toMatchObject({
+        classification: "client-failure",
+        clientStatus: 429,
+        attempts: [
+          {
+            attempt: 1,
+            classification: "http",
+            status: 429,
+            safeIds: { "x-request-id": "upstream-anthropic" },
+          },
+        ],
+      });
+      expect(byProtocol["openai-responses"]).toMatchObject({
+        classification: "runtime-failure",
+        clientStatus: 503,
+        attempts: [
+          {
+            attempt: 1,
+            classification: "http",
+            status: 503,
+            safeIds: { "x-request-id": "upstream-responses" },
+          },
+        ],
+      });
+      expect(JSON.stringify(byProtocol["anthropic-messages"])).not.toContain(
+        "upstream-responses",
+      );
+      expect(JSON.stringify(byProtocol["openai-responses"])).not.toContain(
+        "upstream-anthropic",
+      );
+      expect(
+        journalFiles.some((path) => path.endsWith("44444444-4444-4444-8444-444444444443.json")),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "./protocols/anthropic/options.js";
 import type { CommandCodeCompatibilityPolicy } from "./providers/catalog.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:ca88922836ee41e7b21690880b20ed935f5f1311b5573e17323b05b3047dbddc";
+  "sha256:0ae1f5346da1790f8d598d4a5ad192beadee7580f4ee2cab3d9de9effc8df867";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -32,7 +32,6 @@ const VERIFICATION_COMMANDS = [
   "npm run lint",
   "npm run build",
   "git diff --check",
-  "npm run test:online",
 ] as const;
 
 export interface ServingCertificationFacts {
@@ -79,7 +78,8 @@ export interface ServingCertificationFacts {
 export type ServingCertificationResult = "CERTIFIED" | "FAILED";
 
 export interface ServingCertificationManifest {
-  readonly schemaVersion: "luckytoken-serving-certification-manifest-v1";
+  readonly schemaVersion: "luckytoken-serving-certification-manifest-v2";
+  readonly certificationBasis: "offline";
   readonly result: ServingCertificationResult;
   readonly failures: readonly string[];
   readonly identity: Readonly<Record<string, unknown>>;
@@ -99,12 +99,39 @@ export interface ServingCertificationManifest {
     readonly ambientSemantics: Readonly<Record<string, unknown>>;
     readonly models: Readonly<Record<string, string>>;
   };
-  readonly coverage: Readonly<Record<string, "verified">>;
+  readonly profiles: {
+    readonly anthropicConversion: ServingCertificationProfile;
+    readonly anthropicNativePassthrough: ServingCertificationProfile;
+    readonly responsesConversion: ServingCertificationProfile;
+    readonly responsesNativePassthrough: ServingCertificationProfile;
+    readonly commandCodeProvider: ServingCertificationProfile;
+  };
+  readonly coverage: Readonly<
+    Record<string, "verified" | "evidence-insufficient">
+  >;
   readonly verification: {
     readonly commands: readonly string[];
     readonly conformanceRecord: string;
+    readonly onlineEvidence: {
+      readonly status: "evidence-insufficient";
+      readonly attempted: false;
+      readonly gaps: readonly ServingCertificationOnlineGap[];
+    };
     readonly result: ServingCertificationResult;
   };
+}
+
+export interface ServingCertificationProfile {
+  readonly id: string;
+  readonly seam: string;
+  readonly offlineResult: "CERTIFIED";
+  readonly onlineStatus: "evidence-insufficient";
+}
+
+export interface ServingCertificationOnlineGap {
+  readonly profiles: readonly string[];
+  readonly entrypoint: string | null;
+  readonly reason: string;
 }
 
 function isPlainObject(value: object): boolean {
@@ -246,17 +273,21 @@ export function certifyServingComposition(
   const result: ServingCertificationResult =
     failures.length === 0 ? "CERTIFIED" : "FAILED";
   const manifest: ServingCertificationManifest = {
-    schemaVersion: "luckytoken-serving-certification-manifest-v1",
+    schemaVersion: "luckytoken-serving-certification-manifest-v2",
+    certificationBasis: "offline",
     result,
     failures,
     identity: {
       core: {
         specification: "LuckyToken Core Architecture Specification v5.8",
-        servingComposition: "luckytoken-serving-composition-v2",
+        servingComposition: "luckytoken-full-route-serving-composition-v3",
       },
       conversions: {
+        architecturePolicy: "Protocol Conversion Architecture and Policy",
         anthropicPi:
           "Anthropic-Pi AI IR Conversion Method (Part I/II/III)",
+        openaiResponsesPi:
+          "OpenAI Responses-Pi AI IR Conversion Method",
         piCommandCode:
           "PI AI IR-Commandcode Private Conversion (Part I/II)",
       },
@@ -344,6 +375,38 @@ export function certifyServingComposition(
         inFlight: "deep-frozen-invocation-and-bound-dependencies-v1",
       },
     },
+    profiles: {
+      anthropicConversion: {
+        id: "anthropic-conversion",
+        seam: "POST /v1/messages conversion",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "evidence-insufficient",
+      },
+      anthropicNativePassthrough: {
+        id: "anthropic-native-passthrough",
+        seam: "POST /v1/messages native passthrough",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "evidence-insufficient",
+      },
+      responsesConversion: {
+        id: "responses-conversion",
+        seam: "POST /v1/responses conversion",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "evidence-insufficient",
+      },
+      responsesNativePassthrough: {
+        id: "responses-native-passthrough",
+        seam: "POST /v1/responses native passthrough",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "evidence-insufficient",
+      },
+      commandCodeProvider: {
+        id: "commandcode-provider",
+        seam: "Pi Provider commandcode-private",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "evidence-insufficient",
+      },
+    },
     coverage: {
       inboundGrammarAndSemantics: "verified",
       piInvocationIntegrity: "verified",
@@ -354,7 +417,7 @@ export function certifyServingComposition(
       servingReadinessAndIsolation: "verified",
       localLoopbackHttpBoundary: "verified",
       piConfigurationCredentialCli: "verified",
-      realProviderOnlineConformance: "verified",
+      realProviderOnlineConformance: "evidence-insufficient",
       ...(facts.clientAuthorityPolicy === "handler-bound-file-snapshot-v1"
         ? { perClientProtocolAuthIsolation: "verified" as const }
         : {}),
@@ -362,6 +425,37 @@ export function certifyServingComposition(
     verification: {
       commands: [...VERIFICATION_COMMANDS],
       conformanceRecord: SERVING_CONFORMANCE_REVISION,
+      onlineEvidence: {
+        status: "evidence-insufficient",
+        attempted: false,
+        gaps: [
+          {
+            profiles: ["anthropic-conversion", "commandcode-provider"],
+            entrypoint: "npm run test:online",
+            reason: "not run by explicit user decision; paid upstream credentials were not exercised",
+          },
+          {
+            profiles: ["responses-conversion", "commandcode-provider"],
+            entrypoint: "npm run test:online-responses",
+            reason: "not run by explicit user decision; paid upstream credentials were not exercised",
+          },
+          {
+            profiles: ["responses-conversion", "commandcode-provider"],
+            entrypoint: "npm run test:online-codex",
+            reason: "not run by explicit user decision; live Codex and paid upstream access were not exercised",
+          },
+          {
+            profiles: ["anthropic-native-passthrough"],
+            entrypoint: null,
+            reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
+          },
+          {
+            profiles: ["responses-native-passthrough"],
+            entrypoint: null,
+            reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
+          },
+        ],
+      },
       result,
     },
   };

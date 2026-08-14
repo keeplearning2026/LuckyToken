@@ -5,7 +5,7 @@ import test from "node:test";
 
 const repositoryRoot = new URL("../../", import.meta.url);
 const recordUrl = new URL(
-  "../fixtures/certification/serving-conformance-v1.json",
+  "../fixtures/certification/serving-conformance-v2.json",
   import.meta.url,
 );
 const certificationSourceUrl = new URL(
@@ -28,7 +28,8 @@ test("binds the serving manifest to the immutable conformance record", async () 
   )?.[1];
 
   assert.equal(boundRevision, actualRevision);
-  assert.equal(record.schemaVersion, "luckytoken-serving-conformance-v1");
+  assert.equal(record.schemaVersion, "luckytoken-serving-conformance-v2");
+  assert.equal(record.certificationBasis, "offline");
   assert.equal(record.result, "CERTIFIED");
   assert.deepEqual(record.commands, [
     "npm test",
@@ -36,8 +37,91 @@ test("binds the serving manifest to the immutable conformance record", async () 
     "npm run lint",
     "npm run build",
     "git diff --check",
-    "npm run test:online",
   ]);
+});
+
+test("binds the shared policy and all three conversion authorities by content", async () => {
+  const record = JSON.parse(await readFile(recordUrl, "utf8"));
+  const expected = [
+    [
+      "shared-architecture-policy",
+      "doc/Protocols/Protocol Conversion Architecture and Policy.md",
+    ],
+    [
+      "anthropic-pi-conversion",
+      "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
+    ],
+    [
+      "responses-pi-conversion",
+      "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
+    ],
+    [
+      "pi-commandcode-conversion",
+      "doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
+    ],
+  ];
+  assert.deepEqual(
+    record.authorities.map(({ id, path }) => [id, path]),
+    expected,
+  );
+  for (const authority of record.authorities) {
+    const bytes = await readFile(new URL(authority.path, repositoryRoot));
+    const normalized = bytes.toString("utf8").replaceAll("\r\n", "\n");
+    const actual = `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
+    assert.equal(authority.sha256, actual, `stale authority: ${authority.id}`);
+  }
+});
+
+test("certifies five named profiles separately and records the online gap", async () => {
+  const record = JSON.parse(await readFile(recordUrl, "utf8"));
+  assert.deepEqual(
+    record.profiles.map(({ id, route, offlineResult }) => [id, route, offlineResult]),
+    [
+      ["anthropic-conversion", "POST /v1/messages conversion", "CERTIFIED"],
+      ["anthropic-native-passthrough", "POST /v1/messages native passthrough", "CERTIFIED"],
+      ["responses-conversion", "POST /v1/responses conversion", "CERTIFIED"],
+      ["responses-native-passthrough", "POST /v1/responses native passthrough", "CERTIFIED"],
+      ["commandcode-provider", "Pi Provider commandcode-private", "CERTIFIED"],
+    ],
+  );
+  for (const profile of record.profiles) {
+    assert.ok(profile.tests.length > 0, `profile has no evidence: ${profile.id}`);
+  }
+  assert.deepEqual(record.onlineEvidence, {
+    status: "EVIDENCE_INSUFFICIENT",
+    attempted: false,
+    gaps: [
+      {
+        profiles: ["anthropic-conversion", "commandcode-provider"],
+        entrypoint: "npm run test:online",
+        reason: "not run by explicit user decision; paid upstream credentials were not exercised",
+      },
+      {
+        profiles: ["responses-conversion", "commandcode-provider"],
+        entrypoint: "npm run test:online-responses",
+        reason: "not run by explicit user decision; paid upstream credentials were not exercised",
+      },
+      {
+        profiles: ["responses-conversion", "commandcode-provider"],
+        entrypoint: "npm run test:online-codex",
+        reason: "not run by explicit user decision; live Codex and paid upstream access were not exercised",
+      },
+      {
+        profiles: ["anthropic-native-passthrough"],
+        entrypoint: null,
+        reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
+      },
+      {
+        profiles: ["responses-native-passthrough"],
+        entrypoint: null,
+        reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
+      },
+    ],
+  });
+  assert.equal(
+    JSON.stringify(record.onlineEvidence).includes("PASSED"),
+    false,
+  );
 });
 
 test("the conformance record covers the complete serving route with real tests", async () => {
@@ -54,29 +138,20 @@ test("the conformance record covers the complete serving route with real tests",
       "serving-readiness-and-isolation",
       "local-loopback-http-boundary",
       "pi-configuration-credential-cli",
-      "real-provider-online-conformance",
+      "online-evidence-gap",
       "per-client-protocol-auth-isolation",
     ],
   );
 
-  const onlineCoverage = record.coverage.find(
-    ({ dimension }) => dimension === "real-provider-online-conformance",
-  );
-  assert.deepEqual(onlineCoverage?.tests, [
-    "test/online/plan.ts",
-    "test/online/conformance.ts",
-    "test/online/run-commandcode.ts",
-  ]);
-
   await Promise.all(
-    record.coverage.flatMap(({ tests }) =>
+    [...record.coverage, ...record.profiles].flatMap(({ tests }) =>
       tests.map((relativePath) => access(new URL(relativePath, repositoryRoot))),
     ),
   );
 });
 
 test("binds the installed Pi runtime and every governing specification revision", async () => {
-  const [source, packageText, lockText, core, anthropicPi, piCommandCode] =
+  const [source, packageText, lockText, core, policy, anthropicPi, responsesPi, piCommandCode] =
     await Promise.all([
       readFile(certificationSourceUrl, "utf8"),
       readFile(new URL("../../package.json", import.meta.url), "utf8"),
@@ -84,7 +159,21 @@ test("binds the installed Pi runtime and every governing specification revision"
       readFile(new URL("../../doc/Spec/LuckyTokenCoreSpec.md", import.meta.url), "utf8"),
       readFile(
         new URL(
+          "../../doc/Protocols/Protocol Conversion Architecture and Policy.md",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
           "../../doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../../doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
           import.meta.url,
         ),
         "utf8",
@@ -116,9 +205,19 @@ test("binds the installed Pi runtime and every governing specification revision"
       "LuckyToken Core Architecture Specification v5.8",
     ],
     [
+      policy,
+      "# Protocol Conversion Architecture and Policy",
+      "Protocol Conversion Architecture and Policy",
+    ],
+    [
       anthropicPi,
       "# Part I — Anthropic Request → Pi AI IR Conversion Method",
       "Anthropic-Pi AI IR Conversion Method (Part I/II/III)",
+    ],
+    [
+      responsesPi,
+      "# OpenAI Responses ↔ Pi AI IR Conversion Method",
+      "OpenAI Responses-Pi AI IR Conversion Method",
     ],
     [
       piCommandCode,

@@ -4,7 +4,12 @@
 >
 > 审计日期：2026-08-13。
 >
-> 本文严格区分两件事：**当前代码事实**与**已冻结、尚待实现的转换方法**。代码事实优先于旧报告、规划文档和参考对比文档。本文不把测试通过等同于语义完整。
+> **历史快照，非当前实现合同。** 本文关于 shared `HttpObserver`、fetch observation
+> 与缺失 neutral failure producer 的代码事实仅描述 `2863af2` 基线；当前实现已删除
+> observer side channel，权威合同见 Protocol Conversion Architecture and Policy 及各
+> Conversion Method。以下旧证据保留用于解释 contraction 起因，不得当作当前行为。
+>
+> 本文严格区分两件事：**该审计基线的代码事实**与**当时已冻结、尚待实现的转换方法**。基线代码事实优先于更早的报告、规划文档和参考对比文档，但不代表当前 HEAD。本文不把测试通过等同于语义完整。
 
 ## 0. 结论
 
