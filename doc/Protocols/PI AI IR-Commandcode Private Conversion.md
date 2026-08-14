@@ -446,9 +446,8 @@ Retry rules:
 
 ## 15. Current implementation gaps
 
-Remaining gaps after tickets 20–21:
+Remaining gaps after tickets 20–22:
 
-- constrainedSampling.require throws instead of availability degradation;
 - reasoning content may be rejected by model.reasoning=false;
 - finish-step identity is ignored;
 - stop reason is not content-normalized;

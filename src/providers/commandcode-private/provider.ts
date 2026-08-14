@@ -238,10 +238,16 @@ export function convertCommandCodeMessages(
   return convertCommandCodeMessageHistory(model, context, policy).messages;
 }
 
-export function convertCommandCodeTools(
+interface CommandCodeToolConversion {
+  readonly tools: Array<Record<string, unknown>>;
+  readonly notices: readonly ConversionNotice[];
+}
+
+function convertCommandCodeToolCatalog(
   tools: Context["tools"],
-): Array<Record<string, unknown>> {
-  return (tools ?? []).map((tool) => {
+): CommandCodeToolConversion {
+  const notices: ConversionNotice[] = [];
+  const converted = (tools ?? []).map((tool, index) => {
     const constrained = tool.constrainedSampling;
     if (
       constrained !== undefined &&
@@ -249,8 +255,14 @@ export function convertCommandCodeTools(
       constrained.type === "json_schema" &&
       constrained.strict === "require"
     ) {
-      throw new Error(
-        "CommandCode cannot preserve required JSON-schema constrained sampling",
+      notices.push(
+        Object.freeze({
+          adapter: PROVIDER_ID,
+          direction: "request",
+          code: "constrained_sampling_require_degraded",
+          jsonPath: `$.tools[${index}].constrainedSampling`,
+          action: "degrade",
+        }),
       );
     }
     const inputSchema = cloneLosslessJsonObject(
@@ -263,6 +275,13 @@ export function convertCommandCodeTools(
       input_schema: inputSchema,
     };
   });
+  return { tools: converted, notices: Object.freeze(notices) };
+}
+
+export function convertCommandCodeTools(
+  tools: Context["tools"],
+): Array<Record<string, unknown>> {
+  return convertCommandCodeToolCatalog(tools).tools;
 }
 
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -683,6 +702,7 @@ export function buildCommandCodeBody(
     context,
     requestConversion,
   );
+  const toolConversion = convertCommandCodeToolCatalog(context.tools);
   const maxTokensCandidate = options?.maxTokens ?? model.maxTokens;
   if (
     !Number.isSafeInteger(maxTokensCandidate) ||
@@ -702,7 +722,7 @@ export function buildCommandCodeBody(
   const params: Record<string, unknown> = {
     model: model.id,
     messages: conversion.messages,
-    tools: convertCommandCodeTools(context.tools),
+    tools: toolConversion.tools,
     max_tokens: maxTokensCandidate,
     stream: true,
   };
@@ -711,7 +731,10 @@ export function buildCommandCodeBody(
   if (reasoning.effort !== undefined) params.reasoning_effort = reasoning.effort;
 
   return {
-    notices: conversion.notices,
+    notices: Object.freeze([
+      ...conversion.notices,
+      ...toolConversion.notices,
+    ]),
     supportedReasoningEfforts: reasoning.supportedEfforts,
     body: {
       config,

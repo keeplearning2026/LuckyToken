@@ -1652,10 +1652,10 @@ pending call ID/name 和 Provider request policy 的 `text|error-text`。每次 
 ### Tool definition conversion
 
 Pi tool name/description/parameters 变成 CommandCode tool definition。所有 schema
-必须是 lossless JSON object。当前 CommandCode 上游无法保证 Pi
-`constrainedSampling.strict=require`，所以 Provider 明确拒绝这种 required strict
-constraint；这意味着当前 concrete CommandCode serving route 支持普通 client tools，
-但不宣称端到端支持 Anthropic `strict:true` sampling。
+必须是 lossless JSON object。CommandCode 没有 constrained-sampling wire field，因此
+absent/false/prefer/require/grammar 都降为同一个普通 target tool，不向 prompt、description
+或 schema 注入指令。`strict=require` 是冻结的可用性例外：不拒绝请求，但产生
+request-local、非模型可见的 Provider degradation notice；这不代表上游执行了 strict。
 
 ### Body controls
 
@@ -2379,9 +2379,9 @@ construction/registration/certification，没有 message/content/usage/tool conv
    直接构造 Provider，应显式绑定 fetch，避免 ambient transport。
 
 5. **Client→Pi 可表达不等于当前 Provider 端到端可表达。** 例如 Anthropic
-   `strict:true` 可转换为 Pi constrained sampling，但 CommandCode Provider 当前明确
-   拒绝 required strict semantics；production 默认 policy 也没有认证 image fidelity。
-   这些必须保持显式失败，不能通过丢字段假装支持。
+   `strict:true` 可转换为 Pi constrained sampling；CommandCode Provider 按冻结例外将其
+   降为普通工具并产生 degradation notice，但不宣称 strict 生效。Image 是否可用仍取决于
+   selected model capability；不能把字段到达 Pi 当成具体 Provider 已执行该能力的证据。
 
 6. **Pi CredentialStore 的 file lock 不能被复制到所有 JSON 文件。** 它解决的是
    concurrent OAuth refresh/login/logout；Client token CLI 没有同样并发需求。是否加锁
