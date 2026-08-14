@@ -5,7 +5,7 @@ import {
   createEmptyServerConfig,
   createProjectSnapshot,
   type GitOutput,
-} from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/project.js";
 
 describe("CommandCode project identity and snapshot", () => {
   it("classifies only non-empty strings as project-bound", () => {

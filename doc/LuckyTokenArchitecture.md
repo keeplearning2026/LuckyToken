@@ -145,8 +145,8 @@ WHATWG Response → Node ServerResponse → Agent
   `Options.metadata.projectDir`；
 - 通过 Pi `Provider.auth` 接口执行 Provider login/logout，并把 credential 保存到
   Pi-owned `auth.json`；
-- CommandCode Private Provider 作为 Pi 内置 Provider 注册（模型与上游地址内置，
-  用户零配置）；
+- CommandCode Private Provider 作为私有 workspace package 从 `node_modules` 加载
+  （模型与上游地址由包拥有，配置只需声明 package 根名）；
 - 支持 `models.json` 注册用户自定义 Provider（`baseUrl` + `api` + `apiKey` +
   `models`），复用 Pi 内置 api adapter（如 `anthropic-messages`），经同一
   Anthropic endpoint 按 `provider/model_id` selector 访问；
@@ -246,7 +246,7 @@ flowchart LR
 | Client Auth | `auth.ts`, `client-auth/` | inbound credential 解析、token authority、session/project fact | Client Wire、Pi credential、Provider auth |
 | Anthropic adapter | `protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
 | Pi integration/composition | `pi/`, `composition.ts`, `cli-config.ts`, `cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
-| CommandCode Provider | `providers/commandcode-private/` | Pi ↔ CommandCode、project snapshot、HTTP attempts、JSONL lifecycle | Anthropic/OpenAI 响应格式 |
+| CommandCode Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode、project snapshot、HTTP attempts、JSONL lifecycle | Anthropic/OpenAI 响应格式与 Core 注册策略 |
 
 静态依赖方向如下。箭头表示“调用或持有”，不是数据在 wire 上的方向：
 
@@ -296,9 +296,11 @@ createConfiguredLuckyTokenComposition(config)
   ├── load selected protocol token file once
   │    └── immutable ClientTokenAuthority
   ├── construct Pi Models with CredentialStore(pi/auth.json)
-  ├── register built-in CommandCode Provider via catalog (no models.json)
-  ├── verify Provider credential availability
-  ├── certify the complete serving composition
+  ├── register Pi builtins, then models.json providers
+  ├── import configured Provider Packages from node_modules
+  ├── validate/stage every Provider and atomically register them
+  ├── leave Provider credential checks to the Pi invocation path
+  ├── certify provider-neutral Core composition facts
   ├── construct generic Auth
   ├── construct Anthropic handler(models, auth)
   └── construct Runtime([handler])
@@ -1257,8 +1259,8 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 > Provider 模块里，用户不需要任何 `models.json`。这就像 Pi 内置的 deepseek/anthropic
 > provider 一样——`login` 填 API key 就能用。
 
-CommandCode Private Provider 内置 **33 个模型**，全部硬编码在
-`providers/commandcode-private/models.ts`（`COMMANDCODE_MODEL_SOURCES`），这是
+CommandCode Private Provider Package 内置 **33 个模型**，全部硬编码在
+`packages/provider-commandcode-private/src/models.ts`（`COMMANDCODE_MODEL_SOURCES`），这是
 **唯一的模型权威来源**——没有运行时端点拉取，更新模型只需改这个文件。
 
 模型数据来自 `doc/# CommandCode 1.9.0 模型信息表.md`（官方 command-code@1.9.0
@@ -1404,25 +1406,24 @@ createConfiguredLuckyTokenComposition(options)
 ### `createConfiguredPiModels()`
 
 > **小白理解：** 这一层只组装 Pi 的“模型侧”：读取模型目录、准备 Provider 凭证柜、
-> 这一层只组装 Pi 的“模型侧”：准备 Provider 凭证柜，通过内置 Provider catalog
-> 注册 LuckyToken 自带的 Provider，再通过 Pi 自己的标准接口登记。结果对外只是
-> 普通的 Pi `Models`，上层看不见 CommandCode 的私有实现。
+> 这一层只组装 Pi 的“模型侧”：准备 Provider 凭证柜，按 Pi builtins、
+> `models.json`、外部 Provider Packages 的固定顺序登记。结果对外只是普通的 Pi
+> `Models`，上层看不见 CommandCode 的私有实现。
 
 | 输入 | 输出/行为 |
 | --- | --- |
 | `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
-| required bound `fetch` | 交给 concrete Provider；不使用 ambient fallback |
-| optional `ProjectSnapshot` | 交给 CommandCode Provider |
-| optional ID/clock | 交给对应 owner |
+| `providerPackages` | package 根名 → package-private raw configuration |
+| required bound `fetch` | 通过最小 host capability 交给 external Provider；不使用 ambient fallback |
+| ID/clock | 通过同一最小 host capability 交给 external Provider |
 
-**CommandCode 是 Pi 内置风格 Provider，被完全屏蔽。** 模型数据（默认
+**CommandCode 是通过 Pi Provider 契约加载的私有 workspace package。** 模型数据（默认
 `deepseek/deepseek-v4-flash`）、固定上游地址（`https://api.commandcode.ai`）、
-auth（API key login）都封装在 `providers/commandcode-private/` 内。`catalog.ts`
-是唯一 import 该实现的注册点；composition 只调用
-`registerLuckyTokenProviders(models, deps)`，其余代码通过 Pi `Models` 接口 +
-provider id / model id 使用。**用户零配置**：不需要 models.json，`login` 填
-API key 即可 serve。
+auth（API key login）都封装在 `@luckytoken/provider-commandcode-private` 内。
+Core 不 import 或 special-case 该实现；`package-loader.ts` 只认 Provider Package
+Contract 和固定 `providerPackage` 导出。配置 package 根名后不需要 `models.json`，
+`login` 填 API key 即可 serve。
 
 ### `createConfiguredLuckyTokenComposition()`
 
@@ -1435,9 +1436,9 @@ installed Provider 的位置。职责严格限定为：
 
 ```text
 protocol id → authFile → immutable authority → Auth → handler
-catalog → register built-in CommandCode Provider → Pi Models
+catalog → Pi builtins → models.json → package loader → external Providers → Pi Models
 handler list → Runtime
-all bound facts → serving certification
+provider-neutral bound facts → Core serving certification
 ```
 
 它不做 Anthropic↔Pi 或 Pi↔CommandCode conversion。完整 `LuckyTokenCliConfig` 在
@@ -1449,16 +1450,20 @@ wire forwarding。Conversion invocation 不接收 composition 注入的 custom f
 Provider failure 只通过 trusted neutral Pi diagnostics 跨越 execution boundary。
 `createConfiguredPiModels()` 不把 infrastructure 对象作为公共返回值泄漏。
 
-当前 production composition 分别认证 `anthropic-messages`、`openai-responses` 两个
-Client Protocol profile，以及 `commandcode-private` Provider；两个 native passthrough
-profile 另列，不能拿 conversion 证据替代。未来扩展时应增加独立
-binding/registration，而不是在现有 handler/Provider 内加入跨协议 switch。
+当前 production composition 的运行时 certification 只认证 provider-neutral Core。
+CommandCode Provider Package 与整套 distribution 的 certification 位于测试/分发边界；
+它们验证 package 契约、动态加载、协议冻结测试与真实线上证据，不能拿 Core 认证替代。
 
-## 6.6 Serving certification — `src/commandcode-serving-certification.ts`
+## 6.6 Serving certification — Core 与 Distribution 分离
 
 > **小白理解：** Certification 像营业前的整套验收清单。它核对实际装上的模型、地址、
 > 认证方式、取消策略和转换版本是否仍是经过测试的组合。验收失败就不启动，避免
 > “零件都能单独工作，但接在一起已经不是测试过的系统”。
+
+`src/core-serving-certification.ts` 只记录 Client Protocol、实际 Provider IDs、注册顺序
+和 runtime limits，不绑定某个 private Provider。CommandCode-specific 的完整 conformance
+manifest 位于 `test/support/commandcode-serving-certification.ts`，作为 Provider /
+Distribution certification 验证 package、动态加载与线上证据，不进入 Core runtime。
 
 ```ts
 certifyServingComposition(facts): ServingCertificationManifest
@@ -1547,7 +1552,7 @@ flowchart LR
 这个部门不知道最初的客户讲 Anthropic 还是未来的 OpenAI Responses；它只接收 Pi。
 同样，Client Protocol 也不知道这里使用 CommandCode。这就是左右两侧解耦的实际落点。
 
-目录 `src/providers/commandcode-private/` 是完整 Pi ↔ CommandCode capability。它从
+目录 `packages/provider-commandcode-private/src/` 是完整 Pi ↔ CommandCode capability。它从
 Pi Provider invocation 得到唯一语义输入，生成稳定 CommandCode request；执行真实
 HTTP attempts；在 physical EOF 后原子提交 JSONL result；再把结果转换并 replay 为
 Pi `AssistantMessageEventStream`。它完全不知道请求最初来自 Anthropic 还是未来
@@ -1584,10 +1589,11 @@ Provider.name = CommandCode Private
 Model.api     = commandcode-private
 ```
 
-CommandCode 是 Pi 内置风格 Provider（对齐 `deepseekProvider()` 形态）：
+CommandCode 是 Pi 内置风格 Provider 实现（对齐 `deepseekProvider()` 形态），但由
+独立 Provider Package 交付：
 `createCommandCodePrivateProvider()` 自带固定上游地址
 `https://api.commandcode.ai` 和内置默认模型，`auth.apiKey.login` 让用户只填
-API key 即可使用。用户**零配置**（无 models.json）；测试通过
+API key 即可使用。用户无需 `models.json`，只需在 `providerPackages` 声明已安装包；测试通过
 `LUCKYTOKEN_COMMANDCODE_BASE_URL` 环境变量指向 fixture 上游。
 
 | 项目 | 内容 |
@@ -2039,9 +2045,12 @@ defaultAnthropicModelValidityPolicy
 AnthropicModelValidityPolicy
 ```
 
-Subpath `luckytoken/providers/commandcode-private` 导出 `provider.ts` 的 Provider factory、
-IDs 与 conversion/preparation helpers；subpath
-`luckytoken/providers/commandcode-private/project` 导出 project snapshot capability。
+私有包 `@luckytoken/provider-commandcode-private` 的根入口只导出固定
+`providerPackage`、现有直接 Pi Provider factory 与 options 类型、必要的
+`ProjectSnapshot` 类型。LuckyToken 根包不再导出 CommandCode subpath。
+
+私有包 `@luckytoken/provider-contract` 只暴露 `/package` 与 `/diagnostics`；前者定义
+加载契约，后者保证 Core 与 Provider 共享同一个 trusted diagnostics 运行时实例。
 
 `cli.ts`、`cli-config.ts`、`composition.ts` 和 client-token administrative store 当前是
 application-internal seams，不在 package root exports。`package.json` 目前
@@ -2100,7 +2109,8 @@ flowchart TB
 | `src/execution.ts` | Pi stream → committed `AssistantMessage` | Client Protocol handler | Pi `Models.streamSimple()` | `test/unit/execution.test.ts`, Pi runtime fidelity |
 | `src/cli-config.ts` | config file → frozen deployment facts | top-level CLI | Node file/path/stat | `test/unit/cli-config.test.ts` |
 | `src/composition.ts` | Pi Models/runtime/certification | CLI/tests | all concrete constructors, no conversion | configured-composition/serving certification tests |
-| `src/commandcode-serving-certification.ts` | facts → frozen manifest | composition/test support | model/policy identities | unit/integration/certification sync tests |
+| `src/core-serving-certification.ts` | provider-neutral facts → frozen Core manifest | composition | protocol/provider IDs、limits | configured-composition tests |
+| `test/support/commandcode-serving-certification.ts` | Provider/Distribution facts → conformance manifest | certification tests | package/policy/evidence identities | unit/integration/certification sync tests |
 | `src/cli.ts` | serve/login/logout/client-token process shell | `npm start` | config、composition、Pi Models、server、client-token CLI | `test/integration/cli.test.ts` |
 | `src/client-auth/file-token-store.ts` | immutable authority；admin store | composition；client-token CLI | Node file/crypto/path | client-token unit + real HTTP Auth integration |
 | `src/client-auth/cli.ts` | token CLI args → one file mutation | top-level CLI | narrow auth-file resolver、token store、directory stat | CLI integration |
@@ -2108,8 +2118,8 @@ flowchart TB
 ## 9.2 Pi integration
 
 > **小白理解：** 这组模块把 LuckyToken 接到 Pi 的标准接口，并管理 Pi 所需的
-> Provider 凭证。Provider 的模型与上游地址内置在 Provider 模块里，无需模型配置
-> 文件。仓库里的 `pi-agent/` 是供人核对上游行为的参考源，正式运行依赖 npm 包；
+> Provider 凭证。CommandCode 的模型与上游地址由其 Provider Package 拥有，无需
+> `models.json`。仓库里的 `pi-agent/` 是供人核对上游行为的参考源，正式运行依赖 npm 包；
 > `pi-agent/` 整棵树不可修改（见 AGENTS.md），LuckyToken 只通过 Pi 公共接口消费，
 > 不在参考源码里打任何补丁。
 
@@ -2117,7 +2127,7 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
 | `src/execution.ts` | Pi terminal → atomic success 或 `ExecutionFailure`；验证 neutral diagnostic 并保存在 `.failure` | Client handlers | Pi public event/diagnostic contracts、execution facts sink | execution unit + provider-boundary integration |
-| `src/protocols/upstream-failure.ts` | neutral fact schema、validation/sanitization 与 trusted diagnostic lookup | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
+| `packages/provider-contract/src/diagnostics.ts` | shared diagnostic contracts 与 trusted runtime identity | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerLuckyTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
 | `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
 | `pi-agent/packages/ai` | reviewed reference/source mirror | maintainers/certification review | upstream Pi source | 不作为 LuckyToken production import |
@@ -2152,11 +2162,12 @@ flowchart TB
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
-| `providers/catalog.ts` | `registerLuckyTokenProviders()`；唯一 import Provider 实现的注册点 | composition | CommandCode provider、Pi Models | configured-composition、provider-boundary tests |
-| `providers/commandcode-private/models.ts` | **33 个模型的唯一权威目录**（id/context/模态/价格/推理档位，来自官方 1.9.0 分析）；`thinkingLevelMap` 生成 | provider factory | `constants.ts`、Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
-| `providers/commandcode-private/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider、catalog | none | 被 model tests 覆盖 |
-| `providers/commandcode-private/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory、catalog | `models.ts` | `test/unit/commandcode-model.test.ts` |
-| `providers/commandcode-private/provider.ts` | factory、Pi→wire conversion、request preparation | composition/Pi Models | project、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
+| `src/providers/catalog.ts` | `registerLuckyTokenProviders()`；只注册 Pi builtins 与 `models.json` | composition | Pi Providers、Pi Models | configured-composition、provider-boundary tests |
+| `src/providers/package-loader.ts` | 校验 npm 根名/契约/Provider，冲突检查后原子注册 | composition | Contract、Pi Models、dynamic import | package-loader/runtime/distribution tests |
+| `packages/provider-commandcode-private/src/models.ts` | **33 个模型的唯一权威目录**（id/context/模态/价格/推理档位，来自官方 1.9.0 分析）；`thinkingLevelMap` 生成 | provider factory | `constants.ts`、Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
+| `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
+| `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
+| `packages/provider-commandcode-private/src/provider.ts` | factory、Pi→wire conversion、request preparation | Provider Package entry | project、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
 | `project.ts` | `ProjectSnapshot` → `ServerConfig` | Provider preparation | directory/Git/date/platform capabilities | project unit/provider integration/online project scope |
 | `attempts.ts` | prepared request → committed `CommandCodeResult` | Provider stream | fetch/timers/assembler | attempt controls、decoder、retry/cancel integration |
 | `assembler.ts` | JSONL lines + EOF → ordered result or typed error | attempts | no other business module | assembler/response lifecycle tests |
@@ -2175,7 +2186,7 @@ flowchart TB
 src/protocols/anthropic/**
   imports CommandCode modules?  no
 
-src/providers/commandcode-private/**
+packages/provider-commandcode-private/src/**
   imports/names Anthropic or /v1/messages?  no
 
 src/runtime.ts / src/http.ts
@@ -2581,7 +2592,8 @@ flowchart TB
 3. `src/auth.ts` 与 `src/client-auth/file-token-store.ts`：谁被授权、产生什么窄事实；
 4. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
 5. Pi `Models.streamSimple()` public contract；
-6. `providers/commandcode-private/provider.ts` → project/attempts/assembler/semantic；
+6. `src/providers/package-loader.ts` → `@luckytoken/provider-commandcode-private` →
+   `provider.ts` → project/attempts/assembler/semantic；
 7. 对应 Protocol/Conversion Spec；
 8. owning unit/integration test、serving conformance record，以及深度在线证据
    （`test/online/deep-online.ts`、`test/online/event-coverage.ts`）——后者证明

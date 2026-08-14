@@ -431,6 +431,9 @@ export async function runCommandCodeOnlineSuite(
             authFile: "client-auth/anthropic-messages.json",
           },
         },
+        providerPackages: {
+          "@luckytoken/provider-commandcode-private": {},
+        },
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,

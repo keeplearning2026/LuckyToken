@@ -585,6 +585,9 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       clientProtocols: {
         "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
       },
+      providerPackages: {
+        "@luckytoken/provider-commandcode-private": {},
+      },
       pi: { directory: "pi" },
       limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
     }),

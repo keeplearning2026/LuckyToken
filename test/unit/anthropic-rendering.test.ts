@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { createUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+import { createUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import {
   convertAssistantMessageToAnthropic,
   type AnthropicResponseMessage,

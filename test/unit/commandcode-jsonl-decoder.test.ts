@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { consumeCommandCodeResponse } from "../../src/providers/commandcode-private/attempts.js";
+import { consumeCommandCodeResponse } from "../../packages/provider-commandcode-private/src/attempts.js";
 
 function chunkedResponse(bytes: Uint8Array, splitPoints: number[]): Response {
   const chunks: Uint8Array[] = [];

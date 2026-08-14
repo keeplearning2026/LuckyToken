@@ -8,36 +8,28 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { createAuth } from "./auth.js";
+import {
+  certifyCoreServingComposition,
+  type CoreServingCertificationManifest,
+} from "./core-serving-certification.js";
 import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
-import { bindCommandCodeConfiguration, type CommandCodeConfiguration } from "./providers/commandcode-private/configuration.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import { loadFileClientTokenAuthority } from "./client-auth/file-token-store.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
-import {
-  certifyServingComposition,
-  ServingCertificationFailure,
-  type ServingCertificationManifest,
-} from "./commandcode-serving-certification.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import { loadModelsJson } from "./providers/models-json.js";
+import { registerLuckyTokenProviders } from "./providers/catalog.js";
 import {
-  commandCodePrivateDefaultModelId,
-  commandCodePrivateProviderId,
-  registerLuckyTokenProviders,
-  type ProjectSnapshot,
-} from "./providers/catalog.js";
+  loadProviderPackages,
+  type ImportProviderModule,
+} from "./providers/package-loader.js";
 import {
   anthropicMessagesProtocolId,
   createAnthropicMessagesHandler,
 } from "./protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "./protocols/anthropic/representability.js";
-import {
-  SYNTHETIC_CLIENT_HISTORY_API,
-  SYNTHETIC_CLIENT_HISTORY_PROVIDER,
-} from "./protocols/anthropic/request.js";
 import {
   createOpenAIResponsesHandler,
   openaiResponsesProtocolId,
@@ -51,11 +43,11 @@ export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
-  readonly commandCodeConfiguration?: CommandCodeConfiguration;
   /** Optional models.json path; absent means no user-registered providers. */
   readonly modelsJsonPath?: string;
-  readonly projectSnapshot?: ProjectSnapshot;
-  readonly createSessionId?: () => string;
+  readonly providerPackages?: Readonly<Record<string, unknown>>;
+  readonly importModule?: ImportProviderModule;
+  readonly createUuid?: () => string;
   readonly now?: () => number;
 }
 
@@ -63,7 +55,7 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly config: LuckyTokenCliConfig;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
-  readonly projectSnapshot?: ProjectSnapshot;
+  readonly importModule?: ImportProviderModule;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -72,12 +64,12 @@ export interface ConfiguredLuckyTokenCompositionOptions {
 
 export interface ConfiguredLuckyTokenComposition {
   readonly runtime: LuckyTokenRuntime;
-  readonly certification: ServingCertificationManifest;
+  readonly certification: CoreServingCertificationManifest;
 }
 
 export async function createConfiguredPiModels(
   options: ConfiguredPiModelsOptions,
-): Promise<{ models: Models }> {
+): Promise<{ models: Models; externalProviderIds: readonly string[] }> {
   const modelsJson = await loadModelsJson(options.modelsJsonPath);
   const mutableModels = createModels({
     credentials:
@@ -85,19 +77,25 @@ export async function createConfiguredPiModels(
       createFileCredentialStore(join(options.piDirectory, "auth.json")),
   });
   registerLuckyTokenProviders(mutableModels, {
-    fetch: options.fetch,
-    ...(options.commandCodeConfiguration === undefined ? {} : { commandCodeConfiguration: options.commandCodeConfiguration }),
     ...(modelsJson === undefined ? {} : { modelsJson }),
-    ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.projectSnapshot === undefined
+  });
+  const loaded = await loadProviderPackages({
+    models: mutableModels,
+    providerPackages: options.providerPackages ?? {},
+    host: Object.freeze({
+      fetch: options.fetch,
+      now: options.now ?? Date.now,
+      createUuid: options.createUuid ?? randomUUID,
+    }),
+    ...(options.importModule === undefined
       ? {}
-      : { projectSnapshot: options.projectSnapshot }),
-    ...(options.createSessionId === undefined
-      ? {}
-      : { createSessionId: options.createSessionId }),
+      : { importModule: options.importModule }),
   });
   const models: Models = mutableModels;
-  return Object.freeze({ models });
+  return Object.freeze({
+    models,
+    externalProviderIds: loaded.providerIds,
+  });
 }
 
 export async function createConfiguredLuckyTokenComposition(
@@ -134,7 +132,7 @@ export async function createConfiguredLuckyTokenComposition(
     configuration: config.failureLogging,
     now,
   });
-  const { models } = await createConfiguredPiModels({
+  const { models, externalProviderIds } = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
     ...(config.pi.modelsJson === undefined
       ? {}
@@ -143,75 +141,13 @@ export async function createConfiguredLuckyTokenComposition(
       ? {}
       : { credentials: options.credentials }),
     fetch: options.fetch,
-    commandCodeConfiguration: bindCommandCodeConfiguration(
-      config.providerAdapters[commandCodePrivateProviderId],
-    ),
-    ...(options.projectSnapshot === undefined
+    providerPackages: config.providerPackages,
+    ...(options.importModule === undefined
       ? {}
-      : { projectSnapshot: options.projectSnapshot }),
-    createSessionId,
+      : { importModule: options.importModule }),
+    createUuid: createSessionId,
     now,
   });
-  const providers = models.getProviders();
-  const certifiedProvider = providers.find(
-    (provider) => provider.id === commandCodePrivateProviderId,
-  );
-  if (certifiedProvider === undefined) {
-    throw new Error(
-      `Registered Providers do not include the certified Provider ` +
-        `"${commandCodePrivateProviderId}" (found: ` +
-        `${providers.map((provider) => provider.id).join(", ") || "none"})`,
-    );
-  }
-  const certifiedModel = models.getModels().find(
-    (entry) =>
-      entry.provider === certifiedProvider.id &&
-      entry.id === commandCodePrivateDefaultModelId,
-  );
-  if (certifiedModel === undefined) {
-    throw new Error(
-      `Registered Provider ${certifiedProvider.id} exposes no model`,
-    );
-  }
-  const providerAuth = await models.checkAuth(certifiedProvider.id);
-  const certification = certifyServingComposition({
-    model: certifiedModel,
-    modelValidityPolicyRevision: defaultAnthropicModelValidityPolicy.revision,
-    compatibility: {},
-    fetchBound: true,
-    projectSnapshotPolicy:
-      options.projectSnapshot === undefined
-        ? "node-project-snapshot-v1"
-        : "bound-injected-project-snapshot-v1",
-    projectAuthorizationPolicy: "per-client-protocol-token-file-v1",
-    clientAuthorityPolicy: "handler-bound-file-snapshot-v1",
-    routerDefaults: {},
-    clientAuthConfigured: true,
-    providerApiKeyConfigured: providerAuth !== undefined,
-    providerAuthPolicy: "pi-models-credential-store-v1",
-    providerRegistrationPolicy: "startup-only-mutable-models-v1",
-    maxRequestBytes: config.limits.maxRequestBytes,
-    requestTimeoutMs: config.limits.requestTimeoutMs,
-    shutdownSignalBound: options.shutdownSignal !== undefined,
-    messageIdPolicy:
-      options.createMessageId === undefined
-        ? "node-random-uuid-v1"
-        : "bound-injected-message-id-v1",
-    sessionIdPolicy:
-      options.createSessionId === undefined
-        ? "node-random-uuid-v1"
-        : "bound-injected-session-id-v1",
-    clockPolicy:
-      options.now === undefined ? "system-clock-v1" : "bound-injected-clock-v1",
-    syntheticHistoryIdentity: {
-      provider: SYNTHETIC_CLIENT_HISTORY_PROVIDER,
-      api: SYNTHETIC_CLIENT_HISTORY_API,
-    },
-  });
-  if (certification.result !== "CERTIFIED") {
-    throw new ServingCertificationFailure(certification);
-  }
-
   const auth = createAuth({
     authorizeToken: (token) => clientAuthority.authorize(token),
     createFallbackSessionId: createSessionId,
@@ -240,6 +176,7 @@ export async function createConfiguredLuckyTokenComposition(
   clientProtocols.push(
     createModelsDiscoveryHandler({
       models,
+      providerIds: externalProviderIds,
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   );
@@ -271,6 +208,12 @@ export async function createConfiguredLuckyTokenComposition(
     });
     clientProtocols.push(responses);
   }
+  const certification = certifyCoreServingComposition({
+    clientProtocolIds: Object.keys(config.clientProtocols),
+    providerIds: models.getProviders().map((provider) => provider.id),
+    maxRequestBytes: config.limits.maxRequestBytes,
+    requestTimeoutMs: config.limits.requestTimeoutMs,
+  });
   const runtime = createLuckyTokenRuntime({
     clientProtocols,
     requestTimeoutMs: config.limits.requestTimeoutMs,

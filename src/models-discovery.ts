@@ -3,18 +3,10 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { ClientProtocolHandler } from "./http.js";
 import { renderResponsesModelsList } from "./protocols/openai-responses/models.js";
 
-/**
- * The LuckyToken-owned provider ids exposed through model discovery. Pi
- * built-in providers (openai, anthropic, amazon-bedrock, ...) are not served
- * by this deployment, so discovery lists only what the local endpoint can
- * actually route.
- */
-const DISCOVERED_PROVIDERS: ReadonlySet<string> = new Set([
-  "commandcode-private",
-]);
-
 export interface ModelsDiscoveryHandlerOptions {
   readonly models: Models;
+  /** External Provider Package IDs; Pi builtins and models.json stay hidden. */
+  readonly providerIds: readonly string[];
   readonly now?: () => number;
 }
 
@@ -39,7 +31,7 @@ export function createModelsDiscoveryHandler(
       const list = renderResponsesModelsList(
         options.models,
         Math.floor(now() / 1000),
-        DISCOVERED_PROVIDERS,
+        new Set(options.providerIds),
       );
       return new Response(JSON.stringify(list), {
         status: 200,

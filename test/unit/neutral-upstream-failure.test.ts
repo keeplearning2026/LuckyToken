@@ -14,7 +14,7 @@ import {
   createUpstreamFailureFact,
   findUpstreamFailureFact,
   type UpstreamFailureKind,
-} from "../../src/protocols/upstream-failure.js";
+} from "@luckytoken/provider-contract/diagnostics";
 
 const usage: Usage = {
   input: 0,

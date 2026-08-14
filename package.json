@@ -3,8 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,42 +23,39 @@
     "./protocols/openai-responses": {
       "types": "./dist/protocols/openai-responses/index.d.ts",
       "import": "./dist/protocols/openai-responses/index.js"
-    },
-    "./providers/commandcode-private": {
-      "types": "./dist/providers/commandcode-private/provider.d.ts",
-      "import": "./dist/providers/commandcode-private/provider.js"
-    },
-    "./providers/commandcode-private/project": {
-      "types": "./dist/providers/commandcode-private/project.d.ts",
-      "import": "./dist/providers/commandcode-private/project.js"
     }
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "start": "tsx src/cli.ts",
+    "start": "npm run build:packages && tsx src/cli.ts",
     "test:cache": "tsx test/online/cache-probe.ts",
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "build:packages": "npm run build --workspace @luckytoken/provider-contract && npm run build --workspace @luckytoken/provider-commandcode-private",
+    "build:root": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "build": "npm run build:packages && npm run build:root",
+    "typecheck": "npm run build:packages && npm run typecheck --workspace @luckytoken/provider-contract && npm run typecheck --workspace @luckytoken/provider-commandcode-private && tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"packages/*/src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\"",
+    "pretest": "npm run build:packages",
     "test": "npm run test:certification && vitest run",
-    "test:online": "tsx test/online/run-commandcode.ts",
-    "test:online-responses": "tsx test/online/run-openai-responses.ts",
-    "test:online-codex": "npm --prefix onlinetest/codex_cli test --",
-    "test:online-claude": "npm --prefix onlinetest/claude test --",
+    "test:online": "npm run build:packages && tsx test/online/run-commandcode.ts",
+    "test:online-responses": "npm run build:packages && tsx test/online/run-openai-responses.ts",
+    "test:online-codex": "npm run build:packages && npm --prefix onlinetest/codex_cli test --",
+    "test:online-claude": "npm run build:packages && npm --prefix onlinetest/claude test --",
     "test:certification": "node --test test/certification/*.test.mjs",
+    "test:distribution": "npm run build && node --test test/distribution/*.test.mjs",
     "test:unit": "vitest run test/unit --passWithNoTests",
     "test:integration": "vitest run test/integration"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.1",
-    "@sindresorhus/slugify": "2.2.1",
+    "@luckytoken/provider-contract": "0.1.0",
     "proper-lockfile": "4.1.2",
     "typebox": "1.3.7"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.91.1",
+    "@luckytoken/provider-commandcode-private": "0.1.0",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "eslint": "10.8.1",

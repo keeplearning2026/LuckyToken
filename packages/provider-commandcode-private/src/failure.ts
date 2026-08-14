@@ -1,9 +1,9 @@
 import {
   createUpstreamFailureFact,
+  type InvocationAttempt,
   type UpstreamFailureFact,
   type UpstreamFailureFactInput,
-} from "../../protocols/upstream-failure.js";
-import type { InvocationAttempt } from "../../invocation-diagnostics/index.js";
+} from "@luckytoken/provider-contract/diagnostics";
 
 const retryHeadersByError = new WeakMap<Error, Readonly<Record<string, string>>>();
 

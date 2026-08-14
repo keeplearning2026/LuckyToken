@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   validateCommandCodeRequest,
   type CommandCodeRequestAuthority,
-} from "../../src/providers/commandcode-private/provider.js";
-import type { ServerConfig } from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import type { ServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 const config: ServerConfig = {
   workingDir: "",

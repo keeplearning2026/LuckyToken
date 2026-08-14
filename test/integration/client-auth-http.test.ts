@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
+import {
+  COMMANDCODE_PROVIDER_PACKAGE,
+  commandCodeProviderImportModule,
+} from "../support/commandcode-provider-package.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 function commandCodeText(text: string): Response {
@@ -68,6 +72,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
             authFile: "client-auth/anthropic-messages.json",
           },
         },
+        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
         pi: { directory: "pi" },
       }),
       "utf8",
@@ -99,7 +104,9 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
         config,
         credentials,
         fetch: async () => commandCodeText("authorized"),
-        projectSnapshot: { snapshot: projectSnapshot },
+        importModule: commandCodeProviderImportModule({
+          projectSnapshot: { snapshot: projectSnapshot },
+        }),
       });
       const server = await startLuckyTokenHttpServer({
         runtime: composition.runtime,

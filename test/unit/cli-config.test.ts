@@ -61,10 +61,39 @@ describe("LuckyToken CLI configuration", () => {
       pi: { directory: resolve(directory, "pi") },
       limits: { maxRequestBytes: 32 * 1024 * 1024, requestTimeoutMs: 120_000 },
     });
-    expect(config.providerAdapters["commandcode-private"]).toBeDefined();
+    expect(config.providerPackages).toEqual({});
+    expect(Object.getPrototypeOf(config.providerPackages)).toBeNull();
     expect(config.failureLogging.directory).toBe(resolve(directory, "logs/failed-requests"));
     expect(Object.getPrototypeOf(config.clientProtocols)).toBeNull();
     expect(config.clientProtocols["toString"]).toBeUndefined();
+  });
+
+  it("preserves raw configuration under validated Provider Package names", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
+    directories.push(directory);
+    const path = join(directory, "config.json");
+    const packageConfiguration = {
+      conversion: { response: { unknownEvent: "ignore" } },
+    };
+    await writeFile(
+      path,
+      JSON.stringify({
+        clientProtocols: {
+          fixture: { authFile: "fixture.json" },
+        },
+        providerPackages: {
+          "@luckytoken/provider-commandcode-private": packageConfiguration,
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+
+    const config = await loadLuckyTokenCliConfig(path);
+
+    expect(
+      config.providerPackages["@luckytoken/provider-commandcode-private"],
+    ).toEqual(packageConfiguration);
   });
 
   it("preserves a protocol id named __proto__ as data rather than map structure", async () => {
@@ -135,6 +164,20 @@ describe("LuckyToken CLI configuration", () => {
       {
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         pi: { directory: "" },
+      },
+    ],
+    [
+      {
+        clientProtocols: { fixture: { authFile: "fixture.json" } },
+        providerAdapters: { "commandcode-private": {} },
+        pi: { directory: "pi" },
+      },
+    ],
+    [
+      {
+        clientProtocols: { fixture: { authFile: "fixture.json" } },
+        providerPackages: { "../private-provider": {} },
+        pi: { directory: "pi" },
       },
     ],
   ])("rejects invalid or unknown configuration %#", async (input) => {

@@ -16,9 +16,9 @@ import { cloneLosslessJsonObject } from "./json.js";
 import {
   createConversionNoticeDiagnostic,
   createInvocationAttemptDiagnostic,
-} from "../../execution-facts.js";
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
-import { createUpstreamFailureDiagnostic } from "../../protocols/upstream-failure.js";
+  createUpstreamFailureDiagnostic,
+  type ConversionNotice,
+} from "@luckytoken/provider-contract/diagnostics";
 import {
   commandCodeNeutralFailure,
   CommandCodeNeutralFailureError,

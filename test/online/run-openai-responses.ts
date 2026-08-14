@@ -575,6 +575,9 @@ export async function runOpenAIResponsesOnlineSuite(
             stateFile: "state/openai-responses.json",
           },
         },
+        providerPackages: {
+          "@luckytoken/provider-commandcode-private": {},
+        },
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,

@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
-import { parseCommandCodeConfiguration } from "./providers/commandcode-private/configuration.js";
+import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 
@@ -30,7 +30,7 @@ export interface LuckyTokenCliConfig {
     readonly maxRequestBytes: number;
     readonly requestTimeoutMs: number;
   };
-  readonly providerAdapters: Readonly<Record<string, unknown>>;
+  readonly providerPackages: Readonly<Record<string, unknown>>;
   readonly failureLogging: FailureLoggingConfiguration;
 }
 
@@ -109,17 +109,32 @@ export async function loadLuckyTokenCliConfig(
     );
   }
   const root = requireRecord(parsed, "LuckyToken config root");
+  if (Object.hasOwn(root, "providerAdapters")) {
+    throw new Error(
+      "providerAdapters is no longer supported; configure providerPackages",
+    );
+  }
   assertKeys(
     root,
-    ["server", "clientProtocols", "providerAdapters", "failureLogging", "pi", "limits"],
+    ["server", "clientProtocols", "providerPackages", "failureLogging", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
   const clientProtocols = requireRecord(root.clientProtocols, "clientProtocols");
   const pi = requireRecord(root.pi, "pi");
   const limits = root.limits === undefined ? {} : requireRecord(root.limits, "limits");
-  const providerAdapters = root.providerAdapters === undefined ? {} : requireRecord(root.providerAdapters, "providerAdapters");
-  assertKeys(providerAdapters, ["commandcode-private"], "providerAdapters");
+  const providerPackages = root.providerPackages === undefined
+    ? {}
+    : requireRecord(root.providerPackages, "providerPackages");
+  const resolvedProviderPackages = Object.create(null) as Record<
+    string,
+    unknown
+  >;
+  for (const [specifier, configuration] of Object.entries(providerPackages)) {
+    assertProviderPackageSpecifier(specifier);
+    resolvedProviderPackages[specifier] = configuration;
+  }
+  Object.freeze(resolvedProviderPackages);
   assertKeys(server, ["host", "port"], "server");
   assertKeys(pi, ["directory", "modelsJson"], "pi");
   assertKeys(limits, ["maxRequestBytes", "requestTimeoutMs"], "limits");
@@ -239,11 +254,7 @@ export async function loadLuckyTokenCliConfig(
         Number.MAX_SAFE_INTEGER,
       ),
     }),
-    providerAdapters: Object.freeze(Object.assign(Object.create(null), {
-      "commandcode-private": parseCommandCodeConfiguration(
-        providerAdapters["commandcode-private"] ?? {},
-      ),
-    })) as Readonly<Record<string, unknown>>,
+    providerPackages: resolvedProviderPackages,
     failureLogging: parseFailureLoggingConfiguration(root.failureLogging, directory),
   };
   return Object.freeze(result);

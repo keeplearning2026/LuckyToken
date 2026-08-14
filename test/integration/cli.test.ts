@@ -1,10 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { createRequire } from "node:module";
-import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,10 +12,6 @@ import {
   loadFileClientTokenAuthority,
 } from "../../src/client-auth/file-token-store.js";
 
-const execFileAsync = promisify(execFile);
-const npmCli =
-  process.env.npm_execpath ??
-  join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 
@@ -84,12 +78,11 @@ describe("LuckyToken CLI", () => {
   });
 
   it("documents serve, login, logout, and the single config authority", async () => {
-    const result = await execFileAsync(process.execPath, [npmCli, "start", "--", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+    const child = startCli(["--help"]);
+    children.push(child);
+    const result = await captureChild(child).result;
 
+    expect(result.code).toBe(0);
     expect(result.stdout).toContain("LuckyToken");
     expect(result.stdout).toContain("--config <path>");
     expect(result.stdout).toContain("login");
@@ -241,7 +234,7 @@ describe("LuckyToken CLI", () => {
     expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
   }, 30_000);
 
-  it("logs in and out through the built-in provider without leaking the key", async () => {
+  it("logs in and out through a configured Provider Package without leaking the key", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-e2e-"));
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
@@ -256,6 +249,9 @@ describe("LuckyToken CLI", () => {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",
           },
+        },
+        providerPackages: {
+          "@luckytoken/provider-commandcode-private": {},
         },
         pi: { directory: "pi" },
       }),

@@ -25,8 +25,8 @@ import {
 import type {
   ConversionNotice,
   InvocationAttempt,
-} from "../../invocation-diagnostics/index.js";
-import type { UpstreamFailurePhase } from "../../protocols/upstream-failure.js";
+  UpstreamFailurePhase,
+} from "@luckytoken/provider-contract/diagnostics";
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;

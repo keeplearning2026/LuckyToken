@@ -10,27 +10,20 @@ import {
 } from "node:fs/promises";
 import { basename, join } from "node:path";
 
+import type {
+  ConversionNotice,
+  InvocationAttempt,
+} from "@luckytoken/provider-contract/diagnostics";
+
 import {
   bindFailureLoggingConfiguration,
   type FailureLoggingConfiguration,
 } from "./configuration.js";
 
-export interface ConversionNotice {
-  readonly adapter: string;
-  readonly direction: "request" | "response";
-  readonly code: string;
-  readonly jsonPath?: string;
-  readonly action: "ignore" | "degrade" | "xrepair";
-}
-
-export interface InvocationAttempt {
-  readonly attempt: number;
-  readonly classification: string;
-  readonly stage: string;
-  readonly status?: number;
-  readonly retryable?: boolean;
-  readonly safeIds?: Readonly<Record<string, string>>;
-}
+export type {
+  ConversionNotice,
+  InvocationAttempt,
+} from "@luckytoken/provider-contract/diagnostics";
 
 export interface InvocationCheckpoint {
   readonly stage: string;

@@ -21,11 +21,11 @@ import {
   createConversionNoticeDiagnostic,
   createInvocationAttemptDiagnostic,
   type ExecutionFactsSink,
-} from "../../src/execution-facts.js";
+} from "@luckytoken/provider-contract/diagnostics";
 import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
-} from "../../src/protocols/upstream-failure.js";
+} from "@luckytoken/provider-contract/diagnostics";
 
 const usage: Usage = {
   input: 0,

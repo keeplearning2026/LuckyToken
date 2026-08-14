@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   certifyServingComposition,
   type ServingCertificationFacts,
-} from "../../src/commandcode-serving-certification.js";
+} from "../support/commandcode-serving-certification.js";
 import { freezePiInvocation } from "../../src/execution.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
-} from "../../src/providers/commandcode-private/provider.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
 import {
   SYNTHETIC_CLIENT_HISTORY_API,
   SYNTHETIC_CLIENT_HISTORY_PROVIDER,
@@ -80,7 +80,7 @@ describe("serving composition certification", () => {
 
     expect(manifest).toMatchObject({
       schemaVersion: "luckytoken-serving-certification-manifest-v2",
-      certificationBasis: "offline",
+      certificationBasis: "offline-and-online",
       result: "CERTIFIED",
       failures: [],
       identity: {
@@ -178,7 +178,7 @@ describe("serving composition certification", () => {
         servingReadinessAndIsolation: "verified",
         localLoopbackHttpBoundary: "verified",
         piConfigurationCredentialCli: "verified",
-        realProviderOnlineConformance: "evidence-insufficient",
+        realProviderOnlineConformance: "verified",
         perClientProtocolAuthIsolation: "verified",
       },
       profiles: {
@@ -186,31 +186,31 @@ describe("serving composition certification", () => {
           id: "anthropic-conversion",
           seam: "POST /v1/messages conversion",
           offlineResult: "CERTIFIED",
-          onlineStatus: "evidence-insufficient",
+          onlineStatus: "online-passed",
         },
         anthropicNativePassthrough: {
           id: "anthropic-native-passthrough",
           seam: "POST /v1/messages native passthrough",
           offlineResult: "CERTIFIED",
-          onlineStatus: "evidence-insufficient",
+          onlineStatus: "not-applicable",
         },
         responsesConversion: {
           id: "responses-conversion",
           seam: "POST /v1/responses conversion",
           offlineResult: "CERTIFIED",
-          onlineStatus: "evidence-insufficient",
+          onlineStatus: "online-passed",
         },
         responsesNativePassthrough: {
           id: "responses-native-passthrough",
           seam: "POST /v1/responses native passthrough",
           offlineResult: "CERTIFIED",
-          onlineStatus: "evidence-insufficient",
+          onlineStatus: "not-applicable",
         },
         commandCodeProvider: {
           id: "commandcode-provider",
           seam: "Pi Provider commandcode-private",
           offlineResult: "CERTIFIED",
-          onlineStatus: "evidence-insufficient",
+          onlineStatus: "online-passed",
         },
       },
       verification: {
@@ -219,33 +219,48 @@ describe("serving composition certification", () => {
           "npm run typecheck",
           "npm run lint",
           "npm run build",
+          "npm run test:distribution",
           "git diff --check",
         ],
         onlineEvidence: {
-          status: "evidence-insufficient",
-          attempted: false,
-          gaps: [
+          status: "online-passed",
+          attempted: true,
+          executedAt: "2026-08-14",
+          repositoryRevision: "22ed328a5b6d00189d6086c580c4d288246b8e39",
+          summaryArtifact:
+            "test/fixtures/certification/online-validation-2026-08-14.json",
+          toolVersions: {
+            codexCli: "0.147.0",
+            claudeCode: "2.1.210",
+          },
+          runs: [
             expect.objectContaining({
-              profiles: ["anthropic-conversion", "commandcode-provider"],
-              entrypoint: "npm run test:online",
+              command: "npx tsx test/online/pi-commandcode-ir-probe.ts",
+              passed: 23,
+              attempted: 23,
             }),
             expect.objectContaining({
-              profiles: ["responses-conversion", "commandcode-provider"],
-              entrypoint: "npm run test:online-responses",
+              command: "npm run test:online",
+              passed: 60,
+              attempted: 60,
             }),
             expect.objectContaining({
-              profiles: ["responses-conversion", "commandcode-provider"],
-              entrypoint: "npm run test:online-codex",
+              command: "npm run test:online-responses",
+              passed: 60,
+              attempted: 60,
             }),
             expect.objectContaining({
-              profiles: ["anthropic-native-passthrough"],
-              entrypoint: null,
+              command: "npm run test:online-codex -- 3",
+              passed: 60,
+              attempted: 60,
             }),
             expect.objectContaining({
-              profiles: ["responses-native-passthrough"],
-              entrypoint: null,
+              command: "npm run test:online-claude -- 3",
+              passed: 51,
+              attempted: 51,
             }),
           ],
+          gaps: [],
         },
         result: "CERTIFIED",
       },

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMMANDCODE_MODELS,
   findCommandCodeModel,
-} from "../../src/providers/commandcode-private/models.js";
+} from "../../packages/provider-commandcode-private/src/models.js";
 
 describe("CommandCode model catalog", () => {
   it("ships every model from the source table", () => {

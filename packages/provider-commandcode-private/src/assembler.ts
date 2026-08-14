@@ -1,7 +1,9 @@
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import type {
+  ConversionNotice,
+  InvocationAttempt,
+} from "@luckytoken/provider-contract/diagnostics";
 import { COMMANDCODE_PROVIDER_ID } from "./constants.js";
 import { CommandCodeNeutralFailureError } from "./failure.js";
-import type { InvocationAttempt } from "../../invocation-diagnostics/index.js";
 import {
   captureCommandCodeStreamFailurePayload,
   DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,

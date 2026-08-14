@@ -1,8 +1,8 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { ServingCertificationFailure } from "../../src/commandcode-serving-certification.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+import { ServingCertificationFailure } from "../support/commandcode-serving-certification.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
   createCommandCodeServingTestComposition,

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
-import { parseCommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
+import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
 import { createCommandCodeServingTestComposition } from "../support/commandcode-serving.js";
 
 describe("CommandCode route failure journal", () => {

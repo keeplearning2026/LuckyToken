@@ -1,4 +1,4 @@
-import type { UpstreamFailureFact } from "../upstream-failure.js";
+import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 /**
  * Responses-owned error rendering: one complete Response object or one

@@ -40,7 +40,7 @@ import {
   type ResponsesResponseObject,
 } from "./response.js";
 import { mapUpstreamFailureFact } from "./error-rendering.js";
-import type { UpstreamFailureFact } from "../upstream-failure.js";
+import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import {
   convertResponsesRequest,
   extractResponsesModelSelector,

@@ -9,12 +9,10 @@ import type {
 import {
   createUpstreamFailureFact,
   findUpstreamFailureFact,
-  type UpstreamFailureFact,
-} from "./protocols/upstream-failure.js";
-import {
   submitExecutionFacts,
   type ExecutionFactsSink,
-} from "./execution-facts.js";
+  type UpstreamFailureFact,
+} from "@luckytoken/provider-contract/diagnostics";
 
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);

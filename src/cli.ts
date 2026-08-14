@@ -350,6 +350,10 @@ export async function runLuckyTokenCli(
   const config = await loadLuckyTokenCliConfig(parsed.configPath);
   const configured = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
+    ...(config.pi.modelsJson === undefined
+      ? {}
+      : { modelsJsonPath: config.pi.modelsJson }),
+    providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
   });
   if (parsed.command === "login") {

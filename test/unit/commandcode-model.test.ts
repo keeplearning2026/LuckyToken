@@ -4,7 +4,7 @@ import {
   COMMANDCODE_BASE_URL,
   COMMANDCODE_DEFAULT_MODEL_ID,
   createCommandCodeDefaultModel,
-} from "../../src/providers/commandcode-private/model.js";
+} from "../../packages/provider-commandcode-private/src/model.js";
 
 describe("CommandCode built-in default model", () => {
   it("uses the fixed CommandCode base URL", () => {

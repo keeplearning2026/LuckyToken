@@ -16,8 +16,8 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
-} from "../../src/providers/commandcode-private/provider.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
 

@@ -11,7 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
+import {
+  COMMANDCODE_PROVIDER_PACKAGE,
+  commandCodeProviderImportModule,
+} from "../support/commandcode-provider-package.js";
 
 function commandCodeText(text: string): Response {
   return new Response(
@@ -79,6 +83,7 @@ describe("configured serving composition", () => {
             authFile: "client-auth/anthropic-messages.json",
           },
         },
+        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
         pi: { directory: "pi" },
       }),
       "utf8",
@@ -91,7 +96,7 @@ describe("configured serving composition", () => {
     };
   }
 
-  it("registers the built-in CommandCode Provider hidden behind one Client Protocol", async () => {
+  it("registers the packaged CommandCode Provider hidden behind one Client Protocol", async () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       if (String(input).includes("/provider/v1/models")) {
@@ -114,7 +119,9 @@ describe("configured serving composition", () => {
       config,
       credentials,
       fetch,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      importModule: commandCodeProviderImportModule({
+        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      }),
       createMessageId: () => "msg_configured",
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
       now: () => 1_786_400_000_000,
@@ -127,12 +134,12 @@ describe("configured serving composition", () => {
       { method: "GET", pathname: "/v1/models" },
     ]);
     expect(composition.certification.result).toBe("CERTIFIED");
-    expect(composition.certification.policies.authEndpoint.providerAuth).toBe(
-      "pi-models-credential-store-v1",
+    expect(composition.certification.providerRegistrationPolicy).toBe(
+      "pi-builtins-models-json-provider-packages-v1",
     );
-    expect(
-      composition.certification.policies.models.providerRegistration,
-    ).toBe("startup-only-mutable-models-v1");
+    expect(composition.certification.providerIds).toContain(
+      "commandcode-private",
+    );
     expect(composition.runtime).not.toHaveProperty("models");
     expect(composition.runtime).not.toHaveProperty("provider");
 
@@ -167,7 +174,7 @@ describe("configured serving composition", () => {
     });
   });
 
-  it("serves every built-in CommandCode model through the route", async () => {
+  it("serves every packaged CommandCode model through the route", async () => {
     const fetch: FetchFunction = async () =>
       commandCodeText("served through Pi");
     const { configPath, clientToken } = await writeConfiguration();
@@ -180,7 +187,9 @@ describe("configured serving composition", () => {
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      importModule: commandCodeProviderImportModule({
+        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      }),
       createMessageId: () => "msg_models",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
@@ -226,15 +235,17 @@ describe("configured serving composition", () => {
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch: async () => commandCodeText("project authorized"),
-      projectSnapshot: { snapshot: projectSnapshot },
+      importModule: commandCodeProviderImportModule({
+        projectSnapshot: { snapshot: projectSnapshot },
+      }),
       createMessageId: () => "msg_project_auth",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
 
-    expect(
-      composition.certification.policies.authEndpoint.projectAuthorization,
-    ).toBe("per-client-protocol-token-file-v1");
+    expect(composition.certification.schemaVersion).toBe(
+      "luckytoken-core-serving-certification-v1",
+    );
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
         method: "POST",
@@ -321,6 +332,7 @@ describe("configured serving composition", () => {
             stateFile: "state/openai-responses.json",
           },
         },
+        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
         pi: { directory: "pi" },
       }),
       "utf8",
@@ -334,7 +346,9 @@ describe("configured serving composition", () => {
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch: async () => commandCodeText("responses served"),
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      importModule: commandCodeProviderImportModule({
+        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+      }),
       createMessageId: () => "msg_anthropic",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,

@@ -5,7 +5,7 @@ import { HttpRequestAbortedError } from "../../src/http.js";
 import type {
   ProjectSnapshot,
   ServerConfig,
-} from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/project.js";
 import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
 
 const sessionId = "00000000-0000-4000-8000-000000000030";

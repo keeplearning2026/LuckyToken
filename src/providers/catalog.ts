@@ -1,53 +1,32 @@
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import {
   createProvider,
-  type FetchFunction,
   type MutableModels,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { randomUUID } from "node:crypto";
 
-import { createCommandCodePrivateProvider } from "./commandcode-private/provider.js";
-import type { CommandCodeConfiguration } from "./commandcode-private/configuration.js";
-import { COMMANDCODE_MODELS } from "./commandcode-private/models.js";
 import {
   modelsJsonApiKeyAuth,
   modelsJsonModel,
   type ModelsJsonConfig,
 } from "./models-json.js";
-import {
-  createNodeProjectSnapshot,
-  type ProjectSnapshot,
-} from "./commandcode-private/project.js";
-
-export type { ProjectSnapshot } from "./commandcode-private/project.js";
-export type { CommandCodeCompatibilityPolicy } from "./commandcode-private/provider.js";
-export { commandCodePrivateProviderId } from "./commandcode-private/provider.js";
-export { COMMANDCODE_DEFAULT_MODEL_ID as commandCodePrivateDefaultModelId } from "./commandcode-private/model.js";
 
 /**
- * LuckyToken built-in provider catalog.
+ * LuckyToken base provider catalog.
  *
- * This is the only module that imports concrete Provider implementations.
- * Composition roots and external callers interact with providers exclusively
- * through the Pi `Models` interface and provider id / model id — never through
- * provider implementation code.
+ * This imports Pi's own builtin implementations and constructs models.json
+ * Providers. External Provider implementations stay behind package-loader.ts.
  */
 
 export interface LuckyTokenProviderDependencies {
-  readonly commandCodeConfiguration?: CommandCodeConfiguration;
-  readonly fetch: FetchFunction;
   /** Optional parsed models.json for user-registered custom providers. */
   readonly modelsJson?: ModelsJsonConfig;
-  readonly now?: () => number;
-  readonly projectSnapshot?: ProjectSnapshot;
-  readonly createSessionId?: () => string;
 }
 
 /**
- * Register every LuckyToken built-in provider into a Pi `Models` collection.
- * Concrete provider dependencies are injected here — the only place that
- * touches provider implementations.
+ * Register Pi builtins and models.json Providers into a Pi `Models` collection.
+ * External Provider Packages are loaded only after this base catalog is
+ * complete, so their IDs cannot shadow Pi builtins or models.json entries.
  */
 export function registerLuckyTokenProviders(
   models: MutableModels,
@@ -60,17 +39,6 @@ export function registerLuckyTokenProviders(
     models.setProvider(provider);
   }
 
-  const provider = createCommandCodePrivateProvider({
-    ...(dependencies.commandCodeConfiguration === undefined ? {} : { configuration: dependencies.commandCodeConfiguration }),
-    // CommandCode owns bounded request-local failure acquisition.
-    fetch: dependencies.fetch,
-    now: dependencies.now ?? Date.now,
-    projectSnapshot: dependencies.projectSnapshot ?? createNodeProjectSnapshot(),
-    createSessionId: dependencies.createSessionId ?? randomUUID,
-    models: COMMANDCODE_MODELS,
-  });
-  models.setProvider(provider);
-
   registerModelsJsonProviders(models, dependencies.modelsJson);
 }
 
@@ -80,8 +48,7 @@ function registerModelsJsonProviders(
 ): void {
   if (modelsJson === undefined) return;
   for (const [providerId, config] of Object.entries(modelsJson.providers)) {
-    // Built-in providers win over models.json with the same provider id, so a
-    // stale models.json can never shadow the curated CommandCode catalog.
+    // Pi builtins win over models.json with the same provider id.
     if (models.getProvider(providerId) !== undefined) continue;
     const api = config.api;
     if (api === undefined) {

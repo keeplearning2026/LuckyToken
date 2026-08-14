@@ -12,8 +12,8 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
-} from "../../src/providers/commandcode-private/provider.js";
-import type { ServerConfig } from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import type { ServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 const usage: Usage = {
   input: 0,

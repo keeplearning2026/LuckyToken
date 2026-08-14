@@ -28,13 +28,13 @@ const genericRuntimeModules = [
 ] as const;
 
 const commandCodeProviderModules = [
-  "providers/commandcode-private/assembler.ts",
-  "providers/commandcode-private/attempts.ts",
-  "providers/commandcode-private/json.ts",
-  "providers/commandcode-private/model.ts",
-  "providers/commandcode-private/project.ts",
-  "providers/commandcode-private/provider.ts",
-  "providers/commandcode-private/semantic.ts",
+  "assembler.ts",
+  "attempts.ts",
+  "json.ts",
+  "model.ts",
+  "project.ts",
+  "provider.ts",
+  "semantic.ts",
 ] as const;
 
 describe("Provider architecture boundary", () => {
@@ -63,7 +63,13 @@ describe("Provider architecture boundary", () => {
 
   it("keeps Providers independent of Client Protocol semantics", async () => {
     for (const module of commandCodeProviderModules) {
-      const source = await readFile(new URL(`../../src/${module}`, import.meta.url), "utf8");
+      const source = await readFile(
+        new URL(
+          `../../packages/provider-commandcode-private/src/${module}`,
+          import.meta.url,
+        ),
+        "utf8",
+      );
       expect(source, module).not.toMatch(/Anthropic|anthropic/u);
     }
   });

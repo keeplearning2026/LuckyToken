@@ -120,7 +120,7 @@ export function modelsJsonModel(
  *
  * The stored credential (from `login <provider>`) takes precedence; the
  * models.json `apiKey` field is a configured fallback, mirroring the
- * CommandCode provider's auth pattern.
+ * Pi Provider API-key auth pattern.
  */
 export function modelsJsonApiKeyAuth(
   providerConfig: ModelsJsonProviderConfig,

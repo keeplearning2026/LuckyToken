@@ -9,7 +9,7 @@ const recordUrl = new URL(
   import.meta.url,
 );
 const certificationSourceUrl = new URL(
-  "../../src/commandcode-serving-certification.ts",
+  "../support/commandcode-serving-certification.ts",
   import.meta.url,
 );
 
@@ -29,13 +29,14 @@ test("binds the serving manifest to the immutable conformance record", async () 
 
   assert.equal(boundRevision, actualRevision);
   assert.equal(record.schemaVersion, "luckytoken-serving-conformance-v2");
-  assert.equal(record.certificationBasis, "offline");
+  assert.equal(record.certificationBasis, "offline-and-online");
   assert.equal(record.result, "CERTIFIED");
   assert.deepEqual(record.commands, [
     "npm test",
     "npm run typecheck",
     "npm run lint",
     "npm run build",
+    "npm run test:distribution",
     "git diff --check",
   ]);
 });
@@ -72,7 +73,7 @@ test("binds the shared policy and all three conversion authorities by content", 
   }
 });
 
-test("certifies five named profiles separately and records the online gap", async () => {
+test("certifies five named profiles and records complete online evidence", async () => {
   const record = JSON.parse(await readFile(recordUrl, "utf8"));
   assert.deepEqual(
     record.profiles.map(({ id, route, offlineResult }) => [id, route, offlineResult]),
@@ -87,41 +88,28 @@ test("certifies five named profiles separately and records the online gap", asyn
   for (const profile of record.profiles) {
     assert.ok(profile.tests.length > 0, `profile has no evidence: ${profile.id}`);
   }
-  assert.deepEqual(record.onlineEvidence, {
-    status: "EVIDENCE_INSUFFICIENT",
-    attempted: false,
-    gaps: [
-      {
-        profiles: ["anthropic-conversion", "commandcode-provider"],
-        entrypoint: "npm run test:online",
-        reason: "not run by explicit user decision; paid upstream credentials were not exercised",
-      },
-      {
-        profiles: ["responses-conversion", "commandcode-provider"],
-        entrypoint: "npm run test:online-responses",
-        reason: "not run by explicit user decision; paid upstream credentials were not exercised",
-      },
-      {
-        profiles: ["responses-conversion", "commandcode-provider"],
-        entrypoint: "npm run test:online-codex",
-        reason: "not run by explicit user decision; live Codex and paid upstream access were not exercised",
-      },
-      {
-        profiles: ["anthropic-native-passthrough"],
-        entrypoint: null,
-        reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
-      },
-      {
-        profiles: ["responses-native-passthrough"],
-        entrypoint: null,
-        reason: "no dedicated live passthrough entrypoint exists and no live upstream run was authorized",
-      },
+  assert.equal(record.onlineEvidence.status, "ONLINE_PASSED");
+  assert.equal(record.onlineEvidence.attempted, true);
+  assert.deepEqual(record.onlineEvidence.gaps, []);
+  assert.deepEqual(
+    record.onlineEvidence.runs.map(({ command, passed, attempted }) => [
+      command,
+      passed,
+      attempted,
+    ]),
+    [
+      ["npx tsx test/online/pi-commandcode-ir-probe.ts", 23, 23],
+      ["npm run test:online", 60, 60],
+      ["npm run test:online-responses", 60, 60],
+      ["npm run test:online-codex -- 3", 60, 60],
+      ["npm run test:online-claude -- 3", 51, 51],
     ],
-  });
-  assert.equal(
-    JSON.stringify(record.onlineEvidence).includes("PASSED"),
-    false,
   );
+  const summary = JSON.parse(
+    await readFile(new URL(record.onlineEvidence.summaryArtifact, repositoryRoot), "utf8"),
+  );
+  assert.equal(summary.result, "ONLINE_PASSED");
+  assert.equal(summary.runs.length, 5);
 });
 
 test("the conformance record covers the complete serving route with real tests", async () => {
@@ -138,7 +126,7 @@ test("the conformance record covers the complete serving route with real tests",
       "serving-readiness-and-isolation",
       "local-loopback-http-boundary",
       "pi-configuration-credential-cli",
-      "online-evidence-gap",
+      "real-provider-online-conformance",
       "per-client-protocol-auth-isolation",
     ],
   );

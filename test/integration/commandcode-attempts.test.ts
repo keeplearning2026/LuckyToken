@@ -8,16 +8,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CommandCodeTraceContextCapability } from "../../src/providers/commandcode-private/attempts.js";
+import type { CommandCodeTraceContextCapability } from "../../packages/provider-commandcode-private/src/attempts.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
   type CommandCodePrivateProviderOptions,
-} from "../../src/providers/commandcode-private/provider.js";
-import { parseCommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
-import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 const sessionId = "00000000-0000-4000-8000-000000000100";
 const context: Context = {

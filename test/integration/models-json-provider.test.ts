@@ -1,7 +1,4 @@
-import {
-  InMemoryCredentialStore,
-  type FetchFunction,
-} from "@earendil-works/pi-ai";
+import type { FetchFunction } from "@earendil-works/pi-ai";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
 
 function anthropicJsonResponse(text: string): Response {
   return new Response(
@@ -104,16 +100,9 @@ describe("models.json custom provider registration", () => {
       "utf8",
     );
 
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
     const composition = await createConfiguredLuckyTokenComposition({
       config: await loadLuckyTokenCliConfig(configPath),
-      credentials,
       fetch,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
       createMessageId: () => "msg_models_json",
       createSessionId: () => "00000000-0000-4000-8000-000000000260",
       now: () => 1_786_400_000_000,

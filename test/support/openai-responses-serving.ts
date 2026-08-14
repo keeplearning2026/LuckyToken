@@ -17,10 +17,10 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
-} from "../../src/providers/commandcode-private/provider.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
 import {
   createEmptyServerConfig,
-} from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/project.js";
 import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
@@ -132,6 +132,7 @@ export async function createOpenAIResponsesServingTestComposition(
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,
+    providerIds: [commandCodePrivateProviderId],
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const runtime = createLuckyTokenRuntime({

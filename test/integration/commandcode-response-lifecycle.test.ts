@@ -10,10 +10,10 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
-} from "../../src/providers/commandcode-private/provider.js";
-import { parseCommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
-import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 function lifecycleModel(): Model<typeof commandCodePrivateApiId> {
   return {

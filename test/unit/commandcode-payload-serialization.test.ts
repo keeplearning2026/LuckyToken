@@ -6,8 +6,8 @@ import {
   commandCodePrivateProviderId,
   prepareCommandCodeRequest,
   type CommandCodePreparationDependencies,
-} from "../../src/providers/commandcode-private/provider.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

@@ -9,7 +9,12 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const sourceRoot = path.join(repositoryRoot, "src");
 const anthropicRoot = path.join(sourceRoot, "protocols", "anthropic");
 const responsesRoot = path.join(sourceRoot, "protocols", "openai-responses");
-const commandCodeRoot = path.join(sourceRoot, "providers", "commandcode-private");
+const commandCodeRoot = path.join(
+  repositoryRoot,
+  "packages",
+  "provider-commandcode-private",
+  "src",
+);
 
 const CLIENT_SHARED_SEAMS = new Set([
   "auth.ts",
@@ -18,12 +23,6 @@ const CLIENT_SHARED_SEAMS = new Set([
   "model-resolution.ts",
   "invocation-diagnostics/index.ts",
   "protocols/options.ts",
-  "protocols/upstream-failure.ts",
-]);
-const PROVIDER_SHARED_SEAMS = new Set([
-  "execution-facts.ts",
-  "invocation-diagnostics/index.ts",
-  "protocols/upstream-failure.ts",
 ]);
 
 function slash(value) {
@@ -90,6 +89,7 @@ function assertClosedProtocol(imports, ownRoot, siblingRoot) {
     if (!entry.specifier.startsWith(".")) {
       assert.ok(
         entry.specifier === "@earendil-works/pi-ai" ||
+          entry.specifier === "@luckytoken/provider-contract/diagnostics" ||
           entry.specifier.startsWith("node:"),
         `${slash(path.relative(repositoryRoot, entry.file))} imports non-Pi package ${entry.specifier}`,
       );
@@ -123,6 +123,8 @@ test("the private CommandCode Provider never imports concrete Client Protocols",
     if (!entry.specifier.startsWith(".")) {
       assert.ok(
         entry.specifier === "@earendil-works/pi-ai" ||
+          entry.specifier === "@luckytoken/provider-contract/package" ||
+          entry.specifier === "@luckytoken/provider-contract/diagnostics" ||
           entry.specifier === "@sindresorhus/slugify" ||
           entry.specifier.startsWith("node:"),
         `${slash(path.relative(repositoryRoot, entry.file))} imports unclassified package ${entry.specifier}`,
@@ -136,10 +138,8 @@ test("the private CommandCode Provider never imports concrete Client Protocols",
       `${slash(path.relative(repositoryRoot, entry.file))} imports a concrete Client Protocol`,
     );
     if (target.startsWith(`${commandCodeRoot}${path.sep}`)) continue;
-    const shared = slash(path.relative(sourceRoot, target));
-    assert.ok(
-      PROVIDER_SHARED_SEAMS.has(shared),
-      `${slash(path.relative(repositoryRoot, entry.file))} uses unclassified shared seam ${shared}`,
+    assert.fail(
+      `${slash(path.relative(repositoryRoot, entry.file))} imports outside its package: ${slash(path.relative(repositoryRoot, target))}`,
     );
   }
 });

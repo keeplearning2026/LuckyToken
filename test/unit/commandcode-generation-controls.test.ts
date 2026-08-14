@@ -5,9 +5,9 @@ import {
   buildCommandCodeBody,
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
-} from "../../src/providers/commandcode-private/provider.js";
-import { findCommandCodeModel } from "../../src/providers/commandcode-private/models.js";
-import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import { findCommandCodeModel } from "../../packages/provider-commandcode-private/src/models.js";
+import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 const model: Model<typeof commandCodePrivateApiId> = {
   id: "model",

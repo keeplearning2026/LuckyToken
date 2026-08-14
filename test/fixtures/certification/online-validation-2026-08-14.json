@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "luckytoken-provider-distribution-online-evidence-v1",
+  "executedAt": "2026-08-14",
+  "repositoryRevision": "22ed328a5b6d00189d6086c580c4d288246b8e39",
+  "toolVersions": {
+    "codexCli": "0.147.0",
+    "claudeCode": "2.1.210"
+  },
+  "result": "ONLINE_PASSED",
+  "runs": [
+    {
+      "command": "npx tsx test/online/pi-commandcode-ir-probe.ts",
+      "passed": 23,
+      "attempted": 23,
+      "artifactPath": "test/fixtures/certification/online-validation-2026-08-14.json"
+    },
+    {
+      "command": "npm run test:online",
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "json": 36,
+        "sse": 14,
+        "recoveries": 5,
+        "cancellations": 5,
+        "conformanceCases": 12,
+        "failures": 0
+      },
+      "artifactPath": ".online-artifacts/commandcode-conformance-samples.json"
+    },
+    {
+      "command": "npm run test:online-responses",
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "json": 36,
+        "sse": 14,
+        "chain": 1,
+        "restartRecovery": 1,
+        "cancellations": 5,
+        "failures": 0
+      },
+      "artifactPath": "test/fixtures/certification/online-validation-2026-08-14.json"
+    },
+    {
+      "command": "npm run test:online-codex -- 3",
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "scenariosPerBatch": 20,
+        "batches": 3,
+        "failures": 0
+      },
+      "artifactPath": "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-Uqe3iv/artifacts"
+    },
+    {
+      "command": "npm run test:online-claude -- 3",
+      "passed": 51,
+      "attempted": 51,
+      "details": {
+        "scenariosPerBatch": 17,
+        "batches": 3,
+        "failures": 0
+      },
+      "artifactPath": "onlinetest/claude/.runs/1786734390723-cb546e6e"
+    }
+  ],
+  "transientAttempts": [
+    {
+      "command": "npm run test:online-responses",
+      "passed": 59,
+      "attempted": 60,
+      "failure": "online_empty_content",
+      "resolution": "The unchanged complete suite passed on immediate rerun."
+    },
+    {
+      "command": "npm run test:online-codex -- 3",
+      "passed": 59,
+      "attempted": 60,
+      "failure": "codex_exec_timeout",
+      "artifactPath": "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-i0YAGb/artifacts",
+      "diagnosis": "The scenario completed its file change before Codex CLI plugin curated-sync hit Windows long-path errors.",
+      "resolution": "The unchanged complete suite passed on rerun."
+    }
+  ]
+}

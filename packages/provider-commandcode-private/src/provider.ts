@@ -15,7 +15,7 @@ import {
 import slugify from "@sindresorhus/slugify";
 import { randomUUID } from "node:crypto";
 
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
 import {
   classifyProjectDir,
   createEmptyServerConfig,

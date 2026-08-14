@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   replayCommandCodeAssistantMessage,
   zeroUsage,
-} from "../../src/providers/commandcode-private/semantic.js";
+} from "../../packages/provider-commandcode-private/src/semantic.js";
 
 const usage: Usage = {
   input: 1,

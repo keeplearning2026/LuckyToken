@@ -13,10 +13,13 @@ import {
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { createNodeProjectSnapshot } from "../../src/providers/commandcode-private/project.js";
-import { createCommandCodePrivateProvider } from "../../src/providers/commandcode-private/provider.js";
-import { COMMANDCODE_MODELS } from "../../src/providers/commandcode-private/models.js";
-import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+import {
+  createCommandCodePrivateProvider,
+  providerPackage,
+} from "@luckytoken/provider-commandcode-private";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
+import { createNodeProjectSnapshot } from "../../packages/provider-commandcode-private/src/project.js";
 
 /**
  * Direct Pi AI IR <-> CommandCode private provider online probe.
@@ -202,10 +205,15 @@ async function main(): Promise<void> {
   );
   const models = createModels({ credentials });
   models.setProvider(
-    createCommandCodePrivateProvider({
-      models: COMMANDCODE_MODELS,
-      now: Date.now,
-      projectSnapshot: createNodeProjectSnapshot(),
+    providerPackage.createProvider({
+      configuration: {},
+      configurationPath:
+        'providerPackages["@luckytoken/provider-commandcode-private"]',
+      host: {
+        fetch: globalThis.fetch,
+        now: Date.now,
+        createUuid: randomUUID,
+      },
     }),
   );
   const model = models

@@ -11,14 +11,14 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Auth } from "../../src/auth.js";
-import { createInvocationAttemptDiagnostic } from "../../src/execution-facts.js";
+import { createInvocationAttemptDiagnostic } from "@luckytoken/provider-contract/diagnostics";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
-} from "../../src/protocols/upstream-failure.js";
+} from "@luckytoken/provider-contract/diagnostics";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import type { ResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
 

@@ -4,7 +4,7 @@ import {
   MAX_TIMER_DELAY_MS,
   resolveCommandCodeExecutionControls,
   resolveCommandCodeRetryDelayMs,
-} from "../../src/providers/commandcode-private/attempts.js";
+} from "../../packages/provider-commandcode-private/src/attempts.js";
 
 describe("CommandCode attempt controls", () => {
   it("applies frozen defaults and accepts timer-domain boundaries", () => {

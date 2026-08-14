@@ -47,9 +47,11 @@ Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
 runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
 every `auth.json` are ignored by Git.
 
-The CommandCode Private Provider is a Pi built-in provider: its upstream
-endpoint and default model are embedded in LuckyToken, so no `models.json` is
-needed. Users authenticate with `login` (API key only) and are ready to serve.
+The CommandCode Private Provider is installed as the private workspace package
+`@luckytoken/provider-commandcode-private` and loaded from `node_modules`
+through the standard Pi Provider contract. Configure it under
+`providerPackages`; no `models.json` entry is needed. Users authenticate with
+`login` (API key only) and are then ready to serve.
 
 Create local files from the committed placeholders:
 
@@ -93,8 +95,8 @@ subscription/OAuth:
 npm start -- login commandcode-private --config .luckytoken/config.json
 ```
 
-The key is saved to `.luckytoken/pi/auth.json`. No model configuration is
-required — the built-in model is selected as
+The key is saved to `.luckytoken/pi/auth.json`. No `models.json` configuration
+is required — the packaged model is selected as
 `commandcode-private/deepseek/deepseek-v4-flash`.
 
 Start the local listener:
@@ -199,7 +201,7 @@ LuckyToken POST /v1/responses   (Bearer: LUCKYTOKEN_API_KEY)
    │  expand previous_response_id from the durable snapshot
    │  convert wire → Pi IR
    ▼
-CommandCode Private Provider (real upstream)
+CommandCode Private Provider Package (real upstream)
 ```
 
 - Codex sends incremental turns with `previous_response_id`; LuckyToken

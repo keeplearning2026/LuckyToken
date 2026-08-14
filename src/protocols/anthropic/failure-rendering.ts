@@ -1,4 +1,4 @@
-import type { UpstreamFailureFact } from "../upstream-failure.js";
+import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import type { AnthropicErrorType } from "./wire.js";
 
 export interface AnthropicFailureMapping {

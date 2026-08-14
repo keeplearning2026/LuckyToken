@@ -1,13 +1,13 @@
 import type { Model, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import type { CommandCodeResult } from "../../src/providers/commandcode-private/assembler.js";
+import type { CommandCodeResult } from "../../packages/provider-commandcode-private/src/assembler.js";
 import {
   applyCommandCodeCapturedPricing,
   captureCommandCodeResponseAuthority,
   convertCommittedCommandCodeResult,
-} from "../../src/providers/commandcode-private/semantic.js";
-import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+} from "../../packages/provider-commandcode-private/src/semantic.js";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
   if (typeof value !== "object" || value === null || seen.has(value)) return value;

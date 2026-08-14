@@ -12,19 +12,19 @@ import {
   certifyServingComposition,
   ServingCertificationFailure,
   type ServingCertificationManifest,
-} from "../../src/commandcode-serving-certification.js";
+} from "./commandcode-serving-certification.js";
 import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
   type CommandCodeCompatibilityPolicy,
-} from "../../src/providers/commandcode-private/provider.js";
-import type { CommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import type { CommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
 import {
   createNodeProjectSnapshot,
   type ProjectSnapshot,
-} from "../../src/providers/commandcode-private/project.js";
+} from "../../packages/provider-commandcode-private/src/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";

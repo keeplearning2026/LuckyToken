@@ -7,8 +7,8 @@ import {
   CommandCodeProtocolError,
   CommandCodeStreamError,
   CommandCodeTransportError,
-} from "../../src/providers/commandcode-private/assembler.js";
-import { CommandCodeNeutralFailureError } from "../../src/providers/commandcode-private/failure.js";
+} from "../../packages/provider-commandcode-private/src/assembler.js";
+import { CommandCodeNeutralFailureError } from "../../packages/provider-commandcode-private/src/failure.js";
 
 function line(event: Record<string, unknown>): string {
   return JSON.stringify(event);

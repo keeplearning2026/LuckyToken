@@ -10,9 +10,9 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
-} from "../../src/providers/commandcode-private/provider.js";
-import type { ServerConfig } from "../../src/providers/commandcode-private/project.js";
-import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
+} from "../../packages/provider-commandcode-private/src/provider.js";
+import type { ServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

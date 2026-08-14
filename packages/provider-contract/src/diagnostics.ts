@@ -1,9 +1,28 @@
 import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
 
-import type {
-  ConversionNotice,
-  InvocationAttempt,
-} from "./invocation-diagnostics/index.js";
+export * from "./upstream-failure.js";
+
+export interface ConversionNotice {
+  readonly adapter: string;
+  readonly direction: "request" | "response";
+  readonly code: string;
+  readonly jsonPath?: string;
+  readonly action: "ignore" | "degrade" | "xrepair";
+}
+
+export interface InvocationAttempt {
+  readonly attempt: number;
+  readonly classification: string;
+  readonly stage: string;
+  readonly status?: number;
+  readonly retryable?: boolean;
+  readonly safeIds?: Readonly<Record<string, string>>;
+}
+
+export interface ExecutionFactsSink {
+  notice(notice: ConversionNotice): void;
+  attempt(attempt: InvocationAttempt): void;
+}
 
 const CONVERSION_NOTICE_DIAGNOSTIC_TYPE =
   "luckytoken.conversion_notice.v1";
@@ -11,11 +30,6 @@ const INVOCATION_ATTEMPT_DIAGNOSTIC_TYPE =
   "luckytoken.invocation_attempt.v1";
 const trustedNoticeDiagnostics = new WeakSet<object>();
 const trustedAttemptDiagnostics = new WeakSet<object>();
-
-export interface ExecutionFactsSink {
-  notice(notice: ConversionNotice): void;
-  attempt(attempt: InvocationAttempt): void;
-}
 
 export function createConversionNoticeDiagnostic(
   notice: ConversionNotice,
@@ -27,7 +41,9 @@ export function createConversionNoticeDiagnostic(
     );
   }
   if (!Object.isFrozen(notice)) {
-    throw new TypeError("conversion notice diagnostic requires an immutable notice");
+    throw new TypeError(
+      "conversion notice diagnostic requires an immutable notice",
+    );
   }
   const diagnostic = Object.freeze({
     type: CONVERSION_NOTICE_DIAGNOSTIC_TYPE,
