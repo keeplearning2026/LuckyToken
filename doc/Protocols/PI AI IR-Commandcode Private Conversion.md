@@ -271,6 +271,8 @@ Retries reuse certified logical body facts. They may refresh attempt-owned heade
 
 Non-2xx HTTP failures are captured by the request-local attempt/Provider error path, not a process-global observer. Capture is bounded by Provider response configuration and becomes a protocol-neutral failure diagnostic.
 
+The immutable Provider policy is the outer acquisition limit. The shared neutral diagnostic is deliberately narrower: effective retained capture is `min(maxBodyBytes, 65_536)` and effective safe message length is `min(maxClientMessageChars, 1_024)`. A broader configured value never enlarges the public Pi diagnostic. Reader failure, body-read timeout, malformed length, attempt-timeout race, or cleanup failure during best-effort capture preserves the already-known HTTP failure and marks capture truncated; instrumentation never replaces the primary failure. The caller lifecycle signal remains authoritative and may cancel capture.
+
 HTTP 200 establishes a JSONL transport, not semantic success. A later stream `error`/`abort` is still a failure.
 
 ### 9.2 JSONL decoding
@@ -439,6 +441,8 @@ For error/aborted:
 - do not emit staged partial ToolCalls;
 - caller-aborted result has empty content/zero usage unless the Pi public contract explicitly supports committed partial cancellation, which current LuckyToken does not.
 
+Every started physical attempt produces one immutable trusted attempt diagnostic. Failed attempts record neutral classification, stage, optional validated status/retryability, and fixed allowlisted IDs. A final successful attempt is also recorded, so later Client rendering failures do not erase upstream retry history. Execution submits these diagnostics in order to the invocation facts sink; only the Client handler owns the exactly-once journal lifecycle.
+
 ## 14. Transport limits and retries
 
 Provider-owned configuration covers request timeout, max retries, max retry delay, response body-read timeout, bounded error bytes, and safe client-message length. Values are validated at startup.
@@ -452,10 +456,12 @@ Retry rules:
 - never reuse another request's observation;
 - one final failure journal contains summaries of all attempts.
 
-## 15. Current implementation gaps
+The CommandCode bound fetch is never wrapped by the legacy Client HTTP observer. Built-in Pi adapters may retain their legacy acquisition path until its separate contraction ticket, but CommandCode response cloning or unbounded observer reads are forbidden.
 
-Remaining gaps after tickets 20–25:
+## 15. Completion state
 
-- stream error facts are flattened through semantic/execution;
-
-These are implementation gaps against this frozen method.
+Tickets 20–26 implement this Provider method, including structured stream/HTTP failures,
+retry attempt diagnostics, execution fact promotion, bounded capture, and request-local
+isolation. Ticket 27 removes the remaining Client observer side channel; Ticket 28 owns
+full-route certification. Online CommandCode evidence was not run for this completion and
+remains evidence-insufficient.

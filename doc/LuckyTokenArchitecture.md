@@ -1133,16 +1133,17 @@ wire compatibility，但不是把 upstream partial JSONL 直接透传给客户�
 | malformed JSON/source-invalid/unsupported | 400 `invalid_request_error` |
 | model unknown/ambiguous | 404 `not_found_error` |
 | classified execution abort | 500 `api_error` |
-| upstream provider HTTP failure（observer 捕获 non-2xx） | **status 原样透传**；`error.type` 取 provider body 的 `error.type`/`error.code`（无则按 status 表兜底）；`message` 为原始 body |
+| CommandCode neutral HTTP failure | 只使用已验证 status、safe message/type/code 与 allowlisted headers；bounded snapshot 不进入 Client body |
+| legacy Pi built-in HTTP failure（observer 捕获 non-2xx） | Ticket 27 前的旧映射；仅适用于明确支持 observed fetch 的 adapter，不适用于 CommandCode |
 | provider execution failure（无 HTTP observation） | 502 `api_error`，message 为 Pi `errorMessage` |
 | request connection/shutdown/timeout abort | 不再写 response，由 HTTP lifecycle 终止 |
 | other internal failure | 500 `api_error` without internal diagnostic leakage |
 
-Upstream HTTP failure 的透传由 `src/http-observer.ts`（fetch 层观察）、
+Legacy Pi built-in HTTP failure 的旧透传由 `src/http-observer.ts`（fetch 层观察）、
 `src/http-failure-acquisition.ts`（按 Pi `api` 选择获取方式）与
 `src/protocols/anthropic/upstream-failure.ts`（status/body → Anthropic error
-envelope）共同完成。LuckyToken 不做内容加工：status 与 body 原样进入客户端响应，
-只保证 `error.type` 在 body 无可用值时仍有一个合法兜底。
+envelope）共同完成，并由 Ticket 27 删除。CommandCode 不走该链；它只通过 neutral
+failure diagnostic 向 execution/Client renderer 提供有界安全事实。
 
 ## 5.13 Anthropic 模块内部关系
 
@@ -1412,7 +1413,7 @@ createConfiguredLuckyTokenComposition(options)
 | `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
 | required bound `fetch` | 交给 concrete Provider；不使用 ambient fallback |
-| optional `HttpObserver` | 包装 CommandCode 的 bound fetch，使 provider HTTP 失败对 Client Protocol handler 可见 |
+| optional legacy `HttpObserver` | Ticket 27 前的兼容输入；不得包装 CommandCode bound fetch，Provider 自己产生 neutral facts |
 | optional `ProjectSnapshot` | 交给 CommandCode Provider |
 | optional ID/clock | 交给对应 owner |
 
@@ -1443,11 +1444,11 @@ all bound facts → serving certification
 它不做 Anthropic↔Pi 或 Pi↔CommandCode conversion。完整 `LuckyTokenCliConfig` 在
 这里被拆成窄 constructor facts，之后不进入 Runtime request path。
 
-HTTP failure 观察的生命周期收敛在 composition：`createConfiguredLuckyTokenComposition()`
-创建一个 `HttpObserver`，同时注入 `registerLuckyTokenProviders()`（包装
-CommandCode bound fetch）与 `createAnthropicMessagesHandler()`（读取观察结果）。
-`createConfiguredPiModels()` 不负责创建 observer，只接受可选注入，避免把
-infrastructure 对象当作公共返回值泄漏。
+Ticket 27 前，`createConfiguredLuckyTokenComposition()` 仍为 legacy Client adapter
+创建 `HttpObserver` 并交给 handler。该 observer 也暂时作为兼容参数经过 Provider
+catalog，但 catalog 明确不使用它包装 CommandCode bound fetch；CommandCode 的 HTTP
+failure 由 Provider attempt 直接产生 neutral diagnostic。`createConfiguredPiModels()`
+不创建 observer，也不把 infrastructure 对象作为公共返回值泄漏。
 
 当前 production composition 有意只认证一个 `anthropic-messages` handler 和一个
 `commandcode-private` model。未来扩展时应增加独立 binding/registration，而不是在
@@ -1746,11 +1747,10 @@ session、project config、permission、image/reasoning capabilities、message/t
 
 Transport 选择 precedence 是 request `options.fetch` → Provider-bound fetch → global
 fetch。当前 certified composition 总是显式绑定 fetch，并禁止依赖 global fallback。
-在 certified composition 中，注入给 Provider 的 bound fetch 被 `HttpObserver`
-包装：observer 旁观每次 HTTP attempt（2xx 只记 status/headers，non-2xx 完整快照
-body，transport failure 单独记录），然后把原始 Response 原样交给 CommandCode
-attempt 逻辑。因此 CommandCode 的错误透传与 Anthropic/OpenAI 等 Pi adapter 走
-`options.fetch` 的观察路径不同，但共享同一个 observer 实例，handler 侧读取一致。
+在 certified composition 中，CommandCode Provider 直接持有原始 bound fetch；它不再
+经过 Client `HttpObserver`。每个 physical attempt 在 Provider 内有界读取自己的失败
+response，并只把 neutral fact 与 attempt summary 提升到 Pi diagnostics。Client observer
+仍是 Ticket 27 待删除的 built-in adapter legacy path，不能包装 CommandCode transport。
 
 ## 7.5 HTTP attempt/retry/cancellation — `attempts.ts`
 
@@ -1763,7 +1763,7 @@ resolveCommandCodeExecutionControls(options)
   → { maxRetries, timeoutMs, maxRetryDelayMs, onResponse }
 
 executeCommandCodeAttempts(prepared, model, controls, dependencies)
-  → Promise<CommandCodeResult>
+  → Promise<CommandCodeResult + immutable attempt summaries>
 ```
 
 | Logical invocation state（跨 retry 稳定） | Physical attempt state（每次新建） |
@@ -1776,8 +1776,15 @@ retryable stream error，并受 `maxRetries` 限制。Delay precedence 是
 不能超过 configured max。
 
 Caller cancellation 在 retry sleep、fetch、onResponse callback、body read 和 commit
-前始终 authoritative。Attempt timeout 只结束当前 attempt；响应 body 在失败/abort 时
-被取消，不能留有后台 reader。
+前传播；已经形成的 upstream stream terminal 不会被稍后翻转的 caller signal 重新标成
+Pi aborted。Attempt timeout 只结束当前 attempt，并按触发位置保留 `connect`、
+`response_headers` 或 `response_body` phase。响应 body cleanup 是 best-effort，不能
+掩盖已经形成的 primary failure。
+
+HTTP non-2xx、HTTP-200 stream error、connect/body/EOF、timeout、protocol、configuration、
+callback、retry-delay 与 caller cancellation 都先形成 neutral failure。Retry 只读取
+`failure.retryable === true`。每个 started attempt 都生成可信 diagnostic；execution 按序
+提交到 handler-owned invocation sink，最终失败由 handler 恰好写一个 journal。
 
 ## 7.6 CommandCode response transport — `attempts.ts`
 
@@ -2109,7 +2116,7 @@ flowchart TB
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
-| `src/http-observer.ts` | invocation-local fetch observer（`HttpObserver`）；latest-call-wins 快照 status/body/transport | composition 创建；handler/CommandCode bound fetch 使用 | `globalThis.fetch` 或注入 base | `test/unit/http-observer.test.ts` |
+| `src/http-observer.ts` | legacy invocation-local fetch observer（Ticket 27 删除）；latest-call-wins 快照 status/body/transport | composition 创建；仅旧 Client adapter path 使用，禁止包装 CommandCode bound fetch | `globalThis.fetch` 或注入 base | `test/unit/http-observer.test.ts` |
 | `src/http-failure-acquisition.ts` | Pi `api` → HTTP failure 获取方式映射 | handler（判断是否注入 `options.fetch`） | Pi `KnownApi` types | `test/unit/http-failure-acquisition.test.ts` |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerLuckyTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
 | `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
@@ -2339,7 +2346,7 @@ flowchart LR
 | Information lifecycle | raw token/file JSON/Client Wire/Provider JSONL 都有明确死亡点；只传播窄 Pi facts | 符合 |
 | 模型单一权威来源 | CommandCode 33 个模型只存在于 `models.ts`（官方 1.9.0 数据）；无运行时端点拉取、无第二份模型清单 | 符合 |
 | `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
-| HTTP failure 观察边界 | observer 由 composition 创建并注入；handler 只按 `KnownApi` 注入 `options.fetch`，CommandCode 走 composition 包装 bound fetch；观察结果只在 handler 侧映射成 Anthropic error envelope | 符合 |
+| HTTP failure 观察边界 | CommandCode 在 Provider attempt 内有界产生 neutral fact；legacy observer 仅暂留给 Ticket 27 contraction，不得包装 CommandCode bound fetch | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
 | Tool identity | 两侧转换都保留 call ID/name/correlation；不按位置猜测 | 符合 |
 | Cancellation | socket→HTTP→Pi→Provider→fetch/reader/retry 全链传播；commit 前仍 authoritative | 符合 |

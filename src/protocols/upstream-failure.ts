@@ -383,6 +383,7 @@ function sanitizeHeaders(
     if (typeof rawValue !== "string") {
       throw new TypeError(`failure header ${name} must be a string`);
     }
+    if (rawValue.length === 0) continue;
     const value = sanitizeRequiredText(
       rawValue,
       `failure header ${name}`,

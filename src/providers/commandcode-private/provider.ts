@@ -42,7 +42,10 @@ import {
   parseCommandCodeConfiguration,
   type CommandCodeConfiguration,
 } from "./configuration.js";
-import { commandCodeNeutralFailure } from "./failure.js";
+import {
+  commandCodeNeutralFailure,
+  CommandCodeNeutralFailureError,
+} from "./failure.js";
 
 const PROVIDER_ID = COMMANDCODE_PROVIDER_ID;
 const API_ID = COMMANDCODE_API_ID;
@@ -1006,6 +1009,7 @@ function createCommandCodeStream(
           {
             now,
             responsePolicy: configuration.conversion.response,
+            errorCapture: configuration.response.errorCapture,
             ...(traceContext === undefined ? {} : { traceContext }),
             ...(sleep === undefined ? {} : { sleep }),
           },
@@ -1021,14 +1025,38 @@ function createCommandCodeStream(
           prepared.signal,
         );
       } catch (error) {
-        const aborted = options?.signal?.aborted === true;
+        const normalized =
+          error instanceof CommandCodeNeutralFailureError
+            ? error
+            : options?.signal?.aborted === true
+              ? commandCodeNeutralFailure(
+                  {
+                    kind: "caller_cancellation",
+                    message: "CommandCode invocation was cancelled by its caller",
+                    retryable: false,
+                  },
+                  error,
+                )
+              : commandCodeNeutralFailure(
+                  {
+                    kind: "configuration",
+                    providerCode: "PROVIDER_CONFIGURATION_FAILURE",
+                    message: "CommandCode Provider configuration failed",
+                    retryable: false,
+                  },
+                  error,
+                );
+        const aborted = normalized.failure.kind === "caller_cancellation";
         const failed = createCommandCodeFailureMessage(
           responseAuthority,
-          error,
+          normalized,
           undefined,
           aborted,
         );
-        replayCommandCodeAssistantMessage(stream, failed, options?.signal);
+        // The committed neutral failure kind owns the terminal reason. A
+        // caller signal that flips after an upstream terminal must not relabel
+        // that terminal as caller cancellation.
+        replayCommandCodeAssistantMessage(stream, failed, undefined);
       }
     };
 

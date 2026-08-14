@@ -23,6 +23,7 @@ import {
   freezePiInvocation,
 } from "../../execution.js";
 import { HttpObserver } from "../../http-observer.js";
+import { supportsFetchObservation } from "../../http-failure-acquisition.js";
 import type { ClientProtocolHandler } from "../../http.js";
 import { mapUpstreamHttpFailure } from "../upstream-failure.js";
 import { resolveModel, ModelResolutionFailure } from "../../model-resolution.js";
@@ -266,7 +267,9 @@ async function handleOpenAIResponses(
       {
         sessionId: authResult.sessionId,
         signal: request.signal,
-        fetch: httpObserver.observedFetch,
+        ...(supportsFetchObservation(model.api)
+          ? { fetch: httpObserver.observedFetch }
+          : {}),
         ...(authResult.projectDir === undefined
           ? {}
           : { projectDir: authResult.projectDir }),

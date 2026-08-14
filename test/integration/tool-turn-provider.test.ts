@@ -87,7 +87,7 @@ it("preserves a complete client-tool next turn on the CommandCode wire", async (
             {
               type: "tool-result",
               toolCallId: "call_1",
-              toolName: "",
+              toolName: "lookup",
               output: { type: "text", value: "result" },
             },
           ],

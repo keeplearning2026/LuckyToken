@@ -298,7 +298,7 @@ describe("certified serving composition", () => {
               {
                 type: "tool-result",
                 toolCallId: "Call_Exact-1",
-                toolName: "",
+              toolName: "lookup",
                 output: { type: "text", value: "exact result" },
               },
             ],

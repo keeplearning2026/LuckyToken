@@ -91,7 +91,7 @@ export async function createOpenAIResponsesServingTestComposition(
   mutableModels.setProvider(
     createCommandCodePrivateProvider({
       apiKey: options.commandCodeApiKey,
-      fetch: httpObserver.observedFetch,
+      fetch: options.fetch,
       model,
       now,
       projectSnapshot: {

@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — neutral failure contract; 23 — certified request; 24 — JSONL lifecycle; 25 — Pi normalization.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,25 @@ Each attempt owns response/status/body reader/span/timeout facts. A bounded fina
 
 ## Acceptance criteria
 
-- [ ] HTTP non-2xx preserves validated status/statusText, opaque type/code, safe message, bounded/truncated body metadata, retryability, and fixed allowlisted headers.
-- [ ] HTTP-200 stream error preserves message/statusCode/isRetryable/type/code/body facts instead of flattening to message.
-- [ ] Invalid stream status cannot be used as an HTTP response status.
-- [ ] Fetch/connect, response-body, unexpected EOF, timeout, protocol, configuration, and callback failures have distinct neutral classes/phases.
-- [ ] Wire abort remains upstream-stream failure; only caller signal produces cancellation/Pi aborted.
-- [ ] Retry count/delay/timeout/body-read/body-size/client-message limits come from immutable CommandCode request/response config and are range-tested.
-- [ ] Retried attempts reuse logical body, refresh attempt span, respect cancellation, and retry only classified retryable failures.
-- [ ] Error capture never unboundedly clones/reads a response and cannot turn a readable upstream response into instrumentation failure.
-- [ ] Provider emits Pi error terminal with neutral diagnostic; execution receives the same fact.
-- [ ] Concurrent/sequential tests prove zero cross-request status/body/header leakage.
-- [ ] Final failure submits all attempt summaries to exactly one journal.
+- [x] HTTP non-2xx preserves validated status/statusText, opaque type/code, safe message, bounded/truncated body metadata, retryability, and fixed allowlisted headers.
+- [x] HTTP-200 stream error preserves message/statusCode/isRetryable/type/code/body facts instead of flattening to message.
+- [x] Invalid stream status cannot be used as an HTTP response status.
+- [x] Fetch/connect, response-body, unexpected EOF, timeout, protocol, configuration, and callback failures have distinct neutral classes/phases.
+- [x] Wire abort remains upstream-stream failure; only caller signal produces cancellation/Pi aborted.
+- [x] Retry count/delay/timeout/body-read/body-size/client-message limits come from immutable CommandCode request/response config and are range-tested.
+- [x] Retried attempts reuse logical body, refresh attempt span, respect cancellation, and retry only classified retryable failures.
+- [x] Error capture never unboundedly clones/reads a response and cannot turn a readable upstream response into instrumentation failure.
+- [x] Provider emits Pi error terminal with neutral diagnostic; execution receives the same fact.
+- [x] Concurrent/sequential tests prove zero cross-request status/body/header leakage.
+- [x] Final failure submits all attempt summaries to exactly one journal.
+
+## Completion evidence
+
+- The CommandCode Provider transport now bypasses the legacy Client observer; its attempts module owns bounded request-local acquisition.
+- Provider configuration remains the outer policy. The public neutral diagnostic applies its narrower fixed caps: 65,536 captured bytes and 1,024 safe message characters.
+- Every started physical attempt, including the final successful attempt after retries, is emitted as a trusted Pi diagnostic and submitted through `ExecutionFactsSink`.
+- Offline Provider, execution, route-journal, concurrency, cancellation, timeout-phase, and hostile-reader tests pass. Online CommandCode evidence was not run and remains evidence-insufficient.
 
 ## Out of scope
 
 Client-specific error envelopes and deletion of legacy observer code (27).
-

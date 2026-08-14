@@ -7,7 +7,10 @@ import type {
 
 const CONVERSION_NOTICE_DIAGNOSTIC_TYPE =
   "luckytoken.conversion_notice.v1";
+const INVOCATION_ATTEMPT_DIAGNOSTIC_TYPE =
+  "luckytoken.invocation_attempt.v1";
 const trustedNoticeDiagnostics = new WeakSet<object>();
+const trustedAttemptDiagnostics = new WeakSet<object>();
 
 export interface ExecutionFactsSink {
   notice(notice: ConversionNotice): void;
@@ -35,6 +38,32 @@ export function createConversionNoticeDiagnostic(
   return diagnostic;
 }
 
+export function createInvocationAttemptDiagnostic(
+  attempt: InvocationAttempt,
+  timestamp: number,
+): AssistantMessageDiagnostic {
+  if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+    throw new TypeError(
+      "invocation attempt diagnostic timestamp must be a non-negative integer",
+    );
+  }
+  if (
+    !Object.isFrozen(attempt) ||
+    (attempt.safeIds !== undefined && !Object.isFrozen(attempt.safeIds))
+  ) {
+    throw new TypeError(
+      "invocation attempt diagnostic requires an immutable attempt",
+    );
+  }
+  const diagnostic = Object.freeze({
+    type: INVOCATION_ATTEMPT_DIAGNOSTIC_TYPE,
+    timestamp,
+    details: Object.freeze({ attempt }),
+  });
+  trustedAttemptDiagnostics.add(diagnostic);
+  return diagnostic;
+}
+
 export function submitExecutionFacts(
   diagnostics: readonly AssistantMessageDiagnostic[] | undefined,
   sink: ExecutionFactsSink | undefined,
@@ -45,6 +74,15 @@ export function submitExecutionFacts(
       diagnostic.type !== CONVERSION_NOTICE_DIAGNOSTIC_TYPE ||
       !trustedNoticeDiagnostics.has(diagnostic)
     ) {
+      if (
+        diagnostic.type === INVOCATION_ATTEMPT_DIAGNOSTIC_TYPE &&
+        trustedAttemptDiagnostics.has(diagnostic)
+      ) {
+        const attempt = diagnostic.details?.attempt;
+        if (typeof attempt === "object" && attempt !== null) {
+          sink.attempt(attempt as unknown as InvocationAttempt);
+        }
+      }
       continue;
     }
     const notice = diagnostic.details?.notice;

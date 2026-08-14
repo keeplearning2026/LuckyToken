@@ -55,11 +55,7 @@ export interface ConfiguredPiModelsOptions {
   readonly commandCodeConfiguration?: CommandCodeConfiguration;
   /** Optional models.json path; absent means no user-registered providers. */
   readonly modelsJsonPath?: string;
-  /**
-   * Optional shared HTTP observer. When provided, the CommandCode provider's
-   * bound fetch is wrapped by it so provider HTTP failures are visible to the
-   * Client Protocol handler.
-   */
+  /** Legacy Client observer retained only until Ticket 27; never wraps CommandCode. */
   readonly httpObserver?: HttpObserver;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createSessionId?: () => string;

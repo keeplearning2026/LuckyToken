@@ -7,6 +7,7 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { createAuth } from "../../src/auth.js";
+import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   certifyServingComposition,
   ServingCertificationFailure,
@@ -19,6 +20,7 @@ import {
   createCommandCodePrivateProvider,
   type CommandCodeCompatibilityPolicy,
 } from "../../src/providers/commandcode-private/provider.js";
+import type { CommandCodeConfiguration } from "../../src/providers/commandcode-private/configuration.js";
 import {
   createNodeProjectSnapshot,
   type ProjectSnapshot,
@@ -45,6 +47,7 @@ export interface CommandCodeServingTestOptions {
   modelInput?: Array<"text" | "image">;
   modelReasoning?: boolean;
   commandCodeCompatibility?: CommandCodeCompatibilityPolicy;
+  commandCodeConfiguration?: CommandCodeConfiguration;
   createMessageId?: () => string;
   createSessionId?: () => string;
   projectDir?: string;
@@ -55,6 +58,7 @@ export interface CommandCodeServingTestOptions {
   routerDefaults?: RouterOptionDefaults;
   anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
+  invocationDiagnostics?: InvocationDiagnosticsFactory;
 }
 
 export interface CommandCodeServingTestComposition {
@@ -140,7 +144,10 @@ export function createCommandCodeServingTestComposition(
   mutableModels.setProvider(
     createCommandCodePrivateProvider({
       apiKey: options.commandCodeApiKey,
-      fetch: httpObserver.observedFetch,
+      ...(options.commandCodeConfiguration === undefined
+        ? {}
+        : { configuration: options.commandCodeConfiguration }),
+      fetch: options.fetch,
       model,
       now,
       projectSnapshot,
@@ -171,6 +178,9 @@ export function createCommandCodeServingTestComposition(
     maxRequestBytes,
     routerDefaults,
     now,
+    ...(options.invocationDiagnostics === undefined
+      ? {}
+      : { invocationDiagnostics: options.invocationDiagnostics }),
   });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [anthropic],

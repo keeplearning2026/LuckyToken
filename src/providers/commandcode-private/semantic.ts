@@ -13,7 +13,10 @@ import {
 import type { CommandCodeResult } from "./assembler.js";
 import { COMMANDCODE_PROVIDER_ID } from "./constants.js";
 import { cloneLosslessJsonObject } from "./json.js";
-import { createConversionNoticeDiagnostic } from "../../execution-facts.js";
+import {
+  createConversionNoticeDiagnostic,
+  createInvocationAttemptDiagnostic,
+} from "../../execution-facts.js";
 import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 import { createUpstreamFailureDiagnostic } from "../../protocols/upstream-failure.js";
 import {
@@ -317,6 +320,9 @@ function addDiagnostics(
 ): AssistantMessage {
   const diagnostics = [
     ...(message.diagnostics ?? []),
+    ...(result.attempts ?? []).map((attempt) =>
+      createInvocationAttemptDiagnostic(attempt, message.timestamp),
+    ),
     ...[...notices, ...result.notices, ...semanticNotices].map((notice) =>
     createConversionNoticeDiagnostic(notice, message.timestamp),
     ),
@@ -375,6 +381,9 @@ export function createCommandCodeFailureMessage(
   if (error instanceof CommandCodeNeutralFailureError) {
     message.diagnostics = [
       createUpstreamFailureDiagnostic(error.failure, message.timestamp),
+      ...error.attempts.map((attempt) =>
+        createInvocationAttemptDiagnostic(attempt, message.timestamp),
+      ),
     ];
   }
   return deepFreeze(message);

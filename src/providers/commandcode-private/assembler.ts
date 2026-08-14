@@ -1,6 +1,12 @@
 import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
 import { COMMANDCODE_PROVIDER_ID } from "./constants.js";
 import { CommandCodeNeutralFailureError } from "./failure.js";
+import type { InvocationAttempt } from "../../invocation-diagnostics/index.js";
+import {
+  captureCommandCodeStreamFailurePayload,
+  DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,
+  type CommandCodeFailureCapturePolicy,
+} from "./failure-capture.js";
 import {
   cloneLosslessJsonObject,
   type LosslessJsonValue,
@@ -47,6 +53,8 @@ export interface CommandCodeResult {
   readonly systemPromptTokens?: number;
   readonly responseIdentity?: Readonly<CommandCodeResponseIdentity>;
   readonly notices: readonly ConversionNotice[];
+  /** Physical-attempt facts are attached by the attempts module after commit. */
+  readonly attempts?: readonly InvocationAttempt[];
 }
 
 export type CommandCodeProtocolErrorCode =
@@ -131,6 +139,14 @@ export class CommandCodeStreamError extends CommandCodeNeutralFailureError {
     readonly statusCode?: number,
     providerType?: string,
     providerCode?: string,
+    snapshot?: {
+      readonly mediaType?: string;
+      readonly capturedBytes: number;
+      readonly totalBytes?: number;
+      readonly sha256?: string;
+      readonly truncated: boolean;
+    },
+    truncated = false,
   ) {
     super({
       kind: "upstream_stream",
@@ -139,6 +155,8 @@ export class CommandCodeStreamError extends CommandCodeNeutralFailureError {
       ...(statusCode === undefined ? {} : { status: statusCode }),
       ...(providerType === undefined ? {} : { providerType }),
       ...(providerCode === undefined ? {} : { providerCode }),
+      ...(snapshot === undefined ? {} : { snapshot }),
+      truncated,
     });
     this.name = "CommandCodeStreamError";
     Object.freeze(this);
@@ -212,10 +230,12 @@ function safeFailureMessage(value: string): string {
   return sanitized.length === 0 ? "CommandCode stream failed" : sanitized;
 }
 
-function safeProviderIdentifier(value: unknown): string | undefined {
-  return typeof value === "string" && /^[A-Za-z0-9_.:/-]{1,256}$/u.test(value)
-    ? value
-    : undefined;
+function safeProviderMetadata(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .trim();
+  return sanitized.length === 0 ? undefined : sanitized;
 }
 
 function normalizeUsage(
@@ -253,6 +273,7 @@ function requireString(
 
 export class CommandCodeContentAssembler {
   private readonly policy: CommandCodeResponsePolicy;
+  private readonly failureCapture: CommandCodeFailureCapturePolicy;
   private readonly slots: Slot[] = [];
   private readonly textById = new Map<string, TextSlot>();
   private readonly reasoningById = new Map<string, ReasoningSlot>();
@@ -265,8 +286,13 @@ export class CommandCodeContentAssembler {
   private readonly notices: ConversionNotice[] = [];
   private finalized = false;
 
-  constructor(policy: CommandCodeResponsePolicy = DEFAULT_RESPONSE_POLICY) {
+  constructor(
+    policy: CommandCodeResponsePolicy = DEFAULT_RESPONSE_POLICY,
+    failureCapture: CommandCodeFailureCapturePolicy =
+      DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,
+  ) {
     this.policy = Object.freeze({ ...policy });
+    this.failureCapture = Object.freeze({ ...failureCapture });
   }
 
   consumeRawLine(rawLine: string): void {
@@ -622,13 +648,20 @@ export class CommandCodeContentAssembler {
           detail.statusCode <= 599
             ? detail.statusCode
             : undefined;
+        const captured = captureCommandCodeStreamFailurePayload(
+          detail?.body,
+          message,
+          this.failureCapture,
+        );
         this.rollback();
         throw new CommandCodeStreamError(
-          message,
+          captured.message,
           event.isRetryable === true || detail?.isRetryable === true,
           statusCode,
-          safeProviderIdentifier(detail?.type),
-          safeProviderIdentifier(detail?.code),
+          safeProviderMetadata(detail?.type),
+          safeProviderMetadata(detail?.code),
+          captured.snapshot,
+          captured.truncated,
         );
       }
       case "abort":

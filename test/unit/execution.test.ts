@@ -19,6 +19,7 @@ import {
 } from "../../src/execution.js";
 import {
   createConversionNoticeDiagnostic,
+  createInvocationAttemptDiagnostic,
   type ExecutionFactsSink,
 } from "../../src/execution-facts.js";
 import {
@@ -256,7 +257,21 @@ describe("Core atomic execution", () => {
       action: "xrepair" as const,
     });
     const complete = message("stop");
-    complete.diagnostics = [createConversionNoticeDiagnostic(notice, 1)];
+    const attempt = Object.freeze({
+      attempt: 1,
+      classification: "success",
+      stage: "complete",
+      status: 200,
+    });
+    complete.diagnostics = [
+      createConversionNoticeDiagnostic(notice, 1),
+      createInvocationAttemptDiagnostic(attempt, 1),
+      Object.freeze({
+        type: "luckytoken.invocation_attempt.v1",
+        timestamp: 1,
+        details: Object.freeze({ attempt }),
+      }),
+    ];
     const fixture = modelsFor(
       streamFrom([{ type: "done", reason: "stop", message: complete }]),
     );
@@ -269,7 +284,51 @@ describe("Core atomic execution", () => {
 
     expect(sink.notice).toHaveBeenCalledOnce();
     expect(sink.notice).toHaveBeenCalledWith(notice);
-    expect(sink.attempt).not.toHaveBeenCalled();
+    expect(sink.attempt).toHaveBeenCalledOnce();
+    expect(sink.attempt).toHaveBeenCalledWith(attempt);
+  });
+
+  it("submits every trusted Provider attempt summary before promoting failure", async () => {
+    const first = Object.freeze({
+      attempt: 1,
+      classification: "http",
+      stage: "response_headers",
+      status: 503,
+      retryable: true,
+    });
+    const second = Object.freeze({
+      attempt: 2,
+      classification: "timeout",
+      stage: "response_body",
+      retryable: true,
+    });
+    const failure = createUpstreamFailureFact({
+      kind: "timeout",
+      phase: "response_body",
+      message: "timed out",
+      retryable: true,
+      attemptCount: 2,
+    });
+    const failedMessage = message("error", "fallback");
+    failedMessage.diagnostics = [
+      createUpstreamFailureDiagnostic(failure, 1),
+      createInvocationAttemptDiagnostic(first, 1),
+      createInvocationAttemptDiagnostic(second, 1),
+    ];
+    const fixture = modelsFor(
+      streamFrom([{ type: "error", reason: "error", error: failedMessage }]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+    };
+
+    await expect(
+      execute(fixture.models, model, context, { maxTokens: 10 }, sink),
+    ).rejects.toMatchObject({ failure });
+    expect(sink.attempt).toHaveBeenNthCalledWith(1, first);
+    expect(sink.attempt).toHaveBeenNthCalledWith(2, second);
+    expect(sink.notice).not.toHaveBeenCalled();
   });
 
   it("keeps caller cancellation structurally distinct from upstream abort", async () => {

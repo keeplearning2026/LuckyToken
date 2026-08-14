@@ -707,7 +707,8 @@ describe("OpenAI Responses serving", () => {
     );
     expect(response.status).toBe(429);
     const body = await response.json();
-    expect(body.error.type).toBe("rate_limit_exceeded");
+    expect(body.error.type).toBe("rate_limit_error");
+    expect(body.error.code).toBeNull();
     expect(body.error.message).toContain("slow down");
   });
 

@@ -140,11 +140,10 @@ export function resolveHttpFailureAcquisition(
  * True when a Pi adapter accepts `options.fetch`, so the Client Protocol
  * handler can install a fetch observer for this `api`.
  *
- * Only Pi `KnownApi` values are considered: LuckyToken-owned adapters with
- * their own fetch binding (e.g. the CommandCode provider) are observed at the
- * composition layer instead, never through `options.fetch`, and return false
- * here. Unknown adapter strings also return false so no un-audited adapter
- * receives an injected fetch.
+ * Only Pi `KnownApi` values are considered. LuckyToken-owned adapters with
+ * their own request-local failure acquisition (for example CommandCode) never
+ * receive an observed fetch and return false here. Unknown adapter strings
+ * also return false so no un-audited adapter receives an injected fetch.
  */
 export function supportsFetchObservation(api: string): boolean {
   const known = httpFailureAcquisitionByApi[api as KnownApi];

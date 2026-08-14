@@ -30,6 +30,7 @@ describe("CommandCode attempt controls", () => {
   it.each([
     ["negative retries", { maxRetries: -1 }],
     ["fractional retries", { maxRetries: 1.5 }],
+    ["too many retries", { maxRetries: 101 }],
     ["zero timeout", { timeoutMs: 0 }],
     ["negative timeout", { timeoutMs: -1 }],
     ["fractional timeout", { timeoutMs: 1.5 }],

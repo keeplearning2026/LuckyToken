@@ -225,7 +225,11 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
       ],
     },
   });
-  expect(result.diagnostics).toEqual([
+  expect(
+    result.diagnostics?.filter(
+      (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+    ),
+  ).toEqual([
     expect.objectContaining({
       type: "luckytoken.conversion_notice.v1",
       details: {
@@ -298,7 +302,11 @@ it("applies unknown-ignore and pause-stop policies through the Provider seam", a
     ],
   });
   expect(
-    result.diagnostics?.map((diagnostic) => diagnostic.details?.notice),
+    result.diagnostics
+      ?.filter(
+        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+      )
+      .map((diagnostic) => diagnostic.details?.notice),
   ).toEqual([
     {
       adapter: "commandcode-private",

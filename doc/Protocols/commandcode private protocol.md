@@ -1216,7 +1216,9 @@ CommandCode decoder MUST NOT 要求 `data:`、`event:`、blank-line delimiter �
 
 Success parser 不应使用 Content-Type 作为 gate；只要 body 是有效 bare JSON Lines 就可以解析。
 
-Non-2xx response：读取完整 body 并作为 HTTP error 处理。Retry classification 建议：
+Non-2xx response：按 immutable Provider policy 与 shared neutral cap 有界读取 body，
+生成 neutral HTTP fact；禁止完整读取、保留 raw body 或让 capture/cleanup failure 覆盖
+已经确认的 HTTP status。Retry classification：
 
 | Failure | retryable |
 |---|---:|
@@ -1225,7 +1227,7 @@ Non-2xx response：读取完整 body 并作为 HTTP error 处理。Retry classif
 | HTTP 500–599 | true |
 | other non-2xx | false |
 | 2xx but response body missing | true |
-| physical EOF with neither `finish` nor `abort` | true（`CommandCodeTransportError`：status 502、midStream true） |
+| physical EOF with neither `finish` nor `abort` | true（neutral `transport/unexpected_eof`；不虚构 status） |
 | stream `error` event | 使用 event.isRetryable；缺失时 false |
 | unknown/malformed/lifecycle error | false |
 | `abort` / final `pause_turn` | false |
@@ -1477,7 +1479,7 @@ export interface CommandCodeResult {
 | `error` | neutral upstream-stream failure；no commit |
 | unknown | `error|ignore` policy；ignore adds bounded notice and still requires finish |
 | malformed known event | neutral protocol failure |
-| EOF without `finish`/`abort` | rollback；throw `CommandCodeTransportError`（status 502、retryable true、midStream true）；即使有 open block 也相同 |
+| EOF without `finish`/`abort` | rollback；throw neutral `CommandCodeTransportError`（`transport/unexpected_eof`、retryable true、无 synthetic status）；即使有 open block 也相同 |
 | EOF after final `finish` | require all blocks closed；apply exact-raw pause policy；otherwise return success |
 
 Duplicate start、closed id 后又来的 start/delta/end、以及 end without open block 都是 protocol error。实现不能为 malformed stream 引入 occurrence key、自动修复 lifecycle 或重排 slot。
@@ -2392,7 +2394,11 @@ export class CommandCodeContentAssembler {
 }
 ~~~
 
-## 7.5 HTTP body consumer参考
+## 7.5 Historical HTTP body consumer（non-normative）
+
+下列 `response.text()` / `CommandCodeHttpError.body` 草图属于冻结前实现，不得用于当前
+Provider。当前实现以 bounded `failure-capture.ts`、neutral diagnostic 和 attempt journal
+合同为准；raw body 不跨出 physical attempt。
 
 ~~~ts
 export class CommandCodeHttpError extends Error {
@@ -2475,7 +2481,7 @@ export async function consumeCommandCodeResponse(
 
 收到 `abort` 时 assembler 先 rollback 并抛 `CommandCodeAbortError`。Consumer 的 catch path 随即取消 reader；error 中的 rawEvents 保存到 `abort` 为止。若 debug recorder 必须保留 server 在 `abort` 后仍发送的 bytes，必须在独立 recording layer drain，不能改变 semantic failure 结果。
 
-Physical EOF 时若既没有 `finish` 也没有 `abort`，assembler 先 rollback，再抛 `CommandCodeTransportError`。该错误固定为 `status: 502`、`retryable: true`、`midStream: true`；缺少 terminal event 的判断先于 open-block 检查，因此存在 unfinished block 时仍抛该 transport error。若已经收到 `finish`，EOF 时的 unfinished block 才按 `INVALID_BLOCK_LIFECYCLE` 处理。
+Physical EOF 时若既没有 `finish` 也没有 `abort`，assembler 先 rollback，再抛 neutral `CommandCodeTransportError`。该 failure 固定为 `kind:"transport"`、`phase:"unexpected_eof"`、`retryable:true`，不虚构 upstream status；缺少 terminal event 的判断先于 open-block 检查，因此存在 unfinished block 时仍抛该 transport error。若已经收到 `finish`，EOF 时的 unfinished block 才按 `INVALID_BLOCK_LIFECYCLE` 处理。
 
 ## 7.6 参考代码
 

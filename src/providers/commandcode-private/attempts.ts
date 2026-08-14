@@ -3,20 +3,36 @@ import type {
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { createHash } from "node:crypto";
 
 import {
   CommandCodeContentAssembler,
-  CommandCodeProtocolError,
-  isRetryableCommandCodeResponseError,
   type CommandCodeResult,
   type CommandCodeResponsePolicy,
 } from "./assembler.js";
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import {
+  attachCommandCodeRetryHeaders,
+  commandCodeNeutralFailure,
+  commandCodeRetryHeaders,
+  CommandCodeNeutralFailureError,
+  withCommandCodeAttemptSummaries,
+} from "./failure.js";
+import {
+  captureCommandCodeHttpFailurePayload,
+  DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,
+  type CommandCodeFailureCapturePolicy,
+} from "./failure-capture.js";
+import type {
+  ConversionNotice,
+  InvocationAttempt,
+} from "../../invocation-diagnostics/index.js";
+import type { UpstreamFailurePhase } from "../../protocols/upstream-failure.js";
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const TRACE_ID_PATTERN = /^(?!0{32}$)[0-9a-f]{32}$/u;
 const SPAN_ID_PATTERN = /^(?!0{16}$)[0-9a-f]{16}$/u;
+const SAFE_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_.:/-]{1,256}$/u;
 
 export type CommandCodeAttemptResult = CommandCodeResult;
 
@@ -47,6 +63,7 @@ export interface CommandCodeAttemptDependencies {
   traceContext?: CommandCodeTraceContextCapability;
   sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   responsePolicy?: CommandCodeResponsePolicy;
+  errorCapture?: CommandCodeFailureCapturePolicy;
 }
 
 class RetryableAttemptError extends Error {
@@ -60,7 +77,10 @@ class RetryableAttemptError extends Error {
 }
 
 class AttemptTimeoutError extends RetryableAttemptError {
-  constructor(timeoutMs: number) {
+  constructor(
+    timeoutMs: number,
+    readonly phase: UpstreamFailurePhase,
+  ) {
     super(`CommandCode attempt timed out after ${timeoutMs}ms`);
     this.name = "AttemptTimeoutError";
   }
@@ -92,6 +112,9 @@ export function resolveCommandCodeExecutionControls(
     options?.maxRetries ?? defaults.maxRetries,
     "maxRetries",
   );
+  if (maxRetries > 100) {
+    throw new Error("maxRetries must be no greater than 100");
+  }
   const timeoutMs = options?.timeoutMs ?? defaults.timeoutMs ?? undefined;
   if (
     timeoutMs !== undefined &&
@@ -214,6 +237,7 @@ interface AttemptScope {
 function createAttemptScope(
   callerSignal: AbortSignal,
   timeoutMs: number | undefined,
+  currentPhase: () => UpstreamFailurePhase,
 ): AttemptScope {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -225,7 +249,7 @@ function createAttemptScope(
   if (timeoutMs !== undefined) {
     timer = setTimeout(() => {
       if (!controller.signal.aborted) {
-        controller.abort(new AttemptTimeoutError(timeoutMs));
+        controller.abort(new AttemptTimeoutError(timeoutMs, currentPhase()));
       }
     }, timeoutMs);
   }
@@ -259,6 +283,8 @@ export async function consumeCommandCodeResponse(
   response: Response,
   signal: AbortSignal,
   responsePolicy?: CommandCodeResponsePolicy,
+  errorCapture: CommandCodeFailureCapturePolicy =
+    DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,
 ): Promise<CommandCodeResult> {
   if (response.body === null) {
     throw new RetryableAttemptError(
@@ -266,9 +292,18 @@ export async function consumeCommandCodeResponse(
       response.headers,
     );
   }
-  const reader = response.body.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch (error) {
+    throw new RetryableAttemptError(
+      "CommandCode response body reader failed",
+      response.headers,
+      { cause: error },
+    );
+  }
   const decoder = new TextDecoder();
-  const assembler = new CommandCodeContentAssembler(responsePolicy);
+  const assembler = new CommandCodeContentAssembler(responsePolicy, errorCapture);
   let buffer = "";
   try {
     while (true) {
@@ -296,14 +331,14 @@ export async function consumeCommandCodeResponse(
     if (buffer.trim().length > 0) assembler.consumeRawLine(buffer);
     return assembler.finalizeAfterTransportEnd();
   } catch (error) {
-    try {
-      await reader.cancel(error);
-    } catch {
-      // Preserve the original attempt failure.
-    }
+    void reader.cancel(error).catch(() => undefined);
     throw error;
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // Preserve the attempt's semantic or transport result.
+    }
   }
 }
 
@@ -330,8 +365,17 @@ async function runAttempt(
   model: Model<string>,
   controls: CommandCodeExecutionControls,
   dependencies: CommandCodeAttemptDependencies,
-): Promise<CommandCodeAttemptResult> {
-  const scope = createAttemptScope(prepared.signal, controls.timeoutMs);
+): Promise<{
+  readonly result: CommandCodeAttemptResult;
+  readonly responseStatus: number;
+  readonly responseHeaders: Headers;
+}> {
+  let phase: UpstreamFailurePhase = "request";
+  const scope = createAttemptScope(
+    prepared.signal,
+    controls.timeoutMs,
+    () => phase,
+  );
   let response: Response | undefined;
   let bodyConsumed = false;
   try {
@@ -344,6 +388,7 @@ async function runAttempt(
       signal: scope.signal,
     });
     try {
+      phase = "connect";
       response = await raceWithSignal(
         Promise.resolve().then(() =>
           prepared.fetchImpl(request, { signal: scope.signal }),
@@ -364,6 +409,7 @@ async function runAttempt(
       );
     }
     const receivedResponse = response;
+    phase = "response_headers";
     if (controls.onResponse !== undefined) {
       const callbackPromise = Promise.resolve().then(() =>
         controls.onResponse?.(
@@ -389,35 +435,213 @@ async function runAttempt(
     if (!receivedResponse.ok) {
       const retryable =
         receivedResponse.status === 429 || receivedResponse.status >= 500;
-      if (retryable) {
-        throw new RetryableAttemptError(
-          `CommandCode returned HTTP ${receivedResponse.status}`,
-          receivedResponse.headers,
-        );
-      }
-      throw new CommandCodeProtocolError(
-        "INVALID_EVENT",
-        `CommandCode returned HTTP ${receivedResponse.status}`,
+      phase = "response_body";
+      const captured = await captureCommandCodeHttpFailurePayload(
+        receivedResponse,
+        dependencies.errorCapture ?? DEFAULT_COMMANDCODE_FAILURE_CAPTURE_POLICY,
+        // Once response headers establish a non-2xx HTTP failure, the
+        // capture policy owns its short best-effort body deadline. Preserve
+        // that primary HTTP fact if the broader attempt timer expires; only
+        // the caller lifecycle signal may still cancel capture.
+        prepared.signal,
+      );
+      bodyConsumed = true;
+      throw attachCommandCodeRetryHeaders(
+        commandCodeNeutralFailure({
+          kind: "http",
+          status: receivedResponse.status,
+          ...(receivedResponse.statusText.length === 0
+            ? {}
+            : { statusText: receivedResponse.statusText }),
+          ...(captured.providerType === undefined
+            ? {}
+            : { providerType: captured.providerType }),
+          ...(captured.providerCode === undefined
+            ? {}
+            : { providerCode: captured.providerCode }),
+          message: captured.message,
+          ...(captured.snapshot === undefined
+            ? {}
+            : { snapshot: captured.snapshot }),
+          headers: receivedResponse.headers,
+          retryable,
+          truncated: captured.truncated,
+        }),
+        receivedResponse.headers,
       );
     }
+    phase = "response_body";
     const result = await consumeCommandCodeResponse(
       receivedResponse,
       scope.signal,
       dependencies.responsePolicy,
+      dependencies.errorCapture,
     );
     bodyConsumed = true;
     scope.signal.throwIfAborted();
-    return result;
+    return {
+      result,
+      responseStatus: receivedResponse.status,
+      responseHeaders: receivedResponse.headers,
+    };
+  } catch (error) {
+    if (
+      prepared.signal.aborted &&
+      !(error instanceof CommandCodeNeutralFailureError)
+    ) {
+      const cancelled = commandCodeNeutralFailure(
+        {
+          kind: "caller_cancellation",
+          message: "CommandCode invocation was cancelled by its caller",
+          retryable: false,
+        },
+        error,
+      );
+      attemptStageByError.set(cancelled, phase);
+      throw cancelled;
+    }
+    throw error;
   } finally {
     if ((!bodyConsumed || scope.signal.aborted) && response?.body !== null) {
       try {
-        await response?.body?.cancel(scope.signal.reason);
+        void response?.body?.cancel(scope.signal.reason).catch(() => undefined);
       } catch {
         // A locked body is cancelled by its owning reader.
       }
     }
     scope.dispose();
   }
+}
+
+function normalizeAttemptFailure(error: unknown): CommandCodeNeutralFailureError {
+  if (error instanceof CommandCodeNeutralFailureError) return error;
+  if (error instanceof AttemptTimeoutError) {
+    return commandCodeNeutralFailure(
+      {
+        kind: "timeout",
+        phase: error.phase,
+        message: error.message,
+        retryable: true,
+      },
+      error,
+    );
+  }
+  if (error instanceof CommandCodeResponseCallbackError) {
+    return commandCodeNeutralFailure(
+      {
+        kind: "callback",
+        phase: "response_headers",
+        message: "CommandCode onResponse callback failed",
+        retryable: false,
+      },
+      error,
+    );
+  }
+  if (error instanceof RetryableAttemptError) {
+    const responseBody = error.message.includes("body");
+    const normalized = commandCodeNeutralFailure(
+      {
+        kind: "transport",
+        phase: responseBody ? "response_body" : "connect",
+        message: error.message,
+        retryable: true,
+      },
+      error,
+    );
+    return error.headers === undefined
+      ? normalized
+      : attachCommandCodeRetryHeaders(normalized, error.headers);
+  }
+  return commandCodeNeutralFailure(
+    {
+      kind: "configuration",
+      message: "CommandCode attempt configuration failed",
+      retryable: false,
+    },
+    error,
+  );
+}
+
+const attemptStageByError = new WeakMap<Error, string>();
+
+function safeAttemptId(value: string): string {
+  return SAFE_ATTEMPT_ID_PATTERN.test(value)
+    ? value
+    : `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function attemptSafeIdsFromEntries(
+  entries: Iterable<readonly [string, string]>,
+): Readonly<Record<string, string>> | undefined {
+  const allowed = new Set([
+    "request-id",
+    "trace-id",
+    "x-request-id",
+    "x-trace-id",
+  ]);
+  const selected = [...entries]
+    .filter(([name]) => allowed.has(name))
+    .map(([name, value]) => [name, safeAttemptId(value)] as const);
+  return selected.length === 0
+    ? undefined
+    : Object.freeze(Object.fromEntries(selected));
+}
+
+function attemptSafeIds(
+  error: CommandCodeNeutralFailureError,
+): Readonly<Record<string, string>> | undefined {
+  const entries = Object.entries(error.failure.headers);
+  return attemptSafeIdsFromEntries(entries);
+}
+
+function summarizeAttempt(
+  error: CommandCodeNeutralFailureError,
+  attempt: number,
+): InvocationAttempt {
+  const stage =
+    attemptStageByError.get(error) ??
+    error.failure.phase ??
+    (error.failure.kind === "http" ? "response_headers" : "stream");
+  const safeIds = attemptSafeIds(error);
+  return Object.freeze({
+    attempt,
+    classification: error.failure.kind,
+    stage,
+    ...(error.failure.status === undefined ? {} : { status: error.failure.status }),
+    ...(error.failure.retryable === undefined
+      ? {}
+      : { retryable: error.failure.retryable }),
+    ...(safeIds === undefined ? {} : { safeIds }),
+  });
+}
+
+function successAttempt(
+  status: number,
+  headers: Headers,
+  attempt: number,
+): InvocationAttempt {
+  const safeIds = attemptSafeIdsFromEntries(
+    ["request-id", "trace-id", "x-request-id", "x-trace-id"]
+      .map((name) => [name, headers.get(name)] as const)
+      .filter((entry): entry is readonly [string, string] => entry[1] !== null),
+  );
+  return Object.freeze({
+    attempt,
+    classification: "success",
+    stage: "complete",
+    status,
+    ...(safeIds === undefined ? {} : { safeIds }),
+  });
+}
+
+function committedResultWithAttempts(
+  result: CommandCodeAttemptResult,
+  attempts: readonly InvocationAttempt[],
+): CommandCodeAttemptResult {
+  return Object.freeze({
+    ...result,
+    attempts: Object.freeze([...attempts]),
+  });
 }
 
 async function defaultSleep(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -442,28 +666,75 @@ export async function executeCommandCodeAttempts(
   dependencies: CommandCodeAttemptDependencies,
 ): Promise<CommandCodeAttemptResult> {
   let retryIndex = 0;
+  const attempts: InvocationAttempt[] = [];
   while (true) {
-    prepared.signal.throwIfAborted();
-    try {
-      return await runAttempt(prepared, model, controls, dependencies);
-    } catch (error) {
-      if (prepared.signal.aborted) {
-        throw abortReason(prepared.signal, "CommandCode invocation was cancelled");
-      }
-      const retryable =
-        error instanceof RetryableAttemptError ||
-        isRetryableCommandCodeResponseError(error);
-      if (!retryable || retryIndex >= controls.maxRetries) {
-        throw error;
-      }
-      const delayMs = resolveCommandCodeRetryDelayMs(
-        error instanceof RetryableAttemptError ? error.headers : undefined,
-        retryIndex,
-        controls.maxRetryDelayMs,
-        dependencies.now(),
+    if (prepared.signal.aborted) {
+      const cancelled = commandCodeNeutralFailure(
+        {
+          kind: "caller_cancellation",
+          message: "CommandCode invocation was cancelled by its caller",
+          retryable: false,
+        },
+        abortReason(prepared.signal, "CommandCode invocation was cancelled"),
       );
+      throw withCommandCodeAttemptSummaries(cancelled, attempts);
+    }
+    try {
+      const completed = await runAttempt(prepared, model, controls, dependencies);
+      attempts.push(
+        successAttempt(
+          completed.responseStatus,
+          completed.responseHeaders,
+          attempts.length + 1,
+        ),
+      );
+      return committedResultWithAttempts(completed.result, attempts);
+    } catch (error) {
+      const normalized = normalizeAttemptFailure(error);
+      attempts.push(summarizeAttempt(normalized, attempts.length + 1));
+      const retryable = normalized.failure.retryable === true;
+      if (!retryable || retryIndex >= controls.maxRetries) {
+        throw withCommandCodeAttemptSummaries(normalized, attempts);
+      }
+      let delayMs: number;
+      try {
+        delayMs = resolveCommandCodeRetryDelayMs(
+          commandCodeRetryHeaders(normalized),
+          retryIndex,
+          controls.maxRetryDelayMs,
+          dependencies.now(),
+        );
+      } catch {
+        throw withCommandCodeAttemptSummaries(normalized, attempts);
+      }
       retryIndex += 1;
-      await (dependencies.sleep ?? defaultSleep)(delayMs, prepared.signal);
+      try {
+        await (dependencies.sleep ?? defaultSleep)(delayMs, prepared.signal);
+      } catch (sleepError) {
+        if (prepared.signal.aborted) {
+          const cancelled = commandCodeNeutralFailure(
+            {
+              kind: "caller_cancellation",
+              message: "CommandCode invocation was cancelled by its caller",
+              attemptCount: attempts.length,
+              retryable: false,
+            },
+            sleepError,
+          );
+          throw withCommandCodeAttemptSummaries(cancelled, attempts);
+        }
+        const retryDelayFailure = commandCodeNeutralFailure(
+          {
+            kind: "transport",
+            phase: "retry_delay",
+            message: "CommandCode retry delay failed",
+            retryable: false,
+            attemptCount: attempts.length,
+          },
+          sleepError,
+        );
+        throw withCommandCodeAttemptSummaries(retryDelayFailure, attempts);
+      }
     }
   }
 }

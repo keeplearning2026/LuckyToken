@@ -38,11 +38,7 @@ export { COMMANDCODE_DEFAULT_MODEL_ID as commandCodePrivateDefaultModelId } from
 export interface LuckyTokenProviderDependencies {
   readonly commandCodeConfiguration?: CommandCodeConfiguration;
   readonly fetch: FetchFunction;
-  /**
-   * Optional invocation HTTP observer shared with the Client Protocol
-   * handler. When provided, the CommandCode provider's bound fetch is wrapped
-   * by this observer so provider HTTP failures are visible to the handler.
-   */
+  /** Legacy Client observer retained only until Ticket 27; never wraps CommandCode. */
   readonly httpObserver?: HttpObserver;
   /** Optional parsed models.json for user-registered custom providers. */
   readonly modelsJson?: ModelsJsonConfig;
@@ -69,7 +65,10 @@ export function registerLuckyTokenProviders(
 
   const provider = createCommandCodePrivateProvider({
     ...(dependencies.commandCodeConfiguration === undefined ? {} : { configuration: dependencies.commandCodeConfiguration }),
-    fetch: dependencies.httpObserver?.observedFetch ?? dependencies.fetch,
+    // CommandCode owns bounded request-local failure acquisition. The legacy
+    // Client observer remains available to other adapters until Ticket 27,
+    // but must never wrap this Provider's transport.
+    fetch: dependencies.fetch,
     now: dependencies.now ?? Date.now,
     projectSnapshot: dependencies.projectSnapshot ?? createNodeProjectSnapshot(),
     createSessionId: dependencies.createSessionId ?? randomUUID,
