@@ -263,6 +263,39 @@ describe("OpenAI Responses Pi → wire response conversion", () => {
     ).toThrow(/input/);
   });
 
+  it("isolates namespaceReverse metadata across concurrent output conversions", () => {
+    // Each conversion's reverse metadata must never leak into another
+    // conversion's output rendering.
+    const renders = Array.from({ length: 10 }, (_, i) =>
+      convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: `call_${i}`,
+              name: `ns_${i}.child`,
+              arguments: {},
+            },
+          ],
+        }),
+        "m",
+        `resp_${i}`,
+        1,
+        undefined,
+        new Set(),
+        { [`ns_${i}.child`]: { namespace: `ns_${i}`, child: "child" } },
+      ),
+    );
+    for (const [i, response] of renders.entries()) {
+      expect(response.output[0]).toMatchObject({
+        type: "function_call",
+        name: "child",
+        namespace: `ns_${i}`,
+      });
+    }
+  });
+
   it("keeps non-namespace tool names unchanged when no reverse metadata exists", () => {
     const response = convertAssistantMessageToResponses(
       assistantMessage({

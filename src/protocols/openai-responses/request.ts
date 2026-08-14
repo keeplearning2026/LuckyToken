@@ -1023,10 +1023,20 @@ function convertMessages(
       ? [{ role: "user", content: input }]
       : (input as unknown[]);
   for (const rawItem of items) {
-    if (!isRecord(rawItem)) continue;
+    // The SDK input array contains ResponseInputItem objects; a non-object
+    // item is malformed and must not be silently dropped.
+    if (!isRecord(rawItem)) {
+      throw new InvalidRequest(
+        "input items must be objects when input is an array",
+      );
+    }
     const type =
       rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
-    if (type === undefined) continue;
+    if (type === undefined) {
+      throw new InvalidRequest(
+        "input item must carry a type or a role discriminator",
+      );
+    }
 
     switch (type) {
       case "message": {
@@ -1827,7 +1837,9 @@ async function resolveLuckyReferences(
           ...(signal === undefined ? {} : { signal }),
           limits: limits ?? DEFAULT_REFERENCE_LIMITS,
         });
-        expanded.push(...resolved);
+        // Non-object resolver results are skipped (frozen ticket 13
+        // behavior); they are not forwarded to the message converter.
+        expanded.push(...resolved.filter((entry) => isRecord(entry)));
       } catch (error) {
         // Cancellation propagates: an aborted resolver call is not a
         // degradable failure, it terminates the whole resolution.

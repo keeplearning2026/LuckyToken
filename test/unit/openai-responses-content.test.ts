@@ -71,6 +71,20 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       ]);
     });
 
+    it("errors on a non-object input array item instead of silently skipping it", () => {
+      // The SDK input array contains ResponseInputItem objects; a string or
+      // number item is malformed and must not be silently dropped.
+      for (const badItem of ["plain-string", 42, null, true]) {
+        expect(() =>
+          convertResponsesRequest(
+            { model: "m", input: [badItem, { role: "user", content: "real" }] },
+            1,
+            policy(),
+          ),
+        ).toThrow(/input/i);
+      }
+    });
+
     it("maps a message string exactly", () => {
       const invocation = convertResponsesRequest(
         { model: "m", input: "raw string input" },
