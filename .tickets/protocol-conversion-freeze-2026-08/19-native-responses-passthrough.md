@@ -62,3 +62,30 @@ Passthrough success is never counted as Responses↔Pi conversion coverage:
 the conformance record's scope describes only the conversion route, and no
 conversion test imports passthrough behavior.
 
+## Second re-verification note (2026-08-13)
+
+Second full re-verification of every acceptance criterion. One remaining
+transport-semantics gap was found and fixed:
+
+- **Pre-commit fetch rejection produced an empty 500 body.** A fetch-level
+  transport failure (connection refused, DNS/TLS) was rethrown as a raw
+  TypeError; the handler's catch did not recognize it, so the client received
+  an empty-body 500 instead of a legal Responses error (acceptance
+  criterion: "cancellation and pre/post commit body failure follow Responses
+  native lifecycle"). Fixed with a Responses-owned
+  `ResponsesPassthroughTransportError` wrapping the fetch rejection; the
+  passthrough branch renders it as a 502 `api_error` with the real reason.
+  Certification test added: pre-commit fetch-reject renders 502 `api_error`
+  with the transport message.
+- Added a full header-boundary matrix certification test: every hop-by-hop,
+  cookie, auth, and stale content-length/content-encoding header is stripped
+  from upstream responses, and stale body headers never reach the upstream
+  request.
+- Added certification tests proving incomplete and failed native SSE
+  lifecycles pass through byte-for-byte (acceptance criterion:
+  "completed/incomplete/failed SSE are preserved").
+
+Passthrough success is never counted as Responses↔Pi conversion coverage:
+the conformance record's scope describes only the conversion route, and no
+conversion test imports passthrough behavior.
+

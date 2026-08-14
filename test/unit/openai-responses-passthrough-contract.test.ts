@@ -361,6 +361,74 @@ describe("19: native Responses passthrough contract", () => {
     }
   });
 
+  it("preserves incomplete native SSE frames byte-for-byte", async () => {
+    const model = responsesModel();
+    // A native passthrough must forward the upstream's incomplete lifecycle
+    // verbatim, never normalize it into a completed Response or a
+    // conversion-semantic error.
+    const sseBody =
+      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
+      'data: {"type":"response.incomplete","sequence_number":1,"response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}\n\n' +
+      "data: [DONE]\n\n";
+    const { restore, observer } = captureGlobalFetch(async () =>
+      new Response(sseBody, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    try {
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(
+          JSON.stringify({
+            model: "my-responses/gpt-5",
+            input: "hi",
+            stream: true,
+          }),
+        ),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      await expect(response.text()).resolves.toBe(sseBody);
+    } finally {
+      restore();
+    }
+  });
+
+  it("preserves failed native SSE frames byte-for-byte", async () => {
+    const model = responsesModel();
+    // A failed lifecycle must pass through verbatim: the client receives the
+    // upstream's failed terminal event unchanged, never a conversion-rendered
+    // error envelope.
+    const sseBody =
+      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
+      'data: {"type":"response.failed","sequence_number":1,"response":{"status":"failed","error":{"code":"server_error","message":"upstream exploded"}}}\n\n' +
+      "data: [DONE]\n\n";
+    const { restore, observer } = captureGlobalFetch(async () =>
+      new Response(sseBody, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    try {
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(
+          JSON.stringify({
+            model: "my-responses/gpt-5",
+            input: "hi",
+            stream: true,
+          }),
+        ),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      await expect(response.text()).resolves.toBe(sseBody);
+    } finally {
+      restore();
+    }
+  });
+
   it("returns a legal Responses error when the upstream body read fails (pre-commit)", async () => {
     const model = responsesModel();
     const { restore, observer } = captureGlobalFetch(async () =>
@@ -580,6 +648,33 @@ describe("19: native Responses passthrough contract", () => {
       );
       expect(response.status).toBe(200);
       expect(await upstreamRequests[0]?.text()).toBe(rawBody);
+    } finally {
+      restore();
+    }
+  });
+
+  it("renders a legal Responses error when the upstream fetch rejects (pre-commit network failure)", async () => {
+    const model = responsesModel();
+    const { restore, observer } = captureGlobalFetch(async () => {
+      throw new TypeError("fetch failed: connection refused");
+    });
+    try {
+      const response = await handleHttpRequest(
+        dependencies(passthroughModels(model), {}, observer),
+        request(
+          JSON.stringify({
+            model: "my-responses/gpt-5",
+            input: "hi",
+          }),
+        ),
+      );
+      expect(response.status).toBeGreaterThanOrEqual(500);
+      const body = (await response.json()) as Record<string, unknown>;
+      const error = body.error as Record<string, unknown>;
+      expect(error.type).toBeDefined();
+      // The message must reflect the upstream failure, never a generic
+      // "Internal server error" that hides the transport failure.
+      expect(String(error.message)).toContain("fetch failed");
     } finally {
       restore();
     }

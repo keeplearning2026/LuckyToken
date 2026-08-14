@@ -432,11 +432,13 @@ async function passthroughBranch(
     if (
       error instanceof Error &&
       "kind" in error &&
-      error.kind === "AnthropicPassthroughBodyReadError"
+      (error.kind === "AnthropicPassthroughBodyReadError" ||
+        error.kind === "AnthropicPassthroughTransportError")
     ) {
-      // Pre-commit upstream body-read failure: the upstream response never
-      // committed, so this is a legal non-streaming Anthropic error (upstream
-      // failure), never a raw exception.
+      // Pre-commit upstream failure (body-read or transport): no upstream
+      // response byte ever committed to the client, so this is a legal
+      // non-streaming Anthropic error (upstream failure), never a raw
+      // exception.
       return toResponse(
         renderAnthropicError(502, "api_error", error.message),
       );

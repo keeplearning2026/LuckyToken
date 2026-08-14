@@ -492,10 +492,12 @@ async function passthroughBranch(
     if (
       error instanceof Error &&
       "kind" in error &&
-      error.kind === "ResponsesPassthroughBodyReadError"
+      (error.kind === "ResponsesPassthroughBodyReadError" ||
+        error.kind === "ResponsesPassthroughTransportError")
     ) {
-      // Pre-commit upstream body-read failure: the upstream response never
-      // committed, so this is a legal non-streaming Responses error.
+      // Pre-commit upstream failure (body-read or transport): no upstream
+      // response byte ever committed to the client, so this is a legal
+      // non-streaming Responses error, never a raw exception.
       return toResponse(renderResponsesError(502, "api_error", error.message));
     }
     throw error;

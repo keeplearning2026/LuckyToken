@@ -75,4 +75,30 @@ two remaining transport-semantics gaps:
   model id). Tests: base-path preservation, selector rewrite, byte-identity
   when unchanged.
 
+## Third re-verification note (2026-08-13)
+
+Third full re-verification of every acceptance criterion. Two remaining
+transport-semantics gaps were found and fixed:
+
+- **Upstream `x-api-key` could leak back to the client.** The response-header
+  filter dropped hop-by-hop/cookie/auth headers but not `x-api-key`; a
+  misbehaving upstream echoing the credential as a response header would have
+  forwarded it verbatim (acceptance criterion: "auth ... headers never
+  cross"). Fixed by adding `x-api-key` to the Anthropic-owned
+  `FORBIDDEN_RESPONSE_HEADERS`. Certification test added asserting the
+  upstream `x-api-key` never appears in the passthrough response headers.
+- **Pre-commit fetch rejection produced an empty 500 body.** A fetch-level
+  transport failure (connection refused, DNS/TLS) was rethrown as a raw
+  TypeError; the handler's catch did not recognize it, so the client received
+  an empty-body 500 instead of a legal Anthropic error (acceptance
+  criterion: "pre-commit body/read failure produces legal Anthropic error").
+  Fixed with an Anthropic-owned `AnthropicPassthroughTransportError` wrapping
+  the fetch rejection; the passthrough branch renders it as a 502 `api_error`
+  with the real reason. Certification tests added: pre-commit fetch-reject
+  renders 502 `api_error` with the transport message.
+- Added a full header-boundary matrix certification test: every hop-by-hop,
+  cookie, auth, and stale content-length/content-encoding header is stripped
+  from upstream responses, and stale body headers never reach the upstream
+  request.
+
 No Responses passthrough classifier/config/test/helper is imported.

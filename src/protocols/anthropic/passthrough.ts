@@ -55,6 +55,9 @@ const FORBIDDEN_RESPONSE_HEADERS = new Set([
   "authorization",
   "proxy-authorization",
   "www-authenticate",
+  // The upstream credential must never be echoed back toward the client even
+  // if the upstream mislabels it as a response header.
+  "x-api-key",
 ]);
 
 function isSafeForwardedRequestHeader(name: string): boolean {
@@ -172,21 +175,33 @@ export async function passthroughAnthropicRequest(
   }
   const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
   const forwardedBody = rewriteModelSelector(rawBody, model.id);
-  const upstream = await fetchImpl(endpoint, {
-    method: "POST",
-    headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
-    body: forwardedBody,
-    signal,
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
+      body: forwardedBody,
+      signal,
+    });
+  } catch (error) {
+    // The upstream request never reached a response (pre-commit transport
+    // failure: connection refused, DNS, TLS, or abort). The client has not
+    // received a single byte, so this follows the pre-commit error lifecycle:
+    // the handler turns it into a legal Anthropic error, never a raw
+    // exception. Caller cancellation keeps its own identity so the handler
+    // can rethrow it as cancellation rather than as a transport failure.
+    if (signal.aborted) throw error;
+    throw new AnthropicPassthroughTransportError(error);
+  }
   let body: Uint8Array<ArrayBuffer>;
   try {
     body = new Uint8Array(await upstream.arrayBuffer());
   } catch (error) {
-    // The upstream response never committed to the client (pre-commit). A
-    // body-read/stream failure follows the pre-commit error lifecycle: the
-    // handler turns it into a legal Anthropic error, never a raw exception.
-    // Caller cancellation keeps its own identity so the handler can rethrow
-    // it as cancellation rather than as a body failure.
+    // The upstream response headers arrived but the body read failed
+    // (pre-commit): the upstream response never committed to the client. Same
+    // pre-commit error lifecycle as above. Caller cancellation keeps its own
+    // identity so the handler can rethrow it as cancellation rather than as
+    // a body failure.
     if (signal.aborted) throw error;
     throw new AnthropicPassthroughBodyReadError(error);
   }
@@ -204,11 +219,11 @@ export function passthroughRequestHeaders(
 }
 
 /**
- * A pre-commit failure while reading the upstream response body. The
- * upstream response bytes never committed to the client, so this follows the
- * pre-commit error lifecycle: the handler renders a legal Anthropic error
- * instead of a raw transport exception. Request-local; never crosses into a
- * shared boundary.
+ * A pre-commit failure while reading the upstream response body: the upstream
+ * response headers arrived but the body never committed to the client. This
+ * follows the pre-commit error lifecycle: the handler renders a legal
+ * Anthropic error instead of a raw transport exception. Request-local; never
+ * crosses into a shared boundary.
  */
 export class AnthropicPassthroughBodyReadError extends Error {
   readonly kind = "AnthropicPassthroughBodyReadError";
@@ -221,5 +236,28 @@ export class AnthropicPassthroughBodyReadError extends Error {
       { cause },
     );
     this.name = "AnthropicPassthroughBodyReadError";
+  }
+}
+
+/**
+ * A pre-commit transport failure: the upstream request itself rejected
+ * (connection refused, DNS/TLS failure, network reset) before any response
+ * header arrived. Same pre-commit error lifecycle as
+ * `AnthropicPassthroughBodyReadError`; the handler renders a legal Anthropic
+ * error instead of a raw transport exception. Caller cancellation keeps its
+ * own identity so the handler can rethrow it as cancellation rather than as
+ * a transport failure. Request-local; never crosses a shared boundary.
+ */
+export class AnthropicPassthroughTransportError extends Error {
+  readonly kind = "AnthropicPassthroughTransportError";
+
+  constructor(cause: unknown) {
+    super(
+      `Upstream passthrough request failed: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = "AnthropicPassthroughTransportError";
   }
 }
