@@ -745,7 +745,7 @@ Additional workspace roots 必须与 cwd/home 使用一致的 path representatio
 | `messages` | 已转换的 CommandCode wire messages；required，可为空但不推荐 |
 | `tools` | 当前可用 tool definitions；required；没有 tool 时为 `[]` |
 | `system` | caller 提供 string 时发送；`undefined` 时 omission |
-| `max_tokens` | caller提供 |
+| `max_tokens` | required；LuckyToken 使用 `options.maxTokens ?? model.maxTokens`，model catalog 对明确的 `maxOutputTokens` 使用该值，否则使用官方 CLI default 64000 |
 | `stream` | literal `true`，不可设置为 false |
 | `temperature` | number 时发送，包括 `0`；`undefined` 时 omission |
 | `reasoning_effort` | caller 指定时先 normalize；未知 non-empty value 使用 `max`；normalized value 只有在 selected model capability 支持时才发送 |
@@ -3227,7 +3227,7 @@ AI 在生成实现前必须逐项确认：
 - [ ] permission mapping 默认 `standard`。
 - [ ] request-side `tool-call.input` 必须是 JSON object，但不按工具 `input_schema` 校验键名、值类型或必填字段。
 - [ ] request-side `tool-result.toolName` 可为空或非空；成功使用 `text`、真实失败使用 `error-text`、synthetic 占位固定使用 `text`。
-- [ ] `max_tokens` 默认 64000。
+- [ ] `max_tokens` 必填；caller/options 优先，model catalog 对明确 `maxOutputTokens` 使用模型值，否则使用官方 CLI 默认 64000。
 - [ ] `stream` 是 literal `true`。
 - [ ] unknown non-empty `reasoning_effort` normalize 为 `max`，仅在 model capability 支持时发送。
 

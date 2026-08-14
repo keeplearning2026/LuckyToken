@@ -6,6 +6,7 @@ import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
 } from "../../src/providers/commandcode-private/provider.js";
+import { findCommandCodeModel } from "../../src/providers/commandcode-private/models.js";
 import { createEmptyServerConfig } from "../../src/providers/commandcode-private/project.js";
 
 const model: Model<typeof commandCodePrivateApiId> = {
@@ -63,8 +64,15 @@ describe("CommandCode generation control mapping", () => {
     }
   });
 
-  it("rejects deferred execution and invalid owned numeric controls", () => {
-    expect(() => params({ maxTokens: 20, deferred: true })).toThrow("deferred");
+  it("executes synchronously and omits every deferred variant", () => {
+    for (const deferred of [true, false, { window: "15m" }] as const) {
+      const value = params({ maxTokens: 20, deferred });
+      expect(value).not.toHaveProperty("deferred");
+      expect(value.max_tokens).toBe(20);
+    }
+  });
+
+  it("rejects invalid owned numeric controls", () => {
     expect(() => params({ maxTokens: 0 })).toThrow("positive safe integer");
     expect(() => params({ maxTokens: 20, temperature: Number.NaN })).toThrow(
       "temperature",
@@ -229,4 +237,45 @@ describe("CommandCode generation control mapping", () => {
     ).body.params as Record<string, unknown>;
     expect(off).not.toHaveProperty("reasoning_effort");
   });
+
+  it("clamps unsupported catalog efforts through the Pi model capability", () => {
+    const catalogModel = findCommandCodeModel("deepseek/deepseek-v4-flash");
+    expect(catalogModel).toBeDefined();
+
+    const low = buildCommandCodeBody(
+      catalogModel!,
+      context,
+      { maxTokens: 20, reasoning: "low" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(low.reasoning_effort).toBe("high");
+
+    const xhigh = buildCommandCodeBody(
+      catalogModel!,
+      context,
+      { maxTokens: 20, reasoning: "xhigh" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(xhigh.reasoning_effort).toBe("max");
+  });
+
+  it.each(["xhigh", "max"] as const)(
+    "clamps %s to high when a reasoning model has no explicit effort map",
+    (level) => {
+      const reasoningModel = { ...model, reasoning: true };
+      const value = buildCommandCodeBody(
+        reasoningModel,
+        context,
+        { maxTokens: 20, reasoning: level },
+        createEmptyServerConfig(),
+        sessionId,
+        {},
+      ).body.params as Record<string, unknown>;
+      expect(value.reasoning_effort).toBe("high");
+    },
+  );
 });

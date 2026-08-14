@@ -15,6 +15,12 @@ describe("CommandCode model catalog", () => {
     expect(model).toBeDefined();
     expect(model?.reasoning).toBe(true);
     expect(model?.input).toEqual(["text"]);
+    expect(model?.maxTokens).toBe(64_000);
+  });
+
+  it("uses a model-specific output limit when the official catalog provides one", () => {
+    const model = findCommandCodeModel("poolside/laguna-s-2.1-free");
+    expect(model?.maxTokens).toBe(32_000);
   });
 
   it("maps T-only caps to text-only input and no reasoning", () => {
@@ -33,7 +39,11 @@ describe("CommandCode model catalog", () => {
     expect(model?.reasoning).toBe(true);
     expect(model?.thinkingLevelMap).toEqual({
       off: null,
+      minimal: null,
+      low: null,
+      medium: null,
       high: "high",
+      xhigh: null,
       max: "max",
     });
   });
@@ -43,6 +53,7 @@ describe("CommandCode model catalog", () => {
     expect(model?.reasoning).toBe(true);
     expect(model?.thinkingLevelMap).toEqual({
       off: null,
+      minimal: null,
       low: "low",
       medium: "medium",
       high: "high",

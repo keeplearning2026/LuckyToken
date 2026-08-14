@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — adapter-owned configuration; 02 — notices/journal; 04 — Pi options composer.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,18 @@ Pi options are consumed once into CommandCode fields or documented drops. Sessio
 
 ## Acceptance criteria
 
-- [ ] max_tokens uses options.maxTokens then model.maxTokens, otherwise target omission; no fixed 64000.
-- [ ] Temperature maps only when present/valid.
-- [ ] Reasoning uses model thinkingLevelMap or Pi supported-level clamp; unsupported xhigh/max does not reach an impossible mapper branch.
-- [ ] Reasoning absence/off omits the target field without inventing a default.
-- [ ] options.deferred true/object/false/absence all produce synchronous CommandCode wire omission; true/object no longer rejects.
-- [ ] samplingParams, cacheRetention, thinkingBudgets, generic metadata, unsupported transport/env hints, and other targetless options drop without blocking the request.
-- [ ] session/project values follow Provider authority and are not read from Client-specific config.
-- [ ] Timeout/retry/callback/signal/telemetry controls use Provider-owned immutable settings and Pi public fields.
-- [ ] Dropped targetless auxiliary options do not become prompt text or generic metadata.
-- [ ] Tests cover every scalar/default/clamp/deferred/drop branch through the Provider request interface.
-- [ ] No Anthropic/Responses imports or terms enter the Provider module.
+- [x] `max_tokens` uses `options.maxTokens` then required `model.maxTokens`; built-in models use documented `maxOutputTokens` or the official CLI 64000 fallback.
+- [x] Temperature maps only when present/valid.
+- [x] Reasoning uses model thinkingLevelMap or Pi supported-level clamp; unsupported xhigh/max does not reach an impossible mapper branch.
+- [x] Reasoning absence/off omits the target field without inventing a default.
+- [x] options.deferred true/object/false/absence all produce synchronous CommandCode wire omission; true/object no longer rejects.
+- [x] samplingParams, cacheRetention, thinkingBudgets, generic metadata, unsupported transport/env hints, and other targetless options drop without blocking the request.
+- [x] session/project values follow Provider authority and are not read from Client-specific config.
+- [x] Timeout/retry/callback/signal/telemetry controls use Provider-owned immutable settings and Pi public fields.
+- [x] Dropped targetless auxiliary options do not become prompt text or generic metadata.
+- [x] Tests cover every scalar/default/clamp/deferred/drop branch through the Provider request interface.
+- [x] No Anthropic/Responses imports or terms enter the Provider module.
 
 ## Out of scope
 
 Message/tool conversion (21–22) and final authority certification (23).
-

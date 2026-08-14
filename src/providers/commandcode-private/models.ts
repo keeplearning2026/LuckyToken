@@ -30,6 +30,8 @@ export interface CommandCodeModelSource {
   readonly reasoning: boolean;
   /** Official reasoning effort support (e.g. ["high","max"]); empty = full. */
   readonly reasoningEfforts?: readonly string[];
+  /** Official per-model output limit when the bundled catalog declares one. */
+  readonly maxOutputTokens?: number;
 }
 
 function price(value: string): number {
@@ -54,7 +56,15 @@ function buildModel(
     cacheRead: source.cacheReadCost,
     cacheWrite: source.cacheWriteCost,
   });
-  const thinkingLevelMap: Record<string, string | null> = { off: null };
+  const thinkingLevelMap: Record<string, string | null> = {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: null,
+    xhigh: null,
+    max: null,
+  };
   for (const effort of source.reasoningEfforts ?? [
     "low",
     "medium",
@@ -75,7 +85,7 @@ function buildModel(
     input,
     cost,
     contextWindow: source.contextWindow,
-    maxTokens: 64_000,
+    maxTokens: source.maxOutputTokens ?? 64_000,
   });
 }
 
@@ -89,6 +99,7 @@ function model(
   cacheWriteCost: string,
   caps: string,
   reasoningEfforts?: string,
+  maxOutputTokens?: number,
 ): CommandCodeModelSource {
   return {
     id,
@@ -108,6 +119,7 @@ function model(
             .split("/")
             .map((entry) => entry.trim()),
         }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   };
 }
 
@@ -118,7 +130,7 @@ export const COMMANDCODE_MODEL_SOURCES: readonly CommandCodeModelSource[] = Obje
   model("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash (latest)", 1_000_000, "$0.14", "$0.28", "$0.0028", "—", "T/R", "high/max"),
   model("thinkingmachines/inkling-small", "Inkling Small", 1_000_000, "$0.50", "$1.20", "$0.10", "—", "T/V/R"),
   model("Qwen/Qwen3.7-Flash", "Qwen 3.7 Flash", 1_000_000, "$0.03", "$0.13", "$0.006", "$0.038", "T/V/R"),
-  model("poolside/laguna-s-2.1-free", "Laguna S 2.1", 256_000, "Free", "Free", "Free", "—", "T/R"),
+  model("poolside/laguna-s-2.1-free", "Laguna S 2.1", 256_000, "Free", "Free", "Free", "—", "T/R", undefined, 32_000),
   model("thinkingmachines/inkling", "Inkling", 256_000, "$1.00", "$4.05", "$0.17", "—", "RTV"),
   model("moonshotai/Kimi-K3", "Kimi K3", 1_000_000, "$3.00", "$15.00", "$0.30", "—", "T/V/R"),
   model("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000, "$0.10", "$0.60", "$0.01", "$0.125", "T/V/R", "low/medium/high/xhigh/max"),

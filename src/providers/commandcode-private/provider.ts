@@ -678,9 +678,6 @@ export function buildCommandCodeBody(
   ) {
     throw new Error("CommandCode temperature must be finite when present");
   }
-  if (options?.deferred !== undefined && options.deferred !== false) {
-    throw new Error("CommandCode does not support Pi deferred execution");
-  }
   const reasoning = resolveReasoning(model, options);
 
   const params: Record<string, unknown> = {

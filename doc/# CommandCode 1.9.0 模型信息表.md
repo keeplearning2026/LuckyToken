@@ -54,6 +54,8 @@
 | `hidden`           | 是否在模型列表中隐藏（`--list-models` 不显示）               |
 | `description`      | 一句话描述                                                   |
 
+LuckyToken 的 CommandCode model catalog 将 `maxOutputTokens` 作为模型级输出上限权威；模型未标注该字段时，使用官方 CLI 构造请求时的默认值 `64000`。TypeScript 源码中的 `64_000` 只是数字分隔符写法，运行时及 JSON wire 值均为 `64000`。
+
 ## 3. 模型信息总表（53 个）
 
 ### Anthropic（7 个）

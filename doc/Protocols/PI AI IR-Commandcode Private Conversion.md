@@ -144,8 +144,9 @@ The implementation MUST match this exact contract; old claims that all missing/i
 ### 5.3 max tokens and temperature
 
 - `max_tokens = options.maxTokens ?? model.maxTokens`;
-- if neither exists and the target field is optional, omit it and use the target default;
-- do not invent a fixed 64000 default;
+- the installed Pi `Model` contract requires `model.maxTokens`, so the CommandCode wire field is always present;
+- each built-in CommandCode model derives `model.maxTokens` from its documented `maxOutputTokens` when available, otherwise from the official CommandCode CLI request default of 64000;
+- request conversion does not add another fallback or guess a value outside the certified model contract;
 - temperature maps when present and valid; absence uses target default.
 
 ### 5.4 Reasoning effort
@@ -461,6 +462,6 @@ At audit time:
 - stream error facts are flattened through semantic/execution;
 - wire abort becomes ordinary error but old documentation calls it Pi aborted;
 - onPayload is revalidated in code, while old documentation claimed otherwise;
-- endpoint/project/max-token documentation did not match code.
+- endpoint/project/max-token documentation did not match code before tickets 20 and 23.
 
 These are implementation gaps against this frozen method.
