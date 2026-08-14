@@ -1,5 +1,5 @@
 import type { Context, FetchFunction, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   commandCodePrivateApiId,
@@ -49,6 +49,108 @@ const baseOptions: SimpleStreamOptions = {
 };
 
 describe("CommandCode payload serialization boundary", () => {
+  it.each([
+    ["https://host", "https://host/alpha/generate"],
+    ["https://host/prefix", "https://host/alpha/generate"],
+    ["https://host/prefix/?query=1#fragment", "https://host/alpha/generate"],
+    [
+      "https://api.commandcode.ai",
+      "https://api.commandcode.ai/alpha/generate",
+    ],
+  ])("uses the documented absolute endpoint for %s", async (baseUrl, endpoint) => {
+    const prepared = await prepareCommandCodeRequest(
+      { ...model(), baseUrl },
+      context,
+      baseOptions,
+      dependencies,
+    );
+    expect(prepared.endpoint).toBe(endpoint);
+  });
+
+  it("keeps Provider authority and unsafe transport headers closed", async () => {
+    const prepared = await prepareCommandCodeRequest(
+      model(),
+      context,
+      {
+        ...baseOptions,
+        apiKey: "provider-key",
+        headers: {
+          Authorization: "Bearer attacker",
+          "Content-Type": "text/plain",
+          Cookie: "secret=1",
+          Connection: "keep-alive",
+          "Accept-Encoding": "identity",
+          "Proxy-Authorization": "Basic secret",
+          "X-Custom": "safe",
+          "X-Remove": "temporary",
+          "x-remove": null,
+        },
+      },
+      dependencies,
+    );
+
+    expect(prepared.headers).toMatchObject({
+      authorization: "Bearer provider-key",
+      "content-type": "application/json",
+      "x-custom": "safe",
+    });
+    expect(prepared.headers).not.toHaveProperty("cookie");
+    expect(prepared.headers).not.toHaveProperty("connection");
+    expect(prepared.headers).not.toHaveProperty("accept-encoding");
+    expect(prepared.headers).not.toHaveProperty("proxy-authorization");
+    expect(prepared.headers).not.toHaveProperty("x-remove");
+  });
+
+  it("rejects non-string generic header values", async () => {
+    await expect(
+      prepareCommandCodeRequest(
+        model(),
+        context,
+        {
+          ...baseOptions,
+          headers: { "X-Invalid": 1 as never },
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("CommandCode request conversion failed");
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["empty", ""],
+    ["non-string", 42],
+  ])("omits project authority for %s projectDir", async (_name, projectDir) => {
+    const snapshot = vi.fn(async () => createEmptyServerConfig());
+    const prepared = await prepareCommandCodeRequest(
+      model(),
+      context,
+      {
+        ...baseOptions,
+        ...(projectDir === undefined ? {} : { metadata: { projectDir } }),
+      },
+      { ...dependencies, projectSnapshot: { snapshot } },
+    );
+
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(prepared.headers).not.toHaveProperty("x-project-slug");
+  });
+
+  it("uses root only when a non-empty projectDir normalizes to no slug", async () => {
+    const snapshot = vi.fn(async () => createEmptyServerConfig());
+    const prepared = await prepareCommandCodeRequest(
+      model(),
+      context,
+      { ...baseOptions, metadata: { projectDir: "---" } },
+      { ...dependencies, projectSnapshot: { snapshot } },
+    );
+
+    expect(snapshot).toHaveBeenCalledWith({
+      projectDir: "---",
+      signal: expect.any(AbortSignal),
+    });
+    expect(prepared.headers["x-project-slug"]).toBe("root");
+  });
+
   it("uses a replacement, serializes it once, and freezes stable prepared bytes", async () => {
     let toJsonCalls = 0;
     const prepared = await prepareCommandCodeRequest(
@@ -90,6 +192,33 @@ describe("CommandCode payload serialization boundary", () => {
     );
 
     expect(prepared.fetchImpl).toBe(globalThis.fetch);
+  });
+
+  it("snapshots payload and transport callbacks before yielding", async () => {
+    const initialFetch: FetchFunction = async () => new Response();
+    const replacementFetch: FetchFunction = async () => new Response();
+    const mutableOptions: SimpleStreamOptions = {
+      ...baseOptions,
+      fetch: initialFetch,
+    };
+    const initialPayload = vi.fn(() => {
+      mutableOptions.fetch = replacementFetch;
+    });
+    const replacementPayload = vi.fn(() => undefined);
+    mutableOptions.onPayload = initialPayload;
+
+    const preparing = prepareCommandCodeRequest(
+      model(),
+      context,
+      mutableOptions,
+      dependencies,
+    );
+    mutableOptions.onPayload = replacementPayload;
+    const prepared = await preparing;
+
+    expect(initialPayload).toHaveBeenCalledTimes(1);
+    expect(replacementPayload).not.toHaveBeenCalled();
+    expect(prepared.fetchImpl).toBe(initialFetch);
   });
 
   it.each([

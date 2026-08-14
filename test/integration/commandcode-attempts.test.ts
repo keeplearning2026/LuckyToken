@@ -118,7 +118,10 @@ describe("CommandCode physical attempts", () => {
     });
     const boundFetch = vi.fn<FetchFunction>(async () => success("wrong"));
     const snapshot = vi.fn(async () => createEmptyServerConfig());
-    const payload = vi.fn(() => undefined);
+    const payload = vi.fn((candidate: unknown) => ({
+      ...(candidate as Record<string, unknown>),
+      mode: "retry-stable",
+    }));
     const onResponse = vi.fn<NonNullable<SimpleStreamOptions["onResponse"]>>(
       async () => undefined,
     );
@@ -168,6 +171,9 @@ describe("CommandCode physical attempts", () => {
       "https://fixture.test/alpha/generate",
     ]);
     expect(bodies[0]).toBe(bodies[1]);
+    expect(JSON.parse(bodies[0] as string)).toMatchObject({
+      mode: "retry-stable",
+    });
     expect(requests.map((request) => request.headers.get("traceparent"))).toEqual([
       "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01",
       "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2222222222222222-01",

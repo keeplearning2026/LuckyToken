@@ -1785,7 +1785,8 @@ Caller cancellation 在 retry sleep、fetch、onResponse callback、body read �
 > 字节处拆分，一行也可能横跨多个箱子。这里先把字节重新拼成完整行，再交给内容
 > 拼装器；看到“完成”行后仍要等运输真正结束，才能确认没有尾部错误。
 
-上游 endpoint 是 resolved model base URL 下的 `/alpha/generate`。虽然 response media
+上游 endpoint 是 resolved model base URL authority 上的 absolute path `/alpha/generate`；
+任何 base path/query/fragment 都被替换或丢弃，而不是把 path 追加到 prefix。虽然 response media
 type 可能写 SSE，实际 framing 是 bare newline-delimited JSON：没有 `event:`、`data:`、
 blank-line delimiter 或 `[DONE]`。
 

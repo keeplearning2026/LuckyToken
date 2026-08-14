@@ -42,6 +42,7 @@ import {
   parseCommandCodeConfiguration,
   type CommandCodeConfiguration,
 } from "./configuration.js";
+import { commandCodeNeutralFailure } from "./failure.js";
 
 const PROVIDER_ID = COMMANDCODE_PROVIDER_ID;
 const API_ID = COMMANDCODE_API_ID;
@@ -366,6 +367,20 @@ const RESERVED_HEADERS = new Set([
   "x-oss-primary-provider",
   "x-oauth-token",
   "x-oauth-provider",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "upgrade",
+  "trailer",
+  "te",
+  "host",
+  "content-length",
+  "content-encoding",
+  "accept-encoding",
 ]);
 
 function resolveProviderSessionId(
@@ -386,7 +401,7 @@ function buildCommandCodeHeaders(
   projectSlug: string | undefined,
   compatibility: CommandCodeCompatibilityPolicy,
 ): Record<string, string> {
-  const headers = new Map<string, string>();
+  const headers = new Headers();
   for (const [rawName, value] of Object.entries(options?.headers ?? {})) {
     const name = rawName.toLowerCase();
     if (RESERVED_HEADERS.has(name)) continue;
@@ -420,7 +435,7 @@ function buildCommandCodeHeaders(
       compatibility.ossPrimaryProvider as string,
     );
   }
-  return Object.fromEntries(headers);
+  return Object.fromEntries(headers.entries());
 }
 
 export interface CommandCodeRequestAuthority {
@@ -826,6 +841,8 @@ export async function prepareCommandCodeRequest(
   dependencies: CommandCodePreparationDependencies,
 ): Promise<PreparedCommandCodeRequest> {
   const signal = options?.signal ?? new AbortController().signal;
+  const payloadCallback = options?.onPayload;
+  const fetchImpl = options?.fetch ?? dependencies.boundFetch ?? globalThis.fetch;
   signal.throwIfAborted();
 
   const requestModel = snapshotRequestModel(model);
@@ -854,53 +871,94 @@ export async function prepareCommandCodeRequest(
   const callbackConfig = cloneServerConfig(authoritativeConfig);
   const projectSlug =
     projectDir === undefined ? undefined : slugify(projectDir) || "root";
-  const headers = buildCommandCodeHeaders(
-    options,
-    sessionId,
-    projectSlug,
-    dependencies.compatibility,
-  );
-  const built = buildCommandCodeBody(
-    requestModel,
-    context,
-    options,
-    callbackConfig,
-    sessionId,
-    dependencies.compatibility,
-    dependencies.requestConversion,
-  );
+  let headers: Record<string, string>;
+  let built: BuiltCommandCodeBody;
+  try {
+    headers = buildCommandCodeHeaders(
+      options,
+      sessionId,
+      projectSlug,
+      dependencies.compatibility,
+    );
+    built = buildCommandCodeBody(
+      requestModel,
+      context,
+      options,
+      callbackConfig,
+      sessionId,
+      dependencies.compatibility,
+      dependencies.requestConversion,
+    );
+  } catch (error) {
+    throw commandCodeNeutralFailure(
+      {
+        kind: "conversion",
+        message: "CommandCode request conversion failed",
+        retryable: false,
+      },
+      error,
+    );
+  }
 
   let effectivePayload: unknown = built.body;
-  if (options?.onPayload !== undefined) {
+  if (payloadCallback !== undefined) {
     const callbackPromise = Promise.resolve().then(() =>
-      options.onPayload?.(built.body, model),
+      payloadCallback(built.body, model),
     );
-    const replacement = await racePayloadCallback(callbackPromise, signal);
+    let replacement: unknown;
+    try {
+      replacement = await racePayloadCallback(callbackPromise, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw commandCodeNeutralFailure(
+        {
+          kind: "callback",
+          phase: "payload_callback",
+          message: "CommandCode payload callback failed",
+          retryable: false,
+        },
+        error,
+      );
+    }
     if (replacement !== undefined) effectivePayload = replacement;
   }
   signal.throwIfAborted();
 
-  const serialized = JSON.stringify(effectivePayload);
-  if (serialized === undefined) {
-    throw new Error("CommandCode payload serialization produced no request body");
+  let serialized: string;
+  try {
+    const candidate = JSON.stringify(effectivePayload);
+    if (candidate === undefined) {
+      throw new Error("CommandCode payload serialization produced no request body");
+    }
+    signal.throwIfAborted();
+    const validationValue: unknown = JSON.parse(candidate);
+    validateCommandCodeRequest(validationValue, {
+      config: authoritativeConfig,
+      modelId: invokedModelId,
+      modelAcceptsImages,
+      permissionMode,
+      sessionId,
+      supportedReasoningEfforts: built.supportedReasoningEfforts,
+    });
+    serialized = candidate;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw commandCodeNeutralFailure(
+      {
+        kind: "conversion",
+        message: "CommandCode payload certification failed",
+        retryable: false,
+      },
+      error,
+    );
   }
-  signal.throwIfAborted();
-  const validationValue: unknown = JSON.parse(serialized);
-  validateCommandCodeRequest(validationValue, {
-    config: authoritativeConfig,
-    modelId: invokedModelId,
-    modelAcceptsImages,
-    permissionMode,
-    sessionId,
-    supportedReasoningEfforts: built.supportedReasoningEfforts,
-  });
   return Object.freeze({
     endpoint,
     headers: Object.freeze({ ...headers }),
     bodyText: serialized,
     conversionNotices: built.notices,
     signal,
-    fetchImpl: options?.fetch ?? dependencies.boundFetch ?? globalThis.fetch,
+    fetchImpl,
     ...(logicalTraceId === undefined
       ? {}
       : { logicalTraceId }),

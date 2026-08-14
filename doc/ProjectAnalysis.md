@@ -303,13 +303,11 @@ model_id，model_id 本身可以包含斜杠。
   `luckytoken.config.toml`、`luckytoken-catalog.json`），不是仓库内容；README 有完整
   配置说明。
 
-### 已记录的一处规范/实现不一致
+### 已解决的 endpoint 合同差异
 
-`doc/Protocols/PI AI IR-Commandcode Private Conversion.md` 风格是工作笔记式转换教程，
-其 §1.3 与 `src/providers/commandcode-private/provider.ts` 的 `prepareCommandCodeRequest`
-端点构造行为存在一处不一致（关于 `new URL("/alpha/generate", model.baseUrl)` 是否重置
-已有 path）。按 AGENTS.md 规则，此类冲突应先报告、在 owning authority 修复，而不是
-静默调和。
+Ticket 23 已统一 owning authority、实现与测试：CommandCode endpoint 使用 absolute path
+`/alpha/generate`。`new URL("/alpha/generate", model.baseUrl)` 保留 scheme/authority，
+替换任何既有 base path，并丢弃 query/fragment。
 
 ---
 

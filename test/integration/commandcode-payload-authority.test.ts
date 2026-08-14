@@ -12,6 +12,7 @@ import {
   createCommandCodePrivateProvider,
 } from "../../src/providers/commandcode-private/provider.js";
 import type { ServerConfig } from "../../src/providers/commandcode-private/project.js";
+import { findUpstreamFailureFact } from "../../src/protocols/upstream-failure.js";
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -192,6 +193,109 @@ describe("CommandCode payload authority", () => {
     expect(result).toMatchObject({
       model: "authority-model",
       stopReason: "error",
+    });
+    expect(findUpstreamFailureFact(result.diagnostics)).toMatchObject({
+      kind: "conversion",
+      retryable: false,
+    });
+  });
+
+  it("reports a payload callback failure as a neutral callback fact before fetch", async () => {
+    let fetchCalls = 0;
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "key",
+      fetch: async () => {
+        fetchCalls += 1;
+        return response();
+      },
+      model: model(),
+      now: () => 123,
+      projectSnapshot: { snapshot: async () => projectConfig },
+    });
+
+    const result = await provider
+      .streamSimple(model(), context, {
+        maxTokens: 20,
+        sessionId,
+        onPayload: () => {
+          throw new Error("private callback detail");
+        },
+      })
+      .result();
+
+    expect(fetchCalls).toBe(0);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("CommandCode payload callback failed");
+    const failure = findUpstreamFailureFact(result.diagnostics);
+    expect(failure).toMatchObject({
+      kind: "callback",
+      phase: "payload_callback",
+      retryable: false,
+    });
+    expect(failure?.message).toBe("CommandCode payload callback failed");
+    expect(JSON.stringify(failure)).not.toContain("private callback detail");
+  });
+
+  it("rejects an injected unknown field as a neutral conversion fact before fetch", async () => {
+    let fetchCalls = 0;
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "key",
+      fetch: async () => {
+        fetchCalls += 1;
+        return response();
+      },
+      model: model(),
+      now: () => 123,
+      projectSnapshot: { snapshot: async () => projectConfig },
+    });
+
+    const result = await provider
+      .streamSimple(model(), context, {
+        maxTokens: 20,
+        sessionId,
+        onPayload: (payload) => {
+          record(payload).forbiddenField = true;
+        },
+      })
+      .result();
+
+    expect(fetchCalls).toBe(0);
+    expect(result.stopReason).toBe("error");
+    expect(findUpstreamFailureFact(result.diagnostics)).toMatchObject({
+      kind: "conversion",
+      retryable: false,
+    });
+  });
+
+  it.each([
+    ["invalid name", { "bad header": "value" }],
+    ["invalid value", { "x-invalid": "line\r\nbreak" }],
+  ])("rejects %s header syntax before fetch", async (_name, headers) => {
+    let fetchCalls = 0;
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "key",
+      fetch: async () => {
+        fetchCalls += 1;
+        return response();
+      },
+      model: model(),
+      now: () => 123,
+      projectSnapshot: { snapshot: async () => projectConfig },
+    });
+
+    const result = await provider
+      .streamSimple(model(), context, {
+        maxTokens: 20,
+        sessionId,
+        headers,
+      })
+      .result();
+
+    expect(fetchCalls).toBe(0);
+    expect(result.stopReason).toBe("error");
+    expect(findUpstreamFailureFact(result.diagnostics)).toMatchObject({
+      kind: "conversion",
+      retryable: false,
     });
   });
 });

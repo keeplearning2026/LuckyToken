@@ -14,6 +14,8 @@ import type { CommandCodeResult } from "./assembler.js";
 import { cloneLosslessJsonObject } from "./json.js";
 import { createConversionNoticeDiagnostic } from "../../execution-facts.js";
 import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import { createUpstreamFailureDiagnostic } from "../../protocols/upstream-failure.js";
+import { CommandCodeNeutralFailureError } from "./failure.js";
 
 export interface CommandCodeResponseAuthority {
   api: string;
@@ -226,12 +228,18 @@ export function createCommandCodeFailureMessage(
   usage: Usage = zeroUsage(),
   aborted = false,
 ): AssistantMessage {
-  return {
+  const message: AssistantMessage = {
     ...baseMessage(authority, usage),
     content: [],
     stopReason: aborted ? "aborted" : "error",
     errorMessage: error instanceof Error ? error.message : String(error),
   };
+  if (error instanceof CommandCodeNeutralFailureError) {
+    message.diagnostics = [
+      createUpstreamFailureDiagnostic(error.failure, message.timestamp),
+    ];
+  }
+  return message;
 }
 
 export function convertCommittedCommandCodeResult(

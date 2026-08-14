@@ -106,7 +106,7 @@ staging: https://staging-api.commandcode.ai
 local:   http://localhost:<9090 + portOffset>
 ~~~
 
-Router SHOULD 把 `baseUrl` 作为显式 deployment config，并固定 path `/alpha/generate`。不要根据 model name 改 path。
+Router SHOULD 把 `baseUrl` 作为显式 deployment config，并固定 absolute path `/alpha/generate`。URL resolution 保留 `baseUrl` 的 scheme/authority，但替换任何 base path，并丢弃 query/fragment；例如 `https://host/prefix` 必须解析为 `https://host/alpha/generate`，不是 `https://host/prefix/alpha/generate`。不要根据 model name 改 path。
 
 ## 3.2 Serialization
 
@@ -140,7 +140,7 @@ export interface CommandCodeHeaderInput {
 | `User-Agent` | fixed `cli` |
 | `x-command-code-version` | fixed `1.9.0` |
 | `x-cli-environment` | `prod` 转成 `production`；其他 string 原样使用；默认 `production` |
-| `x-project-slug` | 知道工作目录就`slugify(cwd) || "root"`，不知道工作目录就"root" |
+| `x-project-slug` | 非空 string 工作目录使用 `slugify(cwd) || "root"`；缺失、空或非 string 时 omission |
 | `x-taste-learning` | boolean 转 lowercase string；默认 `false` |
 | `x-co-flag` | boolean 转 lowercase string；默认 `false` |
 | `x-session-id` | 与 body `threadId` 相同的 authoritative logical UUID；缺失或无效 caller value 被随机 UUID 替换 |
@@ -158,16 +158,13 @@ export interface CommandCodeHeaderInput {
 ~~~ts
 import slugify from "@sindresorhus/slugify";
 
-export function buildProjectSlug(cwd?: string): string {
-  if (cwd === undefined || cwd === "") return "root";
-  if (typeof cwd !== "string") {
-    throw new TypeError("cwd must be a string or undefined");
-  }
+export function buildProjectSlug(cwd?: unknown): string | undefined {
+  if (typeof cwd !== "string" || cwd === "") return undefined;
   return slugify(cwd) || "root";
 }
 ~~~
 
-不要先自行替换 path separator；直接把 runtime cwd 传给 `slugify`。为了不同机器和时间得到一致行为，必须 pin `2.2.1`，不要只写 caret range。
+只有已经存在的非空 project fact 才能产生 header；`root` 只是该非空值经 `slugify` 后为空的 fallback，不能用来臆造缺失的项目身份。不要先自行替换 path separator；直接把 runtime cwd 传给 `slugify`。为了不同机器和时间得到一致行为，必须 pin `2.2.1`，不要只写 caret range。
 
 ### 3.3.2 `x-session-id` 与 `threadId`
 
@@ -310,12 +307,16 @@ export function buildCommandCodeHeaders(
     "x-cli-environment": normalizeCliEnvironment(
       input.cliEnvironment,
     ),
-    "x-project-slug": buildProjectSlug(input.cwd),
     "x-taste-learning": String(input.tasteLearning ?? false),
     "x-co-flag": String(input.coFlag ?? false),
     "x-session-id": input.identity.sessionId,
     "x-cmd-zdr": "1",
   });
+
+  const projectSlug = buildProjectSlug(input.cwd);
+  if (projectSlug !== undefined) {
+    headers.set("x-project-slug", projectSlug);
+  }
 
   if (input.apiKey) {
     headers.set("authorization", `Bearer ${input.apiKey}`);
@@ -3213,9 +3214,9 @@ AI 在生成实现前必须逐项确认：
 
 ## Request
 
-- [ ] 固定 `POST /alpha/generate`。
+- [ ] 固定 absolute path `POST /alpha/generate`；替换 base path 并丢弃 query/fragment。
 - [ ] `Content-Type: application/json`。
-- [ ] `x-project-slug = slugify(cwd) || "root"`，package pin `2.2.1`。
+- [ ] 非空 string `cwd` 使用 `x-project-slug = slugify(cwd) || "root"`；其他输入 omission；package pin `2.2.1`。
 - [ ] caller `threadId` 缺失或无效时生成 random UUID。
 - [ ] `x-session-id` 与 body `threadId` 必须使用同一个 resolved UUID。
 - [ ] `x-cmd-zdr` 固定发送 string `1`。

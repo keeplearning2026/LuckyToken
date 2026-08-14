@@ -4,7 +4,7 @@
 
 **Blocked by:** 20 — scalar options; 21 — messages/results; 22 — tools/constraints.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,19 +16,18 @@ Project/config facts are resolved once per logical request. Hook candidate/repla
 
 ## Acceptance criteria
 
-- [ ] Endpoint construction explicitly implements documented base-path/absolute-path semantics and is tested with path-prefixed base URLs.
-- [ ] Provider-authoritative auth/content/session/project/permission/trace headers cannot be overridden by generic headers.
-- [ ] Valid non-reserved string headers pass; null removes generic values; invalid types error.
-- [ ] absent/empty/non-string projectDir omits slug; non-empty values follow documented normalization/root fallback only.
-- [ ] Body is a closed-world GenerateRequest containing only certified fields.
-- [ ] onPayload runs once before retries and may mutate/replace the candidate.
-- [ ] Replacement is JSON serialized/parsed and all schema, required fields, authority, model, session/project, lifecycle, and tool invariants are revalidated before fetch.
-- [ ] Hook failure/replacement failure yields typed neutral conversion/callback failure and zero fetches.
-- [ ] Retries reuse identical certified logical body/config while refreshing only attempt-owned facts.
-- [ ] Tests cover base paths, reserved headers, project cases, hook mutation/replacement/injection, JSON loss, zero-fetch failure, and retry body equality.
-- [ ] Interface/test code contains no Client Protocol terms.
+- [x] Endpoint uses absolute root path `/alpha/generate`, replacing any base path and discarding query/fragment; path-prefixed bases are tested.
+- [x] Provider-authoritative auth/content/session/project/permission/trace headers cannot be overridden by generic headers.
+- [x] Valid non-reserved string headers pass; null removes generic values; invalid types error.
+- [x] absent/empty/non-string projectDir omits slug; non-empty values follow documented normalization/root fallback only.
+- [x] Body is a closed-world GenerateRequest containing only certified fields.
+- [x] onPayload runs once before retries and may mutate/replace the candidate.
+- [x] Replacement is JSON serialized/parsed and all schema, required fields, authority, model, session/project, lifecycle, and tool invariants are revalidated before fetch.
+- [x] Hook failure/replacement failure yields typed neutral conversion/callback failure and zero fetches.
+- [x] Retries reuse identical certified logical body/config while refreshing only attempt-owned facts.
+- [x] Tests cover base paths, reserved headers, project cases, hook mutation/replacement/injection, JSON loss, zero-fetch failure, and retry body equality.
+- [x] Interface/test code contains no Client Protocol terms.
 
 ## Out of scope
 
 Actual attempt failure classification (26) and response reconstruction (24).
-

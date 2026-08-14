@@ -101,7 +101,13 @@ No request is sent until semantic conversion and post-hook certification succeed
 
 ### 4.1 Endpoint
 
-The selected Pi Model provides `baseUrl`; the CommandCode Provider supplies the private endpoint contract. URL construction MUST explicitly define whether the endpoint is appended to or replaces the base path. It MUST NOT silently rely on `new URL("/alpha/generate", baseUrl)` while documentation promises path append.
+The selected Pi Model provides `baseUrl`; the CommandCode Provider supplies the fixed absolute endpoint path `/alpha/generate`. Construction is equivalent to `new URL("/alpha/generate", baseUrl)`: it retains the selected URL's scheme and authority, while replacing any base path and discarding any base query or fragment. The path is never appended to a base prefix.
+
+Examples:
+
+- `https://host` → `https://host/alpha/generate`;
+- `https://host/prefix` → `https://host/alpha/generate`;
+- production → `POST https://api.commandcode.ai/alpha/generate`.
 
 Built-in catalog defaults and conversion contract are separate. A caller-provided certified model may use another base URL without changing message conversion.
 
@@ -132,7 +138,7 @@ The request is a closed-world object. Only certified fields are emitted.
 
 ### 5.2 projectDir/project slug
 
-`options.projectDir` is deployment context, not model-visible content.
+`options.metadata.projectDir` is deployment context, not model-visible content.
 
 - absent, empty, or non-string metadata → no project slug/header;
 - a non-empty string is normalized by the Provider's project capability;
@@ -446,7 +452,7 @@ Retry rules:
 
 ## 15. Current implementation gaps
 
-Remaining gaps after tickets 20–22:
+Remaining gaps after tickets 20–23:
 
 - reasoning content may be rejected by model.reasoning=false;
 - finish-step identity is ignored;
@@ -456,6 +462,5 @@ Remaining gaps after tickets 20–22:
 - stream error facts are flattened through semantic/execution;
 - wire abort becomes ordinary error but old documentation calls it Pi aborted;
 - onPayload is revalidated in code, while old documentation claimed otherwise;
-- endpoint documentation remains pending Ticket 23.
 
 These are implementation gaps against this frozen method.
