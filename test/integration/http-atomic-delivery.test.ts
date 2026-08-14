@@ -260,7 +260,10 @@ describe("atomic HTTP failure delivery", () => {
       request(),
     );
     const failedBody = await expectError(failed, 502, "api_error");
-    expect(JSON.stringify(failedBody)).toContain(providerDiagnostic);
+    expect(failedBody).toMatchObject({
+      error: { message: "Upstream provider failed" },
+    });
+    expect(JSON.stringify(failedBody)).not.toContain(providerDiagnostic);
 
     const malformed = await handleHttpRequest(
       dependencies(() => streamFrom([])),
@@ -289,7 +292,10 @@ describe("atomic HTTP failure delivery", () => {
       }),
       request(),
     );
-    const runtimeBody = await expectError(runtimeFailure, 500, "api_error");
+    const runtimeBody = await expectError(runtimeFailure, 502, "api_error");
+    expect(runtimeBody).toMatchObject({
+      error: { message: "Upstream provider failed" },
+    });
     expect(JSON.stringify(runtimeBody)).not.toContain(runtimeDiagnostic);
   });
 

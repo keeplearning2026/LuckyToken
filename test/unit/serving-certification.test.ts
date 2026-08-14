@@ -84,7 +84,7 @@ describe("serving composition certification", () => {
       failures: [],
       identity: {
         core: {
-          specification: "LuckyToken Core Architecture Specification v5.7",
+          specification: "LuckyToken Core Architecture Specification v5.8",
           servingComposition: "luckytoken-serving-composition-v2",
         },
         conversions: {

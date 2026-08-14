@@ -27,6 +27,9 @@ Pi is the only shared semantic boundary for this profile.
 - A Client adapter cannot inspect Provider identity, Provider configuration, or Provider wire fields.
 - A Provider adapter cannot inspect Anthropic, Responses, or another Client protocol.
 - No shared protocol DTO or second semantic IR may bypass Pi.
+- A conversion handler MUST NOT inject a custom `fetch` to observe Provider
+  traffic. The selected Provider owns its transport and may expose failure facts
+  only through trusted protocol-neutral Pi diagnostics.
 
 ### 1.2 Native passthrough profile
 
@@ -48,6 +51,9 @@ Requirements:
 6. Hop-by-hop headers, credentials, cookies, stale content length/encoding, and unsafe cross-boundary headers are never forwarded merely because the protocol matches.
 7. URL construction preserves the configured base path unless the upstream contract explicitly defines an absolute endpoint.
 8. A body-read or stream failure is rendered according to the same native protocol if no bytes have committed; after commit it follows that protocol's streaming failure lifecycle.
+9. Passthrough uses a separately bound, narrow `passthroughFetch` transport. It
+   is never reused as a conversion observer and does not establish facts for a
+   Pi execution.
 
 ## 2. Conversion priorities
 
@@ -240,15 +246,27 @@ Notices are non-model-visible and request-local. They MUST NOT contain prompt te
 
 ## 8. Failure facts across Pi
 
-The global mutable `HttpObserver.latest` pattern is forbidden.
+Observer side channels, including invocation-local wrappers whose latest result
+is read by a Client handler, are forbidden. Conversion handlers do not inject a
+custom `fetch` into Pi options in order to observe Provider traffic.
 
 Provider failures cross the runtime only through Pi public contracts and LuckyToken control-plane errors:
 
-- `AssistantMessage.errorMessage` is a human fallback;
-- `AssistantMessage.diagnostics` carries a protocol-neutral structured upstream failure;
-- `ExecutionFailure` preserves the neutral fact for the selected Client renderer;
+- `AssistantMessage.errorMessage` is a log-private human fallback and has no
+  authority for Client rendering;
+- a Provider may attach a protocol-neutral structured upstream failure to
+  `AssistantMessage.diagnostics`;
+- Execution validates that diagnostic and preserves it as
+  `ExecutionFailure.failure` for the selected Client renderer;
 - no handler parses a Provider-specific string to recover semantics;
 - no Client adapter reads concrete Provider vocabulary.
+
+Only `ExecutionFailure.failure` has authority to select a Provider-derived
+status, type, code, safe message, request ID, or allowlisted header. If a Pi error
+terminal has no validated structured failure fact, the Client renderer returns
+the fixed generic upstream response: HTTP 502, its protocol-local `api_error`
+shape, and `Upstream provider failed`. It MUST NOT expose `errorMessage`, an
+exception message, or other unstructured diagnostic text.
 
 Suggested neutral classes include HTTP failure, upstream-stream failure, transport failure, timeout, configuration, protocol, conversion, callback, and caller cancellation. Facts may include validated status, provider type/code as opaque strings, safe message, bounded body snapshot metadata, retryability, attempt count, and allowlisted request IDs.
 
@@ -262,6 +280,9 @@ Rules:
 - Authorization, Cookie, Set-Cookie, proxy credentials, and hop-by-hop headers are never forwarded and cannot be enabled by configuration;
 - failures before SSE commit return the Client protocol's non-streaming error response;
 - failures after commit follow that protocol's streaming failure lifecycle.
+- native passthrough failure fidelity belongs to the separate passthrough
+  profile and its narrow transport; it is not a fallback acquisition path for
+  conversion.
 
 ## 9. Per-failure request journal
 

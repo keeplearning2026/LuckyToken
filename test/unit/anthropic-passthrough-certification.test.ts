@@ -1,4 +1,4 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import { HttpObserver } from "../../src/http-observer.js";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
@@ -56,7 +55,7 @@ function request(
 function dependencies(
   models: Models,
   extra: Partial<AnthropicMessagesHandlerOptions> = {},
-  observer?: HttpObserver,
+  passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
     resolve: async () => ({ authorized: true, sessionId: "session" }),
@@ -70,7 +69,7 @@ function dependencies(
     routerDefaults: {},
     now: () => 1,
     ...extra,
-    ...(observer === undefined ? {} : { httpObserver: observer }),
+    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
   };
   const anthropic = createAnthropicMessagesHandler(options);
   return {
@@ -90,21 +89,12 @@ function passthroughModels(
   } as unknown as Models;
 }
 
-function captureGlobalFetch(
+function captureFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-): { restore: () => void; observer: HttpObserver } {
-  const original = globalThis.fetch;
-  // The handler's passthrough fetch is its bound HttpObserver, so the mock
-  // must be visible to the observer's base fetch. Construct the observer
-  // AFTER replacing globalThis.fetch so it captures the mock (matching how
-  // the composition root binds the observer before serving).
-  (globalThis as { fetch: typeof fetch }).fetch = impl as typeof fetch;
-  const observer = new HttpObserver();
+): { restore: () => void; passthroughFetch: FetchFunction } {
   return {
-    restore: () => {
-      (globalThis as { fetch: typeof fetch }).fetch = original;
-    },
-    observer,
+    restore: () => undefined,
+    passthroughFetch: impl as FetchFunction,
   };
 }
 
@@ -124,7 +114,7 @@ describe("11: native Anthropic passthrough certification", () => {
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n' +
       'event: message_stop\ndata: {"type":"message_stop"}\n\n';
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(sseBody, {
         status: 200,
@@ -133,7 +123,7 @@ describe("11: native Anthropic passthrough certification", () => {
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
@@ -153,7 +143,7 @@ describe("11: native Anthropic passthrough certification", () => {
 
   it("returns a legal Anthropic error when the upstream body read fails (pre-commit)", async () => {
     const model = anthropicModel();
-    const { restore, observer } = captureGlobalFetch(async () => {
+    const { restore, passthroughFetch } = captureFetch(async () => {
       // Response headers arrived but the body read fails: a pre-commit
       // body/read failure must produce a legal Anthropic error response, not
       // a hang or an unchecked exception.
@@ -168,7 +158,7 @@ describe("11: native Anthropic passthrough certification", () => {
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
@@ -190,7 +180,7 @@ describe("11: native Anthropic passthrough certification", () => {
   it("forwards x-stainless-* approved end-to-end request headers", async () => {
     const model = anthropicModel();
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response('{"type":"message","content":[]}', {
         status: 200,
@@ -199,7 +189,7 @@ describe("11: native Anthropic passthrough certification", () => {
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
@@ -238,7 +228,7 @@ describe("11: native Anthropic passthrough certification", () => {
         root,
       ),
     });
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response('{"error":{"type":"rate_limit","message":"slow"}}', {
         status: 429,
         headers: { "content-type": "application/json" },
@@ -249,7 +239,7 @@ describe("11: native Anthropic passthrough certification", () => {
         dependencies(
           passthroughModels(model),
           { invocationDiagnostics: journal },
-          observer,
+          passthroughFetch,
         ),
         request(
           JSON.stringify({
@@ -273,7 +263,7 @@ describe("11: native Anthropic passthrough certification", () => {
     const model = anthropicModel();
     const controller = new AbortController();
     let upstreamSignal: AbortSignal | null | undefined;
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       void input;
       upstreamSignal = init?.signal;
       // Abort the caller while the upstream call is in flight. The handler
@@ -284,7 +274,7 @@ describe("11: native Anthropic passthrough certification", () => {
     });
     try {
       const responsePromise = handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         new Request("http://luckytoken.test/v1/messages", {
           method: "POST",
           headers: {

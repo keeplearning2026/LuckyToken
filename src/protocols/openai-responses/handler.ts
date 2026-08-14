@@ -22,10 +22,7 @@ import {
   ExecutionAbortedError,
   freezePiInvocation,
 } from "../../execution.js";
-import { HttpObserver } from "../../http-observer.js";
-import { supportsFetchObservation } from "../../http-failure-acquisition.js";
 import type { ClientProtocolHandler } from "../../http.js";
-import { mapUpstreamHttpFailure } from "../upstream-failure.js";
 import { resolveModel, ModelResolutionFailure } from "../../model-resolution.js";
 import {
   composeOptions,
@@ -42,11 +39,7 @@ import {
   type ResponsesRenderState,
   type ResponsesResponseObject,
 } from "./response.js";
-import {
-  mapUpstreamFailureFact,
-  redactMessage,
-  SAFE_RESPONSE_HEADERS,
-} from "./error-rendering.js";
+import { mapUpstreamFailureFact } from "./error-rendering.js";
 import type { UpstreamFailureFact } from "../upstream-failure.js";
 import {
   convertResponsesRequest,
@@ -80,13 +73,8 @@ export interface OpenAIResponsesHandlerOptions {
    */
   readonly sessionState?: ResponseSessionState;
   readonly shutdownSignal?: AbortSignal;
-  /**
-   * Optional invocation HTTP observer shared with provider composition. When
-   * provided, the handler uses it instead of creating its own, so provider
-   * HTTP failures observed through the bound fetch chain are visible to the
-   * handler.
-   */
-  readonly httpObserver?: HttpObserver;
+  /** Narrow transport dependency used only by native wire passthrough. */
+  readonly passthroughFetch?: FetchFunction;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -102,7 +90,7 @@ interface OpenAIResponsesDependencies {
   readonly configuration: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly sessionState: ResponseSessionState;
-  readonly httpObserver?: HttpObserver;
+  readonly passthroughFetch: FetchFunction;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
@@ -186,7 +174,6 @@ async function handleOpenAIResponses(
   request: Request,
   diagnostics: InvocationDiagnostics,
 ): Promise<Response> {
-  const httpObserver = dependencies.httpObserver ?? new HttpObserver();
   try {
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-validation" });
@@ -239,7 +226,7 @@ async function handleOpenAIResponses(
     if (isResponsesNativePassthroughModel(model)) {
       return passthroughBranch(
         dependencies,
-        httpObserver.observedFetch,
+        dependencies.passthroughFetch,
         request,
         model,
         rawBody,
@@ -267,9 +254,6 @@ async function handleOpenAIResponses(
       {
         sessionId: authResult.sessionId,
         signal: request.signal,
-        ...(supportsFetchObservation(model.api)
-          ? { fetch: httpObserver.observedFetch }
-          : {}),
         ...(authResult.projectDir === undefined
           ? {}
           : { projectDir: authResult.projectDir }),
@@ -379,29 +363,6 @@ async function handleOpenAIResponses(
         });
       }
     }
-    // Legacy observer path (removed in ticket 27): used when no neutral
-    // failure fact survived execution (e.g. providers not yet migrated).
-    const observation = httpObserver.latestObservation;
-    if (observation !== undefined && observation.kind === "response") {
-      const mapping = mapUpstreamHttpFailure(observation);
-      if (mapping !== undefined) {
-        const safeHeaders: Record<string, string> = {};
-        for (const [name, value] of observation.headers.entries()) {
-          if (!SAFE_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
-          safeHeaders[name.toLowerCase()] = value;
-        }
-        return renderResponsesErrorResponse({
-          status: mapping.status,
-          type: mapping.type,
-          // The legacy observer body-derived message is bounded and redacted
-          // here; it must never echo a credential fragment.
-          message: redactMessage(mapping.message),
-          code: null,
-          param: null,
-          safeHeaders,
-        });
-      }
-    }
     if (
       error instanceof Error &&
       "kind" in error &&
@@ -409,15 +370,9 @@ async function handleOpenAIResponses(
       "reason" in error &&
       error.reason === "error"
     ) {
-      const execution = error as unknown as {
-        diagnostic?: unknown;
-        message: string;
-      };
-      const message =
-        typeof execution.diagnostic === "string"
-          ? execution.diagnostic
-          : execution.message || "Upstream provider failed";
-      return toResponse(renderResponsesError(502, "api_error", message));
+      return toResponse(
+        renderResponsesError(502, "api_error", "Upstream provider failed"),
+      );
     }
     return toResponse(
       renderResponsesError(500, "api_error", "Internal server error"),
@@ -691,9 +646,7 @@ export function createOpenAIResponsesHandler(
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     sessionState,
-    ...(options.httpObserver === undefined
-      ? {}
-      : { httpObserver: options.httpObserver }),
+    passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),

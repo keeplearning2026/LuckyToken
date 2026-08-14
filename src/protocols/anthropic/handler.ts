@@ -26,8 +26,6 @@ import {
   type ClientProtocolHandler,
   HttpRequestAbortedError,
 } from "../../http.js";
-import { HttpObserver } from "../../http-observer.js";
-import { supportsFetchObservation } from "../../http-failure-acquisition.js";
 import {
   ModelResolutionFailure,
   resolveModel,
@@ -59,7 +57,6 @@ import {
   mapUpstreamFailureFact,
   requestIdFromFact,
 } from "./failure-rendering.js";
-import { mapUpstreamHttpFailure } from "./upstream-failure.js";
 import {
   isAnthropicNativePassthroughModel,
   passthroughAnthropicRequest,
@@ -74,13 +71,8 @@ export interface AnthropicMessagesHandlerOptions {
   readonly auth: Auth;
   readonly configuration?: AnthropicConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
-  /**
-   * Optional invocation HTTP observer shared with provider composition. When
-   * provided, the handler uses it instead of creating its own, so provider
-   * HTTP failures observed through the bound fetch chain are visible to the
-   * handler.
-   */
-  readonly httpObserver?: HttpObserver;
+  /** Narrow transport dependency used only by native wire passthrough. */
+  readonly passthroughFetch?: FetchFunction;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
   /** Request body byte ceiling. Single source of truth: the composition root
@@ -96,7 +88,7 @@ interface AnthropicMessagesDependencies {
   readonly auth: Auth;
   readonly configuration: AnthropicConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
-  readonly httpObserver?: HttpObserver;
+  readonly passthroughFetch: FetchFunction;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
   readonly maxRequestBytes: number;
@@ -160,9 +152,6 @@ async function handleAnthropicMessages(
   request: Request,
   diagnostics: InvocationDiagnostics,
 ): Promise<Response> {
-  // Invocation-local HTTP observer. Created before the try so the catch can
-  // read the latest upstream HTTP outcome after `execute` throws.
-  const httpObserver = dependencies.httpObserver ?? new HttpObserver();
   try {
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-validation" });
@@ -210,7 +199,7 @@ async function handleAnthropicMessages(
     if (isAnthropicNativePassthroughModel(model)) {
       return passthroughBranch(
         dependencies,
-        httpObserver.observedFetch,
+        dependencies.passthroughFetch,
         request,
         model,
         rawBody,
@@ -238,12 +227,6 @@ async function handleAnthropicMessages(
       {
         sessionId: authResult.sessionId,
         signal: request.signal,
-        // Only inject the HTTP observer for Pi adapters that accept and use
-        // options.fetch. Adapters with their own fetch binding must keep
-        // their injected fetch chain.
-        ...(supportsFetchObservation(model.api)
-          ? { fetch: httpObserver.observedFetch }
-          : {}),
         ...(authResult.projectDir === undefined
           ? {}
           : { projectDir: authResult.projectDir }),
@@ -322,37 +305,19 @@ async function handleAnthropicMessages(
         ),
       );
     }
-    const observation = httpObserver.latestObservation;
-    if (observation !== undefined && observation.kind === "response") {
-      const mapping = mapUpstreamHttpFailure(observation);
-      if (mapping !== undefined) {
-        return toResponse(
-          renderAnthropicError(mapping.status, mapping.type, mapping.message),
-        );
-      }
-    }
-    // Provider execution failure without an observed HTTP response: forward
-    // the Pi error text as a 502 (upstream failure) so the Anthropic client
-    // sees the real reason instead of a generic 500. Structural check rather
-    // than `instanceof` so module duplication across test runtimes cannot
-    // misclassify the error. Only the exact ExecutionFailure kind (not the
-    // MalformedExecutionStreamError / UnsupportedExecutionOutcomeError
-    // subclasses) represents a provider-reported failure.
+    // A Provider failure without a trusted neutral fact has no authority for
+    // a client-visible status, type, code, headers, or message. Structural
+    // matching keeps module duplication harmless while excluding the
+    // malformed/deferred ExecutionFailure subclasses.
     if (
       error instanceof Error &&
       "kind" in error &&
       error.kind === "ExecutionFailure" &&
-      "diagnostic" in error &&
       "reason" in error &&
       error.reason === "error"
     ) {
-      const diagnostic = error.diagnostic;
-      const message =
-        typeof diagnostic === "string"
-          ? diagnostic
-          : error.message || "Upstream provider failed";
       return toResponse(
-        renderAnthropicError(502, "api_error", message),
+        renderAnthropicError(502, "api_error", "Upstream provider failed"),
       );
     }
     return toResponse(
@@ -393,9 +358,8 @@ async function handleAnthropicMessagesWithDiagnostics(
  *
  * Owns the full passthrough lifecycle: upstream auth resolution, forwarding,
  * and verbatim response return (status + headers + body) for both success
- * and upstream HTTP failure. The HttpObserver still records the upstream
- * outcome through its observed fetch, but the client always sees the
- * upstream response as-is.
+ * and upstream HTTP failure. The client always sees the upstream response
+ * as-is; this direct transport is deliberately separate from conversion.
  */
 async function passthroughBranch(
   dependencies: AnthropicMessagesDependencies,
@@ -498,9 +462,7 @@ export function createAnthropicMessagesHandler(
         : bindAnthropicConfiguration(options.configuration),
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
-    ...(options.httpObserver === undefined
-      ? {}
-      : { httpObserver: options.httpObserver }),
+    passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     maxRequestBytes: options.maxRequestBytes,

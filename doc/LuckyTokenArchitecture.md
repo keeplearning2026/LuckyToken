@@ -157,10 +157,11 @@ WHATWG Response → Node ServerResponse → Agent
 - 支持 Claude Code 等真实 Anthropic Agent 接入（其发送的 `context_management`、
   `thinking`、`tool_choice`、`top_p` 等标准扩展字段按"只读所需"原则忽略）；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
-- 把上游 Provider 的 HTTP 错误（status + 原始 body）透传给 Anthropic 客户端：
-  通过 fetch 层 observer 观察真实 Response，错误按原样转发（`error.type` 取
-  provider 自身 body 的 type/code，无则按 status 兜底）；无 HTTP observation 的
-  执行失败回传 502 `api_error` + Pi `errorMessage`；
+- Provider 通过受信任的 neutral Pi diagnostic 提供有界 upstream failure facts；
+  Execution 把已验证 fact 保存在 `ExecutionFailure.failure`，Anthropic/Responses
+  renderer 只据此映射 status、safe message/type/code 与 allowlisted headers；没有
+  structured fact 的 execution failure 固定返回 generic 502 `api_error` +
+  `Upstream provider failed`，不暴露 Pi `errorMessage`；
 - 用 serving certification 和真实在线 conformance 固定当前可服务组合。
 
 ## 1.2 当前没有实现的能力
@@ -1133,17 +1134,16 @@ wire compatibility，但不是把 upstream partial JSONL 直接透传给客户�
 | malformed JSON/source-invalid/unsupported | 400 `invalid_request_error` |
 | model unknown/ambiguous | 404 `not_found_error` |
 | classified execution abort | 500 `api_error` |
-| CommandCode neutral HTTP failure | 只使用已验证 status、safe message/type/code 与 allowlisted headers；bounded snapshot 不进入 Client body |
-| legacy Pi built-in HTTP failure（observer 捕获 non-2xx） | Ticket 27 前的旧映射；仅适用于明确支持 observed fetch 的 adapter，不适用于 CommandCode |
-| provider execution failure（无 HTTP observation） | 502 `api_error`，message 为 Pi `errorMessage` |
+| trusted neutral Provider failure | 只使用 `ExecutionFailure.failure` 中已验证的 status、safe message/type/code 与 allowlisted headers；bounded snapshot 不进入 Client body |
+| provider execution failure（无 structured fact） | 固定 502 `api_error` + `Upstream provider failed`；不读取 Pi `errorMessage`、exception text 或 Provider 私有字段 |
 | request connection/shutdown/timeout abort | 不再写 response，由 HTTP lifecycle 终止 |
 | other internal failure | 500 `api_error` without internal diagnostic leakage |
 
-Legacy Pi built-in HTTP failure 的旧透传由 `src/http-observer.ts`（fetch 层观察）、
-`src/http-failure-acquisition.ts`（按 Pi `api` 选择获取方式）与
-`src/protocols/anthropic/upstream-failure.ts`（status/body → Anthropic error
-envelope）共同完成，并由 Ticket 27 删除。CommandCode 不走该链；它只通过 neutral
-failure diagnostic 向 execution/Client renderer 提供有界安全事实。
+Conversion handler 不注入 custom fetch，也不从旁路 transport state 恢复失败语义。
+Provider 只通过 Pi `AssistantMessage.diagnostics` 发送 neutral fact；Execution 验证后
+把它提升为 `ExecutionFailure.failure`，再由 owning Client renderer 映射。Native
+passthrough 不进入 Pi，使用独立的窄 `passthroughFetch`，不能充当 conversion failure
+acquisition path。
 
 ## 5.13 Anthropic 模块内部关系
 
@@ -1413,7 +1413,6 @@ createConfiguredLuckyTokenComposition(options)
 | `piDirectory` | 只定位默认 `auth.json`（凭证）；不再需要 `models.json` |
 | optional `CredentialStore` | 测试/嵌入方可替换 file store |
 | required bound `fetch` | 交给 concrete Provider；不使用 ambient fallback |
-| optional legacy `HttpObserver` | Ticket 27 前的兼容输入；不得包装 CommandCode bound fetch，Provider 自己产生 neutral facts |
 | optional `ProjectSnapshot` | 交给 CommandCode Provider |
 | optional ID/clock | 交给对应 owner |
 
@@ -1444,11 +1443,11 @@ all bound facts → serving certification
 它不做 Anthropic↔Pi 或 Pi↔CommandCode conversion。完整 `LuckyTokenCliConfig` 在
 这里被拆成窄 constructor facts，之后不进入 Runtime request path。
 
-Ticket 27 前，`createConfiguredLuckyTokenComposition()` 仍为 legacy Client adapter
-创建 `HttpObserver` 并交给 handler。该 observer 也暂时作为兼容参数经过 Provider
-catalog，但 catalog 明确不使用它包装 CommandCode bound fetch；CommandCode 的 HTTP
-failure 由 Provider attempt 直接产生 neutral diagnostic。`createConfiguredPiModels()`
-不创建 observer，也不把 infrastructure 对象作为公共返回值泄漏。
+`createConfiguredLuckyTokenComposition()` 不创建或传递 HTTP observer。它把 bound
+fetch 交给 concrete Provider，并另以 handler-private `passthroughFetch` 绑定 native
+wire forwarding。Conversion invocation 不接收 composition 注入的 custom fetch；
+Provider failure 只通过 trusted neutral Pi diagnostics 跨越 execution boundary。
+`createConfiguredPiModels()` 不把 infrastructure 对象作为公共返回值泄漏。
 
 当前 production composition 有意只认证一个 `anthropic-messages` handler 和一个
 `commandcode-private` model。未来扩展时应增加独立 binding/registration，而不是在
@@ -1747,10 +1746,10 @@ session、project config、permission、image/reasoning capabilities、message/t
 
 Transport 选择 precedence 是 request `options.fetch` → Provider-bound fetch → global
 fetch。当前 certified composition 总是显式绑定 fetch，并禁止依赖 global fallback。
-在 certified composition 中，CommandCode Provider 直接持有原始 bound fetch；它不再
-经过 Client `HttpObserver`。每个 physical attempt 在 Provider 内有界读取自己的失败
-response，并只把 neutral fact 与 attempt summary 提升到 Pi diagnostics。Client observer
-仍是 Ticket 27 待删除的 built-in adapter legacy path，不能包装 CommandCode transport。
+在 certified composition 中，CommandCode Provider 直接持有原始 bound fetch。每个
+physical attempt 在 Provider 内有界读取自己的失败 response，并只把 neutral fact 与
+attempt summary 提升到 Pi diagnostics。Client conversion handler 不包装任何 Provider
+transport，也不通过 `options.fetch` 建立观察旁路。
 
 ## 7.5 HTTP attempt/retry/cancellation — `attempts.ts`
 
@@ -2116,8 +2115,8 @@ flowchart TB
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
-| `src/http-observer.ts` | legacy invocation-local fetch observer（Ticket 27 删除）；latest-call-wins 快照 status/body/transport | composition 创建；仅旧 Client adapter path 使用，禁止包装 CommandCode bound fetch | `globalThis.fetch` 或注入 base | `test/unit/http-observer.test.ts` |
-| `src/http-failure-acquisition.ts` | Pi `api` → HTTP failure 获取方式映射 | handler（判断是否注入 `options.fetch`） | Pi `KnownApi` types | `test/unit/http-failure-acquisition.test.ts` |
+| `src/execution.ts` | Pi terminal → atomic success 或 `ExecutionFailure`；验证 neutral diagnostic 并保存在 `.failure` | Client handlers | Pi public event/diagnostic contracts、execution facts sink | execution unit + provider-boundary integration |
+| `src/protocols/upstream-failure.ts` | neutral fact schema、validation/sanitization 与 trusted diagnostic lookup | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerLuckyTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
 | `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
 | `pi-agent/packages/ai` | reviewed reference/source mirror | maintainers/certification review | upstream Pi source | 不作为 LuckyToken production import |
@@ -2131,7 +2130,7 @@ flowchart TB
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `protocols/anthropic/index.ts` | Anthropic subpath exports | programmatic consumer | handler、representability | public API tests/build |
-| `handler.ts` | factory → `POST /v1/messages` handler | composition/programmatic | Auth、profile、request、model、options、execution、renderers | ingress order、minimal text、thinking/TCP integration |
+| `handler.ts` | factory → `POST /v1/messages` handler；conversion 不注入 fetch，native 分支只用 `passthroughFetch` | composition/programmatic | Auth、profile、request、model、options、execution、renderers | ingress order、minimal text、thinking/TCP integration |
 | `failures.ts` | `InvalidRequest`, `UnsupportedFeature` | all Anthropic validators | none | ingress/error integration |
 | `profile.ts` | headers → source profile | handler | failure types | Anthropic ingress tests + protocol sync |
 | `request.ts` | unknown body → validated state → Pi invocation | handler | tools + Pi types | conversation/tool-turn/ingress tests |
@@ -2140,7 +2139,8 @@ flowchart TB
 | `options.ts` | protocol + infrastructure facts → Pi options | handler | Pi options type | options/invocation-options tests |
 | `response.ts` | committed Pi message → Anthropic Message | handler | Pi AssistantMessage | Anthropic response/thinking integration |
 | `wire.ts` | Anthropic target/error → exact JSON bytes | handler/SSE | response target types | Anthropic wire + atomic delivery tests |
-| `upstream-failure.ts` | observed HTTP failure → Anthropic error envelope（status/body 原样，type 取 provider body） | handler catch | `http-observer` types、wire error type | `test/unit/upstream-failure.test.ts`、commandcode-http-failure integration |
+| `failure-rendering.ts` | trusted neutral failure fact → Anthropic status/type/message/safe headers | handler catch | protocol-neutral upstream fact、wire error type | error-rendering + provider-boundary integration |
+| `passthrough.ts` | native Anthropic wire forwarding；独立窄 `passthroughFetch` | handler native branch | upstream-compatible wire + bound fetch | native passthrough tests |
 | `sse.ts` | target → Atomic SSE events/bytes | handler | wire schema assertion | Anthropic SSE unit/integration |
 
 ## 9.4 CommandCode Provider
@@ -2346,7 +2346,7 @@ flowchart LR
 | Information lifecycle | raw token/file JSON/Client Wire/Provider JSONL 都有明确死亡点；只传播窄 Pi facts | 符合 |
 | 模型单一权威来源 | CommandCode 33 个模型只存在于 `models.ts`（官方 1.9.0 数据）；无运行时端点拉取、无第二份模型清单 | 符合 |
 | `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
-| HTTP failure 观察边界 | CommandCode 在 Provider attempt 内有界产生 neutral fact；legacy observer 仅暂留给 Ticket 27 contraction，不得包装 CommandCode bound fetch | 符合 |
+| HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
 | Tool identity | 两侧转换都保留 call ID/name/correlation；不按位置猜测 | 符合 |
 | Cancellation | socket→HTTP→Pi→Provider→fetch/reader/retry 全链传播；commit 前仍 authoritative | 符合 |
@@ -2416,12 +2416,12 @@ construction/registration/certification，没有 message/content/usage/tool conv
    行为，不是 bug。CommandCode 响应侧同理：只有三种 content 生命周期进入 content，
    `tool-result` 等 no-op 事件不产生语义。
 
-8. **Provider HTTP 错误"尽量原样"透传是显式取舍。** 上游的 status、原始 body 和
-   `error.type`/`error.code` 会原样进入 Anthropic 错误响应（Anthropic 协议允许未知
-   error type，见协议 7.10 versioning）。代价是：客户端可能收到非 Anthropic 原生
-   的错误 type（如 OpenAI 的 `insufficient_quota`、CommandCode 的 `RATE_LIMITED`），
-   依赖 SDK 按已知 type 分类的客户端需要自己处理未知值。若未来要求"统一错误
-   分类"，应只在 `upstream-failure.ts` 内调整映射表，不改变 observer 与 handler。
+8. **Provider HTTP 错误只通过 neutral fact 选择性保真。** Provider 在自己的
+   transport boundary 有界采集并清洗 status、safe message/type/code、snapshot metadata
+   与固定 allowlist headers；Client renderer 只消费 `ExecutionFailure.failure`，不读取
+   原始 body。没有 trusted structured fact 时固定 generic 502，不能以 Pi
+   `errorMessage` 猜测分类。Native passthrough 的 wire fidelity 属于独立 profile，不能
+   用来放宽 conversion failure boundary。
 
 ## 11.4 用于代码评审的边界问题
 

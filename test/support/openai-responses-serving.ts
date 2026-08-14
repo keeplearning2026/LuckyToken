@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createAuth } from "../../src/auth.js";
-import { HttpObserver } from "../../src/http-observer.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
@@ -85,7 +84,6 @@ export async function createOpenAIResponsesServingTestComposition(
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const model = createModel(options);
-  const httpObserver = new HttpObserver(options.fetch);
 
   const mutableModels = createModels();
   mutableModels.setProvider(
@@ -119,7 +117,7 @@ export async function createOpenAIResponsesServingTestComposition(
     auth,
     stateFile,
     sessionState,
-    httpObserver,
+    passthroughFetch: options.fetch,
     ...(options.createResponseId === undefined
       ? {}
       : { createResponseId: options.createResponseId }),

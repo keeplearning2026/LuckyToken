@@ -488,7 +488,11 @@ The non-streaming Responses error envelope preserves distinct target fields:
 }
 ```
 
-Client input conversion errors use a legal invalid-request classification. Provider/runtime errors arrive as protocol-neutral facts. The renderer:
+Client input conversion errors use a legal invalid-request classification.
+Provider/runtime errors may arrive only as validated protocol-neutral Pi
+diagnostics preserved in `ExecutionFailure.failure`; the conversion handler does
+not inject a custom `fetch`, read observer state, or parse a Provider error
+string. The renderer:
 
 - preserves a validated HTTP status when available;
 - does not move an upstream `code` into target `type`;
@@ -496,6 +500,11 @@ Client input conversion errors use a legal invalid-request classification. Provi
 - bounds/redacts body-derived messages;
 - never forwards credentials/cookies/hop-by-hop headers;
 - writes one per-request failure journal.
+
+If `ExecutionFailure.failure` is absent, no Provider-derived status, message,
+type, code, identifier, or header is trusted. The renderer returns the fixed
+generic Responses upstream error: HTTP 502, `api_error`, message
+`Upstream provider failed`, and null `code`/`param`.
 
 ## 14. Fixed known drops and degradations
 
@@ -514,6 +523,10 @@ They MUST NOT be represented as having taken effect in the Response object.
 ## 15. Native Responses passthrough
 
 If an upstream declares compatible OpenAI Responses wire support, LuckyToken may use native passthrough. It preserves handles, hosted tools, conversation/prompt state, background jobs, and future fields without forcing them through Pi.
+
+The handler binds passthrough to a narrow `passthroughFetch` dependency used only
+by this native profile. Conversion does not receive that fetch through Pi
+options, and passthrough transport outcomes are not conversion failure facts.
 
 Passthrough requirements:
 
@@ -541,7 +554,5 @@ At audit time:
 - response envelope/usage defaults are incomplete;
 - SSE always emits completed and has no sequence_number;
 - session unknown IDs fail open and store:false persists;
-- response errors lose code/param/safe headers;
-- no native Responses passthrough profile exists.
 
 These are implementation gaps against this frozen method.

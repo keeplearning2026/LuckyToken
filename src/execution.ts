@@ -1,5 +1,6 @@
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
   Context,
   Model,
   Models,
@@ -50,9 +51,16 @@ export async function execute(
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
 ): Promise<AssistantMessage> {
-  const stream = models.streamSimple(model, context, options);
-  const iterator = stream[Symbol.asyncIterator]();
   const signal = options.signal;
+  throwIfExecutionAborted(signal);
+  let iterator: AsyncIterator<AssistantMessageEvent>;
+  try {
+    const stream = models.streamSimple(model, context, options);
+    iterator = stream[Symbol.asyncIterator]();
+  } catch (error) {
+    throwIfExecutionAborted(signal);
+    throw new ExecutionFailure("Pi execution stream failed", error);
+  }
 
   while (true) {
     let next: IteratorResult<Awaited<ReturnType<typeof iterator.next>>["value"]>;
@@ -135,6 +143,12 @@ export async function execute(
       }
       return event.message;
     }
+  }
+}
+
+function throwIfExecutionAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new ExecutionAbortedError(signal.reason);
   }
 }
 

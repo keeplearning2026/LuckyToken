@@ -1,4 +1,4 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import { HttpObserver } from "../../src/http-observer.js";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
@@ -61,7 +60,7 @@ function request(
 function dependencies(
   models: Models,
   extra: Partial<OpenAIResponsesHandlerOptions> = {},
-  observer?: HttpObserver,
+  passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
     resolve: async () => ({ authorized: true, sessionId: "session" }),
@@ -75,7 +74,7 @@ function dependencies(
     stateFile: join(tmpdir(), "luckytoken-responses-passthrough-state.json"),
     now: () => 1,
     ...extra,
-    ...(observer === undefined ? {} : { httpObserver: observer }),
+    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
   };
   const responses = createOpenAIResponsesHandler(options);
   return {
@@ -95,17 +94,12 @@ function passthroughModels(
   } as unknown as Models;
 }
 
-function captureGlobalFetch(
+function captureFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-): { restore: () => void; observer: HttpObserver } {
-  const original = globalThis.fetch;
-  (globalThis as { fetch: typeof fetch }).fetch = impl as typeof fetch;
-  const observer = new HttpObserver();
+): { restore: () => void; passthroughFetch: FetchFunction } {
   return {
-    restore: () => {
-      (globalThis as { fetch: typeof fetch }).fetch = original;
-    },
-    observer,
+    restore: () => undefined,
+    passthroughFetch: impl as FetchFunction,
   };
 }
 
@@ -135,7 +129,7 @@ describe("19: native Responses passthrough contract", () => {
   it("forwards the raw body verbatim to {baseUrl}/v1/responses with upstream auth", async () => {
     const model = responsesModel();
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(
         JSON.stringify({
@@ -167,7 +161,7 @@ describe("19: native Responses passthrough contract", () => {
         future_field: { opaque: true },
       });
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(rawBody),
       );
       expect(response.status).toBe(200);
@@ -197,7 +191,7 @@ describe("19: native Responses passthrough contract", () => {
   it("passes native handles, hosted tools, background/store and future fields without conversion loss", async () => {
     const model = responsesModel();
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(
         JSON.stringify({
@@ -249,7 +243,7 @@ describe("19: native Responses passthrough contract", () => {
         future_field: { nested: { value: 1 } },
       });
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(rawBody),
       );
       expect(response.status).toBe(200);
@@ -293,7 +287,7 @@ describe("19: native Responses passthrough contract", () => {
 
   it("preserves status, body, and safe response headers; strips unsafe ones", async () => {
     const model = responsesModel();
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response('{"id":"resp_1","object":"response","status":"completed"}', {
         status: 200,
         headers: {
@@ -311,7 +305,7 @@ describe("19: native Responses passthrough contract", () => {
         rawBody: "{}",
         apiKey: "upstream-key",
         signal: new AbortController().signal,
-        fetch: observer.observedFetch,
+        fetch: passthroughFetch,
       });
       expect(result.status).toBe(200);
       expect(new TextDecoder().decode(result.body)).toBe(
@@ -336,7 +330,7 @@ describe("19: native Responses passthrough contract", () => {
       'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"message"}}\n\n' +
       'data: {"type":"response.completed","sequence_number":2,"response":{"status":"completed"}}\n\n' +
       "data: [DONE]\n\n";
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response(sseBody, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
@@ -344,7 +338,7 @@ describe("19: native Responses passthrough contract", () => {
     );
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",
@@ -370,7 +364,7 @@ describe("19: native Responses passthrough contract", () => {
       'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
       'data: {"type":"response.incomplete","sequence_number":1,"response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}\n\n' +
       "data: [DONE]\n\n";
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response(sseBody, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
@@ -378,7 +372,7 @@ describe("19: native Responses passthrough contract", () => {
     );
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",
@@ -404,7 +398,7 @@ describe("19: native Responses passthrough contract", () => {
       'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
       'data: {"type":"response.failed","sequence_number":1,"response":{"status":"failed","error":{"code":"server_error","message":"upstream exploded"}}}\n\n' +
       "data: [DONE]\n\n";
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response(sseBody, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
@@ -412,7 +406,7 @@ describe("19: native Responses passthrough contract", () => {
     );
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",
@@ -431,7 +425,7 @@ describe("19: native Responses passthrough contract", () => {
 
   it("returns a legal Responses error when the upstream body read fails (pre-commit)", async () => {
     const model = responsesModel();
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response(
         new ReadableStream({
           pull(controller) {
@@ -443,7 +437,7 @@ describe("19: native Responses passthrough contract", () => {
     );
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",
@@ -477,7 +471,7 @@ describe("19: native Responses passthrough contract", () => {
         root,
       ),
     });
-    const { restore, observer } = captureGlobalFetch(async () =>
+    const { restore, passthroughFetch } = captureFetch(async () =>
       new Response('{"error":{"message":"rate limited","type":"rate_limit"}}', {
         status: 429,
         headers: { "content-type": "application/json" },
@@ -488,7 +482,7 @@ describe("19: native Responses passthrough contract", () => {
         dependencies(
           passthroughModels(model),
           { invocationDiagnostics: journal },
-          observer,
+          passthroughFetch,
         ),
         request(
           JSON.stringify({
@@ -511,7 +505,7 @@ describe("19: native Responses passthrough contract", () => {
     const model = responsesModel();
     const controller = new AbortController();
     let upstreamSignal: AbortSignal | null | undefined;
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       void input;
       upstreamSignal = init?.signal;
       controller.abort(new Error("client went away"));
@@ -519,7 +513,7 @@ describe("19: native Responses passthrough contract", () => {
     });
     try {
       const responsePromise = handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         new Request("http://luckytoken.test/v1/responses", {
           method: "POST",
           headers: {
@@ -542,7 +536,7 @@ describe("19: native Responses passthrough contract", () => {
 
   it("requires an upstream credential before any transport work", async () => {
     const model = responsesModel();
-    const { restore, observer } = captureGlobalFetch(async () => {
+    const { restore, passthroughFetch } = captureFetch(async () => {
       throw new Error("must not be called");
     });
     try {
@@ -550,7 +544,7 @@ describe("19: native Responses passthrough contract", () => {
         dependencies(
           passthroughModels(model, undefined),
           {},
-          observer,
+          passthroughFetch,
         ),
         request(
           JSON.stringify({
@@ -568,7 +562,7 @@ describe("19: native Responses passthrough contract", () => {
   it("preserves a configured base-path prefix on the endpoint", async () => {
     const model = responsesModel("openai-responses", "https://responses.example.com/api");
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(
         JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
@@ -577,7 +571,7 @@ describe("19: native Responses passthrough contract", () => {
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",
@@ -597,7 +591,7 @@ describe("19: native Responses passthrough contract", () => {
   it("rewrites a qualified Lucky selector to the registered model id", async () => {
     const model = responsesModel();
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(
         JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
@@ -611,7 +605,7 @@ describe("19: native Responses passthrough contract", () => {
         future_field: { opaque: true },
       });
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(rawBody),
       );
       expect(response.status).toBe(200);
@@ -633,7 +627,7 @@ describe("19: native Responses passthrough contract", () => {
   it("keeps the raw body byte-identical when the selector already equals the model id", async () => {
     const model = responsesModel();
     const upstreamRequests: Request[] = [];
-    const { restore, observer } = captureGlobalFetch(async (input, init) => {
+    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
       upstreamRequests.push(new Request(input, init));
       return new Response(
         JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
@@ -643,7 +637,7 @@ describe("19: native Responses passthrough contract", () => {
     try {
       const rawBody = JSON.stringify({ model: "gpt-5", input: "hi" });
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(rawBody),
       );
       expect(response.status).toBe(200);
@@ -655,12 +649,12 @@ describe("19: native Responses passthrough contract", () => {
 
   it("renders a legal Responses error when the upstream fetch rejects (pre-commit network failure)", async () => {
     const model = responsesModel();
-    const { restore, observer } = captureGlobalFetch(async () => {
+    const { restore, passthroughFetch } = captureFetch(async () => {
       throw new TypeError("fetch failed: connection refused");
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, observer),
+        dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "my-responses/gpt-5",

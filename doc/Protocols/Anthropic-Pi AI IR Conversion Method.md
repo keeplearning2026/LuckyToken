@@ -375,7 +375,11 @@ Rules:
 
 ## 11. Errors
 
-Client input validation failures use the Anthropic invalid-request family. Provider/runtime failures arrive as protocol-neutral failure facts, never as a shared observer slot or reparsed Provider string.
+Client input validation failures use the Anthropic invalid-request family.
+Provider/runtime failures may arrive only as validated protocol-neutral Pi
+diagnostics preserved in `ExecutionFailure.failure`, never through a shared or
+invocation-local observer slot, a conversion-handler custom `fetch`, or a
+reparsed Provider string.
 
 The renderer:
 
@@ -387,9 +391,17 @@ The renderer:
 - never emits Provider-specific type/code as an unchecked Anthropic error type;
 - writes one failure journal for the final failed request.
 
+If `ExecutionFailure.failure` is absent, the renderer has no authority to reuse
+Pi `errorMessage` or exception text. It returns the fixed generic Anthropic
+upstream error: HTTP 502, `api_error`, and `Upstream provider failed`, without
+Provider-derived headers or identifiers.
+
 ## 12. Native Anthropic passthrough
 
 Native passthrough is supported and useful. It is not this conversion method.
+The handler binds it to a narrow `passthroughFetch` dependency that is used only
+for native wire forwarding. Conversion never receives that fetch as a Pi option,
+and passthrough observations never supply conversion failure facts.
 
 It MUST have separate certification for:
 
@@ -416,6 +428,5 @@ At audit time, implementation differs from this frozen method in at least these 
 - missing thinking signature silently uses empty string without notice;
 - response stop/content consistency is not normalized;
 - atomic SSE start repeats final usage;
-- native passthrough lacks a complete transport/security contract.
 
 These gaps are implementation work; they do not change the normative decisions above.

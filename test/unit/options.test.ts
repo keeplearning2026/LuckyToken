@@ -160,7 +160,6 @@ describe("closed-world Pi option composition", () => {
 
   it("gives infrastructure exclusive ownership of public execution controls", async () => {
     const signal = new AbortController().signal;
-    const fetch: typeof globalThis.fetch = async () => new Response();
     const onPayload = () => undefined;
     const onResponse = () => undefined;
     const transformHeaders = (headers: Record<string, string | null>) => headers;
@@ -176,7 +175,6 @@ describe("closed-world Pi option composition", () => {
         sessionId,
         signal,
         apiKey: "infrastructure-secret",
-        fetch,
         telemetryContext,
         env: { SAFE_PROVIDER_VALUE: "value" },
         headers: { "x-safe-extension": "value" },
@@ -195,7 +193,6 @@ describe("closed-world Pi option composition", () => {
       sessionId,
       signal,
       apiKey: "infrastructure-secret",
-      fetch,
       telemetryContext,
       env: { SAFE_PROVIDER_VALUE: "value" },
       headers: { "x-safe-extension": "value" },
@@ -309,6 +306,7 @@ describe("closed-world Pi option composition", () => {
     ["invalid transport", { transport: "pipe" }],
     ["invalid header value", { headers: { "x-value": 1 } }],
     ["invalid environment value", { env: { VALUE: null } }],
+    ["custom fetch", { fetch: async () => new Response() }],
     ["unknown fact", { providerOptions: {} }],
   ])("rejects invalid infrastructure fact: %s", (_name, field) => {
     expect(() =>

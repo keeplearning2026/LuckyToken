@@ -100,6 +100,58 @@ function modelsFor(stream: AssistantMessageEventStream): {
 }
 
 describe("Core atomic execution", () => {
+  it("promotes synchronous stream construction failures into ExecutionFailure", async () => {
+    const diagnostic = new Error("synchronous provider construction failed");
+    const models = {
+      streamSimple: vi.fn(() => {
+        throw diagnostic;
+      }),
+    } as unknown as Models;
+
+    await expect(
+      execute(models, model, context, { maxTokens: 10 }),
+    ).rejects.toMatchObject({
+      kind: "ExecutionFailure",
+      reason: "error",
+      diagnostic,
+    });
+  });
+
+  it("promotes synchronous iterator construction failures into ExecutionFailure", async () => {
+    const diagnostic = new Error("iterator construction failed");
+    const stream = {
+      [Symbol.asyncIterator]: () => {
+        throw diagnostic;
+      },
+    } as unknown as AssistantMessageEventStream;
+    const fixture = modelsFor(stream);
+
+    await expect(
+      execute(fixture.models, model, context, { maxTokens: 10 }),
+    ).rejects.toMatchObject({
+      kind: "ExecutionFailure",
+      reason: "error",
+      diagnostic,
+    });
+  });
+
+  it("lets an already-aborted caller win over synchronous stream construction failure", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    const models = {
+      streamSimple: vi.fn(() => {
+        throw new Error("provider construction failed");
+      }),
+    } as unknown as Models;
+
+    await expect(
+      execute(models, model, context, {
+        maxTokens: 10,
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(ExecutionAbortedError);
+  });
+
   it.each(["stop", "length", "toolUse"] as const)(
     "commits one consistent %s success after actively draining",
     async (reason) => {

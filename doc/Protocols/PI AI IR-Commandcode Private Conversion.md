@@ -456,12 +456,15 @@ Retry rules:
 - never reuse another request's observation;
 - one final failure journal contains summaries of all attempts.
 
-The CommandCode bound fetch is never wrapped by the legacy Client HTTP observer. Built-in Pi adapters may retain their legacy acquisition path until its separate contraction ticket, but CommandCode response cloning or unbounded observer reads are forbidden.
+The CommandCode bound fetch is never wrapped by a Client HTTP observer.
+Conversion handlers do not inject custom fetch into any Pi adapter; every
+Provider must publish trusted failure facts through neutral Pi diagnostics.
+Response cloning or unbounded observer reads are forbidden.
 
 ## 15. Completion state
 
 Tickets 20–26 implement this Provider method, including structured stream/HTTP failures,
 retry attempt diagnostics, execution fact promotion, bounded capture, and request-local
-isolation. Ticket 27 removes the remaining Client observer side channel; Ticket 28 owns
-full-route certification. Online CommandCode evidence was not run for this completion and
-remains evidence-insufficient.
+isolation. The current contraction removes the remaining Client observer side channel;
+Ticket 28 owns full-route certification. Online CommandCode evidence was not run for this
+completion and remains evidence-insufficient.

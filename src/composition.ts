@@ -19,7 +19,6 @@ import {
   ServingCertificationFailure,
   type ServingCertificationManifest,
 } from "./commandcode-serving-certification.js";
-import { HttpObserver } from "./http-observer.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
@@ -55,8 +54,6 @@ export interface ConfiguredPiModelsOptions {
   readonly commandCodeConfiguration?: CommandCodeConfiguration;
   /** Optional models.json path; absent means no user-registered providers. */
   readonly modelsJsonPath?: string;
-  /** Legacy Client observer retained only until Ticket 27; never wraps CommandCode. */
-  readonly httpObserver?: HttpObserver;
   readonly projectSnapshot?: ProjectSnapshot;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -91,9 +88,6 @@ export async function createConfiguredPiModels(
     fetch: options.fetch,
     ...(options.commandCodeConfiguration === undefined ? {} : { commandCodeConfiguration: options.commandCodeConfiguration }),
     ...(modelsJson === undefined ? {} : { modelsJson }),
-    ...(options.httpObserver === undefined
-      ? {}
-      : { httpObserver: options.httpObserver }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.projectSnapshot === undefined
       ? {}
@@ -136,7 +130,6 @@ export async function createConfiguredLuckyTokenComposition(
   );
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const httpObserver = new HttpObserver(options.fetch);
   const invocationDiagnostics = createInvocationDiagnosticsFactory({
     configuration: config.failureLogging,
     now,
@@ -153,7 +146,6 @@ export async function createConfiguredLuckyTokenComposition(
     commandCodeConfiguration: bindCommandCodeConfiguration(
       config.providerAdapters[commandCodePrivateProviderId],
     ),
-    httpObserver,
     ...(options.projectSnapshot === undefined
       ? {}
       : { projectSnapshot: options.projectSnapshot }),
@@ -229,7 +221,7 @@ export async function createConfiguredLuckyTokenComposition(
     auth,
     configuration: bindAnthropicConfiguration(anthropicConfig.adapterConfiguration),
     invocationDiagnostics,
-    httpObserver,
+    passthroughFetch: options.fetch,
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),
@@ -270,7 +262,7 @@ export async function createConfiguredLuckyTokenComposition(
       ),
       invocationDiagnostics,
       stateFile,
-      httpObserver,
+      passthroughFetch: options.fetch,
       maxRequestBytes: config.limits.maxRequestBytes,
       ...(options.shutdownSignal === undefined
         ? {}

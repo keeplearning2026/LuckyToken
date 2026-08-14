@@ -112,8 +112,8 @@ test("binds the installed Pi runtime and every governing specification revision"
   for (const [document, documentMarker, manifestMarker] of [
     [
       core,
-      "# LuckyToken Core Architecture Specification v5.7",
-      "LuckyToken Core Architecture Specification v5.7",
+      "# LuckyToken Core Architecture Specification v5.8",
+      "LuckyToken Core Architecture Specification v5.8",
     ],
     [
       anthropicPi,

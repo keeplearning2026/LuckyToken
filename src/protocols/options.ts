@@ -1,5 +1,4 @@
 import type {
-  FetchFunction,
   ModelsSimpleStreamOptions,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
@@ -34,14 +33,6 @@ export interface InvocationInfrastructureFacts {
   readonly signal: AbortSignal;
   readonly apiKey?: string;
   readonly projectDir?: string;
-  /**
-   * Optional fetch for provider HTTP requests. The Pi adapter forwards this
-   * into the provider SDK / direct fetch call, so LuckyToken can observe the
-   * real HTTP Response before Pi flattens it into `errorMessage`. This is
-   * infrastructure, not protocol semantics: it never changes what the client
-   * protocol owns.
-   */
-  readonly fetch?: FetchFunction;
   readonly telemetryContext?: ModelsSimpleStreamOptions["telemetryContext"];
   readonly env?: ModelsSimpleStreamOptions["env"];
   readonly headers?: ProviderHeaders;
@@ -72,7 +63,6 @@ const INFRASTRUCTURE_KEYS = new Set([
   "signal",
   "projectDir",
   "apiKey",
-  "fetch",
   "telemetryContext",
   "env",
   "headers",
@@ -342,7 +332,6 @@ function validateInfrastructure(infrastructure: InvocationInfrastructureFacts): 
     throw new InvocationCompositionFailure("Infrastructure telemetryContext is invalid");
   }
   for (const [key, callback] of [
-    ["fetch", infrastructure.fetch],
     ["onPayload", infrastructure.onPayload],
     ["onResponse", infrastructure.onResponse],
     ["transformHeaders", infrastructure.transformHeaders],
@@ -389,9 +378,6 @@ export function composeOptions(
   if (infrastructure.apiKey !== undefined) effective.apiKey = infrastructure.apiKey;
   if (protocolOptions.maxTokens !== undefined) {
     effective.maxTokens = protocolOptions.maxTokens;
-  }
-  if (infrastructure.fetch !== undefined) {
-    effective.fetch = infrastructure.fetch;
   }
   if (infrastructure.telemetryContext !== undefined) {
     effective.telemetryContext = infrastructure.telemetryContext;

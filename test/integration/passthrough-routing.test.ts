@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
+  FetchFunction,
   Model,
   Models,
   ModelsSimpleStreamOptions,
@@ -87,6 +88,7 @@ function request(
 
 function dependencies(
   models: Models,
+  passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
     resolve: async () => ({ authorized: true, sessionId: "session" }),
@@ -99,6 +101,7 @@ function dependencies(
     maxRequestBytes: 1_000_000,
     routerDefaults: {},
     now: () => 1,
+    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
   };
   const anthropic = createAnthropicMessagesHandler(options);
   return {
@@ -116,9 +119,7 @@ describe("passthrough routing", () => {
       getModels: () => [model],
       getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
     } as unknown as Models;
-    const deps = dependencies(models);
-    const globalFetch = globalThis.fetch;
-    (globalThis as { fetch: typeof fetch }).fetch = (async (
+    const passthroughFetch = (async (
       input: RequestInfo | URL,
       init?: RequestInit,
     ): Promise<Response> => {
@@ -130,12 +131,10 @@ describe("passthrough routing", () => {
           headers: { "content-type": "application/json" },
         },
       );
-    }) as typeof fetch;
-
-    try {
-      const response = await handleHttpRequest(
-        deps,
-        request(
+    }) as FetchFunction;
+    const response = await handleHttpRequest(
+      dependencies(models, passthroughFetch),
+      request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
             max_tokens: 32,
@@ -144,25 +143,22 @@ describe("passthrough routing", () => {
           }),
         ),
       );
-      expect(response.status).toBe(200);
-      await expect(response.text()).resolves.toBe(
-        '{"type":"message","content":[{"type":"text","text":"passthrough ok"}]}',
-      );
-      expect(upstreamRequests).toHaveLength(1);
-      expect(upstreamRequests[0]?.url).toBe(
-        "https://gateway.example.com/v1/messages",
-      );
-      expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("sk-gateway");
-      const upstreamBody = await upstreamRequests[0]?.text();
-      // The qualified Lucky selector is rewritten to the registered model id:
-      // a Lucky selector must never leak to the upstream wire.
-      expect(JSON.parse(upstreamBody ?? "{}")).toMatchObject({
-        model: "claude-sonnet",
-        top_p: 0.9,
-      });
-    } finally {
-      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
-    }
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(
+      '{"type":"message","content":[{"type":"text","text":"passthrough ok"}]}',
+    );
+    expect(upstreamRequests).toHaveLength(1);
+    expect(upstreamRequests[0]?.url).toBe(
+      "https://gateway.example.com/v1/messages",
+    );
+    expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("sk-gateway");
+    const upstreamBody = await upstreamRequests[0]?.text();
+    // The qualified Lucky selector is rewritten to the registered model id:
+    // a Lucky selector must never leak to the upstream wire.
+    expect(JSON.parse(upstreamBody ?? "{}")).toMatchObject({
+      model: "claude-sonnet",
+      top_p: 0.9,
+    });
   });
 
   it("returns 502 when the passthrough provider has no api key", async () => {
@@ -171,15 +167,9 @@ describe("passthrough routing", () => {
       getModels: () => [model],
       getAuth: async () => undefined,
     } as unknown as Models;
-    const deps = dependencies(models);
-    const globalFetch = globalThis.fetch;
-    (globalThis as { fetch: typeof fetch }).fetch = (async () =>
-      new Response(null, { status: 500 })) as typeof fetch;
-
-    try {
-      const response = await handleHttpRequest(
-        deps,
-        request(
+    const response = await handleHttpRequest(
+      dependencies(models, async () => new Response(null, { status: 500 })),
+      request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
             max_tokens: 32,
@@ -187,15 +177,12 @@ describe("passthrough routing", () => {
           }),
         ),
       );
-      expect(response.status).toBe(502);
-      const body = (await response.json()) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        type: "error",
-        error: { type: "api_error" },
-      });
-    } finally {
-      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
-    }
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      type: "error",
+      error: { type: "api_error" },
+    });
   });
 
   it("keeps non-anthropic-messages models on the Pi IR path", async () => {
@@ -253,9 +240,7 @@ describe("passthrough routing", () => {
       getModels: () => [model],
       getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
     } as unknown as Models;
-    const deps = dependencies(models);
-    const globalFetch = globalThis.fetch;
-    (globalThis as { fetch: typeof fetch }).fetch = (async (
+    const passthroughFetch = (async (
       input: RequestInfo | URL,
       init?: RequestInit,
     ): Promise<Response> => {
@@ -264,12 +249,10 @@ describe("passthrough routing", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
-
-    try {
-      const response = await handleHttpRequest(
-        deps,
-        request(
+    }) as FetchFunction;
+    const response = await handleHttpRequest(
+      dependencies(models, passthroughFetch),
+      request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
             max_tokens: 32,
@@ -284,16 +267,13 @@ describe("passthrough routing", () => {
           }),
         ),
       );
-      // Passthrough must forward verbatim, not 400 on unknown blocks.
-      expect(response.status).toBe(200);
-      expect(upstreamRequests).toHaveLength(1);
-      const upstreamBody = await upstreamRequests[0]?.text();
-      expect(JSON.parse(upstreamBody ?? "{}").messages[0].content[0].type).toBe(
-        "future_block_type",
-      );
-    } finally {
-      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
-    }
+    // Passthrough must forward verbatim, not 400 on unknown blocks.
+    expect(response.status).toBe(200);
+    expect(upstreamRequests).toHaveLength(1);
+    const upstreamBody = await upstreamRequests[0]?.text();
+    expect(JSON.parse(upstreamBody ?? "{}").messages[0].content[0].type).toBe(
+      "future_block_type",
+    );
   });
 
   it("returns the upstream error response verbatim (P2)", async () => {
@@ -302,19 +282,15 @@ describe("passthrough routing", () => {
       getModels: () => [model],
       getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
     } as unknown as Models;
-    const deps = dependencies(models);
     const upstreamBody = '{"error":{"type":"rate_limit","message":"slow"}}';
-    const globalFetch = globalThis.fetch;
-    (globalThis as { fetch: typeof fetch }).fetch = (async () =>
+    const passthroughFetch: FetchFunction = async () =>
       new Response(upstreamBody, {
         status: 429,
         headers: { "content-type": "application/json" },
-      })) as typeof fetch;
-
-    try {
-      const response = await handleHttpRequest(
-        deps,
-        request(
+      });
+    const response = await handleHttpRequest(
+      dependencies(models, passthroughFetch),
+      request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
             max_tokens: 32,
@@ -322,12 +298,9 @@ describe("passthrough routing", () => {
           }),
         ),
       );
-      expect(response.status).toBe(429);
-      expect(response.headers.get("content-type")).toBe("application/json");
-      await expect(response.text()).resolves.toBe(upstreamBody);
-    } finally {
-      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
-    }
+    expect(response.status).toBe(429);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    await expect(response.text()).resolves.toBe(upstreamBody);
   });
 
   it("preserves upstream headers on successful passthrough (P4)", async () => {
@@ -336,9 +309,7 @@ describe("passthrough routing", () => {
       getModels: () => [model],
       getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
     } as unknown as Models;
-    const deps = dependencies(models);
-    const globalFetch = globalThis.fetch;
-    (globalThis as { fetch: typeof fetch }).fetch = (async () =>
+    const passthroughFetch: FetchFunction = async () =>
       new Response('{"type":"message","content":[]}', {
         status: 200,
         headers: {
@@ -346,12 +317,10 @@ describe("passthrough routing", () => {
           "request-id": "req_123",
           "x-ratelimit-remaining": "42",
         },
-      })) as typeof fetch;
-
-    try {
-      const response = await handleHttpRequest(
-        deps,
-        request(
+      });
+    const response = await handleHttpRequest(
+      dependencies(models, passthroughFetch),
+      request(
           JSON.stringify({
             model: "my-anthropic/claude-sonnet",
             max_tokens: 32,
@@ -359,11 +328,8 @@ describe("passthrough routing", () => {
           }),
         ),
       );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("request-id")).toBe("req_123");
-      expect(response.headers.get("x-ratelimit-remaining")).toBe("42");
-    } finally {
-      (globalThis as { fetch: typeof fetch }).fetch = globalFetch;
-    }
+    expect(response.status).toBe(200);
+    expect(response.headers.get("request-id")).toBe("req_123");
+    expect(response.headers.get("x-ratelimit-remaining")).toBe("42");
   });
 });

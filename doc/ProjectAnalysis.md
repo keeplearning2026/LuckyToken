@@ -158,8 +158,7 @@ flowchart LR
 | `src/server.ts` | Node `http` listener；`IncomingMessage` ↔ WHATWG `Request/Response` 适配；跟踪活动请求；幂等 `close()` |
 | `src/runtime.ts` | `createLuckyTokenRuntime`：冻结 `ClientProtocolHandler[]` 为路由表（method+path），只暴露 `handle(Request)` 与 `routes` |
 | `src/http.ts` | 精确路由选择；组合 AbortController（断连+关闭+超时）；`markDelivered` 单次投递；404 / 500 |
-| `src/execution.ts` | 消费 Pi `streamSimple` 事件；要求显式语义终态（`done` 或 `error`）；`deferred` 不支持；区分中止/失败/畸形流 |
-| `src/http-observer.ts` / `src/http-failure-acquisition.ts` | 观察上游 fetch 结果，让 Provider HTTP 失败对 handler 可见；判断某 api 是否支持 fetch 观察 |
+| `src/execution.ts` | 消费 Pi `streamSimple` 事件；要求显式语义终态（`done` 或 `error`）；验证 neutral Pi failure diagnostic 并保存在 `ExecutionFailure.failure`；`deferred` 不支持；区分中止/失败/畸形流 |
 
 ### 4.2 Client Auth（按协议隔离）
 
@@ -176,26 +175,27 @@ flowchart LR
 
 | 文件 | 职责 |
 | --- | --- |
-| `handler.ts` | 请求生命周期编排；错误映射（400/401/404/413/415/500，Anthropic 错误形状）；passthrough 分支 |
+| `handler.ts` | 请求生命周期编排；conversion 不注入 custom fetch；只消费 trusted `ExecutionFailure.failure`，缺失时固定 generic 502；native passthrough 使用独立 `passthroughFetch` |
 | `request.ts` | 顶层字段严格白名单；content block 校验；工具轮次生命周期；历史规范化；→ Pi `Context` |
 | `tools.ts` | 工具 JSON-Schema 子集校验；`strict` → Pi `constrainedSampling` |
 | `options.ts` | 闭世界选项组合；只允许 `maxTokens/temperature/metadata.user_id` 等窄字段 |
 | `representability.ts` | model-aware 有效性：图像能力门、最终 assistant 前缀分类、思考需 reasoning 模型 |
 | `profile.ts` / `failures.ts` | `anthropic-version` profile 解析；`InvalidRequest` / `UnsupportedFeature` 分类 |
-| `passthrough.ts` | `anthropic-messages` api 模型的原样转发分支（verbatim 双向） |
+| `passthrough.ts` | `anthropic-messages` api 模型的 native wire 转发分支；只接收独立窄 `passthroughFetch` |
 | `response.ts` | Pi `AssistantMessage` → Anthropic Message；严格保真断言 |
 | `sse.ts` | **Atomic SSE**：先完整提交结果，再渲染 `message_start → content_block_* → message_delta → message_stop` |
 | `wire.ts` | 目标 schema 断言；JSON 成功 / 错误渲染 |
-| `upstream-failure.ts` | 把观察到的上游 HTTP 失败映射为 Anthropic 错误 envelope |
+| `failure-rendering.ts` | 把 trusted neutral fact 映射为 Anthropic 错误 envelope；无 fact 不解析字符串 |
 
 ### 4.4 OpenAI Responses Client Protocol（`src/protocols/openai-responses/`）
 
 | 文件 | 职责 |
 | --- | --- |
-| `handler.ts` | 请求生命周期编排；`previous_response_id` 展开；错误映射；`store:false` 无条件保存 |
+| `handler.ts` | 请求生命周期编排；`previous_response_id` 展开；conversion 不注入 custom fetch；trusted neutral failure 映射与 generic 502 fallback；native 分支独立 transport |
 | `request.ts` | Responses wire → Pi `Context`；Codex 工具形状归一化 |
 | `response.ts` | Pi `AssistantMessage` → Responses response object（含 `previous_response_id` 链） |
 | `sse.ts` | Responses Atomic SSE 渲染 |
+| `passthrough.ts` | native Responses wire 转发；只接收独立窄 `passthroughFetch` |
 | `session-state.ts` | 磁盘持久化会话快照（防污染、FIFO、原子写、corrupt 备份、shutdown flush） |
 | `models.ts` | `/v1/models` 的 Responses wire shape |
 | `index.ts` | 公共导出 |
@@ -205,7 +205,7 @@ flowchart LR
 | 文件 | 职责 |
 | --- | --- |
 | `src/protocols/options.ts` | 中立的 `composeOptions`，Anthropic 与 OpenAI Responses 共用；只接收窄 invocation facts |
-| `src/protocols/upstream-failure.ts` | 中立的上游 HTTP 失败映射（status → Anthropic/Responses error type） |
+| `src/protocols/upstream-failure.ts` | neutral upstream failure fact schema、sanitization 与 trusted Pi diagnostic lookup；不包含 Client-specific 映射 |
 
 ### 4.6 Pi 集成与 Composition
 

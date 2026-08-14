@@ -28,7 +28,6 @@ import {
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
-import { HttpObserver } from "../../src/http-observer.js";
 import {
   SYNTHETIC_CLIENT_HISTORY_API,
   SYNTHETIC_CLIENT_HISTORY_PROVIDER,
@@ -140,7 +139,6 @@ export function createCommandCodeServingTestComposition(
   }
 
   const mutableModels = createModels();
-  const httpObserver = new HttpObserver(options.fetch);
   mutableModels.setProvider(
     createCommandCodePrivateProvider({
       apiKey: options.commandCodeApiKey,
@@ -168,7 +166,7 @@ export function createCommandCodeServingTestComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
-    httpObserver,
+    passthroughFetch: options.fetch,
     ...(options.anthropicModelValidityPolicy === undefined
       ? {}
       : { modelValidityPolicy: options.anthropicModelValidityPolicy }),

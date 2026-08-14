@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import { HttpObserver } from "../../src/http-observer.js";
 import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
@@ -33,7 +32,7 @@ function request(
 function dependencies(
   models: Models,
   extra: Partial<AnthropicMessagesHandlerOptions> = {},
-  observer?: HttpObserver,
+  passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
     resolve: async () => ({ authorized: true, sessionId: "session" }),
@@ -47,7 +46,7 @@ function dependencies(
     routerDefaults: {},
     now: () => 1,
     ...extra,
-    ...(observer === undefined ? {} : { httpObserver: observer }),
+    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
   };
   const anthropic = createAnthropicMessagesHandler(options);
   return {
@@ -67,17 +66,12 @@ function passthroughModels(
   } as unknown as Models;
 }
 
-function captureGlobalFetch(
+function captureFetch(
   impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-): { restore: () => void; observer: HttpObserver } {
-  const original = globalThis.fetch;
-  (globalThis as { fetch: typeof fetch }).fetch = impl as typeof fetch;
-  const observer = new HttpObserver();
+): { restore: () => void; passthroughFetch: FetchFunction } {
   return {
-    restore: () => {
-      (globalThis as { fetch: typeof fetch }).fetch = original;
-    },
-    observer,
+    restore: () => undefined,
+    passthroughFetch: impl as FetchFunction,
   };
 }
 
@@ -200,12 +194,12 @@ describe("11: native Anthropic passthrough header boundary matrix", () => {
 describe("11: native Anthropic passthrough pre-commit transport failure", () => {
   it("renders a legal Anthropic error when the upstream fetch rejects (pre-commit network failure)", async () => {
     const passthroughModel = model();
-    const { restore, observer } = captureGlobalFetch(async () => {
+    const { restore, passthroughFetch } = captureFetch(async () => {
       throw new TypeError("fetch failed: connection refused");
     });
     try {
       const response = await handleHttpRequest(
-        dependencies(passthroughModels(passthroughModel), {}, observer),
+        dependencies(passthroughModels(passthroughModel), {}, passthroughFetch),
         request(
           JSON.stringify({
             model: "fixture-provider/claude",

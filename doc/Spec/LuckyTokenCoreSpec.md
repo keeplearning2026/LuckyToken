@@ -1,6 +1,6 @@
-# LuckyToken Core Architecture Specification v5.7
+# LuckyToken Core Architecture Specification v5.8
 
-**Status:** FROZEN — Upstream HTTP Failure Preservation Added
+**Status:** FROZEN — Observer Side Channel Removed
 
 本文件描述 LuckyToken 的 Core Architecture。
 
@@ -55,7 +55,7 @@ ModelsSimpleStreamOptions
      Upstream
 ```
 
-Provider 将 upstream lifecycle 转成 Pi `AssistantMessageEventStream`。LuckyToken `Execution` 主动消费这个 stream。Pi terminal contract 是 Pi execution outcome 的主要 semantic source；同时，HTTP-owned request `AbortSignal` 在 successful commit 前始终是 independently authoritative cancellation fact。
+Provider 将 upstream lifecycle 转成 Pi `AssistantMessageEventStream`。LuckyToken `Execution` 主动消费这个 stream。Pi terminal contract 是 Pi execution outcome 的主要 semantic source；Provider 需要保留的 upstream failure facts 只能通过 trusted protocol-neutral `AssistantMessage.diagnostics` 进入该 public boundary。同时，HTTP-owned request `AbortSignal` 在 successful commit 前始终是 independently authoritative cancellation fact。
 
 ```text
 Execution Outcome
@@ -66,6 +66,7 @@ Execution Outcome
 └── failure
     ├── aborted
     └── error
+        └── optional validated neutral failure fact
 ```
 
 成功时，`done.message` 作为完整 `AssistantMessage` 进入 Client Protocol renderer。失败时，failure 进入 Client Protocol / HTTP error rendering，而不是伪造一个成功的 `AssistantMessage`。
@@ -233,6 +234,11 @@ error
 
 Pi `error.reason` 是 execution failure 的主要 classification source；但是 HTTP-owned request `AbortSignal` 不因为进入 Pi execution 就失去 authority。若 signal 在 successful commit 前已经 aborted，则 request outcome 必须是 `aborted`，即使 Pi 的 lazy setup/auth path 晚到一个 `error(reason=error)` 或其他 terminal。
 
+`error.reason` 决定 execution success/failure；经验证的 neutral Pi diagnostic
+可以附加最小 upstream classification，供 owning Client renderer 选择安全的
+protocol-visible status/type/code/message/headers。它不会改变 terminal reason，也不是
+Pi-internal error hierarchy。
+
 更细的 Pi-internal setup/runtime classifications，例如：
 
 ```text
@@ -244,7 +250,7 @@ model_source
 model_validation
 ```
 
-不是当前 Core execution contract 的一部分，也不会通过分析 `errorMessage` 字符串重新推断。
+不是当前 Core execution contract 的一部分，也不会通过分析 `errorMessage` 字符串重新推断。没有 validated structured fact 时，execution error 的 Client-visible upstream fallback 固定为 generic HTTP 502；unstructured diagnostic text 不得进入响应。
 
 > **Raw exception text is diagnostic information, not an architectural classification mechanism.**
 
@@ -568,10 +574,13 @@ before Pi execution
 after Pi execution begins
 (defined operationally as invoking Models.streamSimple(...)
 and adopting its returned stream as the outcome channel)
-→ Pi stream contract exposes only aborted | error
+→ Pi stream terminal exposes aborted | error
+→ optional trusted neutral failure facts travel only in Pi diagnostics
 ```
 
-Raw exception text 可以用于 diagnostics，但不是 architecture classification。
+Raw exception text 可以用于 local diagnostics，但不是 architecture classification，也
+不能代替 validated neutral failure fact。Conversion handler 不得通过 custom fetch 或
+observer side channel 补建 Provider transport classification。
 
 当 information 已经被 resolve/convert 成下一 stage 需要的 representation 后，较早的 parsing、lookup、transport representation 通常应停止传播。
 
@@ -3370,6 +3379,7 @@ Request
     └── Pi error terminal
            ├── aborted
            └── error
+                  └── optional validated neutral failure fact
 ```
 
 这里的 **Pi execution begins** 有 operational definition：
@@ -3385,11 +3395,15 @@ lazy Provider / API setup failure
 Provider startup failure
 ```
 
-它们都已经属于 Pi execution phase。通常按 Pi stream contract collapse 为：
+它们都已经属于 Pi execution phase。Pi terminal reason 仍 collapse 为：
 
 ```text
 aborted | error
 ```
+
+Provider 若拥有下游 error rendering 所需的 upstream facts，只能把经过清洗的 neutral
+fact 放入 error-shaped `AssistantMessage.diagnostics`。Execution 验证该 diagnostic，
+并把它作为可选 `ExecutionFailure.failure` 保留；这不会增加新的 terminal reason。
 
 但 request `AbortSignal` 在 successful commit 前仍然独立决定 cancellation precedence。Pi lazy setup 把一个 abort rejection 暴露成 `error(reason=error)` 时，Execution 仍必须把已观察到的 request cancellation 保留为：
 
@@ -3414,13 +3428,16 @@ model resolution failure
 
 Architecture 不把这些强制压成一个统一 enum。
 
-在 Pi execution 开始后，LuckyToken 只承诺保留 Pi `AssistantMessageEventStream` public terminal contract 直接暴露的 distinction：
+在 Pi execution 开始后，LuckyToken 保留 Pi `AssistantMessageEventStream` public terminal contract 直接暴露的 distinction：
 
 ```text
 error.reason
 ├── aborted
 └── error
+    └── optional validated neutral failure diagnostic
 ```
+
+以及在该 public message diagnostic contract 中通过验证的可选 neutral failure fact。
 
 更细的 Pi-internal setup/runtime category 不属于当前 Core execution contract。
 
@@ -3444,22 +3461,21 @@ Architecture invariant 是：
 
 > **A failure must retain exactly the classification required by the downstream client error contract until rendering; raw exception text is diagnostic information, not an architectural classification mechanism.**
 
-如果未来某个真实 Client Protocol requirement 要求在 Pi execution 后区分更细的 Provider/runtime category，则必须重新证明 Pi public contract 不足，再设计最小 preservation mechanism。
+当前不建立 Pi-internal error hierarchy。已实现的最小 preservation mechanism 是：
 
-当前不提前建立 error hierarchy。
+- detecting Provider 在自己的 transport/protocol boundary 有界采集并清洗 failure；
+- Provider 只通过 protocol-neutral Pi diagnostic 发送 status、opaque type/code、safe
+  message、bounded snapshot metadata、retryability 与 fixed-allowlist IDs/headers；
+- Execution 验证 diagnostic，并只把 trusted fact 提升到
+  `ExecutionFailure.failure`；
+- Client Protocol renderer 决定 protocol-visible 映射，不读取 concrete Provider
+  vocabulary；
+- 没有 structured fact 时固定 generic HTTP 502 `api_error` +
+  `Upstream provider failed`，不暴露 `errorMessage` 或 exception text。
 
-已实现的最小 preservation mechanism（Anthropic Client Protocol 需要上游 HTTP
-failure 的 status/body 原样透传）：
-
-- fetch-layer `HttpObserver`（per-invocation）在 HTTP fetch 边界观察 non-2xx
-  Response（status/headers/body）或 transport failure；
-- 不解析 `errorMessage` 字符串，不依赖 Pi error hierarchy；
-- 获取方式按 Pi `api` 选择（`fetch-observation` / `diagnostics` /
-  `error-message`），未知 api 不注入 observer；
-- 观察结果保留至 Client Protocol rendering，由 Client Protocol error
-  renderer 决定 protocol-visible 表达。
-
-该机制位于 Pi execution 之外，不修改 Pi public contract。
+Conversion handler 不注入 custom fetch，也不读取 observer state。Native passthrough
+不进入 Pi，使用独立窄 `passthroughFetch`；其 wire fidelity 不能作为 conversion
+failure acquisition path。
 
 ### Atomic Downstream Semantics
 
@@ -4525,7 +4541,7 @@ active consumption
          aborted | error
 ```
 
-Execution 只理解 Pi stream lifecycle。
+Execution 只理解 Pi public stream lifecycle 与 protocol-neutral diagnostics。
 
 它不理解：
 
@@ -4552,6 +4568,7 @@ Responsibility
 - invoke Pi Models for one request
 - actively consume the Pi execution lifecycle
 - independently observe request cancellation
+- validate protocol-neutral failure diagnostics
 - establish one atomic success/failure outcome
 
 Bound Dependencies
@@ -4565,7 +4582,7 @@ Inputs
 Result
 - committed successful AssistantMessage
 - or aborted failure
-- or error failure
+- or error failure with an optional trusted neutral fact
 
 Effects
 - consume the AssistantMessageEventStream
@@ -4584,6 +4601,7 @@ Must Not Access
 - Client Protocol internal state
 - concrete Provider implementation
 - upstream wire/events
+- Provider transport or custom fetch
 - global runtime configuration
 ```
 
@@ -4819,7 +4837,9 @@ error.reason
 └── error
 ```
 
-作为 Pi execution 后的最小 failure classification。
+作为 Pi execution 后的 terminal classification。对于 `reason=error`，Execution 还会
+在 error-shaped AssistantMessage 的 diagnostics 中查找并验证 neutral upstream
+failure fact；存在时把它保存在 `ExecutionFailure.failure`，不存在时保持 undefined。
 
 但是 cancellation precedence 是独立 rule：
 
@@ -4839,7 +4859,7 @@ error.reason = error
 
 LuckyToken 也不能把这个 request 降格成 ordinary `error`。
 
-> **After LuckyToken invokes `Models.streamSimple(...)`, Pi terminal events remain the semantic completion channel, while the request `AbortSignal` remains independently authoritative for cancellation until success commit. More specific Pi-internal setup/runtime classifications are not part of the current Core execution contract.**
+> **After LuckyToken invokes `Models.streamSimple(...)`, Pi terminal events remain the semantic completion channel, while the request `AbortSignal` remains independently authoritative for cancellation until success commit. Provider-derived client error facts have authority only when they survive as a validated protocol-neutral Pi diagnostic; Pi-internal setup/runtime classifications and unstructured error text are not part of the Core rendering contract.**
 
 因此不能从：
 
@@ -4859,6 +4879,11 @@ model_source
 ```
 
 > **Raw exception text is diagnostic information, not an architectural classification mechanism.**
+
+Client handlers therefore do not inject `options.fetch` to observe Provider
+traffic. A normal execution error without `ExecutionFailure.failure` renders as
+the fixed generic 502 upstream error; native passthrough instead uses its own
+narrow `passthroughFetch` outside Pi.
 
 ### Malformed Pi Stream End：Defensive Rule Only
 
@@ -6868,8 +6893,8 @@ Pi metadata no longer provides the required Provider-visible request carrier
 current Auth fixed output cannot express a demonstrated request-edge fact
 request cancellation cannot be made correct within current Execution boundary
 a new capability changes the atomic downstream commit model
-Pi public contract cannot preserve upstream HTTP failure classification
-  (demonstrated by Anthropic Client Protocol status/body passthrough)
+Pi public diagnostic contract cannot preserve a newly demonstrated safe
+  upstream failure fact required by a Client renderer
 ```
 
 以下变化本身不重新打开 Architecture：
@@ -7297,6 +7322,11 @@ Models.streamSimple(...)
 
 and adopts the returned `AssistantMessageEventStream` as Pi completion channel.
 
+Conversion handlers do not inject custom fetch or read observer state. Provider
+transport facts cross this boundary only through trusted neutral Pi diagnostics;
+without one, Client rendering uses the fixed generic 502 upstream error. Native
+passthrough uses a separate narrow `passthroughFetch` outside Pi.
+
 Cancellation precedence remains：
 
 ```text
@@ -7495,7 +7525,10 @@ none for Pi or Providers.
 LuckyToken Core Architecture v5.6 冻结 per-handler Auth isolation，同时保留
 v5.5 已冻结的 Generic Core dependency semantics。
 
-### v5.7 Frozen Status
+### Historical v5.7 Frozen Status (superseded baseline)
+
+The following block records the historical v5.7 design and is not current
+runtime behavior. v5.8 below supersedes its observer acquisition mechanism.
 
 ```text
 LuckyToken Core Architecture v5.7
@@ -7516,7 +7549,7 @@ LuckyToken Core Architecture v5.7
 
 LuckyToken Core Architecture v5.7 冻结 Upstream HTTP Failure Preservation，同时
 保留 v5.6 已冻结的 per-handler Auth isolation 与 v5.5 已冻结的 Generic Core
-dependency semantics。
+dependency semantics。这里的 observer 描述仅是历史审计基线。
 
 v5.7 新增的 assumption correction：
 
@@ -7537,3 +7570,23 @@ Correction:
 Required cross-boundary behavior change:
 none for Pi or Providers.
 ```
+
+### v5.8 Frozen Status
+
+```text
+LuckyToken Core Architecture v5.8
+        │
+        ├── v5.7 semantic requirement preserved
+        │      └── downstream-required safe failure facts survive to rendering
+        │
+        └── observer side channel removed
+               ├── conversion handlers never inject custom fetch
+               ├── Provider emits only trusted neutral Pi diagnostics
+               ├── Execution validates and preserves ExecutionFailure.failure
+               ├── missing structured fact → fixed generic 502
+               └── native passthrough uses separate narrow passthroughFetch
+```
+
+v5.8 的 correction 不改变 Pi 作为唯一 conversion semantic boundary。它删除
+Client-side transport observation，让 detecting Provider 拥有 failure acquisition，
+并让每个 Client Protocol 只负责把 trusted neutral fact 映射为自己的 wire error。

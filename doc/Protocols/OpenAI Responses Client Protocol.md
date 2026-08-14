@@ -263,7 +263,13 @@ Non-streaming error:
 }
 ```
 
-The adapter keeps type and code distinct, uses validated protocol-neutral failure facts, preserves safe upstream status/request/retry facts, bounds/redacts body-derived messages, and forwards only a fixed safe header allowlist. It never reparses a concrete Provider error string or reads shared mutable observer state.
+The adapter keeps type and code distinct and consumes only validated
+protocol-neutral facts preserved in `ExecutionFailure.failure`. It preserves
+safe upstream status/request/retry facts, bounds/redacts body-derived messages,
+and forwards only a fixed safe header allowlist. It never reparses a concrete
+Provider error string, reads observer state, or injects a custom `fetch` into a
+conversion invocation. Without a structured fact it returns the fixed generic
+HTTP 502 `api_error` response and does not expose Pi `errorMessage`.
 
 Every final failed request submits Responses-local structured facts to the protocol-neutral per-request failure journal. The generic sink does not know Responses conversion policy, and the Responses adapter does not read another protocol's log facts.
 
@@ -280,6 +286,9 @@ Native Responses passthrough must independently test:
 - retry/cancellation/body failure;
 - transport header safety;
 - failure logging.
+
+Its transport is the separately bound narrow `passthroughFetch`; that dependency
+is not shared with conversion or used to acquire Pi failure facts.
 
 It must never be used to claim coverage for Responses↔Pi conversion.
 

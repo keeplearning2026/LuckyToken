@@ -7,7 +7,6 @@ import {
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { randomUUID } from "node:crypto";
 
-import type { HttpObserver } from "../http-observer.js";
 import { createCommandCodePrivateProvider } from "./commandcode-private/provider.js";
 import type { CommandCodeConfiguration } from "./commandcode-private/configuration.js";
 import { COMMANDCODE_MODELS } from "./commandcode-private/models.js";
@@ -38,8 +37,6 @@ export { COMMANDCODE_DEFAULT_MODEL_ID as commandCodePrivateDefaultModelId } from
 export interface LuckyTokenProviderDependencies {
   readonly commandCodeConfiguration?: CommandCodeConfiguration;
   readonly fetch: FetchFunction;
-  /** Legacy Client observer retained only until Ticket 27; never wraps CommandCode. */
-  readonly httpObserver?: HttpObserver;
   /** Optional parsed models.json for user-registered custom providers. */
   readonly modelsJson?: ModelsJsonConfig;
   readonly now?: () => number;
@@ -65,9 +62,7 @@ export function registerLuckyTokenProviders(
 
   const provider = createCommandCodePrivateProvider({
     ...(dependencies.commandCodeConfiguration === undefined ? {} : { configuration: dependencies.commandCodeConfiguration }),
-    // CommandCode owns bounded request-local failure acquisition. The legacy
-    // Client observer remains available to other adapters until Ticket 27,
-    // but must never wrap this Provider's transport.
+    // CommandCode owns bounded request-local failure acquisition.
     fetch: dependencies.fetch,
     now: dependencies.now ?? Date.now,
     projectSnapshot: dependencies.projectSnapshot ?? createNodeProjectSnapshot(),
