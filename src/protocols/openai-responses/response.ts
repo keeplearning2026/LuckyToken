@@ -200,13 +200,20 @@ function convertOutput(
       // `function_call`. Codex rejects a freeform tool invoked as
       // function_call ("incompatible payload").
       const input = argumentsValue.input;
+      // The SDK models custom_tool_call.input as a string; a non-string
+      // Pi argument is a fidelity failure, never a fabricated JSON fallback.
+      if (typeof input !== "string") {
+        throw new OutboundResponseFidelityFailure(
+          "custom tool input must be a string",
+        );
+      }
       output.push({
         type: "custom_tool_call",
         id: `ctc_${responseId}_${toolCallIndex}`,
         call_id: callId,
         name: outputName,
         ...(namespace === undefined ? {} : { namespace }),
-        input: typeof input === "string" ? input : argumentsJson,
+        input,
         status: "completed",
       });
     } else {

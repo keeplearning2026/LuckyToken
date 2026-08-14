@@ -265,16 +265,18 @@ function parseDataUrlImage(
       `${field} must be a data URL with a MIME type and base64 payload`,
     );
   }
-  const mimeType = match[1] ?? "";
+  const rawMime = match[1] ?? "";
   const data = match[2] ?? "";
-  if (mimeType.length === 0) {
+  if (rawMime.length === 0) {
     throw new InvalidRequest(`${field} data URL must include a MIME type`);
   }
   // An input_image data URL must carry an image MIME; a non-image payload is
-  // a malformed image, never a silent acceptance.
-  if (!/^image\//u.test(mimeType.toLowerCase())) {
+  // a malformed image, never a silent acceptance. The MIME is normalized to
+  // lowercase so Pi ImageContent carries a canonical value.
+  const mimeType = rawMime.toLowerCase();
+  if (!/^image\//u.test(mimeType)) {
     throw new InvalidRequest(
-      `${field} data URL MIME must be an image MIME: ${mimeType}`,
+      `${field} data URL MIME must be an image MIME: ${rawMime}`,
     );
   }
   if (
@@ -1356,9 +1358,14 @@ function convertMessages(
         // arguments string applies.
         let argumentsJson: Record<string, unknown>;
         if (type === "custom_tool_call") {
-          argumentsJson = {
-            input: typeof rawItem.input === "string" ? rawItem.input : "",
-          };
+          // The SDK models custom_tool_call.input as a string; a non-string
+          // input is malformed, never silently rewritten.
+          if (typeof rawItem.input !== "string") {
+            throw new InvalidRequest(
+              "custom_tool_call input must be a string",
+            );
+          }
+          argumentsJson = { input: rawItem.input };
         } else if (isRecord(rawItem.action)) {
           argumentsJson = { ...rawItem.action };
         } else if (isRecord(rawItem.operation)) {
@@ -1715,6 +1722,46 @@ function convertMessages(
   flushPendingReasoning();
 
   return messages;
+}
+
+/** Validate resolver limits so they are meaningful bounds: a negative or
+ *  fractional byte/redirect limit would weaken the resolver's over-fetch
+ *  protection. */
+function validateResolverLimits(
+  limits?: Readonly<{
+    maxBytes?: number;
+    maxMimeTypes?: readonly string[];
+    maxRedirects?: number;
+  }>,
+): void {
+  if (limits === undefined) return;
+  if (
+    limits.maxBytes !== undefined &&
+    (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes <= 0)
+  ) {
+    throw new InvalidRequest(
+      "resolver limits.maxBytes must be a positive safe integer",
+    );
+  }
+  if (
+    limits.maxRedirects !== undefined &&
+    (!Number.isSafeInteger(limits.maxRedirects) ||
+      limits.maxRedirects < 0)
+  ) {
+    throw new InvalidRequest(
+      "resolver limits.maxRedirects must be a non-negative safe integer",
+    );
+  }
+  if (limits.maxMimeTypes !== undefined) {
+    if (
+      !Array.isArray(limits.maxMimeTypes) ||
+      limits.maxMimeTypes.some((entry) => typeof entry !== "string")
+    ) {
+      throw new InvalidRequest(
+        "resolver limits.maxMimeTypes must be an array of strings",
+      );
+    }
+  }
 }
 
 /**
@@ -2151,6 +2198,7 @@ export async function convertResponsesRequestAsync(
     maxRedirects?: number;
   }>,
 ): Promise<ResponsesInvocation> {
+  validateResolverLimits(limits);
   const freeformNames = new Set<string>();
   const namespaceReverse: Record<string, { namespace: string; child: string }> =
     Object.create(null);

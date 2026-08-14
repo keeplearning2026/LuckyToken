@@ -361,6 +361,44 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       }
     });
 
+    it("normalizes image MIME to lowercase on data URLs", () => {
+      // A mixed-case image MIME is accepted but normalized to lowercase so
+      // the Pi ImageContent carries a canonical MIME.
+      for (const [source, expected] of [
+        ["IMAGE/PNG", "image/png"],
+        ["Image/Png", "image/png"],
+        ["image/WebP", "image/webp"],
+        ["IMAGE/SVG+XML", "image/svg+xml"],
+      ] as const) {
+        const invocation = convertResponsesRequest(
+          {
+            model: "m",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  {
+                    type: "input_image",
+                    image_url: `data:${source};base64,AAAA`,
+                  },
+                ],
+              },
+            ],
+          },
+          1,
+          policy(),
+        );
+        const image = (
+          invocation.context.messages[0]?.content as Array<{
+            type: string;
+            mimeType: string;
+          }>
+        )[0];
+        expect(image?.mimeType).toBe(expected);
+      }
+    });
+
     it("accepts common image MIME types on data URLs", () => {
       for (const mime of [
         "image/png",
@@ -614,6 +652,80 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       await expect(promise).rejects.toThrow(/cancelled|aborted/);
       // The abort propagates as a rejection, never a degradable notice.
       expect(calls).toBeLessThanOrEqual(2);
+    });
+
+    it("rejects invalid resolver limits instead of forwarding them", async () => {
+      // Limits must be meaningful bounds: negative or fractional byte/
+      // redirect limits would weaken the resolver's over-fetch protection.
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      const invalidLimits: Array<Record<string, unknown>> = [
+        { maxBytes: 0 },
+        { maxBytes: -5 },
+        { maxBytes: 1.5 },
+        { maxRedirects: -1 },
+        { maxRedirects: 1.5 },
+        { maxMimeTypes: "image/png" },
+        { maxMimeTypes: [42] },
+      ];
+      for (const limits of invalidLimits) {
+        await expect(
+          convertResponsesRequestAsync(
+            {
+              model: "m",
+              input: [
+                {
+                  type: "message",
+                  role: "user",
+                  content: [{ type: "input_image", file_id: "f_limits" }],
+                },
+              ],
+            },
+            1,
+            policy(),
+            {
+              resolveItemReference: async () => [],
+            },
+            undefined,
+            limits,
+          ),
+        ).rejects.toThrow(/limit/i);
+      }
+    });
+
+    it("passes valid resolver limits through unchanged", async () => {
+      const { convertResponsesRequestAsync } = await import(
+        "../../src/protocols/openai-responses/request.js"
+      );
+      let received: unknown;
+      await convertResponsesRequestAsync(
+        {
+          model: "m",
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_image", file_id: "f_valid" }],
+            },
+          ],
+        },
+        1,
+        policy(),
+        {
+          resolveItemReference: async (_r, ctx) => {
+            received = ctx.limits;
+            return [];
+          },
+        },
+        undefined,
+        { maxBytes: 2048, maxRedirects: 3, maxMimeTypes: ["image/png"] },
+      );
+      expect(received).toEqual({
+        maxBytes: 2048,
+        maxRedirects: 3,
+        maxMimeTypes: ["image/png"],
+      });
     });
 
     it("passes abort signal and limits to image resolution", async () => {

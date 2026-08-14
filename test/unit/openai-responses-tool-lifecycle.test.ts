@@ -382,6 +382,30 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
   });
 
   describe("custom call freeform input", () => {
+    it("errors on a non-string custom_tool_call input instead of silently emptying it", () => {
+      // The SDK models custom_tool_call.input as a string; a non-string
+      // input is malformed, never silently rewritten to an empty string.
+      for (const input of [42, { nested: true }, ["a"], null, true]) {
+        expect(() =>
+          convertResponsesRequest(
+            {
+              model: "m",
+              input: [
+                {
+                  type: "custom_tool_call",
+                  call_id: "c_bad",
+                  name: "ct",
+                  ...(input === null ? { input: null } : { input }),
+                },
+              ],
+            },
+            1,
+            policy(),
+          ),
+        ).toThrow(/input/);
+      }
+    });
+
     it("maps a custom_tool_call input to {input:string} and reverses to custom family", () => {
       const invocation = convertResponsesRequest(
         {

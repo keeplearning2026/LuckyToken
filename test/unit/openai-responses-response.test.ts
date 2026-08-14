@@ -238,6 +238,31 @@ describe("OpenAI Responses Pi → wire response conversion", () => {
     ]);
   });
 
+  it("fails fidelity on a non-string custom tool input instead of fabricating JSON", () => {
+    // A Pi custom tool call whose arguments input is not a string must not
+    // be JSON-fabricated into the wire input; it is a fidelity failure.
+    expect(() =>
+      convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "apply_patch",
+              arguments: { input: 42 },
+            },
+          ],
+        }),
+        "m",
+        "resp_1",
+        1,
+        undefined,
+        new Set(["apply_patch"]),
+      ),
+    ).toThrow(/input/);
+  });
+
   it("keeps non-namespace tool names unchanged when no reverse metadata exists", () => {
     const response = convertAssistantMessageToResponses(
       assistantMessage({
