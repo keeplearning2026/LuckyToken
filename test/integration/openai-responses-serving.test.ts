@@ -485,6 +485,229 @@ describe("OpenAI Responses serving", () => {
     expect(body.error.message).toContain("slow down");
   });
 
+  it("returns non-2xx JSON for a pre-commit failure instead of fabricating response.failed", async () => {
+    // An upstream 503 before the first SSE byte: the response is a non-2xx
+    // JSON error envelope, never a fabricated response.failed terminal.
+    const fetch: FetchFunction = async () =>
+      new Response(
+        JSON.stringify({ error: { message: "upstream down" } }),
+        {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": "req-safe-123",
+          },
+        },
+      );
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          stream: true,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = (await response.json()) as { error: { type: string; code: string | null } };
+    expect(body.error.type).toBe("api_error");
+    expect(body.error.code).toBeNull();
+    const text = JSON.stringify(body);
+    expect(text).not.toContain("response.failed");
+    expect(text).not.toContain("response.completed");
+    expect(text).not.toContain("[DONE]");
+  });
+
+  it("preserves safe request-id/retry headers on non-streaming errors", async () => {
+    const fetch: FetchFunction = async () =>
+      new Response(JSON.stringify({ error: { message: "throttled" } }), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "req-42",
+          "retry-after": "17",
+          "set-cookie": "secret=1",
+        },
+      });
+    const { runtime } = await start({ fetch });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-request-id")).toBe("req-42");
+    expect(response.headers.get("retry-after")).toBe("17");
+    // Unsafe headers never survive.
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("authorization")).toBeNull();
+  });
+
+  it("writes exactly one Responses-local failure journal record on final failure", async () => {
+    const { mkdtemp, readdir, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-journal-"));
+    const { createInvocationDiagnosticsFactory } = await import(
+      "../../src/invocation-diagnostics/index.js"
+    );
+    const { parseFailureLoggingConfiguration } = await import(
+      "../../src/invocation-diagnostics/configuration.js"
+    );
+    const configuration = parseFailureLoggingConfiguration(
+      {
+        directory,
+        maxFiles: 10,
+        maxFileBytes: 64 * 1024,
+        retentionDays: 1,
+        detail: "safe",
+        logCancellation: true,
+      },
+      directory,
+    );
+    const factory = createInvocationDiagnosticsFactory({
+      configuration,
+      createRequestId: () => "11111111-1111-4111-8111-111111111111",
+    });
+    const fetch: FetchFunction = async () =>
+      new Response(JSON.stringify({ error: { message: "boom" } }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    const { runtime } = await start({ fetch, invocationDiagnostics: factory });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(500);
+
+    // Exactly one journal file, named by the internal safe request ID.
+    const days = await readdir(directory);
+    const day = days.find((entry) => /^\d{4}-\d{2}-\d{2}$/u.test(entry));
+    expect(day).toBeDefined();
+    const files = await readdir(join(directory, day!));
+    expect(files).toEqual(["11111111-1111-4111-8111-111111111111.json"]);
+    const journal = JSON.parse(
+      await readFile(join(directory, day!, files[0]!), "utf8"),
+    ) as { classification: string; clientStatus: number; selector?: string };
+    expect(journal.classification).toBe("runtime-failure");
+    expect(journal.clientStatus).toBe(500);
+    expect(journal.selector).toContain("deepseek");
+    const { rm } = await import("node:fs/promises");
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("emits atomic SSE with monotonic sequence numbers and the status-matching terminal", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("streamed"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          stream: true,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const frames = text
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("data: ") && frame !== "data: [DONE]")
+      .map((frame) => JSON.parse(frame.replace(/^data: /, "")) as {
+        type: string;
+        sequence_number: number;
+      });
+    // created → output_item.done → completed → [DONE]
+    expect(frames.map((f) => f.type)).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const sequences = frames.map((f) => f.sequence_number);
+    for (let i = 1; i < sequences.length; i += 1) {
+      expect(sequences[i]!).toBeGreaterThan(sequences[i - 1]!);
+    }
+    expect(sequences[0]).toBe(0);
+    // The completed terminal carries the full object with null error fields.
+    const terminal = frames.at(-1) as unknown as {
+      response: { status: string; error: unknown; incomplete_details: unknown };
+    };
+    expect(terminal.response.status).toBe("completed");
+    expect(terminal.response.error).toBeNull();
+    expect(terminal.response.incomplete_details).toBeNull();
+    expect(text).toContain("data: [DONE]");
+  });
+
+  it("echoes effective normalized controls in the response object", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("answered"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          // A dropped forced control and a parallel flag must never be echoed
+          // as effective; the response carries target defaults instead.
+          tool_choice: { type: "shell" },
+          parallel_tool_calls: false,
+          temperature: 0.5,
+          top_p: 0.9,
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as Record<string, unknown>;
+    expect(json.tool_choice).toBe("auto");
+    expect(json.parallel_tool_calls).toBe(true);
+    expect(json.temperature).toBe(0.5);
+    expect(json.top_p).toBe(0.9);
+    expect(json.tools).toEqual([]);
+  });
+
+  it("echoes the effective executable tools actually offered to Pi", async () => {
+    const { runtime } = await start({
+      fetch: async () => commandCodeText("answered"),
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          tools: [
+            { type: "function", name: "lookup", parameters: { type: "object" } },
+            { type: "custom", name: "apply_patch" },
+            // Hosted declaration is dropped and must never be echoed.
+            { type: "web_search", name: "web_search" },
+          ],
+          tool_choice: "none",
+        },
+        "client-token",
+      ),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as Record<string, unknown>;
+    // tool_choice none removed the catalog entirely; no tool is echoed.
+    expect(json.tool_choice).toBe("none");
+    expect(json.tools).toEqual([]);
+  });
+
   it("exposes the resolved model through GET /v1/models without auth", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),

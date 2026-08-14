@@ -33,9 +33,18 @@ import { InvalidRequest } from "./request.js";
 import {
   convertAssistantMessageToResponses,
   renderResponsesError,
+  renderResponsesErrorResponse,
+  validResponsesResponseId,
   type PreparedHttpResponse,
+  type ResponsesEchoTool,
+  type ResponsesRenderState,
   type ResponsesResponseObject,
 } from "./response.js";
+import {
+  mapUpstreamFailureFact,
+  SAFE_RESPONSE_HEADERS,
+} from "./error-rendering.js";
+import type { UpstreamFailureFact } from "../upstream-failure.js";
 import {
   convertResponsesRequest,
   type ResponsesInvocation,
@@ -254,18 +263,26 @@ async function handleOpenAIResponses(
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });
 
+    const responseId = validResponsesResponseId(message.responseId)
+      ? message.responseId
+      : dependencies.createResponseId();
+    const renderState = buildRenderState(
+      invocation,
+      dependencies.configuration.conversion.response.unknownPiContent,
+      (notice) => {
+        diagnostics.notice(notice);
+      },
+    );
     const rendered = convertAssistantMessageToResponses(
       message,
-      invocation.renderState.clientModel,
-      dependencies.createResponseId(),
+      renderState,
+      responseId,
       Math.floor(dependencies.now() / 1000),
       typeof body === "object" && body !== null
         ? ((body as Record<string, unknown>).previous_response_id as
             | string
             | undefined)
         : undefined,
-      invocation.renderState.freeformToolNames,
-      invocation.renderState.namespaceReverse,
     );
     // Save the EXPANDED body (full history + increment), so each stored
     // entry contains the complete conversation up to this response. A later
@@ -306,13 +323,53 @@ async function handleOpenAIResponses(
         renderResponsesError(404, "not_found_error", error.message),
       );
     }
+    if (
+      error instanceof Error &&
+      "kind" in error &&
+      error.kind === "ExecutionFailure" &&
+      "reason" in error &&
+      error.reason === "error"
+    ) {
+      // A formed failed Response (stop reason error) is handled inside the
+      // try block; anything reaching here is a pre-commit execution failure
+      // and returns the non-streaming error envelope — never a fabricated
+      // response.failed.
+      const execution = error as unknown as {
+        diagnostic?: unknown;
+        failure?: UpstreamFailureFact;
+        message: string;
+      };
+      if (execution.failure !== undefined) {
+        const mapping = mapUpstreamFailureFact(execution.failure);
+        return renderResponsesErrorResponse({
+          status: mapping.status,
+          type: mapping.type,
+          message: mapping.message,
+          code: mapping.code,
+          param: mapping.param,
+          safeHeaders: mapping.safeHeaders,
+        });
+      }
+    }
+    // Legacy observer path (removed in ticket 27): used when no neutral
+    // failure fact survived execution (e.g. providers not yet migrated).
     const observation = httpObserver.latestObservation;
     if (observation !== undefined && observation.kind === "response") {
       const mapping = mapUpstreamHttpFailure(observation);
       if (mapping !== undefined) {
-        return toResponse(
-          renderResponsesError(mapping.status, mapping.type, mapping.message),
-        );
+        const safeHeaders: Record<string, string> = {};
+        for (const [name, value] of observation.headers.entries()) {
+          if (!SAFE_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
+          safeHeaders[name.toLowerCase()] = value;
+        }
+        return renderResponsesErrorResponse({
+          status: mapping.status,
+          type: mapping.type,
+          message: mapping.message,
+          code: null,
+          param: null,
+          safeHeaders,
+        });
       }
     }
     if (
@@ -322,11 +379,14 @@ async function handleOpenAIResponses(
       "reason" in error &&
       error.reason === "error"
     ) {
-      const diagnostic = (error as { diagnostic?: unknown }).diagnostic;
+      const execution = error as unknown as {
+        diagnostic?: unknown;
+        message: string;
+      };
       const message =
-        typeof diagnostic === "string"
-          ? diagnostic
-          : error.message || "Upstream provider failed";
+        typeof execution.diagnostic === "string"
+          ? execution.diagnostic
+          : execution.message || "Upstream provider failed";
       return toResponse(renderResponsesError(502, "api_error", message));
     }
     return toResponse(
@@ -369,6 +429,111 @@ function renderResponsesJson(
     contentType: "application/json",
     body: new TextEncoder().encode(JSON.stringify(target)),
   };
+}
+
+/**
+ * Build the immutable render facts the Response converter consumes: the
+ * effective normalized controls that actually took effect, echoed from the
+ * request-local render state. Raw caller intent that was dropped or degraded
+ * (hosted tools, forced choices, parallel flag, unsupported controls) never
+ * appears here, so the wire can never claim it took effect.
+ *
+ * Only function/custom tools that were actually offered to Pi are echoed. A
+ * tool is echoed exactly once: its flattened name (used for calls) or its
+ * reversed child name under a namespace, matching how the call output items
+ * are rendered.
+ */
+function buildRenderState(
+  invocation: ResponsesInvocation,
+  unknownPiContent: "error" | "ignore",
+  notice: (notice: {
+    readonly adapter: string;
+    readonly direction: "request" | "response";
+    readonly code: string;
+    readonly jsonPath?: string;
+    readonly action: "ignore" | "degrade" | "xrepair";
+  }) => void,
+): ResponsesRenderState {
+  const state = invocation.renderState;
+  const tools = buildEchoTools(invocation);
+  const freeformNames = state.freeformToolNames;
+  const namespaceReverse = state.namespaceReverse;
+  // Effective sampling values are echoed only when the caller provided them;
+  // the target defaults (null) apply otherwise.
+  const temperature =
+    typeof invocation.options.temperature === "number"
+      ? invocation.options.temperature
+      : undefined;
+  const topP =
+    typeof invocation.options.samplingParams?.top_p === "number"
+      ? (invocation.options.samplingParams.top_p as number)
+      : undefined;
+  return Object.freeze({
+    clientModel: state.clientModel,
+    stream: state.stream,
+    ...(state.toolChoice === undefined ? {} : { toolChoice: state.toolChoice }),
+    ...(freeformNames === undefined || freeformNames.size === 0
+      ? {}
+      : { freeformToolNames: freeformNames }),
+    ...(namespaceReverse === undefined ||
+    Object.keys(namespaceReverse).length === 0
+      ? {}
+      : { namespaceReverse }),
+    ...(state.metadataEcho === undefined ? {} : { metadataEcho: state.metadataEcho }),
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(topP === undefined ? {} : { topP }),
+    ...(tools.length === 0 ? {} : { tools }),
+    unknownPiContent,
+    notices: { push: notice },
+  });
+}
+
+function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
+  const state = invocation.renderState;
+  const freeformNames = state.freeformToolNames;
+  const namespaceReverse = state.namespaceReverse;
+  const catalog = invocation.context.tools;
+  if (catalog === undefined || catalog.length === 0) return [];
+  const seen = new Set<string>();
+  const tools: ResponsesEchoTool[] = [];
+  for (const tool of catalog) {
+    const reverse = namespaceReverse?.[tool.name];
+    const name = reverse?.child ?? tool.name;
+    const key = reverse === undefined ? tool.name : `${reverse.namespace}.${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const freeform = freeformNames?.has(tool.name) === true;
+    // A freeform custom tool is echoed under its own `custom` type with the
+    // documented {input:string} compatibility schema; ordinary functions
+    // echo as strict function declarations.
+    if (freeform) {
+      tools.push({
+        type: "custom",
+        name,
+        ...(reverse === undefined ? {} : { namespace: reverse.namespace }),
+        description: tool.description,
+        input_schema: {
+          type: "object",
+          properties: { input: { type: "string" } },
+          required: ["input"],
+          additionalProperties: false,
+        },
+      });
+      continue;
+    }
+    tools.push({
+      type: "function",
+      name,
+      ...(reverse === undefined ? {} : { namespace: reverse.namespace }),
+      description: tool.description,
+      parameters: tool.parameters as Readonly<Record<string, unknown>>,
+      strict:
+        tool.constrainedSampling !== undefined &&
+        tool.constrainedSampling !== false &&
+        tool.constrainedSampling.type === "json_schema",
+    });
+  }
+  return tools as ResponsesEchoTool[];
 }
 
 function composeInvocationOptions(

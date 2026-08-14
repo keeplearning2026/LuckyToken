@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — configuration; 02 — notices/journal; 13 — request render facts; 16 — complete family matrix.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,17 +16,17 @@ Reverse tool-family/namespace metadata exists only in render state. Client selec
 
 ## Acceptance criteria
 
-- [ ] Use valid Pi responseId or generate high-entropy Responses ID; model always echoes Client selector.
-- [ ] Emit every required target field/default/null: error, incomplete_details, instructions, metadata, output, parallel_tool_calls, temperature, tool_choice, tools, top_p, and usage.
-- [ ] Do not emit SDK-only convenience output_text as wire state.
-- [ ] Echo effective normalized tools/controls, never raw unsupported caller intent.
-- [ ] Pi text, reasoning, verified encrypted continuity, and function/custom/namespace ToolCalls reverse correctly using request-local metadata.
-- [ ] Unknown Pi content uses Responses response-local error|ignore default error; arbitrary opaque signatures never masquerade as encrypted Responses data.
-- [ ] stop/toolUse→completed; length→incomplete with max_output_tokens details; error→failed when forming a Response; pending/aborted/deferred do not become success.
-- [ ] output_tokens_details exists even at zero; cached/reasoning/total usage is complete and consistent.
-- [ ] Empty output is represented legally without invented text.
-- [ ] Tests cover full object equality, effective-vs-raw echo, every terminal, usage zero/nonzero, tool-family reversal, unknown content, and mutation resistance.
-- [ ] No Anthropic renderer or Provider vocabulary is imported.
+- [x] Use valid Pi responseId or generate high-entropy Responses ID; model always echoes Client selector.
+- [x] Emit every required target field/default/null: error, incomplete_details, instructions, metadata, output, parallel_tool_calls, temperature, tool_choice, tools, top_p, and usage.
+- [x] Do not emit SDK-only convenience output_text as wire state.
+- [x] Echo effective normalized tools/controls, never raw unsupported caller intent.
+- [x] Pi text, reasoning, verified encrypted continuity, and function/custom/namespace ToolCalls reverse correctly using request-local metadata.
+- [x] Unknown Pi content uses Responses response-local error|ignore default error; arbitrary opaque signatures never masquerade as encrypted Responses data.
+- [x] stop/toolUse→completed; length→incomplete with max_output_tokens details; error→failed when forming a Response; pending/aborted/deferred do not become success.
+- [x] output_tokens_details exists even at zero; cached/reasoning/total usage is complete and consistent.
+- [x] Empty output is represented legally without invented text.
+- [x] Tests cover full object equality, effective-vs-raw echo, every terminal, usage zero/nonzero, tool-family reversal, unknown content, and mutation resistance.
+- [x] No Anthropic renderer or Provider vocabulary is imported.
 
 ## Out of scope
 

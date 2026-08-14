@@ -9,6 +9,10 @@ function responseObject(): ResponsesResponseObject {
     object: "response" as const,
     created_at: 1_786_400_000,
     status: "completed" as const,
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    metadata: {},
     model: "commandcode-private/deepseek/deepseek-v4-flash",
     output: [
       {
@@ -21,6 +25,11 @@ function responseObject(): ResponsesResponseObject {
         ],
       },
     ],
+    parallel_tool_calls: true,
+    temperature: null,
+    tool_choice: "auto",
+    tools: [],
+    top_p: null,
     usage: {
       input_tokens: 12,
       output_tokens: 5,
@@ -60,5 +69,132 @@ describe("OpenAI Responses SSE rendering", () => {
   it("uses text/event-stream content type", () => {
     const body = renderResponsesSse(responseObject());
     expect(body.contentType).toBe("text/event-stream");
+  });
+
+  it("gives every schema event a monotonically increasing sequence_number", () => {
+    const body = renderResponsesSse(responseObject());
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const sequences = frames
+      .filter((frame) => frame.startsWith("data: ") && frame !== "data: [DONE]")
+      .map((frame) => {
+        const parsed = JSON.parse(frame.replace(/^data: /, "")) as {
+          sequence_number: number;
+        };
+        return parsed.sequence_number;
+      });
+    expect(sequences.length).toBe(3); // created + output_item.done + terminal
+    for (let index = 1; index < sequences.length; index += 1) {
+      expect(sequences[index]!).toBeGreaterThan(sequences[index - 1]!);
+    }
+    expect(sequences[0]).toBe(0);
+  });
+
+  it("emits one ordered output_item.done per output item with matching output_index", () => {
+    const body = renderResponsesSse({
+      ...responseObject(),
+      output: [
+        responseObject().output[0]!,
+        {
+          type: "function_call" as const,
+          id: "fc_1",
+          call_id: "call_1",
+          name: "lookup",
+          arguments: "{}",
+          status: "completed" as const,
+        },
+      ],
+    });
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const done = frames
+      .filter((frame) =>
+        frame.startsWith('data: {"type":"response.output_item.done"'),
+      )
+      .map((frame) => JSON.parse(frame.replace(/^data: /, "")));
+    expect(done).toHaveLength(2);
+    expect(done[0]).toMatchObject({ output_index: 0, item: { type: "message" } });
+    expect(done[1]).toMatchObject({
+      output_index: 1,
+      item: { type: "function_call" },
+    });
+  });
+
+  it("emits the status-matching terminal: incomplete has details/error null", () => {
+    const body = renderResponsesSse({
+      ...responseObject(),
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+    });
+    const text = new TextDecoder().decode(body.body);
+    const frames = text.split("\n\n").filter((frame) => frame.length > 0);
+    expect(frames).toHaveLength(4);
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.type).toBe("response.incomplete");
+    expect(terminal.response.status).toBe("incomplete");
+    expect(terminal.response.incomplete_details).toEqual({
+      reason: "max_output_tokens",
+    });
+    expect(terminal.response.error).toBeNull();
+    expect(text).not.toContain("response.completed");
+  });
+
+  it("emits the status-matching terminal: failed has a non-null error", () => {
+    const body = renderResponsesSse({
+      ...responseObject(),
+      status: "failed",
+      error: {
+        message: "upstream broke",
+        type: "api_error",
+        code: null,
+        param: null,
+      },
+    });
+    const frames = new TextDecoder()
+      .decode(body.body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    expect(frames).toHaveLength(4);
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.type).toBe("response.failed");
+    expect(terminal.response.status).toBe("failed");
+    expect(terminal.response.error).toEqual({
+      message: "upstream broke",
+      type: "api_error",
+      code: null,
+      param: null,
+    });
+    expect(terminal.response.incomplete_details).toBeNull();
+  });
+
+  it("emits completed with error/incomplete_details null", () => {
+    const frames = new TextDecoder()
+      .decode(renderResponsesSse(responseObject()).body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.response.error).toBeNull();
+    expect(terminal.response.incomplete_details).toBeNull();
+  });
+
+  it("keeps [DONE] as the compatibility terminator after the semantic terminal", () => {
+    const frames = new TextDecoder()
+      .decode(renderResponsesSse(responseObject()).body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    expect(frames.at(-1)).toBe("data: [DONE]");
+  });
+
+  it("terminates according to the status, never by re-deriving it from text", () => {
+    // The terminal type is derived from the Response object's status field,
+    // never by reparsing a string.
+    const text = new TextDecoder().decode(renderResponsesSse(responseObject()).body);
+    expect(text).toContain("response.completed");
+    expect(text).not.toContain("response.incomplete");
+    expect(text).not.toContain("response.failed");
   });
 });

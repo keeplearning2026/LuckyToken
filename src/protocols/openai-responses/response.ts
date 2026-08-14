@@ -1,5 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
+import { redactMessage } from "./error-rendering.js";
+
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
 
@@ -14,7 +16,7 @@ export interface ResponsesUsage {
   output_tokens: number;
   total_tokens: number;
   input_tokens_details: { cached_tokens: number };
-  output_tokens_details?: { reasoning_tokens: number };
+  output_tokens_details: { reasoning_tokens: number };
 }
 
 export interface ResponsesMessageOutputItem {
@@ -49,6 +51,47 @@ export interface ResponsesReasoningOutputItem {
   type: "reasoning";
   id: string;
   summary: Array<{ type: "summary_text"; text: string }>;
+  /** Restored only from a verified Responses-owned continuity envelope. */
+  encrypted_content?: string;
+}
+
+/**
+ * The versioned Responses-owned continuity envelope that may restore
+ * `encrypted_content`. Only this exact shape (v1, the Responses authority and
+ * id) is verified; a foreign signature never is.
+ */
+interface ResponsesContinuityEnvelopeV1 {
+  readonly v: 1;
+  readonly id: "openai-responses";
+  readonly authority: "openai-responses";
+  readonly encrypted_content: string;
+}
+
+/** Parse and verify a Responses continuity envelope; undefined when foreign,
+ *  malformed, or missing the encrypted payload. */
+function parseVerifiedContinuityEnvelope(
+  signature: string,
+): ResponsesContinuityEnvelopeV1 | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(signature);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const envelope = parsed as Record<string, unknown>;
+  if (envelope.v !== 1) return undefined;
+  if (envelope.id !== "openai-responses") return undefined;
+  if (envelope.authority !== "openai-responses") return undefined;
+  if (
+    typeof envelope.encrypted_content !== "string" ||
+    envelope.encrypted_content.length === 0
+  ) {
+    return undefined;
+  }
+  return envelope as unknown as ResponsesContinuityEnvelopeV1;
 }
 
 export type ResponsesOutputItem =
@@ -57,22 +100,101 @@ export type ResponsesOutputItem =
   | ResponsesCustomToolCallOutputItem
   | ResponsesReasoningOutputItem;
 
+export interface ResponsesError {
+  message: string;
+  type: string;
+  code: string | null;
+  param: string | null;
+}
+
+export type ResponsesStatus = "completed" | "incomplete" | "failed";
+
 export interface ResponsesResponseObject {
   id: string;
   object: "response";
   created_at: number;
-  status: "completed" | "incomplete" | "in_progress";
+  status: ResponsesStatus;
+  error: ResponsesError | null;
+  incomplete_details: { reason: "max_output_tokens" } | null;
+  instructions: string | null;
+  metadata: Readonly<Record<string, string>>;
   model: string;
   output: ResponsesOutputItem[];
-  previous_response_id?: string;
+  parallel_tool_calls: boolean;
+  temperature: number | null;
+  tool_choice: string;
+  tools: ResponsesEchoTool[];
+  top_p: number | null;
   usage: ResponsesUsage;
-  incomplete_details?: { reason: "max_output_tokens" };
+  previous_response_id?: string;
+}
+
+/**
+ * A rendered tool definition that describes only what actually took effect.
+ * Hosted declarations that were dropped, forced choices, and parallel flags
+ * never appear here. A freeform custom tool echoes under `custom` with the
+ * documented {input:string} compatibility schema.
+ */
+export interface ResponsesEchoTool {
+  readonly type: "function" | "custom";
+  readonly name: string;
+  readonly namespace?: string;
+  readonly description: string;
+  readonly parameters?: Readonly<Record<string, unknown>>;
+  readonly input_schema?: Readonly<Record<string, unknown>>;
+  readonly strict?: boolean;
+}
+
+/**
+ * Immutable Responses-owned render facts, frozen at request conversion and
+ * consumed once to render an honest Response. Only the effective normalized
+ * state survives; raw caller intent that did not take effect never does.
+ */
+export interface ResponsesRenderState {
+  readonly clientModel: string;
+  readonly stream: boolean;
+  readonly toolChoice?: string;
+  readonly freeformToolNames?: ReadonlySet<string>;
+  readonly namespaceReverse?: Readonly<
+    Record<string, { namespace: string; child: string }>
+  >;
+  readonly metadataEcho?: Readonly<Record<string, string>>;
+  readonly temperature?: number;
+  readonly topP?: number;
+  readonly tools?: readonly ResponsesEchoTool[];
+  /** Adapter-local policy for unknown Pi content (response side). */
+  readonly unknownPiContent?: "error" | "ignore";
+  /** Optional request-local response-notice sink (surfaced by the handler). */
+  readonly notices?: ConversionNoticeSink;
 }
 
 export interface PreparedHttpResponse {
   readonly status: number;
   readonly contentType: "application/json" | "text/event-stream";
   readonly body: Uint8Array<ArrayBuffer>;
+}
+
+/** A valid Responses response ID: non-empty, bounded, safe wire characters.
+ *  Only a valid Pi responseId is reused; anything else falls back to a
+ *  freshly generated high-entropy ID. */
+export function validResponsesResponseId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    /^[A-Za-z0-9._:-]+$/u.test(value)
+  );
+}
+
+/** Minimal Responses-owned conversion-notice sink for response rendering. */
+export interface ConversionNoticeSink {
+  push(notice: {
+    readonly adapter: string;
+    readonly direction: "request" | "response";
+    readonly code: string;
+    readonly jsonPath?: string;
+    readonly action: "ignore" | "degrade" | "xrepair";
+  }): void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -114,10 +236,8 @@ function convertUsage(message: AssistantMessage): ResponsesUsage {
     output_tokens: output,
     total_tokens: total,
     input_tokens_details: { cached_tokens: cacheRead },
+    output_tokens_details: { reasoning_tokens: reasoning },
   };
-  if (reasoning > 0) {
-    result.output_tokens_details = { reasoning_tokens: reasoning };
-  }
   return result;
 }
 
@@ -126,6 +246,8 @@ function convertOutput(
   responseId: string,
   freeformToolNames: ReadonlySet<string>,
   namespaceReverse: Readonly<Record<string, { namespace: string; child: string }>>,
+  unknownPolicy: "error" | "ignore",
+  notices: ConversionNoticeSink,
 ): ResponsesOutputItem[] {
   const output: ResponsesOutputItem[] = [];
   let textBlockIndex = 0;
@@ -144,11 +266,24 @@ function convertOutput(
           "Pi thinking content must be a string",
         );
       }
-      output.push({
+      // Verified Responses continuity: only a redacted thinking block whose
+      // versioned envelope was created by the Responses adapter may restore
+      // `encrypted_content`. An arbitrary opaque signature (foreign authority,
+      // wrong version, non-redacted block, unparseable text) is never emitted
+      // as Responses encrypted data — the visible summary is retained instead.
+      const signature =
+        raw.redacted === true && typeof raw.thinkingSignature === "string"
+          ? parseVerifiedContinuityEnvelope(raw.thinkingSignature)
+          : undefined;
+      const item: ResponsesReasoningOutputItem = {
         type: "reasoning",
         id: `rs_${responseId}_${textBlockIndex}`,
         summary: [{ type: "summary_text", text: thinking }],
-      });
+      };
+      if (signature !== undefined) {
+        item.encrypted_content = signature.encrypted_content;
+      }
+      output.push(item);
       textBlockIndex += 1;
       continue;
     }
@@ -170,6 +305,19 @@ function convertOutput(
       continue;
     }
     if (raw.type !== "toolCall") {
+      // A future unknown Pi content block follows the adapter-local
+      // response-side error|ignore policy, default error. Ignoring unknown
+      // content never fabricates a completed status (the terminal is derived
+      // from the Pi stop reason, never from content).
+      if (unknownPolicy === "ignore") {
+        notices.push({
+          adapter: "openai-responses",
+          direction: "response",
+          code: "openai-responses_unknown_pi_content_ignored",
+          action: "ignore",
+        });
+        continue;
+      }
       throw new OutboundResponseFidelityFailure(
         `Unsupported Pi assistant content: ${String(raw.type)}`,
       );
@@ -234,14 +382,35 @@ function convertOutput(
 
 function convertStopReason(
   stopReason: AssistantMessage["stopReason"],
-): Pick<ResponsesResponseObject, "status" | "incomplete_details"> {
+  message: AssistantMessage,
+): Pick<
+  ResponsesResponseObject,
+  "status" | "error" | "incomplete_details"
+> {
   if (stopReason === "stop" || stopReason === "toolUse") {
-    return { status: "completed" };
+    return { status: "completed", error: null, incomplete_details: null };
   }
   if (stopReason === "length") {
     return {
       status: "incomplete",
+      error: null,
       incomplete_details: { reason: "max_output_tokens" },
+    };
+  }
+  if (stopReason === "error") {
+    return {
+      status: "failed",
+      error: {
+        message:
+          typeof message.errorMessage === "string" &&
+          message.errorMessage.length > 0
+            ? message.errorMessage
+            : "Upstream provider failed",
+        type: "api_error",
+        code: null,
+        param: null,
+      },
+      incomplete_details: null,
     };
   }
   throw new OutboundResponseFidelityFailure(
@@ -256,42 +425,53 @@ function assertMessageEnvelope(message: AssistantMessage): void {
       "Committed Pi message must be an assistant message with a content array",
     );
   }
-  convertStopReason(message.stopReason);
+  convertStopReason(message.stopReason, message);
 }
 
 export function convertAssistantMessageToResponses(
   message: AssistantMessage,
-  clientModel: string,
+  renderState: ResponsesRenderState,
   responseId: string,
   createdAt: number,
   previousResponseId: string | undefined,
-  freeformToolNames: ReadonlySet<string> = new Set(),
-  namespaceReverse: Readonly<
-    Record<string, { namespace: string; child: string }>
-  > = {},
 ): ResponsesResponseObject {
   assertMessageEnvelope(message);
   const output = convertOutput(
     message,
     responseId,
-    freeformToolNames,
-    namespaceReverse,
+    renderState.freeformToolNames ?? new Set(),
+    renderState.namespaceReverse ?? {},
+    renderState.unknownPiContent ?? "error",
+    {
+      push(notice): void {
+        if (renderState.notices !== undefined) renderState.notices.push(notice);
+      },
+    },
   );
-  const { status, incomplete_details } = convertStopReason(message.stopReason);
+  const { status, error, incomplete_details } = convertStopReason(
+    message.stopReason,
+    message,
+  );
   const response: ResponsesResponseObject = {
     id: responseId,
     object: "response",
     created_at: createdAt,
     status,
-    model: clientModel,
+    error,
+    incomplete_details,
+    instructions: null,
+    metadata: Object.freeze({ ...(renderState.metadataEcho ?? {}) }),
+    model: renderState.clientModel,
     output,
+    parallel_tool_calls: true,
+    temperature: renderState.temperature ?? null,
+    tool_choice: renderState.toolChoice ?? "auto",
+    tools: (renderState.tools ?? []).map((tool) => Object.freeze({ ...tool })),
+    top_p: renderState.topP ?? null,
     usage: convertUsage(message),
   };
   if (previousResponseId !== undefined) {
     response.previous_response_id = previousResponseId;
-  }
-  if (incomplete_details !== undefined) {
-    response.incomplete_details = incomplete_details;
   }
   return response;
 }
@@ -300,12 +480,50 @@ export function renderResponsesError(
   status: number,
   type: string,
   message: string,
+  code: string | null = null,
+  param: string | null = null,
 ): PreparedHttpResponse {
   return {
     status,
     contentType: "application/json",
     body: new TextEncoder().encode(
-      JSON.stringify({ error: { type, message } }),
+      JSON.stringify({ error: { message: redactMessage(message), type, code, param } }),
     ),
   };
+}
+
+/** A prepared Responses error envelope carrying its status and safe headers. */
+export interface PreparedResponsesError {
+  readonly status: number;
+  readonly type: string;
+  readonly message: string;
+  readonly code: string | null;
+  readonly param: string | null;
+  readonly safeHeaders: Readonly<Record<string, string>>;
+}
+
+/** Render a prepared Responses error as an HTTP Response with only the safe
+ *  allowlisted headers attached. */
+export function renderResponsesErrorResponse(
+  error: PreparedResponsesError,
+): Response {
+  return new Response(
+    new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          message: error.message,
+          type: error.type,
+          code: error.code,
+          param: error.param,
+        },
+      }),
+    ),
+    {
+      status: error.status,
+      headers: {
+        "content-type": "application/json",
+        ...error.safeHeaders,
+      },
+    },
+  );
 }

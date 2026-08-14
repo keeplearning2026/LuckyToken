@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — notices/journal; 03 — neutral failure contract; 17 — complete Response object.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Module seam
 
@@ -16,17 +16,17 @@ Sequence numbers and event objects are request-local. Safe headers/request IDs a
 
 ## Acceptance criteria
 
-- [ ] Atomic SSE emits response.created, ordered output_item.done events, the status-matching terminal, then [DONE].
-- [ ] Every schema event has a monotonically increasing sequence_number.
-- [ ] completed has error/incomplete_details null; incomplete has legal details/error null; failed has non-null error.
-- [ ] Execution failure before first SSE byte returns non-2xx Responses JSON and does not fabricate response.failed.
-- [ ] A formed failed Response or future post-commit failure emits response.failed, not incomplete/completed.
-- [ ] Non-streaming error preserves distinct message/type/code/param fields.
-- [ ] Validated upstream status and safe x-request-id/retry/rate-limit headers are preserved; unsafe headers/body text are bounded/redacted.
-- [ ] No Provider code is moved into Responses type and no string is reparsed for status.
-- [ ] Final failure writes one Responses-local journal record through the generic sink.
-- [ ] Tests cover every terminal, sequence monotonicity, pre/post commit failures, cancellation, code/type distinction, header safety, and JSON/SSE semantics.
-- [ ] No Anthropic or concrete Provider renderer/import is reused.
+- [x] Atomic SSE emits response.created, ordered output_item.done events, the status-matching terminal, then [DONE].
+- [x] Every schema event has a monotonically increasing sequence_number.
+- [x] completed has error/incomplete_details null; incomplete has legal details/error null; failed has non-null error.
+- [x] Execution failure before first SSE byte returns non-2xx Responses JSON and does not fabricate response.failed.
+- [x] A formed failed Response or future post-commit failure emits response.failed, not incomplete/completed.
+- [x] Non-streaming error preserves distinct message/type/code/param fields.
+- [x] Validated upstream status and safe x-request-id/retry/rate-limit headers are preserved; unsafe headers/body text are bounded/redacted.
+- [x] No Provider code is moved into Responses type and no string is reparsed for status.
+- [x] Final failure writes one Responses-local journal record through the generic sink.
+- [x] Tests cover every terminal, sequence monotonicity, pre/post commit failures, cancellation, code/type distinction, header safety, and JSON/SSE semantics.
+- [x] No Anthropic or concrete Provider renderer/import is reused.
 
 ## Out of scope
 

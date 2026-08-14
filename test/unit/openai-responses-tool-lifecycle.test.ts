@@ -484,11 +484,10 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        "m",
+        { clientModel: "m", stream: false, freeformToolNames: new Set(["apply_patch"]) },
         "resp_1",
         1,
         undefined,
-        new Set(["apply_patch"]),
       );
       expect(response.output).toEqual([
         {
@@ -515,11 +514,10 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        "m",
+        { clientModel: "m", stream: false },
         "resp_1",
         1,
         undefined,
-        new Set(),
       );
       expect(response.output[0]?.type).toBe("function_call");
     });
@@ -1600,12 +1598,19 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        "m",
+        {
+          clientModel: "m",
+          stream: false,
+          ...(invocation.renderState.freeformToolNames === undefined
+            ? {}
+            : { freeformToolNames: invocation.renderState.freeformToolNames }),
+          ...(invocation.renderState.namespaceReverse === undefined
+            ? {}
+            : { namespaceReverse: invocation.renderState.namespaceReverse }),
+        },
         "resp_1",
         1,
         undefined,
-        invocation.renderState.freeformToolNames,
-        invocation.renderState.namespaceReverse,
       );
       expect(response.output).toEqual([
         {
