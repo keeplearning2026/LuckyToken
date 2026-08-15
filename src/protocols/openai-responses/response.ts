@@ -221,9 +221,7 @@ export interface PreparedHttpResponse {
   readonly body: Uint8Array<ArrayBuffer>;
 }
 
-/** A valid Responses response ID: non-empty, bounded, safe wire characters.
- *  Only a valid Pi responseId is reused; anything else falls back to a
- *  freshly generated high-entropy ID. */
+/** A syntactically valid Responses response ID for public protocol helpers. */
 export function validResponsesResponseId(value: unknown): value is string {
   return (
     typeof value === "string" &&

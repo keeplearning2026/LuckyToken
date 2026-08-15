@@ -142,23 +142,29 @@ Resolvers belong to this Client adapter and never borrow a Provider credential. 
 
 ### 8.1 Stored representation
 
-The Client adapter stores Responses wire items, not Pi Context, so expansion is deterministic under the current conversion profile.
+The Client adapter stores Responses wire items, not Pi Context. Each node owns
+only the current request input and current rendered output delta:
 
 ```text
-response_id → { createdAt, items, storageClass, version }
+response_id → { createdAt, parentResponseId, items, memoryOnly }
 ```
 
-Entries have TTL/capacity and state-file bounds. State write limits and next-start load limits must be mutually compatible.
+Following parent pointers and concatenating deltas reconstructs the full input
+before the existing Responses → Pi conversion. Snapshot schema v4 is the first
+incremental graph format; v3 is intentionally ignored rather than migrated.
 
 ### 8.2 previous_response_id
 
 ```text
-absent                         → no expansion
-known current local ID          → prepend stored items
-unknown/expired/evicted ID      → conversion error
+absent                         → bypass local state expansion
+known current local ID         → expand ancestor deltas, then current input
+unknown/expired/evicted ID     → conversion error
 ```
 
-There is no fail-open assumption. The 27 sanitized repository fixtures contain no `previous_response_id`, so replay tests do not validate this path.
+There is no fail-open assumption. Direct reference eligibility uses the target
+node's own 24-hour TTL. An expired ancestor may remain internally available
+while an unexpired descendant still depends on it; the expired ancestor ID
+cannot itself be used as `previous_response_id`.
 
 ### 8.3 Authority
 
@@ -166,7 +172,12 @@ Entries are not bound to a Client principal or project. A response ID is therefo
 
 ### 8.4 Commit timing
 
-Returning the first response does not wait for memory/session commit. An immediate continuation may race and receive unknown previous_response_id. This is an explicit availability/storage tradeoff, not a guarantee of read-after-write consistency.
+The handler awaits checkpoint memory admission before returning, so an admitted
+ID has in-process read-after-write consistency. Capacity or history admission
+may be skipped as a best-effort compatibility degradation; the completed
+Response remains successful and a diagnostics notice is emitted. Disk snapshot
+persistence remains asynchronous/debounced, so a crash before flush can lose an
+otherwise admitted checkpoint.
 
 ### 8.5 store:false
 
@@ -185,9 +196,14 @@ For true/null/absence, the normal configured storage profile applies. The Respon
 - state file path is relative to the active config directory unless absolute;
 - writes use same-directory temporary file plus atomic rename;
 - in-process write serialization prevents overlapping snapshots;
-- corrupt state is quarantined;
-- disk, entry, and object limits are validated;
-- write failure is observable and does not silently claim durability;
+- malformed v4 graphs are validated all-or-nothing and quarantined;
+- unknown versions, including v3, are ignored without migration;
+- TTL collection deletes only expired leaves; capacity eviction deletes only
+  an unprotected leaf and never leaves a dangling parent;
+- default bounds are 2,000 nodes, 1,000 expanded history items, 256 KiB
+  expanded history, and a 64 MiB best-effort snapshot write guard;
+- snapshot write failure does not invalidate the in-memory checkpoint and does
+  not claim restart durability;
 - graceful shutdown may flush pending persistence.
 
 ## 9. Successful Response wire
@@ -229,7 +245,11 @@ Status:
 - incomplete: legal incomplete_details non-null, error null;
 - failed: error non-null and distinct from incomplete.
 
-Pi responseId is reused when present; otherwise generate a high-entropy ID. `model` always echoes the Client selector and does not expose a concrete Provider response model.
+The converted path always generates a LuckyToken-owned high-entropy response
+ID; Pi/Provider response identity is not exposed as Client continuation
+identity. Native passthrough preserves upstream IDs unchanged. `model` always
+echoes the Client selector and does not expose a concrete Provider response
+model.
 
 ## 10. Atomic SSE
 

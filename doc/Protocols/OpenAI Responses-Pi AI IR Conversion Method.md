@@ -338,7 +338,14 @@ The Responses adapter defines its own synthetic missing-result literal, correlat
 
 ### 9.1 previous_response_id
 
-A known local response ID expands its stored input/output items before new input, preserving order. An unknown, expired, evicted, or unresolvable ID is a conversion error. There is no fail-open assumption that the client resent complete history.
+A known local response ID follows immutable `parentResponseId` links and
+concatenates each node's current-turn input/output delta before the new input,
+preserving order. Requests without `previous_response_id` bypass state
+expansion and enter the existing converter unchanged. An unknown, expired,
+evicted, or unresolvable target ID is a conversion error; there is no fail-open
+assumption that the client resent complete history. An expired ancestor may
+remain as an internal dependency of an unexpired descendant without regaining
+direct-reference eligibility.
 
 `conversation` and `previous_response_id` are mutually exclusive.
 
@@ -355,7 +362,12 @@ This design deliberately accepts that anyone possessing the ID may use it throug
 
 ### 9.3 Commit timing
 
-The first response need not wait for the memory/session commit before returning. The contract documents the resulting race: an immediately following previous_response_id request may temporarily fail to resolve. Persistence can be asynchronous/debounced.
+The handler awaits checkpoint memory admission before returning, providing
+in-process read-after-write for admitted IDs. Capacity, missing-parent, or
+history-limit admission can be skipped best-effort after a Response has formed;
+the Response remains successful and the existing diagnostics notice seam records
+the degradation. Snapshot persistence remains asynchronous/debounced and is not
+a crash-before-flush durability guarantee.
 
 ### 9.4 store:false
 
@@ -369,7 +381,13 @@ For store true/null/absence, use the configured normal storage profile and repor
 
 ### 9.5 State file integrity
 
-State loading/writing must have mutually compatible total-size and entry limits; it must not write a snapshot that the next process refuses to load. Writes are atomic. Corrupt state is quarantined without silently treating a specifically referenced ID as valid empty history.
+Snapshot v4 stores `createdAt`, `parentResponseId`, the current-turn wire-item
+delta, and excludes memory-only nodes. It validates IDs and the complete parent
+graph before publishing the in-memory Map; duplicate IDs, missing parents,
+self-parenting, or cycles quarantine the whole v4 snapshot. Snapshot v3 is not
+migrated and its response IDs become unavailable. Writes remain same-directory
+temporary-file plus atomic rename and graceful flush; the 64 MiB snapshot cap
+is a best-effort persistence guard, not an in-memory admission limit.
 
 ## 10. Opaque handles and external authority
 
@@ -392,7 +410,10 @@ Native same-authority passthrough may preserve these fields because it is not co
 
 ### 11.1 Identity and envelope
 
-`responseId` is used when present; otherwise generate a valid high-entropy Responses ID. `model` always echoes the client selector; Pi `responseModel` is not exposed as the client model.
+The converted path always generates one LuckyToken-owned high-entropy Responses
+ID and never reuses Pi `responseId`; native passthrough preserves upstream
+identity unchanged. `model` always echoes the client selector; Pi
+`responseModel` is not exposed as the client model.
 
 The Response wire object includes all required fields of the selected target profile, including target defaults/nulls. At minimum:
 

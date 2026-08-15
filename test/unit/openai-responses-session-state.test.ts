@@ -81,6 +81,242 @@ describe("12: Responses local response state", () => {
     });
   });
 
+  it("replays a linear chain from per-turn deltas in exact order", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: "user-1" },
+      completedResponse("resp_1", [{ type: "message", content: "assistant-1" }]),
+    );
+    await state.remember(
+      { input: "user-2", previous_response_id: "resp_1" },
+      completedResponse("resp_2", [{ type: "message", content: "assistant-2" }]),
+    );
+
+    const expanded = await state.expand({
+      model: "m",
+      input: "user-3",
+      previous_response_id: "resp_2",
+    });
+
+    expect(expanded).toMatchObject({
+      input: [
+        { role: "user", content: "user-1" },
+        { type: "message", content: "assistant-1" },
+        { role: "user", content: "user-2" },
+        { type: "message", content: "assistant-2" },
+        { role: "user", content: "user-3" },
+      ],
+    });
+  });
+
+  it("rejects an expanded history that exceeds the item limit", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: Array.from({ length: 600 }, (_, index) => `root-${index}`) },
+      completedResponse("resp_1"),
+    );
+    await state.remember(
+      {
+        input: Array.from({ length: 600 }, (_, index) => `child-${index}`),
+        previous_response_id: "resp_1",
+      },
+      completedResponse("resp_2"),
+    );
+
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_2" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("skips checkpoint admission when the resulting history exceeds limits", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: Array.from({ length: 600 }, (_, index) => `root-${index}`) },
+      completedResponse("resp_1"),
+    );
+    const notices: string[] = [];
+
+    await state.remember(
+      {
+        input: Array.from({ length: 600 }, (_, index) => `child-${index}`),
+        previous_response_id: "resp_1",
+      },
+      completedResponse("resp_2"),
+      (code) => notices.push(code),
+    );
+
+    expect(state.size()).toBe(1);
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_2" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_history_limit_skipped",
+    ]);
+  });
+
+  it("preflights an oversized candidate before evicting an existing leaf", async () => {
+    const { create } = await fixtureState({ maxEntries: 2 });
+    const state = create();
+    await state.remember({ input: "keep" }, completedResponse("resp_keep"));
+    await state.remember({ input: "parent" }, completedResponse("resp_parent"));
+    const notices: string[] = [];
+
+    await state.remember(
+      {
+        input: "x".repeat(300_000),
+        previous_response_id: "resp_parent",
+      },
+      completedResponse("resp_too_large"),
+      (code) => notices.push(code),
+    );
+
+    expect(state.size()).toBe(2);
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_keep" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_history_limit_skipped",
+    ]);
+  });
+
+  it("preserves tool outputs that correlate with a call in an ancestor node", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: "run tool" },
+      completedResponse("resp_1", [
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "lookup",
+          arguments: "{}",
+        },
+      ]),
+    );
+    await state.remember(
+      {
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: "tool result",
+          },
+        ],
+        previous_response_id: "resp_1",
+      },
+      completedResponse("resp_2", [
+        { type: "message", content: "done" },
+      ]),
+    );
+
+    const expanded = await state.expand({
+      input: "tail",
+      previous_response_id: "resp_2",
+    });
+
+    expect(expanded).toMatchObject({
+      input: expect.arrayContaining([
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "tool result",
+        },
+      ]),
+    });
+  });
+
+  it("skips capacity admission when every leaf is on the protected ancestry", async () => {
+    const { create } = await fixtureState({ maxEntries: 2 });
+    const state = create();
+    await state.remember(
+      { input: "root" },
+      completedResponse("resp_1", [{ type: "message", content: "one" }]),
+    );
+    await state.remember(
+      { input: "child", previous_response_id: "resp_1" },
+      completedResponse("resp_2", [{ type: "message", content: "two" }]),
+    );
+    const notices: string[] = [];
+
+    await state.remember(
+      { input: "grandchild", previous_response_id: "resp_2" },
+      completedResponse("resp_3", [{ type: "message", content: "three" }]),
+      (code) => notices.push(code),
+    );
+
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_2" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_3" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_capacity_skipped",
+    ]);
+  });
+
+  it("evicts the oldest leaf outside the candidate ancestry", async () => {
+    let current = 1;
+    const { create } = await fixtureState({ maxEntries: 3, now: () => current });
+    const state = create();
+    await state.remember({ input: "root" }, completedResponse("resp_root"));
+    current += 1;
+    await state.remember({ input: "side" }, completedResponse("resp_side"));
+    current += 1;
+    await state.remember(
+      { input: "child", previous_response_id: "resp_root" },
+      completedResponse("resp_child"),
+    );
+    current += 1;
+
+    await state.remember(
+      { input: "grandchild", previous_response_id: "resp_child" },
+      completedResponse("resp_grandchild"),
+    );
+
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_grandchild" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_side" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("rejects a duplicate response ID without overwriting its checkpoint", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    await state.remember(
+      { input: "first" },
+      completedResponse("resp_duplicate", [
+        { type: "message", role: "assistant", content: "first output" },
+      ]),
+    );
+
+    await expect(
+      state.remember(
+        { input: "second" },
+        completedResponse("resp_duplicate", [
+          { type: "message", role: "assistant", content: "second output" },
+        ]),
+      ),
+    ).rejects.toThrow("duplicate Responses response ID");
+
+    const expanded = await state.expand({
+      input: "tail",
+      previous_response_id: "resp_duplicate",
+    });
+    expect(expanded).toMatchObject({
+      input: [
+        { role: "user", content: "first" },
+        { type: "message", role: "assistant", content: "first output" },
+        { role: "user", content: "tail" },
+      ],
+    });
+  });
+
   it("round-trips saved history through the snapshot file into a fresh instance", async () => {
     const { stateFile, create } = await fixtureState();
     const first = create();
@@ -108,8 +344,171 @@ describe("12: Responses local response state", () => {
       ],
     });
     expect(JSON.parse(await readFile(stateFile, "utf8"))).toMatchObject({
-      version: 3,
+      version: 4,
     });
+  });
+
+  it("round-trips an incremental chain through a v4 snapshot", async () => {
+    const { stateFile, create } = await fixtureState();
+    const first = create();
+    await first.remember(
+      { input: "root" },
+      completedResponse("resp_1", [{ type: "message", content: "one" }]),
+    );
+    await first.remember(
+      { input: "child", previous_response_id: "resp_1" },
+      completedResponse("resp_2", [{ type: "message", content: "two" }]),
+    );
+    await first.flush();
+
+    const second = create();
+    const expanded = await second.expand({
+      input: "tail",
+      previous_response_id: "resp_2",
+    });
+
+    expect(expanded).toMatchObject({
+      input: [
+        { role: "user", content: "root" },
+        { type: "message", content: "one" },
+        { role: "user", content: "child" },
+        { type: "message", content: "two" },
+        { role: "user", content: "tail" },
+      ],
+    });
+    const snapshot = JSON.parse(await readFile(stateFile, "utf8"));
+    expect(snapshot).toMatchObject({ version: 4 });
+    const childNode = snapshot.states.find(
+      ([id]: [string, unknown]) => id === "resp_2",
+    )?.[1];
+    expect(childNode).toMatchObject({
+      parentResponseId: "resp_1",
+      items: [
+        { role: "user", content: "child" },
+        { type: "message", content: "two" },
+      ],
+    });
+    expect(JSON.stringify(childNode)).not.toContain("root");
+  });
+
+  it("round-trips independent branches through a v4 snapshot", async () => {
+    const { create } = await fixtureState();
+    const first = create();
+    await first.remember({ input: "root" }, completedResponse("resp_root"));
+    await first.remember(
+      { input: "left", previous_response_id: "resp_root" },
+      completedResponse("resp_left"),
+    );
+    await first.remember(
+      { input: "right", previous_response_id: "resp_root" },
+      completedResponse("resp_right"),
+    );
+    await first.flush();
+
+    const second = create();
+    await expect(
+      second.expand({ input: "tail", previous_response_id: "resp_left" }),
+    ).resolves.toMatchObject({
+      input: [
+        { role: "user", content: "root" },
+        { role: "user", content: "left" },
+        { role: "user", content: "tail" },
+      ],
+    });
+    await expect(
+      second.expand({ input: "tail", previous_response_id: "resp_right" }),
+    ).resolves.toMatchObject({
+      input: [
+        { role: "user", content: "root" },
+        { role: "user", content: "right" },
+        { role: "user", content: "tail" },
+      ],
+    });
+  });
+
+  it("prunes only leaves when a loaded v4 graph exceeds maxEntries", async () => {
+    const { stateFile } = await fixtureState();
+    const node = (
+      parentResponseId: string | null,
+      content: string,
+      createdAt: number,
+    ) => ({
+      createdAt,
+      parentResponseId,
+      items: [{ role: "user", content }],
+    });
+    await writeFile(
+      stateFile,
+      JSON.stringify({
+        version: 4,
+        states: [
+          ["resp_1", node(null, "one", 1)],
+          ["resp_2", node("resp_1", "two", 2)],
+          ["resp_3", node("resp_2", "three", 3)],
+        ],
+      }),
+      "utf8",
+    );
+    const state = createResponseSessionState({
+      stateFile,
+      maxEntries: 2,
+      ttlMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_2" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_3" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    expect(state.size()).toBe(2);
+  });
+
+  it.each([
+    [
+      "duplicate ID",
+      [
+        ["resp_1", { createdAt: 1, parentResponseId: null, items: [] }],
+        ["resp_1", { createdAt: 2, parentResponseId: null, items: [] }],
+      ],
+    ],
+    [
+      "missing parent",
+      [
+        [
+          "resp_1",
+          { createdAt: 1, parentResponseId: "resp_missing", items: [] },
+        ],
+      ],
+    ],
+    [
+      "self parent",
+      [
+        ["resp_1", { createdAt: 1, parentResponseId: "resp_1", items: [] }],
+      ],
+    ],
+    [
+      "cycle",
+      [
+        ["resp_1", { createdAt: 1, parentResponseId: "resp_2", items: [] }],
+        ["resp_2", { createdAt: 2, parentResponseId: "resp_1", items: [] }],
+      ],
+    ],
+  ])("quarantines a v4 snapshot with %s", async (_case, states) => {
+    const { stateFile, create } = await fixtureState();
+    await writeFile(
+      stateFile,
+      JSON.stringify({ version: 4, states }),
+      "utf8",
+    );
+
+    const state = create();
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_1" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    const { access } = await import("node:fs/promises");
+    await expect(access(`${stateFile}.corrupt`)).resolves.toBeUndefined();
+    expect(state.size()).toBe(0);
   });
 
   it("errors on an unknown previous_response_id (no fail-open)", async () => {
@@ -142,6 +541,57 @@ describe("12: Responses local response state", () => {
         previous_response_id: "resp_old",
       }),
     ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("keeps an expired ancestor as an internal replay dependency", async () => {
+    let current = 1_000;
+    const { create } = await fixtureState({ now: () => current, ttlMs: 100 });
+    const state = create();
+    await state.remember(
+      { input: "root" },
+      completedResponse("resp_1", [{ type: "message", content: "one" }]),
+    );
+    current += 50;
+    await state.remember(
+      { input: "child", previous_response_id: "resp_1" },
+      completedResponse("resp_2", [{ type: "message", content: "two" }]),
+    );
+    current += 51;
+
+    await expect(
+      state.expand({ input: "direct", previous_response_id: "resp_1" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_2" }),
+    ).resolves.toMatchObject({
+      input: [
+        { role: "user", content: "root" },
+        { type: "message", content: "one" },
+        { role: "user", content: "child" },
+        { type: "message", content: "two" },
+        { role: "user", content: "tail" },
+      ],
+    });
+  });
+
+  it("collects expired leaves when admitting a new checkpoint", async () => {
+    let current = 1_000;
+    const { create } = await fixtureState({ now: () => current, ttlMs: 100 });
+    const state = create();
+    await state.remember({ input: "old" }, completedResponse("resp_old"));
+    current += 50;
+    await state.remember({ input: "live" }, completedResponse("resp_live"));
+    current += 51;
+
+    await state.remember({ input: "new" }, completedResponse("resp_new"));
+
+    expect(state.size()).toBe(2);
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_old" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_live" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
   });
 
   it("errors on an evicted previous_response_id", async () => {
@@ -182,6 +632,23 @@ describe("12: Responses local response state", () => {
         previous_response_id: "resp_chain",
       }),
     ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+  });
+
+  it("reports a skipped checkpoint when its parent is unavailable", async () => {
+    const { create } = await fixtureState();
+    const state = create();
+    const notices: string[] = [];
+
+    await state.remember(
+      { input: "increment", previous_response_id: "resp_missing" },
+      completedResponse("resp_child"),
+      (code) => notices.push(code),
+    );
+
+    expect(state.size()).toBe(0);
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_parent_unavailable_skipped",
+    ]);
   });
 
   it("quarantines a corrupt snapshot and errors for a specifically referenced ID", async () => {
@@ -261,19 +728,17 @@ describe("12: Responses local response state", () => {
     });
   });
 
-  it("does not wait for the commit before a continuation may resolve (documented race)", async () => {
-    // Deterministic demonstration: the remember() promise is not awaited
-    // before expand() runs; the store must not synchronously complete a write
-    // that would make the immediately-following expand() always succeed.
+  it("shares one load barrier across concurrent remember and expand calls", async () => {
+    // The handler normally awaits remember. This lower-level interleaving
+    // verifies that concurrent Interface calls still publish one coherent
+    // in-memory checkpoint after their shared initial load completes.
     const { create } = await fixtureState();
     const state = create();
     const pending = state.remember(
       { input: "racing" },
       completedResponse("resp_race", []),
     );
-    // Do NOT await pending: this is the documented immediate-continuation
-    // race. expand may observe the entry (memory state is synchronous) or a
-    // failed commit, but the response must not have blocked on the commit.
+    // Do not await pending: both operations meet at ensureLoaded().
     const expanded = await state.expand({
       model: "m",
       input: "continue",
@@ -337,6 +802,27 @@ describe("12: Responses local response state", () => {
     });
   });
 
+  it("keeps memory checkpoints when the v4 snapshot exceeds 64 MiB", async () => {
+    const { stateFile, create } = await fixtureState();
+    const state = create();
+    const payload = "x".repeat(250_000);
+    for (let index = 0; index < 270; index += 1) {
+      await state.remember(
+        { input: `${index}:${payload}` },
+        completedResponse(`resp_large_${index}`),
+      );
+    }
+
+    await state.flush();
+
+    const { access } = await import("node:fs/promises");
+    await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(state.size()).toBe(270);
+    await expect(
+      state.expand({ input: "tail", previous_response_id: "resp_large_269" }),
+    ).resolves.toMatchObject({ input: expect.any(Array) });
+  });
+
   it("writes atomically with same-directory temp + rename and serializes writes", async () => {
     const { stateFile, create } = await fixtureState();
     const state = create();
@@ -357,7 +843,7 @@ describe("12: Responses local response state", () => {
     expect(ids).toEqual(Array.from({ length: 12 }, (_, index) => `resp_${index}`));
   });
 
-  it("drops orphan function_call_output items when saving (storage hygiene)", async () => {
+  it("preserves tool-correlation items without applying storage semantics", async () => {
     const { create } = await fixtureState();
     const state = create();
     await state.remember(
@@ -385,10 +871,10 @@ describe("12: Responses local response state", () => {
         ? (item as { type: string }).type
         : "message",
     );
-    expect(types).toEqual(["message", "message"]);
+    expect(types).toEqual(["function_call_output", "message", "message"]);
   });
 
-  it("self-heals orphan items already on disk at load time", async () => {
+  it("ignores a v3 snapshot without treating it as corruption", async () => {
     const { stateFile, create } = await fixtureState();
     await writeFile(
       stateFile,
@@ -415,17 +901,14 @@ describe("12: Responses local response state", () => {
     );
 
     const state = create();
-    const expanded = await state.expand({
-      input: "next",
-      previous_response_id: "resp_legacy",
+    await expect(
+      state.expand({ input: "next", previous_response_id: "resp_legacy" }),
+    ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    const { access } = await import("node:fs/promises");
+    await expect(access(stateFile)).resolves.toBeUndefined();
+    await expect(access(`${stateFile}.corrupt`)).rejects.toMatchObject({
+      code: "ENOENT",
     });
-    const items = (expanded as { input: unknown[] }).input;
-    const types = items.map((item) =>
-      typeof item === "object" && item !== null && "type" in item
-        ? (item as { type: string }).type
-        : "message",
-    );
-    expect(types).toEqual(["message", "message"]);
   });
 
   it("never saves a request whose own previous_response_id failed to expand", async () => {
@@ -521,7 +1004,14 @@ describe("12: Responses local response state", () => {
 
     const loaded = JSON.parse(await readFile(stateFile, "utf8"));
     expect(loaded.states).toEqual([
-      ["resp_flush", { createdAt: expect.any(Number), items: [{ role: "user", content: "flush me" }] }],
+      [
+        "resp_flush",
+        {
+          createdAt: expect.any(Number),
+          parentResponseId: null,
+          items: [{ role: "user", content: "flush me" }],
+        },
+      ],
     ]);
   });
 });
@@ -557,16 +1047,16 @@ describe("12 recheck: snapshot byte units stay mutually compatible", () => {
   });
 });
 
-describe("12 recheck: load-side entry caps stay closed", () => {
-  it("clips oversized entries at load time to the same bound the writer uses", async () => {
+describe("12 recheck: loaded history limits remain request-scoped", () => {
+  it("rejects an oversized v4 history without rewriting its payload", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-closed-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
-      // Hand-written snapshot with an entry carrying more items than the
-      // writer would ever emit (MAX_ENTRY_ITEMS = 1000).
+      // Hand-written structurally valid snapshot with more history items than
+      // a request is allowed to expand.
       const hugeItems = Array.from({ length: 2000 }, (_, i) => ({
         role: "user",
         content: `item-${i}`,
@@ -574,26 +1064,28 @@ describe("12 recheck: load-side entry caps stay closed", () => {
       await writeFile(
         stateFile,
         JSON.stringify({
-          version: 3,
+          version: 4,
           states: [
             [
               "resp_huge",
-              { createdAt: Date.now(), items: hugeItems },
+              {
+                createdAt: Date.now(),
+                parentResponseId: null,
+                items: hugeItems,
+              },
             ],
           ],
         }),
         "utf8",
       );
       const state = createResponseSessionState({ stateFile });
-      const expanded = (await state.expand({
-        input: "next",
-        previous_response_id: "resp_huge",
-      })) as { input: unknown[] };
-      // The loaded entry is clipped to the writer's item bound, so the
-      // expansion cannot exceed the closed contract.
-      expect(expanded.input).toHaveLength(1000 + 1);
+      await expect(
+        state.expand({ input: "next", previous_response_id: "resp_huge" }),
+      ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
       await state.flush();
-      expect(JSON.parse(await readFile(stateFile, "utf8")).states[0][1].items).toHaveLength(1000);
+      expect(
+        JSON.parse(await readFile(stateFile, "utf8")).states[0][1].items,
+      ).toHaveLength(2000);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -873,6 +1365,27 @@ describe("12 recheck: prototype pollution in stored items", () => {
 });
 
 describe("12 recheck: store:false combined with previous_response_id", () => {
+  it("store:false=honor bypasses snapshot loading", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfh-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      await writeFile(stateFile, "{not-json", "utf8");
+      const state = createResponseSessionState({
+        stateFile,
+        storeFalsePolicy: "honor",
+      });
+
+      await state.remember(
+        { input: "complete request", store: false },
+        { id: "resp_stateless", status: "completed", output: [] },
+      );
+
+      expect(await readFile(stateFile, "utf8")).toBe("{not-json");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("store:false=honor does not save, but prior history still expands", async () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
@@ -916,20 +1429,51 @@ describe("12 recheck: store:false combined with previous_response_id", () => {
         { input: "second", store: false, previous_response_id: "resp_m1" },
         complete("resp_m2"),
       );
-      // Chain expands in-process (memory entries are visible). The store
-      // remembers the increment input ("second"); the handler stores the
-      // expanded body, but at the store level the entry carries its input.
+      // Chain expands in-process (memory entries are visible), and each node
+      // contributes only its own delta.
       const expanded = await state.expand({ input: "tail", previous_response_id: "resp_m2" });
-      expect((expanded as { input: unknown[] }).input).toHaveLength(2);
+      expect((expanded as { input: unknown[] }).input).toHaveLength(3);
       // Stored items are raw wire items (string input → {role, content}),
       // converted to Pi later; the store keeps them verbatim.
       expect((expanded as { input: unknown[] }).input[0]).toMatchObject({
+        role: "user",
+        content: "first",
+      });
+      expect((expanded as { input: unknown[] }).input[1]).toMatchObject({
         role: "user",
         content: "second",
       });
       // Nothing was written to disk.
       const { access } = await import("node:fs/promises");
       await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates memory-only storage to persisted-policy descendants", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfmp-"));
+    const stateFile = join(directory, "openai-responses.json");
+    try {
+      const state = createResponseSessionState({
+        stateFile,
+        storeFalsePolicy: "memory",
+      });
+      await state.remember(
+        { input: "private root", store: false },
+        { id: "resp_m1", status: "completed", output: [] },
+      );
+      await state.remember(
+        { input: "child", previous_response_id: "resp_m1" },
+        { id: "resp_m2", status: "completed", output: [] },
+      );
+      await state.flush();
+
+      const { access } = await import("node:fs/promises");
+      await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        state.expand({ input: "tail", previous_response_id: "resp_m2" }),
+      ).resolves.toMatchObject({ input: expect.any(Array) });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

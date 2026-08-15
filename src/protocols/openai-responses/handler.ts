@@ -33,7 +33,6 @@ import {
   convertAssistantMessageToResponses,
   renderResponsesError,
   renderResponsesErrorResponse,
-  validResponsesResponseId,
   type PreparedHttpResponse,
   type ResponsesEchoTool,
   type ResponsesRenderState,
@@ -152,13 +151,9 @@ async function rememberAfterSuccess(
   rawBody: unknown,
   rendered: ResponsesResponseObject,
 ): Promise<void> {
-  // Anti-poisoning + save conditions live inside sessionState.remember.
-  // store:false=persist surfaces a request-local notice through the current
-  // invocation's diagnostics. The notice is emitted synchronously inside
-  // remember before its first await, so awaiting remember here guarantees
-  // the notice lands before the invocation finalizes. This does NOT wait for
-  // the debounced disk commit — the first response still returns without
-  // waiting for persistence.
+  // Admission, anti-poisoning, and storage policy live in the deep state
+  // module. Awaiting remember provides in-process read-after-write for an
+  // admitted checkpoint; disk persistence remains debounced and best-effort.
   await dependencies.sessionState.remember(rawBody, rendered, (code) => {
     diagnostics.notice({
       adapter: openaiResponsesProtocolId,
@@ -234,12 +229,19 @@ async function handleOpenAIResponses(
       );
     }
 
-    // Expand previous_response_id into the full input. Unknown/expired/
-    // evicted/corrupt/unresolvable IDs throw a typed conversion error.
-    const expanded = await raceWithRequestSignal(
-      dependencies.sessionState.expand(body),
-      request.signal,
-    );
+    // Complete requests stay on the existing conversion path. Only requests
+    // that actually reference local continuation state pay the expansion cost.
+    const previousResponseId =
+      typeof body === "object" && body !== null
+        ? (body as Record<string, unknown>).previous_response_id
+        : undefined;
+    const expanded =
+      typeof previousResponseId === "string" && previousResponseId.length > 0
+        ? await raceWithRequestSignal(
+            dependencies.sessionState.expand(body),
+            request.signal,
+          )
+        : body;
 
     const invocation = convertResponsesRequest(
       expanded,
@@ -275,9 +277,7 @@ async function handleOpenAIResponses(
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });
 
-    const responseId = validResponsesResponseId(message.responseId)
-      ? message.responseId
-      : dependencies.createResponseId();
+    const responseId = dependencies.createResponseId();
     const renderState = buildRenderState(
       invocation,
       dependencies.configuration.conversion.response.unknownPiContent,
@@ -296,11 +296,9 @@ async function handleOpenAIResponses(
             | undefined)
         : undefined,
     );
-    // Save the EXPANDED body (full history + increment), so each stored
-    // entry contains the complete conversation up to this response. A later
-    // `previous_response_id` expansion then reproduces the full history;
-    // saving the raw (unexpanded) increment would drop all earlier turns.
-    await rememberAfterSuccess(dependencies, diagnostics, expanded, rendered);
+    // The state module owns continuation representation. Give it only this
+    // turn's raw request; expansion is used solely for the current invocation.
+    await rememberAfterSuccess(dependencies, diagnostics, body, rendered);
 
     const prepared = invocation.renderState.stream
       ? renderResponsesSse(rendered)

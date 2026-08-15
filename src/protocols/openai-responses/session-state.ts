@@ -9,7 +9,7 @@
  * conversion.
  *
  * This module is Responses-owned. It exposes only the small expand/remember/
- * flush interface. Wire-item storage, bearer-ID generation, TTL/capacity
+ * flush interface. Wire-item storage, parent-graph validation, TTL/capacity
  * bounds, commit scheduling, persistence, corruption handling, and admission
  * rules are hidden behind it; callers never receive its Map or snapshot
  * schema.
@@ -17,9 +17,9 @@
  * A response ID is a bearer capability: it is high entropy, non-enumerable,
  * bounded by TTL and capacity, and never bound to an auth/project scope.
  *
- * The first response does not wait for the memory/session commit before
- * returning. The contract documents the resulting race: an immediately
- * following previous_response_id request may temporarily fail to resolve.
+ * The handler awaits memory admission before returning, so an admitted ID is
+ * immediately readable in-process. Disk persistence remains debounced and
+ * best-effort; a crash before the snapshot write can still lose checkpoints.
  *
  * State loading/writing have mutually compatible total-size and entry
  * limits: the module never writes a snapshot that the next process refuses
@@ -40,14 +40,16 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export const MAX_RESPONSE_STATE_ENTRIES = 1000;
-export const MAX_SNAPSHOT_FILE_BYTES = 32 * 1024 * 1024;
-/** Per-entry byte budget so the aggregate can never exceed the snapshot cap. */
-export const MAX_ENTRY_ITEMS = 1_000;
-export const MAX_ENTRY_BYTES = 256 * 1024;
+export const MAX_RESPONSE_STATE_ENTRIES = 2000;
+export const MAX_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024;
+export const MAX_HISTORY_ITEMS = 1_000;
+export const MAX_HISTORY_BYTES = 256 * 1024;
+/** Compatibility aliases for the former full-entry terminology. */
+export const MAX_ENTRY_ITEMS = MAX_HISTORY_ITEMS;
+export const MAX_ENTRY_BYTES = MAX_HISTORY_BYTES;
 export const ENTRY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const SNAPSHOT_DEBOUNCE_MS = 2_000;
-const SNAPSHOT_SCHEMA_VERSION = 3;
+const SNAPSHOT_SCHEMA_VERSION = 4;
 const STALE_TEMP_GRACE_MS = 15 * 60 * 1_000;
 const TEMP_NAME_PATTERN = /^(.+)\.(\d+)\.(\d+)\.tmp$/u;
 
@@ -63,8 +65,9 @@ export class ResponseStateConversionFailure extends Error {
   }
 }
 
-export interface ResponseStateEntry {
+export interface ResponseStateNode {
   readonly createdAt: number;
+  readonly parentResponseId: string | null;
   readonly items: readonly unknown[];
   /** Memory-only entries are excluded from the snapshot (store:false=memory). */
   readonly memoryOnly: boolean;
@@ -170,47 +173,11 @@ function approximateBytes(value: unknown): number {
   if (typeof value === "object") {
     let total = 0;
     for (const [key, entry] of Object.entries(value)) {
-      total += key.length + approximateBytes(entry);
+      total += new TextEncoder().encode(key).byteLength + approximateBytes(entry);
     }
     return total;
   }
   return 8;
-}
-
-/**
- * Storage hygiene for saved history: drop `function_call_output` items whose
- * `call_id` has no preceding `function_call` in the same batch. Codex real
- * clients send tool-result increments that may reference a call from an
- * earlier response; retaining the orphan would poison the chain for later
- * expansion (the converter tolerates orphans, but the store should not
- * persist them).
- */
-function sanitizeStoredItems(items: readonly unknown[]): unknown[] {
-  const seenCallIds = new Set<string>();
-  const sanitized: unknown[] = [];
-  for (const item of items) {
-    if (!isRecord(item)) {
-      sanitized.push(item);
-      continue;
-    }
-    const type = item.type;
-    const callId = item.call_id;
-    if (
-      (type === "function_call_output" || type === "custom_tool_call_output") &&
-      typeof callId === "string" &&
-      !seenCallIds.has(callId)
-    ) {
-      continue;
-    }
-    if (
-      (type === "function_call" || type === "custom_tool_call") &&
-      typeof callId === "string"
-    ) {
-      seenCallIds.add(callId);
-    }
-    sanitized.push(item);
-  }
-  return sanitized;
 }
 
 async function cleanupOrphanTemps(stateFile: string): Promise<void> {
@@ -255,25 +222,80 @@ export function createResponseSessionState(
   const storeFalsePolicy = options.storeFalsePolicy ?? "honor";
   const now = options.now ?? Date.now;
   const stateFile = options.stateFile;
-  const states = new Map<string, ResponseStateEntry>();
+  const states = new Map<string, ResponseStateNode>();
   let loaded = false;
   let loadPromise: Promise<void> | undefined;
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
   let persistGate: Promise<void> | undefined;
   let stateRevision = 0;
 
+  const parentIds = (): Set<string> => {
+    const result = new Set<string>();
+    for (const entry of states.values()) {
+      if (entry.parentResponseId !== null) result.add(entry.parentResponseId);
+    }
+    return result;
+  };
+
+  const protectedAncestry = (responseId: string | null): Set<string> | undefined => {
+    const protectedIds = new Set<string>();
+    let currentId = responseId;
+    while (currentId !== null) {
+      if (protectedIds.has(currentId)) return undefined;
+      const current = states.get(currentId);
+      if (current === undefined) return undefined;
+      protectedIds.add(currentId);
+      currentId = current.parentResponseId;
+    }
+    return protectedIds;
+  };
+
+  const oldestUnprotectedLeaf = (
+    protectedIds: ReadonlySet<string>,
+  ): string | undefined => {
+    let oldestId: string | undefined;
+    let oldestCreatedAt = Number.POSITIVE_INFINITY;
+    const parents = parentIds();
+    for (const [id, entry] of states) {
+      if (protectedIds.has(id) || parents.has(id)) continue;
+      if (entry.createdAt < oldestCreatedAt) {
+        oldestCreatedAt = entry.createdAt;
+        oldestId = id;
+      }
+    }
+    return oldestId;
+  };
+
+  const collectExpiredLeaves = (
+    protectedIds: ReadonlySet<string>,
+  ): boolean => {
+    let persistedStateChanged = false;
+    let removed: boolean;
+    do {
+      removed = false;
+      const parents = parentIds();
+      for (const [id, entry] of states) {
+        if (
+          protectedIds.has(id) ||
+          parents.has(id) ||
+          now() - entry.createdAt <= ttlMs
+        ) {
+          continue;
+        }
+        states.delete(id);
+        persistedStateChanged ||= !entry.memoryOnly;
+        removed = true;
+      }
+    } while (removed);
+    return persistedStateChanged;
+  };
+
   const evictIfNeeded = (): void => {
     while (states.size > maxEntries && states.size > 0) {
-      let oldestId: string | undefined;
-      let oldestCreatedAt = Number.POSITIVE_INFINITY;
-      for (const [id, entry] of states) {
-        if (entry.createdAt < oldestCreatedAt) {
-          oldestCreatedAt = entry.createdAt;
-          oldestId = id;
-        }
-      }
+      const oldestId = oldestUnprotectedLeaf(new Set());
       if (oldestId === undefined) break;
       states.delete(oldestId);
+      stateRevision += 1;
     }
   };
 
@@ -291,28 +313,66 @@ export function createResponseSessionState(
       const raw: unknown = JSON.parse(await readFile(stateFile, "utf8"));
       if (!isRecord(raw) || raw.version !== SNAPSHOT_SCHEMA_VERSION) return;
       const entries = raw.states;
-      if (!Array.isArray(entries)) return;
+      if (!Array.isArray(entries)) {
+        throw new Error("invalid Responses state snapshot entries");
+      }
+      const loadedStates = new Map<string, ResponseStateNode>();
       for (const entry of entries) {
-        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        if (!Array.isArray(entry) || entry.length !== 2) {
+          throw new Error("invalid Responses state snapshot entry");
+        }
         const [id, value] = entry;
-        if (typeof id !== "string" || !isRecord(value)) continue;
+        if (
+          typeof id !== "string" ||
+          id.length === 0 ||
+          loadedStates.has(id) ||
+          !isRecord(value)
+        ) {
+          throw new Error("invalid Responses state snapshot ID");
+        }
         const createdAt = value.createdAt;
+        const parentResponseId = value.parentResponseId;
         const items = value.items;
-        if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) continue;
-        if (!Array.isArray(items)) continue;
-        // Load-time self-healing: sanitize orphan tool outputs even when they
-        // come from disk (e.g. written by an older version or a crashed
-        // writer), and clip to the writer's per-entry item bound so the
-        // closed contract holds from disk as well. If anything changed, the
-        // snapshot is rewritten with the clean data on the next persist.
-        const sanitized = sanitizeStoredItems(items);
-        const clipped = sanitized.slice(0, MAX_ENTRY_ITEMS);
+        if (
+          typeof createdAt !== "number" ||
+          !Number.isFinite(createdAt) ||
+          (parentResponseId !== null &&
+            (typeof parentResponseId !== "string" ||
+              parentResponseId.length === 0)) ||
+          !Array.isArray(items)
+        ) {
+          throw new Error("invalid Responses state snapshot node");
+        }
         // Entries loaded from disk are never memory-only.
-        states.set(id, { createdAt, items: clipped, memoryOnly: false });
-        if (clipped.length !== items.length) {
-          stateRevision += 1;
+        loadedStates.set(id, {
+          createdAt,
+          parentResponseId,
+          items,
+          memoryOnly: false,
+        });
+      }
+      for (const [id, entry] of loadedStates) {
+        if (
+          entry.parentResponseId !== null &&
+          !loadedStates.has(entry.parentResponseId)
+        ) {
+          throw new Error(`missing Responses state parent for ${id}`);
+        }
+        const visited = new Set<string>();
+        let currentId: string | null = id;
+        while (currentId !== null) {
+          if (visited.has(currentId)) {
+            throw new Error(`cycle in Responses state snapshot at ${id}`);
+          }
+          visited.add(currentId);
+          const current = loadedStates.get(currentId);
+          if (current === undefined) {
+            throw new Error(`missing Responses state path for ${id}`);
+          }
+          currentId = current.parentResponseId;
         }
       }
+      for (const [id, entry] of loadedStates) states.set(id, entry);
       evictIfNeeded();
       if (stateRevision > 0) {
         schedulePersist();
@@ -335,11 +395,36 @@ export function createResponseSessionState(
     return loadPromise;
   };
 
-  const snapshotEntries = (): Array<[string, { createdAt: number; items: unknown[] }]> => {
-    const entries: Array<[string, { createdAt: number; items: unknown[] }]> = [];
+  const snapshotEntries = (): Array<
+    [
+      string,
+      {
+        createdAt: number;
+        parentResponseId: string | null;
+        items: unknown[];
+      },
+    ]
+  > => {
+    const entries: Array<
+      [
+        string,
+        {
+          createdAt: number;
+          parentResponseId: string | null;
+          items: unknown[];
+        },
+      ]
+    > = [];
     for (const [id, entry] of states) {
       if (entry.memoryOnly) continue;
-      entries.push([id, { createdAt: entry.createdAt, items: [...entry.items] }]);
+      entries.push([
+        id,
+        {
+          createdAt: entry.createdAt,
+          parentResponseId: entry.parentResponseId,
+          items: [...entry.items],
+        },
+      ]);
     }
     return entries;
   };
@@ -396,6 +481,13 @@ export function createResponseSessionState(
       response: unknown,
       notice?: (code: string) => void,
     ): Promise<void> {
+      if (
+        isRecord(request) &&
+        request.store === false &&
+        storeFalsePolicy === "honor"
+      ) {
+        return;
+      }
       await ensureLoaded();
       if (!isRecord(request) || !isRecord(response)) return;
       const id = response.id;
@@ -413,24 +505,30 @@ export function createResponseSessionState(
       } else if (status !== undefined && status !== "completed") {
         return;
       }
+      if (states.has(id)) {
+        throw new Error(`duplicate Responses response ID: ${id}`);
+      }
       // Anti-poisoning: a request whose own previous_response_id failed to
       // expand carries a naked increment. Saving it would replay a truncated
       // conversation, so skip it. A TTL-expired entry is treated the same as
       // an unknown one — an expand would reject it, so a chain built on it
       // must not be admitted.
       const previousId = request.previous_response_id;
+      let parent: ResponseStateNode | undefined;
       if (typeof previousId === "string" && previousId.length > 0) {
         const previous = states.get(previousId);
         const expired =
           previous !== undefined && now() - previous.createdAt > ttlMs;
         if (previous === undefined || expired) {
+          notice?.("openai-responses_checkpoint_parent_unavailable_skipped");
           return;
         }
+        parent = previous;
       }
       // store:false follows the configured policy. honor stores nothing;
       // memory keeps only a process-local entry (never on disk); persist
       // stores despite the caller's false and reports a notice.
-      let memoryOnly = false;
+      let memoryOnly = parent?.memoryOnly === true;
       if (request.store === false) {
         if (storeFalsePolicy === "honor") return;
         if (storeFalsePolicy === "persist") {
@@ -439,24 +537,61 @@ export function createResponseSessionState(
           memoryOnly = true;
         }
       }
-      const items = sanitizeStoredItems([
+      const items = [
         ...responseInputItems(request.input),
         ...output,
-      ]);
+      ];
       if (items.length === 0) return;
       let itemsBytes = 0;
       for (const item of items) {
         itemsBytes += approximateBytes(item);
       }
-      if (itemsBytes > MAX_ENTRY_BYTES) return;
+      if (items.length > MAX_HISTORY_ITEMS || itemsBytes > MAX_HISTORY_BYTES) {
+        notice?.("openai-responses_checkpoint_history_limit_skipped");
+        return;
+      }
+      const parentResponseId =
+        typeof previousId === "string" && previousId.length > 0
+          ? previousId
+          : null;
+      const protectedIds = protectedAncestry(parentResponseId);
+      if (protectedIds === undefined) {
+        notice?.("openai-responses_checkpoint_parent_unavailable_skipped");
+        return;
+      }
+      let historyItems = items.length;
+      let historyBytes = itemsBytes;
+      for (const protectedId of protectedIds) {
+        const entry = states.get(protectedId);
+        if (entry === undefined) {
+          notice?.("openai-responses_checkpoint_parent_unavailable_skipped");
+          return;
+        }
+        historyItems += entry.items.length;
+        for (const item of entry.items) historyBytes += approximateBytes(item);
+      }
+      if (historyItems > MAX_HISTORY_ITEMS || historyBytes > MAX_HISTORY_BYTES) {
+        notice?.("openai-responses_checkpoint_history_limit_skipped");
+        return;
+      }
+      let persistedStateChanged = collectExpiredLeaves(protectedIds);
+      if (states.size >= maxEntries) {
+        const victimId = oldestUnprotectedLeaf(protectedIds);
+        if (victimId === undefined) {
+          notice?.("openai-responses_checkpoint_capacity_skipped");
+          return;
+        }
+        persistedStateChanged ||= states.get(victimId)?.memoryOnly === false;
+        states.delete(victimId);
+      }
       states.set(id, {
         createdAt: now(),
-        items: items.slice(0, MAX_ENTRY_ITEMS),
+        parentResponseId,
+        items,
         memoryOnly,
       });
       stateRevision += 1;
-      evictIfNeeded();
-      if (!memoryOnly) {
+      if (!memoryOnly || persistedStateChanged) {
         schedulePersist();
       }
     },
@@ -475,9 +610,41 @@ export function createResponseSessionState(
         );
       }
       if (now() - previous.createdAt > ttlMs) {
-        states.delete(previousId);
         throw new ResponseStateConversionFailure(
           `previous_response_id has expired: ${previousId}`,
+        );
+      }
+      const history: ResponseStateNode[] = [];
+      const visited = new Set<string>();
+      let currentId: string | null = previousId;
+      while (currentId !== null) {
+        if (visited.has(currentId)) {
+          throw new ResponseStateConversionFailure(
+            `previous_response_id history contains a cycle: ${previousId}`,
+          );
+        }
+        visited.add(currentId);
+        const current = states.get(currentId);
+        if (current === undefined) {
+          throw new ResponseStateConversionFailure(
+            `previous_response_id history is missing a parent: ${previousId}`,
+          );
+        }
+        history.push(current);
+        currentId = current.parentResponseId;
+      }
+      history.reverse();
+      const currentItems = responseInputItems(body.input);
+      let historyItems = currentItems.length;
+      let historyBytes = 0;
+      for (const item of currentItems) historyBytes += approximateBytes(item);
+      for (const entry of history) {
+        historyItems += entry.items.length;
+        for (const item of entry.items) historyBytes += approximateBytes(item);
+      }
+      if (historyItems > MAX_HISTORY_ITEMS || historyBytes > MAX_HISTORY_BYTES) {
+        throw new ResponseStateConversionFailure(
+          `previous_response_id history exceeds local limits: ${previousId}`,
         );
       }
       return {
@@ -485,8 +652,8 @@ export function createResponseSessionState(
         // Deep-copy the stored items so a returned expansion can never alias
         // or mutate the store's owned entries.
         input: [
-          ...cloneStoredItems(previous.items),
-          ...cloneStoredItems(responseInputItems(body.input)),
+          ...history.flatMap((entry) => cloneStoredItems(entry.items)),
+          ...cloneStoredItems(currentItems),
         ],
       };
     },

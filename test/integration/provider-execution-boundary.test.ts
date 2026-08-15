@@ -130,6 +130,110 @@ function anthropicRequest(content = "hello"): Request {
 }
 
 describe("Provider execution boundary", () => {
+  it("executes a complete Responses request without expanding continuation state", async () => {
+    const selected = model("fixture-api");
+    const streamSimple = vi.fn(() => terminalStream(message("fixture-api")));
+    const models = {
+      getModels: () => [selected],
+      streamSimple,
+    } as unknown as Models;
+    const handler = createOpenAIResponsesHandler({
+      models,
+      auth,
+      stateFile: "unused.json",
+      sessionState: {
+        ...sessionState,
+        expand: async () => {
+          throw new Error("complete requests must not expand continuation state");
+        },
+      },
+      maxRequestBytes: 1024,
+      createResponseId: () => "resp_test",
+      now: () => 1,
+    });
+
+    const response = await handler.handle(responsesRequest());
+
+    expect(response.status).toBe(200);
+    expect(streamSimple).toHaveBeenCalledOnce();
+  });
+
+  it("uses a LuckyToken-owned response ID on the converted path", async () => {
+    const selected = model("fixture-api");
+    const providerMessage = {
+      ...message("fixture-api"),
+      responseId: "resp_provider_owned",
+    };
+    const models = {
+      getModels: () => [selected],
+      streamSimple: () => terminalStream(providerMessage),
+    } as unknown as Models;
+    const createResponseId = vi.fn(() => "resp_luckytoken_owned");
+    const handler = createOpenAIResponsesHandler({
+      models,
+      auth,
+      stateFile: "unused.json",
+      sessionState,
+      maxRequestBytes: 1024,
+      createResponseId,
+      now: () => 1,
+    });
+
+    const response = await handler.handle(responsesRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: "resp_luckytoken_owned" });
+    expect(createResponseId).toHaveBeenCalledOnce();
+  });
+
+  it("checkpoints only the raw current request after continuation expansion", async () => {
+    const selected = model("fixture-api");
+    const models = {
+      getModels: () => [selected],
+      streamSimple: () => terminalStream(message("fixture-api")),
+    } as unknown as Models;
+    const remember = vi.fn(async () => undefined);
+    const handler = createOpenAIResponsesHandler({
+      models,
+      auth,
+      stateFile: "unused.json",
+      sessionState: {
+        ...sessionState,
+        expand: async (body) => ({
+          ...(body as Record<string, unknown>),
+          input: "expanded history",
+        }),
+        remember,
+      },
+      maxRequestBytes: 1024,
+      createResponseId: () => "resp_child",
+      now: () => 1,
+    });
+    const rawRequest = {
+      model: "provider/model",
+      input: "current increment",
+      previous_response_id: "resp_parent",
+    };
+
+    const response = await handler.handle(
+      new Request("https://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer client",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(rawRequest),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(remember).toHaveBeenCalledWith(
+      rawRequest,
+      expect.objectContaining({ id: "resp_child" }),
+      expect.any(Function),
+    );
+  });
+
   it.each(["anthropic", "responses"] as const)(
     "renders an unstructured %s Provider failure as a fixed generic 502",
     async (client) => {
