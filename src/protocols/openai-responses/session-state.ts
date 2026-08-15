@@ -75,10 +75,11 @@ export interface ResponseStateNode {
 
 export interface ResponseSessionState {
   /**
-   * Save a completed (or max_output_tokens-incomplete) response for replay.
+   * Admit a completed (or max_output_tokens-incomplete) response checkpoint.
    * `store:false` on the request follows the configured `storeFalsePolicy`.
-   * When the policy persists despite caller false, `notice` is invoked with
-   * the Responses-local notice code.
+   * Expected availability failures (parent, history limit, or capacity) skip
+   * the checkpoint and report a Responses-local notice. A duplicate response
+   * ID or an inconsistent live graph is an internal failure and rejects.
    */
   readonly remember: (
     request: unknown,
@@ -86,9 +87,10 @@ export interface ResponseSessionState {
     notice?: (code: string) => void,
   ) => Promise<void>;
   /**
-   * Expand `previous_response_id` into the full input. An unknown, expired,
-   * evicted, corrupt, or unresolvable ID is a typed conversion error; there
-   * is no fail-open assumption that the client resent complete history.
+   * Expand `previous_response_id` into the full input. An unknown or expired
+   * target, or a history over local limits, is a typed conversion error; an
+   * inconsistent live graph is an internal failure. There is no fail-open
+   * assumption that the client resent complete history.
    */
   readonly expand: (body: unknown) => Promise<unknown>;
   /** Flush any pending debounced snapshot write (shutdown / tests). */
@@ -237,13 +239,17 @@ export function createResponseSessionState(
     return result;
   };
 
-  const protectedAncestry = (responseId: string | null): Set<string> | undefined => {
+  const protectedAncestry = (responseId: string | null): Set<string> => {
     const protectedIds = new Set<string>();
     let currentId = responseId;
     while (currentId !== null) {
-      if (protectedIds.has(currentId)) return undefined;
+      if (protectedIds.has(currentId)) {
+        throw new Error("cycle in live Responses state graph");
+      }
       const current = states.get(currentId);
-      if (current === undefined) return undefined;
+      if (current === undefined) {
+        throw new Error("missing ancestor in live Responses state graph");
+      }
       protectedIds.add(currentId);
       currentId = current.parentResponseId;
     }
@@ -529,11 +535,11 @@ export function createResponseSessionState(
       // memory keeps only a process-local entry (never on disk); persist
       // stores despite the caller's false and reports a notice.
       let memoryOnly = parent?.memoryOnly === true;
+      const shouldNoticePersist =
+        request.store === false && storeFalsePolicy === "persist";
       if (request.store === false) {
         if (storeFalsePolicy === "honor") return;
-        if (storeFalsePolicy === "persist") {
-          notice?.("openai-responses_store_false_persisted");
-        } else {
+        if (storeFalsePolicy === "memory") {
           memoryOnly = true;
         }
       }
@@ -555,17 +561,12 @@ export function createResponseSessionState(
           ? previousId
           : null;
       const protectedIds = protectedAncestry(parentResponseId);
-      if (protectedIds === undefined) {
-        notice?.("openai-responses_checkpoint_parent_unavailable_skipped");
-        return;
-      }
       let historyItems = items.length;
       let historyBytes = itemsBytes;
       for (const protectedId of protectedIds) {
         const entry = states.get(protectedId);
         if (entry === undefined) {
-          notice?.("openai-responses_checkpoint_parent_unavailable_skipped");
-          return;
+          throw new Error("missing protected node in live Responses state graph");
         }
         historyItems += entry.items.length;
         for (const item of entry.items) historyBytes += approximateBytes(item);
@@ -594,6 +595,9 @@ export function createResponseSessionState(
       if (!memoryOnly || persistedStateChanged) {
         schedulePersist();
       }
+      if (shouldNoticePersist) {
+        notice?.("openai-responses_store_false_persisted");
+      }
     },
 
     async expand(body: unknown): Promise<unknown> {
@@ -619,16 +623,12 @@ export function createResponseSessionState(
       let currentId: string | null = previousId;
       while (currentId !== null) {
         if (visited.has(currentId)) {
-          throw new ResponseStateConversionFailure(
-            `previous_response_id history contains a cycle: ${previousId}`,
-          );
+          throw new Error("cycle in live Responses state graph");
         }
         visited.add(currentId);
         const current = states.get(currentId);
         if (current === undefined) {
-          throw new ResponseStateConversionFailure(
-            `previous_response_id history is missing a parent: ${previousId}`,
-          );
+          throw new Error("missing ancestor in live Responses state graph");
         }
         history.push(current);
         currentId = current.parentResponseId;

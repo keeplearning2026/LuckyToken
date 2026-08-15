@@ -157,6 +157,30 @@ describe("12: Responses local response state", () => {
     ]);
   });
 
+  it("does not report store:false persistence when history limits skip the checkpoint", async () => {
+    const { create } = await fixtureState({ storeFalsePolicy: "persist" });
+    const state = create();
+    await state.remember(
+      { input: Array.from({ length: 600 }, (_, index) => `root-${index}`) },
+      completedResponse("resp_1"),
+    );
+    const notices: string[] = [];
+
+    await state.remember(
+      {
+        input: Array.from({ length: 600 }, (_, index) => `child-${index}`),
+        previous_response_id: "resp_1",
+        store: false,
+      },
+      completedResponse("resp_2"),
+      (code) => notices.push(code),
+    );
+
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_history_limit_skipped",
+    ]);
+  });
+
   it("preflights an oversized candidate before evicting an existing leaf", async () => {
     const { create } = await fixtureState({ maxEntries: 2 });
     const state = create();
@@ -253,6 +277,30 @@ describe("12: Responses local response state", () => {
     await expect(
       state.expand({ input: "tail", previous_response_id: "resp_3" }),
     ).rejects.toMatchObject({ kind: "ResponseStateConversionFailure" });
+    expect(notices).toEqual([
+      "openai-responses_checkpoint_capacity_skipped",
+    ]);
+  });
+
+  it("does not report store:false persistence when capacity skips the checkpoint", async () => {
+    const { create } = await fixtureState({
+      maxEntries: 1,
+      storeFalsePolicy: "persist",
+    });
+    const state = create();
+    await state.remember({ input: "root" }, completedResponse("resp_1"));
+    const notices: string[] = [];
+
+    await state.remember(
+      {
+        input: "child",
+        previous_response_id: "resp_1",
+        store: false,
+      },
+      completedResponse("resp_2"),
+      (code) => notices.push(code),
+    );
+
     expect(notices).toEqual([
       "openai-responses_checkpoint_capacity_skipped",
     ]);
