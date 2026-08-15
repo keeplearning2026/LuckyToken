@@ -6,7 +6,7 @@ mod shell_bridge;
 
 use std::sync::Arc;
 
-use control_plane_v1::NativeControlPlaneConnector;
+use control_plane_v1::{NativeControlPlaneConnector, RuntimeCommand};
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{ShellBridge, ShellStateDto, TauriMainWindowEmitter};
 use tauri::{Manager, State};
@@ -24,6 +24,40 @@ async fn shell_retry(
     Ok(state
         .retry(Arc::new(TauriMainWindowEmitter::new(app)))
         .await)
+}
+
+async fn run_runtime_command(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    command: RuntimeCommand,
+) -> Result<ShellStateDto, ()> {
+    Ok(state
+        .runtime_command(command, Arc::new(TauriMainWindowEmitter::new(app)))
+        .await)
+}
+
+#[tauri::command]
+async fn shell_start(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_runtime_command(app, state, RuntimeCommand::Start).await
+}
+
+#[tauri::command]
+async fn shell_stop(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_runtime_command(app, state, RuntimeCommand::Stop).await
+}
+
+#[tauri::command]
+async fn shell_restart(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_runtime_command(app, state, RuntimeCommand::Restart).await
 }
 
 fn main() {
@@ -63,7 +97,13 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![shell_snapshot, shell_retry])
+        .invoke_handler(tauri::generate_handler![
+            shell_snapshot,
+            shell_retry,
+            shell_start,
+            shell_stop,
+            shell_restart
+        ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");
     app.run(|app_handle, event| {

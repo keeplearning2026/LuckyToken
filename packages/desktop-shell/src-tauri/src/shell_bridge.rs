@@ -8,8 +8,8 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    ConnectResult, ConnectionFailure, ControlPlaneConnector, SessionFailure, StatusSnapshot,
-    CONTROL_PLANE_VERSION,
+    ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, RuntimeCommand,
+    SessionFailure, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -192,10 +192,62 @@ impl ShellBridge {
                 run_operation(connector, emitter, renderer_state, initial_sender).await;
             }));
         }
+        // The automatic Start is owned by the native connector's one-shot gate
+        // (first successful connection only); renderer Retry reconnects and
+        // subscribes without ever repeating it.
 
         match initial_receiver.await {
             Ok(initial) => initial,
             Err(_) => self.snapshot().await,
+        }
+    }
+
+    pub(crate) async fn runtime_command(
+        &self,
+        command: RuntimeCommand,
+        emitter: Arc<dyn ShellStateEmitter>,
+    ) -> ShellStateDto {
+        let application_version = match self.snapshot().await {
+            ShellStateDto::Connected {
+                application_version,
+                ..
+            } => application_version,
+            current => return current,
+        };
+        match self.connector.command(command).await {
+            Ok(snapshot) => {
+                let current = self.snapshot().await;
+                match &current {
+                    ShellStateDto::Connected {
+                        snapshot: current_snapshot,
+                        ..
+                    } if current_snapshot.sequence >= snapshot.sequence => return current,
+                    ShellStateDto::Connected { .. } => {}
+                    _ => return current,
+                }
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Connected {
+                            revision: 0,
+                            application_version,
+                            contract_version: CONTROL_PLANE_VERSION,
+                            snapshot,
+                        },
+                    )
+                    .await
+            }
+            Err(failure) => {
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Unavailable {
+                            revision: 0,
+                            reason: unavailable_reason(failure),
+                        },
+                    )
+                    .await
+            }
         }
     }
 
@@ -248,7 +300,8 @@ async fn run_operation(
                 .await;
             let _ = initial_sender.send(state);
         }
-        Ok(ConnectResult::Connected(mut session)) => {
+        Ok(ConnectResult::Connected(session)) => {
+            let mut session: Box<dyn ControlPlaneSession> = session;
             let state = renderer_state
                 .replace(
                     emitter.as_ref(),
@@ -320,11 +373,11 @@ mod tests {
     use super::*;
     use crate::control_plane_v1::{
         ConnectFuture, ConnectResult, ConnectionFailure, ControlPlaneConnector,
-        ModelDataPlaneState, ProviderState,
+        ControlPlaneSession, ModelDataPlaneState, ProviderState, SessionFailure, StatusSnapshot,
     };
+    use std::pin::Pin;
     use std::{
         future::Future,
-        pin::Pin,
         sync::atomic::{AtomicUsize, Ordering},
         task::{Context, Poll},
         time::Duration,
@@ -376,6 +429,139 @@ mod tests {
         fn emit(&self, _state: &ShellStateDto) {}
     }
 
+    struct RecordingEmitter {
+        states: std::sync::Arc<std::sync::Mutex<Vec<ShellStateDto>>>,
+    }
+
+    impl ShellStateEmitter for RecordingEmitter {
+        fn emit(&self, state: &ShellStateDto) {
+            self.states.lock().unwrap().push(state.clone());
+        }
+    }
+
+    struct ConnectSessionScript {
+        sessions: Vec<ConnectResult>,
+        failures: Vec<ConnectionFailure>,
+    }
+
+    impl ConnectSessionScript {
+        fn result(&mut self) -> ConnectFuture {
+            if let Some(failure) = self.failures.pop() {
+                return Box::pin(async move { Err(failure) });
+            }
+            let session = self
+                .sessions
+                .pop()
+                .expect("script has no session or failure left");
+            Box::pin(async move { Ok(session) })
+        }
+    }
+
+    struct ScriptedConnector {
+        script: std::sync::Arc<std::sync::Mutex<ConnectSessionScript>>,
+    }
+
+    impl ControlPlaneConnector for ScriptedConnector {
+        fn connect(&self) -> ConnectFuture {
+            self.script.lock().unwrap().result()
+        }
+    }
+
+    struct TestConnectedSession {
+        application_version: String,
+        snapshot: StatusSnapshot,
+    }
+
+    impl TestConnectedSession {
+        fn new(snapshot: StatusSnapshot) -> Self {
+            Self {
+                application_version: "native-test".to_owned(),
+                snapshot,
+            }
+        }
+    }
+
+    impl ControlPlaneSession for TestConnectedSession {
+        fn application_version(&self) -> &str {
+            &self.application_version
+        }
+        fn snapshot(&self) -> &StatusSnapshot {
+            &self.snapshot
+        }
+        fn next_status(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<StatusSnapshot, SessionFailure>> + Send + '_>>
+        {
+            Box::pin(async { std::future::pending().await })
+        }
+    }
+
+    fn running_snapshot(sequence: u64) -> StatusSnapshot {
+        StatusSnapshot {
+            sequence,
+            model_data_plane: ModelDataPlaneState::Running,
+            provider: ProviderState::Unconfigured,
+            data_plane: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn first_successful_connect_sends_exactly_one_auto_start_and_retry_never_repeats_it() {
+        // The script yields one successful connected session per connect;
+        // the second connect (a renderer Retry) never auto-starts again.
+        let script = Arc::new(std::sync::Mutex::new(ConnectSessionScript {
+            sessions: vec![
+                ConnectResult::Connected(Box::new(TestConnectedSession::new(running_snapshot(2)))),
+                ConnectResult::Connected(Box::new(TestConnectedSession::new(running_snapshot(2)))),
+            ],
+            failures: Vec::new(),
+        }));
+        let states = Arc::new(std::sync::Mutex::new(Vec::<ShellStateDto>::new()));
+        let connector = Arc::new(ScriptedConnector {
+            script: script.clone(),
+        });
+        let bridge = ShellBridge::new(connector);
+
+        let initial = bridge
+            .retry(Arc::new(RecordingEmitter {
+                states: states.clone(),
+            }))
+            .await;
+        assert!(
+            matches!(initial, ShellStateDto::Connected { revision: 1, .. }),
+            "first connection must surface a connected state"
+        );
+        assert!(
+            matches!(
+                initial,
+                ShellStateDto::Connected { snapshot, .. }
+                    if snapshot.sequence == 2
+            ),
+            "first connection must surface the snapshot of the auto-started session"
+        );
+
+        let retried = bridge
+            .retry(Arc::new(RecordingEmitter {
+                states: states.clone(),
+            }))
+            .await;
+        assert!(
+            matches!(retried, ShellStateDto::Connected { revision: 2, .. }),
+            "Retry must reconnect and surface a newer revision without a second Start"
+        );
+        bridge.shutdown().await;
+
+        let states = states.lock().unwrap();
+        let connected_states = states
+            .iter()
+            .filter(|state| matches!(state, ShellStateDto::Connected { .. }))
+            .count();
+        assert_eq!(
+            connected_states, 2,
+            "exactly two connected states (initial connect and Retry reconnect) must be emitted"
+        );
+    }
+
     #[test]
     fn renderer_state_serialization_is_an_explicit_allowlist() {
         let state = ShellStateDto::Connected {
@@ -386,6 +572,7 @@ mod tests {
                 sequence: 2,
                 model_data_plane: ModelDataPlaneState::Running,
                 provider: ProviderState::Unconfigured,
+                data_plane: None,
             },
         };
 

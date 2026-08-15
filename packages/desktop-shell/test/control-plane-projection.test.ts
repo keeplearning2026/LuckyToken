@@ -91,4 +91,40 @@ describe("Control Plane renderer projection public seam", () => {
     expect(projected).toEqual(expected);
     expect(JSON.stringify(projected)).not.toMatch(/capability|secret/u);
   });
+
+  it("projects a failed fixed-port lifecycle without forwarding raw failure text", () => {
+    const projected = projectControlPlaneState({
+      revision: 8,
+      connection: "connected",
+      applicationVersion: "1.2.3",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 14,
+        modelDataPlane: "failed",
+        provider: "unconfigured",
+        dataPlane: {
+          configuredOrigin: "http://127.0.0.1:3000",
+          configuredPort: 3000,
+          failure: {
+            code: "port_in_use",
+            message: "raw renderer secret",
+          },
+        },
+      },
+    });
+
+    expect(projected).toMatchObject({
+      kind: "connected",
+      modelDataPlane: "failed",
+      dataPlane: {
+        configuredPort: 3000,
+        failure: {
+          code: "port_in_use",
+          message:
+            "The configured port is already in use. Stop the other application or choose a different port.",
+        },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("raw renderer secret");
+  });
 });

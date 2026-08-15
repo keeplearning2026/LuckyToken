@@ -82,8 +82,9 @@ New-Item -ItemType Directory -Force .luckytoken\pi
 Copy-Item luckytoken.config.example.json .luckytoken\config.json
 ```
 
-The `openai-responses` Client Protocol is optional: it is served on
-`POST /v1/responses` only when listed in `clientProtocols`. Its `stateFile`
+The shipped configuration enables both Anthropic Messages and OpenAI Responses
+on one listener. A custom configuration can omit `openai-responses`; when it is
+listed, its `stateFile`
 (default `state/openai-responses.json` relative to the config directory)
 persists the `previous_response_id` conversation history across restarts, so
 Codex clients can continue an incremental session even after LuckyToken
@@ -125,6 +126,16 @@ Start the local listener:
 
 ```powershell
 npm start -- --config .luckytoken/config.json
+```
+
+While that background application remains active, inspect or manage the model
+gateway through the same Control Plane used by the desktop Dashboard:
+
+```powershell
+npm start -- control status --descriptor .luckytoken/control-plane.json
+npm start -- control start --descriptor .luckytoken/control-plane.json
+npm start -- control stop --descriptor .luckytoken/control-plane.json
+npm start -- control restart --descriptor .luckytoken/control-plane.json
 ```
 
 Startup prints every served route, normally:

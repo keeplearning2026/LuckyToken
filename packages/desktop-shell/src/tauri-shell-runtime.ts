@@ -1,4 +1,5 @@
 import type { Event } from "@tauri-apps/api/event";
+import type { RuntimeCommand } from "@luckytoken/application-control-plane/control-plane";
 
 import {
   projectControlPlaneState,
@@ -6,7 +7,12 @@ import {
   type ControlPlaneState,
 } from "./control-plane-projection.js";
 
-export type ShellCommand = "shell_snapshot" | "shell_retry";
+export type ShellCommand =
+  | "shell_snapshot"
+  | "shell_retry"
+  | "shell_start"
+  | "shell_stop"
+  | "shell_restart";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: never): Promise<unknown>;
@@ -19,6 +25,7 @@ export interface NativeTauriBridge {
 export interface TauriDesktopRuntime {
   connectControlPlane(): Promise<ControlPlaneState>;
   retryControlPlane(): Promise<ControlPlaneState>;
+  executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -27,6 +34,70 @@ export interface TauriDesktopRuntime {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const dataPlaneFailureMessages = {
+  port_in_use:
+    "The configured port is already in use. Stop the other application or choose a different port.",
+  start_failed:
+    "The model gateway could not start. Check its configured address and try again.",
+  stop_failed:
+    "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+} as const;
+
+function decodeDataPlaneStatus(value: unknown) {
+  if (
+    !isRecord(value) ||
+    typeof value.configuredOrigin !== "string" ||
+    !Number.isSafeInteger(value.configuredPort) ||
+    (value.configuredPort as number) < 0 ||
+    (value.configuredPort as number) > 65_535
+  ) {
+    return undefined;
+  }
+  let origin: URL;
+  try {
+    origin = new URL(value.configuredOrigin);
+  } catch {
+    return undefined;
+  }
+  if (
+    origin.protocol !== "http:" ||
+    origin.username !== "" ||
+    origin.password !== "" ||
+    origin.pathname !== "/" ||
+    origin.search !== "" ||
+    origin.hash !== "" ||
+    (origin.port === "" ? 80 : Number.parseInt(origin.port, 10)) !==
+      value.configuredPort
+  ) {
+    return undefined;
+  }
+  let failure:
+    | {
+        readonly code: keyof typeof dataPlaneFailureMessages;
+        readonly message: string;
+      }
+    | undefined;
+  if (value.failure !== undefined) {
+    if (
+      !isRecord(value.failure) ||
+      (value.failure.code !== "port_in_use" &&
+        value.failure.code !== "start_failed" &&
+        value.failure.code !== "stop_failed")
+    ) {
+      return undefined;
+    }
+    failure = {
+      code: value.failure.code,
+      message: dataPlaneFailureMessages[value.failure.code],
+    };
+  }
+  return {
+    configuredOrigin: value.configuredOrigin,
+    configuredPort: value.configuredPort as number,
+    ...(failure === undefined ? {} : { failure }),
+  };
 }
 
 function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefined {
@@ -47,10 +118,24 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
       !Number.isSafeInteger(snapshot.sequence) ||
       (snapshot.sequence as number) < 0 ||
       (snapshot.modelDataPlane !== "stopped" &&
+        snapshot.modelDataPlane !== "starting" &&
         snapshot.modelDataPlane !== "running" &&
-        snapshot.modelDataPlane !== "stopping") ||
+        snapshot.modelDataPlane !== "stopping" &&
+        snapshot.modelDataPlane !== "failed") ||
       (snapshot.provider !== "configured" &&
         snapshot.provider !== "unconfigured")
+    ) {
+      return undefined;
+    }
+    const dataPlane =
+      snapshot.dataPlane === undefined
+        ? undefined
+        : decodeDataPlaneStatus(snapshot.dataPlane);
+    if (
+      (snapshot.dataPlane !== undefined && dataPlane === undefined) ||
+      (snapshot.modelDataPlane === "failed" &&
+        dataPlane?.failure === undefined) ||
+      (snapshot.modelDataPlane !== "failed" && dataPlane?.failure !== undefined)
     ) {
       return undefined;
     }
@@ -63,6 +148,7 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
         sequence: snapshot.sequence as number,
         modelDataPlane: snapshot.modelDataPlane,
         provider: snapshot.provider,
+        ...(dataPlane === undefined ? {} : { dataPlane }),
       },
     };
   }
@@ -138,6 +224,14 @@ export function createTauriDesktopRuntime(
   return {
     connectControlPlane: () => invokeState("shell_snapshot"),
     retryControlPlane: () => invokeState("shell_retry"),
+    executeRuntimeCommand: (command) =>
+      invokeState(
+        command === "start"
+          ? "shell_start"
+          : command === "stop"
+            ? "shell_stop"
+            : "shell_restart",
+      ),
     async disconnectControlPlane() {
       await listenTask;
       unlisten?.();

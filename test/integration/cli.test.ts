@@ -26,6 +26,7 @@ import {
   createFileClientTokenStore,
   loadFileClientTokenAuthority,
 } from "../../src/client-auth/file-token-store.js";
+import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -161,6 +162,81 @@ describe("LuckyToken CLI", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
   }, 30_000);
 
+  it("issues runtime lifecycle commands through the active Control Plane", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-command-"));
+    directories.push(directory);
+    const transport = createNodePipeTransport();
+    const supervisor = createDataPlaneRuntimeSupervisor({
+      host: "127.0.0.1",
+      port: 48766,
+      provider: "unconfigured",
+      startListener: async () => ({ close: async () => undefined }),
+    });
+    const controlPlane = await startControlPlane({
+      endpoint: {
+        pipeName: `\\\\.\\pipe\\luckytoken-cli-command-${process.pid}`,
+        capability: "cli-command-capability-012345678901234567890",
+      },
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: supervisor.initialStatus,
+      runtimeCommandHandler: supervisor.execute,
+      pipeServerFactory: transport,
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(
+      descriptorPath,
+      JSON.stringify(controlPlane.endpoint),
+      "utf8",
+    );
+
+    const start = startCli([
+      "control",
+      "start",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(start);
+    const result = await captureChild(start).result;
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      command: "start",
+      outcome: "completed",
+      snapshot: { modelDataPlane: "running" },
+    });
+
+    const runCommand = async (command: "restart" | "stop") => {
+      const child = startCli([
+        "control",
+        command,
+        "--descriptor",
+        descriptorPath,
+      ]);
+      children.push(child);
+      return captureChild(child).result;
+    };
+    const restarted = await runCommand("restart");
+    const stopped = await runCommand("stop");
+    const repeatedStop = await runCommand("stop");
+    expect(JSON.parse(restarted.stdout)).toMatchObject({
+      command: "restart",
+      outcome: "completed",
+      snapshot: { modelDataPlane: "running" },
+    });
+    expect(JSON.parse(stopped.stdout)).toMatchObject({
+      command: "stop",
+      outcome: "completed",
+      snapshot: { modelDataPlane: "stopped" },
+    });
+    expect(JSON.parse(repeatedStop.stdout)).toMatchObject({
+      command: "stop",
+      outcome: "unchanged",
+      snapshot: { modelDataPlane: "stopped" },
+    });
+  }, 30_000);
+
   it("does not echo descriptor contents when discovery is malformed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-invalid-"));
     directories.push(directory);
@@ -213,6 +289,15 @@ describe("LuckyToken CLI", () => {
       { type: "global" },
       "serve-test-token",
     );
+    const responsesAuthPath = join(
+      stateDirectory,
+      "client-auth",
+      "openai-responses.json",
+    );
+    await createFileClientTokenStore({ path: responsesAuthPath }).create(
+      { type: "global" },
+      "serve-responses-test-token",
+    );
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
@@ -221,6 +306,9 @@ describe("LuckyToken CLI", () => {
         clientProtocols: {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",
+          },
+          "openai-responses": {
+            authFile: "client-auth/openai-responses.json",
           },
         },
         ...(providerPackages === undefined ? {} : { providerPackages }),
@@ -272,6 +360,9 @@ describe("LuckyToken CLI", () => {
     expect(`${statusResult.stdout}\n${statusResult.stderr}`).not.toContain(
       descriptor.capability,
     );
+    expect(serveCapture.stdout()).toContain("POST http://127.0.0.1:");
+    expect(serveCapture.stdout()).toContain("/v1/messages");
+    expect(serveCapture.stdout()).toContain("/v1/responses");
 
     serve.stdin.end("stop\n");
     const serveResult = await Promise.race([
@@ -307,7 +398,7 @@ describe("LuckyToken CLI", () => {
     ).toEqual([]);
   }, 30_000);
 
-  it("removes owned discovery and temporary files when Data Plane startup fails", async () => {
+  it("keeps the Control Plane available when the fixed Data Plane port is occupied", async () => {
     const blocker = createServer();
     tcpServers.push(blocker);
     await new Promise<void>((resolve, reject) => {
@@ -348,17 +439,51 @@ describe("LuckyToken CLI", () => {
     const descriptorPath = join(stateDirectory, "control-plane.json");
     await writeFile(descriptorPath, "stale-descriptor", "utf8");
 
-    const child = startCli([
-      "--config",
-      configPath,
+    const child = startCli(
+      ["--config", configPath, "--descriptor", descriptorPath],
+      true,
+    );
+    children.push(child);
+    const serving = captureChild(child);
+    await expect
+      .poll(async () => {
+        try {
+          const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
+            readonly pipeName?: unknown;
+          };
+          return typeof parsed.pipeName === "string";
+        } catch {
+          return false;
+        }
+      }, { timeout: 10_000, interval: 50 })
+      .toBe(true);
+
+    const status = startCli([
+      "control",
+      "status",
       "--descriptor",
       descriptorPath,
     ]);
-    children.push(child);
-    const result = await captureChild(child).result;
+    children.push(status);
+    const statusResult = await captureChild(status).result;
 
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("EADDRINUSE");
+    expect(statusResult.code).toBe(0);
+    expect(JSON.parse(statusResult.stdout)).toMatchObject({
+      modelDataPlane: "failed",
+      dataPlane: {
+        configuredPort: address.port,
+        failure: {
+          code: "port_in_use",
+          message:
+            "The configured port is already in use. Stop the other application or choose a different port.",
+        },
+      },
+    });
+    expect(child.exitCode).toBeNull();
+
+    child.stdin.end("stop\n");
+    const result = await serving.result;
+    expect(result.code).toBe(0);
     await expect(readFile(descriptorPath, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });

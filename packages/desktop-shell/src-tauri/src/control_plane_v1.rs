@@ -1,4 +1,11 @@
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -30,8 +37,10 @@ pub(crate) enum SessionFailure {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ModelDataPlaneState {
     Stopped,
+    Starting,
     Running,
     Stopping,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -41,20 +50,79 @@ pub(crate) enum ProviderState {
     Unconfigured,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DataPlaneFailureCode {
+    PortInUse,
+    StartFailed,
+    StopFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct DataPlaneFailure {
+    pub(crate) code: DataPlaneFailureCode,
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct DataPlaneStatus {
+    #[serde(rename = "configuredOrigin")]
+    pub(crate) configured_origin: String,
+    #[serde(rename = "configuredPort")]
+    pub(crate) configured_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failure: Option<DataPlaneFailure>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct StatusSnapshot {
     pub(crate) sequence: u64,
     #[serde(rename = "modelDataPlane")]
     pub(crate) model_data_plane: ModelDataPlaneState,
     pub(crate) provider: ProviderState,
+    #[serde(rename = "dataPlane", skip_serializing_if = "Option::is_none")]
+    pub(crate) data_plane: Option<DataPlaneStatus>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeCommand {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl RuntimeCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+
+    fn request_id(self) -> &'static str {
+        match self {
+            Self::Start => "desktop-start",
+            Self::Stop => "desktop-stop",
+            Self::Restart => "desktop-restart",
+        }
+    }
 }
 
 pub(crate) enum ConnectResult {
-    Connected(ConnectedSession),
+    Connected(Box<dyn ControlPlaneSession>),
     VersionMismatch {
         requested_version: u64,
         supported_versions: Vec<u64>,
     },
+}
+
+pub(crate) trait ControlPlaneSession: Send {
+    fn application_version(&self) -> &str;
+    fn snapshot(&self) -> &StatusSnapshot;
+    fn next_status(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<StatusSnapshot, SessionFailure>> + Send + '_>>;
 }
 
 pub(crate) struct ConnectedSession {
@@ -64,44 +132,93 @@ pub(crate) struct ConnectedSession {
 }
 
 impl ConnectedSession {
-    pub(crate) fn application_version(&self) -> &str {
+    fn new(pipe: NamedPipeClient, application_version: String, snapshot: StatusSnapshot) -> Self {
+        Self {
+            pipe,
+            application_version,
+            snapshot,
+        }
+    }
+}
+
+impl ControlPlaneSession for ConnectedSession {
+    fn application_version(&self) -> &str {
         &self.application_version
     }
 
-    pub(crate) fn snapshot(&self) -> &StatusSnapshot {
+    fn snapshot(&self) -> &StatusSnapshot {
         &self.snapshot
     }
 
-    pub(crate) async fn next_status(&mut self) -> Result<StatusSnapshot, SessionFailure> {
-        let value = read_json_frame(&mut self.pipe)
-            .await
-            .map_err(|failure| match failure {
-                FrameFailure::Io => SessionFailure::TransportLost,
-                FrameFailure::Protocol => SessionFailure::ProtocolError,
-            })?;
-        decode_status_event(&value).ok_or(SessionFailure::ProtocolError)
+    fn next_status(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<StatusSnapshot, SessionFailure>> + Send + '_>> {
+        Box::pin(async move {
+            let value = read_json_frame(&mut self.pipe)
+                .await
+                .map_err(|failure| match failure {
+                    FrameFailure::Io => SessionFailure::TransportLost,
+                    FrameFailure::Protocol => SessionFailure::ProtocolError,
+                })?;
+            decode_status_event(&value).ok_or(SessionFailure::ProtocolError)
+        })
     }
 }
 
 pub(crate) type ConnectFuture =
     Pin<Box<dyn Future<Output = Result<ConnectResult, ConnectionFailure>> + Send + 'static>>;
+pub(crate) type CommandFuture =
+    Pin<Box<dyn Future<Output = Result<StatusSnapshot, ConnectionFailure>> + Send + 'static>>;
 
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
+    fn command(&self, _command: RuntimeCommand) -> CommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
 }
 
 pub(crate) struct NativeControlPlaneConnector {
     discovery: NativeControlPlaneDiscovery,
+    auto_start_consumed: Arc<AtomicBool>,
 }
 
 impl NativeControlPlaneConnector {
     pub(crate) fn new(discovery: NativeControlPlaneDiscovery) -> Self {
-        Self { discovery }
+        Self {
+            discovery,
+            auto_start_consumed: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
 impl ControlPlaneConnector for NativeControlPlaneConnector {
     fn connect(&self) -> ConnectFuture {
+        let discovery = self.discovery.clone();
+        let auto_start_consumed = self.auto_start_consumed.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            // The automatic Start is a one-shot native lifecycle gate: the
+            // first successful connection sends it exactly once. A failed or
+            // version-mismatched handshake does not consume the gate, and a
+            // connect aborted before completion keeps it armed, so the next
+            // successful connection still auto-starts.
+            let auto_start = !auto_start_consumed.load(Ordering::SeqCst);
+            let result = connect_session(&pipe_name, capability, auto_start).await;
+            if auto_start && matches!(result, Ok(ConnectResult::Connected(_))) {
+                auto_start_consumed.store(true, Ordering::SeqCst);
+            }
+            result
+        })
+    }
+
+    fn command(&self, command: RuntimeCommand) -> CommandFuture {
         let discovery = self.discovery.clone();
         Box::pin(async move {
             let authority = discovery
@@ -112,7 +229,7 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                     DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
                 })?;
             let (pipe_name, capability) = authority.into_parts();
-            connect_session(&pipe_name, capability).await
+            execute_command_session(&pipe_name, capability, command).await
         })
     }
 }
@@ -120,6 +237,7 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
 async fn connect_session(
     pipe_name: &str,
     capability: String,
+    auto_start: bool,
 ) -> Result<ConnectResult, ConnectionFailure> {
     let mut pipe = ClientOptions::new()
         .open(pipe_name)
@@ -150,16 +268,32 @@ async fn connect_session(
         Hello::Compatible {
             application_version,
         } => {
-            write_json_frame(
-                &mut pipe,
-                &json!({"type": "get_status", "requestId": "desktop-status"}),
-            )
-            .await
-            .map_err(FrameFailure::connection_failure)?;
-            let status = read_json_frame(&mut pipe)
+            let snapshot = if auto_start {
+                // The one-shot automatic Start belongs to the first successful
+                // native connection.
+                execute_runtime_command(&mut pipe, RuntimeCommand::Start).await?
+            } else {
+                // Renderer Retry reconnect: query status only, never send a
+                // second automatic Start.
+                write_json_frame(
+                    &mut pipe,
+                    &json!({"type": "get_status", "requestId": "desktop-status"}),
+                )
                 .await
                 .map_err(FrameFailure::connection_failure)?;
-            let snapshot = decode_status_result(&status)?;
+                let status = read_json_frame(&mut pipe)
+                    .await
+                    .map_err(FrameFailure::connection_failure)?;
+                if status.get("type").and_then(Value::as_str) != Some("status_result")
+                    || status.get("requestId").and_then(Value::as_str) != Some("desktop-status")
+                {
+                    return Err(ConnectionFailure::ProtocolError);
+                }
+                status
+                    .get("snapshot")
+                    .and_then(decode_status_snapshot)
+                    .ok_or(ConnectionFailure::ProtocolError)?
+            };
             write_json_frame(
                 &mut pipe,
                 &json!({"type": "subscribe", "requestId": "desktop-subscribe"}),
@@ -174,13 +308,64 @@ async fn connect_session(
             {
                 return Err(ConnectionFailure::ProtocolError);
             }
-            Ok(ConnectResult::Connected(ConnectedSession {
+            Ok(ConnectResult::Connected(Box::new(ConnectedSession::new(
                 pipe,
                 application_version,
                 snapshot,
-            }))
+            ))))
         }
     }
+}
+
+async fn execute_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: RuntimeCommand,
+) -> Result<StatusSnapshot, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => execute_runtime_command(&mut pipe, command).await,
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+async fn execute_runtime_command<W>(
+    pipe: &mut W,
+    command: RuntimeCommand,
+) -> Result<StatusSnapshot, ConnectionFailure>
+where
+    W: AsyncRead + AsyncWrite + Unpin,
+{
+    write_json_frame(
+        pipe,
+        &json!({
+            "type": "runtime_command",
+            "requestId": command.request_id(),
+            "command": command.as_str(),
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let result = read_json_frame(pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    decode_runtime_command_result(&result, command)
 }
 
 enum Hello {
@@ -247,19 +432,103 @@ fn decode_hello(value: &Value) -> Result<Hello, ConnectionFailure> {
     }
 }
 
-fn decode_status_result(value: &Value) -> Result<StatusSnapshot, ConnectionFailure> {
-    if value.get("type").and_then(Value::as_str) != Some("status_result")
-        || value.get("requestId").and_then(Value::as_str) != Some("desktop-status")
+#[derive(Deserialize)]
+struct StatusSnapshotWire {
+    sequence: u64,
+    #[serde(rename = "modelDataPlane")]
+    model_data_plane: ModelDataPlaneState,
+    provider: ProviderState,
+    #[serde(rename = "dataPlane")]
+    data_plane: Option<DataPlaneStatusWire>,
+}
+
+#[derive(Deserialize)]
+struct DataPlaneStatusWire {
+    #[serde(rename = "configuredOrigin")]
+    configured_origin: String,
+    #[serde(rename = "configuredPort")]
+    configured_port: u16,
+    failure: Option<DataPlaneFailureWire>,
+}
+
+#[derive(Deserialize)]
+struct DataPlaneFailureWire {
+    code: DataPlaneFailureCode,
+}
+
+fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
+    let wire: StatusSnapshotWire = serde_json::from_value(value.clone()).ok()?;
+    if wire.data_plane.as_ref().is_some_and(|data_plane| {
+        !configured_origin_matches_port(&data_plane.configured_origin, data_plane.configured_port)
+    }) {
+        return None;
+    }
+    let data_plane = wire.data_plane.map(|data_plane| DataPlaneStatus {
+        configured_origin: data_plane.configured_origin,
+        configured_port: data_plane.configured_port,
+        failure: data_plane.failure.map(|failure| DataPlaneFailure {
+            code: failure.code,
+            message: match failure.code {
+                DataPlaneFailureCode::PortInUse => "The configured port is already in use. Stop the other application or choose a different port.",
+                DataPlaneFailureCode::StartFailed => "The model gateway could not start. Check its configured address and try again.",
+                DataPlaneFailureCode::StopFailed => "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+            }
+            .to_owned(),
+        }),
+    });
+    let has_failure = data_plane
+        .as_ref()
+        .and_then(|data_plane| data_plane.failure.as_ref())
+        .is_some();
+    if (wire.model_data_plane == ModelDataPlaneState::Failed) != has_failure {
+        return None;
+    }
+    Some(StatusSnapshot {
+        sequence: wire.sequence,
+        model_data_plane: wire.model_data_plane,
+        provider: wire.provider,
+        data_plane,
+    })
+}
+
+fn configured_origin_matches_port(origin: &str, port: u16) -> bool {
+    let Some(authority) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    if authority.contains(['/', '?', '#', '@']) {
+        return false;
+    }
+    authority
+        .rsplit_once(':')
+        .and_then(|(_, value)| value.parse::<u16>().ok())
+        == Some(port)
+}
+
+fn decode_runtime_command_result(
+    value: &Value,
+    command: RuntimeCommand,
+) -> Result<StatusSnapshot, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("runtime_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
     {
         return Err(ConnectionFailure::ProtocolError);
     }
-    serde_json::from_value(
-        value
-            .get("snapshot")
-            .cloned()
-            .ok_or(ConnectionFailure::ProtocolError)?,
-    )
-    .map_err(|_| ConnectionFailure::ProtocolError)
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if result.get("command").and_then(Value::as_str) != Some(command.as_str())
+        || !matches!(
+            result.get("outcome").and_then(Value::as_str),
+            Some("completed" | "unchanged" | "failed" | "conflict")
+        )
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    result
+        .get("snapshot")
+        .and_then(decode_status_snapshot)
+        .ok_or(ConnectionFailure::ProtocolError)
 }
 
 fn decode_status_event(value: &Value) -> Option<StatusSnapshot> {
@@ -271,7 +540,7 @@ fn decode_status_event(value: &Value) -> Option<StatusSnapshot> {
         return None;
     }
     let sequence = event.get("sequence").and_then(Value::as_u64)?;
-    let snapshot: StatusSnapshot = serde_json::from_value(event.get("snapshot")?.clone()).ok()?;
+    let snapshot = decode_status_snapshot(event.get("snapshot")?)?;
     (snapshot.sequence == sequence).then_some(snapshot)
 }
 
@@ -324,4 +593,212 @@ where
         .await
         .map_err(|_| FrameFailure::Io)?;
     serde_json::from_slice(&body).map_err(|_| FrameFailure::Protocol)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::windows::named_pipe::{NamedPipeServer, ServerOptions},
+        time::timeout,
+    };
+
+    struct TestPipeServer {
+        server: NamedPipeServer,
+    }
+
+    impl TestPipeServer {
+        async fn next_frame(&mut self) -> Value {
+            let length = read_frame_length(&mut self.server)
+                .await
+                .expect("test server must read a frame header");
+            let mut body = vec![0_u8; length];
+            self.server
+                .read_exact(&mut body)
+                .await
+                .expect("test server must read a frame body");
+            serde_json::from_slice(&body).expect("test server must parse the frame body")
+        }
+
+        async fn send(&mut self, value: &Value) {
+            write_frame_bytes(&mut self.server, value)
+                .await
+                .expect("test server must write a frame");
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnect_session_must_begin_with_get_status_and_never_auto_start() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+
+        // A reconnecting subscription session (renderer Retry) must query
+        // status and subscribe; the automatic Start belongs to the one-shot
+        // native lifecycle gate and never fires again on reconnect.
+        let session_task = tokio::spawn(async move {
+            connect_session(&pipe_name, "desktop-test-capability".to_owned(), false)
+                .await
+                .expect("reconnect session must negotiate a compatible hello")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("requestId").and_then(Value::as_str),
+            Some("desktop-hello")
+        );
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let first = server.next_frame().await;
+        assert_eq!(
+            first.get("type").and_then(Value::as_str),
+            Some("get_status"),
+            "the first reconnect request must be get_status, never runtime_command start"
+        );
+        assert_eq!(
+            first.get("requestId").and_then(Value::as_str),
+            Some("desktop-status")
+        );
+        server
+            .send(&json!({
+                "type": "status_result",
+                "requestId": "desktop-status",
+                "snapshot": {
+                    "sequence": 2,
+                    "modelDataPlane": "running",
+                    "provider": "unconfigured",
+                    "dataPlane": {
+                        "configuredOrigin": "http://127.0.0.1:3000",
+                        "configuredPort": 3000
+                    }
+                }
+            }))
+            .await;
+
+        let second = server.next_frame().await;
+        assert_eq!(
+            second.get("type").and_then(Value::as_str),
+            Some("subscribe")
+        );
+        assert_eq!(
+            second.get("requestId").and_then(Value::as_str),
+            Some("desktop-subscribe")
+        );
+        server
+            .send(&json!({"type": "subscribed", "requestId": "desktop-subscribe"}))
+            .await;
+
+        let session = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("reconnect session must complete within the timeout")
+            .expect("reconnect session task must not panic");
+        let ConnectResult::Connected(session) = session else {
+            panic!("reconnect must produce a connected session");
+        };
+        assert_eq!(session.application_version(), "native-test");
+        assert_eq!(session.snapshot().sequence, 2);
+    }
+
+    fn test_pipe_name() -> String {
+        format!(
+            r"\\.\pipe\luckytoken-desktop-test-{}-{}",
+            std::process::id(),
+            rand_test_suffix()
+        )
+    }
+
+    fn rand_test_suffix() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after the epoch")
+            .as_nanos() as u64;
+        nanos ^ (nanos >> 32)
+    }
+
+    async fn read_frame_length(reader: &mut NamedPipeServer) -> Result<usize, std::io::Error> {
+        let mut header = [0_u8; 4];
+        reader.read_exact(&mut header).await?;
+        Ok(u32::from_be_bytes(header) as usize)
+    }
+
+    async fn write_frame_bytes(
+        writer: &mut NamedPipeServer,
+        value: &Value,
+    ) -> Result<(), std::io::Error> {
+        let body = serde_json::to_vec(value).map_err(|_| std::io::ErrorKind::InvalidData)?;
+        writer.write_all(&(body.len() as u32).to_be_bytes()).await?;
+        writer.write_all(&body).await
+    }
+
+    #[test]
+    fn failed_status_is_allowlisted_and_requires_the_configured_port() {
+        let raw = json!({
+            "sequence": 4,
+            "modelDataPlane": "failed",
+            "provider": "unconfigured",
+            "dataPlane": {
+                "configuredOrigin": "http://127.0.0.1:3000",
+                "configuredPort": 3000,
+                "failure": {
+                    "code": "port_in_use",
+                    "message": "raw native secret"
+                },
+                "secret": "ignored"
+            }
+        });
+
+        let status = decode_status_snapshot(&raw).expect("decode failed status");
+
+        assert_eq!(
+            serde_json::to_value(status).expect("serialize failed status"),
+            json!({
+                "sequence": 4,
+                "modelDataPlane": "failed",
+                "provider": "unconfigured",
+                "dataPlane": {
+                    "configuredOrigin": "http://127.0.0.1:3000",
+                    "configuredPort": 3000,
+                    "failure": {
+                        "code": "port_in_use",
+                        "message": "The configured port is already in use. Stop the other application or choose a different port."
+                    }
+                }
+            })
+        );
+        assert!(decode_status_snapshot(&json!({
+            "sequence": 4,
+            "modelDataPlane": "running",
+            "provider": "unconfigured",
+            "dataPlane": {
+                "configuredOrigin": "http://127.0.0.1:3001",
+                "configuredPort": 3000
+            }
+        }))
+        .is_none());
+    }
 }

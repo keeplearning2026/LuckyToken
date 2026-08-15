@@ -93,6 +93,30 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
   cursor: pointer;
 }
 
+.runtime-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+  border: 1px solid #dce4e1;
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: #fff;
+}
+.runtime-controls p { margin: 5px 0 0; color: #6b7480; }
+.runtime-controls small { color: #9a4e20; }
+.runtime-actions { display: flex; gap: 8px; }
+.runtime-actions button {
+  border: 1px solid #6f958b;
+  border-radius: 8px;
+  padding: 8px 14px;
+  color: #174d42;
+  background: #fff;
+  cursor: pointer;
+}
+.runtime-actions button:disabled { cursor: default; opacity: .45; }
+
 .empty-page {
   display: grid;
   min-height: 390px;

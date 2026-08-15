@@ -51,4 +51,37 @@ describe("Tauri shell runtime public adapter seam", () => {
     expect(JSON.stringify(state)).not.toMatch(/capability|secret/u);
     expect(unlistened).toBe(1);
   });
+
+  it("maps runtime lifecycle commands to no-argument native commands", async () => {
+    const calls: string[] = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command) => {
+        calls.push(command);
+        return {
+          revision: calls.length,
+          connection: "connected",
+          applicationVersion: "test",
+          contractVersion: 1,
+          snapshot: {
+            sequence: calls.length,
+            modelDataPlane:
+              command === "shell_stop" ? "stopped" : "running",
+            provider: "unconfigured",
+            dataPlane: {
+              configuredOrigin: "http://127.0.0.1:3000",
+              configuredPort: 3000,
+            },
+          },
+        };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await runtime.executeRuntimeCommand("start");
+    await runtime.executeRuntimeCommand("stop");
+    await runtime.executeRuntimeCommand("restart");
+
+    expect(calls).toEqual(["shell_start", "shell_stop", "shell_restart"]);
+  });
 });

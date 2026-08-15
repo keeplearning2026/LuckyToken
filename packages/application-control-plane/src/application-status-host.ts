@@ -5,6 +5,8 @@ import {
   type ApplicationStatus,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
+  type RuntimeCommandExecution,
+  type RuntimeCommandHandler,
   type StatusSnapshot,
 } from "./contracts.js";
 import { readFrame, writeFrame } from "./framing.js";
@@ -18,6 +20,7 @@ import {
   compatibleHello,
   decodeApplicationStatus,
   decodeClientRequest,
+  decodeRuntimeCommandExecution,
   incompatibleHello,
   isRecord,
   type ControlPlaneErrorCode,
@@ -29,6 +32,7 @@ export interface StartControlPlaneOptions {
   readonly initialStatus: ApplicationStatus;
   readonly pipeServerFactory: PipeServerFactory;
   readonly access: PipeAccessRequirement;
+  readonly runtimeCommandHandler?: RuntimeCommandHandler;
 }
 
 interface ConnectionState {
@@ -133,6 +137,37 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             snapshot: current,
           });
+        } else if (request.type === "runtime_command") {
+          let execution: RuntimeCommandExecution;
+          if (options.runtimeCommandHandler === undefined) {
+            execution = {
+              outcome: "conflict",
+              conflict: {
+                code: "runtime_unavailable",
+                message:
+                  "Runtime lifecycle commands are unavailable in this application.",
+              },
+            };
+          } else {
+            const handled = await options.runtimeCommandHandler(
+              request.command,
+              async (status) => {
+                await publishStatus(status);
+              },
+            );
+            execution = decodeRuntimeCommandExecution(handled) ?? {
+              outcome: "failed",
+            };
+          }
+          await writeFrame(state.connection, {
+            type: "runtime_command_result",
+            requestId: request.requestId,
+            result: {
+              command: request.command,
+              ...execution,
+              snapshot: current,
+            },
+          });
         } else if (request.type === "subscribe") {
           state.subscribed = true;
           await writeFrame(state.connection, {
@@ -178,41 +213,43 @@ export async function startApplicationStatusHost(
     }
   })();
 
+  const publishStatus = (status: ApplicationStatus): Promise<void> => {
+    const safeStatus = decodeApplicationStatus(status);
+    if (safeStatus === undefined) {
+      return Promise.reject(new Error("Invalid application status"));
+    }
+    if (closed) {
+      return Promise.reject(new Error("Control Plane is closed"));
+    }
+    publishQueue = publishQueue.then(async () => {
+      current = { ...safeStatus, sequence: current.sequence + 1 };
+      const event = {
+        type: "event",
+        event: {
+          type: "status_changed",
+          sequence: current.sequence,
+          snapshot: current,
+        },
+      } as const;
+      await Promise.all(
+        [...states]
+          .filter((state) => state.subscribed)
+          .map(async (state) => {
+            try {
+              await writeFrame(state.connection, event);
+            } catch {
+              state.subscribed = false;
+              await state.connection.close().catch(() => undefined);
+            }
+          }),
+      );
+    });
+    return publishQueue;
+  };
+
   return {
     endpoint: options.endpoint,
-    publishStatus(status) {
-      const safeStatus = decodeApplicationStatus(status);
-      if (safeStatus === undefined) {
-        return Promise.reject(new Error("Invalid application status"));
-      }
-      if (closed) {
-        return Promise.reject(new Error("Control Plane is closed"));
-      }
-      publishQueue = publishQueue.then(async () => {
-        current = { ...safeStatus, sequence: current.sequence + 1 };
-        const event = {
-          type: "event",
-          event: {
-            type: "status_changed",
-            sequence: current.sequence,
-            snapshot: current,
-          },
-        } as const;
-        await Promise.all(
-          [...states]
-            .filter((state) => state.subscribed)
-            .map(async (state) => {
-              try {
-                await writeFrame(state.connection, event);
-              } catch {
-                state.subscribed = false;
-                await state.connection.close().catch(() => undefined);
-              }
-            }),
-        );
-      });
-      return publishQueue;
-    },
+    publishStatus,
     async close() {
       if (closed) return;
       closed = true;

@@ -35,9 +35,11 @@ import {
   startControlPlane,
   type ApplicationStatus,
   type ControlPlaneEndpoint,
+  type RuntimeCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 import { startLuckyTokenHttpServer } from "./server.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
+import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
 
 const HELP = `LuckyToken
 
@@ -47,6 +49,7 @@ Usage:
   luckytoken logout [provider] --config <path>
   luckytoken client-token <create|rotate|remove|list> <protocol> [scope] --config <path>
   luckytoken control status --descriptor <path>
+  luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -55,6 +58,7 @@ Commands:
   logout   Remove a Provider credential through Pi Models
   client-token  Manage one Client Protocol's local token file
   control status  Read the local Control Plane status snapshot
+  control start|stop|restart  Manage the model gateway through the Control Plane
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -328,17 +332,50 @@ async function runServe(
   descriptorOverride?: string,
 ): Promise<void> {
   const config = await loadLuckyTokenCliConfig(configPath);
-  const shutdownController = new AbortController();
-  const composition = await createConfiguredLuckyTokenComposition({
-    config,
-    fetch: globalThis.fetch,
-    shutdownSignal: shutdownController.signal,
-  });
   const controlPipe = await createProductionControlPipe();
   const provider: ApplicationStatus["provider"] =
-    composition.userConfiguredProviderIds.length === 0
+    Object.keys(config.providerPackages).length === 0 &&
+    config.pi.modelsJson === undefined
       ? "unconfigured"
       : "configured";
+  const supervisor = createDataPlaneRuntimeSupervisor({
+    host: config.server.host,
+    port: config.server.port,
+    provider,
+    startListener: async () => {
+      const shutdownController = new AbortController();
+      try {
+        const composition = await createConfiguredLuckyTokenComposition({
+          config,
+          fetch: globalThis.fetch,
+          shutdownSignal: shutdownController.signal,
+        });
+        const server = await startLuckyTokenHttpServer({
+          runtime: composition.runtime,
+          host: config.server.host,
+          port: config.server.port,
+        });
+        for (const route of composition.runtime.routes) {
+          stdout.write(
+            `LuckyToken ${route.method} ${server.origin}${route.pathname}\n`,
+          );
+        }
+        return {
+          async close() {
+            shutdownController.abort(
+              new Error("LuckyToken model gateway is stopping"),
+            );
+            await server.close();
+          },
+        };
+      } catch (error) {
+        shutdownController.abort(
+          new Error("LuckyToken model gateway startup failed"),
+        );
+        throw error;
+      }
+    },
+  });
   const endpoint: ControlPlaneEndpoint = Object.freeze({
     pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
     capability: randomBytes(32).toString("base64url"),
@@ -346,7 +383,8 @@ async function runServe(
   const controlPlane = await startControlPlane({
     endpoint,
     application: { id: "luckytoken", version: "0.0.0" },
-    initialStatus: { modelDataPlane: "stopped", provider },
+    initialStatus: supervisor.initialStatus,
+    runtimeCommandHandler: supervisor.execute,
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
   });
@@ -360,26 +398,17 @@ async function runServe(
   let descriptor:
     | Awaited<ReturnType<typeof publishControlPlaneDescriptor>>
     | undefined;
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
   try {
     descriptor = await publishControlPlaneDescriptor({
       path: descriptorPath,
       endpoint,
       createTemporaryId: randomUUID,
     });
-    server = await startLuckyTokenHttpServer({
-      runtime: composition.runtime,
-      host: config.server.host,
-      port: config.server.port,
-    });
-    await controlPlane.publishStatus({ modelDataPlane: "running", provider });
-    for (const route of composition.runtime.routes) {
-      stdout.write(
-        `LuckyToken ${route.method} ${server.origin}${route.pathname}\n`,
-      );
-    }
+    await supervisor.execute("start", (status) =>
+      controlPlane.publishStatus(status),
+    );
 
-    const signalName = await new Promise<"SIGINT" | "SIGTERM">((resolve) => {
+    await new Promise<"SIGINT" | "SIGTERM">((resolve) => {
       const finish = (signal: "SIGINT" | "SIGTERM") => {
         process.off("SIGINT", onInterrupt);
         process.off("SIGTERM", onTerminate);
@@ -390,13 +419,14 @@ async function runServe(
       process.once("SIGINT", onInterrupt);
       process.once("SIGTERM", onTerminate);
     });
-    shutdownController.abort(new Error(`LuckyToken received ${signalName}`));
-    await controlPlane.publishStatus({ modelDataPlane: "stopping", provider });
-    await server.close();
-    await controlPlane.publishStatus({ modelDataPlane: "stopped", provider });
+    await supervisor.execute("stop", (status) =>
+      controlPlane.publishStatus(status),
+    );
   } finally {
+    await supervisor
+      .execute("stop", (status) => controlPlane.publishStatus(status))
+      .catch(() => undefined);
     const cleanup = await Promise.allSettled([
-      server?.close() ?? Promise.resolve(),
       descriptor?.close() ?? Promise.resolve(),
       controlPlane.close(),
     ]);
@@ -406,7 +436,10 @@ async function runServe(
   }
 }
 
-async function runControlStatus(args: readonly string[]): Promise<void> {
+async function runControlCommand(
+  command: "status" | RuntimeCommand,
+  args: readonly string[],
+): Promise<void> {
   let descriptorPath: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] !== "--descriptor") throw new Error(`Unknown control option: ${args[index]}`);
@@ -426,7 +459,11 @@ async function runControlStatus(args: readonly string[]): Promise<void> {
     if (hello.type === "incompatible") {
       throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
     }
-    stdout.write(`${JSON.stringify(await client.getStatus())}\n`);
+    const result =
+      command === "status"
+        ? await client.getStatus()
+        : await client.executeRuntimeCommand(command);
+    stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await client.close();
   }
@@ -435,8 +472,17 @@ async function runControlStatus(args: readonly string[]): Promise<void> {
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
-  if (args[0] === "control" && args[1] === "status") {
-    await runControlStatus(args.slice(2));
+  if (args[0] === "control") {
+    const command = args[1];
+    if (
+      command !== "status" &&
+      command !== "start" &&
+      command !== "stop" &&
+      command !== "restart"
+    ) {
+      throw new Error(`Unknown control command: ${command ?? ""}`);
+    }
+    await runControlCommand(command, args.slice(2));
     return;
   }
   if (args[0] === "client-token") {

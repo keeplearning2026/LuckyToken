@@ -98,6 +98,7 @@ export function projectControlPlaneState(
   payload: ControlPlaneBridgePayload,
 ): ControlPlaneState {
   if (payload.connection === "connected") {
+    const dataPlane = payload.snapshot.dataPlane;
     return Object.freeze({
       revision: payload.revision,
       kind: "connected",
@@ -106,6 +107,23 @@ export function projectControlPlaneState(
       sequence: payload.snapshot.sequence,
       modelDataPlane: payload.snapshot.modelDataPlane,
       provider: payload.snapshot.provider,
+      ...(dataPlane === undefined
+        ? {}
+        : {
+            dataPlane: Object.freeze({
+              configuredOrigin: dataPlane.configuredOrigin,
+              configuredPort: dataPlane.configuredPort,
+              ...(dataPlane.failure === undefined
+                ? {}
+                : {
+                    failure: Object.freeze({
+                      code: dataPlane.failure.code,
+                      message:
+                        dataPlaneFailureCopy[dataPlane.failure.code],
+                    }),
+                  }),
+            }),
+          }),
     });
   }
   if (payload.connection === "version_mismatch") {
@@ -136,3 +154,12 @@ export function projectControlPlaneState(
     ...unavailableCopy[payload.reason],
   });
 }
+
+const dataPlaneFailureCopy = {
+  port_in_use:
+    "The configured port is already in use. Stop the other application or choose a different port.",
+  start_failed:
+    "The model gateway could not start. Check its configured address and try again.",
+  stop_failed:
+    "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+} as const;

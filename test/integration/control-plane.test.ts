@@ -606,6 +606,24 @@ describe("Application Control Plane public seam", () => {
 
     await raw.write(
       encodeRawFrame({
+        type: "runtime_command",
+        requestId: "invalid-runtime-command",
+        command: "launch_with_secret",
+        secret: "malformed-runtime-secret",
+      }),
+    );
+    const invalidRuntimeCommand = await readRawFrame(raw);
+    expect(invalidRuntimeCommand).toEqual({
+      type: "error",
+      requestId: "invalid-runtime-command",
+      code: "invalid_request",
+    });
+    expect(JSON.stringify(invalidRuntimeCommand)).not.toContain(
+      "malformed-runtime-secret",
+    );
+
+    await raw.write(
+      encodeRawFrame({
         type: "future_command",
         requestId: target.capability,
       }),

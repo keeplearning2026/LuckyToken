@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { RuntimeCommand } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
 import {
@@ -18,6 +19,7 @@ export function App({ shell, retryConnection }: AppProps) {
     shell.snapshot(),
   );
   const [retrying, setRetrying] = useState(false);
+  const [runtimeCommand, setRuntimeCommand] = useState<RuntimeCommand>();
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -38,6 +40,15 @@ export function App({ shell, retryConnection }: AppProps) {
       await retryConnection();
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const executeRuntimeCommand = async (command: RuntimeCommand) => {
+    setRuntimeCommand(command);
+    try {
+      await shell.executeRuntimeCommand(command);
+    } finally {
+      setRuntimeCommand(undefined);
     }
   };
 
@@ -88,6 +99,56 @@ export function App({ shell, retryConnection }: AppProps) {
             </button>
           </section>
         ) : null}
+        {snapshot.activePage === "dashboard" &&
+        snapshot.connection.kind === "connected" ? (
+          <section className="runtime-controls" aria-label="Model gateway controls">
+            <div>
+              <strong>Model gateway</strong>
+              <p>
+                {snapshot.connection.dataPlane?.configuredOrigin ??
+                  "Configured locally"}
+              </p>
+              {snapshot.connection.dataPlane?.failure === undefined ? null : (
+                <small>{snapshot.connection.dataPlane.failure.message}</small>
+              )}
+            </div>
+            <div className="runtime-actions">
+              <button
+                disabled={
+                  runtimeCommand !== undefined ||
+                  snapshot.connection.modelDataPlane === "running" ||
+                  snapshot.connection.modelDataPlane === "starting" ||
+                  snapshot.connection.modelDataPlane === "stopping"
+                }
+                onClick={() => void executeRuntimeCommand("start")}
+                type="button"
+              >
+                Start
+              </button>
+              <button
+                disabled={
+                  runtimeCommand !== undefined ||
+                  snapshot.connection.modelDataPlane === "stopped" ||
+                  snapshot.connection.modelDataPlane === "stopping"
+                }
+                onClick={() => void executeRuntimeCommand("stop")}
+                type="button"
+              >
+                Stop
+              </button>
+              <button
+                disabled={
+                  runtimeCommand !== undefined ||
+                  snapshot.connection.modelDataPlane !== "running"
+                }
+                onClick={() => void executeRuntimeCommand("restart")}
+                type="button"
+              >
+                Restart
+              </button>
+            </div>
+          </section>
+        ) : null}
         <section className="empty-page">
           <div className="empty-mark" aria-hidden="true" />
           <h2>{activePage.label}</h2>
@@ -108,7 +169,9 @@ function ConnectionBadge({ state }: { readonly state: ControlPlaneState }) {
   }
   return (
     <span className="badge connected">
-      {state.modelDataPlane === "running" ? "Connected" : state.modelDataPlane}
+      {state.modelDataPlane === "running"
+        ? "Gateway running"
+        : `Gateway ${state.modelDataPlane}`}
     </span>
   );
 }

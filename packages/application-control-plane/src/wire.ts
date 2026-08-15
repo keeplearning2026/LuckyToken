@@ -2,7 +2,12 @@ import {
   controlPlaneVersion,
   type ApplicationIdentity,
   type ApplicationStatus,
+  type DataPlaneFailure,
   type HelloResult,
+  type RuntimeCommand,
+  type RuntimeCommandConflict,
+  type RuntimeCommandExecution,
+  type RuntimeCommandResult,
   type StatusEvent,
   type StatusSnapshot,
 } from "./contracts.js";
@@ -17,6 +22,11 @@ export type ClientRequest =
       readonly capability: string;
     }
   | { readonly type: "get_status"; readonly requestId: string }
+  | {
+      readonly type: "runtime_command";
+      readonly requestId: string;
+      readonly command: RuntimeCommand;
+    }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
 
@@ -36,6 +46,11 @@ export type ServerMessage =
       readonly type: "status_result";
       readonly requestId: string;
       readonly snapshot: StatusSnapshot;
+    }
+  | {
+      readonly type: "runtime_command_result";
+      readonly requestId: string;
+      readonly result: RuntimeCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -72,14 +87,87 @@ export function decodeApplicationStatus(
     !isRecord(value) ||
     (value.provider !== "configured" && value.provider !== "unconfigured") ||
     (value.modelDataPlane !== "stopped" &&
+      value.modelDataPlane !== "starting" &&
       value.modelDataPlane !== "running" &&
-      value.modelDataPlane !== "stopping")
+      value.modelDataPlane !== "stopping" &&
+      value.modelDataPlane !== "failed")
+  ) {
+    return undefined;
+  }
+  const dataPlane = decodeDataPlaneStatus(value.dataPlane);
+  if (
+    (value.dataPlane !== undefined && dataPlane === undefined) ||
+    (value.modelDataPlane === "failed" && dataPlane?.failure === undefined) ||
+    (value.modelDataPlane !== "failed" && dataPlane?.failure !== undefined)
   ) {
     return undefined;
   }
   return {
     modelDataPlane: value.modelDataPlane,
     provider: value.provider,
+    ...(dataPlane === undefined ? {} : { dataPlane }),
+  };
+}
+
+const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
+  port_in_use:
+    "The configured port is already in use. Stop the other application or choose a different port.",
+  start_failed:
+    "The model gateway could not start. Check its configured address and try again.",
+  stop_failed:
+    "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+};
+
+function decodeDataPlaneFailure(value: unknown): DataPlaneFailure | undefined {
+  if (
+    !isRecord(value) ||
+    (value.code !== "port_in_use" &&
+      value.code !== "start_failed" &&
+      value.code !== "stop_failed")
+  ) {
+    return undefined;
+  }
+  return { code: value.code, message: failureMessages[value.code] };
+}
+
+function decodeDataPlaneStatus(
+  value: unknown,
+): ApplicationStatus["dataPlane"] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.configuredOrigin !== "string" ||
+    !Number.isSafeInteger(value.configuredPort) ||
+    (value.configuredPort as number) < 0 ||
+    (value.configuredPort as number) > 65_535
+  ) {
+    return undefined;
+  }
+  let origin: URL;
+  try {
+    origin = new URL(value.configuredOrigin);
+  } catch {
+    return undefined;
+  }
+  const originPort =
+    origin.port === "" ? 80 : Number.parseInt(origin.port, 10);
+  if (
+    origin.protocol !== "http:" ||
+    origin.username !== "" ||
+    origin.password !== "" ||
+    origin.pathname !== "/" ||
+    origin.search !== "" ||
+    origin.hash !== "" ||
+    originPort !== value.configuredPort
+  ) {
+    return undefined;
+  }
+  const failure = decodeDataPlaneFailure(value.failure);
+  if (value.failure !== undefined && failure === undefined) return undefined;
+  return {
+    configuredOrigin: value.configuredOrigin,
+    configuredPort: value.configuredPort as number,
+    ...(failure === undefined ? {} : { failure }),
   };
 }
 
@@ -118,6 +206,19 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
     value.type === "unsubscribe"
   ) {
     return { type: "valid", request: { type: value.type, requestId } };
+  }
+  if (value.type === "runtime_command") {
+    if (
+      value.command !== "start" &&
+      value.command !== "stop" &&
+      value.command !== "restart"
+    ) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "runtime_command", requestId, command: value.command },
+    };
   }
   return { type: "invalid", requestId, code: "unknown_command" };
 }
@@ -205,6 +306,77 @@ export function decodeEvent(value: unknown): StatusEvent | undefined {
     : undefined;
 }
 
+function decodeRuntimeCommandConflict(
+  value: unknown,
+): RuntimeCommandConflict | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.code === "restart_requires_running") {
+    return {
+      code: value.code,
+      message: "Start the model gateway before restarting it.",
+    };
+  }
+  if (value.code === "runtime_unavailable") {
+    return {
+      code: value.code,
+      message: "Runtime lifecycle commands are unavailable in this application.",
+    };
+  }
+  if (value.code === "application_restart_required") {
+    return {
+      code: value.code,
+      message: "Restart LuckyToken before starting the model gateway again.",
+    };
+  }
+  return undefined;
+}
+
+export function decodeRuntimeCommandExecution(
+  value: unknown,
+): RuntimeCommandExecution | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "completed" &&
+      value.outcome !== "unchanged" &&
+      value.outcome !== "failed" &&
+      value.outcome !== "conflict")
+  ) {
+    return undefined;
+  }
+  const conflict = decodeRuntimeCommandConflict(value.conflict);
+  if (
+    (value.outcome === "conflict" && conflict === undefined) ||
+    (value.outcome !== "conflict" && value.conflict !== undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    outcome: value.outcome,
+    ...(conflict === undefined ? {} : { conflict }),
+  };
+}
+
+function decodeRuntimeCommandResult(
+  value: unknown,
+): RuntimeCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.command !== "start" &&
+      value.command !== "stop" &&
+      value.command !== "restart")
+  ) {
+    return undefined;
+  }
+  const snapshot = decodeSnapshot(value.snapshot);
+  const execution = decodeRuntimeCommandExecution(value);
+  if (snapshot === undefined || execution === undefined) return undefined;
+  return {
+    command: value.command as RuntimeCommand,
+    ...execution,
+    snapshot,
+  };
+}
+
 export function decodeServerMessage(value: unknown): ServerMessage | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "event") {
@@ -224,6 +396,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return snapshot === undefined
       ? undefined
       : { type: "status_result", requestId, snapshot };
+  }
+  if (value.type === "runtime_command_result") {
+    const result = decodeRuntimeCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "runtime_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

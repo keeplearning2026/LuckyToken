@@ -6,8 +6,30 @@ export interface ApplicationIdentity {
 }
 
 export interface ApplicationStatus {
-  readonly modelDataPlane: "stopped" | "running" | "stopping";
+  readonly modelDataPlane:
+    | "stopped"
+    | "starting"
+    | "running"
+    | "stopping"
+    | "failed";
   readonly provider: "configured" | "unconfigured";
+  readonly dataPlane?: DataPlaneStatus;
+}
+
+export type DataPlaneFailureCode =
+  | "port_in_use"
+  | "start_failed"
+  | "stop_failed";
+
+export interface DataPlaneFailure {
+  readonly code: DataPlaneFailureCode;
+  readonly message: string;
+}
+
+export interface DataPlaneStatus {
+  readonly configuredOrigin: string;
+  readonly configuredPort: number;
+  readonly failure?: DataPlaneFailure;
 }
 
 export interface StatusSnapshot extends ApplicationStatus {
@@ -47,10 +69,48 @@ export interface RunningControlPlane {
   close(): Promise<void>;
 }
 
+export type RuntimeCommand = "start" | "stop" | "restart";
+
+export type RuntimeCommandConflictCode =
+  | "restart_requires_running"
+  | "application_restart_required"
+  | "runtime_unavailable";
+
+export interface RuntimeCommandConflict {
+  readonly code: RuntimeCommandConflictCode;
+  readonly message: string;
+}
+
+export type RuntimeCommandOutcome =
+  | "completed"
+  | "unchanged"
+  | "failed"
+  | "conflict";
+
+export interface RuntimeCommandExecution {
+  readonly outcome: RuntimeCommandOutcome;
+  readonly conflict?: RuntimeCommandConflict;
+}
+
+export interface RuntimeCommandResult extends RuntimeCommandExecution {
+  readonly command: RuntimeCommand;
+  readonly snapshot: StatusSnapshot;
+}
+
+export type RuntimeStatusPublisher = (
+  status: ApplicationStatus,
+) => Promise<void>;
+
+export type RuntimeCommandHandler = (
+  command: RuntimeCommand,
+  publishStatus: RuntimeStatusPublisher,
+) => Promise<RuntimeCommandExecution>;
+
 export interface ControlPlaneClient {
   readonly disconnected: Promise<ControlPlaneDisconnect>;
   hello(version: number): Promise<HelloResult>;
   getStatus(): Promise<StatusSnapshot>;
+  executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   subscribe(
     listener: (event: StatusEvent) => void,
   ): Promise<() => Promise<void>>;
