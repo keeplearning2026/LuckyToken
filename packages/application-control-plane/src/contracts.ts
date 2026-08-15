@@ -34,6 +34,61 @@ export interface DataPlaneStatus {
 
 export interface StatusSnapshot extends ApplicationStatus {
   readonly sequence: number;
+  /** Optional registered settings catalog projection (Ticket 06). */
+  readonly settings?: Readonly<Record<string, RegisteredSetting>>;
+  /** Present only while a non-loopback bind action waits for confirmation. */
+  readonly confirmation?: LanConfirmation;
+}
+
+/** Registered setting: type, default, validation, sensitivity, and apply mode
+ *  are declared by the backend's authoritative catalog; values are typed and
+ *  validated. Restart-required settings also report the effective value. */
+export interface RegisteredSetting {
+  readonly key: string;
+  readonly type: "boolean" | "number" | "string";
+  readonly default: boolean | number | string;
+  readonly validation: unknown;
+  readonly sensitivity: "public" | "secret";
+  readonly applyMode: "hot-apply" | "restart-required";
+  readonly value: boolean | number | string;
+  readonly effective?: boolean | number | string;
+}
+
+export interface LanConfirmation {
+  readonly actionId: string;
+  readonly settingKey: "server.bindHost";
+  readonly value: string;
+  readonly message: string;
+}
+
+export type SettingsCommand =
+  | {
+      readonly command: "query";
+      readonly keys?: readonly string[];
+    }
+  | {
+      readonly command: "set";
+      readonly key: string;
+      readonly value: unknown;
+    }
+  | {
+      readonly command: "confirm";
+      readonly actionId: string;
+    };
+
+export type SettingsCommandOutcome =
+  | "ok"
+  | "applied"
+  | "pending"
+  | "confirmation_required"
+  | "unknown_key"
+  | "invalid_value";
+
+export interface SettingsCommandResult {
+  readonly outcome: SettingsCommandOutcome;
+  readonly error?: string;
+  readonly confirmation?: LanConfirmation;
+  readonly settings: Readonly<Record<string, RegisteredSetting>>;
 }
 
 export interface StatusEvent {
@@ -106,11 +161,30 @@ export type RuntimeCommandHandler = (
   publishStatus: RuntimeStatusPublisher,
 ) => Promise<RuntimeCommandExecution>;
 
+/** Handles Settings commands and returns a closed outcome plus the settings
+ *  projection. The host owns the snapshot merge and the settings_changed
+ *  event; it publishes only when an outcome actually changes state. */
+export type SettingsCommandHandler = (
+  command: SettingsCommand,
+) => Promise<{
+  readonly outcome: SettingsCommandOutcome;
+  readonly error?: string;
+  readonly confirmation?: LanConfirmation;
+  readonly settings: Readonly<Record<string, RegisteredSetting>>;
+}>;
+
+/** Live settings projection merged into every published status snapshot. */
+export interface SettingsProjection {
+  readonly settings: Readonly<Record<string, RegisteredSetting>>;
+  readonly confirmation?: LanConfirmation;
+}
+
 export interface ControlPlaneClient {
   readonly disconnected: Promise<ControlPlaneDisconnect>;
   hello(version: number): Promise<HelloResult>;
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
+  executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
   subscribe(
     listener: (event: StatusEvent) => void,
   ): Promise<() => Promise<void>>;

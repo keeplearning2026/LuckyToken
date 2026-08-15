@@ -38,6 +38,8 @@ import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
 } from "./runtime.js";
+import { createProtocolAwareRuntime } from "./settings/runtime.js";
+import type { SettingsRegistry } from "./settings/catalog.js";
 
 export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
@@ -60,6 +62,9 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly createSessionId?: () => string;
   readonly now?: () => number;
   readonly shutdownSignal?: AbortSignal;
+  /** Registered settings authority for protocol enablement; when absent every
+   *  configured protocol is served (Ticket 03 behavior). */
+  readonly settingsRegistry?: SettingsRegistry;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -225,12 +230,32 @@ export async function createConfiguredLuckyTokenComposition(
     maxRequestBytes: config.limits.maxRequestBytes,
     requestTimeoutMs: config.limits.requestTimeoutMs,
   });
-  const runtime = createLuckyTokenRuntime({
+  const baseRuntime = createLuckyTokenRuntime({
     clientProtocols,
     requestTimeoutMs: config.limits.requestTimeoutMs,
     ...(options.shutdownSignal === undefined
       ? {}
       : { shutdownSignal: options.shutdownSignal }),
   });
+  const registry = options.settingsRegistry;
+  const runtime =
+    registry === undefined
+      ? baseRuntime
+      : createProtocolAwareRuntime({
+          runtime: baseRuntime,
+          registry,
+          protocolRoutes: [
+            {
+              id: anthropicMessagesProtocolId,
+              method: "POST",
+              pathname: "/v1/messages",
+            },
+            {
+              id: openaiResponsesProtocolId,
+              method: "POST",
+              pathname: "/v1/responses",
+            },
+          ],
+        });
   return Object.freeze({ runtime, certification, userConfiguredProviderIds });
 }

@@ -7,6 +7,8 @@ import {
   type RunningControlPlane,
   type RuntimeCommandExecution,
   type RuntimeCommandHandler,
+  type SettingsCommandHandler,
+  type SettingsProjection,
   type StatusSnapshot,
 } from "./contracts.js";
 import { readFrame, writeFrame } from "./framing.js";
@@ -21,6 +23,7 @@ import {
   decodeApplicationStatus,
   decodeClientRequest,
   decodeRuntimeCommandExecution,
+  decodeSettingsCommandResult,
   incompatibleHello,
   isRecord,
   type ControlPlaneErrorCode,
@@ -33,6 +36,10 @@ export interface StartControlPlaneOptions {
   readonly pipeServerFactory: PipeServerFactory;
   readonly access: PipeAccessRequirement;
   readonly runtimeCommandHandler?: RuntimeCommandHandler;
+  /** Optional Settings command handler (Ticket 06). */
+  readonly settingsCommandHandler?: SettingsCommandHandler;
+  /** Live settings projection merged into every published snapshot. */
+  readonly settingsProjection?: () => SettingsProjection;
 }
 
 interface ConnectionState {
@@ -60,7 +67,23 @@ export async function startApplicationStatusHost(
     throw error;
   }
 
-  let current: StatusSnapshot = { ...initialStatus, sequence: 0 };
+  const mergedStatus = (
+    status: ApplicationStatus,
+  ): Omit<StatusSnapshot, "sequence"> => {
+    const projection = options.settingsProjection?.();
+    return {
+      ...status,
+      ...(projection === undefined
+        ? {}
+        : {
+            settings: projection.settings,
+            ...(projection.confirmation === undefined
+              ? {}
+              : { confirmation: projection.confirmation }),
+          }),
+    };
+  };
+  let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
   let closed = false;
   let publishQueue = Promise.resolve();
   const states = new Set<ConnectionState>();
@@ -168,6 +191,52 @@ export async function startApplicationStatusHost(
               snapshot: current,
             },
           });
+        } else if (request.type === "settings_command") {
+          if (options.settingsCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          const handled = await options.settingsCommandHandler(request.command);
+          const result = decodeSettingsCommandResult({
+            outcome: handled.outcome,
+            ...(handled.error === undefined ? {} : { error: handled.error }),
+            ...(handled.confirmation === undefined
+              ? {}
+              : { confirmation: handled.confirmation }),
+            settings: handled.settings,
+          });
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          if (
+            handled.outcome === "applied" ||
+            handled.outcome === "pending" ||
+            handled.outcome === "confirmation_required"
+          ) {
+            // The live projection is merged by publishStatus, so the base
+            // status alone is enough to emit the settings_changed event.
+            await publishStatus({
+              modelDataPlane: current.modelDataPlane,
+              provider: current.provider,
+              ...(current.dataPlane === undefined
+                ? {}
+                : { dataPlane: current.dataPlane }),
+            });
+          }
+          await writeFrame(state.connection, {
+            type: "settings_command_result",
+            requestId: request.requestId,
+            result,
+          });
         } else if (request.type === "subscribe") {
           state.subscribed = true;
           await writeFrame(state.connection, {
@@ -222,7 +291,7 @@ export async function startApplicationStatusHost(
       return Promise.reject(new Error("Control Plane is closed"));
     }
     publishQueue = publishQueue.then(async () => {
-      current = { ...safeStatus, sequence: current.sequence + 1 };
+      current = { ...mergedStatus(safeStatus), sequence: current.sequence + 1 };
       const event = {
         type: "event",
         event: {

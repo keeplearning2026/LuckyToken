@@ -52,6 +52,10 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
       join(repositoryRoot, "packages", "provider-commandcode-private"),
       directory,
     );
+    const controlPlaneTarball = await pack(
+      join(repositoryRoot, "packages", "application-control-plane"),
+      directory,
+    );
     const rootTarball = await pack(repositoryRoot, directory);
     await writeFile(
       join(directory, "package.json"),
@@ -67,6 +71,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
           )}`,
           "@luckytoken/provider-contract": `file:${contractTarball}`,
           "@luckytoken/provider-commandcode-private": `file:${providerTarball}`,
+          "@luckytoken/application-control-plane": `file:${controlPlaneTarball}`,
           luckytoken: `file:${rootTarball}`,
         },
       }, null, 2)}\n`,

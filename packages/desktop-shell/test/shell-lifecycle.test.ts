@@ -22,6 +22,7 @@ describe("Windows desktop shell public lifecycle seam", () => {
     };
     const shell = createWindowsShellHost({
       connectControlPlane: async () => connected,
+      executeSettingsCommand: async () => connected,
       executeRuntimeCommand: async (command) => {
         commands.push(command);
         return connected;
@@ -50,6 +51,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
         modelDataPlane: "running",
         provider: "unconfigured",
       }),
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -75,6 +79,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
     const shell = createWindowsShellHost({
       connectControlPlane: async () => {
         throw new Error("connection rejected");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
       },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
@@ -104,6 +111,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       connectControlPlane: async () => {
         connected += 1;
         throw new Error("must not connect after disposal");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
       },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
@@ -142,6 +152,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
         modelDataPlane: "running",
         provider: "unconfigured",
       }),
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -177,6 +190,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
         modelDataPlane: "running",
         provider: "unconfigured",
       }),
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -220,6 +236,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
     });
     const shell = createWindowsShellHost({
       connectControlPlane: async () => unavailable(1),
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },

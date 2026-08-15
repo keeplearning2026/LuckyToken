@@ -6,6 +6,8 @@ import {
   type HelloResult,
   type RuntimeCommand,
   type RuntimeCommandResult,
+  type SettingsCommand,
+  type SettingsCommandResult,
   type StatusEvent,
   type StatusSnapshot,
 } from "./contracts.js";
@@ -143,6 +145,18 @@ export async function connectApplicationControlPlane(
     ): Promise<RuntimeCommandResult> {
       const response = await request({ type: "runtime_command", command });
       if (response.type !== "runtime_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async executeSettingsCommand(
+      command: SettingsCommand,
+    ): Promise<SettingsCommandResult> {
+      const response = await request({
+        type: "settings_command",
+        command,
+      });
+      if (response.type !== "settings_command_result") {
         throw new Error("Control Plane response is malformed");
       }
       return response.result;

@@ -27,6 +27,8 @@ import {
   loadFileClientTokenAuthority,
 } from "../../src/client-auth/file-token-store.js";
 import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
+import { createSettingsRegistry } from "../../src/settings/catalog.js";
+import { createSettingsControlPlaneHandler } from "../../src/settings/control-plane.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -235,6 +237,73 @@ describe("LuckyToken CLI", () => {
       outcome: "unchanged",
       snapshot: { modelDataPlane: "stopped" },
     });
+  }, 30_000);
+
+  it("queries and sets registered settings through the same Control Plane commands", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-settings-"));
+    directories.push(directory);
+    const transport = createNodePipeTransport();
+    const registry = createSettingsRegistry({
+      async load() {
+        return {};
+      },
+      async save() {},
+    });
+    const controlPlane = await startControlPlane({
+      endpoint: {
+        pipeName: `\\\\.\\pipe\\luckytoken-cli-settings-${process.pid}`,
+        capability: "cli-settings-capability-0123456789012345678",
+      },
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      },
+      settingsCommandHandler: createSettingsControlPlaneHandler(registry),
+      settingsProjection: () => registry.snapshot(),
+      pipeServerFactory: transport,
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(
+      descriptorPath,
+      JSON.stringify(controlPlane.endpoint),
+      "utf8",
+    );
+
+    const query = startCli([
+      "control",
+      "settings",
+      "query",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(query);
+    const queryResult = await captureChild(query).result;
+    expect(queryResult.code).toBe(0);
+    expect(JSON.parse(queryResult.stdout)).toMatchObject({
+      outcome: "ok",
+      settings: {
+        "protocols.anthropic-messages.enabled": { value: true },
+        "server.port": { value: 3000, effective: 3000 },
+      },
+    });
+    expect(queryResult.stdout).not.toContain("cli-settings-capability");
+
+    const setResult = startCli([
+      "control",
+      "settings",
+      "set",
+      "protocols.openai-responses.enabled",
+      "false",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(setResult);
+    const setOutcome = await captureChild(setResult).result;
+    expect(setOutcome.code).toBe(0);
+    expect(JSON.parse(setOutcome.stdout)).toMatchObject({ outcome: "applied" });
   }, 30_000);
 
   it("does not echo descriptor contents when discovery is malformed", async () => {

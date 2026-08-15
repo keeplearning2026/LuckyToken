@@ -12,7 +12,7 @@ import { stdin, stdout } from "node:process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -36,10 +36,15 @@ import {
   type ApplicationStatus,
   type ControlPlaneEndpoint,
   type RuntimeCommand,
+  type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 import { startLuckyTokenHttpServer } from "./server.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
+import { createSettingsRegistry } from "./settings/catalog.js";
+import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
+import { createFileSettingsStore } from "./settings/file-store.js";
+import { resolveEffectiveSettings } from "./settings/data-plane.js";
 
 const HELP = `LuckyToken
 
@@ -50,6 +55,7 @@ Usage:
   luckytoken client-token <create|rotate|remove|list> <protocol> [scope] --config <path>
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
+  luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -59,6 +65,7 @@ Commands:
   client-token  Manage one Client Protocol's local token file
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
+  control settings query|set|confirm  Read or change registered Settings through the Control Plane
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -338,22 +345,37 @@ async function runServe(
     config.pi.modelsJson === undefined
       ? "unconfigured"
       : "configured";
+  const settingsRegistry = createSettingsRegistry(
+    createFileSettingsStore(
+      join(dirname(configPath), ".luckytoken", "settings.json"),
+    ),
+    {
+      initial: {
+        "server.port": config.server.port,
+        "server.bindHost": config.server.host,
+      },
+    },
+  );
+  await settingsRegistry.load();
   const supervisor = createDataPlaneRuntimeSupervisor({
     host: config.server.host,
     port: config.server.port,
     provider,
-    startListener: async () => {
+    resolveAddress: () =>
+      resolveEffectiveSettings(settingsRegistry.query([])),
+    startListener: async (address) => {
       const shutdownController = new AbortController();
       try {
         const composition = await createConfiguredLuckyTokenComposition({
           config,
           fetch: globalThis.fetch,
           shutdownSignal: shutdownController.signal,
+          settingsRegistry,
         });
         const server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
-          host: config.server.host,
-          port: config.server.port,
+          host: address.host,
+          port: address.port,
         });
         for (const route of composition.runtime.routes) {
           stdout.write(
@@ -385,6 +407,8 @@ async function runServe(
     application: { id: "luckytoken", version: "0.0.0" },
     initialStatus: supervisor.initialStatus,
     runtimeCommandHandler: supervisor.execute,
+    settingsCommandHandler: createSettingsControlPlaneHandler(settingsRegistry),
+    settingsProjection: () => settingsRegistry.snapshot(),
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
   });
@@ -436,6 +460,82 @@ async function runServe(
   }
 }
 
+function parseValue(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (/^-?[0-9]+$/u.test(value)) return Number.parseInt(value, 10);
+  return value;
+}
+
+function parseSettingsCommand(args: readonly string[]): {
+  readonly descriptorPath: string;
+  readonly command: SettingsCommand;
+} {
+  let descriptorPath: string | undefined;
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--descriptor") {
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    positional.push(argument);
+  }
+  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
+  const action = positional[0];
+  if (action === "query") {
+    if (positional.length > 1) throw new Error("settings query takes no key arguments");
+    return { descriptorPath, command: { command: "query" } };
+  }
+  if (action === "confirm") {
+    const actionId = positional[1];
+    if (actionId === undefined || positional.length > 2) {
+      throw new Error("settings confirm requires the pending action id");
+    }
+    return { descriptorPath, command: { command: "confirm", actionId } };
+  }
+  if (action === "set") {
+    const key = positional[1];
+    const value = positional[2];
+    if (key === undefined || value === undefined || positional.length > 3) {
+      throw new Error("settings set requires <key> <value>");
+    }
+    return {
+      descriptorPath,
+      command: { command: "set", key, value: parseValue(value) },
+    };
+  }
+  throw new Error(`Unknown settings command: ${action ?? ""}`);
+}
+
+async function runControlSettingsCommand(args: readonly string[]): Promise<void> {
+  const parsed = parseSettingsCommand(args);
+  const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    const hello = await client.hello(controlPlaneVersion);
+    if (hello.type === "incompatible") {
+      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
+    }
+    const result = await client.executeSettingsCommand(parsed.command);
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
 async function runControlCommand(
   command: "status" | RuntimeCommand,
   args: readonly string[],
@@ -474,6 +574,10 @@ export async function runLuckyTokenCli(
 ): Promise<void> {
   if (args[0] === "control") {
     const command = args[1];
+    if (command === "settings") {
+      await runControlSettingsCommand(args.slice(2));
+      return;
+    }
     if (
       command !== "status" &&
       command !== "start" &&

@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import type { RuntimeCommand } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  RuntimeCommand,
+  SettingsCommand,
+} from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
 import {
@@ -20,6 +23,7 @@ export function App({ shell, retryConnection }: AppProps) {
   );
   const [retrying, setRetrying] = useState(false);
   const [runtimeCommand, setRuntimeCommand] = useState<RuntimeCommand>();
+  const [settingsCommand, setSettingsCommand] = useState<SettingsCommand>();
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -49,6 +53,15 @@ export function App({ shell, retryConnection }: AppProps) {
       await shell.executeRuntimeCommand(command);
     } finally {
       setRuntimeCommand(undefined);
+    }
+  };
+
+  const executeSettingsCommand = async (command: SettingsCommand) => {
+    setSettingsCommand(command);
+    try {
+      await shell.executeSettingsCommand(command);
+    } finally {
+      setSettingsCommand(undefined);
     }
   };
 
@@ -149,6 +162,23 @@ export function App({ shell, retryConnection }: AppProps) {
             </div>
           </section>
         ) : null}
+        {snapshot.activePage === "settings-developer-lab" &&
+        snapshot.connection.kind === "connected" ? (
+          <SettingsDeveloperLab
+            busy={settingsCommand !== undefined}
+            confirmation={snapshot.connection.confirmation}
+            settings={snapshot.connection.settings}
+            onConfirm={(actionId) =>
+              void executeSettingsCommand({
+                command: "confirm",
+                actionId,
+              })
+            }
+            onSet={(key, value) =>
+              void executeSettingsCommand({ command: "set", key, value })
+            }
+          />
+        ) : null}
         <section className="empty-page">
           <div className="empty-mark" aria-hidden="true" />
           <h2>{activePage.label}</h2>
@@ -160,6 +190,150 @@ export function App({ shell, retryConnection }: AppProps) {
         </section>
       </main>
     </div>
+  );
+}
+
+interface SettingsDeveloperLabProps {
+  readonly busy: boolean;
+  readonly confirmation:
+    | Readonly<{
+        readonly actionId: string;
+        readonly settingKey: "server.bindHost";
+        readonly value: string;
+        readonly message: string;
+      }>
+    | undefined;
+  readonly settings:
+    | Readonly<
+        Record<
+          string,
+          Readonly<{
+            readonly key: string;
+            readonly type: "boolean" | "number" | "string";
+            readonly default: boolean | number | string;
+            readonly sensitivity: "public" | "secret";
+            readonly applyMode: "hot-apply" | "restart-required";
+            readonly value: boolean | number | string;
+            readonly effective?: boolean | number | string;
+          }>
+        >
+      >
+    | undefined;
+  readonly onConfirm: (actionId: string) => void;
+  readonly onSet: (key: string, value: boolean | number | string) => void;
+}
+
+/** Settings / Developer Lab: exposes only actively registered settings. */
+function SettingsDeveloperLab({
+  busy,
+  confirmation,
+  settings,
+  onConfirm,
+  onSet,
+}: SettingsDeveloperLabProps) {
+  const anthropic = settings?.["protocols.anthropic-messages.enabled"];
+  const responses = settings?.["protocols.openai-responses.enabled"];
+  const port = settings?.["server.port"];
+  const bindHost = settings?.["server.bindHost"];
+  return (
+    <section className="settings-developer-lab" aria-label="Settings and Developer Lab">
+      <div className="settings-group">
+        <strong>Client Protocols</strong>
+        {anthropic === undefined && responses === undefined ? (
+          <p>No registered protocol settings are available.</p>
+        ) : (
+          <div className="settings-rows">
+            {anthropic === undefined ? null : (
+              <label className="settings-row">
+                <span>
+                  Anthropic Messages
+                  <small>Hot-applies immediately</small>
+                </span>
+                <input
+                  checked={anthropic.value === true}
+                  disabled={busy}
+                  onChange={(event) =>
+                    onSet(anthropic.key, event.target.checked)
+                  }
+                  type="checkbox"
+                />
+              </label>
+            )}
+            {responses === undefined ? null : (
+              <label className="settings-row">
+                <span>
+                  OpenAI Responses
+                  <small>Hot-applies immediately</small>
+                </span>
+                <input
+                  checked={responses.value === true}
+                  disabled={busy}
+                  onChange={(event) =>
+                    onSet(responses.key, event.target.checked)
+                  }
+                  type="checkbox"
+                />
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="settings-group">
+        <strong>Data Plane listener</strong>
+        {port === undefined && bindHost === undefined ? (
+          <p>No registered listener settings are available.</p>
+        ) : (
+          <div className="settings-rows">
+            {bindHost === undefined ? null : (
+              <label className="settings-row">
+                <span>
+                  Bind host
+                  <small>
+                    Effective: {String(bindHost.effective ?? bindHost.default)}
+                    {" — restart required"}
+                  </small>
+                </span>
+                <input
+                  disabled={busy}
+                  onChange={(event) => onSet(bindHost.key, event.target.value)}
+                  value={String(bindHost.value)}
+                />
+              </label>
+            )}
+            {port === undefined ? null : (
+              <label className="settings-row">
+                <span>
+                  Port
+                  <small>
+                    Effective: {String(port.effective ?? port.default)}
+                    {" — restart required"}
+                  </small>
+                </span>
+                <input
+                  disabled={busy}
+                  onChange={(event) =>
+                    onSet(port.key, Number(event.target.value))
+                  }
+                  value={String(port.value)}
+                />
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+      {confirmation === undefined ? null : (
+        <div className="settings-confirmation" aria-live="polite">
+          <p>{confirmation.message}</p>
+          <button
+            disabled={busy}
+            onClick={() => onConfirm(confirmation.actionId)}
+            type="button"
+          >
+            Confirm LAN bind
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

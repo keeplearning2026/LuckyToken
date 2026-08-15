@@ -1,5 +1,8 @@
 import type { Event } from "@tauri-apps/api/event";
-import type { RuntimeCommand } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  RuntimeCommand,
+  SettingsCommand,
+} from "@luckytoken/application-control-plane/control-plane";
 
 import {
   projectControlPlaneState,
@@ -12,7 +15,10 @@ export type ShellCommand =
   | "shell_retry"
   | "shell_start"
   | "shell_stop"
-  | "shell_restart";
+  | "shell_restart"
+  | "shell_settings_query"
+  | "shell_settings_set"
+  | "shell_settings_confirm";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: never): Promise<unknown>;
@@ -26,6 +32,7 @@ export interface TauriDesktopRuntime {
   connectControlPlane(): Promise<ControlPlaneState>;
   retryControlPlane(): Promise<ControlPlaneState>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
+  executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -231,6 +238,14 @@ export function createTauriDesktopRuntime(
           : command === "stop"
             ? "shell_stop"
             : "shell_restart",
+      ),
+    executeSettingsCommand: (command) =>
+      invokeState(
+        command.command === "query"
+          ? "shell_settings_query"
+          : command.command === "set"
+            ? "shell_settings_set"
+            : "shell_settings_confirm",
       ),
     async disconnectControlPlane() {
       await listenTask;

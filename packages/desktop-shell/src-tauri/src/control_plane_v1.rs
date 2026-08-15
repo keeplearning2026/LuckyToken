@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     pin::Pin,
     sync::{
@@ -74,6 +75,30 @@ pub(crate) struct DataPlaneStatus {
     pub(crate) failure: Option<DataPlaneFailure>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct RegisteredSettingWire {
+    pub(crate) key: String,
+    pub(crate) r#type: String,
+    pub(crate) default: Value,
+    pub(crate) validation: Value,
+    pub(crate) sensitivity: String,
+    #[serde(rename = "applyMode")]
+    pub(crate) apply_mode: String,
+    pub(crate) value: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effective: Option<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct LanConfirmationWire {
+    #[serde(rename = "actionId")]
+    pub(crate) action_id: String,
+    #[serde(rename = "settingKey")]
+    pub(crate) setting_key: String,
+    pub(crate) value: String,
+    pub(crate) message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct StatusSnapshot {
     pub(crate) sequence: u64,
@@ -82,6 +107,10 @@ pub(crate) struct StatusSnapshot {
     pub(crate) provider: ProviderState,
     #[serde(rename = "dataPlane", skip_serializing_if = "Option::is_none")]
     pub(crate) data_plane: Option<DataPlaneStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) settings: Option<BTreeMap<String, RegisteredSettingWire>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) confirmation: Option<LanConfirmationWire>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +118,31 @@ pub(crate) enum RuntimeCommand {
     Start,
     Stop,
     Restart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingsCommand {
+    Query,
+    Set,
+    Confirm,
+}
+
+impl SettingsCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Set => "set",
+            Self::Confirm => "confirm",
+        }
+    }
+
+    fn request_id(self) -> &'static str {
+        match self {
+            Self::Query => "desktop-settings-query",
+            Self::Set => "desktop-settings-set",
+            Self::Confirm => "desktop-settings-confirm",
+        }
+    }
 }
 
 impl RuntimeCommand {
@@ -169,12 +223,29 @@ pub(crate) type ConnectFuture =
     Pin<Box<dyn Future<Output = Result<ConnectResult, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type CommandFuture =
     Pin<Box<dyn Future<Output = Result<StatusSnapshot, ConnectionFailure>> + Send + 'static>>;
+pub(crate) type SettingsCommandFuture = Pin<
+    Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
+>;
 
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
     fn command(&self, _command: RuntimeCommand) -> CommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
+    fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct SettingsCommandResultWire {
+    pub(crate) outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) confirmation: Option<LanConfirmationWire>,
+    #[serde(rename = "settings")]
+    pub(crate) settings: BTreeMap<String, RegisteredSettingWire>,
 }
 
 pub(crate) struct NativeControlPlaneConnector {
@@ -230,6 +301,21 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_command_session(&pipe_name, capability, command).await
+        })
+    }
+
+    fn settings_command(&self, command: SettingsCommand) -> SettingsCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_settings_command_session(&pipe_name, capability, command).await
         })
     }
 }
@@ -345,6 +431,80 @@ async fn execute_command_session(
     }
 }
 
+async fn execute_settings_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: SettingsCommand,
+) -> Result<SettingsCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "settings_command",
+                    "requestId": command.request_id(),
+                    "command": {
+                        "command": command.as_str(),
+                    },
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_settings_command_result(&result, command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_settings_command_result(
+    value: &Value,
+    command: SettingsCommand,
+) -> Result<SettingsCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("settings_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if !matches!(
+        result.get("outcome").and_then(Value::as_str),
+        Some(
+            "ok" | "applied"
+                | "pending"
+                | "confirmation_required"
+                | "unknown_key"
+                | "invalid_value"
+        )
+    ) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    serde_json::from_value::<SettingsCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)
+}
+
 async fn execute_runtime_command<W>(
     pipe: &mut W,
     command: RuntimeCommand,
@@ -440,6 +600,8 @@ struct StatusSnapshotWire {
     provider: ProviderState,
     #[serde(rename = "dataPlane")]
     data_plane: Option<DataPlaneStatusWire>,
+    settings: Option<BTreeMap<String, RegisteredSettingWire>>,
+    confirmation: Option<LanConfirmationWire>,
 }
 
 #[derive(Deserialize)]
@@ -488,6 +650,8 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
         model_data_plane: wire.model_data_plane,
         provider: wire.provider,
         data_plane,
+        settings: wire.settings.filter(|settings| !settings.is_empty()),
+        confirmation: wire.confirmation,
     })
 }
 
@@ -721,6 +885,97 @@ mod tests {
         };
         assert_eq!(session.application_version(), "native-test");
         assert_eq!(session.snapshot().sequence, 2);
+    }
+
+    #[tokio::test]
+    async fn settings_command_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_settings_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                SettingsCommand::Query,
+            )
+            .await
+            .expect("settings query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("settings_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-settings-query")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("query")
+        );
+        server
+            .send(&json!({
+                "type": "settings_command_result",
+                "requestId": "desktop-settings-query",
+                "result": {
+                    "outcome": "ok",
+                    "settings": {
+                        "protocols.anthropic-messages.enabled": {
+                            "key": "protocols.anthropic-messages.enabled",
+                            "type": "boolean",
+                            "default": true,
+                            "validation": {"type": "boolean"},
+                            "sensitivity": "public",
+                            "applyMode": "hot-apply",
+                            "value": true
+                        }
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("settings query must complete within the timeout")
+            .expect("settings query task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(
+            result
+                .settings
+                .get("protocols.anthropic-messages.enabled")
+                .map(|setting| setting.key.as_str()),
+            Some("protocols.anthropic-messages.enabled")
+        );
     }
 
     fn test_pipe_name() -> String {

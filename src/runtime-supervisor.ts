@@ -1,6 +1,7 @@
 import type {
   ApplicationStatus,
   DataPlaneFailure,
+  DataPlaneStatus,
   RuntimeCommand,
   RuntimeCommandExecution,
   RuntimeCommandHandler,
@@ -16,11 +17,22 @@ export interface DataPlaneRuntimeSupervisor {
   readonly execute: RuntimeCommandHandler;
 }
 
+export interface DataPlaneAddress {
+  readonly host: string;
+  readonly port: number;
+}
+
 export interface DataPlaneRuntimeSupervisorOptions {
   readonly host: string;
   readonly port: number;
   readonly provider: ApplicationStatus["provider"];
-  readonly startListener: () => Promise<RunningDataPlaneListener>;
+  /** Resolves the effective bind address at each start/restart. When omitted,
+   *  the fixed configured host and port are used (Ticket 03 semantics). The
+   *  resolution is authoritative: there is no random or default fallback. */
+  readonly resolveAddress?: () => DataPlaneAddress;
+  readonly startListener: (
+    address: DataPlaneAddress,
+  ) => Promise<RunningDataPlaneListener>;
 }
 
 const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
@@ -41,14 +53,17 @@ function errorCode(error: unknown): string | undefined {
 export function createDataPlaneRuntimeSupervisor(
   options: DataPlaneRuntimeSupervisorOptions,
 ): DataPlaneRuntimeSupervisor {
-  const originHost =
-    options.host.includes(":") && !options.host.startsWith("[")
-      ? `[${options.host}]`
-      : options.host;
-  const configured = Object.freeze({
-    configuredOrigin: `http://${originHost}:${options.port}`,
-    configuredPort: options.port,
-  });
+  const configuredAddress = (): DataPlaneAddress =>
+    options.resolveAddress === undefined
+      ? Object.freeze({ host: options.host, port: options.port })
+      : options.resolveAddress();
+  const displayHost = (host: string): string =>
+    host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const configured = (address: DataPlaneAddress): ApplicationStatus["dataPlane"] =>
+    Object.freeze({
+      configuredOrigin: `http://${displayHost(address.host)}:${address.port}`,
+      configuredPort: address.port,
+    });
   const status = (
     modelDataPlane: ApplicationStatus["modelDataPlane"],
     failure?: DataPlaneFailure,
@@ -56,10 +71,12 @@ export function createDataPlaneRuntimeSupervisor(
     Object.freeze({
       modelDataPlane,
       provider: options.provider,
-      dataPlane: Object.freeze({
-        ...configured,
-        ...(failure === undefined ? {} : { failure: Object.freeze(failure) }),
-      }),
+      dataPlane: {
+        ...configured(configuredAddress()),
+        ...(failure === undefined
+          ? {}
+          : { failure: Object.freeze(failure) }),
+      } as DataPlaneStatus,
     });
   const initialStatus = status("stopped");
   let current = initialStatus;
@@ -102,7 +119,7 @@ export function createDataPlaneRuntimeSupervisor(
     }
     await transition(status("starting"), publishStatus);
     try {
-      listener = await options.startListener();
+      listener = await options.startListener(configuredAddress());
     } catch (error) {
       listener = undefined;
       return failStart(error, publishStatus);
@@ -170,7 +187,7 @@ export function createDataPlaneRuntimeSupervisor(
     }
     await transition(status("starting"), publishStatus);
     try {
-      listener = await options.startListener();
+      listener = await options.startListener(configuredAddress());
     } catch (error) {
       return failStart(error, publishStatus);
     }

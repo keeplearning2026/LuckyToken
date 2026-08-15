@@ -4,10 +4,14 @@ import {
   type ApplicationStatus,
   type DataPlaneFailure,
   type HelloResult,
+  type LanConfirmation,
+  type RegisteredSetting,
   type RuntimeCommand,
   type RuntimeCommandConflict,
   type RuntimeCommandExecution,
   type RuntimeCommandResult,
+  type SettingsCommand,
+  type SettingsCommandResult,
   type StatusEvent,
   type StatusSnapshot,
 } from "./contracts.js";
@@ -26,6 +30,11 @@ export type ClientRequest =
       readonly type: "runtime_command";
       readonly requestId: string;
       readonly command: RuntimeCommand;
+    }
+  | {
+      readonly type: "settings_command";
+      readonly requestId: string;
+      readonly command: SettingsCommand;
     }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
@@ -51,6 +60,11 @@ export type ServerMessage =
       readonly type: "runtime_command_result";
       readonly requestId: string;
       readonly result: RuntimeCommandResult;
+    }
+  | {
+      readonly type: "settings_command_result";
+      readonly requestId: string;
+      readonly result: SettingsCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -102,11 +116,173 @@ export function decodeApplicationStatus(
   ) {
     return undefined;
   }
+  const settings = decodeSettingsProjection(value.settings);
+  if (value.settings !== undefined && settings === undefined) {
+    return undefined;
+  }
+  const confirmation =
+    value.confirmation === undefined
+      ? undefined
+      : decodeLanConfirmation(value.confirmation);
+  if (value.confirmation !== undefined && confirmation === undefined) {
+    return undefined;
+  }
+  if (confirmation !== undefined && settings === undefined) {
+    return undefined;
+  }
   return {
     modelDataPlane: value.modelDataPlane,
     provider: value.provider,
     ...(dataPlane === undefined ? {} : { dataPlane }),
+    ...(settings === undefined ? {} : { settings }),
+    ...(confirmation === undefined ? {} : { confirmation }),
   };
+}
+
+function decodeRegisteredSetting(
+  value: unknown,
+): RegisteredSetting | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.key !== "string" ||
+    (value.type !== "boolean" && value.type !== "number" && value.type !== "string") ||
+    (typeof value.default !== "boolean" &&
+      typeof value.default !== "number" &&
+      typeof value.default !== "string") ||
+    (value.sensitivity !== "public" && value.sensitivity !== "secret") ||
+    (value.applyMode !== "hot-apply" && value.applyMode !== "restart-required") ||
+    (typeof value.value !== "boolean" &&
+      typeof value.value !== "number" &&
+      typeof value.value !== "string")
+  ) {
+    return undefined;
+  }
+  const effective =
+    typeof value.effective === "boolean" ||
+    typeof value.effective === "number" ||
+    typeof value.effective === "string"
+      ? value.effective
+      : undefined;
+  if (
+    (value.effective !== undefined && effective === undefined) ||
+    (value.applyMode === "hot-apply" && value.effective !== undefined) ||
+    (value.applyMode === "restart-required" && effective === undefined)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    key: value.key,
+    type: value.type,
+    default: value.default,
+    validation: value.validation,
+    sensitivity: value.sensitivity,
+    applyMode: value.applyMode,
+    value: value.value,
+    ...(effective === undefined ? {} : { effective }),
+  });
+}
+
+export function decodeSettingsProjection(
+  value: unknown,
+): Readonly<Record<string, RegisteredSetting>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, RegisteredSetting> = Object.create(null);
+  for (const [key, raw] of Object.entries(value)) {
+    const setting = decodeRegisteredSetting(raw);
+    if (setting === undefined || setting.key !== key) return undefined;
+    result[key] = setting;
+  }
+  return Object.freeze(result);
+}
+
+function decodeLanConfirmation(value: unknown): LanConfirmation | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.actionId !== "string" ||
+    value.actionId.length === 0 ||
+    value.settingKey !== "server.bindHost" ||
+    typeof value.value !== "string" ||
+    typeof value.message !== "string"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    actionId: value.actionId,
+    settingKey: "server.bindHost",
+    value: value.value,
+    message: value.message,
+  });
+}
+
+function decodeSettingsCommand(value: unknown): SettingsCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.command === "query") {
+    if (value.keys === undefined) return { command: "query" };
+    if (
+      Array.isArray(value.keys) &&
+      value.keys.every((key) => typeof key === "string")
+    ) {
+      return { command: "query", keys: value.keys as string[] };
+    }
+    return undefined;
+  }
+  if (value.command === "set") {
+    if (typeof value.key !== "string" || value.key.length === 0) {
+      return undefined;
+    }
+    return { command: "set", key: value.key, value: value.value };
+  }
+  if (value.command === "confirm") {
+    if (typeof value.actionId !== "string" || value.actionId.length === 0) {
+      return undefined;
+    }
+    return { command: "confirm", actionId: value.actionId };
+  }
+  return undefined;
+}
+
+export function decodeSettingsCommandResult(
+  value: unknown,
+): SettingsCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "applied" &&
+      value.outcome !== "pending" &&
+      value.outcome !== "confirmation_required" &&
+      value.outcome !== "unknown_key" &&
+      value.outcome !== "invalid_value")
+  ) {
+    return undefined;
+  }
+  const settings = decodeSettingsProjection(value.settings);
+  if (settings === undefined) return undefined;
+  if (
+    value.outcome === "confirmation_required" &&
+    value.confirmation === undefined
+  ) {
+    return undefined;
+  }
+  if (value.outcome !== "confirmation_required" && value.confirmation !== undefined) {
+    return undefined;
+  }
+  const confirmation =
+    value.confirmation === undefined
+      ? undefined
+      : decodeLanConfirmation(value.confirmation);
+  if (value.confirmation !== undefined && confirmation === undefined) {
+    return undefined;
+  }
+  if (value.outcome === "invalid_value" && typeof value.error !== "string") {
+    return undefined;
+  }
+  return Object.freeze({
+    outcome: value.outcome,
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+    ...(confirmation === undefined ? {} : { confirmation }),
+    settings,
+  });
 }
 
 const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
@@ -218,6 +394,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
     return {
       type: "valid",
       request: { type: "runtime_command", requestId, command: value.command },
+    };
+  }
+  if (value.type === "settings_command") {
+    const command = decodeSettingsCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "settings_command",
+        requestId,
+        command,
+      },
     };
   }
   return { type: "invalid", requestId, code: "unknown_command" };
@@ -402,6 +592,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "runtime_command_result", requestId, result };
+  }
+  if (value.type === "settings_command_result") {
+    const result = decodeSettingsCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "settings_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

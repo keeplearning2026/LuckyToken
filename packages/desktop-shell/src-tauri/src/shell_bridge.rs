@@ -9,7 +9,7 @@ use tokio::{
 
 use crate::control_plane_v1::{
     ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, RuntimeCommand,
-    SessionFailure, StatusSnapshot, CONTROL_PLANE_VERSION,
+    SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -38,7 +38,7 @@ pub(crate) enum ShellStateDto {
         application_version: String,
         #[serde(rename = "contractVersion")]
         contract_version: u64,
-        snapshot: StatusSnapshot,
+        snapshot: Box<StatusSnapshot>,
     },
     VersionMismatch {
         revision: u64,
@@ -232,7 +232,54 @@ impl ShellBridge {
                             revision: 0,
                             application_version,
                             contract_version: CONTROL_PLANE_VERSION,
-                            snapshot,
+                            snapshot: Box::new(snapshot),
+                        },
+                    )
+                    .await
+            }
+            Err(failure) => {
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Unavailable {
+                            revision: 0,
+                            reason: unavailable_reason(failure),
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+
+    pub(crate) async fn settings_command(
+        &self,
+        command: SettingsCommand,
+        emitter: Arc<dyn ShellStateEmitter>,
+    ) -> ShellStateDto {
+        let (application_version, current_snapshot) = match self.snapshot().await {
+            ShellStateDto::Connected {
+                application_version,
+                snapshot,
+                ..
+            } => (application_version, snapshot),
+            current => return current,
+        };
+        match self.connector.settings_command(command).await {
+            Ok(result) => {
+                // Merge the settings projection into the current snapshot.
+                // The projection is authoritative for the registered settings
+                // and confirmation; everything else stays as the last status.
+                let mut merged = current_snapshot.clone();
+                merged.settings = Some(result.settings);
+                merged.confirmation = result.confirmation;
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Connected {
+                            revision: 0,
+                            application_version,
+                            contract_version: CONTROL_PLANE_VERSION,
+                            snapshot: merged,
                         },
                     )
                     .await
@@ -309,7 +356,7 @@ async fn run_operation(
                         revision: 0,
                         application_version: session.application_version().to_owned(),
                         contract_version: CONTROL_PLANE_VERSION,
-                        snapshot: session.snapshot().clone(),
+                        snapshot: Box::new(session.snapshot().clone()),
                     },
                 )
                 .await;
@@ -324,7 +371,7 @@ async fn run_operation(
                                     revision: 0,
                                     application_version: session.application_version().to_owned(),
                                     contract_version: CONTROL_PLANE_VERSION,
-                                    snapshot,
+                                    snapshot: Box::new(snapshot),
                                 },
                             )
                             .await;
@@ -502,6 +549,8 @@ mod tests {
             model_data_plane: ModelDataPlaneState::Running,
             provider: ProviderState::Unconfigured,
             data_plane: None,
+            settings: None,
+            confirmation: None,
         }
     }
 
@@ -568,12 +617,14 @@ mod tests {
             revision: 3,
             application_version: "0.1.0".to_owned(),
             contract_version: 1,
-            snapshot: StatusSnapshot {
+            snapshot: Box::new(StatusSnapshot {
                 sequence: 2,
                 model_data_plane: ModelDataPlaneState::Running,
                 provider: ProviderState::Unconfigured,
                 data_plane: None,
-            },
+                settings: None,
+                confirmation: None,
+            }),
         };
 
         assert_eq!(

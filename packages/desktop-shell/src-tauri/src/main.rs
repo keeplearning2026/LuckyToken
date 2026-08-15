@@ -6,7 +6,7 @@ mod shell_bridge;
 
 use std::sync::Arc;
 
-use control_plane_v1::{NativeControlPlaneConnector, RuntimeCommand};
+use control_plane_v1::{NativeControlPlaneConnector, RuntimeCommand, SettingsCommand};
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{ShellBridge, ShellStateDto, TauriMainWindowEmitter};
 use tauri::{Manager, State};
@@ -60,6 +60,40 @@ async fn shell_restart(
     run_runtime_command(app, state, RuntimeCommand::Restart).await
 }
 
+async fn run_settings_command(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    command: SettingsCommand,
+) -> Result<ShellStateDto, ()> {
+    Ok(state
+        .settings_command(command, Arc::new(TauriMainWindowEmitter::new(app)))
+        .await)
+}
+
+#[tauri::command]
+async fn shell_settings_query(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_settings_command(app, state, SettingsCommand::Query).await
+}
+
+#[tauri::command]
+async fn shell_settings_set(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_settings_command(app, state, SettingsCommand::Set).await
+}
+
+#[tauri::command]
+async fn shell_settings_confirm(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_settings_command(app, state, SettingsCommand::Confirm).await
+}
+
 fn main() {
     let app = tauri::Builder::default()
         // Single-instance must be registered first so a second process never
@@ -102,7 +136,10 @@ fn main() {
             shell_retry,
             shell_start,
             shell_stop,
-            shell_restart
+            shell_restart,
+            shell_settings_query,
+            shell_settings_set,
+            shell_settings_confirm
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");

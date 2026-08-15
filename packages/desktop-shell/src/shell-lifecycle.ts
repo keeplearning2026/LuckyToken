@@ -1,5 +1,8 @@
 import type { ControlPlaneState } from "./control-plane-projection.js";
-import type { RuntimeCommand } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  RuntimeCommand,
+  SettingsCommand,
+} from "@luckytoken/application-control-plane/control-plane";
 
 export const productPages = Object.freeze([
   { id: "dashboard", label: "Dashboard" },
@@ -20,6 +23,7 @@ export interface DesktopShellRuntime {
     listener: (state: ControlPlaneState) => void,
   ): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
+  executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
   disconnectControlPlane(): Promise<void>;
 }
 
@@ -45,6 +49,7 @@ export interface WindowsShellHost {
   snapshot(): DesktopShellSnapshot;
   subscribe(listener: (snapshot: DesktopShellSnapshot) => void): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<DesktopShellSnapshot>;
+  executeSettingsCommand(command: SettingsCommand): Promise<DesktopShellSnapshot>;
   dispose(): Promise<void>;
 }
 
@@ -139,6 +144,21 @@ export function createWindowsShellHost(
         throw new Error("Desktop shell is not open");
       }
       const result = await runtime.executeRuntimeCommand(command);
+      if (
+        current.lifecycle === "open" &&
+        result.revision > current.connection.revision
+      ) {
+        connection = result;
+        current = Object.freeze({ ...current, connection });
+        emit();
+      }
+      return current;
+    },
+    async executeSettingsCommand(command) {
+      if (current.lifecycle !== "open") {
+        throw new Error("Desktop shell is not open");
+      }
+      const result = await runtime.executeSettingsCommand(command);
       if (
         current.lifecycle === "open" &&
         result.revision > current.connection.revision
