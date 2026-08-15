@@ -127,7 +127,14 @@ describe("configured serving composition", () => {
       now: () => 1_786_400_000_000,
     });
 
-    expect(Object.keys(composition).sort()).toEqual(["certification", "runtime"]);
+    expect(Object.keys(composition).sort()).toEqual([
+      "certification",
+      "runtime",
+      "userConfiguredProviderIds",
+    ]);
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "commandcode-private",
+    ]);
     expect(Object.keys(composition.runtime).sort()).toEqual(["handle", "routes"]);
     expect(composition.runtime.routes).toEqual([
       { method: "POST", pathname: "/v1/messages" },

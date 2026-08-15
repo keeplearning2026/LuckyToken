@@ -8,7 +8,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm the Application Control Plane command/query/event 
 
 ## Acceptance criteria
 
-- [ ] A local client can negotiate the supported Control Plane contract version and receive explicit application identity and version facts.
-- [ ] An unsupported client version is rejected with a structured incompatibility result rather than partially executing a command.
-- [ ] A local status query returns a typed snapshot even when the Model Data Plane is stopped or no Provider is configured.
-- [ ] Typed events carry a monotonically ordered application sequence and never include credential values.
-- [ ] After losing the event connection, a client can read a fresh snapshot and resume without treating missed events as current state.
-- [ ] The same public interface is consumable by CLI and desktop adapters without importing application implementation state.
-- [ ] Remote/LAN callers cannot reach the Control Plane even when a future Data Plane listener is configured for LAN.
-- [ ] Contract tests use deterministic adapters and verify externally observable query, command, event-order, and reconnect behavior.
+- [x] A local client can negotiate the supported Control Plane contract version and receive explicit application identity and version facts.
+- [x] An unsupported client version is rejected with a structured incompatibility result rather than partially executing a command.
+- [x] A local status query returns a typed snapshot even when the Model Data Plane is stopped or no Provider is configured.
+- [x] Typed events carry a monotonically ordered application sequence and never include credential values.
+- [x] After losing the event connection, a client can read a fresh snapshot and resume without treating missed events as current state.
+- [x] The same public interface is consumable by CLI and desktop adapters without importing application implementation state.
+- [x] Remote/LAN callers cannot reach the Control Plane even when a future Data Plane listener is configured for LAN.
+- [x] Contract tests use deterministic adapters and verify externally observable query, command, event-order, and reconnect behavior.

@@ -108,6 +108,8 @@ describe("models.json custom provider registration", () => {
       now: () => 1_786_400_000_000,
     });
 
+    expect(composition.userConfiguredProviderIds).toEqual(["my-anthropic"]);
+
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
         method: "POST",

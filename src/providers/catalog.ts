@@ -31,7 +31,7 @@ export interface LuckyTokenProviderDependencies {
 export function registerLuckyTokenProviders(
   models: MutableModels,
   dependencies: LuckyTokenProviderDependencies,
-): void {
+): readonly string[] {
   // Pi built-in providers are part of the LuckyToken provider collection:
   // every Pi provider (openai, anthropic, deepseek, ...) is registered so it
   // can be logged in and served through the same Anthropic endpoint.
@@ -39,14 +39,15 @@ export function registerLuckyTokenProviders(
     models.setProvider(provider);
   }
 
-  registerModelsJsonProviders(models, dependencies.modelsJson);
+  return registerModelsJsonProviders(models, dependencies.modelsJson);
 }
 
 function registerModelsJsonProviders(
   models: MutableModels,
   modelsJson: ModelsJsonConfig | undefined,
-): void {
-  if (modelsJson === undefined) return;
+): readonly string[] {
+  if (modelsJson === undefined) return Object.freeze([]);
+  const registeredProviderIds: string[] = [];
   for (const [providerId, config] of Object.entries(modelsJson.providers)) {
     // Pi builtins win over models.json with the same provider id.
     if (models.getProvider(providerId) !== undefined) continue;
@@ -90,5 +91,7 @@ function registerModelsJsonProviders(
         },
       }),
     );
+    registeredProviderIds.push(providerId);
   }
+  return Object.freeze(registeredProviderIds);
 }

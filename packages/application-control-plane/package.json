@@ -1,0 +1,8 @@
+{
+  "name": "@luckytoken/application-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { "./control-plane": { "types": "./dist/control-plane.d.ts", "import": "./dist/control-plane.js" } },
+  "scripts": { "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json", "typecheck": "tsc -p tsconfig.json --noEmit" }
+}

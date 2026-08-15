@@ -65,18 +65,24 @@ export interface ConfiguredLuckyTokenCompositionOptions {
 export interface ConfiguredLuckyTokenComposition {
   readonly runtime: LuckyTokenRuntime;
   readonly certification: CoreServingCertificationManifest;
+  /** User-configured models.json and external Provider Package registrations. */
+  readonly userConfiguredProviderIds: readonly string[];
 }
 
 export async function createConfiguredPiModels(
   options: ConfiguredPiModelsOptions,
-): Promise<{ models: Models; externalProviderIds: readonly string[] }> {
+): Promise<{
+  models: Models;
+  externalProviderIds: readonly string[];
+  userConfiguredProviderIds: readonly string[];
+}> {
   const modelsJson = await loadModelsJson(options.modelsJsonPath);
   const mutableModels = createModels({
     credentials:
       options.credentials ??
       createFileCredentialStore(join(options.piDirectory, "auth.json")),
   });
-  registerLuckyTokenProviders(mutableModels, {
+  const modelsJsonProviderIds = registerLuckyTokenProviders(mutableModels, {
     ...(modelsJson === undefined ? {} : { modelsJson }),
   });
   const loaded = await loadProviderPackages({
@@ -95,6 +101,10 @@ export async function createConfiguredPiModels(
   return Object.freeze({
     models,
     externalProviderIds: loaded.providerIds,
+    userConfiguredProviderIds: Object.freeze([
+      ...modelsJsonProviderIds,
+      ...loaded.providerIds,
+    ]),
   });
 }
 
@@ -132,22 +142,23 @@ export async function createConfiguredLuckyTokenComposition(
     configuration: config.failureLogging,
     now,
   });
-  const { models, externalProviderIds } = await createConfiguredPiModels({
-    piDirectory: config.pi.directory,
-    ...(config.pi.modelsJson === undefined
-      ? {}
-      : { modelsJsonPath: config.pi.modelsJson }),
-    ...(options.credentials === undefined
-      ? {}
-      : { credentials: options.credentials }),
-    fetch: options.fetch,
-    providerPackages: config.providerPackages,
-    ...(options.importModule === undefined
-      ? {}
-      : { importModule: options.importModule }),
-    createUuid: createSessionId,
-    now,
-  });
+  const { models, externalProviderIds, userConfiguredProviderIds } =
+    await createConfiguredPiModels({
+      piDirectory: config.pi.directory,
+      ...(config.pi.modelsJson === undefined
+        ? {}
+        : { modelsJsonPath: config.pi.modelsJson }),
+      ...(options.credentials === undefined
+        ? {}
+        : { credentials: options.credentials }),
+      fetch: options.fetch,
+      providerPackages: config.providerPackages,
+      ...(options.importModule === undefined
+        ? {}
+        : { importModule: options.importModule }),
+      createUuid: createSessionId,
+      now,
+    });
   const auth = createAuth({
     authorizeToken: (token) => clientAuthority.authorize(token),
     createFallbackSessionId: createSessionId,
@@ -221,5 +232,5 @@ export async function createConfiguredLuckyTokenComposition(
       ? {}
       : { shutdownSignal: options.shutdownSignal }),
   });
-  return Object.freeze({ runtime, certification });
+  return Object.freeze({ runtime, certification, userConfiguredProviderIds });
 }
