@@ -8,7 +8,7 @@
 
 **Blocked by:** 01 — Versioned local Control Plane status tracer.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,10 +16,10 @@ Use the `$tdd` skill. Confirm the thin Windows shell lifecycle smoke seam and th
 
 ## Acceptance criteria
 
-- [ ] Launching the Windows desktop executable opens one main window connected to the local Control Plane.
-- [ ] First launch shows an empty Dashboard without an onboarding wizard, forced Provider selection, or modal setup flow.
-- [ ] All eight approved product pages have stable navigation entries and can be opened even when their capability is not configured.
-- [ ] The shell renders connection/version errors from the Control Plane as actionable application state rather than crashing.
-- [ ] No credential, Client token, raw capture, or internal mutable application object is placed in renderer startup arguments.
-- [ ] The chosen desktop host, packaging approach, and control transport are recorded as an architecture decision before their implementation becomes a dependency for later tickets.
-- [ ] A Windows lifecycle smoke test proves launch, connection, navigation, and clean window disposal through public shell behavior.
+- [x] Launching the Windows desktop executable opens one main window connected to the local Control Plane.
+- [x] First launch shows an empty Dashboard without an onboarding wizard, forced Provider selection, or modal setup flow.
+- [x] All eight approved product pages have stable navigation entries and can be opened even when their capability is not configured.
+- [x] The shell renders connection/version errors from the Control Plane as actionable application state rather than crashing.
+- [x] No credential, Client token, raw capture, or internal mutable application object is placed in renderer startup arguments.
+- [x] The chosen desktop host, packaging approach, and control transport are recorded as an architecture decision before their implementation becomes a dependency for later tickets.
+- [x] A Windows lifecycle smoke test proves launch, connection, navigation, and clean window disposal through public shell behavior.

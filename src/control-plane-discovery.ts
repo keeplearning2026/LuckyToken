@@ -1,4 +1,5 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 import type { ControlPlaneEndpoint } from "@luckytoken/application-control-plane/control-plane";
 import lockfile from "proper-lockfile";
@@ -7,6 +8,19 @@ import lockfile from "proper-lockfile";
 // process-liveness recovery; until then a live process paused beyond this
 // window can lose its descriptor authority.
 const descriptorLockStaleMs = 30_000;
+
+export interface ControlPlaneDiscoveryLocation {
+  readonly homeDirectory: string;
+  readonly overridePath?: string;
+}
+
+export function resolveControlPlaneDescriptorPath(
+  location: ControlPlaneDiscoveryLocation,
+): string {
+  return location.overridePath === undefined
+    ? join(location.homeDirectory, ".luckytoken", "control-plane.json")
+    : resolve(location.overridePath);
+}
 
 export interface ControlPlaneDescriptorLease {
   close(): Promise<void>;

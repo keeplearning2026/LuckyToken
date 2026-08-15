@@ -10,7 +10,9 @@ import type {
 } from "@earendil-works/pi-ai";
 import { stdin, stdout } from "node:process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -19,6 +21,7 @@ import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import {
   publishControlPlaneDescriptor,
   readControlPlaneDescriptor,
+  resolveControlPlaneDescriptorPath,
 } from "./control-plane-discovery.js";
 import { runClientTokenCli } from "./client-auth/cli.js";
 import {
@@ -63,7 +66,11 @@ Options:
 `;
 
 type ParsedCliArguments =
-  | { readonly command: "serve"; readonly configPath: string }
+  | {
+      readonly command: "serve";
+      readonly configPath: string;
+      readonly descriptorPath?: string;
+    }
   | {
       readonly command: "login" | "logout";
       readonly configPath: string;
@@ -79,6 +86,7 @@ interface LoginChoice {
 function parseArguments(args: readonly string[]): ParsedCliArguments | undefined {
   if (args.includes("--help")) return undefined;
   let configPath: string | undefined;
+  let descriptorPath: string | undefined;
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
@@ -89,6 +97,18 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
         throw new Error("--config requires a path");
       }
       configPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--descriptor") {
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      descriptorPath = value;
       index += 1;
       continue;
     }
@@ -106,6 +126,9 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
             throw new Error(`Unknown command: ${first}`);
           })();
   const providerId = command === "serve" ? undefined : positional[1];
+  if (command !== "serve" && descriptorPath !== undefined) {
+    throw new Error("--descriptor is only valid for serve or control status");
+  }
   const expectedPositionals = command === "serve" && first === "serve" ? 1 : command === "serve" ? 0 : 2;
   if (positional.length > expectedPositionals) {
     throw new Error(`Too many arguments for ${command}`);
@@ -113,6 +136,9 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
   return {
     command,
     configPath,
+    ...(command === "serve" && descriptorPath !== undefined
+      ? { descriptorPath }
+      : {}),
     ...(providerId === undefined ? {} : { providerId }),
   };
 }
@@ -299,6 +325,7 @@ async function runLogout(models: Models, providerId: string | undefined): Promis
 
 async function runServe(
   configPath: string,
+  descriptorOverride?: string,
 ): Promise<void> {
   const config = await loadLuckyTokenCliConfig(configPath);
   const shutdownController = new AbortController();
@@ -323,7 +350,13 @@ async function runServe(
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
   });
-  const descriptorPath = join(dirname(config.configPath), "control-plane.json");
+  const descriptorPath = resolveControlPlaneDescriptorPath({
+    homeDirectory: homedir(),
+    ...(descriptorOverride === undefined
+      ? {}
+      : { overridePath: descriptorOverride }),
+  });
+  await mkdir(dirname(descriptorPath), { recursive: true });
   let descriptor:
     | Awaited<ReturnType<typeof publishControlPlaneDescriptor>>
     | undefined;
@@ -423,7 +456,7 @@ export async function runLuckyTokenCli(
     return;
   }
   if (parsed.command === "serve") {
-    await runServe(parsed.configPath);
+    await runServe(parsed.configPath, parsed.descriptorPath);
     return;
   }
   const config = await loadLuckyTokenCliConfig(parsed.configPath);

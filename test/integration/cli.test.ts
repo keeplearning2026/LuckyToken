@@ -230,7 +230,10 @@ describe("LuckyToken CLI", () => {
     );
     const descriptorPath = join(stateDirectory, "control-plane.json");
     await writeFile(descriptorPath, "stale-descriptor", "utf8");
-    const serve = startCli(["--config", configPath], true);
+    const serve = startCli(
+      ["--config", configPath, "--descriptor", descriptorPath],
+      true,
+    );
     children.push(serve);
     const serveCapture = captureChild(serve);
 
@@ -345,7 +348,12 @@ describe("LuckyToken CLI", () => {
     const descriptorPath = join(stateDirectory, "control-plane.json");
     await writeFile(descriptorPath, "stale-descriptor", "utf8");
 
-    const child = startCli(["--config", configPath]);
+    const child = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
     children.push(child);
     const result = await captureChild(child).result;
 
