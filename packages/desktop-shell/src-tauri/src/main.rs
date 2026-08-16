@@ -9,11 +9,13 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    ClientTokenCommand, ClientTokenCommandResultWire, DiagnosticsWarningWire, ModelsCommand,
-    NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
+    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, DiagnosticsWarningWire,
+    ModelsCommand, NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
-use shell_bridge::{ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter};
+use shell_bridge::{
+    AutoStartDto, ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter,
+};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -72,6 +74,28 @@ async fn run_settings_command(
     command: SettingsCommand,
 ) -> Result<ShellStateDto, ()> {
     Ok(state.settings_command(command, shell_emitter(app)).await)
+}
+
+async fn run_auto_start_command(
+    state: State<'_, ShellBridge>,
+    action: AutoStartAction,
+) -> Result<AutoStartDto, ()> {
+    state.auto_start(action).await
+}
+
+#[tauri::command]
+async fn shell_auto_start_status(state: State<'_, ShellBridge>) -> Result<AutoStartDto, ()> {
+    run_auto_start_command(state, AutoStartAction::Status).await
+}
+
+#[tauri::command]
+async fn shell_auto_start_enable(state: State<'_, ShellBridge>) -> Result<AutoStartDto, ()> {
+    run_auto_start_command(state, AutoStartAction::Enable).await
+}
+
+#[tauri::command]
+async fn shell_auto_start_disable(state: State<'_, ShellBridge>) -> Result<AutoStartDto, ()> {
+    run_auto_start_command(state, AutoStartAction::Disable).await
 }
 
 #[tauri::command]
@@ -324,6 +348,9 @@ fn main() {
             shell_settings_query,
             shell_settings_set,
             shell_settings_confirm,
+            shell_auto_start_status,
+            shell_auto_start_enable,
+            shell_auto_start_disable,
             shell_client_tokens_list,
             shell_client_tokens_reveal,
             shell_client_tokens_rotate,

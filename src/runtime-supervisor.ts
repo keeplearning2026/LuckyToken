@@ -10,11 +10,23 @@ import type {
 
 export interface RunningDataPlaneListener {
   close(): Promise<void>;
+  /** Optional graceful quit drain (Ticket 05): stops accepting new work and
+   *  resolves with the typed outcome when the active set empties or the
+   *  timeout aborts the rest. Listeners without a drain seam fall back to
+   *  the immediate close. */
+  drain?(timeoutMs: number): Promise<"drained" | "timed_out">;
 }
 
 export interface DataPlaneRuntimeSupervisor {
   readonly initialStatus: ApplicationStatus;
   readonly execute: RuntimeCommandHandler;
+  /** Owner Quit (Ticket 05): stops the Data Plane from accepting new
+   *  requests, waits for the active set to drain within the timeout, then
+   *  aborts the remaining requests. Reports the typed drain outcome. */
+  quit(options: {
+    readonly timeoutMs: number;
+    readonly publishStatus: RuntimeStatusPublisher;
+  }): Promise<"drained" | "timed_out">;
 }
 
 export interface DataPlaneAddress {
@@ -209,6 +221,30 @@ export function createDataPlaneRuntimeSupervisor(
     }
   };
 
+  const performQuit = async (options: {
+    readonly timeoutMs: number;
+    readonly publishStatus: RuntimeStatusPublisher;
+  }): Promise<"drained" | "timed_out"> => {
+    if (current.modelDataPlane === "stopped") return "drained";
+    if (current.modelDataPlane === "failed") return "drained";
+    await transition(status("stopping"), options.publishStatus);
+    const active = listener;
+    listener = undefined;
+    let outcome: "drained" | "timed_out";
+    try {
+      outcome =
+        active?.drain === undefined
+          ? (await active?.close(), "drained")
+          : await active.drain(options.timeoutMs);
+    } catch {
+      // A drain that cannot complete within the quit lifecycle aborts the
+      // remaining work and reports the typed timeout outcome.
+      outcome = "timed_out";
+    }
+    await transition(status("stopped"), options.publishStatus);
+    return outcome;
+  };
+
   const execute: RuntimeCommandHandler = (command, publishStatus) => {
     const operation = operationQueue.then(() => perform(command, publishStatus));
     operationQueue = operation.then(
@@ -218,5 +254,24 @@ export function createDataPlaneRuntimeSupervisor(
     return operation;
   };
 
-  return Object.freeze({ initialStatus, execute });
+  const quit = (options: {
+    readonly timeoutMs: number;
+    readonly publishStatus: RuntimeStatusPublisher;
+  }): Promise<"drained" | "timed_out"> => {
+    if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 0) {
+      return Promise.reject(
+        new Error("Drain timeout must be a non-negative integer"),
+      );
+    }
+    // Quit is serialized with Start/Stop/Restart so it can never race a
+    // listener transition.
+    const operation = operationQueue.then(() => performQuit(options));
+    operationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  };
+
+  return Object.freeze({ initialStatus, execute, quit });
 }

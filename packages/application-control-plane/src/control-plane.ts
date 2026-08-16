@@ -1,11 +1,24 @@
 export {
   controlPlaneVersion,
+  type ApplicationCommand,
+  type ApplicationCommandConflict,
+  type ApplicationCommandConflictCode,
+  type ApplicationCommandExecution,
+  type ApplicationCommandHandler,
+  type ApplicationCommandOutcome,
+  type ApplicationCommandResult,
+  type ApplicationCommandResultDeliveredHandler,
   type ApplicationIdentity,
+  type ApplicationOwnership,
   type ApplicationStatus,
+  type AutoStartRegistration,
+
   type ClientTokenCommand,
   type ClientTokenCommandHandler,
   type ClientTokenCommandOutcome,
   type ClientTokenCommandResult,
+
+
   type ControlPlaneDiagnostics,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,

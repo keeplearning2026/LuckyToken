@@ -1,10 +1,9 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
-
+  ApplicationOwnership,
   ClientTokenCommand,
   ClientTokenCommandResult,
   MaskedClientTokenScope,
-
   ModelsCommand,
 
   RegisteredSetting,
@@ -19,6 +18,7 @@ import {
   type ControlPlaneBridgePayload,
   type ControlPlaneState,
 } from "./control-plane-projection.js";
+import type { AutoStartProjection } from "./shell-lifecycle.js";
 
 export type ShellCommand =
   | "shell_snapshot"
@@ -29,7 +29,9 @@ export type ShellCommand =
   | "shell_settings_query"
   | "shell_settings_set"
   | "shell_settings_confirm"
-
+  | "shell_auto_start_status"
+  | "shell_auto_start_enable"
+  | "shell_auto_start_disable"
   | "shell_client_tokens_list"
   | "shell_client_tokens_reveal"
   | "shell_client_tokens_rotate"
@@ -39,6 +41,7 @@ export type ShellCommand =
   | "shell_models_query"
   | "shell_models_write_raw"
   | "shell_models_write_structured";
+
 
 
 export interface NativeTauriBridge {
@@ -63,6 +66,13 @@ export interface TauriDesktopRuntime {
   retryControlPlane(): Promise<ControlPlaneState>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+  getAutoStartStatus(): Promise<AutoStartProjection>;
+  setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
+
+  executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+
+
+
 
   executeClientTokenCommand(
     command: ClientTokenCommand,
@@ -70,6 +80,8 @@ export interface TauriDesktopRuntime {
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+
+
 
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
@@ -180,6 +192,38 @@ function decodeLanConfirmation(value: unknown) {
   };
 }
 
+function decodeOwnership(
+  value: unknown,
+): ApplicationOwnership | undefined {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.owner) ||
+    (value.owner.kind !== "cli" && value.owner.kind !== "desktop") ||
+    !Number.isSafeInteger(value.owner.pid) ||
+    (value.owner.pid as number) <= 0 ||
+    typeof value.owner.startedAt !== "string" ||
+    Number.isNaN(Date.parse(value.owner.startedAt))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    owner: Object.freeze({
+      kind: value.owner.kind as "cli" | "desktop",
+      pid: value.owner.pid as number,
+      startedAt: value.owner.startedAt as string,
+    }),
+  });
+}
+
+function decodeAutoStartProjection(
+  value: unknown,
+): AutoStartProjection | undefined {
+  return isRecord(value) && typeof value.enabled === "boolean"
+    ? { enabled: value.enabled }
+    : undefined;
+}
+
+
 function decodeMaskedClientTokenScope(
   value: unknown,
 ): MaskedClientTokenScope | undefined {
@@ -270,6 +314,8 @@ function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefine
   };
 }
 
+
+
 function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefined {
   if (
     !isRecord(value) ||
@@ -315,6 +361,10 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
     // models command result rides alongside the payload.
     const settings = decodeRegisteredSettings(snapshot.settings);
     const confirmation = decodeLanConfirmation(snapshot.confirmation);
+    const ownership = decodeOwnership(snapshot.ownership);
+    if (snapshot.ownership !== undefined && ownership === undefined) {
+      return undefined;
+    }
     const modelsProjection = decodeModelsProjection(snapshot.models);
     if (snapshot.models !== undefined && modelsProjection === undefined) {
       return undefined;
@@ -336,6 +386,7 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
         ...(settings === undefined ? {} : { settings }),
         ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
         ...(confirmation === undefined ? {} : { confirmation }),
+        ...(ownership === undefined ? {} : { ownership }),
       },
       ...(models === undefined ? {} : { models }),
     };
@@ -427,6 +478,17 @@ export function createTauriDesktopRuntime(
     return accept(await bridge.invoke(command, args));
   };
 
+  const invokeAutoStart = async (
+    command: ShellCommand,
+  ): Promise<AutoStartProjection> => {
+    await ensureListening();
+    const result = decodeAutoStartProjection(await bridge.invoke(command));
+    if (result === undefined) {
+      throw new Error("Native auto-start response is malformed");
+    }
+    return result;
+  };
+
   return {
     connectControlPlane: () => invokeState("shell_snapshot"),
     retryControlPlane: () => invokeState("shell_retry"),
@@ -446,6 +508,13 @@ export function createTauriDesktopRuntime(
             ? "shell_settings_set"
             : "shell_settings_confirm",
       ),
+    getAutoStartStatus: () =>
+      invokeAutoStart("shell_auto_start_status"),
+    setAutoStartEnabled: (enabled) =>
+      invokeAutoStart(
+        enabled ? "shell_auto_start_enable" : "shell_auto_start_disable",
+      ),
+
 
     async executeClientTokenCommand(command) {
       // Client Token commands return their own result (masked scopes or the
@@ -491,6 +560,8 @@ export function createTauriDesktopRuntime(
       }
       return Object.freeze(warnings);
     },
+
+
 
     executeModelsCommand: (command) =>
       invokeState(

@@ -159,6 +159,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.openai-responses.enabled",
       "server.port",
       "server.bindHost",
+      "application.quitDrainTimeoutMs",
     ]);
     expect(settings["server.port"]).toMatchObject({
       type: "number",

@@ -24,6 +24,11 @@ export const productPages = Object.freeze([
 
 export type ProductPageId = (typeof productPages)[number]["id"];
 
+/** Effective Windows login auto-start registration status (Ticket 05). */
+export interface AutoStartProjection {
+  readonly enabled: boolean;
+}
+
 export interface DesktopShellRuntime {
   connectControlPlane(): Promise<ControlPlaneState>;
   subscribeControlPlane(
@@ -31,14 +36,13 @@ export interface DesktopShellRuntime {
   ): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
-
+  getAutoStartStatus(): Promise<AutoStartProjection>;
+  setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
+  executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
-
-  executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
-
   disconnectControlPlane(): Promise<void>;
 }
 
@@ -65,6 +69,13 @@ export interface WindowsShellHost {
   subscribe(listener: (snapshot: DesktopShellSnapshot) => void): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<DesktopShellSnapshot>;
   executeSettingsCommand(command: SettingsCommand): Promise<DesktopShellSnapshot>;
+  getAutoStartStatus(): Promise<AutoStartProjection>;
+  setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
+
+  executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
+
+
+
 
   executeClientTokenCommand(
     command: ClientTokenCommand,
@@ -72,6 +83,8 @@ export interface WindowsShellHost {
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
+
+
 
   dispose(): Promise<void>;
 }
@@ -192,7 +205,12 @@ export function createWindowsShellHost(
       }
       return current;
     },
-
+    getAutoStartStatus() {
+      return runtime.getAutoStartStatus();
+    },
+    setAutoStartEnabled(enabled) {
+      return runtime.setAutoStartEnabled(enabled);
+    },
     executeClientTokenCommand(command) {
       if (current.lifecycle !== "open") {
         return Promise.reject(new Error("Desktop shell is not open"));
@@ -205,7 +223,6 @@ export function createWindowsShellHost(
       }
       return runtime.queryDiagnosticsWarnings();
     },
-
     async executeModelsCommand(command) {
       if (current.lifecycle !== "open") {
         throw new Error("Desktop shell is not open");
@@ -220,7 +237,6 @@ export function createWindowsShellHost(
         emit();
       }
       return current;
-
     },
     dispose() {
       disposed = true;

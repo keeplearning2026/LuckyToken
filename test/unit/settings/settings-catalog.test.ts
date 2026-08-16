@@ -25,6 +25,7 @@ describe("authoritative registered settings catalog", () => {
       "protocols.openai-responses.enabled",
       "server.port",
       "server.bindHost",
+      "application.quitDrainTimeoutMs",
     ]);
 
     const anthropic = byKey.get("protocols.anthropic-messages.enabled");
@@ -59,6 +60,25 @@ describe("authoritative registered settings catalog", () => {
       applyMode: "restart-required",
       value: "127.0.0.1",
       effective: "127.0.0.1",
+    });
+
+    const drainTimeout = byKey.get("application.quitDrainTimeoutMs");
+    expect(drainTimeout).toMatchObject({
+      key: "application.quitDrainTimeoutMs",
+      type: "number",
+      default: 5000,
+      sensitivity: "public",
+      applyMode: "hot-apply",
+      value: 5000,
+    });
+    expect(registry.validate("application.quitDrainTimeoutMs", -1)).toMatchObject({
+      valid: false,
+    });
+    expect(registry.validate("application.quitDrainTimeoutMs", 301_000)).toMatchObject({
+      valid: false,
+    });
+    expect(registry.validate("application.quitDrainTimeoutMs", 750)).toMatchObject({
+      valid: true,
     });
   });
 

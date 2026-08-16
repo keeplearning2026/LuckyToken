@@ -12,18 +12,33 @@ import { stdin, stdout } from "node:process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import {
+  ControlPlaneDescriptorOwnedError,
   publishControlPlaneDescriptor,
   readControlPlaneDescriptor,
   resolveControlPlaneDescriptorPath,
 } from "./control-plane-discovery.js";
+import {
+  buildWindowsAutoStartCommand,
+  createUnsupportedAutoStartRegistrar,
+  createWindowsAutoStartRegistrar,
+  executeAutoStart,
+  type AutoStartRegistrar,
+} from "./auto-start.js";
 import { runClientTokenCli } from "./client-auth/cli.js";
+import {
+  createClientTokenControlPlaneHandler,
+  createProtocolEnablementSettingsHandler,
+} from "./client-auth/control-plane.js";
+import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
+import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
+import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
 import {
   createConfiguredLuckyTokenComposition,
   createConfiguredPiModels,
@@ -52,18 +67,8 @@ import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { resolveEffectiveSettings } from "./settings/data-plane.js";
-
-import {
-  createClientTokenControlPlaneHandler,
-  createProtocolEnablementSettingsHandler,
-} from "./client-auth/control-plane.js";
-import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
-import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
-import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
-
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
-
 
 const HELP = `LuckyToken
 
@@ -75,6 +80,7 @@ Usage:
   luckytoken client-token <create|rotate|remove|list> <protocol> --config <path> [--global|--project <path>]
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
+  luckytoken control auto-start <status|enable|disable> --descriptor <path>
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
   luckytoken --help
@@ -86,15 +92,16 @@ Commands:
   client-token  Manage client tokens: live global tokens through the Control Plane, or token files offline
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
+  control auto-start status|enable|disable  Query or change Windows login auto-start
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
-  --descriptor <path>  Current-user Control Plane discovery descriptor
   --global         Select the protocol-global client token
   --project <path> Select a project-bound client token
   --token <value>  Use an explicit token for create/rotate
+  --descriptor <path>  Current-user Control Plane discovery descriptor
   --help           Show this help
 
 control models commands:
@@ -363,127 +370,56 @@ async function runLogout(models: Models, providerId: string | undefined): Promis
   stdout.write(`Removed the stored credential for ${provider.name}.\n`);
 }
 
+async function attachToActiveInstance(descriptorPath: string): Promise<void> {
+  // The winning launch publishes its descriptor immediately after taking
+  // the lease; a bounded retry absorbs that small publish window.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        const hello = await client.hello(controlPlaneVersion);
+        if (hello.type === "incompatible") {
+          throw new Error(
+            "the active instance speaks an incompatible Control Plane contract",
+          );
+        }
+        const result = await client.executeApplicationCommand({
+          command: "attach",
+        });
+        const owner = result.snapshot.ownership?.owner;
+        stdout.write(
+          `LuckyToken is already running: attached to the active instance${
+            owner === undefined
+              ? ""
+              : ` owned by PID ${owner.pid} (${owner.kind})`
+          }. No second Data Plane was started.\n`,
+        );
+        return;
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    } catch (error) {
+      lastError = error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw (
+    lastError instanceof Error
+      ? lastError
+      : new Error("Failed to attach to the active LuckyToken instance")
+  );
+}
+
 async function runServe(
   configPath: string,
   descriptorOverride?: string,
 ): Promise<void> {
   const config = await loadLuckyTokenCliConfig(configPath);
-  const diagnosticsStore: RuntimeDiagnosticsStore =
-    await createRuntimeDiagnosticsStoreFactory({
-      configuration: bindRuntimeDiagnosticsConfiguration(
-        config.runtimeDiagnostics,
-      ),
-    }).open();
-  const controlPipe = await createProductionControlPipe();
-  // The canonical LuckyToken-owned models.json: defaults to `models.json`
-  // next to the config file (the desktop layout's `~/.luckytoken/models.json`)
-  // unless the config overrides it. The Pi Agent default data directory is
-  // never read or written implicitly.
-  const modelsAuthority = createModelsJsonAuthority({
-    path: config.pi.modelsJson,
-  });
-  const modelsState = await modelsAuthority.query();
-  const provider: ApplicationStatus["provider"] =
-    Object.keys(config.providerPackages).length > 0 ||
-    (modelsState.present &&
-      modelsState.valid &&
-      Object.keys(modelsState.providers ?? {}).length > 0)
-      ? "configured"
-      : "unconfigured";
-  const settingsRegistry = createSettingsRegistry(
-    createFileSettingsStore(
-      join(dirname(configPath), ".luckytoken", "settings.json"),
-    ),
-    {
-      initial: {
-        "server.port": config.server.port,
-        "server.bindHost": config.server.host,
-      },
-    },
-  );
-  await settingsRegistry.load();
-  // Ticket 16: the live per-protocol Client Token authorities belong to the
-  // running Data Plane composition; the Control Plane adapters read them
-  // through this slot so commands and enable transitions always target the
-  // current authorities (boot-time enabling is ensured by the composition).
-  let tokenAuthorities: Readonly<Record<string, LiveClientTokenAuthority>> |
-    undefined;
-  const protocolNames = Object.freeze({
-    [anthropicMessagesProtocolId]: "Anthropic Messages",
-    [openaiResponsesProtocolId]: "OpenAI Responses",
-  });
-  const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
-    authorities: () => tokenAuthorities ?? Object.freeze({}),
-    protocolNames,
-    diagnostics: diagnosticsStore,
-  });
-  const settingsCommandHandler = createProtocolEnablementSettingsHandler({
-    settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
-    authorities: () => tokenAuthorities ?? Object.freeze({}),
-    protocolNames,
-    diagnostics: diagnosticsStore,
-  });
-  const supervisor = createDataPlaneRuntimeSupervisor({
-    host: config.server.host,
-    port: config.server.port,
-    provider,
-    resolveAddress: () =>
-      resolveEffectiveSettings(settingsRegistry.query([])),
-    startListener: async (address) => {
-      const shutdownController = new AbortController();
-      try {
-        const composition = await createConfiguredLuckyTokenComposition({
-          config,
-          fetch: globalThis.fetch,
-          shutdownSignal: shutdownController.signal,
-          diagnosticsStore,
-          settingsRegistry,
-        });
-        tokenAuthorities = composition.clientTokenAuthorities;
-        const server = await startLuckyTokenHttpServer({
-          runtime: composition.runtime,
-          host: address.host,
-          port: address.port,
-        });
-        for (const route of composition.runtime.routes) {
-          stdout.write(
-            `LuckyToken ${route.method} ${server.origin}${route.pathname}\n`,
-          );
-        }
-        return {
-          async close() {
-            shutdownController.abort(
-              new Error("LuckyToken model gateway is stopping"),
-            );
-            await server.close();
-          },
-        };
-      } catch (error) {
-        shutdownController.abort(
-          new Error("LuckyToken model gateway startup failed"),
-        );
-        throw error;
-      }
-    },
-  });
-  const endpoint: ControlPlaneEndpoint = Object.freeze({
-    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
-    capability: randomBytes(32).toString("base64url"),
-  });
-  const controlPlane = await startControlPlane({
-    endpoint,
-    application: { id: "luckytoken", version: "0.0.0" },
-    initialStatus: supervisor.initialStatus,
-    runtimeCommandHandler: supervisor.execute,
-    settingsCommandHandler,
-    settingsProjection: () => settingsRegistry.snapshot(),
-    clientTokenCommandHandler,
-    modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
-    modelsProjection: () => modelsAuthority.snapshot(),
-    pipeServerFactory: controlPipe.pipeServerFactory,
-    access: controlPipe.access,
-    diagnostics: diagnosticsStore,
-  });
   const descriptorPath = resolveControlPlaneDescriptorPath({
     homeDirectory: homedir(),
     ...(descriptorOverride === undefined
@@ -491,20 +427,166 @@ async function runServe(
       : { overridePath: descriptorOverride }),
   });
   await mkdir(dirname(descriptorPath), { recursive: true });
+  const endpoint: ControlPlaneEndpoint = Object.freeze({
+    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    capability: randomBytes(32).toString("base64url"),
+  });
   let descriptor:
     | Awaited<ReturnType<typeof publishControlPlaneDescriptor>>
     | undefined;
+  let supervisor:
+    | Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>>
+    | undefined;
+  let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
+  let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
   try {
-    descriptor = await publishControlPlaneDescriptor({
-      path: descriptorPath,
-      endpoint,
-      createTemporaryId: randomUUID,
+    try {
+      descriptor = await publishControlPlaneDescriptor({
+        path: descriptorPath,
+        endpoint,
+        createTemporaryId: randomUUID,
+      });
+    } catch (error) {
+      if (error instanceof ControlPlaneDescriptorOwnedError) {
+        // One active instance already owns the application: attach to it
+        // instead of binding a second Data Plane.
+        await attachToActiveInstance(descriptorPath);
+        return;
+      }
+      throw error;
+    }
+    diagnosticsStore = await createRuntimeDiagnosticsStoreFactory({
+      configuration: bindRuntimeDiagnosticsConfiguration(
+        config.runtimeDiagnostics,
+      ),
+    }).open();
+    const ownedDiagnosticsStore = diagnosticsStore;
+    const controlPipe = await createProductionControlPipe();
+    // The canonical LuckyToken-owned models.json: defaults to `models.json`
+    // next to the config file (the desktop layout's `~/.luckytoken/models.json`)
+    // unless the config overrides it. The Pi Agent default data directory is
+    // never read or written implicitly.
+    const modelsAuthority = createModelsJsonAuthority({
+      path: config.pi.modelsJson,
     });
-    await supervisor.execute("start", (status) =>
-      controlPlane.publishStatus(status),
+    const modelsState = await modelsAuthority.query();
+    const provider: ApplicationStatus["provider"] =
+      Object.keys(config.providerPackages).length > 0 ||
+      (modelsState.present &&
+        modelsState.valid &&
+        Object.keys(modelsState.providers ?? {}).length > 0)
+        ? "configured"
+        : "unconfigured";
+    const settingsRegistry = createSettingsRegistry(
+      createFileSettingsStore(join(dirname(configPath), "settings.json")),
+      {
+        initial: {
+          "server.port": config.server.port,
+          "server.bindHost": config.server.host,
+        },
+      },
     );
-
-    await new Promise<"SIGINT" | "SIGTERM">((resolve) => {
+    await settingsRegistry.load();
+    // Ticket 16: the live per-protocol Client Token authorities belong to the
+    // running Data Plane composition; the Control Plane adapters read them
+    // through this slot so commands and enable transitions always target the
+    // current authorities (boot-time enabling is ensured by the composition).
+    let tokenAuthorities:
+      | Readonly<Record<string, LiveClientTokenAuthority>>
+      | undefined;
+    const protocolNames = Object.freeze({
+      [anthropicMessagesProtocolId]: "Anthropic Messages",
+      [openaiResponsesProtocolId]: "OpenAI Responses",
+    });
+    const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
+      authorities: () => tokenAuthorities ?? Object.freeze({}),
+      protocolNames,
+      diagnostics: diagnosticsStore,
+    });
+    const settingsCommandHandler = createProtocolEnablementSettingsHandler({
+      settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
+      authorities: () => tokenAuthorities ?? Object.freeze({}),
+      protocolNames,
+      diagnostics: diagnosticsStore,
+    });
+    const drainTimeoutMs = (): number => {
+      const setting = settingsRegistry.query([
+        "application.quitDrainTimeoutMs",
+      ])["application.quitDrainTimeoutMs"];
+      if (setting === undefined) return 5000;
+      const value = Number(setting.value);
+      return Number.isSafeInteger(value) && value >= 0 ? value : 5000;
+    };
+    supervisor = createDataPlaneRuntimeSupervisor({
+      host: config.server.host,
+      port: config.server.port,
+      provider,
+      resolveAddress: () =>
+        resolveEffectiveSettings(settingsRegistry.query([])),
+      startListener: async (address) => {
+        const shutdownController = new AbortController();
+        try {
+          const composition = await createConfiguredLuckyTokenComposition({
+            config,
+            fetch: globalThis.fetch,
+            shutdownSignal: shutdownController.signal,
+            diagnosticsStore: ownedDiagnosticsStore,
+            settingsRegistry,
+          });
+          tokenAuthorities = composition.clientTokenAuthorities;
+          const server = await startLuckyTokenHttpServer({
+            runtime: composition.runtime,
+            host: address.host,
+            port: address.port,
+          });
+          for (const route of composition.runtime.routes) {
+            stdout.write(
+              `LuckyToken ${route.method} ${server.origin}${route.pathname}\n`,
+            );
+          }
+          return {
+            async close() {
+              shutdownController.abort(
+                new Error("LuckyToken model gateway is stopping"),
+              );
+              await server.close();
+            },
+            async drain(timeoutMs) {
+              // A graceful quit drain lets in-flight requests complete; the
+              // composition shutdown signal is only aborted on Stop/close.
+              return server.drain(timeoutMs);
+            },
+          };
+        } catch (error) {
+          shutdownController.abort(
+            new Error("LuckyToken model gateway startup failed"),
+          );
+          throw error;
+        }
+      },
+    });
+    const autoStartRegistrar: AutoStartRegistrar =
+      process.platform === "win32"
+        ? createWindowsAutoStartRegistrar({
+            name: "LuckyToken",
+            command: buildWindowsAutoStartCommand(process.execPath, [
+              fileURLToPath(import.meta.url),
+              "serve",
+              "--config",
+              resolve(configPath),
+              ...(descriptorOverride === undefined
+                ? []
+                : ["--descriptor", resolve(descriptorOverride)]),
+            ]),
+          })
+        : createUnsupportedAutoStartRegistrar();
+    const publish = (status: ApplicationStatus): Promise<void> => {
+      const plane = controlPlane;
+      return plane === undefined
+        ? Promise.reject(new Error("Control Plane is not ready"))
+        : plane.publishStatus(status);
+    };
+    const signalQuit = new Promise<"SIGINT" | "SIGTERM">((resolve) => {
       const finish = (signal: "SIGINT" | "SIGTERM") => {
         process.off("SIGINT", onInterrupt);
         process.off("SIGTERM", onTerminate);
@@ -515,19 +597,149 @@ async function runServe(
       process.once("SIGINT", onInterrupt);
       process.once("SIGTERM", onTerminate);
     });
-    await supervisor.execute("stop", (status) =>
-      controlPlane.publishStatus(status),
-    );
-  } finally {
-    await supervisor
-      .execute("stop", (status) => controlPlane.publishStatus(status))
-      .catch(() => undefined);
-    const cleanup = await Promise.allSettled([
-      descriptor?.close() ?? Promise.resolve(),
-      controlPlane.close(),
-      diagnosticsStore.close(),
+    let resolveCommandQuit:
+      | ((outcome: "drained" | "timed_out") => void)
+      | undefined;
+    let resolveCommandQuitExited: (() => void) | undefined;
+    const commandQuit = new Promise<"drained" | "timed_out">((resolve) => {
+      resolveCommandQuit = resolve;
+    });
+    const commandQuitExited = new Promise<void>((resolve) => {
+      resolveCommandQuitExited = resolve;
+    });
+    const quitRequested = Promise.race([
+      signalQuit.then((signal) => ({ kind: "signal" as const, signal })),
+      commandQuit.then((outcome) => ({ kind: "command" as const, outcome })),
     ]);
-    if (cleanup.some((result) => result.status === "rejected")) {
+    const cleanup = async (): Promise<void> => {
+      if (supervisor !== undefined) {
+        await supervisor
+          .execute("stop", (status) => controlPlane?.publishStatus(status) ?? Promise.resolve())
+          .catch(() => undefined);
+      }
+      const results = await Promise.allSettled([
+        descriptor?.close() ?? Promise.resolve(),
+        controlPlane?.close() ?? Promise.resolve(),
+        diagnosticsStore?.close() ?? Promise.resolve(),
+      ]);
+      if (results.some((result) => result.status === "rejected")) {
+        throw new Error("LuckyToken application resource cleanup failed");
+      }
+    };
+    controlPlane = await startControlPlane({
+      endpoint,
+      application: { id: "luckytoken", version: "0.0.0" },
+      initialStatus: supervisor.initialStatus,
+      ownership: {
+        owner: {
+          kind: "cli",
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+        },
+      },
+      runtimeCommandHandler: supervisor.execute,
+      settingsCommandHandler,
+      settingsProjection: () => settingsRegistry.snapshot(),
+      clientTokenCommandHandler,
+      modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
+      modelsProjection: () => modelsAuthority.snapshot(),
+      applicationCommandHandler: async (command, publishStatus) => {
+        switch (command.command) {
+          case "attach":
+            return { outcome: "attached" };
+          case "auto_start": {
+            const execution = await executeAutoStart(
+              autoStartRegistrar,
+              command.action,
+            );
+            return {
+              outcome: execution.outcome,
+              ...(execution.error === undefined
+                ? {}
+                : { error: execution.error }),
+              ...(execution.enabled === undefined
+                ? {}
+                : { autoStart: { enabled: execution.enabled } }),
+            };
+          }
+          case "quit": {
+            const outcome = await supervisor?.quit({
+              timeoutMs: drainTimeoutMs(),
+              publishStatus,
+            });
+            const settled = outcome ?? "timed_out";
+            resolveCommandQuit?.(settled);
+            return { outcome: settled };
+          }
+        }
+      },
+      onApplicationCommandResultDelivered: async (command, result) => {
+        if (
+          command.command !== "quit" ||
+          (result.outcome !== "drained" && result.outcome !== "timed_out")
+        ) {
+          return;
+        }
+        stdout.write(
+          `LuckyToken: application quit — ${
+            result.outcome === "drained"
+              ? "active requests drained"
+              : "drain timed out; remaining requests aborted"
+          }\n`,
+        );
+        // Tear down only after the quit result frame is visible to the
+        // requester, and never from inside the host's request loop.
+        setImmediate(() => {
+          void cleanup().then(
+            () => resolveCommandQuitExited?.(),
+            (error: unknown) => {
+              process.stderr.write(
+                `LuckyToken: ${
+                  error instanceof Error ? error.message : String(error)
+                }\n`,
+              );
+              process.exitCode = 1;
+              resolveCommandQuitExited?.();
+            },
+          );
+        });
+      },
+      pipeServerFactory: controlPipe.pipeServerFactory,
+      access: controlPipe.access,
+      diagnostics: ownedDiagnosticsStore,
+    });
+    await supervisor.execute("start", publish);
+    const quit = await quitRequested;
+    if (quit.kind === "signal") {
+      const outcome = await supervisor.quit({
+        timeoutMs: drainTimeoutMs(),
+        publishStatus: publish,
+      });
+      stdout.write(
+        `LuckyToken: application quit — ${
+          outcome === "drained"
+            ? "active requests drained"
+            : "drain timed out; remaining requests aborted"
+        }\n`,
+      );
+    } else {
+      // The quit result was delivered by the Control Plane; the delivery
+      // hook performs the teardown above. Wait for it so this cleanup path
+      // never runs concurrently with the hook's.
+      await commandQuitExited;
+    }
+  } finally {
+    if (supervisor !== undefined) {
+      await supervisor
+        .execute("stop", (status) => controlPlane?.publishStatus(status) ?? Promise.resolve())
+        .catch(() => undefined);
+    }
+    const results = await Promise.allSettled([
+      descriptor?.close() ?? Promise.resolve(),
+      controlPlane?.close() ?? Promise.resolve(),
+      diagnosticsStore?.close() ?? Promise.resolve(),
+    ]);
+    if (results.some((result) => result.status === "rejected")) {
       throw new Error("LuckyToken application resource cleanup failed");
     }
   }
@@ -598,8 +810,75 @@ async function runControlSettingsCommand(args: readonly string[]): Promise<void>
     pipeConnector: createNodePipeTransport(),
   });
   try {
-    await assertCompatibleControlPlane(client);
+    const hello = await client.hello(controlPlaneVersion);
+    if (hello.type === "incompatible") {
+      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
+    }
     const result = await client.executeSettingsCommand(parsed.command);
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
+async function runControlCommand(
+  command: "status" | RuntimeCommand | "auto-start",
+  args: readonly string[],
+): Promise<void> {
+  let descriptorPath: string | undefined;
+  let autoStartAction: "status" | "enable" | "disable" | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--descriptor") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (command === "auto-start") {
+      const action = args[index];
+      if (
+        action === "status" ||
+        action === "enable" ||
+        action === "disable"
+      ) {
+        if (autoStartAction !== undefined) {
+          throw new Error("auto-start action may be provided once");
+        }
+        autoStartAction = action;
+        continue;
+      }
+    }
+    throw new Error(`Unknown control option: ${args[index]}`);
+  }
+  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
+  if (command === "auto-start" && autoStartAction === undefined) {
+    throw new Error("auto-start requires status, enable, or disable");
+  }
+  const endpoint = await readControlPlaneDescriptor(descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    const hello = await client.hello(controlPlaneVersion);
+    if (hello.type === "incompatible") {
+      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
+    }
+    const result =
+      command === "status"
+        ? await client.getStatus()
+        : command === "auto-start"
+          ? await client.executeApplicationCommand({
+              command: "auto_start",
+              action: autoStartAction as "status" | "enable" | "disable",
+            })
+          : await client.executeRuntimeCommand(command);
     stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await client.close();
@@ -712,39 +991,6 @@ async function runControlModelsCommand(args: readonly string[]): Promise<void> {
   }
 }
 
-async function runControlCommand(
-  command: "status" | RuntimeCommand,
-  args: readonly string[],
-): Promise<void> {
-  let descriptorPath: string | undefined;
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] !== "--descriptor") throw new Error(`Unknown control option: ${args[index]}`);
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("-")) throw new Error("--descriptor requires a path");
-    descriptorPath = value;
-    index += 1;
-  }
-  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
-  const endpoint = await readControlPlaneDescriptor(descriptorPath);
-  const client = await connectControlPlane(endpoint, {
-    createRequestId: randomUUID,
-    pipeConnector: createNodePipeTransport(),
-  });
-  try {
-    const hello = await client.hello(controlPlaneVersion);
-    if (hello.type === "incompatible") {
-      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
-    }
-    const result =
-      command === "status"
-        ? await client.getStatus()
-        : await client.executeRuntimeCommand(command);
-    stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    await client.close();
-  }
-}
-
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
@@ -762,7 +1008,8 @@ export async function runLuckyTokenCli(
       command !== "status" &&
       command !== "start" &&
       command !== "stop" &&
-      command !== "restart"
+      command !== "restart" &&
+      command !== "auto-start"
     ) {
       throw new Error(`Unknown control command: ${command ?? ""}`);
     }
@@ -792,7 +1039,9 @@ export async function runLuckyTokenCli(
   const config = await loadLuckyTokenCliConfig(parsed.configPath);
   const configured = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
-    modelsJsonPath: config.pi.modelsJson,
+    ...(config.pi.modelsJson === undefined
+      ? {}
+      : { modelsJsonPath: config.pi.modelsJson }),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
   });

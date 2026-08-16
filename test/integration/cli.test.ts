@@ -91,6 +91,19 @@ function startCli(
   });
 }
 
+async function reserveFreePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port =
+    typeof address === "object" && address !== null ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 describe("LuckyToken CLI", () => {
   const directories: string[] = [];
   const children: ChildProcessWithoutNullStreams[] = [];
@@ -562,7 +575,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        server: { host: "127.0.0.1", port: 0 },
+        server: { host: "127.0.0.1", port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",

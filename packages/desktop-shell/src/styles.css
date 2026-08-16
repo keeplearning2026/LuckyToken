@@ -117,6 +117,21 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
 }
 .runtime-actions button:disabled { cursor: default; opacity: .45; }
 
+.ownership-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+  border: 1px solid #dce4e1;
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: #fff;
+}
+.ownership-controls p { margin: 5px 0 0; color: #6b7480; }
+.ownership-controls small { color: #9a4e20; }
+.auto-start-status { color: #6b7480; font-size: 13px; }
+
 .empty-page {
   display: grid;
   min-height: 390px;

@@ -84,6 +84,96 @@ describe("Tauri shell runtime public adapter seam", () => {
 
     expect(calls).toEqual(["shell_start", "shell_stop", "shell_restart"]);
   });
+
+  it("projects the headless owner identity from the live bridge snapshot", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => ({
+        revision: 3,
+        connection: "connected",
+        applicationVersion: "test",
+        contractVersion: 1,
+        snapshot: {
+          sequence: 3,
+          modelDataPlane: "running",
+          provider: "unconfigured",
+          ownership: {
+            owner: {
+              kind: "cli",
+              pid: 4242,
+              startedAt: "2026-08-15T12:00:00.000Z",
+            },
+          },
+        },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    const state = await runtime.connectControlPlane();
+
+    expect(state).toMatchObject({
+      kind: "connected",
+      ownership: {
+        owner: { kind: "cli", pid: 4242 },
+      },
+    });
+  });
+
+  it("rejects a bridge snapshot with a malformed owner identity", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => ({
+        revision: 4,
+        connection: "connected",
+        applicationVersion: "test",
+        contractVersion: 1,
+        snapshot: {
+          sequence: 4,
+          modelDataPlane: "running",
+          provider: "unconfigured",
+          ownership: {
+            owner: { kind: "cli", pid: -5, startedAt: "nope" },
+          },
+        },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    const state = await runtime.connectControlPlane();
+
+    expect(state).toMatchObject({
+      kind: "error",
+      code: "protocol_error",
+    });
+  });
+
+  it("queries and changes Windows login auto-start through native commands", async () => {
+    const calls: string[] = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command) => {
+        calls.push(command);
+        return { enabled: command !== "shell_auto_start_enable" };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await expect(runtime.getAutoStartStatus()).resolves.toEqual({
+      enabled: true,
+    });
+    await expect(runtime.setAutoStartEnabled(false)).resolves.toEqual({
+      enabled: true,
+    });
+    await expect(runtime.setAutoStartEnabled(true)).resolves.toEqual({
+      enabled: false,
+    });
+
+    expect(calls).toEqual([
+      "shell_auto_start_status",
+      "shell_auto_start_disable",
+      "shell_auto_start_enable",
+    ]);
+  });
 });
 
 describe("Tauri client token commands and Dashboard warnings", () => {

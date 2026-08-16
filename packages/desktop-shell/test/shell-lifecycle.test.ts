@@ -32,6 +32,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
         commands.push(command);
         return connected;
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
     });
@@ -79,7 +81,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
         commands.push(command);
         return connected;
       },
-      subscribeControlPlane: () => () => undefined,
+            getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
+subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
     });
     await shell.launch();
@@ -121,6 +125,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
     };
@@ -155,6 +161,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => {
         unsubscribed += 1;
       },
@@ -192,6 +200,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => {
         subscribed += 1;
         return () => undefined;
@@ -237,6 +247,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => {
         unsubscribed += 1;
       },
@@ -280,6 +292,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => {
         controlPlaneDisconnected += 1;
@@ -331,6 +345,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: (listener) => {
         publish = listener;
         return () => undefined;
@@ -365,6 +381,55 @@ describe("Windows desktop shell public lifecycle seam", () => {
       "transport_lost",
     ]);
   });
+
+  it("passes Windows login auto-start queries and changes to the runtime", async () => {
+    const actions: Array<boolean | "query"> = [];
+    const shell = createWindowsShellHost({
+      connectControlPlane: async () => ({
+        revision: 1,
+        kind: "connected",
+        applicationVersion: "0.0.0-test",
+        contractVersion: 1,
+        sequence: 0,
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      }),
+      executeSettingsCommand: async () => {
+        throw new Error("unused settings command");
+      },
+      executeRuntimeCommand: async () => {
+        throw new Error("unused runtime command");
+      },
+      getAutoStartStatus: async () => {
+        actions.push("query");
+        return { enabled: false };
+      },
+      setAutoStartEnabled: async (enabled) => {
+        actions.push(enabled);
+        return { enabled };
+      },
+      executeModelsCommand: async () => {
+        throw new Error("unused models command");
+      },
+      executeClientTokenCommand: async () => {
+        throw new Error("unused client token command");
+      },
+      queryDiagnosticsWarnings: async () => [],
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+    });
+    await shell.launch();
+
+    await expect(shell.getAutoStartStatus()).resolves.toEqual({
+      enabled: false,
+    });
+    await expect(shell.setAutoStartEnabled(true)).resolves.toEqual({
+      enabled: true,
+    });
+
+    expect(actions).toEqual(["query", true]);
+    await shell.dispose();
+  });
 });
 
 
@@ -397,6 +462,8 @@ describe("WindowsShellHost client token commands", () => {
           text: "sanitized warning",
         },
       ],
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       executeModelsCommand: async () => {
         throw new Error("unused models command");
       },
@@ -441,6 +508,8 @@ describe("WindowsShellHost client token commands", () => {
         throw new Error("unused");
       },
       queryDiagnosticsWarnings: async () => [],
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       executeModelsCommand: async () => {
         throw new Error("unused models command");
       },

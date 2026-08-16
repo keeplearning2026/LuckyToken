@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { projectControlPlaneState } from "../src/control-plane-projection.js";
+import {
+  projectControlPlaneState,
+  type ControlPlaneBridgePayload,
+} from "../src/control-plane-projection.js";
 
 describe("Control Plane renderer projection public seam", () => {
   it("projects only the compatible identity and Ticket01 status snapshot", () => {
@@ -90,6 +93,64 @@ describe("Control Plane renderer projection public seam", () => {
 
     expect(projected).toEqual(expected);
     expect(JSON.stringify(projected)).not.toMatch(/capability|secret/u);
+  });
+
+  it("projects the headless owner identity without forwarding transport details", () => {
+    const projected = projectControlPlaneState({
+      revision: 9,
+      connection: "connected",
+      applicationVersion: "1.2.3",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 15,
+        modelDataPlane: "running",
+        provider: "configured",
+        ownership: {
+          owner: {
+            kind: "cli",
+            pid: 4242,
+            startedAt: "2026-08-15T12:00:00.000Z",
+          },
+        },
+        capability: "must-not-reach-renderer",
+      },
+    });
+
+    expect(projected).toMatchObject({
+      kind: "connected",
+      ownership: {
+        owner: {
+          kind: "cli",
+          pid: 4242,
+          startedAt: "2026-08-15T12:00:00.000Z",
+        },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toMatch(
+      /capability|must-not-reach-renderer/u,
+    );
+  });
+
+  it("rejects a connected snapshot whose owner identity is malformed", () => {
+    const projected = projectControlPlaneState({
+      revision: 10,
+      connection: "connected",
+      applicationVersion: "1.2.3",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 16,
+        modelDataPlane: "running",
+        provider: "configured",
+        ownership: {
+          owner: { kind: "unknown-owner-kind", pid: -1, startedAt: "nope" },
+        },
+      },
+    } as unknown as ControlPlaneBridgePayload);
+
+    expect(projected).toMatchObject({
+      kind: "error",
+      code: "protocol_error",
+    });
   });
 
   it("projects a failed fixed-port lifecycle without forwarding raw failure text", () => {

@@ -4,7 +4,13 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   controlPlaneVersion,
+  type ApplicationCommand,
+  type ApplicationCommandConflict,
+  type ApplicationCommandExecution,
+  type ApplicationCommandOutcome,
+  type ApplicationCommandResult,
   type ApplicationIdentity,
+  type ApplicationOwnership,
   type ApplicationStatus,
   type DataPlaneFailure,
   type HelloResult,
@@ -61,6 +67,11 @@ export type ClientRequest =
       readonly command: SettingsCommand;
     }
   | {
+      readonly type: "application_command";
+      readonly requestId: string;
+      readonly command: ApplicationCommand;
+    }
+  | {
       readonly type: "client_token_command";
       readonly requestId: string;
       readonly command: ClientTokenCommand;
@@ -104,6 +115,11 @@ export type ServerMessage =
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
+    }
+  | {
+      readonly type: "application_command_result";
+      readonly requestId: string;
+      readonly result: ApplicationCommandResult;
     }
   | {
       readonly type: "client_token_command_result";
@@ -787,7 +803,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
-
+  if (value.type === "application_command") {
+    const command = decodeApplicationCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "application_command",
+        requestId,
+        command,
+      },
+    };
+  }
   if (value.type === "client_token_command") {
     const command = decodeClientTokenCommand(value.command);
     if (command === undefined) {
@@ -872,15 +901,160 @@ export function decodeHello(value: unknown): HelloResult | undefined {
   return undefined;
 }
 
+export function decodeApplicationOwnership(
+  value: unknown,
+): ApplicationOwnership | undefined {
+  if (!isRecord(value) || !isRecord(value.owner)) return undefined;
+  const owner = value.owner;
+  if (
+    (owner.kind !== "cli" && owner.kind !== "desktop") ||
+    !Number.isSafeInteger(owner.pid) ||
+    (owner.pid as number) <= 0 ||
+    typeof owner.startedAt !== "string" ||
+    Number.isNaN(Date.parse(owner.startedAt))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    owner: Object.freeze({
+      kind: owner.kind as "cli" | "desktop",
+      pid: owner.pid as number,
+      startedAt: owner.startedAt as string,
+    }),
+  });
+}
+
+function decodeApplicationCommand(
+  value: unknown,
+): ApplicationCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.command === "attach") return { command: "attach" };
+  if (value.command === "quit") {
+    return typeof value.acknowledged === "boolean"
+      ? { command: "quit", acknowledged: value.acknowledged }
+      : undefined;
+  }
+  if (value.command === "auto_start") {
+    return value.action === "status" ||
+      value.action === "enable" ||
+      value.action === "disable"
+      ? { command: "auto_start", action: value.action }
+      : undefined;
+  }
+  return undefined;
+}
+
+const applicationCommandConflictMessages: Readonly<
+  Record<ApplicationCommandConflict["code"], string>
+> = {
+  quit_requires_explicit_confirmation:
+    "Quitting would stop the LuckyToken gateway that another process started. Acknowledge the quit explicitly to continue.",
+};
+
+function decodeApplicationCommandConflict(
+  value: unknown,
+): ApplicationCommandConflict | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.code === "quit_requires_explicit_confirmation") {
+    return {
+      code: value.code,
+      message: applicationCommandConflictMessages[value.code],
+    };
+  }
+  return undefined;
+}
+
+function decodeAutoStartRegistration(
+  value: unknown,
+): { readonly enabled: boolean } | undefined {
+  return isRecord(value) && typeof value.enabled === "boolean"
+    ? { enabled: value.enabled }
+    : undefined;
+}
+
+export function decodeApplicationCommandExecution(
+  value: unknown,
+): ApplicationCommandExecution | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "attached" &&
+      value.outcome !== "drained" &&
+      value.outcome !== "timed_out" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "ok" &&
+      value.outcome !== "failed" &&
+      value.outcome !== "unsupported")
+  ) {
+    return undefined;
+  }
+  const conflict = decodeApplicationCommandConflict(value.conflict);
+  if (
+    (value.outcome === "conflict" && conflict === undefined) ||
+    (value.outcome !== "conflict" && value.conflict !== undefined)
+  ) {
+    return undefined;
+  }
+  const autoStart = decodeAutoStartRegistration(value.autoStart);
+  if (
+    (value.outcome === "ok" && autoStart === undefined) ||
+    (value.outcome !== "ok" && value.autoStart !== undefined)
+  ) {
+    return undefined;
+  }
+  if (value.outcome === "failed" && typeof value.error !== "string") {
+    return undefined;
+  }
+  return {
+    outcome: value.outcome as ApplicationCommandOutcome,
+    ...(conflict === undefined ? {} : { conflict }),
+    ...(autoStart === undefined ? {} : { autoStart }),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
+}
+
+function decodeApplicationCommandResult(
+  value: unknown,
+): ApplicationCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.command !== "attach" &&
+      value.command !== "quit" &&
+      value.command !== "auto_start")
+  ) {
+    return undefined;
+  }
+  const snapshot = decodeSnapshot(value.snapshot);
+  const execution = decodeApplicationCommandExecution(value);
+  if (snapshot === undefined || execution === undefined) return undefined;
+  return {
+    command: value.command as ApplicationCommandResult["command"],
+    ...execution,
+    snapshot,
+  };
+}
+
 export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   const safeStatus = decodeApplicationStatus(value);
   const sequence = isRecord(value) ? value.sequence : undefined;
-  return safeStatus !== undefined &&
-    typeof sequence === "number" &&
-    Number.isSafeInteger(sequence) &&
-    sequence >= 0
-    ? { ...safeStatus, sequence }
+  if (
+    safeStatus === undefined ||
+    typeof sequence !== "number" ||
+    !Number.isSafeInteger(sequence) ||
+    (sequence as number) < 0
+  ) {
+    return undefined;
+  }
+  const ownership = isRecord(value)
+    ? decodeApplicationOwnership(value.ownership)
     : undefined;
+  if (isRecord(value) && value.ownership !== undefined && ownership === undefined) {
+    return undefined;
+  }
+  return {
+    ...safeStatus,
+    sequence,
+    ...(ownership === undefined ? {} : { ownership }),
+  };
 }
 
 export function decodeEvent(value: unknown): StatusEvent | undefined {
@@ -1030,7 +1204,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "settings_command_result", requestId, result };
   }
-
+  if (value.type === "application_command_result") {
+    const result = decodeApplicationCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "application_command_result", requestId, result };
+  }
   if (value.type === "client_token_command_result") {
     // The full per-command result validation happens against the client's
     // own command (executeClientTokenCommand); the host already validated
@@ -1055,7 +1234,6 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       result: value.result as unknown as ClientTokenCommandResult,
     };
   }
-
   if (value.type === "models_command_result") {
     const result = decodeModelsCommandResult(value.result);
     return result === undefined

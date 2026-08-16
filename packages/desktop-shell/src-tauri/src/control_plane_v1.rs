@@ -75,6 +75,26 @@ pub(crate) struct DataPlaneStatus {
     pub(crate) failure: Option<DataPlaneFailure>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OwnerKind {
+    Cli,
+    Desktop,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct OwnerWire {
+    pub(crate) kind: OwnerKind,
+    pub(crate) pid: u64,
+    #[serde(rename = "startedAt")]
+    pub(crate) started_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct OwnershipWire {
+    pub(crate) owner: OwnerWire,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct RegisteredSettingWire {
     pub(crate) key: String,
@@ -112,6 +132,8 @@ pub(crate) struct StatusSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) confirmation: Option<LanConfirmationWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ownership: Option<OwnershipWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) models: Option<ModelsProjectionWire>,
 }
 
@@ -143,6 +165,31 @@ impl SettingsCommand {
             Self::Query => "desktop-settings-query",
             Self::Set => "desktop-settings-set",
             Self::Confirm => "desktop-settings-confirm",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutoStartAction {
+    Status,
+    Enable,
+    Disable,
+}
+
+impl AutoStartAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Enable => "enable",
+            Self::Disable => "disable",
+        }
+    }
+
+    fn request_id(self) -> &'static str {
+        match self {
+            Self::Status => "desktop-auto-start-status",
+            Self::Enable => "desktop-auto-start-enable",
+            Self::Disable => "desktop-auto-start-disable",
         }
     }
 }
@@ -181,7 +228,6 @@ impl ClientTokenCommand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModelsCommand {
     Query,
     WriteRaw { revision: u64, content: String },
@@ -313,58 +359,11 @@ pub(crate) type CommandFuture =
 pub(crate) type SettingsCommandFuture = Pin<
     Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
-
-pub(crate) type ClientTokenCommandFuture = Pin<
-    Box<
-        dyn Future<Output = Result<ClientTokenCommandResultWire, ConnectionFailure>>
-            + Send
-            + 'static,
-    >,
->;
-pub(crate) type DiagnosticsWarningsFuture = Pin<
-    Box<
-        dyn Future<Output = Result<Vec<DiagnosticsWarningWire>, ConnectionFailure>>
-            + Send
-            + 'static,
-    >,
->;
-
 pub(crate) type ModelsCommandFuture = Pin<
     Box<dyn Future<Output = Result<ModelsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
 
-pub(crate) trait ControlPlaneConnector: Send + Sync {
-    fn connect(&self) -> ConnectFuture;
-    fn command(&self, _command: RuntimeCommand) -> CommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub(crate) struct SettingsCommandResultWire {
-    pub(crate) outcome: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) confirmation: Option<LanConfirmationWire>,
-    #[serde(rename = "settings")]
-    pub(crate) settings: BTreeMap<String, RegisteredSettingWire>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-
 pub(crate) struct MaskedClientTokenScopeWire {
     #[serde(rename = "type")]
     pub(crate) scope_type: String,
@@ -395,6 +394,65 @@ pub(crate) struct DiagnosticsWarningWire {
     pub(crate) level: String,
     pub(crate) time: u64,
     pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+
+pub(crate) struct AutoStartResultWire {
+    pub(crate) outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enabled: Option<bool>,
+}
+
+pub(crate) type AutoStartFuture =
+    Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
+
+pub(crate) type ClientTokenCommandFuture = Pin<
+    Box<
+        dyn Future<Output = Result<ClientTokenCommandResultWire, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+pub(crate) type DiagnosticsWarningsFuture = Pin<
+    Box<
+        dyn Future<Output = Result<Vec<DiagnosticsWarningWire>, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+
+pub(crate) trait ControlPlaneConnector: Send + Sync {
+    fn connect(&self) -> ConnectFuture;
+    fn command(&self, _command: RuntimeCommand) -> CommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct SettingsCommandResultWire {
+    pub(crate) outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) confirmation: Option<LanConfirmationWire>,
+    #[serde(rename = "settings")]
+    pub(crate) settings: BTreeMap<String, RegisteredSettingWire>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -514,6 +572,22 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
             execute_settings_command_session(&pipe_name, capability, command).await
         })
     }
+
+    fn auto_start(&self, action: AutoStartAction) -> AutoStartFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_auto_start_session(&pipe_name, capability, action).await
+        })
+    }
+
     fn client_token_command(&self, command: ClientTokenCommand) -> ClientTokenCommandFuture {
         let discovery = self.discovery.clone();
         Box::pin(async move {
@@ -543,7 +617,6 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
             execute_diagnostics_warnings_session(&pipe_name, capability).await
         })
     }
-
     fn models_command(&self, command: ModelsCommand) -> ModelsCommandFuture {
         let discovery = self.discovery.clone();
         Box::pin(async move {
@@ -745,6 +818,88 @@ fn decode_settings_command_result(
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
+async fn execute_auto_start_session(
+    pipe_name: &str,
+    capability: String,
+    action: AutoStartAction,
+) -> Result<AutoStartResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "application_command",
+                    "requestId": action.request_id(),
+                    "command": {
+                        "command": "auto_start",
+                        "action": action.as_str(),
+                    },
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_auto_start_result(&result, action)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_auto_start_result(
+    value: &Value,
+    action: AutoStartAction,
+) -> Result<AutoStartResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("application_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(action.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let outcome = result.get("outcome").and_then(Value::as_str);
+    if result.get("command").and_then(Value::as_str) != Some("auto_start")
+        || !matches!(outcome, Some("ok" | "failed" | "unsupported"))
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let enabled = if outcome == Some("ok") {
+        Some(
+            result
+                .get("autoStart")
+                .and_then(|raw| raw.get("enabled"))
+                .and_then(Value::as_bool)
+                .ok_or(ConnectionFailure::ProtocolError)?,
+        )
+    } else {
+        None
+    };
+    Ok(AutoStartResultWire {
+        outcome: outcome.unwrap_or_default().to_owned(),
+        enabled,
+    })
+}
+
 async fn execute_client_token_command_session(
     pipe_name: &str,
     capability: String,
@@ -940,6 +1095,7 @@ fn decode_models_command_result(
     serde_json::from_value::<ModelsCommandResultWire>(Value::Object(result.clone()))
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
+
 fn valid_masked_scopes(value: Option<&Value>) -> bool {
     let Some(scopes) = value.and_then(Value::as_array) else {
         return false;
@@ -1154,6 +1310,8 @@ struct StatusSnapshotWire {
     data_plane: Option<DataPlaneStatusWire>,
     settings: Option<BTreeMap<String, RegisteredSettingWire>>,
     confirmation: Option<LanConfirmationWire>,
+    ownership: Option<OwnershipWire>,
+
     models: Option<ModelsProjectionWire>,
 }
 
@@ -1205,6 +1363,8 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
         data_plane,
         settings: wire.settings.filter(|settings| !settings.is_empty()),
         confirmation: wire.confirmation,
+        ownership: wire.ownership,
+
         models: wire.models,
     })
 }
@@ -1546,6 +1706,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auto_start_command_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_auto_start_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                AutoStartAction::Status,
+            )
+            .await
+            .expect("auto-start status must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("application_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-auto-start-status")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("auto_start")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("action"))
+                .and_then(Value::as_str),
+            Some("status")
+        );
+        server
+            .send(&json!({
+                "type": "application_command_result",
+                "requestId": "desktop-auto-start-status",
+                "result": {
+                    "command": "auto_start",
+                    "outcome": "ok",
+                    "autoStart": {"enabled": true},
+                    "snapshot": {
+                        "sequence": 2,
+                        "modelDataPlane": "running",
+                        "provider": "unconfigured"
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("auto-start status must complete within the timeout")
+            .expect("auto-start status task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.enabled, Some(true));
+    }
+
+    #[tokio::test]
     async fn client_token_command_exchanges_the_versioned_wire_and_decodes_the_result() {
         let pipe_name = test_pipe_name();
         let server = ServerOptions::new()
@@ -1745,6 +1993,51 @@ mod tests {
         assert!(!serialized.to_string().contains("fp:deadbeef"));
     }
 
+    #[test]
+    fn owner_identity_is_allowlisted_through_status_snapshots() {
+        let raw = json!({
+            "sequence": 5,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "ownership": {
+                "owner": {
+                    "kind": "cli",
+                    "pid": 4242,
+                    "startedAt": "2026-08-15T12:00:00.000Z"
+                }
+            },
+            "capability": "must-not-leave-the-native-shell"
+        });
+
+        let status = decode_status_snapshot(&raw).expect("decode ownership status");
+
+        assert_eq!(
+            serde_json::to_value(status).expect("serialize ownership status"),
+            json!({
+                "sequence": 5,
+                "modelDataPlane": "running",
+                "provider": "configured",
+                "ownership": {
+                    "owner": {
+                        "kind": "cli",
+                        "pid": 4242,
+                        "startedAt": "2026-08-15T12:00:00.000Z"
+                    }
+                }
+            })
+        );
+        // Unknown owner kinds and invalid identities never reach the shell.
+        assert!(decode_status_snapshot(&json!({
+            "sequence": 6,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "ownership": {
+                "owner": {"kind": "unknown", "pid": 1, "startedAt": "2026-08-15T12:00:00.000Z"}
+            }
+        }))
+        .is_none());
+    }
+
     fn test_pipe_name() -> String {
         format!(
             r"\\.\pipe\luckytoken-desktop-test-{}-{}",
@@ -1754,12 +2047,17 @@ mod tests {
     }
 
     fn rand_test_suffix() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock must be after the epoch")
             .as_nanos() as u64;
-        nanos ^ (nanos >> 32)
+        // Parallel tests in one binary share the process id and can observe
+        // the same nanosecond; a per-call counter makes every pipe name
+        // unique so `first_pipe_instance` never collides across tests.
+        nanos ^ COUNTER.fetch_add(1, Ordering::Relaxed)
     }
 
     async fn read_frame_length(reader: &mut NamedPipeServer) -> Result<usize, std::io::Error> {

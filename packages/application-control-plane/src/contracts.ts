@@ -11,6 +11,17 @@ export interface ApplicationIdentity {
   readonly version: string;
 }
 
+/** Owner identity of the one active LuckyToken application instance (Ticket
+ *  05). The Control Plane host runs inside the owner process; every client
+ *  connection is therefore an attached non-owner viewer. */
+export interface ApplicationOwnership {
+  readonly owner: {
+    readonly kind: "cli" | "desktop";
+    readonly pid: number;
+    readonly startedAt: string;
+  };
+}
+
 export interface ApplicationStatus {
   readonly modelDataPlane:
     | "stopped"
@@ -44,6 +55,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
   /** Present only while a non-loopback bind action waits for confirmation. */
   readonly confirmation?: LanConfirmation;
+  /** Owner identity of the one active instance (Ticket 05). */
+  readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
   readonly models?: ModelsProjection;
 }
@@ -332,15 +345,76 @@ export interface SettingsProjection {
   readonly confirmation?: LanConfirmation;
 }
 
+export type ApplicationCommand =
+  | { readonly command: "attach" }
+  | { readonly command: "quit"; readonly acknowledged: boolean }
+  | {
+      readonly command: "auto_start";
+      readonly action: "status" | "enable" | "disable";
+    };
+
+export type ApplicationCommandOutcome =
+  | "attached"
+  | "drained"
+  | "timed_out"
+  | "conflict"
+  | "ok"
+  | "failed"
+  | "unsupported";
+
+export type ApplicationCommandConflictCode =
+  | "quit_requires_explicit_confirmation";
+
+export interface ApplicationCommandConflict {
+  readonly code: ApplicationCommandConflictCode;
+  readonly message: string;
+}
+
+/** Effective Windows login auto-start registration status. */
+export interface AutoStartRegistration {
+  readonly enabled: boolean;
+}
+
+export interface ApplicationCommandExecution {
+  readonly outcome: ApplicationCommandOutcome;
+  readonly conflict?: ApplicationCommandConflict;
+  readonly autoStart?: AutoStartRegistration;
+  readonly error?: string;
+}
+
+export interface ApplicationCommandResult extends ApplicationCommandExecution {
+  readonly command: "attach" | "quit" | "auto_start";
+  readonly snapshot: StatusSnapshot;
+}
+
+export type ApplicationCommandHandler = (
+  command: ApplicationCommand,
+  publishStatus: RuntimeStatusPublisher,
+) => Promise<ApplicationCommandExecution>;
+
+/** Notified after an application command result frame has been written to
+ *  the requesting connection (Ticket 05): the outcome is visible to the
+ *  client before the owner process tears down and exits. */
+export type ApplicationCommandResultDeliveredHandler = (
+  command: ApplicationCommand,
+  result: ApplicationCommandResult,
+) => Promise<void> | void;
+
 export interface ControlPlaneClient {
   readonly disconnected: Promise<ControlPlaneDisconnect>;
   hello(version: number): Promise<HelloResult>;
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
+  executeApplicationCommand(
+    command: ApplicationCommand,
+  ): Promise<ApplicationCommandResult>;
+
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
+
+
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,

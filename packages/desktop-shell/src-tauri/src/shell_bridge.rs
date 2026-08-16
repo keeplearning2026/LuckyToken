@@ -8,10 +8,10 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult, ConnectionFailure,
-    ControlPlaneConnector, ControlPlaneSession, DiagnosticsWarningWire, ModelsCommand,
-    ModelsCommandResultWire, ModelsProjectionWire, RuntimeCommand, SessionFailure, SettingsCommand,
-    StatusSnapshot, CONTROL_PLANE_VERSION,
+    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
+    ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, DiagnosticsWarningWire,
+    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RuntimeCommand, SessionFailure,
+    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -29,6 +29,11 @@ pub(crate) enum UnavailableReason {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DisconnectReason {
     TransportLost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AutoStartDto {
+    pub(crate) enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -359,6 +364,15 @@ impl ShellBridge {
         }
     }
 
+    pub(crate) async fn auto_start(&self, action: AutoStartAction) -> Result<AutoStartDto, ()> {
+        match self.connector.auto_start(action).await {
+            Ok(result) if result.outcome == "ok" => Ok(AutoStartDto {
+                enabled: result.enabled.unwrap_or(false),
+            }),
+            _ => Err(()),
+        }
+    }
+
     /// Ticket 16: versioned Client Token commands for the Client Tokens page.
     /// The result is returned to the renderer as-is; list/mutation results
     /// carry masked scopes only and Reveal returns exactly the requested
@@ -503,8 +517,9 @@ fn unavailable_reason(failure: ConnectionFailure) -> UnavailableReason {
 mod tests {
     use super::*;
     use crate::control_plane_v1::{
-        ConnectFuture, ConnectResult, ConnectionFailure, ControlPlaneConnector,
-        ControlPlaneSession, ModelDataPlaneState, ProviderState, SessionFailure, StatusSnapshot,
+        AutoStartFuture, AutoStartResultWire, ConnectFuture, ConnectResult, ConnectionFailure,
+        ControlPlaneConnector, ControlPlaneSession, ModelDataPlaneState, ProviderState,
+        SessionFailure, StatusSnapshot,
     };
     use std::pin::Pin;
     use std::{
@@ -635,6 +650,8 @@ mod tests {
             data_plane: None,
             settings: None,
             confirmation: None,
+            ownership: None,
+
             models: None,
         }
     }
@@ -709,6 +726,8 @@ mod tests {
                 data_plane: None,
                 settings: None,
                 confirmation: None,
+                ownership: None,
+
                 models: None,
             }),
             models: None,
@@ -728,6 +747,51 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[tokio::test]
+    async fn auto_start_actions_route_to_the_native_connector_and_return_the_dto() {
+        let actions = Arc::new(std::sync::Mutex::new(Vec::<AutoStartAction>::new()));
+        let bridge = ShellBridge::new(Arc::new(AutoStartRecordingConnector {
+            actions: actions.clone(),
+        }));
+
+        let enabled = bridge.auto_start(AutoStartAction::Enable).await;
+        let disabled = bridge.auto_start(AutoStartAction::Disable).await;
+        let queried = bridge.auto_start(AutoStartAction::Status).await;
+
+        assert!(enabled.expect("enable must succeed").enabled);
+        assert!(!disabled.expect("disable must succeed").enabled);
+        assert!(!queried.expect("status must succeed").enabled);
+        assert_eq!(
+            *actions.lock().unwrap(),
+            vec![
+                AutoStartAction::Enable,
+                AutoStartAction::Disable,
+                AutoStartAction::Status
+            ]
+        );
+    }
+
+    struct AutoStartRecordingConnector {
+        actions: Arc<std::sync::Mutex<Vec<AutoStartAction>>>,
+    }
+
+    impl ControlPlaneConnector for AutoStartRecordingConnector {
+        fn connect(&self) -> ConnectFuture {
+            Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+        }
+
+        fn auto_start(&self, action: AutoStartAction) -> AutoStartFuture {
+            self.actions.lock().unwrap().push(action);
+            let enabled = action == AutoStartAction::Enable;
+            Box::pin(async move {
+                Ok(AutoStartResultWire {
+                    outcome: "ok".to_owned(),
+                    enabled: Some(enabled),
+                })
+            })
+        }
     }
 
     #[tokio::test]

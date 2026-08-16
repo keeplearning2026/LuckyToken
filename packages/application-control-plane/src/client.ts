@@ -5,8 +5,13 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   assertControlPlaneEndpoint,
+  type ApplicationCommand,
+  type ApplicationCommandResult,
+
   type ClientTokenCommand,
   type ClientTokenCommandResult,
+
+
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
@@ -184,6 +189,18 @@ export async function connectApplicationControlPlane(
         command,
       });
       if (response.type !== "settings_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async executeApplicationCommand(
+      command: ApplicationCommand,
+    ): Promise<ApplicationCommandResult> {
+      const response = await request({
+        type: "application_command",
+        command,
+      });
+      if (response.type !== "application_command_result") {
         throw new Error("Control Plane response is malformed");
       }
       return response.result;

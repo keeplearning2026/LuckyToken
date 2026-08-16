@@ -498,6 +498,13 @@ function New-StatusSnapshot {
     modelDataPlane = $State
     provider = "unconfigured"
     dataPlane = $dataPlane
+    ownership = @{
+      owner = @{
+        kind = "cli"
+        pid = 4242
+        startedAt = "2026-08-15T12:00:00.000Z"
+      }
+    }
   }
   if ($WithSettings) {
     $snapshot.settings = @{
@@ -540,6 +547,101 @@ function New-StatusSnapshot {
     }
   }
   return $snapshot
+}
+
+
+function Serve-BridgeQuery {
+  # Serves one of the renderer's one-shot bridge queries (Windows sign-in
+  # auto-start status or Dashboard diagnostics warnings) on a freshly created
+  # pipe instance, dispatching on whichever frame arrives.
+  param([Parameter(Mandatory = $true)] [string] $Label)
+  $pipe = New-PipeServer -PipeLeaf $script:pipeLeaf
+  try {
+    $connection = $pipe.WaitForConnectionAsync()
+    if (-not $connection.Wait(15000)) {
+      throw "$Label did not open a native pipe"
+    }
+    return Serve-ConnectedQuery -Pipe $pipe -Label $Label
+  } finally {
+    $pipe.Dispose()
+  }
+}
+
+function Serve-ConnectedQuery {
+  # Serves an already-connected bridge query pipe: hello, then dispatch on
+  # the first frame (auto-start status vs diagnostics warnings).
+  param(
+    [Parameter(Mandatory = $true)] $Pipe,
+    [Parameter(Mandatory = $true)] [string] $Label
+  )
+  try {
+    Complete-Hello -Stream $Pipe
+    $request = Read-Frame -Stream $pipe
+    if ($request.type -eq "application_command") {
+      Assert-Equal $request.command.command "auto_start" "Bridge command must be auto_start"
+      Assert-Equal $request.command.action "status" "Bridge auto-start action must be status"
+      Write-Frame -Stream $Pipe -Value @{
+        type = "application_command_result"
+        requestId = $request.requestId
+        result = @{
+          command = "auto_start"
+          outcome = "ok"
+          autoStart = @{ enabled = $false }
+          snapshot = (New-StatusSnapshot -Sequence 2 -State "running")
+        }
+      }
+      return "auto_start"
+    }
+    if ($request.type -eq "get_diagnostics") {
+      Write-Frame -Stream $Pipe -Value @{
+        type = "diagnostics_result"
+        requestId = $request.requestId
+        result = @{ records = @(); hasMore = $false }
+      }
+      return "diagnostics"
+    }
+    throw "$Label received an unexpected frame: $($request.type)"
+  } finally {
+    $Pipe.Dispose()
+  }
+}
+
+function Invoke-AutoStartAction {
+  param(
+    [Parameter(Mandatory = $true)] [string] $ButtonName,
+    [Parameter(Mandatory = $true)] [string] $Action,
+    [Parameter(Mandatory = $true)] [bool] $Enabled
+  )
+  # The native client fails fast when no server instance is listening, so
+  # the fixture must be waiting BEFORE the renderer's invoke fires.
+  $autoStartPipe = New-PipeServer -PipeLeaf $script:pipeLeaf
+  try {
+    $connection = $autoStartPipe.WaitForConnectionAsync()
+    Invoke-UiButton -Process $script:first -Name $ButtonName
+    if (-not $connection.Wait(10000)) {
+      $visibleNames = if ($null -ne $script:first) {
+        [LuckyTokenProductWindowProbe]::Names([uint32]$script:first.Id) -join " | "
+      } else { "no first process" }
+      throw "Auto-start $Action did not open a native pipe. UI names: $visibleNames"
+    }
+    Complete-Hello -Stream $autoStartPipe
+    $request = Read-Frame -Stream $autoStartPipe
+    Assert-Equal $request.type "application_command" "Auto-start must use application_command"
+    Assert-Equal $request.command.command "auto_start" "Auto-start command must be preserved"
+    Assert-Equal $request.command.action $Action "Auto-start action must be preserved"
+    Write-Frame -Stream $autoStartPipe -Value @{
+      type = "application_command_result"
+      requestId = $request.requestId
+      result = @{
+        command = "auto_start"
+        outcome = "ok"
+        autoStart = @{ enabled = $Enabled }
+        snapshot = (New-StatusSnapshot -Sequence 2 -State "running")
+      }
+    }
+  } finally {
+    $autoStartPipe.Dispose()
+  }
 }
 
 function Complete-Hello {
@@ -667,6 +769,19 @@ try {
   Assert-Equal $subscribe.requestId "desktop-subscribe" "Subscribe request ID must be stable"
   Write-Frame -Stream $pipe -Value @{ type = "subscribed"; requestId = "desktop-subscribe" }
 
+  # --- Ticket 05/16: ownership projection, auto-start, and warnings --------
+  # The renderer fires one-shot bridge queries (sign-in auto-start status and
+  # Dashboard diagnostics warnings) right after the first connected render.
+  # The fixture must already be listening, because the native client fails
+  # fast when no server instance exists.
+  $bridgeQueryPipes = @(
+    (New-PipeServer -PipeLeaf $pipeLeaf),
+    (New-PipeServer -PipeLeaf $pipeLeaf)
+  )
+  foreach ($queryPipe in $bridgeQueryPipes) {
+    $null = $queryPipe.WaitForConnectionAsync()
+  }
+
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
     Start-Sleep -Milliseconds 200
@@ -682,6 +797,19 @@ try {
   }
 
   Wait-UiText -Process $first -Text "Gateway running"
+  $firstQuery = Serve-ConnectedQuery -Pipe $bridgeQueryPipes[0] -Label "First bridge query"
+  $secondQuery = Serve-ConnectedQuery -Pipe $bridgeQueryPipes[1] -Label "Second bridge query"
+  $autoStartServed = ($firstQuery -eq "auto_start") -or ($secondQuery -eq "auto_start")
+  $diagnosticsServed = ($firstQuery -eq "diagnostics") -or ($secondQuery -eq "diagnostics")
+  if (-not $autoStartServed -or -not $diagnosticsServed) {
+    throw "Bridge queries must include auto-start status and diagnostics warnings (got $firstQuery, $secondQuery)"
+  }
+  Wait-UiText -Process $first -Text "Owned by the headless LuckyToken CLI (PID 4242)"
+  Wait-UiText -Process $first -Text "Does not start at sign-in"
+  Invoke-AutoStartAction -ButtonName "Enable auto-start" -Action "enable" -Enabled $true
+  Wait-UiText -Process $first -Text "Starts LuckyToken at sign-in"
+  Invoke-AutoStartAction -ButtonName "Disable auto-start" -Action "disable" -Enabled $false
+  Wait-UiText -Process $first -Text "Does not start at sign-in"
   Invoke-RuntimeCommand -Process $first -Subscription $pipe -Command "stop" -Outcome "completed" -Transitions @(
     @{ snapshot = (New-StatusSnapshot -Sequence 3 -State "stopping"); text = "Gateway stopping" },
     @{ snapshot = (New-StatusSnapshot -Sequence 4 -State "stopped"); text = "Gateway stopped" }
@@ -712,6 +840,16 @@ try {
   $retryStatus = Read-Frame -Stream $retryPipe
   Assert-Equal $retryStatus.type "get_status" "Retry must query status without a second automatic Start"
   Assert-Equal $retryStatus.requestId "desktop-status" "Retry status request ID must be stable"
+  # The reconnected session is a new connected session: the renderer queries
+  # the sign-in registration once more. Listen BEFORE the status result so
+  # the one-shot query always finds a server.
+  $retryQueryPipes = @(
+    (New-PipeServer -PipeLeaf $pipeLeaf),
+    (New-PipeServer -PipeLeaf $pipeLeaf)
+  )
+  foreach ($retryQueryPipe in $retryQueryPipes) {
+    $null = $retryQueryPipe.WaitForConnectionAsync()
+  }
   Write-Frame -Stream $retryPipe -Value @{
     type = "status_result"
     requestId = "desktop-status"
@@ -721,6 +859,16 @@ try {
   Assert-Equal $retrySubscribe.type "subscribe" "Retry must restore the event subscription"
   Write-Frame -Stream $retryPipe -Value @{ type = "subscribed"; requestId = $retrySubscribe.requestId }
   Wait-UiText -Process $first -Text "Gateway failed"
+  $retryFirst = Serve-ConnectedQuery -Pipe $retryQueryPipes[0] -Label "Retry first bridge query"
+  $retrySecond = Serve-ConnectedQuery -Pipe $retryQueryPipes[1] -Label "Retry second bridge query"
+  if (
+    (($retryFirst -eq "auto_start") -or ($retrySecond -eq "auto_start")) -and
+    (($retryFirst -eq "diagnostics") -or ($retrySecond -eq "diagnostics"))
+  ) {
+    # The reconnected session re-queries both one-shot bridge queries.
+  } else {
+    throw "Retry bridge queries must include auto-start and diagnostics (got $retryFirst, $retrySecond)"
+  }
 
   # --- Ticket 06: settings projection through the public native seam --------
   # A status event carrying registered public settings reaches the renderer
@@ -846,6 +994,9 @@ try {
     quitViaTray = $cleanExit
     cleanExit = $cleanExit
     pipeClosed = $pipeClosed
+    ownershipProjected = $true
+    autoStartStatusQueried = $true
+    autoStartToggled = $true
   }
   $result | ConvertTo-Json -Compress | Write-Output
 

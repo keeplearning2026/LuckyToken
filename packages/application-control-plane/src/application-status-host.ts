@@ -1,7 +1,11 @@
 import {
   assertControlPlaneEndpoint,
   controlPlaneVersion,
+  type ApplicationCommandHandler,
+  type ApplicationCommandResult,
+  type ApplicationCommandResultDeliveredHandler,
   type ApplicationIdentity,
+  type ApplicationOwnership,
   type ApplicationStatus,
   type ControlPlaneEndpoint,
   type ModelsCommandHandler,
@@ -31,6 +35,7 @@ import {
 import { decodeDiagnosticQuery } from "./wire-diagnostics.js";
 import {
   compatibleHello,
+  decodeApplicationCommandExecution,
   decodeApplicationStatus,
   decodeClientRequest,
   decodeClientTokenCommandResult,
@@ -51,12 +56,22 @@ export interface StartControlPlaneOptions {
   readonly runtimeCommandHandler?: RuntimeCommandHandler;
   /** Optional Settings command handler (Ticket 06). */
   readonly settingsCommandHandler?: SettingsCommandHandler;
+  /** Optional application ownership/lifecycle handler (Ticket 05). */
+  readonly applicationCommandHandler?: ApplicationCommandHandler;
+  /** Notified once an application command result is visible to the client
+   *  (Ticket 05); the owner uses it to tear down and exit after a quit. */
+  readonly onApplicationCommandResultDelivered?: ApplicationCommandResultDeliveredHandler;
+  /** Owner identity merged into every snapshot (Ticket 05). */
+  readonly ownership?: ApplicationOwnership;
+
   /**
    * Optional Client Token command handler (Ticket 16): serves the versioned
    * Client Token commands used by UI and CLI against the live per-protocol
    * authorities.
    */
   readonly clientTokenCommandHandler?: ClientTokenCommandHandler;
+
+
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
   /** Live settings projection merged into every published snapshot. */
@@ -105,6 +120,9 @@ export async function startApplicationStatusHost(
     const modelsProjection = options.modelsProjection?.();
     return {
       ...status,
+      ...(options.ownership === undefined
+        ? {}
+        : { ownership: options.ownership }),
       ...(projection === undefined
         ? {}
         : {
@@ -324,6 +342,55 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             result,
           });
+        } else if (request.type === "application_command") {
+          let execution: ReturnType<typeof decodeApplicationCommandExecution>;
+          if (
+            request.command.command === "quit" &&
+            request.command.acknowledged !== true
+          ) {
+            // Wire contract (Ticket 05): a non-owner Quit is explicit. An
+            // unacknowledged quit can never silently kill the user-started
+            // headless process; it is refused before reaching the handler.
+            execution = {
+              outcome: "conflict",
+              conflict: {
+                code: "quit_requires_explicit_confirmation",
+                message:
+                  "Quitting would stop the LuckyToken gateway that another process started. Acknowledge the quit explicitly to continue.",
+              },
+            };
+          } else if (options.applicationCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          } else {
+            const handled = await options.applicationCommandHandler(
+              request.command,
+              async (status) => {
+                await publishStatus(status);
+              },
+            );
+            execution = decodeApplicationCommandExecution(handled) ?? {
+              outcome: "failed",
+            };
+          }
+          const result: ApplicationCommandResult = {
+            command: request.command.command,
+            ...execution,
+            snapshot: current,
+          };
+          await writeFrame(state.connection, {
+            type: "application_command_result",
+            requestId: request.requestId,
+            result,
+          });
+          await options.onApplicationCommandResultDelivered?.(
+            request.command,
+            result,
+          );
         } else if (request.type === "client_token_command") {
           if (options.clientTokenCommandHandler === undefined) {
             await writeFrame(state.connection, {

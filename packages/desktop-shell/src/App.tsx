@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import type {
 
   ClientTokenCommand,
@@ -17,6 +18,7 @@ import { ModelsFileWorkspace } from "./models-editors.js";
 
 import {
   productPages,
+  type AutoStartProjection,
   type DesktopShellSnapshot,
   type ProductPageId,
   type WindowsShellHost,
@@ -34,7 +36,40 @@ export function App({ shell, retryConnection }: AppProps) {
   const [retrying, setRetrying] = useState(false);
   const [runtimeCommand, setRuntimeCommand] = useState<RuntimeCommand>();
   const [settingsCommand, setSettingsCommand] = useState<SettingsCommand>();
+  const [autoStart, setAutoStart] = useState<AutoStartProjection>();
+  const [autoStartBusy, setAutoStartBusy] = useState(false);
+  const [autoStartError, setAutoStartError] = useState<string>();
+  const autoStartQueried = useRef(false);
+
+  useEffect(() => {
+    const connected = snapshot.connection.kind === "connected";
+    if (!connected) {
+      autoStartQueried.current = false;
+      return;
+    }
+    // Query the effective Windows sign-in registration exactly once per
+    // connected session; status revisions never repeat the registry query.
+    if (autoStartQueried.current) return;
+    autoStartQueried.current = true;
+    setAutoStartBusy(true);
+    void shell.getAutoStartStatus().then(
+      (result) => {
+        setAutoStart(result);
+        setAutoStartError(undefined);
+        setAutoStartBusy(false);
+      },
+      (error: unknown) => {
+        setAutoStartError(
+          error instanceof Error ? error.message : String(error),
+        );
+        setAutoStartBusy(false);
+      },
+    );
+  }, [snapshot.connection, shell]);
+
   const [modelsCommand, setModelsCommand] = useState<ModelsCommand>();
+
+
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -73,6 +108,21 @@ export function App({ shell, retryConnection }: AppProps) {
       await shell.executeSettingsCommand(command);
     } finally {
       setSettingsCommand(undefined);
+    }
+  };
+
+  const toggleAutoStart = async () => {
+    setAutoStartBusy(true);
+    try {
+      const result = await shell.setAutoStartEnabled(
+        !(autoStart?.enabled ?? false),
+      );
+      setAutoStart(result);
+      setAutoStartError(undefined);
+    } catch (error) {
+      setAutoStartError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAutoStartBusy(false);
     }
   };
 
@@ -178,6 +228,45 @@ export function App({ shell, retryConnection }: AppProps) {
                 type="button"
               >
                 Restart
+              </button>
+            </div>
+          </section>
+        ) : null}
+        {snapshot.activePage === "dashboard" &&
+        snapshot.connection.kind === "connected" ? (
+          <section
+            className="ownership-controls"
+            aria-label="Application ownership"
+          >
+            <div>
+              <strong>Application ownership</strong>
+              <p>
+                {snapshot.connection.ownership === undefined
+                  ? "Owned by this application instance"
+                  : snapshot.connection.ownership.owner.kind === "cli"
+                    ? `Owned by the headless LuckyToken CLI (PID ${snapshot.connection.ownership.owner.pid})`
+                    : "Owned by a LuckyToken desktop instance"}
+              </p>
+              {autoStartError === undefined ? null : (
+                <small className="auto-start-error">{autoStartError}</small>
+              )}
+            </div>
+            <div className="runtime-actions">
+              <span className="auto-start-status">
+                {autoStart === undefined
+                  ? "Windows sign-in auto-start: unknown"
+                  : autoStart.enabled
+                    ? "Starts LuckyToken at sign-in"
+                    : "Does not start at sign-in"}
+              </span>
+              <button
+                disabled={autoStartBusy || autoStart === undefined}
+                onClick={() => void toggleAutoStart()}
+                type="button"
+              >
+                {autoStart?.enabled === true
+                  ? "Disable auto-start"
+                  : "Enable auto-start"}
               </button>
             </div>
           </section>

@@ -1,7 +1,11 @@
 import type {
+  ApplicationOwnership,
+
   ModelsCommandResult,
   ModelsFileError,
   ModelsProjection,
+
+
   RegisteredSetting,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -28,7 +32,6 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   /** Sanitized models.json projection from the status snapshot (Ticket 08). */
   readonly modelsProjection?: ModelsProjection;
 }
-
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
  *  ambient internal variables, and secrets never appear. */
@@ -320,8 +323,7 @@ const unavailableCopy: Readonly<
     ControlPlaneUnavailableReason,
     Omit<ControlPlaneErrorState, "revision" | "kind" | "code">
   >
-> = {
-  descriptor_missing: {
+> = {  descriptor_missing: {
     title: "LuckyToken backend is not available",
     detail: "No active local Control Plane was found.",
     action: "Start LuckyToken, then reconnect.",
@@ -342,6 +344,27 @@ const unavailableCopy: Readonly<
     action: "Restart LuckyToken; update it if the problem continues.",
   },
 };
+
+function decodeOwnership(value: unknown): ApplicationOwnership | undefined {
+  if (!isRecord(value) || !isRecord(value.owner)) return undefined;
+  const owner = value.owner;
+  if (
+    (owner.kind !== "cli" && owner.kind !== "desktop") ||
+    !Number.isSafeInteger(owner.pid) ||
+    (owner.pid as number) <= 0 ||
+    typeof owner.startedAt !== "string" ||
+    Number.isNaN(Date.parse(owner.startedAt))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    owner: Object.freeze({
+      kind: owner.kind as "cli" | "desktop",
+      pid: owner.pid as number,
+      startedAt: owner.startedAt as string,
+    }),
+  });
+}
 
 export function projectControlPlaneState(
   payload: ControlPlaneBridgePayload,
@@ -369,6 +392,20 @@ export function projectControlPlaneState(
             value: confirmation.value,
             message: confirmation.message,
           });
+    const ownership = decodeOwnership(payload.snapshot.ownership);
+    if (
+      payload.snapshot.ownership !== undefined &&
+      ownership === undefined
+    ) {
+      // A connected snapshot whose owner identity is malformed cannot be
+      // trusted for lifecycle decisions (quit, attach, auto-start).
+      return Object.freeze({
+        revision: payload.revision,
+        kind: "error",
+        code: "protocol_error",
+        ...unavailableCopy.protocol_error,
+      });
+    }
     return Object.freeze({
       revision: payload.revision,
       kind: "connected",
@@ -399,6 +436,7 @@ export function projectControlPlaneState(
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),
+      ...(ownership === undefined ? {} : { ownership }),
     });
   }
   if (payload.connection === "version_mismatch") {

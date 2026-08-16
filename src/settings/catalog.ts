@@ -210,6 +210,18 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     sensitivity: "public",
     applyMode: "restart-required",
   }),
+  Object.freeze({
+    key: "application.quitDrainTimeoutMs",
+    type: "number",
+    default: 5000,
+    validation: Object.freeze({
+      type: "integer",
+      minimum: 0,
+      maximum: 300_000,
+    }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
 ]);
 
 const allKeys = Object.freeze(definitions.map((definition) => definition.key));
