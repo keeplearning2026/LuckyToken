@@ -69,6 +69,8 @@ import { createFileSettingsStore } from "./settings/file-store.js";
 import { resolveEffectiveSettings } from "./settings/data-plane.js";
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
+import { createCatalogCacheStore } from "./providers/catalog-cache.js";
+import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 
 const HELP = `LuckyToken
@@ -84,6 +86,7 @@ Usage:
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
+  luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -96,6 +99,7 @@ Commands:
   control auto-start status|enable|disable  Query or change Windows login auto-start
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
+  control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -111,6 +115,11 @@ control models commands:
                             file's raw content (compare-and-swap on <rev>)
   write-structured <rev> <file>  Replace models.json with the providers record in
                             <file> (compare-and-swap on <rev>, formatted)
+
+control catalog commands:
+  query                     Print the active catalog snapshot
+  refresh-background        Schedule a non-blocking background refresh
+  refresh-manual            Run a forced refresh with per-Provider results
 `;
 
 type ParsedCliArguments =
@@ -471,6 +480,12 @@ async function runServe(
       path: config.pi.modelsJson,
       compose: (providers) => composeEffectiveCatalog(providers),
     });
+    // Ticket 11: the validated dynamic catalog cache lives under the
+    // configured application directory as a transparent LuckyToken-owned
+    // file; it is never a second editable authority.
+    const catalogCacheStore = createCatalogCacheStore({
+      path: join(config.pi.directory, "models-catalog-cache.json"),
+    });
     const modelsState = await modelsAuthority.query();
     const provider: ApplicationStatus["provider"] =
       Object.keys(config.providerPackages).length > 0 ||
@@ -524,6 +539,26 @@ async function runServe(
       const value = Number(setting.value);
       return Number.isSafeInteger(value) && value >= 0 ? value : 5000;
     };
+    // Ticket 11: the refresh controller owns the one authoritative active
+    // catalog snapshot; the Control Plane adapter serves catalog queries
+    // and refresh commands against it, and the sanitized status projection
+    // rides on every published snapshot.
+    const catalogController = createCatalogRefreshController({
+      store: catalogCacheStore,
+      authority: modelsAuthority,
+      diagnostics: diagnosticsStore,
+      now: Date.now,
+      onSnapshot: () => {
+        // Republish the full latest ApplicationStatus (modelDataPlane,
+        // provider AND dataPlane origin/port/failure facts) so the fresh
+        // catalog projection rides on a complete status snapshot.
+        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+      },
+    });
+    let lastPublishedStatus: ApplicationStatus = Object.freeze({
+      modelDataPlane: "stopped",
+      provider,
+    });
     supervisor = createDataPlaneRuntimeSupervisor({
       host: config.server.host,
       port: config.server.port,
@@ -539,9 +574,18 @@ async function runServe(
             shutdownSignal: shutdownController.signal,
             diagnosticsStore: ownedDiagnosticsStore,
             settingsRegistry,
+            modelsStore: catalogCacheStore,
+            // A successful Provider login schedules a background refresh
+            // for the provider that just logged in (Ticket 11).
+            onProviderLogin: (providerId) =>
+              catalogController.onProviderLogin(providerId),
           });
           tokenAuthorities = composition.clientTokenAuthorities;
           requestIdentities = composition.requestIdentities;
+          // Startup restore: the cached dynamic catalog is served before
+          // any network refresh completes, then the non-blocking startup
+          // background refresh is scheduled.
+          await catalogController.bind(composition.catalog, shutdownController.signal);
           const server = await startLuckyTokenHttpServer({
             runtime: composition.runtime,
             host: address.host,
@@ -589,6 +633,7 @@ async function runServe(
           })
         : createUnsupportedAutoStartRegistrar();
     const publish = (status: ApplicationStatus): Promise<void> => {
+      lastPublishedStatus = status;
       const plane = controlPlane;
       return plane === undefined
         ? Promise.reject(new Error("Control Plane is not ready"))
@@ -630,6 +675,7 @@ async function runServe(
         controlPlane?.close() ?? Promise.resolve(),
         diagnosticsStore?.close() ?? Promise.resolve(),
       ]);
+      catalogController.dispose();
       if (results.some((result) => result.status === "rejected")) {
         throw new Error("LuckyToken application resource cleanup failed");
       }
@@ -655,6 +701,52 @@ async function runServe(
         }),
       modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
       modelsProjection: () => modelsAuthority.snapshot(),
+      // Ticket 11: versioned catalog queries and refresh commands against
+      // the one authoritative active catalog snapshot.
+      catalogCommandHandler: async (command) => {
+        if (command.command === "query") {
+          return { outcome: "ok", snapshot: catalogController.snapshot() };
+        }
+        if (command.mode === "background") {
+          // Before the gateway (and the controller binding) is up, a
+          // background refresh is a no-op — report unavailable instead of
+          // claiming something was scheduled.
+          if (!catalogController.isBound()) {
+            return {
+              outcome: "unavailable",
+              snapshot: catalogController.snapshot(),
+            };
+          }
+          catalogController.scheduleBackground("page_open");
+          return {
+            outcome: "scheduled",
+            snapshot: catalogController.snapshot(),
+          };
+        }
+        const refresh = await catalogController.refreshManual();
+        return {
+          outcome: "ok",
+          snapshot: catalogController.snapshot(),
+          refresh,
+        };
+      },
+      catalogProjection: () => {
+        const snapshot = catalogController.snapshot();
+        return Object.freeze({
+          version: snapshot.version,
+          refreshing: snapshot.providers.some(
+            (provider) => provider.state === "refreshing",
+          ),
+          ...(snapshot.refreshedAt === undefined
+            ? {}
+            : { refreshedAt: snapshot.refreshedAt }),
+          failedProviderIds: Object.freeze(
+            snapshot.providers
+              .filter((provider) => provider.state === "failed")
+              .map((provider) => provider.providerId),
+          ),
+        });
+      },
       applicationCommandHandler: async (command, publishStatus) => {
         switch (command.command) {
           case "attach":
@@ -1003,6 +1095,44 @@ async function runControlModelsCommand(args: readonly string[]): Promise<void> {
   }
 }
 
+async function runControlCatalogCommand(args: readonly string[]): Promise<void> {
+  const action = args[0];
+  if (
+    action !== "query" &&
+    action !== "refresh-background" &&
+    action !== "refresh-manual"
+  ) {
+    throw new Error(
+      "control catalog requires query, refresh-background or refresh-manual",
+    );
+  }
+  const descriptorIndex = args.indexOf("--descriptor");
+  if (descriptorIndex < 0 || descriptorIndex + 1 >= args.length) {
+    throw new Error("control catalog requires --descriptor <path>");
+  }
+  const descriptorPath = args[descriptorIndex + 1] as string;
+  const endpoint = await readControlPlaneDescriptor(descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    await assertCompatibleControlPlane(client);
+    const command =
+      action === "query"
+        ? ({ command: "query" } as const)
+        : ({
+            command: "refresh",
+            mode:
+              action === "refresh-background" ? ("background" as const) : ("manual" as const),
+          } as const);
+    const result = await client.executeCatalogCommand(command);
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
@@ -1014,6 +1144,10 @@ export async function runLuckyTokenCli(
     }
     if (command === "models") {
       await runControlModelsCommand(args.slice(2));
+      return;
+    }
+    if (command === "catalog") {
+      await runControlCatalogCommand(args.slice(2));
       return;
     }
     if (

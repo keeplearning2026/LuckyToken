@@ -133,6 +133,7 @@ describe("configured serving composition", () => {
     compositions.push(composition);
 
     expect(Object.keys(composition).sort()).toEqual([
+      "catalog",
       "certification",
       "clientTokenAuthorities",
       "diagnosticsStore",

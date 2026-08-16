@@ -8,10 +8,11 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
-    ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, DiagnosticsWarningWire,
-    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
-    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
+    ClientTokenCommandResultWire, ConnectResult, ConnectionFailure, ControlPlaneConnector,
+    ControlPlaneSession, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
+    ModelsProjectionWire, RequestIdentityRecordWire, RuntimeCommand, SessionFailure,
+    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -392,6 +393,17 @@ impl ShellBridge {
     /// already scrubbed credentials before they leave the Control Plane.
     pub(crate) async fn diagnostics_warnings(&self) -> Result<Vec<DiagnosticsWarningWire>, ()> {
         self.connector.diagnostics_warnings().await.map_err(|_| ())
+    }
+
+    /// Ticket 11: versioned catalog commands (query / background / manual
+    /// refresh). The result carries only the sanitized active catalog
+    /// snapshot and bounded per-Provider refresh results; the renderer
+    /// re-validates the payload strictly.
+    pub(crate) async fn catalog_command(
+        &self,
+        command: CatalogCommand,
+    ) -> Result<CatalogCommandResultWire, ()> {
+        self.connector.catalog_command(command).await.map_err(|_| ())
     }
 
     /// Ticket 17 identity seam: the recent authorized request identities

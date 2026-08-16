@@ -59,6 +59,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
   readonly models?: ModelsProjection;
+  /** Optional sanitized catalog lifecycle projection (Ticket 11). */
+  readonly catalog?: CatalogStatusProjection;
 }
 
 /** Registered setting: type, default, validation, sensitivity, and apply mode
@@ -213,6 +215,138 @@ export interface EffectiveCatalogProjection {
   readonly providers: readonly EffectiveProviderProjection[];
   readonly compositionErrors: readonly EffectiveCatalogCompositionError[];
 }
+
+/**
+ * Catalog refresh lifecycle (Ticket 11): the refresh state of one Provider
+ * in the authoritative active catalog snapshot. `known` is a static
+ * Provider (no dynamic refresh); `cached` means dynamic facts were restored
+ * from the validated LuckyToken-owned cache before any network refresh;
+ * `refreshing` is an in-flight refresh; `succeeded`/`failed` are the last
+ * network refresh outcome (a failed Provider keeps its cached/built-in
+ * facts and carries a value-safe error).
+ */
+export type CatalogProviderState =
+  | "known"
+  | "cached"
+  | "refreshing"
+  | "succeeded"
+  | "failed";
+
+/** Auth-based model usability in the active catalog snapshot. */
+export type CatalogModelAvailability =
+  | "available"
+  | "unavailable"
+  | "unknown";
+
+/** What started a refresh run. */
+export type CatalogRefreshTrigger =
+  | "startup"
+  | "login"
+  | "page_open"
+  | "manual";
+
+/** One model in the active catalog snapshot. `dynamic` marks facts that
+ *  came from the Provider's dynamic catalog overlay (cache or network). */
+export interface CatalogModelProjection {
+  readonly id: string;
+  readonly dynamic: boolean;
+  readonly availability: CatalogModelAvailability;
+}
+
+/** One Provider in the active catalog snapshot. */
+export interface CatalogProviderProjection {
+  readonly providerId: string;
+  readonly name: string;
+  /** Provider has a dynamic refresh implementation. */
+  readonly dynamic: boolean;
+  readonly state: CatalogProviderState;
+  /** Value-safe failure summary; present only when state is "failed". */
+  readonly error?: string;
+  /** Value-safe failure category; present only when state is "failed". */
+  readonly errorCode?: string;
+  readonly refreshedAt?: number;
+  readonly cachedAt?: number;
+  readonly models: readonly CatalogModelProjection[];
+}
+
+/** One value-safe Provider refresh failure (fixed template, safe category). */
+export interface CatalogRefreshErrorProjection {
+  readonly providerId: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+/**
+ * One authoritative active catalog snapshot (Ticket 11): versioned and
+ * atomically swapped after each refresh cycle. New requests resolve the
+ * served catalog from the swapped snapshot; in-flight invocations keep the
+ * Model objects they already captured. Never carries credentials, headers,
+ * environment values or raw Provider errors.
+ */
+export interface CatalogSnapshotProjection {
+  readonly version: number;
+  readonly modelsJsonValid: boolean;
+  /** Value-free models.json file error when the file is not loadable. */
+  readonly modelsJsonError?: ModelsFileError;
+  readonly refreshedAt?: number;
+  readonly providers: readonly CatalogProviderProjection[];
+  /** The last refresh run's Provider failures, aggregated. */
+  readonly refreshErrors: readonly CatalogRefreshErrorProjection[];
+}
+
+/** Bounded per-Provider results of a completed manual refresh. */
+export interface CatalogRefreshReportProjection {
+  readonly trigger: "manual";
+  readonly startedAt: number;
+  readonly finishedAt: number;
+  readonly providers: readonly {
+    readonly providerId: string;
+    readonly outcome: "succeeded" | "failed" | "skipped";
+    readonly error?: string;
+    readonly errorCode?: string;
+  }[];
+}
+
+/**
+ * Sanitized catalog lifecycle projection merged into status snapshots:
+ * version, in-flight refresh flag and the failed Provider ids (for precise
+ * badges). Bounded; the full per-Provider/model facts ride only on catalog
+ * query/refresh command results.
+ */
+export interface CatalogStatusProjection {
+  readonly version: number;
+  readonly refreshing: boolean;
+  readonly refreshedAt?: number;
+  readonly failedProviderIds: readonly string[];
+}
+
+/**
+ * Versioned catalog commands (Ticket 11): query the one authoritative
+ * active catalog snapshot, schedule a non-blocking background refresh, or
+ * run a forced manual refresh that resolves with bounded per-Provider
+ * results. `page_open` (background) is how the Models & Aliases page
+ * triggers its refresh; `manual` is the explicit Refresh action.
+ */
+export type CatalogCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "refresh";
+      readonly mode: "background" | "manual";
+    };
+
+export type CatalogCommandOutcome = "ok" | "scheduled" | "unavailable";
+
+export interface CatalogCommandResult {
+  readonly outcome: CatalogCommandOutcome;
+  readonly snapshot: CatalogSnapshotProjection;
+  /** Present only for a completed manual refresh. */
+  readonly refresh?: CatalogRefreshReportProjection;
+}
+
+/** Handles versioned catalog commands against the refresh controller. */
+export type CatalogCommandHandler = (
+  command: CatalogCommand,
+) => Promise<CatalogCommandResult>;
 
 export type ModelsCommand =
   | { readonly command: "query" }
@@ -592,6 +726,7 @@ export interface ControlPlaneClient {
   ): Promise<ClientTokenCommandResult>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
+  executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

@@ -5,6 +5,7 @@ import {
   type CredentialStore,
   type FetchFunction,
   type Models,
+  type ModelsStore,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -42,8 +43,12 @@ import {
   createConfigValueResolver,
   type ConfigValueAdapters,
 } from "./providers/config-value.js";
-import { loadModelsJson } from "./providers/models-json.js";
-import { registerLuckyTokenProviders } from "./providers/catalog.js";
+import { loadModelsJson, type ModelsJsonConfig } from "./providers/models-json.js";
+import {
+  applyLuckyTokenProviderComposition,
+  registerLuckyTokenProviders,
+} from "./providers/catalog.js";
+import { createCatalogSnapshotModels } from "./providers/catalog-refresh.js";
 import {
   createRequestCompositionModels,
   resolveRequestModel,
@@ -73,6 +78,19 @@ export interface ConfiguredPiModelsOptions {
   readonly fetch: FetchFunction;
   /** Optional models.json path; absent means no user-registered providers. */
   readonly modelsJsonPath?: string;
+  /**
+   * Ticket 11: the validated LuckyToken-owned dynamic catalog cache. When
+   * provided, the composition restores the cached dynamic facts (before
+   * any network refresh) and serves the one authoritative active catalog
+   * snapshot.
+   */
+  readonly modelsStore?: ModelsStore;
+  /**
+   * Ticket 11: notified after a successful Provider login through the
+   * served Models; the refresh controller schedules a background refresh
+   * for the provider that just logged in.
+   */
+  readonly onProviderLogin?: (providerId: string) => void;
   readonly providerPackages?: Readonly<Record<string, unknown>>;
   readonly importModule?: ImportProviderModule;
   readonly createUuid?: () => string;
@@ -175,6 +193,10 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly configValueAdapters?: ConfigValueAdapters;
   /** See `ConfiguredPiModelsOptions.authContext` (Ticket 10). */
   readonly authContext?: AuthContext;
+  /** See `ConfiguredPiModelsOptions.modelsStore` (Ticket 11). */
+  readonly modelsStore?: ModelsStore;
+  /** See `ConfiguredPiModelsOptions.onProviderLogin` (Ticket 11). */
+  readonly onProviderLogin?: (providerId: string) => void;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -189,6 +211,13 @@ export interface ConfiguredLuckyTokenComposition {
   readonly clientTokenAuthorities: Readonly<
     Record<string, LiveClientTokenAuthority>
   >;
+  /** Ticket 11 catalog runtime handle: served snapshot Models, recompose
+   *  and atomic capture for the refresh controller. */
+  readonly catalog: {
+    readonly models: Models;
+    readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
+    readonly capture: () => void;
+  };
   /** Request identity observer (Ticket 17 identity seam): the bounded
    *  public ledger of authorized request identities that the Requests
    *  surface and Ticket 18's permanent ledger build on. */
@@ -201,6 +230,14 @@ export async function createConfiguredPiModels(
   models: Models;
   externalProviderIds: readonly string[];
   userConfiguredProviderIds: readonly string[];
+  /** Ticket 11 catalog runtime handle: the served snapshot Models, the
+   *  recompose capability and the atomic capture (one authoritative active
+   *  catalog). */
+  catalog: {
+    readonly models: Models;
+    readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
+    readonly capture: () => void;
+  };
 }> {
   // A broken models.json must never brick the data plane (Ticket 08): the
   // gateway starts without models.json providers and the Control Plane
@@ -235,6 +272,9 @@ export async function createConfiguredPiModels(
       options.credentials ??
       createFileCredentialStore(join(options.piDirectory, "auth.json")),
     authContext,
+    ...(options.modelsStore === undefined
+      ? {}
+      : { modelsStore: options.modelsStore }),
   });
   const modelsJsonProviderIds = registerLuckyTokenProviders(mutableModels, {
     ...(modelsJson === undefined ? {} : { modelsJson }),
@@ -255,18 +295,62 @@ export async function createConfiguredPiModels(
   // Ticket 10: the same effective Provider/model/runtime composition serves
   // catalog facts and invocation; the facade adds only the per-request
   // model-level configured header layer above the standard Pi auth path.
-  const models: Models = createRequestCompositionModels(
+  const facade: Models = createRequestCompositionModels(
     mutableModels,
     modelsJson,
     { configValues },
   );
+  // Ticket 11 login seam: a successful Provider login through the served
+  // Models schedules a background refresh for the relevant Provider.
+  const loginAware: Models =
+    options.onProviderLogin === undefined
+      ? facade
+      : Object.freeze({
+          ...facade,
+          login: (
+            providerId: string,
+            type: "api_key" | "oauth",
+            interaction: never,
+          ) =>
+            facade
+              .login(providerId, type, interaction)
+              .then((credential) => {
+                options.onProviderLogin?.(providerId);
+                return credential;
+              }),
+        } as Models);
+  // Ticket 11: the served Models resolve the one authoritative active
+  // catalog snapshot; a capture atomically swaps it for new requests while
+  // in-flight invocations keep their captured Model objects. The cached
+  // dynamic catalog is restored before the composition returns (before any
+  // network refresh), then the initial snapshot is captured.
+  const served = createCatalogSnapshotModels(loginAware);
+  await served.refresh({ allowNetwork: false });
+  served.capture();
+  let currentModelsJsonProviderIds: ReadonlySet<string> = new Set(
+    modelsJsonProviderIds,
+  );
+  const recompose = (next: ModelsJsonConfig | undefined): void => {
+    currentModelsJsonProviderIds = new Set(
+      applyLuckyTokenProviderComposition(mutableModels, {
+        ...(next === undefined ? {} : { modelsJson: next }),
+        configValues,
+        previousUserProviderIds: currentModelsJsonProviderIds,
+      }),
+    );
+  };
   return Object.freeze({
-    models,
+    models: served,
     externalProviderIds: loaded.providerIds,
     userConfiguredProviderIds: Object.freeze([
       ...modelsJsonProviderIds,
       ...loaded.providerIds,
     ]),
+    catalog: Object.freeze({
+      models: served,
+      recompose,
+      capture: () => served.capture(),
+    }),
   });
 }
 
@@ -339,7 +423,7 @@ export async function createConfiguredLuckyTokenComposition(
       enabledSetting === undefined ? true : enabledSetting.value !== false;
     if (enabled) await authority.ensureGlobal({ freshOnly: true });
   }
-  const { models, externalProviderIds, userConfiguredProviderIds } =
+  const { models, externalProviderIds, userConfiguredProviderIds, catalog } =
     await createConfiguredPiModels({
       piDirectory: config.pi.directory,
       modelsJsonPath: config.pi.modelsJson,
@@ -360,6 +444,12 @@ export async function createConfiguredLuckyTokenComposition(
       ...(options.authContext === undefined
         ? {}
         : { authContext: options.authContext }),
+      ...(options.modelsStore === undefined
+        ? {}
+        : { modelsStore: options.modelsStore }),
+      ...(options.onProviderLogin === undefined
+        ? {}
+        : { onProviderLogin: options.onProviderLogin }),
       createUuid: createSessionId,
       now,
     });
@@ -493,6 +583,7 @@ export async function createConfiguredLuckyTokenComposition(
     userConfiguredProviderIds,
     diagnosticsStore,
     clientTokenAuthorities: Object.freeze(clientAuthorities),
+    catalog,
     requestIdentities,
   });
 }

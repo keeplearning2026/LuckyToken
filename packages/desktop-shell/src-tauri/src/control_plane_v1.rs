@@ -379,6 +379,59 @@ impl ControlPlaneSession for ConnectedSession {
     }
 }
 
+/** Versioned catalog commands (Ticket 11): query the one authoritative
+ * active catalog snapshot or trigger a refresh (non-blocking background for
+ * page-open, forced manual with bounded per-Provider results). The wire
+ * shape mirrors the Control Plane contract exactly. */
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CatalogCommand {
+    Query,
+    RefreshBackground,
+    RefreshManual,
+}
+
+impl CatalogCommand {
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::Query => "desktop-catalog-query",
+            Self::RefreshBackground => "desktop-catalog-refresh-background",
+            Self::RefreshManual => "desktop-catalog-refresh-manual",
+        }
+    }
+
+    fn wire(&self) -> Value {
+        match self {
+            Self::Query => json!({ "command": "query" }),
+            Self::RefreshBackground => json!({ "command": "refresh", "mode": "background" }),
+            Self::RefreshManual => json!({ "command": "refresh", "mode": "manual" }),
+        }
+    }
+}
+
+/// Sanitized catalog snapshot top-level projection (Ticket 11): the version
+/// identity and the provider/error arrays pass through as opaque JSON — the
+/// Control Plane already validated the value-safe facts, and the renderer
+/// strictly re-decodes them. Rust stays a thin allowlisted transport.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub(crate) struct CatalogSnapshotWire {
+    pub(crate) version: u64,
+    #[serde(rename = "modelsJsonValid")]
+    pub(crate) models_json_valid: bool,
+    #[serde(rename = "refreshedAt", skip_serializing_if = "Option::is_none")]
+    pub(crate) refreshed_at: Option<u64>,
+    pub(crate) providers: Vec<Value>,
+    #[serde(rename = "refreshErrors")]
+    pub(crate) refresh_errors: Vec<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub(crate) struct CatalogCommandResultWire {
+    pub(crate) outcome: String,
+    pub(crate) snapshot: CatalogSnapshotWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) refresh: Option<Value>,
+}
+
 pub(crate) type ConnectFuture =
     Pin<Box<dyn Future<Output = Result<ConnectResult, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type CommandFuture =
@@ -414,6 +467,10 @@ pub(crate) type ModelsCommandFuture = Pin<
     Box<dyn Future<Output = Result<ModelsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
 
+pub(crate) type CatalogCommandFuture = Pin<
+    Box<dyn Future<Output = Result<CatalogCommandResultWire, ConnectionFailure>> + Send + 'static>,
+>;
+
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
     fn command(&self, _command: RuntimeCommand) -> CommandFuture {
@@ -435,6 +492,9 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn catalog_command(&self, _command: CatalogCommand) -> CatalogCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
 }
@@ -703,6 +763,20 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_models_command_session(&pipe_name, capability, command).await
+        })
+    }
+    fn catalog_command(&self, command: CatalogCommand) -> CatalogCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_catalog_command_session(&pipe_name, capability, command).await
         })
     }
 }
@@ -1218,6 +1292,91 @@ fn decode_models_command_result(
         return Err(ConnectionFailure::ProtocolError);
     }
     serde_json::from_value::<ModelsCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)
+}
+
+async fn execute_catalog_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: CatalogCommand,
+) -> Result<CatalogCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "catalog_command",
+                    "requestId": command.request_id(),
+                    "command": command.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_catalog_command_result(&result, &command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_catalog_command_result(
+    value: &Value,
+    command: &CatalogCommand,
+) -> Result<CatalogCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("catalog_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if !matches!(
+        result.get("outcome").and_then(Value::as_str),
+        Some("ok" | "scheduled" | "unavailable")
+    ) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let snapshot = result
+        .get("snapshot")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if !snapshot.get("version").and_then(Value::as_u64).is_some()
+        || !snapshot.get("providers").and_then(Value::as_array).is_some()
+        || !snapshot
+            .get("refreshErrors")
+            .and_then(Value::as_array)
+            .is_some()
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    // A manual-only report must never ride on a non-ok outcome.
+    if result.get("outcome").and_then(Value::as_str) != Some("ok")
+        && result.contains_key("refresh")
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    serde_json::from_value::<CatalogCommandResultWire>(Value::Object(result.clone()))
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
@@ -2172,6 +2331,110 @@ mod tests {
         assert_eq!(scopes.len(), 1);
         assert_eq!(scopes[0].scope_type, "global");
         assert_eq!(scopes[0].masked_token, "canary-n…oken");
+    }
+
+    #[tokio::test]
+    async fn catalog_command_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_catalog_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CatalogCommand::RefreshManual,
+            )
+            .await
+            .expect("catalog refresh must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("catalog_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-catalog-refresh-manual")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("refresh")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("mode"))
+                .and_then(Value::as_str),
+            Some("manual")
+        );
+        server
+            .send(&json!({
+                "type": "catalog_command_result",
+                "requestId": "desktop-catalog-refresh-manual",
+                "result": {
+                    "outcome": "ok",
+                    "snapshot": {
+                        "version": 4,
+                        "modelsJsonValid": true,
+                        "refreshedAt": 1700000000000_u64,
+                        "providers": [{
+                            "providerId": "dynamic-a",
+                            "name": "dynamic-a",
+                            "dynamic": true,
+                            "state": "succeeded",
+                            "models": [{"id": "m", "dynamic": true, "availability": "available"}]
+                        }],
+                        "refreshErrors": []
+                    },
+                    "refresh": {
+                        "trigger": "manual",
+                        "startedAt": 1,
+                        "finishedAt": 2,
+                        "providers": [{"providerId": "dynamic-a", "outcome": "succeeded"}]
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("catalog refresh must complete within the timeout")
+            .expect("catalog refresh task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.snapshot.version, 4);
+        assert!(result.snapshot.models_json_valid);
+        assert_eq!(result.snapshot.providers.len(), 1);
+        assert_eq!(result.snapshot.refresh_errors.len(), 0);
+        assert!(result.refresh.is_some());
     }
 
     #[tokio::test]

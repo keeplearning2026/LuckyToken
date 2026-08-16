@@ -1,5 +1,14 @@
 import type {
   ApplicationOwnership,
+  CatalogCommandResult,
+  CatalogModelAvailability,
+  CatalogModelProjection,
+  CatalogProviderProjection,
+  CatalogProviderState,
+  CatalogRefreshErrorProjection,
+  CatalogRefreshReportProjection,
+  CatalogSnapshotProjection,
+  CatalogStatusProjection,
   EffectiveCatalogCompositionError,
   EffectiveCatalogProjection,
   EffectiveModelLayer,
@@ -36,6 +45,9 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   readonly modelsResult?: ModelsCommandResult;
   /** Sanitized models.json projection from the status snapshot (Ticket 08). */
   readonly modelsProjection?: ModelsProjection;
+  /** Sanitized catalog lifecycle projection from the status snapshot
+   *  (Ticket 11): version, refreshing flag, failed Provider ids. */
+  readonly catalogStatus?: CatalogStatusProjection;
 }
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
@@ -474,6 +486,290 @@ export function decodeModelsCommandResult(
   });
 }
 
+const catalogProviderStates: ReadonlySet<string> = new Set([
+  "known",
+  "cached",
+  "refreshing",
+  "succeeded",
+  "failed",
+]);
+
+const catalogModelAvailability: ReadonlySet<string> = new Set([
+  "available",
+  "unavailable",
+  "unknown",
+]);
+
+/** Sanitized catalog lifecycle projection from the status snapshot: the
+ *  renderer accepts only the bounded version/refreshing/failed shape. */
+export function decodeCatalogStatusProjection(
+  value: unknown,
+): CatalogStatusProjection | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.version) ||
+    (value.version as number) < 0 ||
+    typeof value.refreshing !== "boolean" ||
+    !Array.isArray(value.failedProviderIds) ||
+    value.failedProviderIds.some((entry) => typeof entry !== "string")
+  ) {
+    return undefined;
+  }
+  if (
+    value.refreshedAt !== undefined &&
+    typeof value.refreshedAt !== "number"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    version: value.version as number,
+    refreshing: value.refreshing,
+    ...(value.refreshedAt === undefined
+      ? {}
+      : { refreshedAt: value.refreshedAt as number }),
+    failedProviderIds: Object.freeze([...value.failedProviderIds]),
+  });
+}
+
+function decodeCatalogModel(
+  value: unknown,
+): CatalogModelProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.dynamic !== "boolean" ||
+    typeof value.availability !== "string" ||
+    !catalogModelAvailability.has(value.availability)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    id: value.id,
+    dynamic: value.dynamic,
+    availability: value.availability as CatalogModelAvailability,
+  });
+}
+
+function decodeCatalogProvider(
+  value: unknown,
+): CatalogProviderProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.dynamic !== "boolean" ||
+    typeof value.state !== "string" ||
+    !catalogProviderStates.has(value.state) ||
+    !Array.isArray(value.models)
+  ) {
+    return undefined;
+  }
+  const models = value.models.map(decodeCatalogModel);
+  if (models.some((entry) => entry === undefined)) return undefined;
+  if (
+    (value.error !== undefined && typeof value.error !== "string") ||
+    (value.errorCode !== undefined && typeof value.errorCode !== "string") ||
+    (value.refreshedAt !== undefined &&
+      typeof value.refreshedAt !== "number") ||
+    (value.cachedAt !== undefined && typeof value.cachedAt !== "number")
+  ) {
+    return undefined;
+  }
+  if (value.state !== "failed" && value.error !== undefined) {
+    return undefined;
+  }
+  if (value.state !== "failed" && value.errorCode !== undefined) {
+    return undefined;
+  }
+  if (value.state === "failed" && value.error === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    providerId: value.providerId,
+    name: value.name,
+    dynamic: value.dynamic,
+    state: value.state as CatalogProviderState,
+    ...(value.error === undefined ? {} : { error: value.error as string }),
+    ...(value.errorCode === undefined
+      ? {}
+      : { errorCode: value.errorCode as string }),
+    ...(value.refreshedAt === undefined
+      ? {}
+      : { refreshedAt: value.refreshedAt as number }),
+    ...(value.cachedAt === undefined
+      ? {}
+      : { cachedAt: value.cachedAt as number }),
+    models: Object.freeze(
+      models.filter((entry): entry is CatalogModelProjection => entry !== undefined),
+    ),
+  });
+}
+
+function decodeCatalogRefreshError(
+  value: unknown,
+): CatalogRefreshErrorProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.code !== "string" ||
+    value.code.length === 0 ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    providerId: value.providerId,
+    code: value.code,
+    message: value.message,
+  });
+}
+
+/** Strict decode of the full catalog snapshot crossing the bridge. */
+export function decodeCatalogSnapshotProjection(
+  value: unknown,
+): CatalogSnapshotProjection | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.version) ||
+    (value.version as number) < 0 ||
+    typeof value.modelsJsonValid !== "boolean" ||
+    !Array.isArray(value.providers) ||
+    !Array.isArray(value.refreshErrors)
+  ) {
+    return undefined;
+  }
+  const providers = value.providers.map(decodeCatalogProvider);
+  if (providers.some((entry) => entry === undefined)) return undefined;
+  const refreshErrors = value.refreshErrors.map(decodeCatalogRefreshError);
+  if (refreshErrors.some((entry) => entry === undefined)) return undefined;
+  if (
+    value.refreshedAt !== undefined &&
+    typeof value.refreshedAt !== "number"
+  ) {
+    return undefined;
+  }
+  const error = decodeModelsFileError(value.modelsJsonError);
+  if (value.modelsJsonError !== undefined && error === undefined) {
+    return undefined;
+  }
+  if (!value.modelsJsonValid && error === undefined) return undefined;
+  if (value.modelsJsonValid && error !== undefined) return undefined;
+  return Object.freeze({
+    version: value.version as number,
+    modelsJsonValid: value.modelsJsonValid,
+    ...(error === undefined ? {} : { modelsJsonError: error }),
+    ...(value.refreshedAt === undefined
+      ? {}
+      : { refreshedAt: value.refreshedAt as number }),
+    providers: Object.freeze(
+      providers.filter(
+        (entry): entry is CatalogProviderProjection => entry !== undefined,
+      ),
+    ),
+    refreshErrors: Object.freeze(
+      refreshErrors.filter(
+        (entry): entry is CatalogRefreshErrorProjection => entry !== undefined,
+      ),
+    ),
+  });
+}
+
+function decodeCatalogRefreshReport(
+  value: unknown,
+): CatalogRefreshReportProjection | undefined {
+  if (
+    !isRecord(value) ||
+    value.trigger !== "manual" ||
+    typeof value.startedAt !== "number" ||
+    typeof value.finishedAt !== "number" ||
+    !Array.isArray(value.providers)
+  ) {
+    return undefined;
+  }
+  const providers = value.providers.map(
+    (entry: unknown):
+      | CatalogRefreshReportProjection["providers"][number]
+      | undefined => {
+      if (!isRecord(entry) || typeof entry.providerId !== "string") {
+        return undefined;
+      }
+      if (
+        entry.outcome !== "succeeded" &&
+        entry.outcome !== "failed" &&
+        entry.outcome !== "skipped"
+      ) {
+        return undefined;
+      }
+      if (
+        (entry.error !== undefined && typeof entry.error !== "string") ||
+        (entry.errorCode !== undefined && typeof entry.errorCode !== "string")
+      ) {
+        return undefined;
+      }
+      if (entry.outcome !== "failed" && entry.error !== undefined) {
+        return undefined;
+      }
+      return Object.freeze({
+        providerId: entry.providerId,
+        outcome: entry.outcome,
+        ...(entry.error === undefined ? {} : { error: entry.error as string }),
+        ...(entry.errorCode === undefined
+          ? {}
+          : { errorCode: entry.errorCode as string }),
+      });
+    },
+  );
+  if (providers.some((entry) => entry === undefined)) return undefined;
+  return Object.freeze({
+    trigger: "manual" as const,
+    startedAt: value.startedAt as number,
+    finishedAt: value.finishedAt as number,
+    providers: Object.freeze(
+      providers.filter(
+        (
+          entry,
+        ): entry is CatalogRefreshReportProjection["providers"][number] =>
+          entry !== undefined,
+      ),
+    ),
+  });
+}
+
+/** Strict decode of a versioned catalog command result crossing the
+ *  bridge; only the bounded snapshot + manual report shapes are accepted. */
+export function decodeCatalogCommandResult(
+  value: unknown,
+): CatalogCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "scheduled" &&
+      value.outcome !== "unavailable")
+  ) {
+    return undefined;
+  }
+  const snapshot = decodeCatalogSnapshotProjection(value.snapshot);
+  if (snapshot === undefined) return undefined;
+  const refresh =
+    value.refresh === undefined
+      ? undefined
+      : decodeCatalogRefreshReport(value.refresh);
+  if (value.refresh !== undefined && refresh === undefined) {
+    return undefined;
+  }
+  if (value.outcome !== "ok" && refresh !== undefined) return undefined;
+  return Object.freeze({
+    outcome: value.outcome as CatalogCommandResult["outcome"],
+    snapshot,
+    ...(refresh === undefined ? {} : { refresh }),
+  });
+}
+
 /** Sanitized models.json projection from the status snapshot: revision,
  *  location, presence, validity and value-free error — never content. */
 export function decodeModelsProjection(
@@ -585,6 +881,10 @@ export function projectControlPlaneState(
       payload.snapshot.models === undefined
         ? undefined
         : decodeModelsProjection(payload.snapshot.models);
+    const catalogStatus =
+      payload.snapshot.catalog === undefined
+        ? undefined
+        : decodeCatalogStatusProjection(payload.snapshot.catalog);
     const confirmation = payload.snapshot.confirmation;
     const projectedConfirmation =
       confirmation === undefined ||
@@ -642,6 +942,7 @@ export function projectControlPlaneState(
           }),
       ...(settings === undefined ? {} : { settings }),
       ...(modelsProjection === undefined ? {} : { modelsProjection }),
+      ...(catalogStatus === undefined ? {} : { catalogStatus }),
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),

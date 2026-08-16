@@ -1,5 +1,7 @@
 import type { ControlPlaneState } from "./control-plane-projection.js";
 import type {
+  CatalogCommand,
+  CatalogCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
   ModelsCommand,
@@ -37,6 +39,7 @@ export interface DesktopShellRuntime {
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+  executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -76,6 +79,7 @@ export interface WindowsShellHost {
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
+  executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -213,6 +217,12 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.executeClientTokenCommand(command);
+    },
+    executeCatalogCommand(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeCatalogCommand(command);
     },
     pickDirectory() {
       if (current.lifecycle !== "open") {

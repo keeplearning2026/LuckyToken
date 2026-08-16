@@ -100,6 +100,12 @@ function createCustomProvider(
  * Overlay a built-in Provider: every unrelated built-in fact (stream
  * behavior, dynamic model refresh, filters) survives; only name, baseUrl,
  * auth and the effective model list are replaced by the composition.
+ *
+ * Pinned Pi `composeModelProvider` semantics: the composed model list is a
+ * closure over the base Provider's LIVE `getModels()` — the models.json
+ * overlay (baseUrl rule, upserts, overrides) re-applies on every call, so
+ * restored/refreshed dynamic base facts flow into the served catalog
+ * instead of freezing the composition-time list.
  */
 function createOverlaidProvider(
   providerId: string,
@@ -112,10 +118,14 @@ function createOverlaidProvider(
     ...base,
     name: composition.name,
     ...(composition.baseUrl === undefined
-      ? {}
-      : { baseUrl: composition.baseUrl }),
+      ? {} : { baseUrl: composition.baseUrl }),
     auth: composeConfiguredAuth(providerId, base, config, adapters),
-    getModels: () => composition.models as unknown as readonly Model<Api>[],
+    // The registered composition validated eagerly at registration (a
+    // failing composition keeps the untouched base); from then on the
+    // closure re-composes the same deterministic inputs per call, with the
+    // base catalog read live exactly like the pinned composer.
+    getModels: () =>
+      composeConfiguredProvider(providerId, base, config).models as unknown as readonly Model<Api>[],
   };
 }
 
@@ -124,28 +134,57 @@ export interface LuckyTokenProviderDependencies {
   readonly modelsJson?: ModelsJsonConfig;
   /** Ticket 10 per-request config value resolution (deterministic in tests). */
   readonly configValues: ConfigValueResolver;
+  /**
+   * The built-in base catalog the models.json composition overlays
+   * (pinned `builtinProviders()`). Injectable for deterministic tests,
+   * mirroring `composeEffectiveCatalog(providers, builtins?)`.
+   */
+  readonly builtins?: readonly Provider[];
 }
 
 /**
- * Register Pi builtins and the effective models.json Providers into a Pi
- * `Models` collection. External Provider Packages are loaded only after
- * this base catalog is complete, so their IDs cannot shadow Pi builtins or
- * models.json entries. Returns every models.json provider id (whether its
- * composition succeeded or was isolated per pinned behavior).
+ * Apply the LuckyToken provider composition to a mutable collection
+ * (pinned `ModelRuntime.rebuildProviders`): Pi built-ins as the lower
+ * layer, valid models.json Providers composed above them with per-Provider
+ * isolation, and previously registered user Providers that are no longer
+ * configured removed. External Provider Packages are never touched, so
+ * their ids cannot shadow Pi builtins or models.json entries and their
+ * dynamic refresh state survives recomposition.
+ *
+ * The initial registration and every Ticket 11 refresh recomposition go
+ * through the same function, so the served data plane and the projected
+ * catalog can never diverge. Returns every models.json provider id
+ * (whether its composition succeeded or was isolated per pinned behavior).
  */
-export function registerLuckyTokenProviders(
+export function applyLuckyTokenProviderComposition(
   models: MutableModels,
-  dependencies: LuckyTokenProviderDependencies,
+  dependencies: LuckyTokenProviderDependencies & {
+    /** User provider ids registered by the previous application. */
+    readonly previousUserProviderIds: ReadonlySet<string>;
+  },
 ): readonly string[] {
   const adapters = Object.freeze({ configValues: dependencies.configValues });
+  const newUserProviderIds = new Set(
+    Object.keys(dependencies.modelsJson?.providers ?? {}),
+  );
+  // Pinned recomposeProvider delete branch: user Providers that are no
+  // longer configured disappear from the runtime catalog.
+  for (const providerId of dependencies.previousUserProviderIds) {
+    if (newUserProviderIds.has(providerId)) continue;
+    if (models.getProvider(providerId) !== undefined) {
+      models.deleteProvider(providerId);
+    }
+  }
   // Pi built-in providers are part of the LuckyToken provider collection:
   // every Pi provider (openai, anthropic, deepseek, ...) is registered so it
   // can be logged in and served through the same Anthropic endpoint.
-  const builtins = builtinProviders();
+  const builtins = dependencies.builtins ?? builtinProviders();
   for (const provider of builtins) {
     models.setProvider(provider);
   }
-  if (dependencies.modelsJson === undefined) return Object.freeze([]);
+  if (dependencies.modelsJson === undefined) {
+    return Object.freeze([...newUserProviderIds]);
+  }
 
   const registeredProviderIds: string[] = [];
   for (const [providerId, rawConfig] of Object.entries(
@@ -181,4 +220,22 @@ export function registerLuckyTokenProviders(
     registeredProviderIds.push(providerId);
   }
   return Object.freeze(registeredProviderIds);
+}
+
+/**
+ * Register Pi builtins and the effective models.json Providers into a Pi
+ * `Models` collection (initial composition). External Provider Packages are
+ * loaded only after this base catalog is complete, so their IDs cannot
+ * shadow Pi builtins or models.json entries. Returns every models.json
+ * provider id (whether its composition succeeded or was isolated per
+ * pinned behavior).
+ */
+export function registerLuckyTokenProviders(
+  models: MutableModels,
+  dependencies: LuckyTokenProviderDependencies,
+): readonly string[] {
+  return applyLuckyTokenProviderComposition(models, {
+    ...dependencies,
+    previousUserProviderIds: Object.freeze(new Set<string>()),
+  });
 }

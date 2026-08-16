@@ -9,9 +9,9 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire,
-    DiagnosticsWarningWire, ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire,
-    RuntimeCommand, SettingsCommand,
+    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
+    ClientTokenCommandResultWire, ClientTokenScopeWire, DiagnosticsWarningWire, ModelsCommand,
+    NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
@@ -261,6 +261,25 @@ async fn run_models_command(
 }
 
 #[tauri::command]
+async fn shell_catalog_query(
+    state: State<'_, ShellBridge>,
+) -> Result<CatalogCommandResultWire, ()> {
+    state.catalog_command(CatalogCommand::Query).await
+}
+
+#[tauri::command]
+async fn shell_catalog_refresh(
+    state: State<'_, ShellBridge>,
+    mode: String,
+) -> Result<CatalogCommandResultWire, ()> {
+    match mode.as_str() {
+        "background" => state.catalog_command(CatalogCommand::RefreshBackground).await,
+        "manual" => state.catalog_command(CatalogCommand::RefreshManual).await,
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
 async fn shell_models_query(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -438,6 +457,8 @@ fn main() {
             shell_models_query,
             shell_models_write_raw,
             shell_models_write_structured,
+            shell_catalog_query,
+            shell_catalog_refresh,
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");

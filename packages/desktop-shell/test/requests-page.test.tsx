@@ -93,6 +93,10 @@ function makeShell(identities: {
       ],
     }),
     executeModelsCommand: async () => snapshot,
+    executeCatalogCommand: async () => ({
+      outcome: "ok",
+      snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+    }),
     dispose: async () => undefined,
   };
 }

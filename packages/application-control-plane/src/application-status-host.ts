@@ -7,6 +7,9 @@ import {
   type ApplicationIdentity,
   type ApplicationOwnership,
   type ApplicationStatus,
+  type CatalogCommandHandler,
+  type CatalogCommandResult,
+  type CatalogStatusProjection,
   type ControlPlaneEndpoint,
   type ModelsCommandHandler,
   type ModelsProjection,
@@ -39,6 +42,7 @@ import {
   compatibleHello,
   decodeApplicationCommandExecution,
   decodeApplicationStatus,
+  decodeCatalogCommandResult,
   decodeClientRequest,
   decodeClientTokenCommandResult,
   decodeModelsCommandResult,
@@ -79,10 +83,19 @@ export interface StartControlPlaneOptions {
   readonly requestIdentitiesHandler?: RequestIdentitiesQueryHandler;
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
+  /**
+   * Optional catalog command handler (Ticket 11): serves the versioned
+   * catalog query/refresh commands against the authoritative active
+   * catalog snapshot.
+   */
+  readonly catalogCommandHandler?: CatalogCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
   readonly modelsProjection?: () => ModelsProjection;
+  /** Live sanitized catalog lifecycle projection merged into every
+   *  published snapshot (Ticket 11). */
+  readonly catalogProjection?: () => CatalogStatusProjection;
   /**
    * Explicit diagnostics ownership (Ticket 07): when present, the Control
    * Plane serves bounded diagnostics queries and typed diagnostic events to
@@ -123,6 +136,7 @@ export async function startApplicationStatusHost(
   ): Omit<StatusSnapshot, "sequence"> => {
     const projection = options.settingsProjection?.();
     const modelsProjection = options.modelsProjection?.();
+    const catalogProjection = options.catalogProjection?.();
     return {
       ...status,
       ...(options.ownership === undefined
@@ -137,6 +151,7 @@ export async function startApplicationStatusHost(
               : { confirmation: projection.confirmation }),
           }),
       ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
+      ...(catalogProjection === undefined ? {} : { catalog: catalogProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -462,6 +477,43 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "client_token_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "catalog_command") {
+          if (options.catalogCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          let handled: CatalogCommandResult;
+          try {
+            handled = await options.catalogCommandHandler(request.command);
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              snapshot: Object.freeze({
+                version: 0,
+                modelsJsonValid: true,
+                providers: Object.freeze([]),
+                refreshErrors: Object.freeze([]),
+              }),
+            };
+          }
+          const result = decodeCatalogCommandResult(handled);
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "catalog_command_result",
             requestId: request.requestId,
             result,
           });

@@ -101,6 +101,10 @@ function makeShell(overrides: {
     pickDirectory: overrides.pick ?? (async () => undefined),
     getRequestIdentities: async () => ({ records: [] }),
     executeModelsCommand: async () => snapshot,
+    executeCatalogCommand: async () => ({
+      outcome: "ok",
+      snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+    }),
     dispose: async () => undefined,
   };
 }

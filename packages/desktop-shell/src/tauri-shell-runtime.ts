@@ -1,6 +1,8 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
   ApplicationOwnership,
+  CatalogCommand,
+  CatalogCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
   MaskedClientTokenScope,
@@ -13,6 +15,7 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
+  decodeCatalogCommandResult,
   decodeModelsCommandResult,
   decodeModelsProjection,
   projectControlPlaneState,
@@ -45,7 +48,9 @@ export type ShellCommand =
 
   | "shell_models_query"
   | "shell_models_write_raw"
-  | "shell_models_write_structured";
+  | "shell_models_write_structured"
+  | "shell_catalog_query"
+  | "shell_catalog_refresh";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -72,6 +77,7 @@ export interface TauriDesktopRuntime {
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+  executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -690,6 +696,19 @@ export function createTauriDesktopRuntime(
             ? { revision: command.revision, content: command.content }
             : { revision: command.revision, providers: command.providers },
       ),
+    async executeCatalogCommand(command) {
+      const raw =
+        command.command === "query"
+          ? await bridge.invoke("shell_catalog_query")
+          : await bridge.invoke("shell_catalog_refresh", {
+              mode: command.mode,
+            });
+      const decoded = decodeCatalogCommandResult(raw);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid catalog result");
+      }
+      return decoded;
+    },
 
     async disconnectControlPlane() {
       await listenTask;

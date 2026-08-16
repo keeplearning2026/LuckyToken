@@ -8,6 +8,9 @@ import {
   type ApplicationCommand,
   type ApplicationCommandResult,
 
+  type CatalogCommand,
+  type CatalogCommandResult,
+
   type ClientTokenCommand,
   type ClientTokenCommandResult,
 
@@ -29,6 +32,7 @@ import {
 import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
+  decodeCatalogCommandResult,
   decodeClientTokenCommandResult,
   decodeRequestId,
   decodeServerMessage,
@@ -243,6 +247,24 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
+    },
+    async executeCatalogCommand(
+      command: CatalogCommand,
+    ): Promise<CatalogCommandResult> {
+      const response = await request({
+        type: "catalog_command",
+        command,
+      });
+      if (response.type !== "catalog_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      // Strictly validate the projection crossing the pipe: the catalog
+      // snapshot must never carry malformed or unexpected state.
+      const result = decodeCatalogCommandResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
     },
     async subscribeDiagnostics(
       next: (event: RuntimeDiagnosticEvent) => void,

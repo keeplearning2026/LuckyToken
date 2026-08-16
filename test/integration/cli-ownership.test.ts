@@ -268,6 +268,9 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
     const client = await connectToServe(descriptorPath, "refused-quit");
     await client.hello(1);
+    // The gateway starts asynchronously after the descriptor is published;
+    // wait for the running state before the quit so the refused-quit
+    // snapshot is deterministic.
     await waitForRunning(client);
     const result = await client.executeApplicationCommand({
       command: "quit",

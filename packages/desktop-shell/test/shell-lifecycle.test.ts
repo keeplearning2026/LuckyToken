@@ -24,6 +24,10 @@ describe("Windows desktop shell public lifecycle seam", () => {
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -78,6 +82,10 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => connected,
       executeRuntimeCommand: async () => connected,
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async (command) => {
         commands.push(command);
@@ -122,6 +130,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -160,6 +172,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -201,6 +217,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -250,6 +270,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -297,6 +321,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -352,6 +380,10 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused settings command");
         },
       executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -434,7 +466,11 @@ subscribeControlPlane: () => () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
       subscribeControlPlane: () => () => undefined,
-      disconnectControlPlane: async () => undefined,
+      disconnectControlPlane: async () => undefined,      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
+
     });
     await shell.launch();
 
@@ -472,6 +508,15 @@ describe("WindowsShellHost client token commands", () => {
           scopes: [{ type: "global", maskedToken: "canary-m…sked" }],
         };
       },
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
+      }),
       queryDiagnosticsWarnings: async () => [
         {
           id: 1,
@@ -541,6 +586,10 @@ describe("WindowsShellHost client token commands", () => {
       },
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
     });
@@ -582,6 +631,10 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
         calls.push("identities");
         return { records: [] };
       },
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       executeModelsCommand: async () => {
         throw new Error("unused");
       },
@@ -615,6 +668,10 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       pickDirectory: async () => "C:\\picked\\directory",
       getRequestIdentities: async () => ({ records: [] }),
+      executeCatalogCommand: async () => ({
+        outcome: "ok",
+        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+      }),
       executeModelsCommand: async () => {
         throw new Error("unused");
       },

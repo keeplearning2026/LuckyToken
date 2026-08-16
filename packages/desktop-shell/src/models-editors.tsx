@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  CatalogCommand,
+  CatalogCommandResult,
+  CatalogProviderProjection,
+  CatalogStatusProjection,
   EffectiveCatalogProjection,
   EffectiveModelLayer,
   EffectiveModelProjection,
@@ -865,6 +869,157 @@ function EffectiveCatalogView({
   );
 }
 
+const catalogProviderStateLabel: Readonly<
+  Record<CatalogProviderProjection["state"], string>
+> = {
+  known: "known",
+  cached: "cached",
+  refreshing: "refreshing",
+  succeeded: "succeeded",
+  failed: "failed",
+};
+
+/** One Provider's refresh state in the authoritative active snapshot. */
+function CatalogProviderRefreshCard({
+  provider,
+}: {
+  readonly provider: CatalogProviderProjection;
+}) {
+  const available = provider.models.filter(
+    (model) => model.availability === "available",
+  ).length;
+  const cached = provider.models.filter((model) => model.dynamic).length;
+  return (
+    <div className="models-card catalog-provider">
+      <div className="models-card-head">
+        <strong>{provider.providerId}</strong>
+        <span
+          className={`catalog-state catalog-state-${provider.state}`}
+        >
+          {catalogProviderStateLabel[provider.state]}
+        </span>
+      </div>
+      <div className="catalog-provider-facts">
+        <span className="effective-fact">{provider.name}</span>
+        {provider.dynamic ? (
+          <span className="effective-fact">dynamic refresh</span>
+        ) : (
+          <span className="effective-fact">static</span>
+        )}
+        <span className="effective-fact">
+          {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
+        </span>
+        <span className="effective-fact">{available} available</span>
+        {cached > 0 ? (
+          <span className="effective-fact">{cached} from cache</span>
+        ) : null}
+      </div>
+      {provider.state === "failed" && provider.error !== undefined ? (
+        <p className="catalog-provider-error">{provider.error}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Ticket 11 refresh tab: the authoritative active catalog snapshot, the
+ *  in-flight refresh flag, the aggregated value-safe failures and the
+ *  bounded per-Provider results of the last Manual Refresh. */
+function CatalogRefreshView({
+  result,
+  status,
+  busy,
+  onRefresh,
+}: {
+  readonly result: CatalogCommandResult | undefined;
+  readonly status: CatalogStatusProjection | undefined;
+  readonly busy: boolean;
+  readonly onRefresh: () => void;
+}) {
+  const snapshot = result?.snapshot;
+  const refreshing =
+    status?.refreshing === true ||
+    (snapshot?.providers.some(
+      (provider) => provider.state === "refreshing",
+    ) ??
+      false);
+  const version = snapshot?.version ?? status?.version ?? 0;
+  return (
+    <div className="catalog-refresh" aria-label="catalog refresh">
+      <div className="catalog-refresh-head">
+        <div>
+          <strong>Active catalog snapshot</strong>
+          <small>
+            {version === 0
+              ? "Not refreshed yet"
+              : `version ${version}`}
+          </small>
+        </div>
+        <span
+          className={refreshing ? "badge" : "badge connected"}
+        >
+          {refreshing ? "Refreshing…" : "Up to date"}
+        </span>
+        <button
+          disabled={busy || refreshing}
+          onClick={onRefresh}
+          type="button"
+        >
+          {busy ? "Refreshing…" : "Manual Refresh"}
+        </button>
+      </div>
+      {snapshot !== undefined && snapshot.modelsJsonValid === false ? (
+        <div className="models-error" role="alert">
+          <strong>models.json is not loadable</strong>
+          <p>{snapshot.modelsJsonError?.message}</p>
+          <small>
+            Compatible built-in Providers remain; affected custom Providers
+            are not served until the file is fixed.
+          </small>
+        </div>
+      ) : null}
+      {snapshot !== undefined && snapshot.refreshErrors.length > 0 ? (
+        <div className="models-error" role="alert">
+          <strong>Some Providers could not refresh</strong>
+          <p>
+            {snapshot.refreshErrors
+              .map((entry) => `${entry.providerId}: ${entry.message}`)
+              .join("\n")}
+          </p>
+        </div>
+      ) : null}
+      {result?.refresh === undefined ? null : (
+        <div className="catalog-refresh-report" role="status">
+          <strong>Manual refresh completed</strong>
+          <ul>
+            {result.refresh.providers.map((entry) => (
+              <li key={entry.providerId}>
+                {entry.providerId}: {entry.outcome}
+                {entry.errorCode === undefined ? "" : ` (${entry.errorCode})`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {snapshot === undefined ? (
+        <p className="models-empty" role="status">
+          {version === 0
+            ? "Open the Models & Aliases page to refresh the catalog."
+            : "Loading the active catalog snapshot…"}
+        </p>
+      ) : (
+        <div className="models-stack">
+          {snapshot.providers.map((provider) => (
+            <CatalogProviderRefreshCard
+              key={provider.providerId}
+              provider={provider}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export interface ModelsFileWorkspaceProps {
   readonly result: ModelsCommandResult | undefined;
   readonly projection: ModelsProjection | undefined;
@@ -872,6 +1027,15 @@ export interface ModelsFileWorkspaceProps {
   readonly busy: boolean;
   readonly onCommand: (command: ModelsCommand) => void;
   readonly onReload: () => void;
+  /** Ticket 11: the latest catalog command result (query / manual refresh). */
+  readonly catalogResult?: CatalogCommandResult;
+  /** Ticket 11: sanitized catalog lifecycle projection from status events. */
+  readonly catalogStatus?: CatalogStatusProjection;
+  /** Ticket 11: a catalog command is in flight. */
+  readonly catalogBusy?: boolean;
+  /** Ticket 11: catalog query/refresh commands (page-open background
+   *  refresh, manual refresh). */
+  readonly onCatalogCommand?: (command: CatalogCommand) => void;
 }
 
 /** One authoritative file, structured and raw editors on the same revision. */
@@ -882,10 +1046,25 @@ export function ModelsFileWorkspace({
   busy,
   onCommand,
   onReload,
+  catalogResult,
+  catalogStatus,
+  catalogBusy = false,
+  onCatalogCommand,
 }: ModelsFileWorkspaceProps) {
-  const [tab, setTab] = useState<"structured" | "raw" | "effective">(
-    "structured",
-  );
+  const [tab, setTab] = useState<
+    "structured" | "raw" | "effective" | "refresh"
+  >("structured");
+  // Ticket 11: opening the Models & Aliases page schedules a non-blocking
+  // background refresh and loads the authoritative active catalog snapshot
+  // exactly once per mount.
+  const openedCatalog = useRef(false);
+  useEffect(() => {
+    if (openedCatalog.current) return;
+    openedCatalog.current = true;
+    if (onCatalogCommand === undefined) return;
+    onCatalogCommand({ command: "refresh", mode: "background" });
+    onCatalogCommand({ command: "query" });
+  }, [onCatalogCommand]);
   // Every draft is bound to the exact authoritative revision its content was
   // created from. A save can never carry a revision newer than its draft
   // content: it always submits the draft's baseRevision, so a stale draft is
@@ -1104,9 +1283,26 @@ export function ModelsFileWorkspace({
         >
           Effective catalog
         </button>
+        <button
+          className={tab === "refresh" ? "active" : ""}
+          onClick={() => setTab("refresh")}
+          type="button"
+        >
+          Catalog refresh
+        </button>
       </div>
       {tab === "effective" ? (
         <EffectiveCatalogView catalog={state?.catalog} state={state} />
+      ) : null}
+      {tab === "refresh" ? (
+        <CatalogRefreshView
+          busy={catalogBusy}
+          onRefresh={() =>
+            onCatalogCommand?.({ command: "refresh", mode: "manual" })
+          }
+          result={catalogResult}
+          status={catalogStatus}
+        />
       ) : null}
       {tab === "structured" ? (
         <>

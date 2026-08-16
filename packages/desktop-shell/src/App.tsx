@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import {
   projectRequestIdentity,
+  type CatalogCommand,
+  type CatalogCommandResult,
   type ClientTokenCommand,
   type ClientTokenDirectoryRejection,
   type ClientTokenScopeRef,
@@ -10,6 +13,8 @@ import {
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
+
+import type { CatalogStatusProjection } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
 
@@ -69,6 +74,8 @@ export function App({ shell, retryConnection }: AppProps) {
   }, [snapshot.connection, shell]);
 
   const [modelsCommand, setModelsCommand] = useState<ModelsCommand>();
+  const [catalogCommand, setCatalogCommand] = useState<CatalogCommand>();
+  const [catalogResult, setCatalogResult] = useState<CatalogCommandResult>();
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -131,6 +138,16 @@ export function App({ shell, retryConnection }: AppProps) {
       await shell.executeModelsCommand(command);
     } finally {
       setModelsCommand(undefined);
+    }
+  };
+
+  const executeCatalogCommand = async (command: CatalogCommand) => {
+    setCatalogCommand(command);
+    try {
+      const result = await shell.executeCatalogCommand(command);
+      setCatalogResult(result);
+    } finally {
+      setCatalogCommand(undefined);
     }
   };
 
@@ -310,11 +327,17 @@ export function App({ shell, retryConnection }: AppProps) {
         snapshot.connection.kind === "connected" ? (
           <ModelsPage
             busy={modelsCommand !== undefined}
+            catalogBusy={catalogCommand !== undefined}
             connection={snapshot.connection}
             mode={
               snapshot.activePage === "providers" ? "providers" : "models"
             }
+            onCatalogCommand={executeCatalogCommand}
             onCommand={executeModelsCommand}
+            {...(catalogResult === undefined ? {} : { catalogResult })}
+            {...(snapshot.connection.catalogStatus === undefined
+              ? {}
+              : { catalogStatus: snapshot.connection.catalogStatus })}
           />
         ) : null}
         <section className="empty-page">
@@ -477,13 +500,21 @@ function SettingsDeveloperLab({
 
 function ModelsPage({
   busy,
+  catalogBusy = false,
+  catalogResult,
+  catalogStatus,
   connection,
   mode,
+  onCatalogCommand,
   onCommand,
 }: {
   readonly busy: boolean;
+  readonly catalogBusy?: boolean;
+  readonly catalogResult?: CatalogCommandResult;
+  readonly catalogStatus?: CatalogStatusProjection;
   readonly connection: Extract<ControlPlaneState, { readonly kind: "connected" }>;
   readonly mode: "providers" | "models";
+  readonly onCatalogCommand: (command: CatalogCommand) => void;
   readonly onCommand: (command: ModelsCommand) => void;
 }) {
   // The first visit to a models page loads the authoritative revision; the
@@ -496,11 +527,15 @@ function ModelsPage({
   return (
     <ModelsFileWorkspace
       busy={busy}
+      catalogBusy={catalogBusy}
       mode={mode}
+      onCatalogCommand={onCatalogCommand}
       onCommand={onCommand}
       onReload={() => onCommand({ command: "query" })}
       projection={connection.modelsProjection}
       result={connection.modelsResult}
+      {...(catalogResult === undefined ? {} : { catalogResult })}
+      {...(catalogStatus === undefined ? {} : { catalogStatus })}
     />
   );
 }
