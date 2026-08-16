@@ -9,10 +9,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 
 import { afterEach, describe, expect, it } from "vitest";
+
+import lockfile from "proper-lockfile";
 
 import {
   createNodePipeTransport,
@@ -26,6 +28,13 @@ import {
   createFileClientTokenStore,
   loadFileClientTokenAuthority,
 } from "../../src/client-auth/file-token-store.js";
+import {
+  createClientTokenControlPlaneHandler,
+} from "../../src/client-auth/control-plane.js";
+import {
+  createLiveClientTokenAuthority,
+  type LiveClientTokenAuthority,
+} from "../../src/client-auth/live-authority.js";
 import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "../../src/settings/control-plane.js";
@@ -87,6 +96,38 @@ describe("LuckyToken CLI", () => {
   const children: ChildProcessWithoutNullStreams[] = [];
   const controlPlanes: RunningControlPlane[] = [];
   const tcpServers: Server[] = [];
+  let nextClientTokenPipe = 0;
+
+  /** Starts a Control Plane serving the given live authorities and returns
+   *  the discovery descriptor path the CLI connects through. */
+  async function startClientTokenBackend(options: {
+    readonly authorities: Readonly<Record<string, LiveClientTokenAuthority>>;
+  }): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-client-token-cp-"));
+    directories.push(directory);
+    const endpoint = {
+      pipeName: `\\\\.\\pipe\\luckytoken-cli-token-${process.pid}-${++nextClientTokenPipe}`,
+      capability: "cli-client-token-capability-01234567890123",
+    };
+    const controlPlane = await startControlPlane({
+      endpoint,
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: { modelDataPlane: "running", provider: "configured" },
+      clientTokenCommandHandler: createClientTokenControlPlaneHandler({
+        authorities: () => options.authorities,
+        protocolNames: {
+          "anthropic-messages": "Anthropic Messages",
+          "openai-responses": "OpenAI Responses",
+        },
+      }),
+      pipeServerFactory: createNodePipeTransport(),
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(descriptorPath, JSON.stringify(endpoint), "utf8");
+    return descriptorPath;
+  }
 
   afterEach(async () => {
     for (const child of children.splice(0)) {
@@ -713,23 +754,116 @@ describe("LuckyToken CLI", () => {
     ).toEqual([]);
   }, 30_000);
 
-  it("creates and lists a token for any configured Client Protocol without protocol branches", async () => {
+  it("lists masked tokens and reveals the active global token through the running Control Plane", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-cli-"));
+    directories.push(root);
+    const authFile = join(root, "client-auth", "anthropic-messages.json");
+    const store = createFileClientTokenStore({ path: authFile });
+    const live = await createLiveClientTokenAuthority({
+      store,
+      generateToken: () => "canary-cli-global-token-1",
+    });
+    await live.ensureGlobal();
+    const descriptorPath = await startClientTokenBackend({
+      authorities: { "anthropic-messages": live },
+    });
+
+    const list = startCli([
+      "client-token",
+      "list",
+      "anthropic-messages",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(list);
+    const listResult = await captureChild(list).result;
+    expect(listResult.code).toBe(0);
+    expect(listResult.stdout).toContain("global");
+    expect(listResult.stdout).toContain("…");
+    // The masked list never exposes the raw secret.
+    expect(listResult.stdout).not.toContain("canary-cli-global-token-1");
+
+    const reveal = startCli([
+      "client-token",
+      "reveal",
+      "anthropic-messages",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(reveal);
+    const revealResult = await captureChild(reveal).result;
+    expect(revealResult.code).toBe(0);
+    expect(revealResult.stdout.trim()).toBe("canary-cli-global-token-1");
+  }, 30_000);
+
+  it("rotates and removes the live global token with a locked revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-cli-"));
+    directories.push(root);
+    const authFile = join(root, "client-auth", "anthropic-messages.json");
+    const store = createFileClientTokenStore({ path: authFile });
+    const live = await createLiveClientTokenAuthority({
+      store,
+      generateToken: () => "canary-cli-global-token-2",
+    });
+    await live.ensureGlobal();
+    const descriptorPath = await startClientTokenBackend({
+      authorities: { "anthropic-messages": live },
+    });
+    const run = async (args: readonly string[]) => {
+      const child = startCli(["client-token", ...args]);
+      children.push(child);
+      return captureChild(child).result;
+    };
+
+    const rotated = await run([
+      "rotate",
+      "anthropic-messages",
+      "--token",
+      "canary-cli-rotated-token-3",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    expect(rotated.code).toBe(0);
+    expect(rotated.stdout).toContain("Rotated the global client token");
+    expect(rotated.stdout).not.toContain("canary-cli-rotated-token-3");
+    // Hot-applied: the authority rejects the prior token immediately.
+    expect(live.authorize("canary-cli-global-token-2")).toBeUndefined();
+    expect(live.authorize("canary-cli-rotated-token-3")).toEqual({});
+
+    const removed = await run([
+      "remove",
+      "anthropic-messages",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain("Removed the global client token");
+    expect(removed.stdout).toContain("return 401");
+    expect(live.authorize("canary-cli-rotated-token-3")).toBeUndefined();
+
+    const missing = await run([
+      "remove",
+      "anthropic-messages",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("does not exist");
+  }, 30_000);
+
+  it("creates and lists a global token offline without ever printing it in the list", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-offline-"));
     directories.push(root);
     const stateDirectory = join(root, ".luckytoken");
     await mkdir(stateDirectory);
     const configPath = join(stateDirectory, "config.json");
-    const authFile = join(
-      stateDirectory,
-      "client-auth",
-      "future-client-protocol.json",
-    );
+    const authFile = join(stateDirectory, "client-auth", "anthropic-messages.json");
     await writeFile(
       configPath,
       JSON.stringify({
         clientProtocols: {
-          "future-client-protocol": {
-            authFile: "client-auth/future-client-protocol.json",
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
           },
         },
         pi: { directory: "pi" },
@@ -740,7 +874,7 @@ describe("LuckyToken CLI", () => {
     const create = startCli([
       "client-token",
       "create",
-      "future-client-protocol",
+      "anthropic-messages",
       "--global",
       "--config",
       configPath,
@@ -750,12 +884,13 @@ describe("LuckyToken CLI", () => {
     expect(createResult.code).toBe(0);
     const token = createResult.stdout.match(/\b(lt_[A-Za-z0-9_-]{43})\b/u)?.[1];
     expect(token).toBeDefined();
+    expect(createResult.stdout).toContain("Created global token");
     expect(createResult.stdout).toContain("Restart LuckyToken");
 
     const list = startCli([
       "client-token",
       "list",
-      "future-client-protocol",
+      "anthropic-messages",
       "--config",
       configPath,
     ]);
@@ -768,8 +903,8 @@ describe("LuckyToken CLI", () => {
     expect(authority.authorize(token as string)).toEqual({});
   }, 30_000);
 
-  it("creates, rotates, and removes one project token while runtime snapshots stay immutable", async () => {
-    const root = await mkdtemp(join(process.cwd(), ".tmp-client-token-cli-"));
+  it("creates, rotates, and removes one project token offline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-offline-"));
     directories.push(root);
     const stateDirectory = join(root, ".luckytoken");
     const projectDir = join(root, "project");
@@ -787,34 +922,35 @@ describe("LuckyToken CLI", () => {
       }),
       "utf8",
     );
-    const scopeArgs = ["--project", relative(process.cwd(), projectDir)];
     const run = async (args: readonly string[]) => {
-      const child = startCli(args);
+      const child = startCli(["client-token", ...args]);
       children.push(child);
       return captureChild(child).result;
     };
 
     const created = await run([
-      "client-token",
       "create",
       "fixture-client",
-      ...scopeArgs,
+      "--project",
+      projectDir,
       "--token",
       "manual-project-token",
       "--config",
       configPath,
     ]);
     expect(created.code).toBe(0);
+    expect(created.stdout).toContain("Created project");
     expect(created.stdout).not.toContain("manual-project-token");
-    const store = createFileClientTokenStore({ path: authFile });
     const oldAuthority = await loadFileClientTokenAuthority(authFile);
-    expect(oldAuthority.authorize("manual-project-token")).toEqual({ projectDir });
+    expect(oldAuthority.authorize("manual-project-token")).toEqual({
+      projectDir,
+    });
 
     const duplicate = await run([
-      "client-token",
       "create",
       "fixture-client",
-      ...scopeArgs,
+      "--project",
+      projectDir,
       "--token",
       "unexpected-overwrite",
       "--config",
@@ -824,37 +960,143 @@ describe("LuckyToken CLI", () => {
     expect(duplicate.stderr).toContain("already has a token");
 
     const rotated = await run([
-      "client-token",
       "rotate",
       "fixture-client",
-      ...scopeArgs,
+      "--project",
+      projectDir,
       "--token",
       "rotated-project-token",
       "--config",
       configPath,
     ]);
     expect(rotated.code).toBe(0);
+    expect(rotated.stdout).toContain("Rotated project");
+    expect(rotated.stdout).toContain("Restart LuckyToken");
     const newAuthority = await loadFileClientTokenAuthority(authFile);
-    expect(oldAuthority.authorize("manual-project-token")).toEqual({ projectDir });
+    expect(oldAuthority.authorize("manual-project-token")).toEqual({
+      projectDir,
+    });
     expect(oldAuthority.authorize("rotated-project-token")).toBeUndefined();
     expect(newAuthority.authorize("manual-project-token")).toBeUndefined();
-    expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
+    expect(newAuthority.authorize("rotated-project-token")).toEqual({
+      projectDir,
+    });
 
     const removed = await run([
-      "client-token",
       "remove",
       "fixture-client",
-      ...scopeArgs,
+      "--project",
+      projectDir,
       "--config",
       configPath,
     ]);
     expect(removed.code).toBe(0);
-    await expect(store.list()).resolves.toEqual([]);
-    await expect(loadFileClientTokenAuthority(authFile)).rejects.toThrow(
-      "must contain at least one token",
-    );
-    expect(newAuthority.authorize("rotated-project-token")).toEqual({ projectDir });
+    expect(removed.stdout).toContain("Removed project");
+    await expect(
+      loadFileClientTokenAuthority(authFile),
+    ).rejects.toThrow("must contain at least one token");
+    expect(newAuthority.authorize("rotated-project-token")).toEqual({
+      projectDir,
+    });
   }, 30_000);
+
+  it("requires exactly one of --descriptor or --config for client-token", async () => {
+    const child = startCli(["client-token", "list", "anthropic-messages"]);
+    children.push(child);
+    const result = await captureChild(child).result;
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--descriptor");
+    expect(result.stderr).toContain("--config");
+  }, 30_000);
+
+  it("races two offline CLI mutations from the same revision without losing an update", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-race-"));
+    directories.push(root);
+    const stateDirectory = join(root, ".luckytoken");
+    await mkdir(stateDirectory);
+    const configPath = join(stateDirectory, "config.json");
+    const authFile = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const seed = createFileClientTokenStore({ path: authFile });
+    await seed.create({ type: "global" }, "canary-race-seed", 0);
+
+    // Hold the filesystem lock so both CLI processes snapshot revision 1
+    // (snapshots never block) and then wait on the mutation lock; releasing
+    // makes exactly one mutation win and the other observe the stale
+    // revision after lock acquisition.
+    const release = await lockfile.lock(authFile, {
+      realpath: false,
+      stale: 30_000,
+      retries: 0,
+    });
+    const first = startCli([
+      "client-token",
+      "rotate",
+      "anthropic-messages",
+      "--global",
+      "--token",
+      "canary-race-cli-a",
+      "--config",
+      configPath,
+    ]);
+    const second = startCli([
+      "client-token",
+      "rotate",
+      "anthropic-messages",
+      "--global",
+      "--token",
+      "canary-race-cli-b",
+      "--config",
+      configPath,
+    ]);
+    children.push(first, second);
+    const firstCapture = captureChild(first);
+    const secondCapture = captureChild(second);
+    // Long enough for both processes to finish config load and snapshot, and
+    // short enough to stay inside their lock retry budget.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(first.exitCode).toBeNull();
+    expect(second.exitCode).toBeNull();
+    await release();
+
+    const [firstResult, secondResult] = await Promise.all([
+      firstCapture.result,
+      secondCapture.result,
+    ]);
+    // Both snapshots observed revision 1 while the lock was held, so exactly
+    // one mutation wins and the other reports the stale conflict.
+    expect([firstResult.code, secondResult.code].sort()).toEqual([0, 1]);
+    const loser = firstResult.code === 1 ? firstResult : secondResult;
+    expect(loser.stderr).toContain("stale");
+
+    const persisted = JSON.parse(await readFile(authFile, "utf8")) as {
+      readonly global: string;
+      readonly revision: number;
+    };
+    expect(["canary-race-cli-a", "canary-race-cli-b"]).toContain(
+      persisted.global,
+    );
+    expect(persisted.revision).toBe(2);
+    // No lock or temporary artifacts remain next to the token file.
+    expect(await readdir(join(stateDirectory, "client-auth"))).toEqual([
+      "anthropic-messages.json",
+    ]);
+  }, 60_000);
 
   it("logs in and out through a configured Provider Package without leaking the key", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-e2e-"));

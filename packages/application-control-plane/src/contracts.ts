@@ -177,6 +177,59 @@ export interface StatusEvent {
   readonly snapshot: StatusSnapshot;
 }
 
+/**
+ * Versioned Client Token commands (Ticket 16): UI and CLI manage the one
+ * active protocol-global token through these commands. List results are
+ * masked metadata; Reveal is the only command that returns the active
+ * secret, and only for the requested protocol. Mutations carry the expected
+ * revision from a prior list so a stale UI/CLI can never overwrite a newer
+ * token.
+ */
+export type ClientTokenCommand =
+  | { readonly command: "list"; readonly protocolId: string }
+  | { readonly command: "reveal"; readonly protocolId: string }
+  | {
+      readonly command: "rotate";
+      readonly protocolId: string;
+      readonly expectedRevision: number;
+      readonly token?: string;
+    }
+  | {
+      readonly command: "remove";
+      readonly protocolId: string;
+      readonly expectedRevision: number;
+    };
+
+export type ClientTokenCommandOutcome =
+  | "ok"
+  | "conflict"
+  | "not_found"
+  | "invalid_value"
+  | "unknown_protocol"
+  | "unavailable";
+
+/** Masked scope metadata; the mask marker guarantees the wire never carries
+ *  a raw token in list/mutation results. */
+export interface MaskedClientTokenScope {
+  readonly type: "global" | "project";
+  readonly projectDir?: string;
+  readonly maskedToken: string;
+}
+
+export interface ClientTokenCommandResult {
+  readonly outcome: ClientTokenCommandOutcome;
+  readonly revision: number;
+  readonly scopes?: readonly MaskedClientTokenScope[];
+  /** Present only for an explicit Reveal of the active global token. */
+  readonly token?: string;
+  readonly error?: string;
+}
+
+/** Handles versioned Client Token commands against the live authority. */
+export type ClientTokenCommandHandler = (
+  command: ClientTokenCommand,
+) => Promise<ClientTokenCommandResult>;
+
 export interface ControlPlaneEndpoint {
   readonly pipeName: string;
   readonly capability: string;
@@ -285,6 +338,9 @@ export interface ControlPlaneClient {
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
+  executeClientTokenCommand(
+    command: ClientTokenCommand,
+  ): Promise<ClientTokenCommandResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,

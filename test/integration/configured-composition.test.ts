@@ -134,9 +134,15 @@ describe("configured serving composition", () => {
 
     expect(Object.keys(composition).sort()).toEqual([
       "certification",
+      "clientTokenAuthorities",
       "diagnosticsStore",
       "runtime",
       "userConfiguredProviderIds",
+    ]);
+    // Ticket 16: the running Data Plane owns one live global token authority
+    // per configured Client Protocol.
+    expect(Object.keys(composition.clientTokenAuthorities).sort()).toEqual([
+      "anthropic-messages",
     ]);
     expect(composition.userConfiguredProviderIds).toEqual([
       "commandcode-private",

@@ -9,7 +9,8 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    ModelsCommand, NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
+    ClientTokenCommand, ClientTokenCommandResultWire, DiagnosticsWarningWire, ModelsCommand,
+    NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter};
@@ -95,6 +96,63 @@ async fn shell_settings_confirm(
     state: State<'_, ShellBridge>,
 ) -> Result<ShellStateDto, ()> {
     run_settings_command(app, state, SettingsCommand::Confirm).await
+}
+
+#[tauri::command]
+async fn shell_client_tokens_list(
+    state: State<'_, ShellBridge>,
+    protocol_id: String,
+) -> Result<ClientTokenCommandResultWire, ()> {
+    state
+        .client_token_command(ClientTokenCommand::List { protocol_id })
+        .await
+}
+
+#[tauri::command]
+async fn shell_client_tokens_reveal(
+    state: State<'_, ShellBridge>,
+    protocol_id: String,
+) -> Result<ClientTokenCommandResultWire, ()> {
+    state
+        .client_token_command(ClientTokenCommand::Reveal { protocol_id })
+        .await
+}
+
+#[tauri::command]
+async fn shell_client_tokens_rotate(
+    state: State<'_, ShellBridge>,
+    protocol_id: String,
+    expected_revision: u64,
+    token: Option<String>,
+) -> Result<ClientTokenCommandResultWire, ()> {
+    state
+        .client_token_command(ClientTokenCommand::Rotate {
+            protocol_id,
+            expected_revision,
+            token,
+        })
+        .await
+}
+
+#[tauri::command]
+async fn shell_client_tokens_remove(
+    state: State<'_, ShellBridge>,
+    protocol_id: String,
+    expected_revision: u64,
+) -> Result<ClientTokenCommandResultWire, ()> {
+    state
+        .client_token_command(ClientTokenCommand::Remove {
+            protocol_id,
+            expected_revision,
+        })
+        .await
+}
+
+#[tauri::command]
+async fn shell_diagnostics_warnings(
+    state: State<'_, ShellBridge>,
+) -> Result<Vec<DiagnosticsWarningWire>, ()> {
+    state.diagnostics_warnings().await
 }
 
 async fn run_models_command(
@@ -266,9 +324,14 @@ fn main() {
             shell_settings_query,
             shell_settings_set,
             shell_settings_confirm,
+            shell_client_tokens_list,
+            shell_client_tokens_reveal,
+            shell_client_tokens_rotate,
+            shell_client_tokens_remove,
+            shell_diagnostics_warnings,
             shell_models_query,
             shell_models_write_raw,
-            shell_models_write_structured
+            shell_models_write_structured,
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");

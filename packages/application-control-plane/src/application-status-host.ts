@@ -14,6 +14,10 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import {
+  type ClientTokenCommandHandler,
+  type ClientTokenCommandResult,
+} from "./contracts.js";
+import {
   type ControlPlaneDiagnostics,
   normalizeDiagnosticQuery,
 } from "./diagnostics-contract.js";
@@ -29,6 +33,7 @@ import {
   compatibleHello,
   decodeApplicationStatus,
   decodeClientRequest,
+  decodeClientTokenCommandResult,
   decodeModelsCommandResult,
   decodeRuntimeCommandExecution,
   decodeSettingsCommandResult,
@@ -46,6 +51,12 @@ export interface StartControlPlaneOptions {
   readonly runtimeCommandHandler?: RuntimeCommandHandler;
   /** Optional Settings command handler (Ticket 06). */
   readonly settingsCommandHandler?: SettingsCommandHandler;
+  /**
+   * Optional Client Token command handler (Ticket 16): serves the versioned
+   * Client Token commands used by UI and CLI against the live per-protocol
+   * authorities.
+   */
+  readonly clientTokenCommandHandler?: ClientTokenCommandHandler;
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
   /** Live settings projection merged into every published snapshot. */
@@ -310,6 +321,45 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "settings_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "client_token_command") {
+          if (options.clientTokenCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          let handled: ClientTokenCommandResult;
+          try {
+            handled = await options.clientTokenCommandHandler(request.command);
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              revision: 0,
+              error: "Client Token Authority is unavailable",
+            };
+          }
+          // Validate the handler result against the request command before
+          // it is written: a masked scope field can never carry a raw token
+          // and a Reveal can only return the requested active secret.
+          const result = decodeClientTokenCommandResult(
+            handled,
+            request.command,
+          );
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "client_token_command_result",
             requestId: request.requestId,
             result,
           });

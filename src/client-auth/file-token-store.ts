@@ -1,12 +1,46 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
+
+import lockfile from "proper-lockfile";
 
 import type { AuthorizedClient } from "../auth.js";
 
-const SCHEMA_VERSION = "luckytoken-client-auth-v1";
+const SCHEMA_VERSION = "luckytoken-client-auth-v2";
+/**
+ * Legacy Ticket 16/baseline shape: read-only acceptance with an explicit
+ * migration rule (no persisted revision or deletion marker). Existing valid
+ * token data is preserved; the next successful mutation rewrites the file
+ * as v2.
+ */
+const LEGACY_SCHEMA_VERSION = "luckytoken-client-auth-v1";
 const AUTH_FILE_MODE = 0o600;
 const AUTH_DIRECTORY_MODE = 0o700;
+/** Lock staleness matches the Control Plane descriptor lease pattern. */
+const LOCK_STALE_MS = 30_000;
+/** Retry budget ≈ the stale window, mirroring the credential store's
+ *  deadline pattern: waiters survive brief contention and only give up
+ *  after a crashed owner could have been detected as stale. */
+const LOCK_RETRIES = 6_000;
+const LOCK_MIN_TIMEOUT_MS = 5;
+const LOCK_MAX_TIMEOUT_MS = 25;
+
+export class ClientTokenStaleRevisionError extends Error {
+  readonly code = "STALE_REVISION" as const;
+
+  constructor() {
+    super("Client token revision is stale");
+    this.name = "ClientTokenStaleRevisionError";
+  }
+}
 
 export type ClientTokenScope =
   | { readonly type: "global" }
@@ -22,22 +56,67 @@ export interface ClientTokenAuthority {
   scrub(value: string): string;
 }
 
-export interface FileClientTokenStore {
-  create(scope: ClientTokenScope, token?: string): Promise<string>;
-  rotate(scope: ClientTokenScope, token?: string): Promise<string>;
-  remove(scope: ClientTokenScope): Promise<boolean>;
-  list(): Promise<readonly ClientTokenScope[]>;
+export interface ClientTokenFileSnapshot {
+  readonly global: string | null;
+  readonly projects: Readonly<Record<string, string>>;
+  /**
+   * Monotonic mutation generation persisted in the authoritative file: a
+   * stale client's expectedRevision can never match a post-restart reset.
+   */
+  readonly revision: number;
+  /** Explicit marker: the global token was deliberately deleted and must
+   *  not be re-created by an ordinary restart (fresh enabling may create). */
+  readonly globalDeleted: boolean;
 }
+
+export interface FileClientTokenStore {
+  /**
+   * When expectedRevision is provided the persisted mutation is a
+   * compare-and-swap: the file's current revision must match or the write is
+   * rejected without mutating anything.
+   */
+  create(scope: ClientTokenScope, token?: string, expectedRevision?: number): Promise<string>;
+  rotate(scope: ClientTokenScope, token?: string, expectedRevision?: number): Promise<string>;
+  remove(scope: ClientTokenScope, expectedRevision?: number): Promise<boolean>;
+  list(): Promise<readonly ClientTokenScope[]>;
+  /** Raw value snapshot for the live authority's in-memory authorization
+   *  state (Ticket 16). Only the authority consumes token values. */
+  snapshot(): Promise<ClientTokenFileSnapshot>;
+}
+
+export interface ClientTokenFileOperations {
+  /** Create a private same-directory temporary file for atomic publication. */
+  createTemporary(path: string): Promise<FileHandle>;
+  /** Durable flush of the temporary file before publication. */
+  flush(handle: FileHandle): Promise<void>;
+  /** Atomic replace of the target file with the temporary file. */
+  replace(from: string, to: string): Promise<void>;
+}
+
+const defaultFileOperations: ClientTokenFileOperations = Object.freeze({
+  createTemporary: (path: string) => open(path, "wx", AUTH_FILE_MODE),
+  flush: (handle: FileHandle) => handle.sync(),
+  replace: (from: string, to: string) => rename(from, to),
+});
 
 export interface FileClientTokenStoreOptions {
   readonly path: string;
   readonly generateToken?: () => string;
+  /**
+   * Injectable file primitives (repair turn 2): the persist path publishes
+   * through a private temporary file plus atomic replace, and each boundary
+   * is independently faultable in tests. Defaults are the real fs
+   * operations.
+   */
+  readonly fileOperations?: ClientTokenFileOperations;
 }
 
 interface ClientTokenData {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly global: string | null;
   readonly projects: Readonly<Record<string, string>>;
+  readonly revision: number;
+  readonly globalDeleted: boolean;
 }
 
 function validIdentifier(value: string, description: string): string {
@@ -67,14 +146,23 @@ function parseData(content: string): ClientTokenData {
     throw new Error("Invalid client token file: expected an object");
   }
   const value = parsed as Record<string, unknown>;
-  const allowed = new Set(["schemaVersion", "global", "projects"]);
+  const schemaVersion = value.schemaVersion;
+  if (
+    schemaVersion !== SCHEMA_VERSION &&
+    schemaVersion !== LEGACY_SCHEMA_VERSION
+  ) {
+    throw new Error(
+      `Invalid client token file: schemaVersion must be ${SCHEMA_VERSION} or ${LEGACY_SCHEMA_VERSION}`,
+    );
+  }
+  const legacy = schemaVersion === LEGACY_SCHEMA_VERSION;
+  const allowed = legacy
+    ? new Set(["schemaVersion", "global", "projects"])
+    : new Set(["schemaVersion", "global", "projects", "revision", "globalDeleted"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
       throw new Error(`Invalid client token file: unknown field ${key}`);
     }
-  }
-  if (value.schemaVersion !== SCHEMA_VERSION) {
-    throw new Error(`Invalid client token file: schemaVersion must be ${SCHEMA_VERSION}`);
   }
   if (value.global !== null && typeof value.global !== "string") {
     throw new Error("Invalid client token file: global must be a token or null");
@@ -99,6 +187,34 @@ function parseData(content: string): ClientTokenData {
     }
     projects[projectDir] = validIdentifier(token, "Project client token");
   }
+  // Legacy v1 files carry neither a revision nor a deletion marker; the
+  // explicit migration rule treats them as initialized (revision 0, never
+  // deleted), preserving their valid token data.
+  const revision = legacy
+    ? 0
+    : typeof value.revision === "number" &&
+        Number.isSafeInteger(value.revision) &&
+        value.revision >= 0
+      ? value.revision
+      : (() => {
+          throw new Error(
+            "Invalid client token file: revision must be a non-negative integer",
+          );
+        })();
+  const globalDeleted = legacy
+    ? false
+    : typeof value.globalDeleted === "boolean"
+      ? value.globalDeleted
+      : (() => {
+          throw new Error(
+            "Invalid client token file: globalDeleted must be a boolean",
+          );
+        })();
+  if (global !== null && globalDeleted) {
+    throw new Error(
+      "Invalid client token file: globalDeleted must be false while a global token exists",
+    );
+  }
   const assignedTokens = [
     ...(global === null ? [] : [global]),
     ...Object.values(projects),
@@ -110,6 +226,8 @@ function parseData(content: string): ClientTokenData {
     schemaVersion: SCHEMA_VERSION,
     global,
     projects: Object.freeze(projects),
+    revision,
+    globalDeleted,
   });
 }
 
@@ -173,42 +291,109 @@ export function createFileClientTokenStore(
   const path = resolve(options.path);
   const generateToken =
     options.generateToken ?? (() => `lt_${randomBytes(32).toString("base64url")}`);
+  const fileOperations = options.fileOperations ?? defaultFileOperations;
 
   const emptyData = (): ClientTokenData => ({
     schemaVersion: SCHEMA_VERSION,
     global: null,
     projects: {},
+    revision: 0,
+    globalDeleted: false,
   });
   const readData = (): Promise<ClientTokenData | undefined> =>
     readClientTokenData(path);
-  const writeData = async (data: ClientTokenData): Promise<void> => {
+  /**
+   * Atomic publication: write the next state to a private same-directory
+   * temporary file, flush it durably, then atomically replace the target.
+   * On any injected failure before publication the last valid file bytes
+   * stay intact and the temporary file is cleaned safely.
+   */
+  const writeDataAtomic = async (data: ClientTokenData): Promise<void> => {
     await mkdir(dirname(path), { recursive: true, mode: AUTH_DIRECTORY_MODE });
-    await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: AUTH_FILE_MODE,
-    });
-    await chmod(path, AUTH_FILE_MODE);
+    const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    const serialized = `${JSON.stringify(data, null, 2)}\n`;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await fileOperations.createTemporary(temporaryPath);
+      await handle.writeFile(serialized, { encoding: "utf8" });
+      await fileOperations.flush(handle);
+      await handle.close();
+      handle = undefined;
+      await chmod(temporaryPath, AUTH_FILE_MODE);
+      await fileOperations.replace(temporaryPath, path);
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   };
   const mutate = async <T>(
+    expectedRevision: number | undefined,
     operation: (current: ClientTokenData) => {
       readonly result: T;
       readonly next?: ClientTokenData;
     },
   ): Promise<T> => {
-    const current = (await readData()) ?? emptyData();
-    const { result, next } = operation(current);
-    if (next !== undefined) await writeData(next);
-    return result;
+    await mkdir(dirname(path), { recursive: true, mode: AUTH_DIRECTORY_MODE });
+    let compromised: Error | undefined;
+    // Real filesystem lock shared by every independent store instance and
+    // process (offline CLI, running authority, tests): read-check-mutate-
+    // write sequences serialize across writers, not just within one
+    // authority's in-process queue.
+    const release = await lockfile.lock(path, {
+      realpath: false,
+      stale: LOCK_STALE_MS,
+      retries: {
+        retries: LOCK_RETRIES,
+        factor: 1,
+        minTimeout: LOCK_MIN_TIMEOUT_MS,
+        maxTimeout: LOCK_MAX_TIMEOUT_MS,
+      },
+      onCompromised: (error: Error) => {
+        compromised = error;
+      },
+    });
+    try {
+      if (compromised !== undefined) {
+        throw new Error("Client token file lock was compromised", {
+          cause: compromised,
+        });
+      }
+      // Re-read AFTER acquiring the lock: the authoritative file is the
+      // compare-and-swap generation. A mutation that read a stale revision
+      // before the lock now conflicts instead of overwriting.
+      const current = (await readData()) ?? emptyData();
+      if (
+        expectedRevision !== undefined &&
+        current.revision !== expectedRevision
+      ) {
+        throw new ClientTokenStaleRevisionError();
+      }
+      const { result, next } = operation(current);
+      if (next !== undefined) await writeDataAtomic(next);
+      if (compromised !== undefined) {
+        throw new Error("Client token file lock was compromised", {
+          cause: compromised,
+        });
+      }
+      return result;
+    } finally {
+      await release().catch(() => undefined);
+    }
   };
 
   return Object.freeze({
-    async create(scope: ClientTokenScope, token?: string): Promise<string> {
+    async create(
+      scope: ClientTokenScope,
+      token?: string,
+      expectedRevision?: number,
+    ): Promise<string> {
       const createdToken = validIdentifier(
         token ?? generateToken(),
         "Client token",
       );
       if (scope.type === "project") assertNormalizedProjectDir(scope.projectDir);
-      return mutate((current) => {
+      return mutate(expectedRevision, (current) => {
         if (
           (scope.type === "global" && current.global !== null) ||
           (scope.type === "project" &&
@@ -234,17 +419,24 @@ export function createFileClientTokenStore(
                 ? { [scope.projectDir]: createdToken }
                 : {}),
             },
+            revision: current.revision + 1,
+            globalDeleted:
+              scope.type === "global" ? false : current.globalDeleted,
           },
         };
       });
     },
-    async rotate(scope: ClientTokenScope, token?: string): Promise<string> {
+    async rotate(
+      scope: ClientTokenScope,
+      token?: string,
+      expectedRevision?: number,
+    ): Promise<string> {
       if (scope.type === "project") assertNormalizedProjectDir(scope.projectDir);
       const replacement = validIdentifier(
         token ?? generateToken(),
         "Client token",
       );
-      return mutate((current) => {
+      return mutate(expectedRevision, (current) => {
         const currentToken =
           scope.type === "global"
             ? current.global
@@ -282,24 +474,40 @@ export function createFileClientTokenStore(
                 ? { [scope.projectDir]: replacement }
                 : {}),
             },
+            revision: current.revision + 1,
+            globalDeleted: current.globalDeleted,
           },
         };
       });
     },
-    async remove(scope: ClientTokenScope): Promise<boolean> {
+    async remove(
+      scope: ClientTokenScope,
+      expectedRevision?: number,
+    ): Promise<boolean> {
       if (scope.type === "project") assertNormalizedProjectDir(scope.projectDir);
-      return mutate((current) => {
+      return mutate(expectedRevision, (current) => {
         if (scope.type === "global") {
           return current.global === null
             ? { result: false }
-            : { result: true, next: { ...current, global: null } };
+            : {
+                result: true,
+                next: {
+                  ...current,
+                  global: null,
+                  globalDeleted: true,
+                  revision: current.revision + 1,
+                },
+              };
         }
         if (!Object.hasOwn(current.projects, scope.projectDir)) {
           return { result: false };
         }
         const projects = { ...current.projects };
         delete projects[scope.projectDir];
-        return { result: true, next: { ...current, projects } };
+        return {
+          result: true,
+          next: { ...current, projects, revision: current.revision + 1 },
+        };
       });
     },
     async list(): Promise<readonly ClientTokenScope[]> {
@@ -311,6 +519,23 @@ export function createFileClientTokenStore(
         scopes.push(Object.freeze({ type: "project", projectDir }));
       }
       return Object.freeze(scopes);
+    },
+    async snapshot(): Promise<ClientTokenFileSnapshot> {
+      const data = await readData();
+      if (data === undefined) {
+        return Object.freeze({
+          global: null,
+          projects: Object.freeze({}),
+          revision: 0,
+          globalDeleted: false,
+        });
+      }
+      return Object.freeze({
+        global: data.global,
+        projects: data.projects,
+        revision: data.revision,
+        globalDeleted: data.globalDeleted,
+      });
     },
   });
 }

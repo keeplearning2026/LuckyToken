@@ -147,6 +147,40 @@ impl SettingsCommand {
     }
 }
 
+/// Versioned Client Token commands (Ticket 16): the renderer manages the one
+/// live protocol-global token per enabled Client Protocol. Mutations carry
+/// the expected revision from a prior list so a stale UI can never overwrite
+/// a newer token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ClientTokenCommand {
+    List {
+        protocol_id: String,
+    },
+    Reveal {
+        protocol_id: String,
+    },
+    Rotate {
+        protocol_id: String,
+        expected_revision: u64,
+        token: Option<String>,
+    },
+    Remove {
+        protocol_id: String,
+        expected_revision: u64,
+    },
+}
+
+impl ClientTokenCommand {
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::List { .. } => "desktop-client-tokens-list",
+            Self::Reveal { .. } => "desktop-client-tokens-reveal",
+            Self::Rotate { .. } => "desktop-client-tokens-rotate",
+            Self::Remove { .. } => "desktop-client-tokens-remove",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModelsCommand {
     Query,
@@ -279,6 +313,22 @@ pub(crate) type CommandFuture =
 pub(crate) type SettingsCommandFuture = Pin<
     Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+
+pub(crate) type ClientTokenCommandFuture = Pin<
+    Box<
+        dyn Future<Output = Result<ClientTokenCommandResultWire, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+pub(crate) type DiagnosticsWarningsFuture = Pin<
+    Box<
+        dyn Future<Output = Result<Vec<DiagnosticsWarningWire>, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+
 pub(crate) type ModelsCommandFuture = Pin<
     Box<dyn Future<Output = Result<ModelsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
@@ -289,6 +339,12 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
@@ -305,6 +361,40 @@ pub(crate) struct SettingsCommandResultWire {
     pub(crate) confirmation: Option<LanConfirmationWire>,
     #[serde(rename = "settings")]
     pub(crate) settings: BTreeMap<String, RegisteredSettingWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+
+pub(crate) struct MaskedClientTokenScopeWire {
+    #[serde(rename = "type")]
+    pub(crate) scope_type: String,
+    #[serde(rename = "projectDir", skip_serializing_if = "Option::is_none")]
+    pub(crate) project_dir: Option<String>,
+    #[serde(rename = "maskedToken")]
+    pub(crate) masked_token: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct ClientTokenCommandResultWire {
+    pub(crate) outcome: String,
+    pub(crate) revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) scopes: Option<Vec<MaskedClientTokenScopeWire>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+/// Sanitized Dashboard warning projection: only the safe fields of a
+/// diagnostics record are forwarded to the renderer; details/errors are
+/// deliberately never forwarded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct DiagnosticsWarningWire {
+    pub(crate) id: u64,
+    pub(crate) level: String,
+    pub(crate) time: u64,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -422,6 +512,35 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_settings_command_session(&pipe_name, capability, command).await
+        })
+    }
+    fn client_token_command(&self, command: ClientTokenCommand) -> ClientTokenCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_client_token_command_session(&pipe_name, capability, command).await
+        })
+    }
+
+    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_diagnostics_warnings_session(&pipe_name, capability).await
         })
     }
 
@@ -626,6 +745,136 @@ fn decode_settings_command_result(
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
+async fn execute_client_token_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: ClientTokenCommand,
+) -> Result<ClientTokenCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            let wire_command = match &command {
+                ClientTokenCommand::List { protocol_id } => json!({
+                    "command": "list",
+                    "protocolId": protocol_id,
+                }),
+                ClientTokenCommand::Reveal { protocol_id } => json!({
+                    "command": "reveal",
+                    "protocolId": protocol_id,
+                }),
+                ClientTokenCommand::Rotate {
+                    protocol_id,
+                    expected_revision,
+                    token,
+                } => {
+                    let mut value = json!({
+                        "command": "rotate",
+                        "protocolId": protocol_id,
+                        "expectedRevision": expected_revision,
+                    });
+                    if let Some(token) = token {
+                        value["token"] = json!(token);
+                    }
+                    value
+                }
+                ClientTokenCommand::Remove {
+                    protocol_id,
+                    expected_revision,
+                } => json!({
+                    "command": "remove",
+                    "protocolId": protocol_id,
+                    "expectedRevision": expected_revision,
+                }),
+            };
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "client_token_command",
+                    "requestId": command.request_id(),
+                    "command": wire_command,
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_client_token_command_result(&result, &command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_client_token_command_result(
+    value: &Value,
+    command: &ClientTokenCommand,
+) -> Result<ClientTokenCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("client_token_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let outcome = result.get("outcome").and_then(Value::as_str);
+    if !matches!(
+        outcome,
+        Some(
+            "ok" | "conflict" | "not_found" | "invalid_value" | "unknown_protocol" | "unavailable"
+        )
+    ) || result.get("revision").and_then(Value::as_u64).is_none()
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    // Reveal is the only command that may carry the active secret; list and
+    // mutation results expose masked scopes only. A result that violates the
+    // command's shape (e.g. a raw token in a masked field) never decodes.
+    match (command, outcome) {
+        (ClientTokenCommand::Reveal { .. }, Some("ok")) => {
+            if result.get("token").and_then(Value::as_str).is_none()
+                || result.get("scopes").is_some()
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (ClientTokenCommand::List { .. }, Some("ok"))
+        | (ClientTokenCommand::Rotate { .. }, Some("ok"))
+        | (ClientTokenCommand::Remove { .. }, Some("ok")) => {
+            if result.get("token").is_some() || !valid_masked_scopes(result.get("scopes")) {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (_, _) => {
+            if result.get("error").and_then(Value::as_str).is_none()
+                || result.get("token").is_some()
+                || result.get("scopes").is_some()
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+    }
+    serde_json::from_value::<ClientTokenCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)
+}
+
 async fn execute_models_command_session(
     pipe_name: &str,
     capability: String,
@@ -690,6 +939,122 @@ fn decode_models_command_result(
     }
     serde_json::from_value::<ModelsCommandResultWire>(Value::Object(result.clone()))
         .map_err(|_| ConnectionFailure::ProtocolError)
+}
+fn valid_masked_scopes(value: Option<&Value>) -> bool {
+    let Some(scopes) = value.and_then(Value::as_array) else {
+        return false;
+    };
+    scopes.iter().all(|scope| {
+        let Some(scope) = scope.as_object() else {
+            return false;
+        };
+        let scope_type = scope.get("type").and_then(Value::as_str);
+        let masked = scope.get("maskedToken").and_then(Value::as_str);
+        // The mask marker guarantees a masked field never carries a raw token.
+        matches!(scope_type, Some("global" | "project"))
+            && masked.is_some_and(|value| !value.is_empty() && value.contains('\u{2026}'))
+            && match scope_type {
+                Some("global") => scope.get("projectDir").is_none(),
+                Some("project") => scope
+                    .get("projectDir")
+                    .and_then(Value::as_str)
+                    .is_some_and(|dir| !dir.is_empty()),
+                _ => false,
+            }
+    })
+}
+
+async fn execute_diagnostics_warnings_session(
+    pipe_name: &str,
+    capability: String,
+) -> Result<Vec<DiagnosticsWarningWire>, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "get_diagnostics",
+                    "requestId": "desktop-diagnostics-warnings",
+                    "query": {
+                        "minimumLevel": "warning",
+                        "limit": 8,
+                    },
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_diagnostics_warnings(&result)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_diagnostics_warnings(
+    value: &Value,
+) -> Result<Vec<DiagnosticsWarningWire>, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("diagnostics_result")
+        || value.get("requestId").and_then(Value::as_str) != Some("desktop-diagnostics-warnings")
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let records = result.get("records").and_then(Value::as_array);
+    let Some(records) = records else {
+        return Err(ConnectionFailure::ProtocolError);
+    };
+    let mut warnings = Vec::with_capacity(records.len());
+    for record in records {
+        let Some(record) = record.as_object() else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        let Some(id) = record.get("id").and_then(Value::as_u64) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        let Some(level) = record.get("level").and_then(Value::as_str) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        if !matches!(level, "warning" | "error" | "critical") {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let Some(time) = record.get("time").and_then(Value::as_u64) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        let Some(text) = record.get("text").and_then(Value::as_str) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        // Only the allowlisted safe fields are forwarded; details, errors,
+        // fingerprints, and request ids never reach the renderer.
+        warnings.push(DiagnosticsWarningWire {
+            id,
+            level: level.to_owned(),
+            time,
+            text: text.to_owned(),
+        });
+    }
+    Ok(warnings)
 }
 
 async fn execute_runtime_command<W>(
@@ -1178,6 +1543,206 @@ mod tests {
                 .map(|setting| setting.key.as_str()),
             Some("protocols.anthropic-messages.enabled")
         );
+    }
+
+    #[tokio::test]
+    async fn client_token_command_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_client_token_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                ClientTokenCommand::Rotate {
+                    protocol_id: "anthropic-messages".to_owned(),
+                    expected_revision: 2,
+                    token: Some("canary-native-rotate-token".to_owned()),
+                },
+            )
+            .await
+            .expect("client token rotate must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("client_token_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-client-tokens-rotate")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("rotate")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("protocolId"))
+                .and_then(Value::as_str),
+            Some("anthropic-messages")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("expectedRevision"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("token"))
+                .and_then(Value::as_str),
+            Some("canary-native-rotate-token")
+        );
+        server
+            .send(&json!({
+                "type": "client_token_command_result",
+                "requestId": "desktop-client-tokens-rotate",
+                "result": {
+                    "outcome": "ok",
+                    "revision": 3,
+                    "scopes": [{
+                        "type": "global",
+                        "maskedToken": "canary-n…oken"
+                    }]
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("rotate must complete within the timeout")
+            .expect("rotate task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.revision, 3);
+        let scopes = result
+            .scopes
+            .expect("rotate result must carry masked scopes");
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].scope_type, "global");
+        assert_eq!(scopes[0].masked_token, "canary-n…oken");
+    }
+
+    #[tokio::test]
+    async fn diagnostics_warnings_query_decodes_only_allowlisted_safe_fields() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_diagnostics_warnings_session(&pipe_name, "desktop-test-capability".to_owned())
+                .await
+                .expect("diagnostics warnings must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("get_diagnostics")
+        );
+        assert_eq!(
+            request
+                .get("query")
+                .and_then(|raw| raw.get("minimumLevel"))
+                .and_then(Value::as_str),
+            Some("warning")
+        );
+        // A record with a raw credential in its details must still decode to
+        // the allowlisted safe fields only: details/errors/fingerprints are
+        // never forwarded to the renderer.
+        server
+            .send(&json!({
+                "type": "diagnostics_result",
+                "requestId": "desktop-diagnostics-warnings",
+                "result": {
+                    "records": [{
+                        "id": 7,
+                        "level": "warning",
+                        "time": 1700000000000_u64,
+                        "text": "Anthropic Messages has no active client token",
+                        "details": {"raw": "canary-native-secret-999"},
+                        "fingerprint": "fp:deadbeef"
+                    }],
+                    "hasMore": false
+                }
+            }))
+            .await;
+
+        let warnings = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("diagnostics query must complete within the timeout")
+            .expect("diagnostics task must not panic");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].id, 7);
+        assert_eq!(warnings[0].level, "warning");
+        assert_eq!(
+            warnings[0].text,
+            "Anthropic Messages has no active client token"
+        );
+        let serialized = serde_json::to_value(&warnings).expect("serialize warnings");
+        assert_eq!(
+            serialized[0],
+            json!({
+                "id": 7,
+                "level": "warning",
+                "time": 1700000000000_u64,
+                "text": "Anthropic Messages has no active client token"
+            })
+        );
+        assert!(!serialized.to_string().contains("canary-native-secret-999"));
+        assert!(!serialized.to_string().contains("fp:deadbeef"));
     }
 
     fn test_pipe_name() -> String {

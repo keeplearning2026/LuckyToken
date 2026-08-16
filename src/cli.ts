@@ -52,8 +52,18 @@ import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { resolveEffectiveSettings } from "./settings/data-plane.js";
+
+import {
+  createClientTokenControlPlaneHandler,
+  createProtocolEnablementSettingsHandler,
+} from "./client-auth/control-plane.js";
+import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
+import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
+import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
+
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
+
 
 const HELP = `LuckyToken
 
@@ -61,7 +71,8 @@ Usage:
   luckytoken --config <path>
   luckytoken login [provider] --config <path>
   luckytoken logout [provider] --config <path>
-  luckytoken client-token <create|rotate|remove|list> <protocol> [scope] --config <path>
+  luckytoken client-token <list|reveal|rotate|remove> <protocol> --descriptor <path>
+  luckytoken client-token <create|rotate|remove|list> <protocol> --config <path> [--global|--project <path>]
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
@@ -72,7 +83,7 @@ Commands:
   serve    Start the local Client Protocol service (default)
   login    Authenticate a Provider through Pi Models
   logout   Remove a Provider credential through Pi Models
-  client-token  Manage one Client Protocol's local token file
+  client-token  Manage client tokens: live global tokens through the Control Plane, or token files offline
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
@@ -80,10 +91,10 @@ Commands:
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
+  --descriptor <path>  Current-user Control Plane discovery descriptor
   --global         Select the protocol-global client token
   --project <path> Select a project-bound client token
   --token <value>  Use an explicit token for create/rotate
-  --descriptor <path>  Current-user Control Plane discovery descriptor
   --help           Show this help
 
 control models commands:
@@ -391,6 +402,27 @@ async function runServe(
     },
   );
   await settingsRegistry.load();
+  // Ticket 16: the live per-protocol Client Token authorities belong to the
+  // running Data Plane composition; the Control Plane adapters read them
+  // through this slot so commands and enable transitions always target the
+  // current authorities (boot-time enabling is ensured by the composition).
+  let tokenAuthorities: Readonly<Record<string, LiveClientTokenAuthority>> |
+    undefined;
+  const protocolNames = Object.freeze({
+    [anthropicMessagesProtocolId]: "Anthropic Messages",
+    [openaiResponsesProtocolId]: "OpenAI Responses",
+  });
+  const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
+    authorities: () => tokenAuthorities ?? Object.freeze({}),
+    protocolNames,
+    diagnostics: diagnosticsStore,
+  });
+  const settingsCommandHandler = createProtocolEnablementSettingsHandler({
+    settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
+    authorities: () => tokenAuthorities ?? Object.freeze({}),
+    protocolNames,
+    diagnostics: diagnosticsStore,
+  });
   const supervisor = createDataPlaneRuntimeSupervisor({
     host: config.server.host,
     port: config.server.port,
@@ -407,6 +439,7 @@ async function runServe(
           diagnosticsStore,
           settingsRegistry,
         });
+        tokenAuthorities = composition.clientTokenAuthorities;
         const server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
           host: address.host,
@@ -442,9 +475,10 @@ async function runServe(
     application: { id: "luckytoken", version: "0.0.0" },
     initialStatus: supervisor.initialStatus,
     runtimeCommandHandler: supervisor.execute,
-    settingsCommandHandler: createSettingsControlPlaneHandler(settingsRegistry),
-    modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
+    settingsCommandHandler,
     settingsProjection: () => settingsRegistry.snapshot(),
+    clientTokenCommandHandler,
+    modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
     modelsProjection: () => modelsAuthority.snapshot(),
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,

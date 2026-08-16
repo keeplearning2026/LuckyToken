@@ -23,6 +23,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
     const shell = createWindowsShellHost({
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
       },
@@ -71,6 +73,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
       executeRuntimeCommand: async () => connected,
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async (command) => {
         commands.push(command);
         return connected;
@@ -109,7 +113,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -141,7 +147,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -176,7 +184,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -219,7 +229,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -260,7 +272,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -309,7 +323,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
         },
-        executeModelsCommand: async () => {
+      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
         throw new Error("unused models command");
         },
       executeRuntimeCommand: async () => {
@@ -348,5 +364,102 @@ describe("Windows desktop shell public lifecycle seam", () => {
       "descriptor_missing",
       "transport_lost",
     ]);
+  });
+});
+
+
+describe("WindowsShellHost client token commands", () => {
+  it("delegates client token commands and Dashboard warning queries to the runtime", async () => {
+    const tokenResults: string[] = [];
+    const runtime: DesktopShellRuntime = {
+      connectControlPlane: async () => ({
+        revision: 1,
+        kind: "connected",
+        applicationVersion: "0.0.0-test",
+        contractVersion: 1,
+        sequence: 0,
+        modelDataPlane: "running",
+        provider: "unconfigured",
+      }),
+      executeClientTokenCommand: async (command) => {
+        tokenResults.push(command.command);
+        return {
+          outcome: "ok",
+          revision: 1,
+          scopes: [{ type: "global", maskedToken: "canary-m…sked" }],
+        };
+      },
+      queryDiagnosticsWarnings: async () => [
+        {
+          id: 1,
+          level: "warning",
+          time: 1700000000000,
+          text: "sanitized warning",
+        },
+      ],
+      executeModelsCommand: async () => {
+        throw new Error("unused models command");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeRuntimeCommand: async () => {
+        throw new Error("unused");
+      },
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+    };
+    const shell = createWindowsShellHost(runtime);
+    await shell.launch();
+
+    const listed = await shell.executeClientTokenCommand({
+      command: "list",
+      protocolId: "anthropic-messages",
+    });
+    expect(listed).toMatchObject({ outcome: "ok" });
+    expect(tokenResults).toEqual(["list"]);
+    await expect(
+      shell.executeClientTokenCommand({
+        command: "reveal",
+        protocolId: "anthropic-messages",
+      }),
+    ).resolves.toMatchObject({ outcome: "ok" });
+
+    const warnings = await shell.queryDiagnosticsWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.text).toBe("sanitized warning");
+
+    await shell.dispose();
+  });
+
+  it("rejects client token commands while the shell is closed", async () => {
+    const shell = createWindowsShellHost({
+      connectControlPlane: async () => {
+        throw new Error("unused");
+      },
+      executeClientTokenCommand: async () => {
+        throw new Error("unused");
+      },
+      queryDiagnosticsWarnings: async () => [],
+      executeModelsCommand: async () => {
+        throw new Error("unused models command");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeRuntimeCommand: async () => {
+        throw new Error("unused");
+      },
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+    });
+
+    await expect(
+      shell.executeClientTokenCommand({
+        command: "list",
+        protocolId: "anthropic-messages",
+      }),
+    ).rejects.toThrow("not open");
+    await expect(shell.queryDiagnosticsWarnings()).rejects.toThrow("not open");
   });
 });

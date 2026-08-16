@@ -8,7 +8,7 @@
 
 **Blocked by:** 02 — Windows Desktop Shell and empty Dashboard; 03 — Dashboard-managed Runtime Supervisor; 06 — Settings-driven protocol, port, and LAN controls; 07 — Permanent Runtime Diagnostics and universal credential redaction.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm Client Token Authority commands/queries and real p
 
 ## Acceptance criteria
 
-- [ ] First enabling Anthropic Messages or OpenAI Responses creates one protocol-global token when that scope has none.
-- [ ] Each protocol has an independent authority; a token for one protocol cannot authorize another protocol.
-- [ ] Masked token listings never reveal the secret, while explicit local Reveal/Copy returns only the requested active token.
-- [ ] Rotate atomically persists a new token and immediately rejects the prior token for subsequent requests.
-- [ ] Delete immediately rejects the removed token but does not disable its Client Protocol.
-- [ ] An enabled protocol with no remaining token returns 401 for all model requests and emits a warning visible in Dashboard/Diagnostics.
-- [ ] UI and CLI mutations share a locked, revision-aware authority and concurrent operations cannot resurrect an old token or lose an update.
-- [ ] Token secrets never appear in typed events, Diagnostics, request records, exports, error bodies, or logs.
+- [x] First enabling Anthropic Messages or OpenAI Responses creates one protocol-global token when that scope has none.
+- [x] Each protocol has an independent authority; a token for one protocol cannot authorize another protocol.
+- [x] Masked token listings never reveal the secret, while explicit local Reveal/Copy returns only the requested active token.
+- [x] Rotate atomically persists a new token and immediately rejects the prior token for subsequent requests.
+- [x] Delete immediately rejects the removed token but does not disable its Client Protocol.
+- [x] An enabled protocol with no remaining token returns 401 for all model requests and emits a warning visible in Dashboard/Diagnostics.
+- [x] UI and CLI mutations share a locked, revision-aware authority and concurrent operations cannot resurrect an old token or lose an update.
+- [x] Token secrets never appear in typed events, Diagnostics, request records, exports, error bodies, or logs.

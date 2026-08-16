@@ -1,9 +1,15 @@
 import type { ControlPlaneState } from "./control-plane-projection.js";
 import type {
+
+  ClientTokenCommand,
+  ClientTokenCommandResult,
+
   ModelsCommand,
+
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
+import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
 
 export const productPages = Object.freeze([
   { id: "dashboard", label: "Dashboard" },
@@ -25,7 +31,14 @@ export interface DesktopShellRuntime {
   ): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+
+  executeClientTokenCommand(
+    command: ClientTokenCommand,
+  ): Promise<ClientTokenCommandResult>;
+  queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
+
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+
   disconnectControlPlane(): Promise<void>;
 }
 
@@ -52,7 +65,14 @@ export interface WindowsShellHost {
   subscribe(listener: (snapshot: DesktopShellSnapshot) => void): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<DesktopShellSnapshot>;
   executeSettingsCommand(command: SettingsCommand): Promise<DesktopShellSnapshot>;
+
+  executeClientTokenCommand(
+    command: ClientTokenCommand,
+  ): Promise<ClientTokenCommandResult>;
+  queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
+
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
+
   dispose(): Promise<void>;
 }
 
@@ -172,6 +192,20 @@ export function createWindowsShellHost(
       }
       return current;
     },
+
+    executeClientTokenCommand(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeClientTokenCommand(command);
+    },
+    queryDiagnosticsWarnings() {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.queryDiagnosticsWarnings();
+    },
+
     async executeModelsCommand(command) {
       if (current.lifecycle !== "open") {
         throw new Error("Desktop shell is not open");
@@ -186,6 +220,7 @@ export function createWindowsShellHost(
         emit();
       }
       return current;
+
     },
     dispose() {
       disposed = true;

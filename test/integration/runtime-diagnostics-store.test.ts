@@ -670,6 +670,34 @@ describe("Runtime Diagnostics store public seam", () => {
     ready.close();
   });
 
+  it("replaces the attached scrubber when a restarted composition re-attaches (Ticket 16)", async () => {
+    const { configuration } = await fixture();
+    const factory = createRuntimeDiagnosticsStoreFactory({
+      configuration,
+      now: () => 1_700_000_000_000,
+    });
+    const store = await factory.open();
+    // First composition attaches its authorities' scrubber.
+    store.attachScrub((value) =>
+      value.replaceAll("canary-old-token-restart-11", "[REDACTED]"),
+    );
+    // A Data Plane restart rebuilds the authorities: the live global token
+    // may have rotated, so the store must scrub the CURRENT values, not the
+    // previous composition's stale ones.
+    store.attachScrub((value) =>
+      value.replaceAll("canary-new-token-restart-22", "[REDACTED]"),
+    );
+    const record = store.append({
+      level: "warning",
+      text: "bearer canary-new-token-restart-22 observed",
+    });
+    expect(JSON.stringify(record)).not.toContain("canary-new-token-restart-22");
+    store.close();
+    const persisted = await allPersistedBytes(configuration.directory);
+    expect(persisted).not.toContain("canary-new-token-restart-22");
+    expect(persisted).not.toContain("canary-old-token-restart-11");
+  });
+
   it("fails closed when the attached scrubber throws a secret-bearing error", async () => {
     const { configuration } = await fixture();
     const store = await createRuntimeDiagnosticsStoreFactory({

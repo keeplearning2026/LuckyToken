@@ -5,6 +5,8 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   assertControlPlaneEndpoint,
+  type ClientTokenCommand,
+  type ClientTokenCommandResult,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
@@ -21,6 +23,7 @@ import {
 import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
+  decodeClientTokenCommandResult,
   decodeRequestId,
   decodeServerMessage,
   type RecordValue,
@@ -184,6 +187,25 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
+    },
+    async executeClientTokenCommand(
+      command: ClientTokenCommand,
+    ): Promise<ClientTokenCommandResult> {
+      const response = await request({
+        type: "client_token_command",
+        command,
+      });
+      if (response.type !== "client_token_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      // The result shape depends on the command that was sent: only a
+      // Reveal may carry the active secret and list/mutation results must
+      // expose masked scopes only. Re-validate against the local command.
+      const result = decodeClientTokenCommandResult(response.result, command);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
     },
     async executeModelsCommand(
       command: ModelsCommand,

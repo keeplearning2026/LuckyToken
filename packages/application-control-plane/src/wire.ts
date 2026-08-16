@@ -27,6 +27,11 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import { decodeDiagnosticEvent, decodeDiagnosticRecord } from "./wire-diagnostics.js";
+import {
+  type ClientTokenCommand,
+  type ClientTokenCommandResult,
+  type MaskedClientTokenScope,
+} from "./contracts.js";
 
 export type RecordValue = Record<string, unknown>;
 
@@ -54,6 +59,11 @@ export type ClientRequest =
       readonly type: "settings_command";
       readonly requestId: string;
       readonly command: SettingsCommand;
+    }
+  | {
+      readonly type: "client_token_command";
+      readonly requestId: string;
+      readonly command: ClientTokenCommand;
     }
   | {
       readonly type: "models_command";
@@ -94,6 +104,11 @@ export type ServerMessage =
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
+    }
+  | {
+      readonly type: "client_token_command_result";
+      readonly requestId: string;
+      readonly result: ClientTokenCommandResult;
     }
   | {
       readonly type: "models_command_result";
@@ -511,6 +526,130 @@ export function decodeSettingsCommandResult(
   });
 }
 
+export function decodeClientTokenCommand(
+  value: unknown,
+): ClientTokenCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.protocolId !== "string" || value.protocolId.length === 0) {
+    return undefined;
+  }
+  const protocolId = value.protocolId;
+  if (value.command === "list" || value.command === "reveal") {
+    return { command: value.command, protocolId };
+  }
+  if (
+    value.command === "rotate" ||
+    value.command === "remove"
+  ) {
+    if (
+      !Number.isSafeInteger(value.expectedRevision) ||
+      (value.expectedRevision as number) < 0
+    ) {
+      return undefined;
+    }
+    const expectedRevision = value.expectedRevision as number;
+    if (value.command === "remove") {
+      return { command: "remove", protocolId, expectedRevision };
+    }
+    if (
+      value.token !== undefined &&
+      (typeof value.token !== "string" || value.token.length === 0)
+    ) {
+      return undefined;
+    }
+    return {
+      command: "rotate",
+      protocolId,
+      expectedRevision,
+      ...(value.token === undefined ? {} : { token: value.token }),
+    };
+  }
+  return undefined;
+}
+
+function decodeMaskedClientTokenScope(
+  value: unknown,
+): MaskedClientTokenScope | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "global" && value.type !== "project") ||
+    typeof value.maskedToken !== "string" ||
+    value.maskedToken.length === 0 ||
+    // The mask marker guarantees masked results never carry raw tokens.
+    !value.maskedToken.includes("\u2026")
+  ) {
+    return undefined;
+  }
+  if (value.type === "global") {
+    if (value.projectDir !== undefined) return undefined;
+    return Object.freeze({
+      type: "global",
+      maskedToken: value.maskedToken,
+    });
+  }
+  if (typeof value.projectDir !== "string" || value.projectDir.length === 0) {
+    return undefined;
+  }
+  return Object.freeze({
+    type: "project",
+    projectDir: value.projectDir,
+    maskedToken: value.maskedToken,
+  });
+}
+
+function decodeMaskedClientTokenScopes(
+  value: unknown,
+): readonly MaskedClientTokenScope[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const scopes = value
+    .map((entry) => decodeMaskedClientTokenScope(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return scopes.length === value.length ? Object.freeze(scopes) : undefined;
+}
+
+export function decodeClientTokenCommandResult(
+  value: unknown,
+  command: ClientTokenCommand,
+): ClientTokenCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "not_found" &&
+      value.outcome !== "invalid_value" &&
+      value.outcome !== "unknown_protocol" &&
+      value.outcome !== "unavailable") ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome;
+  const revision = value.revision as number;
+  if (outcome !== "ok") {
+    if (
+      typeof value.error !== "string" ||
+      value.error.length === 0 ||
+      value.token !== undefined ||
+      value.scopes !== undefined
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ outcome, revision, error: value.error });
+  }
+  if (typeof value.error === "string") return undefined;
+  if (command.command === "reveal") {
+    if (typeof value.token !== "string" || value.token.length === 0) {
+      return undefined;
+    }
+    return Object.freeze({ outcome, revision, token: value.token });
+  }
+  if (value.token !== undefined) return undefined;
+  const scopes = decodeMaskedClientTokenScopes(value.scopes);
+  if (scopes === undefined) return undefined;
+  return Object.freeze({ outcome, revision, scopes });
+}
+
 const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
   port_in_use:
     "The configured port is already in use. Stop the other application or choose a different port.",
@@ -643,6 +782,21 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       type: "valid",
       request: {
         type: "settings_command",
+        requestId,
+        command,
+      },
+    };
+  }
+
+  if (value.type === "client_token_command") {
+    const command = decodeClientTokenCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "client_token_command",
         requestId,
         command,
       },
@@ -876,11 +1030,38 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "settings_command_result", requestId, result };
   }
+
+  if (value.type === "client_token_command_result") {
+    // The full per-command result validation happens against the client's
+    // own command (executeClientTokenCommand); the host already validated
+    // this result before writing it. Only the shared fields are checked
+    // here so a malformed frame is still rejected at the wire boundary.
+    if (
+      !isRecord(value.result) ||
+      (value.result.outcome !== "ok" &&
+        value.result.outcome !== "conflict" &&
+        value.result.outcome !== "not_found" &&
+        value.result.outcome !== "invalid_value" &&
+        value.result.outcome !== "unknown_protocol" &&
+        value.result.outcome !== "unavailable") ||
+      !Number.isSafeInteger(value.result.revision) ||
+      (value.result.revision as number) < 0
+    ) {
+      return undefined;
+    }
+    return {
+      type: "client_token_command_result",
+      requestId,
+      result: value.result as unknown as ClientTokenCommandResult,
+    };
+  }
+
   if (value.type === "models_command_result") {
     const result = decodeModelsCommandResult(value.result);
     return result === undefined
       ? undefined
       : { type: "models_command_result", requestId, result };
+
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

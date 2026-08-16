@@ -1,6 +1,12 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
+
+  ClientTokenCommand,
+  ClientTokenCommandResult,
+  MaskedClientTokenScope,
+
   ModelsCommand,
+
   RegisteredSetting,
   RuntimeCommand,
   SettingsCommand,
@@ -23,9 +29,17 @@ export type ShellCommand =
   | "shell_settings_query"
   | "shell_settings_set"
   | "shell_settings_confirm"
+
+  | "shell_client_tokens_list"
+  | "shell_client_tokens_reveal"
+  | "shell_client_tokens_rotate"
+  | "shell_client_tokens_remove"
+  | "shell_diagnostics_warnings"
+
   | "shell_models_query"
   | "shell_models_write_raw"
   | "shell_models_write_structured";
+
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -35,12 +49,28 @@ export interface NativeTauriBridge {
   ): Promise<() => void>;
 }
 
+/** Sanitized Dashboard warning projection (Ticket 16): only the safe fields
+ *  of a diagnostics record are forwarded from the native bridge. */
+export interface DiagnosticsWarning {
+  readonly id: number;
+  readonly level: "warning" | "error" | "critical";
+  readonly time: number;
+  readonly text: string;
+}
+
 export interface TauriDesktopRuntime {
   connectControlPlane(): Promise<ControlPlaneState>;
   retryControlPlane(): Promise<ControlPlaneState>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+
+  executeClientTokenCommand(
+    command: ClientTokenCommand,
+  ): Promise<ClientTokenCommandResult>;
+  queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
+
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
+
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -147,6 +177,96 @@ function decodeLanConfirmation(value: unknown) {
     settingKey: "server.bindHost" as const,
     value: value.value,
     message: value.message,
+  };
+}
+
+function decodeMaskedClientTokenScope(
+  value: unknown,
+): MaskedClientTokenScope | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "global" && value.type !== "project") ||
+    typeof value.maskedToken !== "string" ||
+    value.maskedToken.length === 0 ||
+    // The mask marker guarantees a masked field never carries a raw token.
+    !value.maskedToken.includes("\u2026")
+  ) {
+    return undefined;
+  }
+  if (value.type === "global") {
+    return value.projectDir === undefined
+      ? { type: "global", maskedToken: value.maskedToken }
+      : undefined;
+  }
+  return typeof value.projectDir === "string" && value.projectDir.length > 0
+    ? { type: "project", projectDir: value.projectDir, maskedToken: value.maskedToken }
+    : undefined;
+}
+
+function decodeClientTokenCommandResult(
+  value: unknown,
+  command: ClientTokenCommand,
+): ClientTokenCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "not_found" &&
+      value.outcome !== "invalid_value" &&
+      value.outcome !== "unknown_protocol" &&
+      value.outcome !== "unavailable") ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome as ClientTokenCommandResult["outcome"];
+  const revision = value.revision as number;
+  if (outcome !== "ok") {
+    if (
+      typeof value.error !== "string" ||
+      value.error.length === 0 ||
+      value.token !== undefined ||
+      value.scopes !== undefined
+    ) {
+      return undefined;
+    }
+    return { outcome, revision, error: value.error };
+  }
+  if (command.command === "reveal") {
+    if (typeof value.token !== "string" || value.token.length === 0) {
+      return undefined;
+    }
+    return { outcome, revision, token: value.token };
+  }
+  if (value.token !== undefined || !Array.isArray(value.scopes)) {
+    return undefined;
+  }
+  const scopes = value.scopes
+    .map((entry) => decodeMaskedClientTokenScope(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (scopes.length !== value.scopes.length) return undefined;
+  return { outcome, revision, scopes };
+}
+
+function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.id) ||
+    (value.level !== "warning" &&
+      value.level !== "error" &&
+      value.level !== "critical") ||
+    !Number.isSafeInteger(value.time) ||
+    typeof value.text !== "string" ||
+    value.text.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    id: value.id as number,
+    level: value.level,
+    time: value.time as number,
+    text: value.text,
   };
 }
 
@@ -326,6 +446,52 @@ export function createTauriDesktopRuntime(
             ? "shell_settings_set"
             : "shell_settings_confirm",
       ),
+
+    async executeClientTokenCommand(command) {
+      // Client Token commands return their own result (masked scopes or the
+      // explicitly revealed secret); they never merge into the status
+      // projection.
+      const raw =
+        command.command === "list"
+          ? await bridge.invoke("shell_client_tokens_list", {
+              protocolId: command.protocolId,
+            })
+          : command.command === "reveal"
+            ? await bridge.invoke("shell_client_tokens_reveal", {
+                protocolId: command.protocolId,
+              })
+            : command.command === "rotate"
+              ? await bridge.invoke("shell_client_tokens_rotate", {
+                  protocolId: command.protocolId,
+                  expectedRevision: command.expectedRevision,
+                  ...(command.token === undefined
+                    ? {}
+                    : { token: command.token }),
+                })
+              : await bridge.invoke("shell_client_tokens_remove", {
+                  protocolId: command.protocolId,
+                  expectedRevision: command.expectedRevision,
+                });
+      const decoded = decodeClientTokenCommandResult(raw, command);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid client token result");
+      }
+      return decoded;
+    },
+    async queryDiagnosticsWarnings() {
+      const raw = await bridge.invoke("shell_diagnostics_warnings");
+      if (!Array.isArray(raw)) {
+        throw new Error("LuckyToken returned an invalid diagnostics result");
+      }
+      const warnings = raw
+        .map((entry) => decodeDiagnosticsWarning(entry))
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+      if (warnings.length !== raw.length) {
+        throw new Error("LuckyToken returned an invalid diagnostics result");
+      }
+      return Object.freeze(warnings);
+    },
+
     executeModelsCommand: (command) =>
       invokeState(
         command.command === "query"
@@ -339,6 +505,7 @@ export function createTauriDesktopRuntime(
             ? { revision: command.revision, content: command.content }
             : { revision: command.revision, providers: command.providers },
       ),
+
     async disconnectControlPlane() {
       await listenTask;
       unlisten?.();

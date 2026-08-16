@@ -272,11 +272,17 @@ export function createRuntimeDiagnosticsStoreFactory(
           };
         },
         attachScrub(next: (value: string) => string): void {
-          if (scrubReady) {
-            throw new Error("Runtime Diagnostics scrubber is already attached");
+          if (!scrubReady) {
+            attachedScrub = next;
+            scrubReady = true;
+            return;
           }
+          // F5 invariant: no append before the first attached scrubber. A
+          // later attach may REPLACE the scrubber: a Data Plane restart
+          // rebuilds the credential authorities (e.g. after a live Client
+          // Token rotate), and the store must scrub the current values, not
+          // the previous composition's stale ones.
           attachedScrub = next;
-          scrubReady = true;
         },
         append(draft: RuntimeDiagnosticDraft): RuntimeDiagnosticRecord {
           if (closed) throw new Error("Runtime Diagnostics store is closed");

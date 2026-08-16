@@ -1,12 +1,20 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
+
+  ClientTokenCommand,
+
   ModelsCommand,
+
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
+
+import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
+
 import { ModelsFileWorkspace } from "./models-editors.js";
+
 import {
   productPages,
   type DesktopShellSnapshot,
@@ -189,6 +197,20 @@ export function App({ shell, retryConnection }: AppProps) {
             onSet={(key, value) =>
               void executeSettingsCommand({ command: "set", key, value })
             }
+          />
+        ) : null}
+        {snapshot.activePage === "dashboard" &&
+        snapshot.connection.kind === "connected" ? (
+          <DashboardWarnings
+            refreshKey={snapshot.connection.sequence}
+            shell={shell}
+          />
+        ) : null}
+        {snapshot.activePage === "client-tokens" &&
+        snapshot.connection.kind === "connected" ? (
+          <ClientTokensPage
+            settings={snapshot.connection.settings}
+            shell={shell}
           />
         ) : null}
         {(snapshot.activePage === "providers" ||
@@ -401,5 +423,307 @@ function ConnectionBadge({ state }: { readonly state: ControlPlaneState }) {
         ? "Gateway running"
         : `Gateway ${state.modelDataPlane}`}
     </span>
+  );
+}
+
+/** Sanitized warning strip (Ticket 16): the backend redaction boundary has
+ *  already scrubbed credentials before records reach the native bridge. */
+function DashboardWarnings({
+  refreshKey,
+  shell,
+}: {
+  readonly refreshKey: number;
+  readonly shell: WindowsShellHost;
+}) {
+  const [warnings, setWarnings] = useState<readonly DiagnosticsWarning[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void shell
+      .queryDiagnosticsWarnings()
+      .then((next) => {
+        if (!cancelled) setWarnings(next);
+      })
+      .catch(() => {
+        if (!cancelled) setWarnings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey, shell]);
+  if (warnings.length === 0) return null;
+  return (
+    <section className="dashboard-warnings" aria-live="polite">
+      <strong>Attention needed</strong>
+      {warnings.slice(-3).map((warning) => (
+        <p key={warning.id}>{warning.text}</p>
+      ))}
+    </section>
+  );
+}
+
+const TOKEN_PROTOCOLS = Object.freeze([
+  {
+    id: "anthropic-messages",
+    name: "Anthropic Messages",
+    enableKey: "protocols.anthropic-messages.enabled",
+  },
+  {
+    id: "openai-responses",
+    name: "OpenAI Responses",
+    enableKey: "protocols.openai-responses.enabled",
+  },
+] as const);
+
+interface ProtocolTokenView {
+  readonly revision: number;
+  readonly maskedToken: string | undefined;
+  readonly unknownProtocol: boolean;
+}
+
+/**
+ * Client Tokens page (Ticket 16): manages the one live global token per
+ * enabled Client Protocol. Lists show masked metadata only; Reveal and Copy
+ * are explicit local operations that return exactly the requested active
+ * secret; Rotate and Delete are revision-locked two-step actions that
+ * hot-apply immediately.
+ */
+function ClientTokensPage({
+  settings,
+  shell,
+}: {
+  readonly settings:
+    | Readonly<
+        Record<
+          string,
+          Readonly<{
+            readonly key: string;
+            readonly value: boolean | number | string;
+          }>
+        >
+      >
+    | undefined;
+  readonly shell: WindowsShellHost;
+}) {
+  const [views, setViews] = useState<
+    Readonly<Record<string, ProtocolTokenView | undefined>>
+  >({});
+  const [revealed, setRevealed] = useState<Readonly<Record<string, string>>>(
+    {},
+  );
+  const [copied, setCopied] = useState<Readonly<Record<string, boolean>>>(
+    {},
+  );
+  const [busy, setBusy] = useState<string | undefined>();
+  const [confirming, setConfirming] = useState<
+    Readonly<Record<string, "rotate" | "remove" | undefined>>
+  >({});
+  const [errors, setErrors] = useState<Readonly<Record<string, string>>>({});
+
+  const refresh = useCallback(
+    async (protocolId: string) => {
+      try {
+        const result = await shell.executeClientTokenCommand({
+          command: "list",
+          protocolId,
+        });
+        if (result.outcome === "unknown_protocol") {
+          setViews((previous) => ({
+            ...previous,
+            [protocolId]: {
+              revision: result.revision,
+              maskedToken: undefined,
+              unknownProtocol: true,
+            },
+          }));
+          return;
+        }
+        if (result.outcome !== "ok") {
+          setErrors((previous) => ({
+            ...previous,
+            [protocolId]: result.error ?? "Client Token list failed",
+          }));
+          return;
+        }
+        const globalScope = result.scopes?.find(
+          (scope) => scope.type === "global",
+        );
+        setViews((previous) => ({
+          ...previous,
+          [protocolId]: {
+            revision: result.revision,
+            maskedToken: globalScope?.maskedToken,
+            unknownProtocol: false,
+          },
+        }));
+      } catch {
+        setErrors((previous) => ({
+          ...previous,
+          [protocolId]: "Control Plane is unavailable",
+        }));
+      }
+    },
+    [shell],
+  );
+
+  useEffect(() => {
+    for (const protocol of TOKEN_PROTOCOLS) void refresh(protocol.id);
+  }, [refresh]);
+
+  const run = async (
+    protocolId: string,
+    operation: () => Promise<void>,
+  ) => {
+    setBusy(protocolId);
+    setErrors((previous) => ({ ...previous, [protocolId]: "" }));
+    setConfirming((previous) => ({ ...previous, [protocolId]: undefined }));
+    try {
+      await operation();
+    } catch (error) {
+      setErrors((previous) => ({
+        ...previous,
+        [protocolId]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const reveal = (protocolId: string) =>
+    run(protocolId, async () => {
+      const result = await shell.executeClientTokenCommand({
+        command: "reveal",
+        protocolId,
+      });
+      if (result.outcome !== "ok" || result.token === undefined) {
+        throw new Error(result.error ?? "Client token scope does not exist");
+      }
+      setRevealed((previous) => ({ ...previous, [protocolId]: result.token as string }));
+    });
+
+  const copy = (protocolId: string) =>
+    run(protocolId, async () => {
+      const result = await shell.executeClientTokenCommand({
+        command: "reveal",
+        protocolId,
+      });
+      if (result.outcome !== "ok" || result.token === undefined) {
+        throw new Error(result.error ?? "Client token scope does not exist");
+      }
+      await navigator.clipboard.writeText(result.token as string);
+      setCopied((previous) => ({ ...previous, [protocolId]: true }));
+      setRevealed((previous) => ({ ...previous, [protocolId]: result.token as string }));
+    });
+
+  const mutate = (protocolId: string, command: ClientTokenCommand) =>
+    run(protocolId, async () => {
+      const result = await shell.executeClientTokenCommand(command);
+      if (result.outcome === "conflict") {
+        // A concurrent UI/CLI mutation won: refresh instead of overwriting.
+        await refresh(protocolId);
+        throw new Error(
+          "The token changed elsewhere; the list was refreshed.",
+        );
+      }
+      if (result.outcome !== "ok") {
+        throw new Error(result.error ?? "Client Token operation failed");
+      }
+      setRevealed((previous) => {
+        const next = { ...previous };
+        delete next[protocolId];
+        return next;
+      });
+      await refresh(protocolId);
+    });
+
+  return (
+    <section className="client-tokens-page" aria-label="Client Tokens">
+      {TOKEN_PROTOCOLS.map((protocol) => {
+        const view = views[protocol.id];
+        const enabled =
+          settings?.[protocol.enableKey]?.value === true;
+        const hasToken = view?.maskedToken !== undefined;
+        const busyHere = busy === protocol.id;
+        const confirmAction = confirming[protocol.id];
+        const secret = revealed[protocol.id];
+        return (
+          <section className="client-token-card" key={protocol.id}>
+            <header>
+              <strong>{protocol.name}</strong>
+              <small>{enabled ? "Enabled" : "Disabled"}</small>
+            </header>
+            {view === undefined ? (
+              <p>Loading client token state…</p>
+            ) : view.unknownProtocol ? (
+              <p>Not configured in this backend.</p>
+            ) : hasToken ? (
+              <code>{secret ?? (view.maskedToken as string)}</code>
+            ) : (
+              <p className="client-token-warning">
+                No active client token — all model requests return 401 until
+                a token is created.
+              </p>
+            )}
+            <div className="client-token-actions">
+              <button
+                disabled={busyHere || !hasToken || view?.unknownProtocol === true}
+                onClick={() => void reveal(protocol.id)}
+                type="button"
+              >
+                {secret === undefined ? "Reveal" : "Hide"}
+              </button>
+              <button
+                disabled={busyHere || !hasToken}
+                onClick={() => void copy(protocol.id)}
+                type="button"
+              >
+                {copied[protocol.id] === true ? "Copied" : "Copy"}
+              </button>
+              <button
+                className={confirmAction === "rotate" ? "confirming" : ""}
+                disabled={busyHere || !hasToken}
+                onClick={() =>
+                  confirmAction === "rotate"
+                    ? void mutate(protocol.id, {
+                        command: "rotate",
+                        protocolId: protocol.id,
+                        expectedRevision: (view as ProtocolTokenView).revision,
+                      })
+                    : setConfirming((previous) => ({
+                        ...previous,
+                        [protocol.id]: "rotate",
+                      }))
+                }
+                type="button"
+              >
+                {confirmAction === "rotate" ? "Confirm rotate" : "Rotate"}
+              </button>
+              <button
+                className={`danger${confirmAction === "remove" ? " confirming" : ""}`}
+                disabled={busyHere || !hasToken}
+                onClick={() =>
+                  confirmAction === "remove"
+                    ? void mutate(protocol.id, {
+                        command: "remove",
+                        protocolId: protocol.id,
+                        expectedRevision: (view as ProtocolTokenView).revision,
+                      })
+                    : setConfirming((previous) => ({
+                        ...previous,
+                        [protocol.id]: "remove",
+                      }))
+                }
+                type="button"
+              >
+                {confirmAction === "remove" ? "Confirm remove" : "Remove"}
+              </button>
+            </div>
+            {errors[protocol.id] === undefined ||
+            errors[protocol.id] === "" ? null : (
+              <p className="client-token-error">{errors[protocol.id]}</p>
+            )}
+          </section>
+        );
+      })}
+    </section>
   );
 }

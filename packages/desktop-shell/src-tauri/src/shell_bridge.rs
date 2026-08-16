@@ -8,7 +8,8 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, ModelsCommand,
+    ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult, ConnectionFailure,
+    ControlPlaneConnector, ControlPlaneSession, DiagnosticsWarningWire, ModelsCommand,
     ModelsCommandResultWire, ModelsProjectionWire, RuntimeCommand, SessionFailure, SettingsCommand,
     StatusSnapshot, CONTROL_PLANE_VERSION,
 };
@@ -356,6 +357,27 @@ impl ShellBridge {
                     .await
             }
         }
+    }
+
+    /// Ticket 16: versioned Client Token commands for the Client Tokens page.
+    /// The result is returned to the renderer as-is; list/mutation results
+    /// carry masked scopes only and Reveal returns exactly the requested
+    /// active secret.
+    pub(crate) async fn client_token_command(
+        &self,
+        command: ClientTokenCommand,
+    ) -> Result<ClientTokenCommandResultWire, ()> {
+        self.connector
+            .client_token_command(command)
+            .await
+            .map_err(|_| ())
+    }
+
+    /// Sanitized Dashboard warnings: a one-shot diagnostics query restricted
+    /// to warning-or-worse records; the backend redaction boundary has
+    /// already scrubbed credentials before they leave the Control Plane.
+    pub(crate) async fn diagnostics_warnings(&self) -> Result<Vec<DiagnosticsWarningWire>, ()> {
+        self.connector.diagnostics_warnings().await.map_err(|_| ())
     }
 
     pub(crate) async fn shutdown(&self) {

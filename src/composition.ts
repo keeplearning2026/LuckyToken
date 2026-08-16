@@ -21,9 +21,13 @@ import {
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import {
-  loadFileClientTokenAuthority,
+  createFileClientTokenStore,
   type ClientTokenAuthority,
 } from "./client-auth/file-token-store.js";
+import {
+  createLiveClientTokenAuthority,
+  type LiveClientTokenAuthority,
+} from "./client-auth/live-authority.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
@@ -150,6 +154,11 @@ export interface ConfiguredLuckyTokenComposition {
   readonly userConfiguredProviderIds: readonly string[];
   /** Permanent Runtime Diagnostics store (Ticket 07). */
   readonly diagnosticsStore: RuntimeDiagnosticsStore;
+  /** Live per-protocol Client Token authorities (Ticket 16): the running
+   *  Data Plane's one active global token per protocol. */
+  readonly clientTokenAuthorities: Readonly<
+    Record<string, LiveClientTokenAuthority>
+  >;
 }
 
 export async function createConfiguredPiModels(
@@ -225,9 +234,15 @@ export async function createConfiguredLuckyTokenComposition(
       `clientProtocols must configure ${anthropicMessagesProtocolId}`,
     );
   }
-  const clientAuthority = await loadFileClientTokenAuthority(
-    anthropicConfig.authFile,
-  );
+  // Ticket 16: live per-protocol authorities own the one active global
+  // token. They replace the restart-only static authority: every mutation
+  // hot-applies to authorization, list results stay masked, and the narrow
+  // known-value scrub follows the live token state.
+  const clientAuthorities: Record<string, LiveClientTokenAuthority> = {};
+  const clientAuthority = await createLiveClientTokenAuthority({
+    store: createFileClientTokenStore({ path: anthropicConfig.authFile }),
+  });
+  clientAuthorities[anthropicMessagesProtocolId] = clientAuthority;
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const openaiResponsesConfig = Object.hasOwn(
@@ -239,7 +254,30 @@ export async function createConfiguredLuckyTokenComposition(
   const responsesAuthority =
     openaiResponsesConfig === undefined
       ? undefined
-      : await loadFileClientTokenAuthority(openaiResponsesConfig.authFile);
+      : await createLiveClientTokenAuthority({
+          store: createFileClientTokenStore({ path: openaiResponsesConfig.authFile }),
+        });
+  if (responsesAuthority !== undefined) {
+    clientAuthorities[openaiResponsesProtocolId] = responsesAuthority;
+  }
+  // First enabling creates exactly one protocol-global token when the scope
+  // has none — but only for a never-initialized scope: a deliberately
+  // deleted token must survive an ordinary restart, so boot-time enabling
+  // never resurrects one. The disabled→enabled transition is ensured by the
+  // Settings adapter (which may create in any state).
+  const registry = options.settingsRegistry;
+  if (registry !== undefined) await registry.load();
+  for (const [protocolId, authority] of Object.entries(clientAuthorities)) {
+    const enabledSetting =
+      registry === undefined
+        ? undefined
+        : registry.query([`protocols.${protocolId}.enabled`])[
+            `protocols.${protocolId}.enabled`
+          ];
+    const enabled =
+      enabledSetting === undefined ? true : enabledSetting.value !== false;
+    if (enabled) await authority.ensureGlobal({ freshOnly: true });
+  }
   const { models, externalProviderIds, userConfiguredProviderIds } =
     await createConfiguredPiModels({
       piDirectory: config.pi.directory,
@@ -349,7 +387,6 @@ export async function createConfiguredLuckyTokenComposition(
       ? {}
       : { shutdownSignal: options.shutdownSignal }),
   });
-  const registry = options.settingsRegistry;
   const runtime =
     registry === undefined
       ? baseRuntime
@@ -374,5 +411,6 @@ export async function createConfiguredLuckyTokenComposition(
     certification,
     userConfiguredProviderIds,
     diagnosticsStore,
+    clientTokenAuthorities: Object.freeze(clientAuthorities),
   });
 }
