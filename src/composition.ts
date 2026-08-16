@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { createAuth } from "./auth.js";
+import type { AliasRegistryAuthority } from "./aliases/authority.js";
+import type { AliasModelSource } from "./alias-model-seam.js";
 import {
   certifyCoreServingComposition,
   type CoreServingCertificationManifest,
@@ -207,6 +209,14 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly modelsStore?: ModelsStore;
   /** See `ConfiguredPiModelsOptions.onProviderLogin` (Ticket 11). */
   readonly onProviderLogin?: (providerId: string) => void;
+  /**
+   * Ticket 15: the Ticket 14 alias authority created by the run/serve
+   * composition root (one registry, never duplicated). When provided, the
+   * data plane is alias-only: handlers and model discovery capture one
+   * immutable resolver snapshot per request. When absent, the legacy
+   * provider/model selector contract applies (test seam).
+   */
+  readonly aliasAuthority?: AliasRegistryAuthority;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -527,6 +537,21 @@ export async function createConfiguredLuckyTokenComposition(
     onAuthorized: (identity) =>
       requestIdentities.observe(anthropicMessagesProtocolId, identity),
   });
+  // Ticket 15: the composition adapts the one alias authority into the
+  // narrow data-plane source. Every request refreshes first so hot
+  // alias/catalog replacement applies to new requests only, then captures
+  // the frozen resolver snapshot for its own resolution and response
+  // projection (in-flight requests keep the snapshot they captured).
+  const aliasAuthority = options.aliasAuthority;
+  const aliasSource: AliasModelSource | undefined =
+    aliasAuthority === undefined
+      ? undefined
+      : Object.freeze({
+          requestSnapshot: async () => {
+            await aliasAuthority.query();
+            return aliasAuthority.resolver();
+          },
+        });
   const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
@@ -538,6 +563,7 @@ export async function createConfiguredLuckyTokenComposition(
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),
+    ...(aliasSource === undefined ? {} : { aliasSource }),
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
     // Ticket 10: the Provider/request-composition seam owns request-local
@@ -551,6 +577,7 @@ export async function createConfiguredLuckyTokenComposition(
     createModelsDiscoveryHandler({
       models,
       providerIds: externalProviderIds,
+      ...(aliasSource === undefined ? {} : { aliasSource }),
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   );
@@ -573,6 +600,7 @@ export async function createConfiguredLuckyTokenComposition(
       invocationDiagnostics,
       stateFile,
       passthroughFetch: options.fetch,
+      ...(aliasSource === undefined ? {} : { aliasSource }),
       maxRequestBytes: config.limits.maxRequestBytes,
       ...(options.shutdownSignal === undefined
         ? {}

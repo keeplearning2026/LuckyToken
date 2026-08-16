@@ -56,6 +56,51 @@ export function canonicalTargetKey(target: AliasCanonicalTarget): string {
   return `${target.provider}\u0000${target.model}`;
 }
 
+/**
+ * Compute the catalog-independent configured alias mappings: every alias
+ * key that owns a parseable, non-duplicate canonical target, whether or
+ * not that target is currently in the active catalog.
+ *
+ * The effective registry (control plane) keeps catalog-membership
+ * validation and reports out-of-catalog targets as `unknown` errors; the
+ * data plane needs the mapping to survive a catalog swap so it can render
+ * `model_unavailable` for a configured alias whose target left the active
+ * catalog (Ticket 15). Rejected proposals never enter the file, so a
+ * mapping this function serves always came from the transparent user file
+ * or the curated defaults — never from a guessed repair.
+ */
+export function computeConfiguredAliasMappings(input: {
+  readonly userAliases: Readonly<Record<string, unknown>>;
+  readonly defaults: readonly CuratedAliasDefault[];
+}): ReadonlyMap<string, AliasCanonicalTarget> {
+  const byAlias = new Map<string, AliasCanonicalTarget>();
+  const claimedTargets = new Set<string>();
+  const userAliasKeys = new Set(Object.keys(input.userAliases));
+  const claim = (alias: string, ref: unknown): void => {
+    const keyError = aliasKeyError(alias);
+    if (keyError !== undefined) return;
+    const parsed = parseAliasTarget(ref);
+    if ("error" in parsed) return;
+    const key = canonicalTargetKey(parsed.target);
+    if (claimedTargets.has(key)) return;
+    byAlias.set(alias, parsed.target);
+    claimedTargets.add(key);
+  };
+  for (const [alias, ref] of Object.entries(input.userAliases)) {
+    claim(alias, ref);
+  }
+  for (const curated of input.defaults) {
+    // The user owns the alias key even when their mapping is broken: the
+    // curated default must never silently replace it.
+    if (userAliasKeys.has(curated.alias)) continue;
+    claim(curated.alias, {
+      provider: curated.provider,
+      model: curated.model,
+    });
+  }
+  return byAlias;
+}
+
 export function parseAliasTarget(
   ref: unknown,
 ): { readonly target: AliasCanonicalTarget } | { readonly error: Omit<AliasValidationErrorProjection, "alias"> } {

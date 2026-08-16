@@ -14,6 +14,7 @@ import lockfile from "proper-lockfile";
 import { stripJsonComments } from "../providers/models-json-schema.js";
 import { curatedAliasDefaults, CURATED_ALIAS_DEFAULTS_VERSION } from "./defaults.js";
 import {
+  computeConfiguredAliasMappings,
   computeEffectiveAliasRegistry,
   type CuratedAliasDefault,
 } from "./domain.js";
@@ -131,8 +132,16 @@ export interface AliasResolverSnapshot {
   readonly fileRevision: number;
   /** Curated defaults generation in effect. */
   readonly defaultsVersion: number;
-  /** Resolve one alias to its canonical target, or undefined. */
+  /** Resolve one configured alias to its canonical target, or undefined.
+   *  The mapping is catalog-independent: a configured alias whose target
+   *  left the active catalog still resolves here, and the data plane
+   *  decides `model_unavailable` against the live catalog (Ticket 15). */
   resolve(alias: string): { readonly providerId: string; readonly modelId: string } | undefined;
+  /** Every configured alias with its canonical target (frozen). */
+  entries(): ReadonlyArray<{
+    readonly alias: string;
+    readonly target: { readonly providerId: string; readonly modelId: string };
+  }>;
 }
 
 export interface AliasRegistryAuthority {
@@ -237,6 +246,7 @@ export function createAliasRegistryAuthority(
     fileRevision: 0,
     defaultsVersion,
     resolve: () => undefined,
+    entries: () => Object.freeze([]),
   });
 
   const effectiveFor = (
@@ -268,8 +278,31 @@ export function createAliasRegistryAuthority(
       capturedFacts.registry === undefined ||
       JSON.stringify(capturedFacts.registry) !== JSON.stringify(registry);
     if (!changed) return;
-    const byAlias = new Map(
-      registry.aliases.map((entry) => [entry.alias, entry.target]),
+    // The resolver serves the catalog-independent configured mappings: a
+    // configured alias whose target left the active catalog still resolves
+    // (Ticket 15 `model_unavailable`), while the control-plane registry
+    // keeps reporting the out-of-catalog validation error.
+    const configured = computeConfiguredAliasMappings({
+      userAliases:
+        state.present && state.valid && state.aliases !== undefined
+          ? state.aliases
+          : {},
+      defaults,
+    });
+    const frozenTargets = new Map<
+      string,
+      { readonly providerId: string; readonly modelId: string }
+    >();
+    for (const [alias, target] of configured) {
+      frozenTargets.set(
+        alias,
+        Object.freeze({ providerId: target.provider, modelId: target.model }),
+      );
+    }
+    const entries = Object.freeze(
+      [...frozenTargets].map(([alias, target]) =>
+        Object.freeze({ alias, target }),
+      ),
     );
     capturedVersion += 1;
     capturedFacts = {
@@ -283,12 +316,8 @@ export function createAliasRegistryAuthority(
       catalogVersion: facts.catalogVersion,
       fileRevision: state.revision,
       defaultsVersion: state.defaultsVersion,
-      resolve: (alias: string) => {
-        const target = byAlias.get(alias);
-        return target === undefined
-          ? undefined
-          : Object.freeze({ providerId: target.provider, modelId: target.model });
-      },
+      resolve: (alias: string) => frozenTargets.get(alias),
+      entries: () => entries,
     });
   };
 

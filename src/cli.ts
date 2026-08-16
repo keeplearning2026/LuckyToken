@@ -676,6 +676,10 @@ async function runServe(
             diagnosticsStore: ownedDiagnosticsStore,
             settingsRegistry,
             modelsStore: catalogCacheStore,
+            // Ticket 14/15: the one alias registry owns the data plane
+            // resolver snapshots; new requests hot-apply, in-flight
+            // requests keep the snapshot they captured at acceptance.
+            aliasAuthority,
             // A successful Provider login schedules a background refresh
             // for the provider that just logged in (Ticket 11).
             onProviderLogin: (providerId) =>

@@ -335,6 +335,72 @@ describe("alias registry snapshots and hot-apply", () => {
     });
   });
 
+  it("keeps a configured mapping resolvable after a catalog swap removes its target (Ticket 15 unavailable taxonomy)", async () => {
+    const { authority, setCatalog } = createAuthority();
+    await authority.query();
+    await authority.write({
+      revision: 0,
+      aliases: { "my-gpt": { provider: "openai", model: "gpt-4o-mini" } },
+    });
+    expect(authority.resolver().resolve("my-gpt")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o-mini",
+    });
+    // A catalog swap drops the mapped target: the control-plane effective
+    // registry reports the validation error, but the data plane resolver
+    // keeps the configured mapping so requests can render the distinct
+    // model_unavailable result against the live catalog.
+    setCatalog({
+      catalogVersion: 12,
+      knownTargets: knownTargets([
+        ["openai", "gpt-4o"],
+        ["openai", "gpt-4.1"],
+      ]),
+    });
+    authority.onCatalogSnapshot();
+    const after = authority.resolver();
+    expect(after.catalogVersion).toBe(12);
+    expect(after.resolve("my-gpt")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o-mini",
+    });
+    expect(after.entries().map((entry) => entry.alias)).toContain("my-gpt");
+  });
+
+  it("enumerates configured mappings through entries() including catalog-absent targets", async () => {
+    const { fileSystem } = memoryFileSystem({
+      [path]: `${JSON.stringify(
+        {
+          aliases: {
+            "good": { provider: "openai", model: "gpt-4o" },
+            "slash-id": { provider: "deepseek", model: "deepseek-v4-flash" },
+            "broken": "no-slash-target",
+            "duplicate": "openai/gpt-4o",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    });
+    const { authority } = createAuthority({ fileSystem });
+    await authority.query();
+    const entries = authority.resolver().entries();
+    // Valid user mappings are enumerated (including a slash-bearing model
+    // id); malformed targets and duplicate claims never enter the map.
+    expect(entries).toContainEqual({
+      alias: "good",
+      target: { providerId: "openai", modelId: "gpt-4o" },
+    });
+    expect(entries).toContainEqual({
+      alias: "slash-id",
+      target: { providerId: "deepseek", modelId: "deepseek-v4-flash" },
+    });
+    expect(entries.map((entry) => entry.alias)).not.toContain("broken");
+    expect(entries.map((entry) => entry.alias)).not.toContain("duplicate");
+    expect(authority.resolver().resolve("broken")).toBeUndefined();
+    expect(authority.resolver().resolve("duplicate")).toBeUndefined();
+  });
+
   it("an unknown target never resolves until a valid mapping is persisted", async () => {
     const { authority, setCatalog } = createAuthority();
     await authority.query();

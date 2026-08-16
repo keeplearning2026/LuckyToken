@@ -28,8 +28,11 @@ import {
 } from "../../http.js";
 import {
   ModelResolutionFailure,
-  resolveModel,
 } from "../../model-resolution.js";
+import {
+  resolveDataPlaneModel,
+  type AliasModelSource,
+} from "../../alias-model-seam.js";
 import {
   composeOptions,
   identityRequestModelResolver,
@@ -66,6 +69,7 @@ import {
   isAnthropicNativePassthroughModel,
   passthroughAnthropicRequest,
   passthroughRequestHeaders,
+  projectAnthropicPassthroughBody,
   type PassthroughAnthropicResult,
 } from "./passthrough.js";
 
@@ -80,6 +84,15 @@ export interface AnthropicMessagesHandlerOptions {
   readonly passthroughFetch?: FetchFunction;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
+  /**
+   * Ticket 15 alias-only model data plane: when wired, only configured
+   * aliases are valid selectors, converted and passthrough responses echo
+   * the requested alias, and the request captures one immutable resolver
+   * snapshot at acceptance. Without it the legacy provider/model selector
+   * contract applies (handler-level test seam); the composition root
+   * always wires the real authority in production.
+   */
+  readonly aliasSource?: AliasModelSource;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -103,6 +116,7 @@ interface AnthropicMessagesDependencies {
   readonly passthroughFetch: FetchFunction;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
+  readonly aliasSource: AliasModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
@@ -208,7 +222,34 @@ async function handleAnthropicMessages(
     assertImplementedAnthropicProfile(sourceProfile);
     const selector = extractAnthropicModelSelector(body);
     diagnostics.checkpoint({ stage: "model-resolution", selector });
-    const model = resolveModel(dependencies.models, selector);
+    // Ticket 15: the request captures one immutable alias snapshot at
+    // acceptance; the resolved canonical target reaches the standard Pi
+    // Provider invocation path. Bare ids and canonical selectors are never
+    // valid aliases.
+    const resolution = await resolveDataPlaneModel(
+      dependencies.models,
+      dependencies.aliasSource,
+      selector,
+    );
+    if (resolution.kind === "unknown") {
+      return toResponse(
+        renderAnthropicError(404, "not_found_error", `Unknown model: ${selector}`),
+      );
+    }
+    if (resolution.kind === "unavailable") {
+      return toResponse(
+        renderAnthropicError(
+          502,
+          "api_error",
+          "The requested model is not currently available",
+        ),
+      );
+    }
+    const model = resolution.model;
+    // Passthrough response projection is alias-only: the alias captured at
+    // acceptance must be echoed symmetrically by the upstream response.
+    const projectAlias =
+      dependencies.aliasSource === undefined ? undefined : resolution.alias;
     if (isAnthropicNativePassthroughModel(model)) {
       return passthroughBranch(
         dependencies,
@@ -217,6 +258,7 @@ async function handleAnthropicMessages(
         model,
         rawBody,
         diagnostics,
+        projectAlias,
       );
     }
     const validatedRequest = validateAnthropicSourceRequest(body);
@@ -381,6 +423,7 @@ async function passthroughBranch(
   model: Model<string>,
   rawBody: string,
   diagnostics: InvocationDiagnostics,
+  alias: string | undefined,
 ): Promise<Response> {
   const auth = await raceWithRequestSignal(
     dependencies.models.getAuth(model),
@@ -436,15 +479,30 @@ async function passthroughBranch(
       // Pre-commit upstream failure (body-read or transport): no upstream
       // response byte ever committed to the client, so this is a legal
       // non-streaming Anthropic error (upstream failure), never a raw
-      // exception.
+      // exception. The client sees fixed actionable text — the raw cause
+      // may name the endpoint or the canonical target and goes only to
+      // the sanitized diagnostics journal.
+      await diagnostics.fail({
+        classification: "runtime-failure",
+        stage: "native-passthrough",
+        clientStatus: 502,
+        error,
+      });
       return toResponse(
-        renderAnthropicError(502, "api_error", error.message),
+        renderAnthropicError(
+          502,
+          "api_error",
+          error.kind === "AnthropicPassthroughTransportError"
+            ? "Upstream provider request failed"
+            : "Upstream provider response could not be read",
+        ),
       );
     }
     throw error;
   }
   request.signal.throwIfAborted();
-  if (upstream.status >= 400) {
+  if (upstream.status >= 400 && alias === undefined) {
+    // Legacy handler seam: upstream error responses pass through verbatim.
     await diagnostics.fail({
       classification: "runtime-failure",
       stage: "native-passthrough",
@@ -454,7 +512,53 @@ async function passthroughBranch(
         : { safeIds: { requestId: upstream.headers["request-id"] } }),
     });
   }
-  return new Response(upstream.body, {
+  if (upstream.status >= 400 && alias !== undefined) {
+    // Alias mode never forwards upstream error bytes: arbitrary upstream
+    // error text or headers could name the canonical target. The client
+    // receives a legal fixed value-free error instead.
+    await diagnostics.fail({
+      classification: "runtime-failure",
+      stage: "native-passthrough",
+      clientStatus: upstream.status,
+      ...(upstream.headers["request-id"] === undefined
+        ? {}
+        : { safeIds: { requestId: upstream.headers["request-id"] } }),
+    });
+    return toResponse(
+      renderAnthropicError(502, "api_error", "Upstream provider failed"),
+    );
+  }
+  // Ticket 15 symmetry: a successful upstream response must expose the
+  // requested alias, never the canonical model id. The buffered body is
+  // projected before any byte is committed; an unprojectable shape fails
+  // safely (no upstream bytes, no canonical identity).
+  let body = upstream.body;
+  if (alias !== undefined) {
+    const projected = projectAnthropicPassthroughBody(
+      body,
+      upstream.headers["content-type"] ?? "",
+      alias,
+    );
+    if ("error" in projected) {
+      // The detailed projection reason is value-free and useful for
+      // diagnostics; the client sees only the fixed safe envelope.
+      await diagnostics.fail({
+        classification: "runtime-failure",
+        stage: "native-passthrough",
+        clientStatus: 502,
+        error: new Error(projected.error),
+      });
+      return toResponse(
+        renderAnthropicError(
+          502,
+          "api_error",
+          "Upstream response could not be projected safely",
+        ),
+      );
+    }
+    body = projected.body;
+  }
+  return new Response(body, {
     status: upstream.status,
     headers: { ...upstream.headers },
   });
@@ -495,6 +599,7 @@ export function createAnthropicMessagesHandler(
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
+    aliasSource: options.aliasSource,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,

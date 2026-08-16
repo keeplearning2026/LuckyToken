@@ -213,9 +213,10 @@ describe("11: native Anthropic passthrough pre-commit transport failure", () => 
       expect(body.type).toBe("error");
       const error = body.error as Record<string, unknown>;
       expect(["api_error", "overloaded_error"]).toContain(error.type);
-      // The message must reflect the upstream failure, never a generic
-      // "Internal server error" that hides the transport failure.
-      expect(String(error.message)).toContain("fetch failed");
+      // The client sees fixed actionable text; the raw transport cause
+      // (which may name endpoints) never reaches the wire.
+      expect(String(error.message)).toBe("Upstream provider request failed");
+      expect(String(error.message)).not.toContain("fetch failed");
     } finally {
       restore();
     }
