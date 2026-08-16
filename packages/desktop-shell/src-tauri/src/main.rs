@@ -13,13 +13,13 @@ use control_plane_v1::{
     AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
     ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
     CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
-    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand,
-    SettingsCommand,
+    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RequestLedgerResultWire,
+    RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
-    AuthEventEmitter, AutoStartDto, ShellBridge, ShellStateDto, ShellStateEmitter,
-    TauriAuthEventEmitter, TauriMainWindowEmitter,
+    AuthEventEmitter, AutoStartDto, LedgerEventEmitter, ShellBridge, ShellStateDto,
+    ShellStateEmitter, TauriAuthEventEmitter, TauriLedgerEventEmitter, TauriMainWindowEmitter,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -356,6 +356,29 @@ async fn shell_auth_respond(
 }
 
 #[tauri::command]
+async fn shell_request_ledger_query(
+    state: State<'_, ShellBridge>,
+    query: Option<serde_json::Value>,
+) -> Result<RequestLedgerResultWire, ()> {
+    state.request_ledger_query(query).await
+}
+
+#[tauri::command]
+async fn shell_request_ledger_subscribe(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<(), String> {
+    let emitter: Arc<dyn LedgerEventEmitter> = Arc::new(TauriLedgerEventEmitter::new(app));
+    state.request_ledger_subscribe(emitter).await
+}
+
+#[tauri::command]
+async fn shell_request_ledger_unsubscribe(state: State<'_, ShellBridge>) -> Result<(), ()> {
+    state.request_ledger_unsubscribe().await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn shell_open_url(url: String) -> Result<(), ()> {
     open_authorized_url(&url)
 }
@@ -632,6 +655,9 @@ fn main() {
             shell_auth_login,
             shell_auth_respond,
             shell_open_url,
+            shell_request_ledger_query,
+            shell_request_ledger_subscribe,
+            shell_request_ledger_unsubscribe,
             shell_catalog_query,
             shell_catalog_refresh,
             shell_aliases_query,

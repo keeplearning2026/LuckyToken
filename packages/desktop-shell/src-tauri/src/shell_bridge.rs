@@ -16,14 +16,20 @@ use crate::control_plane_v1::{
     CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
     CredentialCommandResultWire, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
-    ModelsProjectionWire, RequestIdentityRecordWire, RuntimeCommand, SessionFailure,
-    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    ModelsProjectionWire, RequestIdentityRecordWire, RequestLedgerResultWire, RequestLedgerSession,
+    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
+
+use serde_json::Value;
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
 /// Renderer channel for typed Provider-auth interaction events (Ticket 13):
 /// the bridge forwards allowlisted events here while a login is pending.
 const AUTH_EVENT: &str = "luckytoken://auth-event";
+/// Renderer channel for typed Request Ledger committed-record events
+/// (Ticket 19): the bridge forwards allowlisted records here while a ledger
+/// subscription is active.
+const LEDGER_EVENT: &str = "luckytoken://ledger-event";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +129,13 @@ pub(crate) trait AuthEventEmitter: Send + Sync {
     fn emit(&self, event: &serde_json::Value);
 }
 
+/// Typed Request Ledger committed-record events forwarded to the renderer
+/// (Ticket 19). Each payload is a strictly allowlisted record; the renderer
+/// re-decodes it — the bridge is a trust boundary.
+pub(crate) trait LedgerEventEmitter: Send + Sync {
+    fn emit(&self, record: &serde_json::Value);
+}
+
 pub(crate) struct TauriMainWindowEmitter {
     app: tauri::AppHandle,
 }
@@ -152,6 +165,22 @@ impl TauriAuthEventEmitter {
 impl AuthEventEmitter for TauriAuthEventEmitter {
     fn emit(&self, event: &serde_json::Value) {
         let _ = self.app.emit_to("main", AUTH_EVENT, event);
+    }
+}
+
+pub(crate) struct TauriLedgerEventEmitter {
+    app: tauri::AppHandle,
+}
+
+impl TauriLedgerEventEmitter {
+    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl LedgerEventEmitter for TauriLedgerEventEmitter {
+    fn emit(&self, record: &serde_json::Value) {
+        let _ = self.app.emit_to("main", LEDGER_EVENT, record);
     }
 }
 
@@ -218,6 +247,14 @@ pub(crate) struct ShellBridge {
     /// Per-flow correlation id source: every accepted login gets a
     /// distinct id, so stale responses from earlier flows are rejected.
     auth_login_sequence: Arc<AtomicU64>,
+    /// The one active Request Ledger subscription session (Ticket 19): the
+    /// write half keeps the subscription pipe open; removed identity-safely
+    /// when the reader ends and by `shutdown`.
+    ledger_session: Arc<tokio::sync::Mutex<Option<RequestLedgerSession>>>,
+    /// Per-subscription correlation id source: every accepted subscription
+    /// gets a distinct id, so an old cleanup task can never remove a
+    /// different active session.
+    ledger_subscribe_sequence: Arc<AtomicU64>,
 }
 
 /// RAII single-flight gate: released when the login task ends (including
@@ -254,6 +291,8 @@ impl ShellBridge {
             auth_session: Arc::new(tokio::sync::Mutex::new(None)),
             auth_login_active: Arc::new(AtomicBool::new(false)),
             auth_login_sequence: Arc::new(AtomicU64::new(0)),
+            ledger_session: Arc::new(tokio::sync::Mutex::new(None)),
+            ledger_subscribe_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -598,12 +637,85 @@ impl ShellBridge {
         self.connector.request_identities().await.map_err(|_| ())
     }
 
+    /// Ticket 19: bounded newest-first Request Ledger query. The query
+    /// object is forwarded verbatim; the host validates it strictly.
+    pub(crate) async fn request_ledger_query(
+        &self,
+        query: Option<Value>,
+    ) -> Result<RequestLedgerResultWire, ()> {
+        self.connector
+            .request_ledger_query(query)
+            .await
+            .map_err(|_| ())
+    }
+
+    /// Ticket 19: long-lived Request Ledger subscription. Any previous
+    /// session is replaced (dropping it aborts its reader and closes its
+    /// pipe), then a fresh session is opened; the command resolves only
+    /// after the host confirmed `subscribed`, so the renderer's
+    /// listen-first ordering holds. A cleanup task removes the session
+    /// identity-safely when its reader ends, so an old task can never
+    /// remove a different active session.
+    pub(crate) async fn request_ledger_subscribe(
+        &self,
+        emitter: Arc<dyn LedgerEventEmitter>,
+    ) -> Result<(), String> {
+        let request_id = format!(
+            "desktop-ledger-subscribe-{}",
+            self.ledger_subscribe_sequence
+                .fetch_add(1, Ordering::SeqCst)
+        );
+        let start = {
+            let emitter = emitter.clone();
+            self.connector
+                .request_ledger_subscribe(
+                    request_id.clone(),
+                    Box::new(move |record| emitter.emit(&record)),
+                )
+                .await
+                .map_err(|_| {
+                    "The Control Plane could not start the request ledger subscription. Check that LuckyToken is running and try again."
+                        .to_owned()
+                })?
+        };
+        {
+            let mut active = self.ledger_session.lock().await;
+            let _ = active.replace(start.session);
+        }
+        // Identity-safe cleanup: when the reader ends, only remove this
+        // session — a replaced subscription is never torn down by an old
+        // task.
+        let ledger_session = self.ledger_session.clone();
+        let session_request_id = request_id;
+        tokio::spawn(async move {
+            let _ = start.ended.await;
+            let mut active = ledger_session.lock().await;
+            if active
+                .as_ref()
+                .is_some_and(|session| session.request_id() == session_request_id)
+            {
+                active.take();
+            }
+        });
+        Ok(())
+    }
+
+    /// Ticket 19: ends the active ledger subscription (no-op without one).
+    /// Dropping the session aborts its reader loop and closes its pipe, so
+    /// the host stops the per-connection fan-out.
+    pub(crate) async fn request_ledger_unsubscribe(&self) {
+        self.ledger_session.lock().await.take();
+    }
+
     pub(crate) async fn shutdown(&self) {
         let mut active = self.lifecycle.active.lock().await;
         abort_and_join(active.take()).await;
         // Closing the auth session aborts its reader loop and pipe: the
         // host aborts any Provider-owned flow still pending.
         self.auth_session.lock().await.take();
+        // Closing the ledger session aborts its reader loop and pipe: the
+        // host stops the per-connection ledger fan-out.
+        self.ledger_session.lock().await.take();
     }
 }
 

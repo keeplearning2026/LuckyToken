@@ -14,6 +14,9 @@ import type {
   CredentialCommandResult,
   ModelsCommand,
   RequestIdentitiesQueryResult,
+  RequestLedgerEvent,
+  RequestLedgerQuery,
+  RequestLedgerQueryResult,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -69,6 +72,19 @@ export interface DesktopShellRuntime {
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
 
+  /** Bounded newest-first Request Ledger query (Ticket 19). */
+  getRequestLedger(
+    query: RequestLedgerQuery | undefined,
+  ): Promise<RequestLedgerQueryResult>;
+  /** Listen-first typed ledger subscription: the caller must subscribe
+   *  before its head query so no committed record is ever missed. The
+   *  returned stop ends the subscription; an invalid stream event is
+   *  reported through `onError` (the subscription then ends itself). */
+  subscribeRequestLedger(
+    listener: (event: RequestLedgerEvent) => void,
+    onError?: (error: Error) => void,
+  ): Promise<() => Promise<void>>;
+
   disconnectControlPlane(): Promise<void>;
 }
 
@@ -122,6 +138,13 @@ export interface WindowsShellHost {
 
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+  getRequestLedger(
+    query: RequestLedgerQuery | undefined,
+  ): Promise<RequestLedgerQueryResult>;
+  subscribeRequestLedger(
+    listener: (event: RequestLedgerEvent) => void,
+    onError?: (error: Error) => void,
+  ): Promise<() => Promise<void>>;
   dispose(): Promise<void>;
 }
 
@@ -300,6 +323,18 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.getRequestIdentities();
+    },
+    getRequestLedger(query) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.getRequestLedger(query);
+    },
+    subscribeRequestLedger(listener, onError) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.subscribeRequestLedger(listener, onError);
     },
     queryDiagnosticsWarnings() {
       if (current.lifecycle !== "open") {

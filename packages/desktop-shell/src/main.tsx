@@ -13,6 +13,10 @@ import "./styles.css";
 const bridge: NativeTauriBridge = {
   invoke: (command) => invoke(command),
   listen: (event, listener) => listen(event, listener),
+  // Request Ledger committed-record events (Ticket 19): the native shell
+  // forwards allowlisted records on this channel while a ledger
+  // subscription is active; the runtime strictly re-decodes each payload.
+  listenLedgerEvent: (listener) => listen("luckytoken://ledger-event", listener),
 };
 const controlPlane = createTauriDesktopRuntime(bridge);
 const shell = createWindowsShellHost(controlPlane);

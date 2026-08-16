@@ -302,4 +302,5 @@ describe("Request Ledger wire contract", () => {
     expect(decodeRequestLedgerQuery({ afterId: 5, extra: true })).toBeUndefined();
     expect(decodeRequestLedgerQuery({ outcome: "success", filter: "x" })).toBeUndefined();
   });
+
 });

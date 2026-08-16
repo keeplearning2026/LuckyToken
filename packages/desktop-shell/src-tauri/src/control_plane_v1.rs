@@ -626,6 +626,17 @@ pub(crate) type RequestIdentitiesFuture = Pin<
     >,
 >;
 
+pub(crate) type RequestLedgerQueryFuture = Pin<
+    Box<dyn Future<Output = Result<RequestLedgerResultWire, ConnectionFailure>> + Send + 'static>,
+>;
+pub(crate) type RequestLedgerSubscribeFuture = Pin<
+    Box<
+        dyn Future<Output = Result<RequestLedgerSubscribeStart, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+
 pub(crate) type ModelsCommandFuture = Pin<
     Box<dyn Future<Output = Result<ModelsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
@@ -680,6 +691,22 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn request_identities(&self) -> RequestIdentitiesFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    /// One-shot bounded Request Ledger query (Ticket 19): the query object
+    /// is forwarded verbatim; the native shell never interprets filters.
+    fn request_ledger_query(&self, _query: Option<Value>) -> RequestLedgerQueryFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    /// Long-lived Request Ledger subscription (Ticket 19): forwards
+    /// allowlisted committed records to the emitter; dropping the returned
+    /// session ends the subscription. The `request_id` is the session's
+    /// correlation identity.
+    fn request_ledger_subscribe(
+        &self,
+        _request_id: String,
+        _on_ledger_event: Box<dyn FnMut(Value) + Send + 'static>,
+    ) -> RequestLedgerSubscribeFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
@@ -964,6 +991,57 @@ pub(crate) struct RequestIdentityRecordWire {
     pub(crate) client_session_id: Option<String>,
     #[serde(rename = "projectDir", skip_serializing_if = "Option::is_none")]
     pub(crate) project_dir: Option<String>,
+}
+
+/// Request Lifecycle Ledger record (Ticket 18 surface, Ticket 19 relay):
+/// the thin native shell validates every record strictly at this boundary
+/// (allowlisted keys, UUID grammar per identity field, bounded strings,
+/// HTTP status range) and forwards the validated projection. The `facts`
+/// object is opaque here — the renderer strict-decodes its allowlisted
+/// sub-keys — so the Rust side never interprets, derives, or re-shapes any
+/// ledger state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RequestLedgerRecordWire {
+    pub(crate) id: u64,
+    #[serde(rename = "requestId")]
+    pub(crate) request_id: String,
+    #[serde(rename = "protocolId")]
+    pub(crate) protocol_id: String,
+    pub(crate) phase: String,
+    pub(crate) outcome: String,
+    #[serde(rename = "acceptedAt")]
+    pub(crate) accepted_at: u64,
+    #[serde(rename = "executionStartedAt", skip_serializing_if = "Option::is_none")]
+    pub(crate) execution_started_at: Option<u64>,
+    #[serde(rename = "terminalAt", skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_at: Option<u64>,
+    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none")]
+    pub(crate) completed_at: Option<u64>,
+    #[serde(rename = "clientHttpStatus", skip_serializing_if = "Option::is_none")]
+    pub(crate) client_http_status: Option<u64>,
+    #[serde(rename = "externalAlias", skip_serializing_if = "Option::is_none")]
+    pub(crate) external_alias: Option<String>,
+    #[serde(rename = "providerId", skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_id: Option<String>,
+    #[serde(rename = "realModelId", skip_serializing_if = "Option::is_none")]
+    pub(crate) real_model_id: Option<String>,
+    #[serde(rename = "clientSessionId", skip_serializing_if = "Option::is_none")]
+    pub(crate) client_session_id: Option<String>,
+    #[serde(rename = "effectiveSessionId", skip_serializing_if = "Option::is_none")]
+    pub(crate) effective_session_id: Option<String>,
+    #[serde(rename = "projectDir", skip_serializing_if = "Option::is_none")]
+    pub(crate) project_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) facts: Option<serde_json::Value>,
+    #[serde(rename = "terminalUsage", skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_usage: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RequestLedgerResultWire {
+    pub(crate) records: Vec<RequestLedgerRecordWire>,
+    #[serde(rename = "hasMore")]
+    pub(crate) has_more: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1288,6 +1366,46 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_request_identities_session(&pipe_name, capability).await
+        })
+    }
+
+    fn request_ledger_query(&self, query: Option<Value>) -> RequestLedgerQueryFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_request_ledger_query_session(&pipe_name, capability, query).await
+        })
+    }
+
+    fn request_ledger_subscribe(
+        &self,
+        request_id: String,
+        on_ledger_event: Box<dyn FnMut(Value) + Send + 'static>,
+    ) -> RequestLedgerSubscribeFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_request_ledger_subscribe_session(
+                &pipe_name,
+                capability,
+                request_id,
+                on_ledger_event,
+            )
+            .await
         })
     }
 
@@ -2571,6 +2689,205 @@ async fn execute_request_identities_session(
     }
 }
 
+/// One-shot bounded Request Ledger query (Ticket 19): negotiate, send the
+/// query verbatim (the native shell never interprets filters — the host
+/// validates them), and expect exactly one result frame.
+async fn execute_request_ledger_query_session(
+    pipe_name: &str,
+    capability: String,
+    query: Option<Value>,
+) -> Result<RequestLedgerResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            let mut frame =
+                json!({ "type": "get_request_ledger", "requestId": "desktop-request-ledger" });
+            if let Some(query) = query {
+                frame["query"] = query;
+            }
+            write_json_frame(&mut pipe, &frame)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_request_ledger_result(&result)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// The long-lived Request Ledger subscription session (Ticket 19): holds
+/// the pipe write half so the subscription stays open; dropping the session
+/// aborts the reader loop and closes the pipe, so a replaced or shut-down
+/// subscription can never keep forwarding events and the Control Plane host
+/// sees the connection loss and stops the per-connection fan-out. The
+/// session carries its correlation id for identity-safe cleanup.
+pub(crate) struct RequestLedgerSession {
+    request_id: String,
+    cancel: Arc<Notify>,
+    _write: tokio::io::WriteHalf<NamedPipeClient>,
+}
+
+impl Drop for RequestLedgerSession {
+    fn drop(&mut self) {
+        self.cancel.notify_one();
+    }
+}
+
+impl RequestLedgerSession {
+    pub(crate) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+}
+
+/// The start of one ledger subscription: the shared session handle plus the
+/// reader-end signal, resolved once the reader loop exits (cancel, pipe
+/// close, or a protocol error).
+pub(crate) struct RequestLedgerSubscribeStart {
+    pub(crate) session: RequestLedgerSession,
+    pub(crate) ended: oneshot::Receiver<()>,
+}
+
+/// Long-lived ledger subscription (Ticket 19): negotiate, send
+/// `ledger_subscribe`, wait for the host's `subscribed` confirmation (the
+/// listen-first barrier), then hand the pipe to a reader loop that forwards
+/// allowlisted committed records to the emitter until the session is
+/// dropped or the connection dies.
+pub(crate) async fn execute_request_ledger_subscribe_session(
+    pipe_name: &str,
+    capability: String,
+    request_id: String,
+    on_ledger_event: impl FnMut(Value) + Send + 'static,
+) -> Result<RequestLedgerSubscribeStart, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "ledger_subscribe",
+                    "requestId": "desktop-ledger-subscribe",
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let confirmation = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if confirmation.get("type").and_then(Value::as_str) != Some("subscribed")
+                || confirmation.get("requestId").and_then(Value::as_str)
+                    != Some("desktop-ledger-subscribe")
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let (read, write) = split(pipe);
+            let cancel = Arc::new(Notify::new());
+            let (ended_sender, ended_receiver) = oneshot::channel();
+            tokio::spawn(request_ledger_reader(
+                read,
+                cancel.clone(),
+                on_ledger_event,
+                ended_sender,
+            ));
+            Ok(RequestLedgerSubscribeStart {
+                session: RequestLedgerSession {
+                    request_id,
+                    cancel,
+                    _write: write,
+                },
+                ended: ended_receiver,
+            })
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// The ledger reader loop: forwards strictly decoded committed records to
+/// the emitter; any other frame (including a malformed or secret-bearing
+/// record extension) is a protocol error. A closed pipe ends the
+/// subscription (the host stops the fan-out on connection loss). The
+/// cancellation notify aborts the loop when the session is replaced or the
+/// shell shuts down, so a dead subscription never keeps forwarding events.
+async fn request_ledger_reader<R>(
+    mut read: R,
+    cancel: Arc<Notify>,
+    mut on_ledger_event: impl FnMut(Value) + Send + 'static,
+    ended_sender: oneshot::Sender<()>,
+) where
+    R: AsyncRead + Unpin,
+{
+    loop {
+        tokio::select! {
+            _ = cancel.notified() => {
+                let _ = ended_sender.send(());
+                return;
+            }
+            frame = read_json_frame(&mut read) => {
+                let record = match frame {
+                    Err(_) => None,
+                    Ok(value) => {
+                        let mut record = None;
+                        if value.get("type").and_then(Value::as_str) == Some("event") {
+                            if let Some(event) = value.get("event") {
+                                if event.get("type").and_then(Value::as_str)
+                                    == Some("request_ledger")
+                                {
+                                    record = event
+                                        .get("record")
+                                        .and_then(decode_request_ledger_record);
+                                }
+                            }
+                        }
+                        record
+                    }
+                };
+                match record {
+                    Some(record) => {
+                        on_ledger_event(serde_json::to_value(record).expect("serializable"));
+                    }
+                    None => {
+                        let _ = ended_sender.send(());
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Strict identity record decode: the allowed key set has no
 /// effective-session field, so a record that ever carries the internal
 /// `effectiveSessionId` (or any other unknown key) is rejected instead of
@@ -2630,6 +2947,173 @@ fn decode_request_identities(
         });
     }
     Ok(output)
+}
+
+/// Strict ledger record decode (Ticket 19): the allowlisted key set is
+/// exact, every identity field is validated against the UUID grammar under
+/// its own key (the effective identity can never be smuggled into the
+/// client-session field), strings are bounded, timestamps/status follow the
+/// wire contract, and `facts` must be a JSON object (its allowlisted
+/// sub-keys are re-decoded strictly by the renderer). A record that ever
+/// carries an unknown key or out-of-contract value is rejected, never
+/// projected. No status, speed, filter, or usage semantics are derived
+/// here.
+fn decode_request_ledger_record(value: &Value) -> Option<RequestLedgerRecordWire> {
+    let record = value.as_object()?;
+    const ALLOWED: &[&str] = &[
+        "id",
+        "requestId",
+        "protocolId",
+        "phase",
+        "outcome",
+        "acceptedAt",
+        "executionStartedAt",
+        "terminalAt",
+        "completedAt",
+        "clientHttpStatus",
+        "externalAlias",
+        "providerId",
+        "realModelId",
+        "clientSessionId",
+        "effectiveSessionId",
+        "projectDir",
+        "facts",
+        "terminalUsage",
+    ];
+    if record.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return None;
+    }
+    let id = record.get("id").and_then(Value::as_u64)?;
+    if id < 1 {
+        return None;
+    }
+    let request_id = record.get("requestId").and_then(Value::as_str)?;
+    let uuid_pattern = regex_lite();
+    if !uuid_pattern(request_id) {
+        return None;
+    }
+    let protocol_id = record.get("protocolId").and_then(Value::as_str)?;
+    if protocol_id.is_empty() || protocol_id.len() > 128 {
+        return None;
+    }
+    let phase = record.get("phase").and_then(Value::as_str)?;
+    if !matches!(
+        phase,
+        "accepted" | "execution" | "rendering" | "terminal-preparation"
+    ) {
+        return None;
+    }
+    let outcome = record.get("outcome").and_then(Value::as_str)?;
+    if !matches!(
+        outcome,
+        "running"
+            | "success"
+            | "failed"
+            | "aborted"
+            | "rejected-auth"
+            | "unknown-alias"
+            | "unavailable-alias"
+            | "interrupted"
+    ) {
+        return None;
+    }
+    let accepted_at = record.get("acceptedAt").and_then(Value::as_u64)?;
+    let execution_started_at = record.get("executionStartedAt").and_then(Value::as_u64);
+    let terminal_at = record.get("terminalAt").and_then(Value::as_u64);
+    let completed_at = record.get("completedAt").and_then(Value::as_u64);
+    let client_http_status = record.get("clientHttpStatus").and_then(Value::as_u64);
+    if client_http_status.is_some_and(|status| !(100..=599).contains(&status)) {
+        return None;
+    }
+    let external_alias = record.get("externalAlias").and_then(Value::as_str);
+    if external_alias.is_some_and(|value| value.is_empty() || value.len() > 4_096) {
+        return None;
+    }
+    let provider_id = record.get("providerId").and_then(Value::as_str);
+    if provider_id.is_some_and(|value| value.is_empty() || value.len() > 256) {
+        return None;
+    }
+    let real_model_id = record.get("realModelId").and_then(Value::as_str);
+    if real_model_id.is_some_and(|value| value.is_empty() || value.len() > 256) {
+        return None;
+    }
+    let client_session_id = record.get("clientSessionId").and_then(Value::as_str);
+    if client_session_id.is_some_and(|value| !uuid_pattern(value)) {
+        return None;
+    }
+    let effective_session_id = record.get("effectiveSessionId").and_then(Value::as_str);
+    if effective_session_id.is_some_and(|value| !uuid_pattern(value)) {
+        return None;
+    }
+    let project_dir = record.get("projectDir").and_then(Value::as_str);
+    if project_dir.is_some_and(|value| value.is_empty() || value.len() > 1_024) {
+        return None;
+    }
+    let facts = record.get("facts");
+    if facts.is_some_and(|value| !value.is_object()) {
+        return None;
+    }
+    // The canonical terminal-usage snapshot (Ticket 20) rides opaque like
+    // facts: the native shell never derives usage semantics — the renderer
+    // strict-decodes its allowlisted sub-keys.
+    let terminal_usage = record.get("terminalUsage");
+    if terminal_usage.is_some_and(|value| !value.is_object()) {
+        return None;
+    }
+    Some(RequestLedgerRecordWire {
+        id,
+        request_id: request_id.to_owned(),
+        protocol_id: protocol_id.to_owned(),
+        phase: phase.to_owned(),
+        outcome: outcome.to_owned(),
+        accepted_at,
+        execution_started_at,
+        terminal_at,
+        completed_at,
+        client_http_status,
+        external_alias: external_alias.map(str::to_owned),
+        provider_id: provider_id.map(str::to_owned),
+        real_model_id: real_model_id.map(str::to_owned),
+        client_session_id: client_session_id.map(str::to_owned),
+        effective_session_id: effective_session_id.map(str::to_owned),
+        project_dir: project_dir.map(str::to_owned),
+        facts: facts.cloned(),
+        terminal_usage: terminal_usage.cloned(),
+    })
+}
+
+/// Strict ledger query-result decode: the type/requestId frame header plus
+/// the allowlisted records.
+fn decode_request_ledger_result(
+    value: &Value,
+) -> Result<RequestLedgerResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("request_ledger_result")
+        || value.get("requestId").and_then(Value::as_str) != Some("desktop-request-ledger")
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let has_more = result.get("hasMore").and_then(Value::as_bool);
+    let Some(has_more) = has_more else {
+        return Err(ConnectionFailure::ProtocolError);
+    };
+    let records = result.get("records").and_then(Value::as_array);
+    let Some(records) = records else {
+        return Err(ConnectionFailure::ProtocolError);
+    };
+    let mut output = Vec::with_capacity(records.len());
+    for record in records {
+        let record =
+            decode_request_ledger_record(record).ok_or(ConnectionFailure::ProtocolError)?;
+        output.push(record);
+    }
+    Ok(RequestLedgerResultWire {
+        records: output,
+        has_more,
+    })
 }
 
 /// Minimal UUID-shape matcher (version 1-8 variant). Kept as a tiny local
@@ -4846,6 +5330,157 @@ mod ticket17_directory_scope_tests {
             ] }
         });
         assert!(decode_request_identities(&not_uuid).is_err());
+    }
+
+    fn ledger_record_base() -> Value {
+        json!({
+            "id": 1,
+            "requestId": "10000000-0000-4000-8000-000000000001",
+            "protocolId": "anthropic-messages",
+            "phase": "terminal-preparation",
+            "outcome": "success",
+            "acceptedAt": 1700000000000_i64,
+            "executionStartedAt": 1700000001000_i64,
+            "terminalAt": 1700000003000_i64,
+            "completedAt": 1700000003010_i64,
+            "clientHttpStatus": 200,
+            "externalAlias": "alpha",
+            "providerId": "commandcode-private",
+            "realModelId": "claude-fixture",
+            "clientSessionId": "20000000-0000-4000-8000-000000000031",
+            "effectiveSessionId": "30000000-0000-4000-8000-000000000032",
+            "projectDir": "C:\\canonical\\project",
+            "facts": {
+                "piStopReason": "stop"
+            },
+            "terminalUsage": {
+                "api": "commandcode-private",
+                "input": 5,
+                "cacheRead": 3,
+                "cacheWrite": 2,
+                "output": 100,
+                "completeness": "complete"
+            }
+        })
+    }
+
+    #[test]
+    fn request_ledger_record_decodes_a_full_allowlisted_record() {
+        let record = decode_request_ledger_record(&ledger_record_base())
+            .expect("valid ledger record must decode");
+        assert_eq!(record.id, 1);
+        assert_eq!(record.request_id, "10000000-0000-4000-8000-000000000001");
+        assert_eq!(record.protocol_id, "anthropic-messages");
+        assert_eq!(record.phase, "terminal-preparation");
+        assert_eq!(record.outcome, "success");
+        assert_eq!(record.client_http_status, Some(200));
+        assert_eq!(
+            record.client_session_id.as_deref(),
+            Some("20000000-0000-4000-8000-000000000031")
+        );
+        assert_eq!(
+            record.effective_session_id.as_deref(),
+            Some("30000000-0000-4000-8000-000000000032")
+        );
+        assert_eq!(record.external_alias.as_deref(), Some("alpha"));
+        // The facts object rides opaque; its sub-keys are the renderer's
+        // strict decode boundary.
+        assert!(record.facts.is_some());
+        // The canonical terminal-usage snapshot rides opaque too; the
+        // native shell never derives usage semantics.
+        assert!(record.terminal_usage.is_some());
+    }
+
+    #[test]
+    fn request_ledger_record_rejects_unknown_keys_and_invalid_values() {
+        let mut with_unknown = ledger_record_base();
+        with_unknown["invented"] = json!(true);
+        assert!(decode_request_ledger_record(&with_unknown).is_none());
+
+        let mut bad_request_id = ledger_record_base();
+        bad_request_id["requestId"] = json!("not-a-uuid");
+        assert!(decode_request_ledger_record(&bad_request_id).is_none());
+
+        let mut bad_phase = ledger_record_base();
+        bad_phase["phase"] = json!("streaming");
+        assert!(decode_request_ledger_record(&bad_phase).is_none());
+
+        let mut bad_outcome = ledger_record_base();
+        bad_outcome["outcome"] = json!("cancelled");
+        assert!(decode_request_ledger_record(&bad_outcome).is_none());
+
+        let mut bad_status = ledger_record_base();
+        bad_status["clientHttpStatus"] = json!(42);
+        assert!(decode_request_ledger_record(&bad_status).is_none());
+
+        let mut bad_session = ledger_record_base();
+        bad_session["clientSessionId"] = json!("not-a-uuid");
+        assert!(decode_request_ledger_record(&bad_session).is_none());
+
+        let mut bad_effective = ledger_record_base();
+        bad_effective["effectiveSessionId"] = json!("also-not-a-uuid");
+        assert!(decode_request_ledger_record(&bad_effective).is_none());
+
+        let mut missing_id = ledger_record_base();
+        missing_id.as_object_mut().unwrap().remove("id");
+        assert!(decode_request_ledger_record(&missing_id).is_none());
+
+        let mut long_protocol = ledger_record_base();
+        long_protocol["protocolId"] = json!("x".repeat(129));
+        assert!(decode_request_ledger_record(&long_protocol).is_none());
+
+        let mut scalar_facts = ledger_record_base();
+        scalar_facts["facts"] = json!("not-an-object");
+        assert!(decode_request_ledger_record(&scalar_facts).is_none());
+
+        let mut scalar_usage = ledger_record_base();
+        scalar_usage["terminalUsage"] = json!("not-an-object");
+        assert!(decode_request_ledger_record(&scalar_usage).is_none());
+    }
+
+    #[test]
+    fn request_ledger_result_decodes_clean_results_and_rejects_bad_frames() {
+        let result = json!({
+            "type": "request_ledger_result",
+            "requestId": "desktop-request-ledger",
+            "result": {
+                "records": [ledger_record_base()],
+                "hasMore": false
+            }
+        });
+        let decoded = decode_request_ledger_result(&result).expect("valid result must decode");
+        assert_eq!(decoded.records.len(), 1);
+        assert!(!decoded.has_more);
+
+        // Wrong type/requestId headers are protocol errors.
+        let wrong_type = json!({
+            "type": "request_identities_result",
+            "requestId": "desktop-request-ledger",
+            "result": { "records": [], "hasMore": false }
+        });
+        assert!(decode_request_ledger_result(&wrong_type).is_err());
+        let wrong_id = json!({
+            "type": "request_ledger_result",
+            "requestId": "desktop-request-identities",
+            "result": { "records": [], "hasMore": false }
+        });
+        assert!(decode_request_ledger_result(&wrong_id).is_err());
+        // A malformed record inside the result fails the whole frame.
+        let mut bad_record = ledger_record_base();
+        bad_record["clientHttpStatus"] = json!(999);
+        let with_bad_record = json!({
+            "type": "request_ledger_result",
+            "requestId": "desktop-request-ledger",
+            "result": { "records": [bad_record], "hasMore": false }
+        });
+        assert!(decode_request_ledger_result(&with_bad_record).is_err());
+        // Missing hasMore is a protocol error.
+        let missing_has_more = json!({
+            "type": "request_ledger_result",
+            "requestId": "desktop-request-ledger",
+            "result": { "records": [] }
+        });
+        assert!(decode_request_ledger_result(&missing_has_more).is_err());
     }
 }
 

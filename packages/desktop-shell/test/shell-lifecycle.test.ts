@@ -80,6 +80,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     });
     await shell.launch();
 
@@ -178,6 +180,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     });
     await shell.launch();
 
@@ -266,6 +270,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     };
     const shell = createWindowsShellHost(runtime);
 
@@ -347,6 +353,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
         disconnected += 1;
       },
@@ -431,6 +439,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
         disconnected += 1;
       },
@@ -521,6 +531,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
         disconnected += 1;
         throw disconnectFailure;
@@ -608,6 +620,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       subscribeControlPlane: () => () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
         controlPlaneDisconnected += 1;
       },
@@ -710,6 +724,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     });
     const observed: ControlPlaneState[] = [];
     shell.subscribe((snapshot) => observed.push(snapshot.connection));
@@ -784,6 +800,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       queryDiagnosticsWarnings: async () => [],
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
       executeCatalogCommand: async () => ({
@@ -908,6 +926,8 @@ describe("WindowsShellHost client token commands", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     };
     const shell = createWindowsShellHost(runtime);
     await shell.launch();
@@ -992,6 +1012,8 @@ describe("WindowsShellHost client token commands", () => {
       }),
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
     });
 
     await expect(
@@ -1047,6 +1069,14 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
         calls.push("identities");
         return { records: [] };
       },
+      getRequestLedger: async () => {
+        calls.push("ledger");
+        return { records: [], hasMore: false };
+      },
+      subscribeRequestLedger: async () => {
+        calls.push("subscribe");
+        return async () => undefined;
+      },
       executeCatalogCommand: async () => ({
         outcome: "ok",
         snapshot: {
@@ -1087,7 +1117,13 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
     await expect(shell.getRequestIdentities()).resolves.toEqual({
       records: [],
     });
-    expect(calls).toEqual(["pick", "identities"]);
+    await expect(shell.getRequestLedger({ limit: 10 })).resolves.toEqual({
+      records: [],
+      hasMore: false,
+    });
+    const stop = await shell.subscribeRequestLedger(() => undefined);
+    await stop();
+    expect(calls).toEqual(["pick", "identities", "ledger", "subscribe"]);
     await shell.dispose();
   });
 
@@ -1120,6 +1156,8 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       pickDirectory: async () => "C:\\picked\\directory",
       getRequestIdentities: async () => ({ records: [] }),
+      getRequestLedger: async () => ({ records: [], hasMore: false }),
+      subscribeRequestLedger: async () => async () => undefined,
       executeCatalogCommand: async () => ({
         outcome: "ok",
         snapshot: {

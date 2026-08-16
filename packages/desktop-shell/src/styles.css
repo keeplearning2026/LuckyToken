@@ -370,3 +370,98 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
 .client-token-actions button.danger { border-color: #c98d7d; color: #8a3d22; }
 .client-token-actions button.confirming { border-color: #a13123; color: #fff; background: #a13123; }
 .client-token-actions button:disabled { cursor: default; opacity: .45; }
+
+/* ---- Requests page (Ticket 19) ---- */
+.requests-page { display: grid; gap: 12px; min-width: 0; }
+.requests-toolbar {
+  display: flex; align-items: center; gap: 10px;
+}
+.requests-toolbar strong { color: #174d42; font-size: 15px; }
+.requests-count { color: #6b7480; font-size: 12px; }
+.requests-toolbar button, .requests-pagination button, .requests-detail-head button,
+.requests-detail dd button {
+  border: 1px solid #6f958b; border-radius: 8px; padding: 6px 12px;
+  color: #174d42; background: #fff; cursor: pointer; font-size: 13px;
+}
+.requests-toolbar button:disabled, .requests-pagination button:disabled { cursor: default; opacity: .45; }
+.requests-filters {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  padding: 10px 12px; border: 1px solid #dbe4e1; border-radius: 10px;
+  background: #f7faf9;
+}
+.requests-filters label {
+  display: grid; gap: 3px; font-size: 11px; color: #56606d;
+}
+.requests-filters input, .requests-filters select {
+  min-width: 130px; padding: 6px 8px; border: 1px solid #c6d4cf;
+  border-radius: 7px; background: #fff; color: #26303c; font-size: 13px;
+}
+.requests-filters input[name="from"], .requests-filters input[name="to"] { min-width: 170px; }
+.requests-filter-actions { display: flex; gap: 8px; }
+.requests-filter-actions button {
+  border: 1px solid #6f958b; border-radius: 8px; padding: 6px 12px;
+  color: #174d42; background: #fff; cursor: pointer; font-size: 13px;
+}
+.requests-offline, .requests-loading { color: #6b7480; font-size: 13px; }
+.requests-table-scroll { overflow-x: auto; border: 1px solid #dbe4e1; border-radius: 10px; }
+.requests-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.requests-table caption {
+  text-align: left; padding: 8px 12px; color: #56606d; font-size: 12px;
+}
+.requests-table th {
+  position: sticky; top: 0; z-index: 1; background: #eef4f2; color: #3f4a56;
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid #dbe4e1;
+  white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+}
+.requests-table td {
+  padding: 8px 10px; border-bottom: 1px solid #e6ecea; white-space: nowrap;
+  color: #26303c;
+}
+.requests-table tbody tr:hover { background: #f2f8f6; }
+.request-id-cell {
+  max-width: 210px; overflow: hidden; text-overflow: ellipsis;
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+}
+.status-badge {
+  display: inline-block; border-radius: 999px; padding: 3px 9px;
+  font-size: 11px; font-weight: 650; white-space: nowrap;
+}
+.status-success { color: #17604f; background: #dff1eb; }
+.status-running { color: #1f5f8a; background: #e2eef7; }
+.status-failed { color: #8a3d22; background: #fae7e0; }
+.status-client-error { color: #8a4b13; background: #f8e9d5; }
+.status-server-error { color: #8a3d22; background: #fae7e0; }
+.status-aborted { color: #5a4a3a; background: #f0ebe4; }
+.status-auth-rejected { color: #7c3a4a; background: #f6e6ea; }
+.status-unknown-model { color: #6b4a1a; background: #f4ecd8; }
+.status-model-unavailable { color: #6b4a1a; background: #f4ecd8; }
+.status-interrupted { color: #4a4a5a; background: #eaeaf2; }
+.status-secondary { display: block; color: #7a838e; font-size: 11px; }
+.requests-pagination { display: flex; justify-content: flex-end; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.requests-detail {
+  margin-top: 6px; padding: 14px 16px; border: 1px solid #dbe4e1;
+  border-radius: 12px; background: #f7faf9;
+}
+.requests-detail-head { display: flex; align-items: center; gap: 12px; }
+.requests-detail-head h3 { margin: 0; color: #174d42; font-size: 15px; }
+.requests-detail dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 18px; margin: 12px 0; }
+.requests-detail dt { color: #56606d; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.requests-detail dd { margin: 2px 0 0; color: #26303c; font-size: 13px; overflow-wrap: anywhere; }
+.requests-detail code.request-id-full {
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+}
+.requests-facts { margin-top: 10px; }
+.requests-facts h4 { margin: 0 0 6px; color: #3f4a56; font-size: 13px; }
+.requests-facts ul { margin: 0; padding-left: 18px; color: #26303c; font-size: 12px; }
+.requests-facts li { margin: 3px 0; }
+.persistence-warning {
+  margin: 8px 0 0; padding: 9px 12px; border-radius: 8px;
+  background: #fdf3f0; color: #8a3d22; font-size: 13px;
+}

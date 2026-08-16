@@ -109,10 +109,13 @@ export {
   type ModelsFileErrorLocation,
   type ModelsFileState,
   type ModelsProjection,
+  type PrimaryStatus,
   type RegisteredSetting,
   type RequestLedger,
+  type RequestLedgerDetailProjection,
   type RequestLedgerEntry,
   type RequestLedgerEvent,
+  type RequestLedgerListProjection,
   type RequestLedgerQuery,
   type RequestLedgerQueryResult,
   type RequestLedgerRecord,
@@ -123,6 +126,7 @@ export {
   type RequestIdentityFact,
   type RequestIdentityProjection,
   type RequestIdentityRecord,
+  type RequestUsageProjection,
   type RunningControlPlane,
   type RuntimeCommand,
   type RuntimeCommandConflict,
@@ -150,6 +154,21 @@ export {
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
 export { projectRequestIdentity } from "./contracts.js";
+export {
+  averageOutputSpeedUnavailableReason,
+  deriveRequestStatus,
+  formatDuration,
+  formatTimestamp,
+  formatTokensPerSecond,
+  formatCacheHitRate,
+  ledgerPhaseLabel,
+  projectAverageOutputTokensPerSecond,
+  projectRequestLedger,
+  projectRequestLedgerDetail,
+  projectRequestUsage,
+  protocolDisplayName,
+} from "./contracts.js";
+export { decodeRequestLedgerEvent, decodeRequestLedgerQuery, decodeRequestLedgerRecord, decodeRequestLedgerResult } from "./wire-ledger.js";
 export {
   LEDGER_OUTCOMES,
   LEDGER_PHASES,

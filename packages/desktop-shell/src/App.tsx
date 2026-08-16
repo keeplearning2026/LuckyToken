@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  projectRequestIdentity,
   type AliasCommand,
   type AliasCommandResult,
   type AliasStatusProjection,
@@ -12,7 +11,6 @@ import {
   type ClientTokenScopeRef,
   type MaskedClientTokenScope,
   type ModelsCommand,
-  type RequestIdentityProjection,
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -25,6 +23,7 @@ import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
 
 import { ModelsFileWorkspace } from "./models-editors.js";
 import { CredentialsPage } from "./credentials-page.js";
+import { RequestsPage } from "./requests-page.js";
 
 import {
   productPages,
@@ -348,9 +347,11 @@ export function App({ shell, retryConnection }: AppProps) {
             shell={shell}
           />
         ) : null}
-        {snapshot.activePage === "requests" &&
-        snapshot.connection.kind === "connected" ? (
-          <RequestsPage shell={shell} />
+        {snapshot.activePage === "requests" ? (
+          <RequestsPage
+            connection={snapshot.connection}
+            shell={shell}
+          />
         ) : null}
         {(snapshot.activePage === "providers" ||
           snapshot.activePage === "models-aliases") &&
@@ -1001,75 +1002,6 @@ function ClientTokensPage({
           </section>
         );
       })}
-    </section>
-  );
-}
-
-/**
- * Requests page (Ticket 17 identity seam; Ticket 18 handoff): the public
- * request identity ledger. Each row renders the client-provided session id
- * or `-` through the shared projection; the internal effective session
- * identity has no field in this contract and can never be rendered here.
- */
-function RequestsPage({ shell }: { readonly shell: WindowsShellHost }) {
-  const [rows, setRows] = useState<readonly RequestIdentityProjection[]>([]);
-  const [error, setError] = useState<string | undefined>();
-  const refresh = useCallback(async () => {
-    try {
-      const result = await shell.getRequestIdentities();
-      setRows(
-        Object.freeze(
-          result.records.map((record) => projectRequestIdentity(record)),
-        ),
-      );
-      setError(undefined);
-    } catch {
-      setError("Request identities are unavailable.");
-    }
-  }, [shell]);
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-  const formatTime = (time: number) => new Date(time).toLocaleTimeString();
-  return (
-    <section className="requests-page" aria-label="Requests">
-      <div className="requests-toolbar">
-        <strong>Recent authorized requests</strong>
-        <button
-          disabled={rows.length === 0}
-          onClick={() => void refresh()}
-          type="button"
-        >
-          Refresh
-        </button>
-      </div>
-      {error === undefined ? null : (
-        <p className="client-token-error">{error}</p>
-      )}
-      {rows.length === 0 ? (
-        <p>No requests yet. Authorized model requests appear here.</p>
-      ) : (
-        <table className="requests-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Protocol</th>
-              <th>Client session</th>
-              <th>Project</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
-                <td>{formatTime(row.time)}</td>
-                <td>{row.protocolId}</td>
-                <td>{row.clientSessionId}</td>
-                <td>{row.projectDir ?? "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </section>
   );
 }

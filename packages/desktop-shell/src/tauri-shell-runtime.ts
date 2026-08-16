@@ -18,8 +18,15 @@ import type {
   RegisteredSetting,
   RequestIdentitiesQueryResult,
   RequestIdentityRecord,
+  RequestLedgerEvent,
+  RequestLedgerQuery,
+  RequestLedgerQueryResult,
   RuntimeCommand,
   SettingsCommand,
+} from "@luckytoken/application-control-plane/control-plane";
+import {
+  decodeRequestLedgerRecord,
+  decodeRequestLedgerResult,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
@@ -72,7 +79,10 @@ export type ShellCommand =
   | "shell_catalog_query"
   | "shell_catalog_refresh"
   | "shell_aliases_query"
-  | "shell_aliases_write";
+  | "shell_aliases_write"
+  | "shell_request_ledger_query"
+  | "shell_request_ledger_subscribe"
+  | "shell_request_ledger_unsubscribe";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -88,6 +98,14 @@ export interface NativeTauriBridge {
    *  for the account/subscription login flow; the runtime fails that flow
    *  explicitly when a bridge does not provide it. */
   listenAuthEvent?(
+    listener: (event: Pick<Event<unknown>, "payload">) => void,
+  ): Promise<() => void>;
+  /** Typed Request Ledger committed-record events (Ticket 19): the native
+   *  shell forwards allowlisted records while a ledger subscription is
+   *  active. The payload is opaque JSON; the runtime strictly re-decodes
+   *  it. Required for live list/detail updates; the runtime fails the
+   *  subscription explicitly when a bridge does not provide it. */
+  listenLedgerEvent?(
     listener: (event: Pick<Event<unknown>, "payload">) => void,
   ): Promise<() => void>;
 }
@@ -139,6 +157,19 @@ export interface TauriDesktopRuntime {
    *  a filesystem authority. */
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+  /** Bounded newest-first Request Ledger query (Ticket 19). */
+  getRequestLedger(
+    query: RequestLedgerQuery | undefined,
+  ): Promise<RequestLedgerQueryResult>;
+  /** Listen-first typed ledger subscription (Ticket 19): registers the
+   *  event listener before the native subscribe so no committed record is
+   *  missed; the promise resolves once the native side confirmed. An
+   *  invalid stream event ends the subscription and reports through
+   *  `onError`. */
+  subscribeRequestLedger(
+    listener: (event: RequestLedgerEvent) => void,
+    onError?: (error: Error) => void,
+  ): Promise<() => Promise<void>>;
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -857,6 +888,71 @@ export function createTauriDesktopRuntime(
         );
       }
       return decoded;
+    },
+
+    async getRequestLedger(query) {
+      const raw = await bridge.invoke("shell_request_ledger_query", {
+        ...(query === undefined ? {} : { query }),
+      });
+      const decoded = decodeRequestLedgerResult(raw);
+      if (decoded === undefined) {
+        throw new Error(
+          "LuckyToken returned an invalid request ledger result",
+        );
+      }
+      return decoded;
+    },
+
+    async subscribeRequestLedger(listener, onError) {
+      // Listen-first: the Tauri event listener is registered before the
+      // native subscribe is invoked, so a committed record can never slip
+      // between the two. Every payload is strictly re-decoded at this
+      // boundary; an undecodable record is a protocol violation that ends
+      // the subscription and reports through onError (a silently skipped
+      // record could corrupt the live view).
+      if (bridge.listenLedgerEvent === undefined) {
+        throw new Error("Native bridge does not support ledger events");
+      }
+      let unlisten: (() => void) | undefined = undefined;
+      let active = true;
+      let invalid: Error | undefined;
+      const failStream = (error: Error) => {
+        if (!active) return;
+        active = false;
+        invalid = error;
+        unlisten?.();
+        void bridge
+          .invoke("shell_request_ledger_unsubscribe")
+          .catch(() => undefined);
+        onError?.(error);
+      };
+      unlisten = await bridge.listenLedgerEvent((event) => {
+        const record = decodeRequestLedgerRecord(event.payload);
+        if (record === undefined) {
+          failStream(
+            new Error(
+              "LuckyToken returned an invalid request ledger event",
+            ),
+          );
+          return;
+        }
+        if (active) listener({ type: "request_ledger", record });
+      });
+      try {
+        await bridge.invoke("shell_request_ledger_subscribe");
+      } catch (error) {
+        unlisten?.();
+        throw error;
+      }
+      if (invalid !== undefined) throw invalid;
+      return async () => {
+        if (!active) return;
+        active = false;
+        unlisten?.();
+        await bridge
+          .invoke("shell_request_ledger_unsubscribe")
+          .catch(() => undefined);
+      };
     },
 
     executeModelsCommand: (command) =>

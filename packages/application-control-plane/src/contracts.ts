@@ -1028,6 +1028,24 @@ export {
   assertLedgerOutcome,
   assertLedgerPhase,
 } from "./ledger-contract.js";
+export {
+  averageOutputSpeedUnavailableReason,
+  deriveRequestStatus,
+  formatDuration,
+  formatTimestamp,
+  formatTokensPerSecond,
+  formatCacheHitRate,
+  ledgerPhaseLabel,
+  projectAverageOutputTokensPerSecond,
+  projectRequestLedger,
+  projectRequestLedgerDetail,
+  projectRequestUsage,
+  protocolDisplayName,
+  type PrimaryStatus,
+  type RequestLedgerDetailProjection,
+  type RequestLedgerListProjection,
+  type RequestUsageProjection,
+} from "./ledger-projection.js";
 
 export type HelloResult =
   | {
