@@ -238,7 +238,7 @@ async function handleAnthropicMessages(
     const piOptions = composeOptions(
       invocation.options,
       {
-        sessionId: authResult.sessionId,
+        sessionId: authResult.effectiveSessionId,
         signal: request.signal,
         ...(authResult.projectDir === undefined
           ? {}

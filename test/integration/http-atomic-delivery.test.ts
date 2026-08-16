@@ -95,7 +95,7 @@ function dependencies(
   overrides: Partial<AnthropicMessagesHandlerOptions> = {},
 ): HttpBoundaryDependencies {
   const auth: Auth = {
-    resolve: async () => ({ authorized: true, sessionId: "session" }),
+    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
   };
   const models = {
     getModels: () => [model],
@@ -209,7 +209,7 @@ describe("atomic HTTP failure delivery", () => {
 
     try {
       const auth: Auth = {
-        resolve: async () => ({ authorized: true, sessionId: "session" }),
+        resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
       };
       const models = {
         getModels: () => [observableModel],

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import type {
-
-  ClientTokenCommand,
-
-  ModelsCommand,
-
-  RuntimeCommand,
-  SettingsCommand,
+import {
+  projectRequestIdentity,
+  type ClientTokenCommand,
+  type ClientTokenDirectoryRejection,
+  type ClientTokenScopeRef,
+  type MaskedClientTokenScope,
+  type ModelsCommand,
+  type RequestIdentityProjection,
+  type RuntimeCommand,
+  type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
@@ -68,8 +69,6 @@ export function App({ shell, retryConnection }: AppProps) {
   }, [snapshot.connection, shell]);
 
   const [modelsCommand, setModelsCommand] = useState<ModelsCommand>();
-
-
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -301,6 +300,10 @@ export function App({ shell, retryConnection }: AppProps) {
             settings={snapshot.connection.settings}
             shell={shell}
           />
+        ) : null}
+        {snapshot.activePage === "requests" &&
+        snapshot.connection.kind === "connected" ? (
+          <RequestsPage shell={shell} />
         ) : null}
         {(snapshot.activePage === "providers" ||
           snapshot.activePage === "models-aliases") &&
@@ -565,16 +568,42 @@ const TOKEN_PROTOCOLS = Object.freeze([
 
 interface ProtocolTokenView {
   readonly revision: number;
-  readonly maskedToken: string | undefined;
+  readonly scopes: readonly MaskedClientTokenScope[];
   readonly unknownProtocol: boolean;
 }
 
+type ScopeKey = "global" | `project:${string}`;
+
+function scopeKey(scope: MaskedClientTokenScope): ScopeKey {
+  return scope.type === "global" ? "global" : `project:${scope.projectDir}`;
+}
+
+function scopeRef(scope: MaskedClientTokenScope): ClientTokenScopeRef {
+  return scope.type === "global"
+    ? { type: "global" }
+    : { type: "project", projectDir: scope.projectDir as string };
+}
+
+/** Value-free backend canonicalization reasons rendered as friendly text;
+ *  the raw picked path never reaches the renderer's error surface. */
+const DIRECTORY_REJECTION_TEXT: Readonly<
+  Record<ClientTokenDirectoryRejection, string>
+> = {
+  not_found: "The selected directory no longer exists.",
+  not_a_directory: "The selected path is not a directory.",
+  inaccessible: "The selected directory is not accessible.",
+  race: "The directory changed while opening; try again.",
+  invalid: "The selected path is not a valid directory path.",
+};
+
 /**
- * Client Tokens page (Ticket 16): manages the one live global token per
- * enabled Client Protocol. Lists show masked metadata only; Reveal and Copy
- * are explicit local operations that return exactly the requested active
- * secret; Rotate and Delete are revision-locked two-step actions that
- * hot-apply immediately.
+ * Client Tokens page (Ticket 16 + Ticket 17): manages the one live global
+ * token and one token per canonical directory scope per enabled Client
+ * Protocol. Lists show masked metadata only; Reveal and Copy are explicit
+ * local operations; Rotate and Delete are revision-locked two-step actions
+ * that hot-apply immediately. Adding a directory token runs the native
+ * picker; the backend canonicalizes the picked path at the authority
+ * boundary — the renderer never becomes a filesystem authority.
  */
 function ClientTokensPage({
   settings,
@@ -620,7 +649,7 @@ function ClientTokensPage({
             ...previous,
             [protocolId]: {
               revision: result.revision,
-              maskedToken: undefined,
+              scopes: [],
               unknownProtocol: true,
             },
           }));
@@ -633,14 +662,11 @@ function ClientTokensPage({
           }));
           return;
         }
-        const globalScope = result.scopes?.find(
-          (scope) => scope.type === "global",
-        );
         setViews((previous) => ({
           ...previous,
           [protocolId]: {
             revision: result.revision,
-            maskedToken: globalScope?.maskedToken,
+            scopes: result.scopes ?? [],
             unknownProtocol: false,
           },
         }));
@@ -677,30 +703,41 @@ function ClientTokensPage({
     }
   };
 
-  const reveal = (protocolId: string) =>
+  const reveal = (protocolId: string, scope: MaskedClientTokenScope) =>
     run(protocolId, async () => {
       const result = await shell.executeClientTokenCommand({
         command: "reveal",
         protocolId,
+        scope: scopeRef(scope),
       });
       if (result.outcome !== "ok" || result.token === undefined) {
         throw new Error(result.error ?? "Client token scope does not exist");
       }
-      setRevealed((previous) => ({ ...previous, [protocolId]: result.token as string }));
+      setRevealed((previous) => ({
+        ...previous,
+        [`${protocolId}\u0000${scopeKey(scope)}`]: result.token as string,
+      }));
     });
 
-  const copy = (protocolId: string) =>
+  const copy = (protocolId: string, scope: MaskedClientTokenScope) =>
     run(protocolId, async () => {
       const result = await shell.executeClientTokenCommand({
         command: "reveal",
         protocolId,
+        scope: scopeRef(scope),
       });
       if (result.outcome !== "ok" || result.token === undefined) {
         throw new Error(result.error ?? "Client token scope does not exist");
       }
       await navigator.clipboard.writeText(result.token as string);
-      setCopied((previous) => ({ ...previous, [protocolId]: true }));
-      setRevealed((previous) => ({ ...previous, [protocolId]: result.token as string }));
+      setCopied((previous) => ({
+        ...previous,
+        [`${protocolId}\u0000${scopeKey(scope)}`]: true,
+      }));
+      setRevealed((previous) => ({
+        ...previous,
+        [`${protocolId}\u0000${scopeKey(scope)}`]: result.token as string,
+      }));
     });
 
   const mutate = (protocolId: string, command: ClientTokenCommand) =>
@@ -718,9 +755,41 @@ function ClientTokensPage({
       }
       setRevealed((previous) => {
         const next = { ...previous };
-        delete next[protocolId];
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${protocolId}\u0000`)) delete next[key];
+        }
         return next;
       });
+      await refresh(protocolId);
+    });
+
+  const addDirectory = (protocolId: string) =>
+    run(protocolId, async () => {
+      // The native picker returns the raw path (or undefined on cancel);
+      // only the backend canonicalizes it.
+      const picked = await shell.pickDirectory();
+      if (picked === undefined) return;
+      const result = await shell.executeClientTokenCommand({
+        command: "create",
+        protocolId,
+        scope: { type: "project", projectDir: picked },
+      });
+      if (result.outcome === "already_exists") {
+        await refresh(protocolId);
+        throw new Error("This directory already has a token.");
+      }
+      if (result.outcome === "invalid_directory" && result.reason !== undefined) {
+        throw new Error(DIRECTORY_REJECTION_TEXT[result.reason]);
+      }
+      if (result.outcome === "conflict") {
+        await refresh(protocolId);
+        throw new Error(
+          "The tokens changed elsewhere; the list was refreshed.",
+        );
+      }
+      if (result.outcome !== "ok") {
+        throw new Error(result.error ?? "Client Token create failed");
+      }
       await refresh(protocolId);
     });
 
@@ -728,12 +797,10 @@ function ClientTokensPage({
     <section className="client-tokens-page" aria-label="Client Tokens">
       {TOKEN_PROTOCOLS.map((protocol) => {
         const view = views[protocol.id];
-        const enabled =
-          settings?.[protocol.enableKey]?.value === true;
-        const hasToken = view?.maskedToken !== undefined;
+        const enabled = settings?.[protocol.enableKey]?.value === true;
         const busyHere = busy === protocol.id;
+        const scopeRows = view?.scopes ?? [];
         const confirmAction = confirming[protocol.id];
-        const secret = revealed[protocol.id];
         return (
           <section className="client-token-card" key={protocol.id}>
             <header>
@@ -744,66 +811,104 @@ function ClientTokensPage({
               <p>Loading client token state…</p>
             ) : view.unknownProtocol ? (
               <p>Not configured in this backend.</p>
-            ) : hasToken ? (
-              <code>{secret ?? (view.maskedToken as string)}</code>
-            ) : (
+            ) : scopeRows.length === 0 ? (
               <p className="client-token-warning">
                 No active client token — all model requests return 401 until
                 a token is created.
               </p>
+            ) : (
+              <div className="client-token-scopes">
+                {scopeRows.map((scope) => {
+                  const key = `${protocol.id}\u0000${scopeKey(scope)}`;
+                  const secret = revealed[key];
+                  const label =
+                    scope.type === "global"
+                      ? "Global"
+                      : (scope.projectDir as string);
+                  return (
+                    <div className="client-token-scope" key={key}>
+                      <code title={label}>
+                        {secret ?? scope.maskedToken}
+                      </code>
+                      {scope.type === "project" ? (
+                        <small className="client-token-dir">{label}</small>
+                      ) : null}
+                      <div className="client-token-actions">
+                        <button
+                          disabled={busyHere}
+                          onClick={() => void reveal(protocol.id, scope)}
+                          type="button"
+                        >
+                          {secret === undefined ? "Reveal" : "Hide"}
+                        </button>
+                        <button
+                          disabled={busyHere}
+                          onClick={() => void copy(protocol.id, scope)}
+                          type="button"
+                        >
+                          {copied[key] === true ? "Copied" : "Copy"}
+                        </button>
+                        <button
+                          className={
+                            confirmAction === "rotate" ? "confirming" : ""
+                          }
+                          disabled={busyHere}
+                          onClick={() =>
+                            confirmAction === "rotate"
+                              ? void mutate(protocol.id, {
+                                  command: "rotate",
+                                  protocolId: protocol.id,
+                                  expectedRevision:
+                                    (view as ProtocolTokenView).revision,
+                                  scope: scopeRef(scope),
+                                })
+                              : setConfirming((previous) => ({
+                                  ...previous,
+                                  [protocol.id]: "rotate",
+                                }))
+                          }
+                          type="button"
+                        >
+                          {confirmAction === "rotate"
+                            ? "Confirm rotate"
+                            : "Rotate"}
+                        </button>
+                        <button
+                          className={`danger${confirmAction === "remove" ? " confirming" : ""}`}
+                          disabled={busyHere}
+                          onClick={() =>
+                            confirmAction === "remove"
+                              ? void mutate(protocol.id, {
+                                  command: "remove",
+                                  protocolId: protocol.id,
+                                  expectedRevision:
+                                    (view as ProtocolTokenView).revision,
+                                  scope: scopeRef(scope),
+                                })
+                              : setConfirming((previous) => ({
+                                  ...previous,
+                                  [protocol.id]: "remove",
+                                }))
+                          }
+                          type="button"
+                        >
+                          {confirmAction === "remove"
+                            ? "Confirm remove"
+                            : "Remove"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            <div className="client-token-actions">
+            <div className="client-token-add">
               <button
-                disabled={busyHere || !hasToken || view?.unknownProtocol === true}
-                onClick={() => void reveal(protocol.id)}
+                disabled={busyHere || view?.unknownProtocol === true}
+                onClick={() => void addDirectory(protocol.id)}
                 type="button"
               >
-                {secret === undefined ? "Reveal" : "Hide"}
-              </button>
-              <button
-                disabled={busyHere || !hasToken}
-                onClick={() => void copy(protocol.id)}
-                type="button"
-              >
-                {copied[protocol.id] === true ? "Copied" : "Copy"}
-              </button>
-              <button
-                className={confirmAction === "rotate" ? "confirming" : ""}
-                disabled={busyHere || !hasToken}
-                onClick={() =>
-                  confirmAction === "rotate"
-                    ? void mutate(protocol.id, {
-                        command: "rotate",
-                        protocolId: protocol.id,
-                        expectedRevision: (view as ProtocolTokenView).revision,
-                      })
-                    : setConfirming((previous) => ({
-                        ...previous,
-                        [protocol.id]: "rotate",
-                      }))
-                }
-                type="button"
-              >
-                {confirmAction === "rotate" ? "Confirm rotate" : "Rotate"}
-              </button>
-              <button
-                className={`danger${confirmAction === "remove" ? " confirming" : ""}`}
-                disabled={busyHere || !hasToken}
-                onClick={() =>
-                  confirmAction === "remove"
-                    ? void mutate(protocol.id, {
-                        command: "remove",
-                        protocolId: protocol.id,
-                        expectedRevision: (view as ProtocolTokenView).revision,
-                      })
-                    : setConfirming((previous) => ({
-                        ...previous,
-                        [protocol.id]: "remove",
-                      }))
-                }
-                type="button"
-              >
-                {confirmAction === "remove" ? "Confirm remove" : "Remove"}
+                Add directory token…
               </button>
             </div>
             {errors[protocol.id] === undefined ||
@@ -813,6 +918,70 @@ function ClientTokensPage({
           </section>
         );
       })}
+    </section>
+  );
+}
+
+/**
+ * Requests page (Ticket 17 identity seam; Ticket 18 handoff): the public
+ * request identity ledger. Each row renders the client-provided session id
+ * or `-` through the shared projection; the internal effective session
+ * identity has no field in this contract and can never be rendered here.
+ */
+function RequestsPage({ shell }: { readonly shell: WindowsShellHost }) {
+  const [rows, setRows] = useState<readonly RequestIdentityProjection[]>([]);
+  const [error, setError] = useState<string | undefined>();
+  const refresh = useCallback(async () => {
+    try {
+      const result = await shell.getRequestIdentities();
+      setRows(
+        Object.freeze(
+          result.records.map((record) => projectRequestIdentity(record)),
+        ),
+      );
+      setError(undefined);
+    } catch {
+      setError("Request identities are unavailable.");
+    }
+  }, [shell]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  const formatTime = (time: number) =>
+    new Date(time).toLocaleTimeString();
+  return (
+    <section className="requests-page" aria-label="Requests">
+      <div className="requests-toolbar">
+        <strong>Recent authorized requests</strong>
+        <button disabled={rows.length === 0} onClick={() => void refresh()} type="button">
+          Refresh
+        </button>
+      </div>
+      {error === undefined ? null : <p className="client-token-error">{error}</p>}
+      {rows.length === 0 ? (
+        <p>No requests yet. Authorized model requests appear here.</p>
+      ) : (
+        <table className="requests-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Protocol</th>
+              <th>Client session</th>
+              <th>Project</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td>{formatTime(row.time)}</td>
+                <td>{row.protocolId}</td>
+                <td>{row.clientSessionId}</td>
+                <td>{row.projectDir ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </section>
   );
 }

@@ -169,6 +169,12 @@ impl SettingsCommand {
     }
 }
 
+/// Versioned Client Token commands (Ticket 16 + Ticket 17 directory scopes):
+/// the renderer manages the one live global token and one token per
+/// canonical directory scope per enabled Client Protocol. Mutations carry
+/// the expected revision from a prior list so a stale UI can never
+/// overwrite a newer token. Project scope inputs are raw picker paths; the
+/// backend canonicalizes them at the authority boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AutoStartAction {
     Status,
@@ -194,33 +200,54 @@ impl AutoStartAction {
     }
 }
 
-/// Versioned Client Token commands (Ticket 16): the renderer manages the one
-/// live protocol-global token per enabled Client Protocol. Mutations carry
-/// the expected revision from a prior list so a stale UI can never overwrite
-/// a newer token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientTokenCommand {
     List {
         protocol_id: String,
     },
+    Create {
+        protocol_id: String,
+        scope: ClientTokenScopeWire,
+        token: Option<String>,
+    },
     Reveal {
         protocol_id: String,
+        scope: Option<ClientTokenScopeWire>,
     },
     Rotate {
         protocol_id: String,
         expected_revision: u64,
+        scope: Option<ClientTokenScopeWire>,
         token: Option<String>,
     },
     Remove {
         protocol_id: String,
         expected_revision: u64,
+        scope: Option<ClientTokenScopeWire>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ClientTokenScopeWire {
+    #[serde(rename = "type")]
+    pub(crate) scope_type: String,
+    #[serde(rename = "projectDir", skip_serializing_if = "Option::is_none")]
+    pub(crate) project_dir: Option<String>,
+}
+
+fn scope_json(scope: &ClientTokenScopeWire) -> Value {
+    let mut value = json!({ "type": scope.scope_type });
+    if let Some(project_dir) = &scope.project_dir {
+        value["projectDir"] = json!(project_dir);
+    }
+    value
 }
 
 impl ClientTokenCommand {
     fn request_id(&self) -> &'static str {
         match self {
             Self::List { .. } => "desktop-client-tokens-list",
+            Self::Create { .. } => "desktop-client-tokens-create",
             Self::Reveal { .. } => "desktop-client-tokens-reveal",
             Self::Rotate { .. } => "desktop-client-tokens-rotate",
             Self::Remove { .. } => "desktop-client-tokens-remove",
@@ -359,9 +386,58 @@ pub(crate) type CommandFuture =
 pub(crate) type SettingsCommandFuture = Pin<
     Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+
+pub(crate) type ClientTokenCommandFuture = Pin<
+    Box<
+        dyn Future<Output = Result<ClientTokenCommandResultWire, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+pub(crate) type DiagnosticsWarningsFuture = Pin<
+    Box<
+        dyn Future<Output = Result<Vec<DiagnosticsWarningWire>, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+
+pub(crate) type RequestIdentitiesFuture = Pin<
+    Box<
+        dyn Future<Output = Result<Vec<RequestIdentityRecordWire>, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
+
 pub(crate) type ModelsCommandFuture = Pin<
     Box<dyn Future<Output = Result<ModelsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+
+pub(crate) trait ControlPlaneConnector: Send + Sync {
+    fn connect(&self) -> ConnectFuture;
+    fn command(&self, _command: RuntimeCommand) -> CommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn request_identities(&self) -> RequestIdentitiesFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct MaskedClientTokenScopeWire {
@@ -382,6 +458,8 @@ pub(crate) struct ClientTokenCommandResultWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
 }
 
@@ -396,6 +474,23 @@ pub(crate) struct DiagnosticsWarningWire {
     pub(crate) text: String,
 }
 
+/// Request identity ledger record (Ticket 17 identity seam; Ticket 18
+/// handoff): only the optional client-provided session id and the canonical
+/// project context ride the wire. The internal effective session identity
+/// is not a field of this contract, so the renderer can never show it as
+/// the client's id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RequestIdentityRecordWire {
+    pub(crate) id: u64,
+    pub(crate) time: u64,
+    #[serde(rename = "protocolId")]
+    pub(crate) protocol_id: String,
+    #[serde(rename = "clientSessionId", skip_serializing_if = "Option::is_none")]
+    pub(crate) client_session_id: Option<String>,
+    #[serde(rename = "projectDir", skip_serializing_if = "Option::is_none")]
+    pub(crate) project_dir: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 
 pub(crate) struct AutoStartResultWire {
@@ -406,43 +501,6 @@ pub(crate) struct AutoStartResultWire {
 
 pub(crate) type AutoStartFuture =
     Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
-
-pub(crate) type ClientTokenCommandFuture = Pin<
-    Box<
-        dyn Future<Output = Result<ClientTokenCommandResultWire, ConnectionFailure>>
-            + Send
-            + 'static,
-    >,
->;
-pub(crate) type DiagnosticsWarningsFuture = Pin<
-    Box<
-        dyn Future<Output = Result<Vec<DiagnosticsWarningWire>, ConnectionFailure>>
-            + Send
-            + 'static,
-    >,
->;
-
-pub(crate) trait ControlPlaneConnector: Send + Sync {
-    fn connect(&self) -> ConnectFuture;
-    fn command(&self, _command: RuntimeCommand) -> CommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-    fn models_command(&self, _command: ModelsCommand) -> ModelsCommandFuture {
-        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct SettingsCommandResultWire {
@@ -617,6 +675,22 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
             execute_diagnostics_warnings_session(&pipe_name, capability).await
         })
     }
+
+    fn request_identities(&self) -> RequestIdentitiesFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_request_identities_session(&pipe_name, capability).await
+        })
+    }
+
     fn models_command(&self, command: ModelsCommand) -> ModelsCommandFuture {
         let discovery = self.discovery.clone();
         Box::pin(async move {
@@ -929,13 +1003,35 @@ async fn execute_client_token_command_session(
                     "command": "list",
                     "protocolId": protocol_id,
                 }),
-                ClientTokenCommand::Reveal { protocol_id } => json!({
-                    "command": "reveal",
-                    "protocolId": protocol_id,
-                }),
+                ClientTokenCommand::Create {
+                    protocol_id,
+                    scope,
+                    token,
+                } => {
+                    let mut value = json!({
+                        "command": "create",
+                        "protocolId": protocol_id,
+                        "scope": scope_json(scope),
+                    });
+                    if let Some(token) = token {
+                        value["token"] = json!(token);
+                    }
+                    value
+                }
+                ClientTokenCommand::Reveal { protocol_id, scope } => {
+                    let mut value = json!({
+                        "command": "reveal",
+                        "protocolId": protocol_id,
+                    });
+                    if let Some(scope) = scope {
+                        value["scope"] = scope_json(scope);
+                    }
+                    value
+                }
                 ClientTokenCommand::Rotate {
                     protocol_id,
                     expected_revision,
+                    scope,
                     token,
                 } => {
                     let mut value = json!({
@@ -943,6 +1039,9 @@ async fn execute_client_token_command_session(
                         "protocolId": protocol_id,
                         "expectedRevision": expected_revision,
                     });
+                    if let Some(scope) = scope {
+                        value["scope"] = scope_json(scope);
+                    }
                     if let Some(token) = token {
                         value["token"] = json!(token);
                     }
@@ -951,11 +1050,18 @@ async fn execute_client_token_command_session(
                 ClientTokenCommand::Remove {
                     protocol_id,
                     expected_revision,
-                } => json!({
-                    "command": "remove",
-                    "protocolId": protocol_id,
-                    "expectedRevision": expected_revision,
-                }),
+                    scope,
+                } => {
+                    let mut value = json!({
+                        "command": "remove",
+                        "protocolId": protocol_id,
+                        "expectedRevision": expected_revision,
+                    });
+                    if let Some(scope) = scope {
+                        value["scope"] = scope_json(scope);
+                    }
+                    value
+                }
             };
             write_json_frame(
                 &mut pipe,
@@ -993,9 +1099,27 @@ fn decode_client_token_command_result(
     if !matches!(
         outcome,
         Some(
-            "ok" | "conflict" | "not_found" | "invalid_value" | "unknown_protocol" | "unavailable"
+            "ok" | "conflict"
+                | "not_found"
+                | "invalid_value"
+                | "already_exists"
+                | "invalid_directory"
+                | "unknown_protocol"
+                | "unavailable"
         )
     ) || result.get("revision").and_then(Value::as_u64).is_none()
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    // Value-free canonicalization rejection: only the reason taxonomy is
+    // forwarded; the raw input path never reaches the renderer.
+    let reason = result.get("reason").and_then(Value::as_str);
+    if (outcome == Some("invalid_directory")
+        && !matches!(
+            reason,
+            Some("not_found" | "not_a_directory" | "inaccessible" | "race" | "invalid")
+        ))
+        || (outcome != Some("invalid_directory") && result.get("reason").is_some())
     {
         return Err(ConnectionFailure::ProtocolError);
     }
@@ -1011,6 +1135,7 @@ fn decode_client_token_command_result(
             }
         }
         (ClientTokenCommand::List { .. }, Some("ok"))
+        | (ClientTokenCommand::Create { .. }, Some("ok"))
         | (ClientTokenCommand::Rotate { .. }, Some("ok"))
         | (ClientTokenCommand::Remove { .. }, Some("ok")) => {
             if result.get("token").is_some() || !valid_masked_scopes(result.get("scopes")) {
@@ -1211,6 +1336,132 @@ fn decode_diagnostics_warnings(
         });
     }
     Ok(warnings)
+}
+
+async fn execute_request_identities_session(
+    pipe_name: &str,
+    capability: String,
+) -> Result<Vec<RequestIdentityRecordWire>, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "get_request_identities",
+                    "requestId": "desktop-request-identities",
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_request_identities(&result)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// Strict identity record decode: the allowed key set has no
+/// effective-session field, so a record that ever carries the internal
+/// `effectiveSessionId` (or any other unknown key) is rejected instead of
+/// projected.
+fn decode_request_identities(
+    value: &Value,
+) -> Result<Vec<RequestIdentityRecordWire>, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("request_identities_result")
+        || value.get("requestId").and_then(Value::as_str) != Some("desktop-request-identities")
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let records = result.get("records").and_then(Value::as_array);
+    let Some(records) = records else {
+        return Err(ConnectionFailure::ProtocolError);
+    };
+    let allowed: &[&str] = &["id", "time", "protocolId", "clientSessionId", "projectDir"];
+    let uuid_pattern = regex_lite();
+    let mut output = Vec::with_capacity(records.len());
+    for record in records {
+        let Some(record) = record.as_object() else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        if record.keys().any(|key| !allowed.contains(&key.as_str())) {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let Some(id) = record.get("id").and_then(Value::as_u64) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        let Some(time) = record.get("time").and_then(Value::as_u64) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        let Some(protocol_id) = record.get("protocolId").and_then(Value::as_str) else {
+            return Err(ConnectionFailure::ProtocolError);
+        };
+        if protocol_id.is_empty() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let client_session_id = record.get("clientSessionId").and_then(Value::as_str);
+        if client_session_id.is_some_and(|value| !uuid_pattern(value)) {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let project_dir = record.get("projectDir").and_then(Value::as_str);
+        if project_dir.is_some_and(str::is_empty) {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        output.push(RequestIdentityRecordWire {
+            id,
+            time,
+            protocol_id: protocol_id.to_owned(),
+            client_session_id: client_session_id.map(str::to_owned),
+            project_dir: project_dir.map(str::to_owned),
+        });
+    }
+    Ok(output)
+}
+
+/// Minimal UUID-shape matcher (version 1-8 variant). Kept as a tiny local
+/// matcher so the shell does not pull a regex dependency for one check.
+fn regex_lite() -> impl Fn(&str) -> bool {
+    fn is_hex(byte: u8) -> bool {
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || (b'A'..=b'F').contains(&byte)
+    }
+    move |value: &str| {
+        let bytes = value.as_bytes();
+        bytes.len() == 36
+            && bytes[8] == b'-'
+            && bytes[13] == b'-'
+            && bytes[18] == b'-'
+            && bytes[23] == b'-'
+            && bytes[0..8].iter().all(|b| is_hex(*b))
+            && bytes[9..13].iter().all(|b| is_hex(*b))
+            && bytes[14] >= b'1'
+            && bytes[14] <= b'8'
+            && bytes[15..18].iter().all(|b| is_hex(*b))
+            && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B')
+            && bytes[20..23].iter().all(|b| is_hex(*b))
+            && bytes[24..36].iter().all(|b| is_hex(*b))
+    }
 }
 
 async fn execute_runtime_command<W>(
@@ -1807,6 +2058,10 @@ mod tests {
                 ClientTokenCommand::Rotate {
                     protocol_id: "anthropic-messages".to_owned(),
                     expected_revision: 2,
+                    scope: Some(ClientTokenScopeWire {
+                        scope_type: "project".to_owned(),
+                        project_dir: Some("C:\\picked\\path".to_owned()),
+                    }),
                     token: Some("canary-native-rotate-token".to_owned()),
                 },
             )
@@ -1866,6 +2121,22 @@ mod tests {
                 .and_then(|raw| raw.get("expectedRevision"))
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("scope"))
+                .and_then(|raw| raw.get("type"))
+                .and_then(Value::as_str),
+            Some("project")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("scope"))
+                .and_then(|raw| raw.get("projectDir"))
+                .and_then(Value::as_str),
+            Some("C:\\picked\\path")
         );
         assert_eq!(
             request
@@ -2227,5 +2498,150 @@ mod tests {
             result.sequence, 2,
             "status event after a skipped diagnostics event must surface"
         );
+    }
+}
+
+#[cfg(test)]
+mod ticket17_directory_scope_tests {
+    use super::*;
+
+    #[test]
+    fn create_command_serializes_scope_and_invalid_directory_reason_decodes() {
+        let command = ClientTokenCommand::Create {
+            protocol_id: "anthropic-messages".to_owned(),
+            scope: ClientTokenScopeWire {
+                scope_type: "project".to_owned(),
+                project_dir: Some("C:\\picked\\path".to_owned()),
+            },
+            token: None,
+        };
+        assert_eq!(command.request_id(), "desktop-client-tokens-create");
+        // Wire serialization mirrors the backend contract.
+        let serialized = serde_json::to_value(scope_json(&ClientTokenScopeWire {
+            scope_type: "project".to_owned(),
+            project_dir: Some("C:\\picked\\path".to_owned()),
+        }))
+        .expect("scope must serialize");
+        assert_eq!(serialized["type"], "project");
+        assert_eq!(serialized["projectDir"], "C:\\picked\\path");
+
+        // A value-free invalid_directory result decodes with its reason.
+        let decoded = decode_client_token_command_result(
+            &json!({
+                "type": "client_token_command_result",
+                "requestId": "desktop-client-tokens-create",
+                "result": {
+                    "outcome": "invalid_directory",
+                    "revision": 4,
+                    "reason": "not_found",
+                    "error": "Selected directory is not usable as a client token scope"
+                }
+            }),
+            &command,
+        )
+        .expect("invalid_directory result must decode");
+        assert_eq!(decoded.outcome, "invalid_directory");
+        assert_eq!(decoded.reason.as_deref(), Some("not_found"));
+        assert_eq!(
+            decoded.error.as_deref(),
+            Some("Selected directory is not usable as a client token scope")
+        );
+
+        // A reason that is not part of the taxonomy never decodes.
+        let malformed = decode_client_token_command_result(
+            &json!({
+                "type": "client_token_command_result",
+                "requestId": "desktop-client-tokens-create",
+                "result": {
+                    "outcome": "invalid_directory",
+                    "revision": 4,
+                    "reason": "C:\\raw\\path",
+                    "error": "Selected directory is not usable as a client token scope"
+                }
+            }),
+            &command,
+        );
+        assert!(malformed.is_err());
+        // An already_exists result decodes (duplicate scope).
+        let duplicate = decode_client_token_command_result(
+            &json!({
+                "type": "client_token_command_result",
+                "requestId": "desktop-client-tokens-create",
+                "result": {
+                    "outcome": "already_exists",
+                    "revision": 4,
+                    "error": "Client token scope already has a token"
+                }
+            }),
+            &command,
+        )
+        .expect("already_exists result must decode");
+        assert_eq!(duplicate.outcome, "already_exists");
+    }
+
+    #[test]
+    fn request_identities_reject_effective_session_records_and_unknown_keys() {
+        let base = json!({
+            "type": "request_identities_result",
+            "requestId": "desktop-request-identities",
+            "result": { "records": [
+                {
+                    "id": 2,
+                    "time": 1700000000000_i64,
+                    "protocolId": "anthropic-messages",
+                    "clientSessionId": "11111111-1111-4111-8111-111111111111",
+                    "projectDir": "C:\\canonical\\project"
+                },
+                {
+                    "id": 1,
+                    "time": 1699999999999_i64,
+                    "protocolId": "openai-responses"
+                }
+            ] }
+        });
+        let records = decode_request_identities(&base).expect("valid records must decode");
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].client_session_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            records[0].project_dir.as_deref(),
+            Some("C:\\canonical\\project")
+        );
+        assert_eq!(records[1].client_session_id, None);
+
+        // The internal effective session identity must never reach the
+        // renderer: a record carrying it is rejected at the bridge.
+        let leaking = json!({
+            "type": "request_identities_result",
+            "requestId": "desktop-request-identities",
+            "result": { "records": [
+                {
+                    "id": 3,
+                    "time": 1700000000000_i64,
+                    "protocolId": "anthropic-messages",
+                    "effectiveSessionId": "22222222-2222-4222-8222-222222222222"
+                }
+            ] }
+        });
+        assert!(decode_request_identities(&leaking).is_err());
+        // Unknown keys and non-UUID client session ids are rejected too.
+        let unknown = json!({
+            "type": "request_identities_result",
+            "requestId": "desktop-request-identities",
+            "result": { "records": [
+                { "id": 4, "time": 1, "protocolId": "x", "sessionId": "abc" }
+            ] }
+        });
+        assert!(decode_request_identities(&unknown).is_err());
+        let not_uuid = json!({
+            "type": "request_identities_result",
+            "requestId": "desktop-request-identities",
+            "result": { "records": [
+                { "id": 5, "time": 1, "protocolId": "x", "clientSessionId": "not-a-uuid" }
+            ] }
+        });
+        assert!(decode_request_identities(&not_uuid).is_err());
     }
 }

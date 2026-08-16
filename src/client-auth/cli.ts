@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
-import { resolve } from "node:path";
 import { stdout } from "node:process";
 
 import {
@@ -8,36 +6,44 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   type ClientTokenCommand,
+  type ClientTokenScopeRef,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import { readControlPlaneDescriptor } from "../control-plane-discovery.js";
+import {
+  resolveCanonicalDirectoryForScopeLookup,
+} from "./canonical-directory.js";
 import {
   createFileClientTokenStore,
   type ClientTokenScope,
 } from "./file-token-store.js";
 
 /**
- * CLI Client Token commands (Ticket 16 + repair).
+ * CLI Client Token commands (Ticket 16 + Ticket 17 directory scopes).
  *
  * Two modes share the same action verbs:
  *
- * - Live mode (`--descriptor <path>`): list/reveal/rotate/remove run through
- *   the versioned Control Plane Client Token channel against the running
- *   application's live authority. Every mutation is revision-locked, so CLI
- *   and UI can never lose an update or resurrect an old token.
+ * - Live mode (`--descriptor <path>`): list/reveal/rotate/remove (and
+ *   project-scope create) run through the versioned Control Plane Client
+ *   Token channel against the running application's live authority. Every
+ *   mutation is revision-locked, so CLI and UI can never lose an update or
+ *   resurrect an old token. Project scope inputs are raw paths; the backend
+ *   canonicalizes them at the authority boundary.
  *
- * - Offline mode (`--config <path>`): the restored directory-token file
- *   management (create/rotate/remove/list with --global or --project)
- *   operates directly on the protocol's token file, exactly as before
- *   Ticket 16. Mutations carry the file's current revision as a
- *   compare-and-swap generation, so an offline write can never clobber a
- *   newer state written by a running application.
+ * - Offline mode (`--config <path>`): the restored token file management
+ *   (create/rotate/remove/list with --global or --project) operates directly
+ *   on the protocol's token file. Project inputs are resolved through the
+ *   same backend-owned canonical directory contract, and mutations carry
+ *   the file's current revision as a compare-and-swap generation, so an
+ *   offline write can never clobber a newer state written by a running
+ *   application.
  */
 
 const CLIENT_TOKEN_HELP = `LuckyToken client-token
 
 Usage (live, running application):
-  luckytoken client-token <list|reveal|rotate|remove> <protocol> --descriptor <path> [--token <value>]
+  luckytoken client-token <list|reveal|rotate|remove> <protocol> --descriptor <path> [--project <path>] [--token <value>]
+  luckytoken client-token create <protocol> --descriptor <path> --project <path> [--token <value>]
 
 Usage (offline token file):
   luckytoken client-token <create|rotate|remove|list> <protocol> --config <path> [--global|--project <path>] [--token <value>]
@@ -46,16 +52,17 @@ Options:
   --descriptor <path>  Current-user Control Plane discovery descriptor (live mode)
   --config <path>      Strict LuckyToken JSON configuration (offline token file mode)
   --global             Select the protocol-global client token
-  --project <path>     Select a project-bound client token
+  --project <path>     Select a project-bound client token (canonicalized by the backend)
   --token <value>      Use an explicit token for create/rotate
 `;
 
 type ParsedClientTokenArguments =
   | {
       readonly mode: "live";
-      readonly action: "list" | "reveal" | "rotate" | "remove";
+      readonly action: "list" | "create" | "reveal" | "rotate" | "remove";
       readonly protocolId: string;
       readonly descriptorPath: string;
+      readonly scope: ClientTokenScopeRef;
       readonly token?: string;
     }
   | {
@@ -146,27 +153,32 @@ function parseClientTokenArguments(
   if (descriptorPath !== undefined) {
     if (
       action !== "list" &&
+      action !== "create" &&
       action !== "reveal" &&
       action !== "rotate" &&
       action !== "remove"
     ) {
-      throw new Error(
-        action === "create"
-          ? "create is an offline token-file action; the running application creates tokens when a Client Protocol is enabled"
-          : `Unknown client-token action for the live Control Plane: ${action}`,
-      );
+      throw new Error(`Unknown client-token action for the live Control Plane: ${action}`);
     }
-    if (globalScope || projectPath !== undefined) {
-      throw new Error("Live mode does not accept --global or --project");
+    if (globalScope && projectPath !== undefined) {
+      throw new Error("Select at most one of --global or --project");
     }
-    if (action !== "rotate" && explicitToken !== undefined) {
-      throw new Error("--token is only valid for rotate in live mode");
+    if (action === "create" && projectPath === undefined) {
+      throw new Error("Live create requires --project <path>");
     }
+    if (action !== "create" && action !== "rotate" && explicitToken !== undefined) {
+      throw new Error("--token is only valid for create/rotate");
+    }
+    const scope: ClientTokenScopeRef =
+      projectPath === undefined
+        ? { type: "global" }
+        : { type: "project", projectDir: projectPath };
     return {
       mode: "live",
       action,
       protocolId,
       descriptorPath,
+      scope,
       ...(explicitToken === undefined ? {} : { token: explicitToken }),
     };
   }
@@ -202,7 +214,7 @@ function parseClientTokenArguments(
   }
   const scope: ClientTokenScope = globalScope
     ? { type: "global" }
-    : { type: "project", projectDir: resolve(projectPath as string) };
+    : { type: "project", projectDir: projectPath as string };
   return {
     mode: "offline",
     action,
@@ -213,7 +225,7 @@ function parseClientTokenArguments(
   };
 }
 
-function scopeLabel(scope: ClientTokenScope): string {
+function scopeLabel(scope: ClientTokenScope | ClientTokenScopeRef): string {
   return scope.type === "global" ? "global" : `project ${scope.projectDir}`;
 }
 
@@ -267,10 +279,38 @@ async function runLiveClientTokenCli(
       return;
     }
 
+    if (parsed.action === "create") {
+      // Directory scopes only: the running application owns global-scope
+      // creation through protocol enablement.
+      const result = await execute({
+        command: "create",
+        protocolId: parsed.protocolId,
+        scope: parsed.scope,
+        ...(parsed.token === undefined ? {} : { token: parsed.token }),
+      });
+      if (result.outcome !== "ok") {
+        throw new Error(result.error ?? "Client Token create failed");
+      }
+      stdout.write(
+        `Created ${scopeLabel(parsed.scope)} token for ${parsed.protocolId}.\n`,
+      );
+      if (parsed.token === undefined) {
+        // Explicit local reveal of the freshly generated active token.
+        const revealed = await execute({
+          command: "reveal",
+          protocolId: parsed.protocolId,
+          scope: parsed.scope,
+        });
+        if (revealed.outcome === "ok") stdout.write(`Token: ${revealed.token}\n`);
+      }
+      return;
+    }
+
     if (parsed.action === "reveal") {
       const result = await execute({
         command: "reveal",
         protocolId: parsed.protocolId,
+        scope: parsed.scope,
       });
       if (result.outcome !== "ok") {
         throw new Error(result.error ?? "Client Token reveal failed");
@@ -295,25 +335,30 @@ async function runLiveClientTokenCli(
             command: "rotate",
             protocolId: parsed.protocolId,
             expectedRevision: listed.revision,
+            scope: parsed.scope,
             ...(parsed.token === undefined ? {} : { token: parsed.token }),
           }
         : {
             command: "remove",
             protocolId: parsed.protocolId,
             expectedRevision: listed.revision,
+            scope: parsed.scope,
           };
     const result = await execute(command);
     if (result.outcome !== "ok") {
       throw new Error(result.error ?? `Client Token ${parsed.action} failed`);
     }
     stdout.write(
-      `${parsed.action === "rotate" ? "Rotated" : "Removed"} the global client token for ${parsed.protocolId}.\n`,
+      parsed.scope.type === "global"
+        ? `${parsed.action === "rotate" ? "Rotated" : "Removed"} the global client token for ${parsed.protocolId}.\n`
+        : `${parsed.action === "rotate" ? "Rotated" : "Removed"} ${scopeLabel(parsed.scope)} token for ${parsed.protocolId}.\n`,
     );
     if (parsed.action === "rotate" && parsed.token === undefined) {
       // Explicit local reveal of the freshly generated active token.
       const revealed = await execute({
         command: "reveal",
         protocolId: parsed.protocolId,
+        scope: parsed.scope,
       });
       if (revealed.outcome === "ok") stdout.write(`Token: ${revealed.token}\n`);
     }
@@ -349,36 +394,64 @@ async function runOfflineClientTokenCli(
     for (const scope of scopes) stdout.write(`${scopeLine(scope)}\n`);
     return;
   }
-  if (parsed.action === "create" && parsed.scope.type === "project") {
-    const project = await stat(parsed.scope.projectDir);
-    if (!project.isDirectory()) {
-      throw new Error(
-        `Project path is not a directory: ${parsed.scope.projectDir}`,
-      );
+  // Ticket 17: every project input resolves through the backend-owned
+  // canonical directory contract before any persistence or comparison, so
+  // CLI aliases can never create a duplicate scope or bypass the running
+  // authority's identity rules. Repair 01: once the directory has
+  // disappeared, only an input that exactly matches a persisted canonical
+  // scope identity may still manage the orphan scope (rotate/remove);
+  // creation never uses the fallback and keeps failing on missing paths.
+  let scope = parsed.scope;
+  if (scope.type === "project") {
+    const persisted =
+      parsed.action === "create"
+        ? new Set<string>()
+        : new Set(
+            (await store.list())
+              .filter(
+                (entry): entry is Extract<ClientTokenScope, { type: "project" }> =>
+                  entry.type === "project",
+              )
+              .map((entry) => entry.projectDir),
+          );
+    const resolved = await resolveCanonicalDirectoryForScopeLookup(
+      scope.projectDir,
+      persisted,
+    );
+    if (resolved.outcome !== "ok") {
+      const reasonText = {
+        not_found: "The directory does not exist",
+        not_a_directory: "The path is not a directory",
+        inaccessible: "The directory is not accessible",
+        race: "The directory changed while opening; try again",
+        invalid: "The path is not a valid directory path",
+      }[resolved.outcome];
+      throw new Error(reasonText);
     }
+    scope = { type: "project", projectDir: resolved.canonicalDir };
   }
   // The file's revision is the compare-and-swap generation: an offline
   // mutation can never overwrite a state a running application wrote after
   // this command started.
   const current = await store.snapshot();
   if (parsed.action === "remove") {
-    const removed = await store.remove(parsed.scope, current.revision);
+    const removed = await store.remove(scope, current.revision);
     if (!removed) {
       throw new Error(
-        `Client token scope does not exist: ${scopeLabel(parsed.scope)}`,
+        `Client token scope does not exist: ${scopeLabel(scope)}`,
       );
     }
     stdout.write(
-      `Removed ${scopeLabel(parsed.scope)} token for ${parsed.protocolId}.\n`,
+      `Removed ${scopeLabel(scope)} token for ${parsed.protocolId}.\n`,
     );
   } else {
     const token = await store[parsed.action](
-      parsed.scope,
+      scope,
       parsed.token,
       current.revision,
     );
     stdout.write(
-      `${parsed.action === "create" ? "Created" : "Rotated"} ${scopeLabel(parsed.scope)} token for ${parsed.protocolId}.\n`,
+      `${parsed.action === "create" ? "Created" : "Rotated"} ${scopeLabel(scope)} token for ${parsed.protocolId}.\n`,
     );
     if (parsed.token === undefined) stdout.write(`Token: ${token}\n`);
   }

@@ -279,26 +279,46 @@ export interface StatusEvent {
 }
 
 /**
- * Versioned Client Token commands (Ticket 16): UI and CLI manage the one
- * active protocol-global token through these commands. List results are
- * masked metadata; Reveal is the only command that returns the active
- * secret, and only for the requested protocol. Mutations carry the expected
- * revision from a prior list so a stale UI/CLI can never overwrite a newer
- * token.
+ * Versioned Client Token commands (Ticket 16 + Ticket 17 directory scopes):
+ * UI and CLI manage the one active protocol-global token and canonical
+ * directory-scoped tokens through these commands. List results are masked
+ * metadata; Reveal is the only command that returns the active secret, and
+ * only for the requested scope. Mutations carry the expected revision from
+ * a prior list so a stale UI/CLI can never overwrite a newer token.
+ *
+ * Project scope inputs are raw picker/CLI directory paths; the backend
+ * resolves them to the canonical real filesystem identity at the authority
+ * boundary before any persistence or comparison.
  */
+export type ClientTokenScopeRef =
+  | { readonly type: "global" }
+  | { readonly type: "project"; readonly projectDir: string };
+
 export type ClientTokenCommand =
   | { readonly command: "list"; readonly protocolId: string }
-  | { readonly command: "reveal"; readonly protocolId: string }
+  | {
+      readonly command: "create";
+      readonly protocolId: string;
+      readonly scope: ClientTokenScopeRef;
+      readonly token?: string;
+    }
+  | {
+      readonly command: "reveal";
+      readonly protocolId: string;
+      readonly scope?: ClientTokenScopeRef;
+    }
   | {
       readonly command: "rotate";
       readonly protocolId: string;
       readonly expectedRevision: number;
+      readonly scope?: ClientTokenScopeRef;
       readonly token?: string;
     }
   | {
       readonly command: "remove";
       readonly protocolId: string;
       readonly expectedRevision: number;
+      readonly scope?: ClientTokenScopeRef;
     };
 
 export type ClientTokenCommandOutcome =
@@ -306,13 +326,25 @@ export type ClientTokenCommandOutcome =
   | "conflict"
   | "not_found"
   | "invalid_value"
+  | "already_exists"
+  | "invalid_directory"
   | "unknown_protocol"
   | "unavailable";
+
+/** Value-free backend canonicalization failure taxonomy (never a raw
+ *  input path). */
+export type ClientTokenDirectoryRejection =
+  | "not_found"
+  | "not_a_directory"
+  | "inaccessible"
+  | "race"
+  | "invalid";
 
 /** Masked scope metadata; the mask marker guarantees the wire never carries
  *  a raw token in list/mutation results. */
 export interface MaskedClientTokenScope {
   readonly type: "global" | "project";
+  /** Canonical real filesystem identity, backend-verified. */
   readonly projectDir?: string;
   readonly maskedToken: string;
 }
@@ -321,8 +353,10 @@ export interface ClientTokenCommandResult {
   readonly outcome: ClientTokenCommandOutcome;
   readonly revision: number;
   readonly scopes?: readonly MaskedClientTokenScope[];
-  /** Present only for an explicit Reveal of the active global token. */
+  /** Present only for an explicit Reveal of the requested active token. */
   readonly token?: string;
+  /** Present only with outcome "invalid_directory". */
+  readonly reason?: ClientTokenDirectoryRejection;
   readonly error?: string;
 }
 
@@ -330,6 +364,61 @@ export interface ClientTokenCommandResult {
 export type ClientTokenCommandHandler = (
   command: ClientTokenCommand,
 ) => Promise<ClientTokenCommandResult>;
+
+/**
+ * Request identity ledger seam (Ticket 17, Ticket 18 handoff): the public
+ * projection carries only the optional client-provided session identity and
+ * the canonical project context. The internal effective session identity is
+ * not a field of this contract, so no ledger, wire decoder, or renderer can
+ * substitute it for the client's id.
+ */
+export interface RequestIdentityRecord {
+  readonly id: number;
+  readonly time: number;
+  readonly protocolId: string;
+  readonly clientSessionId?: string;
+  readonly projectDir?: string;
+}
+
+/** Observation input (Ticket 17 identity seam): carries only the optional
+ *  client-provided session identity and canonical project context; the
+ *  internal effective session identity is not a field of this contract. */
+export interface RequestIdentityFact {
+  readonly clientSessionId?: string;
+  readonly projectDir?: string;
+}
+
+export interface RequestIdentitiesQueryResult {
+  readonly records: readonly RequestIdentityRecord[];
+}
+
+export type RequestIdentitiesQueryHandler = (
+) => Promise<RequestIdentitiesQueryResult>;
+
+/** Public renderer projection: the client identity is always a displayable
+ *  string and a missing one renders as `-`. The effective session identity
+ *  has no field here, so it can never be projected as the client's id. */
+export interface RequestIdentityProjection {
+  readonly id: number;
+  readonly time: number;
+  readonly protocolId: string;
+  readonly clientSessionId: string;
+  readonly projectDir?: string;
+}
+
+export function projectRequestIdentity(
+  record: RequestIdentityRecord,
+): RequestIdentityProjection {
+  return Object.freeze({
+    id: record.id,
+    time: record.time,
+    protocolId: record.protocolId,
+    clientSessionId: record.clientSessionId ?? "-",
+    ...(record.projectDir === undefined
+      ? {}
+      : { projectDir: record.projectDir }),
+  });
+}
 
 export interface ControlPlaneEndpoint {
   readonly pipeName: string;
@@ -501,8 +590,7 @@ export interface ControlPlaneClient {
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
-
-
+  getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,

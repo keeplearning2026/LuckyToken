@@ -2,6 +2,12 @@ import { randomBytes } from "node:crypto";
 
 import type { AuthorizedClient } from "../auth.js";
 import {
+  createRealFilesystemCanonicalDirectoryResolver,
+  resolveCanonicalDirectoryForScopeLookup,
+  type CanonicalDirectoryFailureReason,
+  type CanonicalDirectoryResolver,
+} from "./canonical-directory.js";
+import {
   ClientTokenStaleRevisionError,
   type FileClientTokenStore,
 } from "./file-token-store.js";
@@ -47,6 +53,29 @@ export class ClientTokenScopeNotFoundError extends Error {
   }
 }
 
+export class ClientTokenScopeExistsError extends Error {
+  readonly code = "SCOPE_EXISTS" as const;
+
+  constructor() {
+    super("Client token scope already has a token");
+    this.name = "ClientTokenScopeExistsError";
+  }
+}
+
+export class ClientTokenDirectoryRejectionError extends Error {
+  readonly code = "INVALID_DIRECTORY" as const;
+  readonly reason: CanonicalDirectoryFailureReason;
+
+  constructor(reason: CanonicalDirectoryFailureReason) {
+    super("Selected directory is not usable as a client token scope");
+    this.name = "ClientTokenDirectoryRejectionError";
+    this.reason = reason;
+  }
+}
+
+/** Value-free canonicalization failure reason (never the raw input path). */
+export type ClientTokenDirectoryRejectionReason = CanonicalDirectoryFailureReason;
+
 export class ClientTokenInvalidValueError extends Error {
   readonly code = "INVALID_VALUE" as const;
 
@@ -59,6 +88,13 @@ export class ClientTokenInvalidValueError extends Error {
 export interface LiveClientTokenAuthorityOptions {
   readonly store: FileClientTokenStore;
   readonly generateToken?: () => string;
+  /**
+   * Backend-owned canonical directory contract (Ticket 17): every project
+   * scope input resolves through this resolver inside the authority lock;
+   * the renderer, CLI, and direct Control Plane callers can never bypass
+   * it. Defaults to the real filesystem resolver.
+   */
+  readonly resolveCanonicalDirectory?: CanonicalDirectoryResolver;
 }
 
 export interface LiveClientTokenAuthority {
@@ -71,11 +107,33 @@ export interface LiveClientTokenAuthority {
    * disabled→enabled transition (no `freshOnly`) may.
    */
   ensureGlobal(options?: { readonly freshOnly?: boolean }): Promise<boolean>;
+  /**
+   * Creates exactly one token for the canonical identity of `inputDir`.
+   * Aliases of one directory resolve to one scope; a scope that already has
+   * a token rejects with `ClientTokenScopeExistsError` and no duplicate is
+   * ever persisted.
+   */
+  createProject(
+    inputDir: string,
+    token?: string,
+  ): Promise<{ readonly canonicalDir: string; readonly listing: ClientTokenAuthorityListing }>;
   list(): Promise<ClientTokenAuthorityListing>;
   /** Explicit local operation: returns only the active global secret. */
   reveal(): Promise<string>;
+  /** Explicit local operation: returns only the active secret of the
+   *  canonical scope for `inputDir`. */
+  revealProject(inputDir: string): Promise<string>;
   rotate(expectedRevision: number, token?: string): Promise<ClientTokenAuthorityListing>;
+  rotateProject(
+    expectedRevision: number,
+    inputDir: string,
+    token?: string,
+  ): Promise<ClientTokenAuthorityListing>;
   remove(expectedRevision: number): Promise<ClientTokenAuthorityListing>;
+  removeProject(
+    expectedRevision: number,
+    inputDir: string,
+  ): Promise<ClientTokenAuthorityListing>;
   authorize(token: string): AuthorizedClient | undefined;
   /** Narrow known-value scrub capability (Ticket 07 F4) over the current
    *  owned token values; follows rotate/remove/ensure live. */
@@ -97,6 +155,9 @@ export async function createLiveClientTokenAuthority(
 ): Promise<LiveClientTokenAuthority> {
   const generateToken =
     options.generateToken ?? (() => `lt_${randomBytes(32).toString("base64url")}`);
+  const resolveCanonicalDirectory =
+    options.resolveCanonicalDirectory ??
+    createRealFilesystemCanonicalDirectoryResolver();
   let globalToken: string | undefined;
   let globalDeleted = false;
   let projectTokens = new Map<string, string>();
@@ -156,6 +217,39 @@ export async function createLiveClientTokenAuthority(
         : new RegExp(owned.map(escapePattern).join("|"), "gu");
   };
 
+  /** Canonicalization failures carry a value-free reason; the raw input
+   *  path never appears in the rejection. */
+  const canonicalize = async (inputDir: string): Promise<string> => {
+    const result = await resolveCanonicalDirectory.resolve(inputDir);
+    if (result.outcome !== "ok") {
+      throw new ClientTokenDirectoryRejectionError(result.outcome);
+    }
+    return result.canonicalDir;
+  };
+
+  /**
+   * Scope-lookup canonicalization (Ticket 17 repair 01): while the
+   * directory exists, alias/case/junction resolution applies. Once it has
+   * disappeared, the stored canonical identity is authoritative — only an
+   * input that exactly matches a persisted canonical scope key may manage
+   * the orphan scope. An arbitrary missing path or a former alias that no
+   * longer resolves keeps the value-free rejection. Creation never uses
+   * this rule.
+   */
+  const canonicalizeForScopeLookup = async (
+    inputDir: string,
+  ): Promise<string> => {
+    const result = await resolveCanonicalDirectoryForScopeLookup(
+      inputDir,
+      new Set(projectTokens.keys()),
+      resolveCanonicalDirectory,
+    );
+    if (result.outcome !== "ok") {
+      throw new ClientTokenDirectoryRejectionError(result.outcome);
+    }
+    return result.canonicalDir;
+  };
+
   const live: LiveClientTokenAuthority = Object.freeze({
     get revision(): number {
       return revision;
@@ -198,11 +292,68 @@ export async function createLiveClientTokenAuthority(
     list(): Promise<ClientTokenAuthorityListing> {
       return withLock(async () => listing());
     },
+    createProject(
+      inputDir: string,
+      token?: string,
+    ): Promise<{
+      readonly canonicalDir: string;
+      readonly listing: ClientTokenAuthorityListing;
+    }> {
+      return withLock(async () => {
+        const canonicalDir = await canonicalize(inputDir);
+        if (projectTokens.has(canonicalDir)) {
+          throw new ClientTokenScopeExistsError();
+        }
+        const createdToken = token ?? generateToken();
+        if (
+          createdToken === globalToken ||
+          [...projectTokens.values()].includes(createdToken)
+        ) {
+          throw new ClientTokenInvalidValueError(
+            "Client token already belongs to another scope",
+          );
+        }
+        try {
+          await options.store.create(
+            { type: "project", projectDir: canonicalDir },
+            createdToken,
+            revision,
+          );
+        } catch (error) {
+          if (!(error instanceof ClientTokenStaleRevisionError)) throw error;
+          // The authoritative file advanced since this mirror (e.g. an
+          // offline directory-token CLI write while the app is running):
+          // converge and retry the idempotent creation once. Creation can
+          // never clobber a concurrent mutation.
+          await convergeOnStale();
+          if (projectTokens.has(canonicalDir)) {
+            throw new ClientTokenScopeExistsError();
+          }
+          await options.store.create(
+            { type: "project", projectDir: canonicalDir },
+            createdToken,
+            revision,
+          );
+        }
+        await refresh();
+        return { canonicalDir, listing: listing() };
+      });
+    },
     reveal(): Promise<string> {
       if (globalToken === undefined) {
         return Promise.reject(new ClientTokenScopeNotFoundError());
       }
       return Promise.resolve(globalToken);
+    },
+    revealProject(inputDir: string): Promise<string> {
+      return withLock(async () => {
+        const canonicalDir = await canonicalizeForScopeLookup(inputDir);
+        const token = projectTokens.get(canonicalDir);
+        if (token === undefined) {
+          throw new ClientTokenScopeNotFoundError();
+        }
+        return token;
+      });
     },
     rotate(
       expectedRevision: number,
@@ -210,6 +361,10 @@ export async function createLiveClientTokenAuthority(
     ): Promise<ClientTokenAuthorityListing> {
       return withLock(async () => {
         if (expectedRevision !== revision) {
+          // The authoritative file may have advanced behind this mirror
+          // (e.g. an offline CLI write): converge before reporting the
+          // conflict so the next list/authorization observes current state.
+          await convergeOnStale();
           throw new ClientTokenStaleRevisionError();
         }
         if (globalToken === undefined) {
@@ -245,9 +400,92 @@ export async function createLiveClientTokenAuthority(
         return listing();
       });
     },
+    rotateProject(
+      expectedRevision: number,
+      inputDir: string,
+      token?: string,
+    ): Promise<ClientTokenAuthorityListing> {
+      return withLock(async () => {
+        const canonicalDir = await canonicalizeForScopeLookup(inputDir);
+        if (expectedRevision !== revision) {
+          // The authoritative file may have advanced behind this mirror
+          // (e.g. an offline CLI write): converge before reporting the
+          // conflict so the next list/authorization observes current state.
+          await convergeOnStale();
+          throw new ClientTokenStaleRevisionError();
+        }
+        const currentToken = projectTokens.get(canonicalDir);
+        if (currentToken === undefined) {
+          throw new ClientTokenScopeNotFoundError();
+        }
+        const replacement = token ?? generateToken();
+        if (replacement === currentToken) {
+          throw new ClientTokenInvalidValueError(
+            "Replacement client token must be different from the current token",
+          );
+        }
+        if (
+          replacement === globalToken ||
+          [...projectTokens.values()].includes(replacement)
+        ) {
+          throw new ClientTokenInvalidValueError(
+            "Client token already belongs to another scope",
+          );
+        }
+        try {
+          await options.store.rotate(
+            { type: "project", projectDir: canonicalDir },
+            replacement,
+            expectedRevision,
+          );
+        } catch (error) {
+          if (error instanceof ClientTokenStaleRevisionError) {
+            await convergeOnStale();
+          }
+          throw error;
+        }
+        await refresh();
+        return listing();
+      });
+    },
+    removeProject(
+      expectedRevision: number,
+      inputDir: string,
+    ): Promise<ClientTokenAuthorityListing> {
+      return withLock(async () => {
+        const canonicalDir = await canonicalizeForScopeLookup(inputDir);
+        if (expectedRevision !== revision) {
+          // The authoritative file may have advanced behind this mirror
+          // (e.g. an offline CLI write): converge before reporting the
+          // conflict so the next list/authorization observes current state.
+          await convergeOnStale();
+          throw new ClientTokenStaleRevisionError();
+        }
+        if (!projectTokens.has(canonicalDir)) {
+          throw new ClientTokenScopeNotFoundError();
+        }
+        try {
+          await options.store.remove(
+            { type: "project", projectDir: canonicalDir },
+            expectedRevision,
+          );
+        } catch (error) {
+          if (error instanceof ClientTokenStaleRevisionError) {
+            await convergeOnStale();
+          }
+          throw error;
+        }
+        await refresh();
+        return listing();
+      });
+    },
     remove(expectedRevision: number): Promise<ClientTokenAuthorityListing> {
       return withLock(async () => {
         if (expectedRevision !== revision) {
+          // The authoritative file may have advanced behind this mirror
+          // (e.g. an offline CLI write): converge before reporting the
+          // conflict so the next list/authorization observes current state.
+          await convergeOnStale();
           throw new ClientTokenStaleRevisionError();
         }
         if (globalToken === undefined) {

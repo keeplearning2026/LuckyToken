@@ -91,7 +91,7 @@ function dependencies(
   passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
-    resolve: async () => ({ authorized: true, sessionId: "session" }),
+    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
   };
   const options: AnthropicMessagesHandlerOptions = {
     models,

@@ -10,8 +10,8 @@ use tokio::{
 use crate::control_plane_v1::{
     AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, DiagnosticsWarningWire,
-    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RuntimeCommand, SessionFailure,
-    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
+    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -392,6 +392,14 @@ impl ShellBridge {
     /// already scrubbed credentials before they leave the Control Plane.
     pub(crate) async fn diagnostics_warnings(&self) -> Result<Vec<DiagnosticsWarningWire>, ()> {
         self.connector.diagnostics_warnings().await.map_err(|_| ())
+    }
+
+    /// Ticket 17 identity seam: the recent authorized request identities
+    /// (optional client session id, canonical project context). The native
+    /// bridge rejects records carrying the internal effective session id
+    /// before they can reach the renderer.
+    pub(crate) async fn request_identities(&self) -> Result<Vec<RequestIdentityRecordWire>, ()> {
+        self.connector.request_identities().await.map_err(|_| ())
     }
 
     pub(crate) async fn shutdown(&self) {

@@ -330,3 +330,195 @@ describe("Tauri client token commands and Dashboard warnings", () => {
     expect(JSON.stringify(warnings)).not.toContain("details");
   });
 });
+
+describe("Tauri directory-scoped client token commands, picker, and request identities (Ticket 17)", () => {
+  it("routes create and scope-carrying commands to the native bridge", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        if (command === "shell_client_tokens_create") {
+          return {
+            outcome: "ok",
+            revision: 1,
+            scopes: [
+              {
+                type: "project",
+                projectDir: "C:\\canonical\\project",
+                maskedToken: "canary-d\u2026n-77",
+              },
+            ],
+          };
+        }
+        if (command === "shell_client_tokens_reveal") {
+          return { outcome: "ok", revision: 1, token: "canary-token-1" };
+        }
+        return {
+          outcome: "ok",
+          revision: 1,
+          scopes: [
+            {
+              type: "project",
+              projectDir: "C:\\canonical\\project",
+              maskedToken: "canary-d\u2026n-77",
+            },
+          ],
+        };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    const created = await runtime.executeClientTokenCommand({
+      command: "create",
+      protocolId: "anthropic-messages",
+      scope: { type: "project", projectDir: "C:\\picked\\path" },
+      token: "canary-token-1",
+    });
+    expect(created).toMatchObject({ outcome: "ok" });
+    const revealed = await runtime.executeClientTokenCommand({
+      command: "reveal",
+      protocolId: "anthropic-messages",
+      scope: { type: "project", projectDir: "C:\\picked\\path" },
+    });
+    expect(revealed).toMatchObject({ outcome: "ok", token: "canary-token-1" });
+    await runtime.executeClientTokenCommand({
+      command: "rotate",
+      protocolId: "anthropic-messages",
+      expectedRevision: 1,
+      scope: { type: "project", projectDir: "C:\\picked\\path" },
+    });
+    await runtime.executeClientTokenCommand({
+      command: "remove",
+      protocolId: "anthropic-messages",
+      expectedRevision: 1,
+      scope: { type: "project", projectDir: "C:\\picked\\path" },
+    });
+
+    expect(calls).toEqual([
+      {
+        command: "shell_client_tokens_create",
+        args: {
+          protocolId: "anthropic-messages",
+          scope: { type: "project", projectDir: "C:\\picked\\path" },
+          token: "canary-token-1",
+        },
+      },
+      {
+        command: "shell_client_tokens_reveal",
+        args: {
+          protocolId: "anthropic-messages",
+          scope: { type: "project", projectDir: "C:\\picked\\path" },
+        },
+      },
+      {
+        command: "shell_client_tokens_rotate",
+        args: {
+          protocolId: "anthropic-messages",
+          expectedRevision: 1,
+          scope: { type: "project", projectDir: "C:\\picked\\path" },
+        },
+      },
+      {
+        command: "shell_client_tokens_remove",
+        args: {
+          protocolId: "anthropic-messages",
+          expectedRevision: 1,
+          scope: { type: "project", projectDir: "C:\\picked\\path" },
+        },
+      },
+    ]);
+  });
+
+  it("decodes invalid_directory results with their value-free reason", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => ({
+        outcome: "invalid_directory",
+        revision: 3,
+        reason: "not_found",
+        error: "Selected directory is not usable as a client token scope",
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    const result = await runtime.executeClientTokenCommand({
+      command: "create",
+      protocolId: "anthropic-messages",
+      scope: { type: "project", projectDir: "C:\\missing" },
+    });
+    expect(result).toEqual({
+      outcome: "invalid_directory",
+      revision: 3,
+      reason: "not_found",
+      error: "Selected directory is not usable as a client token scope",
+    });
+  });
+
+  it("returns the native picker result or undefined on cancel", async () => {
+    const calls: string[] = [];
+    let pick = 0;
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command) => {
+        calls.push(command);
+        pick += 1;
+        return command === "shell_pick_directory" && pick === 1
+          ? "C:\\picked\\directory"
+          : null;
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    await expect(runtime.pickDirectory()).resolves.toBe("C:\\picked\\directory");
+    await expect(runtime.pickDirectory()).resolves.toBeUndefined();
+    expect(calls).toEqual(["shell_pick_directory", "shell_pick_directory"]);
+  });
+
+  it("queries request identities and rejects records carrying the effective session id", async () => {
+    let attempt = 0;
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return {
+            records: [
+              {
+                id: 2,
+                time: 1700000000000,
+                protocolId: "anthropic-messages",
+                clientSessionId: "11111111-1111-4111-8111-111111111111",
+              },
+              {
+                id: 1,
+                time: 1699999999999,
+                protocolId: "openai-responses",
+              },
+            ],
+          };
+        }
+        return {
+          records: [
+            {
+              id: 3,
+              time: 1700000000000,
+              protocolId: "anthropic-messages",
+              effectiveSessionId: "22222222-2222-4222-8222-222222222222",
+            },
+          ],
+        };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    const identities = await runtime.getRequestIdentities();
+    expect(identities.records).toHaveLength(2);
+    expect(identities.records[0]!.clientSessionId).toBe(
+      "11111111-1111-4111-8111-111111111111",
+    );
+    expect(identities.records[1]!.clientSessionId).toBeUndefined();
+    // A record that ever carries the internal effective session identity is
+    // rejected at the bridge boundary.
+    await expect(runtime.getRequestIdentities()).rejects.toThrow(
+      "invalid request identities result",
+    );
+  });
+});

@@ -264,7 +264,7 @@ async function handleOpenAIResponses(
     const piOptions = composeInvocationOptions(
       invocation,
       {
-        sessionId: authResult.sessionId,
+        sessionId: authResult.effectiveSessionId,
         signal: request.signal,
         ...(authResult.projectDir === undefined
           ? {}

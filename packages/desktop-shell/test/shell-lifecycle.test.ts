@@ -36,6 +36,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     });
     await shell.launch();
 
@@ -85,6 +87,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
 subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     });
     await shell.launch();
 
@@ -129,6 +133,8 @@ subscribeControlPlane: () => () => undefined,
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     };
     const shell = createWindowsShellHost(runtime);
 
@@ -166,6 +172,8 @@ subscribeControlPlane: () => () => undefined,
       subscribeControlPlane: () => () => {
         unsubscribed += 1;
       },
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
       disconnectControlPlane: async () => {
         disconnected += 1;
       },
@@ -206,6 +214,8 @@ subscribeControlPlane: () => () => undefined,
         subscribed += 1;
         return () => undefined;
       },
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
       disconnectControlPlane: async () => {
         disconnected += 1;
       },
@@ -252,6 +262,8 @@ subscribeControlPlane: () => () => undefined,
       subscribeControlPlane: () => () => {
         unsubscribed += 1;
       },
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
       disconnectControlPlane: async () => {
         disconnected += 1;
         throw disconnectFailure;
@@ -295,6 +307,8 @@ subscribeControlPlane: () => () => undefined,
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       subscribeControlPlane: () => () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
       disconnectControlPlane: async () => {
         controlPlaneDisconnected += 1;
       },
@@ -352,6 +366,8 @@ subscribeControlPlane: () => () => undefined,
         return () => undefined;
       },
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     });
     const observed: ControlPlaneState[] = [];
     shell.subscribe((snapshot) => observed.push(snapshot.connection));
@@ -415,6 +431,8 @@ subscribeControlPlane: () => () => undefined,
         throw new Error("unused client token command");
       },
       queryDiagnosticsWarnings: async () => [],
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
     });
@@ -475,6 +493,8 @@ describe("WindowsShellHost client token commands", () => {
       },
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     };
     const shell = createWindowsShellHost(runtime);
     await shell.launch();
@@ -521,6 +541,8 @@ describe("WindowsShellHost client token commands", () => {
       },
       subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
+      pickDirectory: async () => undefined,
+      getRequestIdentities: async () => ({ records: [] }),
     });
 
     await expect(
@@ -530,5 +552,83 @@ describe("WindowsShellHost client token commands", () => {
       }),
     ).rejects.toThrow("not open");
     await expect(shell.queryDiagnosticsWarnings()).rejects.toThrow("not open");
+  });
+});
+
+describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
+  it("delegates the native picker and identity ledger to the runtime", async () => {
+    const calls: string[] = [];
+    const runtime: DesktopShellRuntime = {
+      connectControlPlane: async () => ({
+        revision: 1,
+        kind: "connected",
+        applicationVersion: "0.0.0-test",
+        contractVersion: 1,
+        sequence: 0,
+        modelDataPlane: "running",
+        provider: "unconfigured",
+      }),
+      executeClientTokenCommand: async () => {
+        throw new Error("unused");
+      },
+      queryDiagnosticsWarnings: async () => [],
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
+      pickDirectory: async () => {
+        calls.push("pick");
+        return "C:\\picked\\directory";
+      },
+      getRequestIdentities: async () => {
+        calls.push("identities");
+        return { records: [] };
+      },
+      executeModelsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeRuntimeCommand: async () => {
+        throw new Error("unused");
+      },
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+    };
+    const shell = createWindowsShellHost(runtime);
+    await shell.launch();
+    await expect(shell.pickDirectory()).resolves.toBe("C:\\picked\\directory");
+    await expect(shell.getRequestIdentities()).resolves.toEqual({ records: [] });
+    expect(calls).toEqual(["pick", "identities"]);
+    await shell.dispose();
+  });
+
+  it("rejects picker and ledger queries while the shell is closed", async () => {
+    const shell = createWindowsShellHost({
+      connectControlPlane: async () => {
+        throw new Error("unused");
+      },
+      executeClientTokenCommand: async () => {
+        throw new Error("unused");
+      },
+      queryDiagnosticsWarnings: async () => [],
+      getAutoStartStatus: async () => ({ enabled: false }),
+      setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
+      pickDirectory: async () => "C:\\picked\\directory",
+      getRequestIdentities: async () => ({ records: [] }),
+      executeModelsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      executeRuntimeCommand: async () => {
+        throw new Error("unused");
+      },
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+    });
+    await expect(shell.pickDirectory()).rejects.toThrow("not open");
+    await expect(shell.getRequestIdentities()).rejects.toThrow("not open");
+    await shell.dispose();
   });
 });

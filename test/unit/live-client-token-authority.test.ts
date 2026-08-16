@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -462,5 +462,323 @@ describe("live authority persisted state across restarts (repair findings 1-2)",
     await expect(
       live.rotate(2, "canary-after-external-1"),
     ).resolves.toMatchObject({ revision: 3 });
+  });
+});
+
+describe("live authority canonical directory scopes (Ticket 17)", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      directories.splice(0).map((directory) =>
+        rm(directory, { recursive: true, force: true }),
+      ),
+    );
+  });
+
+  async function directoryFixture(): Promise<{
+    readonly root: string;
+    readonly projectDir: string;
+    readonly path: string;
+    readonly store: FileClientTokenStore;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-canonical-auth-"));
+    directories.push(root);
+    const projectDir = join(root, "project");
+    await mkdir(projectDir);
+    const path = join(root, "anthropic-messages.json");
+    const store = createFileClientTokenStore({
+      path,
+      generateToken: () => "lt_generated_deterministic",
+    });
+    return { root, projectDir, path, store };
+  }
+
+  it("creates one canonical scope through an alias and persists only the canonical identity", async () => {
+    const { root, projectDir, path, store } = await directoryFixture();
+    const live = await createLiveClientTokenAuthority({ store });
+    // Windows junction (no privilege needed); elsewhere a real symlink.
+    const alias = join(root, "project-alias");
+    await symlink(projectDir, alias, "junction").catch(() =>
+      symlink(projectDir, alias, "dir"),
+    );
+    const aliasCase = `${alias.toUpperCase()}${sep}`;
+
+    const created = await live.createProject(aliasCase, "canary-dir-token-1");
+    expect(created.canonicalDir).toBe(projectDir);
+    expect(created.listing.revision).toBe(1);
+    expect(created.listing.scopes).toEqual([
+      {
+        type: "project",
+        projectDir,
+        maskedToken: "canary-d…en-1",
+      },
+    ]);
+    // The authoritative file stores only the canonical identity.
+    const persisted = JSON.parse(
+      await readFile(path, "utf8"),
+    ) as { projects: Record<string, string> };
+    expect(Object.keys(persisted.projects)).toEqual([projectDir]);
+    expect(JSON.stringify(persisted)).not.toContain(alias);
+    expect(JSON.stringify(persisted)).not.toContain(aliasCase);
+
+    // Authorization supplies the canonical projectDir.
+    expect(live.authorize("canary-dir-token-1")).toEqual({ projectDir });
+    // Aliases cannot create a duplicate scope.
+    await expect(
+      live.createProject(alias, "canary-dir-token-2"),
+    ).rejects.toMatchObject({ code: "SCOPE_EXISTS" });
+    expect(await store.snapshot()).toMatchObject({ revision: 1 });
+  });
+
+  it("reveals, rotates, and removes a directory scope through its aliases with the locked revision", async () => {
+    const { root, projectDir, store } = await directoryFixture();
+    const live = await createLiveClientTokenAuthority({ store });
+    await live.createProject(projectDir, "canary-dir-token-1");
+    const alias = join(root, "project-alias");
+    await symlink(projectDir, alias, "junction").catch(() =>
+      symlink(projectDir, alias, "dir"),
+    );
+
+    await expect(live.revealProject(alias)).resolves.toBe("canary-dir-token-1");
+    // A stale revision can never rotate the scope.
+    await expect(
+      live.rotateProject(0, alias, "canary-dir-token-2"),
+    ).rejects.toBeInstanceOf(ClientTokenStaleRevisionError);
+    const rotated = await live.rotateProject(1, alias, "canary-dir-token-2");
+    expect(rotated.revision).toBe(2);
+    expect(live.authorize("canary-dir-token-1")).toBeUndefined();
+    expect(live.authorize("canary-dir-token-2")).toEqual({ projectDir });
+    // The scrub follows the hot rotation: only the active owned token
+    // value is scrubbed; the revoked prior token is no longer owned.
+    expect(live.scrub("prefix canary-dir-token-1 suffix")).toBe(
+      "prefix canary-dir-token-1 suffix",
+    );
+    expect(live.scrub("prefix canary-dir-token-2 suffix")).toBe(
+      "prefix [REDACTED] suffix",
+    );
+
+    const removed = await live.removeProject(2, alias);
+    expect(removed.revision).toBe(3);
+    expect(removed.scopes).toEqual([]);
+    expect(live.authorize("canary-dir-token-2")).toBeUndefined();
+    await expect(live.revealProject(alias)).rejects.toBeInstanceOf(
+      ClientTokenScopeNotFoundError,
+    );
+  });
+
+  it("rejects directory inputs with the value-free failure taxonomy", async () => {
+    const { root, store } = await directoryFixture();
+    const live = await createLiveClientTokenAuthority({ store });
+    await expect(
+      live.createProject(join(root, "missing"), "canary-x"),
+    ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_found" });
+    const file = join(root, "file.txt");
+    await writeFile(file, "content");
+    await expect(
+      live.createProject(file, "canary-x"),
+    ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_a_directory" });
+    await expect(live.createProject("", "canary-x")).rejects.toMatchObject({
+      code: "INVALID_DIRECTORY",
+      reason: "invalid",
+    });
+    // Nothing was persisted and no error carries the raw input.
+    expect(await store.snapshot()).toMatchObject({ revision: 0 });
+  });
+
+  it("supports an injectable resolver and keeps the lock across canonicalization", async () => {
+    const { projectDir, store } = await directoryFixture();
+    let resolutions = 0;
+    const live = await createLiveClientTokenAuthority({
+      store,
+      resolveCanonicalDirectory: {
+        async resolve(input: string) {
+          resolutions += 1;
+          if (input === "C:\projects\resolved") {
+            return { outcome: "ok", canonicalDir: projectDir };
+          }
+          return { outcome: "not_found" };
+        },
+      },
+    });
+    await live.createProject("C:\projects\resolved", "canary-injected-1");
+    expect(resolutions).toBe(1);
+    expect(live.authorize("canary-injected-1")).toEqual({ projectDir });
+    await expect(
+      live.createProject("C:\projects\resolved", "canary-injected-2"),
+    ).rejects.toMatchObject({ code: "SCOPE_EXISTS" });
+    // Two mutations against the same alias serialize; the second resolution
+    // still happened inside the lock before the scope-exists rejection.
+    expect(resolutions).toBe(2);
+  });
+
+  it("keeps directory and global scopes independent with distinct tokens", async () => {
+    const { projectDir, store } = await directoryFixture();
+    const live = await createLiveClientTokenAuthority({
+      store,
+      generateToken: () => "canary-global-dir-1",
+    });
+    await live.ensureGlobal({ freshOnly: true });
+    await live.createProject(projectDir, "canary-project-dir-1");
+    expect(live.authorize("canary-global-dir-1")).toEqual({});
+    expect(live.authorize("canary-project-dir-1")).toEqual({ projectDir });
+    const listed = await live.list();
+    expect(listed.scopes).toEqual([
+      { type: "global", maskedToken: "canary-g…ir-1" },
+      { type: "project", projectDir, maskedToken: "canary-p…ir-1" },
+    ]);
+  });
+});
+
+describe("live authority orphaned directory scopes (Ticket 17 repair 01)", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      directories.splice(0).map((directory) =>
+        rm(directory, { recursive: true, force: true }),
+      ),
+    );
+  });
+
+  async function orphanFixture(options?: {
+    readonly keepDirectory?: boolean;
+  }): Promise<{
+    readonly root: string;
+    readonly projectDir: string;
+    readonly store: FileClientTokenStore;
+    readonly live: LiveClientTokenAuthority;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-orphan-auth-"));
+    directories.push(root);
+    const projectDir = join(root, "project");
+    await mkdir(projectDir);
+    const store = createFileClientTokenStore({
+      path: join(root, "anthropic-messages.json"),
+    });
+    const live = await createLiveClientTokenAuthority({ store });
+    await live.createProject(projectDir, "canary-orphan-token-1");
+    if (options?.keepDirectory !== true) {
+      // The directory disappears while the persisted canonical scope stays.
+      await rm(projectDir, { recursive: true, force: true });
+    }
+    return { root, projectDir, store, live };
+  }
+
+  it("lists the persisted orphan scope and removes it by its stored canonical identity", async () => {
+    const { projectDir, store, live } = await orphanFixture();
+
+    // The persisted scope still lists with its stored canonical identity.
+    const listed = await live.list();
+    expect(listed.scopes).toEqual([
+      { type: "project", projectDir, maskedToken: "canary-o…en-1" },
+    ]);
+    expect(await store.snapshot()).toMatchObject({
+      projects: { [projectDir]: "canary-orphan-token-1" },
+    });
+
+    // Remove succeeds when addressed by the listed canonical scope
+    // identity, and the old token immediately stops authorizing.
+    const removed = await live.removeProject(listed.revision, projectDir);
+    expect(removed.revision).toBe(listed.revision + 1);
+    expect(removed.scopes).toEqual([]);
+    expect(live.authorize("canary-orphan-token-1")).toBeUndefined();
+    // The identity is no longer persisted, so the missing directory is a
+    // plain value-free rejection again.
+    await expect(live.revealProject(projectDir)).rejects.toMatchObject({
+      code: "INVALID_DIRECTORY",
+      reason: "not_found",
+    });
+  });
+
+  it("reveals and rotates an orphan scope by its stored canonical identity, keeping the identity", async () => {
+    const { projectDir, live } = await orphanFixture();
+
+    await expect(live.revealProject(projectDir)).resolves.toBe(
+      "canary-orphan-token-1",
+    );
+    const rotated = await live.rotateProject(
+      (await live.list()).revision,
+      projectDir,
+      "canary-orphan-token-2",
+    );
+    expect(rotated.revision).toBe(2);
+    // The old token is immediately invalid; the new token retains the same
+    // stored canonical projectDir.
+    expect(live.authorize("canary-orphan-token-1")).toBeUndefined();
+    expect(live.authorize("canary-orphan-token-2")).toEqual({ projectDir });
+    expect(rotated.scopes).toEqual([
+      { type: "project", projectDir, maskedToken: "canary-o…en-2" },
+    ]);
+    // The scrub follows the hot rotation on the orphan scope.
+    expect(live.scrub("prefix canary-orphan-token-2 suffix")).toBe(
+      "prefix [REDACTED] suffix",
+    );
+  });
+
+  it("never lets an arbitrary missing path, a former alias, or a creation use the fallback", async () => {
+    const { root, projectDir, store, live } = await orphanFixture();
+    // A junction alias to the deleted directory no longer resolves and is
+    // not a persisted canonical identity: every lookup still rejects.
+    const alias = join(root, "former-alias");
+    await symlink(projectDir, alias, "junction").catch(() =>
+      symlink(projectDir, alias, "dir"),
+    );
+    await rm(alias, { force: true });
+    for (const input of [alias, join(root, "never-existed")]) {
+      await expect(live.revealProject(input)).rejects.toMatchObject({
+        code: "INVALID_DIRECTORY",
+        reason: "not_found",
+      });
+      await expect(
+        live.rotateProject((await live.list()).revision, input),
+      ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_found" });
+      await expect(
+        live.removeProject((await live.list()).revision, input),
+      ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_found" });
+    }
+    // Creating a token for a missing directory still fails (not_found),
+    // even when the input matches the persisted canonical identity, and
+    // nothing new is persisted.
+    await expect(
+      live.createProject(projectDir, "canary-orphan-token-2"),
+    ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_found" });
+    await expect(
+      live.createProject(join(root, "missing"), "canary-orphan-token-2"),
+    ).rejects.toMatchObject({ code: "INVALID_DIRECTORY", reason: "not_found" });
+    expect(await store.snapshot()).toMatchObject({
+      projects: { [projectDir]: "canary-orphan-token-1" },
+      revision: 1,
+    });
+  });
+
+  it("keeps realpath alias resolution while the directory exists and only then", async () => {
+    const { root, projectDir, live } = await orphanFixture({
+      keepDirectory: true,
+    });
+    const alias = join(root, "alias");
+    await symlink(projectDir, alias, "junction").catch(() =>
+      symlink(projectDir, alias, "dir"),
+    );
+    // While the directory exists, the alias resolves to the canonical
+    // scope (the stored identity is not required for management).
+    await expect(live.revealProject(alias)).resolves.toBe(
+      "canary-orphan-token-1",
+    );
+    await expect(
+      live.rotateProject((await live.list()).revision, alias, "canary-orphan-token-2"),
+    ).resolves.toMatchObject({ revision: 2 });
+    // The directory then disappears: the alias can no longer resolve and
+    // only the stored canonical identity remains usable.
+    await rm(projectDir, { recursive: true, force: true });
+    const stored = (await live.list()).scopes.find(
+      (entry) => entry.type === "project",
+    )?.projectDir as string;
+    expect(stored).toBe(projectDir);
+    await expect(live.revealProject(alias)).rejects.toMatchObject({
+      code: "INVALID_DIRECTORY",
+      reason: "not_found",
+    });
+    await expect(live.revealProject(stored)).resolves.toBe(
+      "canary-orphan-token-2",
+    );
   });
 });

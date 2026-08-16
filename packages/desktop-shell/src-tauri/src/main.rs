@@ -9,8 +9,9 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, DiagnosticsWarningWire,
-    ModelsCommand, NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
+    AutoStartAction, ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire,
+    DiagnosticsWarningWire, ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire,
+    RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
@@ -133,12 +134,31 @@ async fn shell_client_tokens_list(
 }
 
 #[tauri::command]
+async fn shell_client_tokens_create(
+    state: State<'_, ShellBridge>,
+    protocol_id: String,
+    scope: serde_json::Value,
+    token: Option<String>,
+) -> Result<ClientTokenCommandResultWire, ()> {
+    let scope = parse_client_token_scope(scope)?;
+    state
+        .client_token_command(ClientTokenCommand::Create {
+            protocol_id,
+            scope,
+            token,
+        })
+        .await
+}
+
+#[tauri::command]
 async fn shell_client_tokens_reveal(
     state: State<'_, ShellBridge>,
     protocol_id: String,
+    scope: Option<serde_json::Value>,
 ) -> Result<ClientTokenCommandResultWire, ()> {
+    let scope = scope.map(parse_client_token_scope).transpose()?;
     state
-        .client_token_command(ClientTokenCommand::Reveal { protocol_id })
+        .client_token_command(ClientTokenCommand::Reveal { protocol_id, scope })
         .await
 }
 
@@ -147,12 +167,15 @@ async fn shell_client_tokens_rotate(
     state: State<'_, ShellBridge>,
     protocol_id: String,
     expected_revision: u64,
+    scope: Option<serde_json::Value>,
     token: Option<String>,
 ) -> Result<ClientTokenCommandResultWire, ()> {
+    let scope = scope.map(parse_client_token_scope).transpose()?;
     state
         .client_token_command(ClientTokenCommand::Rotate {
             protocol_id,
             expected_revision,
+            scope,
             token,
         })
         .await
@@ -163,13 +186,63 @@ async fn shell_client_tokens_remove(
     state: State<'_, ShellBridge>,
     protocol_id: String,
     expected_revision: u64,
+    scope: Option<serde_json::Value>,
 ) -> Result<ClientTokenCommandResultWire, ()> {
+    let scope = scope.map(parse_client_token_scope).transpose()?;
     state
         .client_token_command(ClientTokenCommand::Remove {
             protocol_id,
             expected_revision,
+            scope,
         })
         .await
+}
+
+/// Strict scope decode at the native bridge: `type` is required and
+/// `projectDir` is required exactly for project scopes. Raw paths ride
+/// verbatim to the backend, which owns canonicalization.
+fn parse_client_token_scope(value: serde_json::Value) -> Result<ClientTokenScopeWire, ()> {
+    let Some(object) = value.as_object() else {
+        return Err(());
+    };
+    match object.get("type").and_then(serde_json::Value::as_str) {
+        Some("global") if object.get("projectDir").is_none() => Ok(ClientTokenScopeWire {
+            scope_type: "global".to_owned(),
+            project_dir: None,
+        }),
+        Some("project") => {
+            let project_dir = object
+                .get("projectDir")
+                .and_then(serde_json::Value::as_str)
+                .filter(|dir| !dir.is_empty());
+            match project_dir {
+                Some(project_dir) => Ok(ClientTokenScopeWire {
+                    scope_type: "project".to_owned(),
+                    project_dir: Some(project_dir.to_owned()),
+                }),
+                None => Err(()),
+            }
+        }
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
+async fn shell_pick_directory(app: tauri::AppHandle) -> Result<Option<String>, ()> {
+    use tauri_plugin_dialog::DialogExt;
+    // The desktop Rust shell owns the native picker interaction; the raw
+    // picked path is returned to the renderer and the backend canonicalizes
+    // it at the token-authority boundary. Commands run off the main thread,
+    // so the blocking dialog is safe here.
+    let picked = app.dialog().file().blocking_pick_folder();
+    Ok(picked.map(|path| path.to_string()))
+}
+
+#[tauri::command]
+async fn shell_request_identities(
+    state: State<'_, ShellBridge>,
+) -> Result<Vec<RequestIdentityRecordWire>, ()> {
+    state.request_identities().await
 }
 
 #[tauri::command]
@@ -272,6 +345,9 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
+        // Native system dialogs (Ticket 17): the shell owns the directory
+        // picker; the backend owns canonical identity.
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             // Window Close is a hide, never a quit: the application and the
             // Data Plane stay alive and the tray keeps the window reachable.
@@ -352,9 +428,12 @@ fn main() {
             shell_auto_start_enable,
             shell_auto_start_disable,
             shell_client_tokens_list,
+            shell_client_tokens_create,
             shell_client_tokens_reveal,
             shell_client_tokens_rotate,
             shell_client_tokens_remove,
+            shell_pick_directory,
+            shell_request_identities,
             shell_diagnostics_warnings,
             shell_models_query,
             shell_models_write_raw,

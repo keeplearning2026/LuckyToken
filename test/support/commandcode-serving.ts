@@ -161,7 +161,7 @@ export function createCommandCodeServingTestComposition(
       if (token !== clientApiKey) return undefined;
       return projectDir === undefined ? {} : { projectDir };
     },
-    createFallbackSessionId: createSessionId,
+    createEffectiveSessionId: createSessionId,
   });
   const anthropic = createAnthropicMessagesHandler({
     models,

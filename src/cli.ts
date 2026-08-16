@@ -496,6 +496,11 @@ async function runServe(
     let tokenAuthorities:
       | Readonly<Record<string, LiveClientTokenAuthority>>
       | undefined;
+    // Ticket 17 identity seam: the Control Plane serves the bounded public
+    // request identity ledger from the running Data Plane composition.
+    let requestIdentities:
+      | Awaited<ReturnType<typeof createConfiguredLuckyTokenComposition>>["requestIdentities"]
+      | undefined;
     const protocolNames = Object.freeze({
       [anthropicMessagesProtocolId]: "Anthropic Messages",
       [openaiResponsesProtocolId]: "OpenAI Responses",
@@ -536,6 +541,7 @@ async function runServe(
             settingsRegistry,
           });
           tokenAuthorities = composition.clientTokenAuthorities;
+          requestIdentities = composition.requestIdentities;
           const server = await startLuckyTokenHttpServer({
             runtime: composition.runtime,
             host: address.host,
@@ -643,6 +649,10 @@ async function runServe(
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
       clientTokenCommandHandler,
+      requestIdentitiesHandler: () =>
+        Promise.resolve({
+          records: requestIdentities?.list() ?? Object.freeze([]),
+        }),
       modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
       modelsProjection: () => modelsAuthority.snapshot(),
       applicationCommandHandler: async (command, publishStatus) => {

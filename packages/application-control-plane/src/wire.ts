@@ -43,7 +43,11 @@ import { decodeDiagnosticEvent, decodeDiagnosticRecord } from "./wire-diagnostic
 import {
   type ClientTokenCommand,
   type ClientTokenCommandResult,
+  type ClientTokenDirectoryRejection,
+  type ClientTokenScopeRef,
   type MaskedClientTokenScope,
+  type RequestIdentitiesQueryResult,
+  type RequestIdentityRecord,
 } from "./contracts.js";
 
 export type RecordValue = Record<string, unknown>;
@@ -61,6 +65,7 @@ export type ClientRequest =
       readonly requestId: string;
       readonly query?: unknown;
     }
+  | { readonly type: "get_request_identities"; readonly requestId: string }
   | { readonly type: "diagnostics_subscribe"; readonly requestId: string }
   | { readonly type: "diagnostics_unsubscribe"; readonly requestId: string }
   | {
@@ -117,6 +122,11 @@ export type ServerMessage =
       readonly type: "diagnostics_result";
       readonly requestId: string;
       readonly result: RuntimeDiagnosticsQueryResult;
+    }
+  | {
+      readonly type: "request_identities_result";
+      readonly requestId: string;
+      readonly result: RequestIdentitiesQueryResult;
     }
   | {
       readonly type: "settings_command_result";
@@ -770,8 +780,33 @@ export function decodeClientTokenCommand(
     return undefined;
   }
   const protocolId = value.protocolId;
-  if (value.command === "list" || value.command === "reveal") {
-    return { command: value.command, protocolId };
+  const scope = decodeClientTokenScopeRef(value.scope);
+  if (value.scope !== undefined && scope === undefined) return undefined;
+  if (value.command === "list") {
+    if (value.scope !== undefined) return undefined;
+    return { command: "list", protocolId };
+  }
+  if (value.command === "reveal") {
+    return {
+      command: "reveal",
+      protocolId,
+      ...(scope === undefined ? {} : { scope }),
+    };
+  }
+  if (value.command === "create") {
+    if (scope === undefined) return undefined;
+    if (
+      value.token !== undefined &&
+      (typeof value.token !== "string" || value.token.length === 0)
+    ) {
+      return undefined;
+    }
+    return {
+      command: "create",
+      protocolId,
+      scope,
+      ...(value.token === undefined ? {} : { token: value.token }),
+    };
   }
   if (
     value.command === "rotate" ||
@@ -785,7 +820,12 @@ export function decodeClientTokenCommand(
     }
     const expectedRevision = value.expectedRevision as number;
     if (value.command === "remove") {
-      return { command: "remove", protocolId, expectedRevision };
+      return {
+        command: "remove",
+        protocolId,
+        expectedRevision,
+        ...(scope === undefined ? {} : { scope }),
+      };
     }
     if (
       value.token !== undefined &&
@@ -797,8 +837,26 @@ export function decodeClientTokenCommand(
       command: "rotate",
       protocolId,
       expectedRevision,
+      ...(scope === undefined ? {} : { scope }),
       ...(value.token === undefined ? {} : { token: value.token }),
     };
+  }
+  return undefined;
+}
+
+function decodeClientTokenScopeRef(value: unknown): ClientTokenScopeRef | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.type === "global") {
+    return value.projectDir === undefined
+      ? Object.freeze({ type: "global" })
+      : undefined;
+  }
+  if (
+    value.type === "project" &&
+    typeof value.projectDir === "string" &&
+    value.projectDir.length > 0
+  ) {
+    return Object.freeze({ type: "project", projectDir: value.projectDir });
   }
   return undefined;
 }
@@ -843,6 +901,14 @@ function decodeMaskedClientTokenScopes(
   return scopes.length === value.length ? Object.freeze(scopes) : undefined;
 }
 
+const DIRECTORY_REJECTIONS = new Set([
+  "not_found",
+  "not_a_directory",
+  "inaccessible",
+  "race",
+  "invalid",
+]);
+
 export function decodeClientTokenCommandResult(
   value: unknown,
   command: ClientTokenCommand,
@@ -853,6 +919,8 @@ export function decodeClientTokenCommandResult(
       value.outcome !== "conflict" &&
       value.outcome !== "not_found" &&
       value.outcome !== "invalid_value" &&
+      value.outcome !== "already_exists" &&
+      value.outcome !== "invalid_directory" &&
       value.outcome !== "unknown_protocol" &&
       value.outcome !== "unavailable") ||
     !Number.isSafeInteger(value.revision) ||
@@ -863,15 +931,26 @@ export function decodeClientTokenCommandResult(
   const outcome = value.outcome;
   const revision = value.revision as number;
   if (outcome !== "ok") {
+    const reason = outcome === "invalid_directory" ? value.reason : undefined;
     if (
       typeof value.error !== "string" ||
       value.error.length === 0 ||
       value.token !== undefined ||
-      value.scopes !== undefined
+      value.scopes !== undefined ||
+      (outcome === "invalid_directory" &&
+        (typeof reason !== "string" || !DIRECTORY_REJECTIONS.has(reason))) ||
+      (outcome !== "invalid_directory" && value.reason !== undefined)
     ) {
       return undefined;
     }
-    return Object.freeze({ outcome, revision, error: value.error });
+    return Object.freeze({
+      outcome,
+      revision,
+      ...(reason === undefined
+        ? {}
+        : { reason: reason as ClientTokenDirectoryRejection }),
+      error: value.error,
+    });
   }
   if (typeof value.error === "string") return undefined;
   if (command.command === "reveal") {
@@ -994,6 +1073,12 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
         requestId,
         ...(value.query === undefined ? {} : { query: value.query }),
       },
+    };
+  }
+  if (value.type === "get_request_identities") {
+    return {
+      type: "valid",
+      request: { type: "get_request_identities", requestId },
     };
   }
   if (value.type === "runtime_command") {
@@ -1382,6 +1467,80 @@ function decodeDiagnosticsResult(
   });
 }
 
+const REQUEST_IDENTITY_KEYS = new Set([
+  "id",
+  "time",
+  "protocolId",
+  "clientSessionId",
+  "projectDir",
+]);
+const REQUEST_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Strict request identity record decoder (Ticket 17 identity seam): the
+ * allowed key set has no effective-session field, so a frame that ever
+ * carries the internal `effectiveSessionId` (or any other unknown key) is
+ * rejected instead of projected.
+ */
+export function decodeRequestIdentityRecord(
+  value: unknown,
+): RequestIdentityRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const key of Object.keys(value)) {
+    if (!REQUEST_IDENTITY_KEYS.has(key)) return undefined;
+  }
+  if (
+    !Number.isSafeInteger(value.id) ||
+    (value.id as number) < 1 ||
+    !Number.isSafeInteger(value.time) ||
+    (value.time as number) < 0 ||
+    typeof value.protocolId !== "string" ||
+    value.protocolId.length === 0
+  ) {
+    return undefined;
+  }
+  const clientSessionId = value.clientSessionId;
+  if (
+    (clientSessionId !== undefined &&
+      (typeof clientSessionId !== "string" ||
+        !REQUEST_SESSION_ID_PATTERN.test(clientSessionId))) ||
+    (clientSessionId === undefined && value.clientSessionId !== undefined)
+  ) {
+    return undefined;
+  }
+  const projectDir = value.projectDir;
+  if (
+    (projectDir !== undefined &&
+      (typeof projectDir !== "string" || projectDir.length === 0)) ||
+    (projectDir === undefined && value.projectDir !== undefined)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    id: value.id as number,
+    time: value.time as number,
+    protocolId: value.protocolId,
+    ...(clientSessionId === undefined
+      ? {}
+      : { clientSessionId: clientSessionId as string }),
+    ...(projectDir === undefined ? {} : { projectDir: projectDir as string }),
+  });
+}
+
+function decodeRequestIdentitiesResult(
+  value: unknown,
+): RequestIdentitiesQueryResult | undefined {
+  if (!isRecord(value) || !Array.isArray(value.records)) return undefined;
+  const records = value.records
+    .map((entry) => decodeRequestIdentityRecord(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (records.length !== value.records.length) return undefined;
+  return Object.freeze({
+    records: Object.freeze(records),
+  });
+}
+
 export function decodeServerMessage(value: unknown): ServerMessage | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "event") {
@@ -1412,6 +1571,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "diagnostics_result", requestId, result };
   }
+  if (value.type === "request_identities_result") {
+    const result = decodeRequestIdentitiesResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "request_identities_result", requestId, result };
+  }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);
     return result === undefined
@@ -1441,6 +1606,8 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
         value.result.outcome !== "conflict" &&
         value.result.outcome !== "not_found" &&
         value.result.outcome !== "invalid_value" &&
+        value.result.outcome !== "already_exists" &&
+        value.result.outcome !== "invalid_directory" &&
         value.result.outcome !== "unknown_protocol" &&
         value.result.outcome !== "unavailable") ||
       !Number.isSafeInteger(value.result.revision) ||

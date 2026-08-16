@@ -103,7 +103,7 @@ export async function createOpenAIResponsesServingTestComposition(
   const auth = createAuth({
     authorizeToken: async (token) =>
       token === options.clientApiKey ? {} : undefined,
-    createFallbackSessionId: createSessionId,
+    createEffectiveSessionId: createSessionId,
   });
   const sessionState = createResponseSessionState({
     stateFile,

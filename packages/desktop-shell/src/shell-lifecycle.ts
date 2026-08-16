@@ -1,11 +1,9 @@
 import type { ControlPlaneState } from "./control-plane-projection.js";
 import type {
-
   ClientTokenCommand,
   ClientTokenCommandResult,
-
   ModelsCommand,
-
+  RequestIdentitiesQueryResult,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -43,6 +41,12 @@ export interface DesktopShellRuntime {
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
+
+  /** Native directory picker: the picked absolute path or undefined on
+   *  cancel. The backend canonicalizes the path. */
+  pickDirectory(): Promise<string | undefined>;
+  getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+
   disconnectControlPlane(): Promise<void>;
 }
 
@@ -71,21 +75,14 @@ export interface WindowsShellHost {
   executeSettingsCommand(command: SettingsCommand): Promise<DesktopShellSnapshot>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
-
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
-
-
-
-
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
-  executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
-
-
-
+  pickDirectory(): Promise<string | undefined>;
+  getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   dispose(): Promise<void>;
 }
 
@@ -216,6 +213,18 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.executeClientTokenCommand(command);
+    },
+    pickDirectory() {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.pickDirectory();
+    },
+    getRequestIdentities() {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.getRequestIdentities();
     },
     queryDiagnosticsWarnings() {
       if (current.lifecycle !== "open") {

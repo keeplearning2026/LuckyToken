@@ -116,7 +116,7 @@ describe("Pi Models provider boundary", () => {
     );
     const auth = createAuth({
       authorizeToken: async (token) => (token === "client-key" ? {} : undefined),
-      createFallbackSessionId: () => sessionId,
+      createEffectiveSessionId: () => sessionId,
     });
 
     const anthropic = createAnthropicMessagesHandler({
@@ -192,7 +192,7 @@ describe("Pi Models provider boundary", () => {
     const models: Models = mutableModels;
     const auth = createAuth({
       authorizeToken: async (token) => (token === "client-key" ? {} : undefined),
-      createFallbackSessionId: () => "00000000-0000-4000-8000-000000000222",
+      createEffectiveSessionId: () => "00000000-0000-4000-8000-000000000222",
     });
     const anthropic = createAnthropicMessagesHandler({
       models,

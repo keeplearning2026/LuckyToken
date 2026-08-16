@@ -5,8 +5,9 @@ import type {
   ClientTokenCommandResult,
   MaskedClientTokenScope,
   ModelsCommand,
-
   RegisteredSetting,
+  RequestIdentitiesQueryResult,
+  RequestIdentityRecord,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -33,16 +34,18 @@ export type ShellCommand =
   | "shell_auto_start_enable"
   | "shell_auto_start_disable"
   | "shell_client_tokens_list"
+  | "shell_client_tokens_create"
   | "shell_client_tokens_reveal"
   | "shell_client_tokens_rotate"
   | "shell_client_tokens_remove"
   | "shell_diagnostics_warnings"
 
+  | "shell_pick_directory"
+  | "shell_request_identities"
+
   | "shell_models_query"
   | "shell_models_write_raw"
   | "shell_models_write_structured";
-
-
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -68,21 +71,17 @@ export interface TauriDesktopRuntime {
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
-
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
-
-
-
-
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
-  executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
-
-
-
+  /** Native directory picker: the picked absolute path or undefined on
+   *  cancel. The backend canonicalizes the path; the renderer never becomes
+   *  a filesystem authority. */
+  pickDirectory(): Promise<string | undefined>;
+  getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -257,6 +256,8 @@ function decodeClientTokenCommandResult(
       value.outcome !== "conflict" &&
       value.outcome !== "not_found" &&
       value.outcome !== "invalid_value" &&
+      value.outcome !== "already_exists" &&
+      value.outcome !== "invalid_directory" &&
       value.outcome !== "unknown_protocol" &&
       value.outcome !== "unavailable") ||
     !Number.isSafeInteger(value.revision) ||
@@ -267,15 +268,32 @@ function decodeClientTokenCommandResult(
   const outcome = value.outcome as ClientTokenCommandResult["outcome"];
   const revision = value.revision as number;
   if (outcome !== "ok") {
+    const reason =
+      outcome === "invalid_directory" &&
+      typeof value.reason === "string" &&
+      (value.reason === "not_found" ||
+        value.reason === "not_a_directory" ||
+        value.reason === "inaccessible" ||
+        value.reason === "race" ||
+        value.reason === "invalid")
+        ? value.reason
+        : undefined;
     if (
       typeof value.error !== "string" ||
       value.error.length === 0 ||
       value.token !== undefined ||
-      value.scopes !== undefined
+      value.scopes !== undefined ||
+      (outcome === "invalid_directory" && reason === undefined) ||
+      (outcome !== "invalid_directory" && value.reason !== undefined)
     ) {
       return undefined;
     }
-    return { outcome, revision, error: value.error };
+    return {
+      outcome,
+      revision,
+      ...(reason === undefined ? {} : { reason }),
+      error: value.error,
+    };
   }
   if (command.command === "reveal") {
     if (typeof value.token !== "string" || value.token.length === 0) {
@@ -291,6 +309,73 @@ function decodeClientTokenCommandResult(
     .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
   if (scopes.length !== value.scopes.length) return undefined;
   return { outcome, revision, scopes };
+}
+
+const REQUEST_IDENTITY_KEYS = new Set([
+  "id",
+  "time",
+  "protocolId",
+  "clientSessionId",
+  "projectDir",
+]);
+const REQUEST_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/** Strict request identity record decode (Ticket 17 identity seam): the
+ *  allowed key set has no effective-session field, so a record that ever
+ *  carries the internal `effectiveSessionId` is rejected at the bridge. */
+function decodeRequestIdentityRecord(
+  value: unknown,
+): RequestIdentityRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const key of Object.keys(value)) {
+    if (!REQUEST_IDENTITY_KEYS.has(key)) return undefined;
+  }
+  if (
+    !Number.isSafeInteger(value.id) ||
+    (value.id as number) < 1 ||
+    !Number.isSafeInteger(value.time) ||
+    (value.time as number) < 0 ||
+    typeof value.protocolId !== "string" ||
+    value.protocolId.length === 0
+  ) {
+    return undefined;
+  }
+  const clientSessionId = value.clientSessionId;
+  if (
+    clientSessionId !== undefined &&
+    (typeof clientSessionId !== "string" ||
+      !REQUEST_SESSION_ID_PATTERN.test(clientSessionId))
+  ) {
+    return undefined;
+  }
+  const projectDir = value.projectDir;
+  if (
+    projectDir !== undefined &&
+    (typeof projectDir !== "string" || projectDir.length === 0)
+  ) {
+    return undefined;
+  }
+  return {
+    id: value.id as number,
+    time: value.time as number,
+    protocolId: value.protocolId,
+    ...(clientSessionId === undefined
+      ? {}
+      : { clientSessionId: clientSessionId as string }),
+    ...(projectDir === undefined ? {} : { projectDir: projectDir as string }),
+  };
+}
+
+function decodeRequestIdentitiesResult(
+  value: unknown,
+): RequestIdentitiesQueryResult | undefined {
+  if (!isRecord(value) || !Array.isArray(value.records)) return undefined;
+  const records = value.records
+    .map((entry) => decodeRequestIdentityRecord(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (records.length !== value.records.length) return undefined;
+  return { records };
 }
 
 function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefined {
@@ -313,8 +398,6 @@ function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefine
     text: value.text,
   };
 }
-
-
 
 function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefined {
   if (
@@ -519,28 +602,44 @@ export function createTauriDesktopRuntime(
     async executeClientTokenCommand(command) {
       // Client Token commands return their own result (masked scopes or the
       // explicitly revealed secret); they never merge into the status
-      // projection.
+      // projection. Project scope inputs are raw picker paths; only the
+      // backend canonicalizes them.
+      const scopeArgs =
+        command.command === "list" || command.scope === undefined
+          ? {}
+          : { scope: command.scope };
       const raw =
         command.command === "list"
           ? await bridge.invoke("shell_client_tokens_list", {
               protocolId: command.protocolId,
             })
-          : command.command === "reveal"
-            ? await bridge.invoke("shell_client_tokens_reveal", {
+          : command.command === "create"
+            ? await bridge.invoke("shell_client_tokens_create", {
                 protocolId: command.protocolId,
+                scope: command.scope,
+                ...(command.token === undefined
+                  ? {}
+                  : { token: command.token }),
               })
-            : command.command === "rotate"
-              ? await bridge.invoke("shell_client_tokens_rotate", {
+            : command.command === "reveal"
+              ? await bridge.invoke("shell_client_tokens_reveal", {
                   protocolId: command.protocolId,
-                  expectedRevision: command.expectedRevision,
-                  ...(command.token === undefined
-                    ? {}
-                    : { token: command.token }),
+                  ...scopeArgs,
                 })
-              : await bridge.invoke("shell_client_tokens_remove", {
-                  protocolId: command.protocolId,
-                  expectedRevision: command.expectedRevision,
-                });
+              : command.command === "rotate"
+                ? await bridge.invoke("shell_client_tokens_rotate", {
+                    protocolId: command.protocolId,
+                    expectedRevision: command.expectedRevision,
+                    ...scopeArgs,
+                    ...(command.token === undefined
+                      ? {}
+                      : { token: command.token }),
+                  })
+                : await bridge.invoke("shell_client_tokens_remove", {
+                    protocolId: command.protocolId,
+                    expectedRevision: command.expectedRevision,
+                    ...scopeArgs,
+                  });
       const decoded = decodeClientTokenCommandResult(raw, command);
       if (decoded === undefined) {
         throw new Error("LuckyToken returned an invalid client token result");
@@ -561,7 +660,22 @@ export function createTauriDesktopRuntime(
       return Object.freeze(warnings);
     },
 
-
+    async pickDirectory() {
+      const raw = await bridge.invoke("shell_pick_directory");
+      if (raw === null || raw === undefined) return undefined;
+      if (typeof raw !== "string" || raw.length === 0) {
+        throw new Error("LuckyToken returned an invalid picker result");
+      }
+      return raw;
+    },
+    async getRequestIdentities() {
+      const raw = await bridge.invoke("shell_request_identities");
+      const decoded = decodeRequestIdentitiesResult(raw);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid request identities result");
+      }
+      return decoded;
+    },
 
     executeModelsCommand: (command) =>
       invokeState(

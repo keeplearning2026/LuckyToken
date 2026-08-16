@@ -16,6 +16,10 @@ import {
 } from "./core-serving-certification.js";
 import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
 import {
+  createRequestIdentityObserver,
+  type RequestIdentityObserver,
+} from "./request-observation/index.js";
+import {
   bindRuntimeDiagnosticsConfiguration,
   createRuntimeDiagnosticsStoreFactory,
   type RuntimeDiagnosticsStore,
@@ -185,6 +189,10 @@ export interface ConfiguredLuckyTokenComposition {
   readonly clientTokenAuthorities: Readonly<
     Record<string, LiveClientTokenAuthority>
   >;
+  /** Request identity observer (Ticket 17 identity seam): the bounded
+   *  public ledger of authorized request identities that the Requests
+   *  surface and Ticket 18's permanent ledger build on. */
+  readonly requestIdentities: RequestIdentityObserver;
 }
 
 export async function createConfiguredPiModels(
@@ -382,9 +390,15 @@ export async function createConfiguredLuckyTokenComposition(
   if (options.diagnosticsStore !== undefined && scrub !== undefined) {
     diagnosticsStore.attachScrub(scrub);
   }
+  // Ticket 17 identity seam: the internal effective session identity is
+  // created per request by the auth boundary; only the optional client
+  // identity and canonical project context may reach the public observer.
+  const requestIdentities = createRequestIdentityObserver({ now });
   const auth = createAuth({
     authorizeToken: (token) => clientAuthority.authorize(token),
-    createFallbackSessionId: createSessionId,
+    createEffectiveSessionId: createSessionId,
+    onAuthorized: (identity) =>
+      requestIdentities.observe(anthropicMessagesProtocolId, identity),
   });
   const anthropic = createAnthropicMessagesHandler({
     models,
@@ -414,7 +428,9 @@ export async function createConfiguredLuckyTokenComposition(
   if (openaiResponsesConfig !== undefined && responsesAuthority !== undefined) {
     const responsesAuth = createAuth({
       authorizeToken: (token) => responsesAuthority.authorize(token),
-      createFallbackSessionId: createSessionId,
+      createEffectiveSessionId: createSessionId,
+      onAuthorized: (identity) =>
+        requestIdentities.observe(openaiResponsesProtocolId, identity),
     });
     const stateFile =
       openaiResponsesConfig.stateFile ??
@@ -477,5 +493,6 @@ export async function createConfiguredLuckyTokenComposition(
     userConfiguredProviderIds,
     diagnosticsStore,
     clientTokenAuthorities: Object.freeze(clientAuthorities),
+    requestIdentities,
   });
 }

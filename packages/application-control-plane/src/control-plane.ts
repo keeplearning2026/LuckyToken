@@ -17,8 +17,8 @@ export {
   type ClientTokenCommandHandler,
   type ClientTokenCommandOutcome,
   type ClientTokenCommandResult,
-
-
+  type ClientTokenDirectoryRejection,
+  type ClientTokenScopeRef,
   type ControlPlaneDiagnostics,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
@@ -47,6 +47,11 @@ export {
   type ModelsFileState,
   type ModelsProjection,
   type RegisteredSetting,
+  type RequestIdentitiesQueryHandler,
+  type RequestIdentitiesQueryResult,
+  type RequestIdentityFact,
+  type RequestIdentityProjection,
+  type RequestIdentityRecord,
   type RunningControlPlane,
   type RuntimeCommand,
   type RuntimeCommandConflict,
@@ -73,6 +78,7 @@ export {
   type RuntimeDiagnosticsStore,
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
+export { projectRequestIdentity } from "./contracts.js";
 export {
   RUNTIME_DIAGNOSTIC_LEVELS,
   RUNTIME_DIAGNOSTIC_SEVERITY,

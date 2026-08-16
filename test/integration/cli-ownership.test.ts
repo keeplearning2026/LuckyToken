@@ -19,6 +19,7 @@ import {
   createNodePipeTransport,
   nodePipeFallbackAccess,
   startControlPlane,
+  type ControlPlaneClient,
   type RunningControlPlane,
 } from "@luckytoken/application-control-plane/control-plane";
 
@@ -152,9 +153,17 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     return { directory, stateDirectory, configPath, descriptorPath };
   }
 
-  async function waitForDescriptor(descriptorPath: string): Promise<unknown> {
+  async function waitForDescriptor(
+    descriptorPath: string,
+    child?: ChildProcessWithoutNullStreams,
+  ): Promise<unknown> {
     await expect
       .poll(async () => {
+        // Under full-suite load, parallel tsx child boots can exceed a
+        // short budget; fail fast if the child exited instead of waiting.
+        if (child !== undefined && child.exitCode !== null) {
+          throw new Error(`serve exited before publishing its descriptor`);
+        }
         try {
           const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
             pipeName?: unknown;
@@ -163,7 +172,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
         } catch {
           return false;
         }
-      }, { timeout: 10_000, interval: 50 })
+      }, { timeout: 30_000, interval: 50 })
       .toBe(true);
     return JSON.parse(await readFile(descriptorPath, "utf8"));
   }
@@ -195,6 +204,18 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     throw lastError;
   }
 
+  /** The owner publishes its descriptor before its Data Plane finishes
+   *  starting; wait for the running state so snapshot assertions are
+   *  deterministic. */
+  async function waitForRunning(client: ControlPlaneClient): Promise<void> {
+    await expect
+      .poll(async () => (await client.getStatus()).modelDataPlane, {
+        timeout: 10_000,
+        interval: 50,
+      })
+      .toBe("running");
+  }
+
   it("attaches a second launch to the active instance instead of starting another Data Plane", async () => {
     const { configPath, descriptorPath } = await writeServeState();
     const first = startCli(
@@ -223,6 +244,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
     const status = await connectToServe(descriptorPath, "attach-status");
     await status.hello(1);
+    await waitForRunning(status);
     await expect(status.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
       ownership: { owner: { kind: "cli" } },
@@ -246,6 +268,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
     const client = await connectToServe(descriptorPath, "refused-quit");
     await client.hello(1);
+    await waitForRunning(client);
     const result = await client.executeApplicationCommand({
       command: "quit",
       acknowledged: false,

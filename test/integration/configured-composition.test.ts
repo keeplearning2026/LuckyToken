@@ -136,6 +136,7 @@ describe("configured serving composition", () => {
       "certification",
       "clientTokenAuthorities",
       "diagnosticsStore",
+      "requestIdentities",
       "runtime",
       "userConfiguredProviderIds",
     ]);

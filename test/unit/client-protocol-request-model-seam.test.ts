@@ -103,7 +103,7 @@ describe("Client Protocol request-model seam", () => {
 
   function auth(): Auth {
     return {
-      resolve: async () => ({ authorized: true, sessionId: "session" }),
+      resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
     };
   }
 

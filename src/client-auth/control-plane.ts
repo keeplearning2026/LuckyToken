@@ -7,9 +7,12 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
+  ClientTokenDirectoryRejectionError,
   ClientTokenInvalidValueError,
+  ClientTokenScopeExistsError,
   ClientTokenScopeNotFoundError,
   ClientTokenStaleRevisionError,
+  type ClientTokenDirectoryRejectionReason,
   type LiveClientTokenAuthority,
 } from "./live-authority.js";
 
@@ -59,18 +62,53 @@ export function createClientTokenControlPlaneHandler(
         const listing = await authority.list();
         return { outcome: "ok", revision: listing.revision, scopes: listing.scopes };
       }
+      if (command.command === "create") {
+        // Only the backend canonicalizes: the raw picker/CLI path resolves
+        // at the authority boundary and no duplicate scope can be created.
+        if (command.scope.type === "global") {
+          const created = await authority.ensureGlobal();
+          const listing = await authority.list();
+          return {
+            outcome: created ? "ok" : "already_exists",
+            revision: listing.revision,
+            scopes: listing.scopes,
+          };
+        }
+        const created = await authority.createProject(
+          command.scope.projectDir,
+          command.token,
+        );
+        return {
+          outcome: "ok",
+          revision: created.listing.revision,
+          scopes: created.listing.scopes,
+        };
+      }
       if (command.command === "reveal") {
-        const token = await authority.reveal();
+        const token =
+          command.scope?.type === "project"
+            ? await authority.revealProject(command.scope.projectDir)
+            : await authority.reveal();
         return { outcome: "ok", revision: authority.revision, token };
       }
       if (command.command === "rotate") {
-        const listing = await authority.rotate(
-          command.expectedRevision,
-          command.token,
-        );
+        const listing =
+          command.scope?.type === "project"
+            ? await authority.rotateProject(
+                command.expectedRevision,
+                command.scope.projectDir,
+                command.token,
+              )
+            : await authority.rotate(command.expectedRevision, command.token);
         return { outcome: "ok", revision: listing.revision, scopes: listing.scopes };
       }
-      const listing = await authority.remove(command.expectedRevision);
+      const listing =
+        command.scope?.type === "project"
+          ? await authority.removeProject(
+              command.expectedRevision,
+              command.scope.projectDir,
+            )
+          : await authority.remove(command.expectedRevision);
       if (listing.scopes.length === 0) {
         // The protocol lost its last token: requests now return 401. Emit a
         // sanitized warning through the single Ticket 07 redaction boundary.
@@ -92,6 +130,24 @@ export function createClientTokenControlPlaneHandler(
         return {
           outcome: "not_found",
           revision: authority.revision,
+          error: error.message,
+        };
+      }
+      if (error instanceof ClientTokenScopeExistsError) {
+        return {
+          outcome: "already_exists",
+          revision: authority.revision,
+          error: error.message,
+        };
+      }
+      if (error instanceof ClientTokenDirectoryRejectionError) {
+        // Value-free canonicalization rejection: the raw input path never
+        // reaches the wire.
+        const reason: ClientTokenDirectoryRejectionReason = error.reason;
+        return {
+          outcome: "invalid_directory",
+          revision: authority.revision,
+          reason,
           error: error.message,
         };
       }

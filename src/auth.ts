@@ -10,9 +10,28 @@ export type AuthResult =
   | { authorized: false }
   | {
       authorized: true;
-      sessionId: string;
+      /**
+       * The always-present internal Pi invocation identity (Ticket 17): a
+       * valid client-supplied session id is retained as the effective
+       * identity, otherwise one is created. This identity is internal: it
+       * must never be projected as the client's supplied id.
+       */
+      effectiveSessionId: string;
+      /**
+       * The client-provided session identity. Exists only when the client
+       * supplied a valid supported session header; never synthesized and
+       * never substituted for by the effective identity.
+       */
+      clientSessionId?: string;
       projectDir?: string;
     };
+
+/** Public request-identity fact observed after successful authorization:
+ *  the internal effective session identity is deliberately absent. */
+export interface AuthorizedRequestIdentity {
+  readonly clientSessionId?: string;
+  readonly projectDir?: string;
+}
 
 export interface Auth {
   resolve(headers: ReadonlyHeaders): Promise<AuthResult>;
@@ -22,7 +41,14 @@ export interface AuthDependencies {
   authorizeToken(
     token: string,
   ): AuthorizedClient | undefined | Promise<AuthorizedClient | undefined>;
-  createFallbackSessionId(): string;
+  /** Creates the internal effective session identity (a UUID). */
+  createEffectiveSessionId(): string;
+  /**
+   * Optional observation hook (Ticket 17 identity seam): invoked after
+   * every successful authorization with only the client identity and
+   * project facts. The effective session identity never reaches observers.
+   */
+  onAuthorized?(identity: AuthorizedRequestIdentity): void;
 }
 
 const SESSION_HEADER_PRECEDENCE = ["x-session-id", "x-client-request-id","x-session-affinity"] as const;
@@ -46,20 +72,12 @@ function parseClientCredential(headers: ReadonlyHeaders): string | undefined {
   return usableApiKey ?? usableBearer;
 }
 
-function resolveSessionId(
-  headers: ReadonlyHeaders,
-  createFallbackSessionId: () => string,
-): string {
+function parseClientSessionId(headers: ReadonlyHeaders): string | undefined {
   for (const name of SESSION_HEADER_PRECEDENCE) {
     const value = headers.get(name)?.trim();
     if (value !== undefined && UUID_PATTERN.test(value)) return value;
   }
-
-  const fallback = createFallbackSessionId();
-  if (!UUID_PATTERN.test(fallback)) {
-    throw new Error("Auth fallback identity generator returned an invalid UUID");
-  }
-  return fallback;
+  return undefined;
 }
 
 export function createAuth(dependencies: AuthDependencies): Auth {
@@ -71,17 +89,28 @@ export function createAuth(dependencies: AuthDependencies): Auth {
       const authorizedClient = await dependencies.authorizeToken(credential);
       if (authorizedClient === undefined) return { authorized: false };
 
-      const sessionId = resolveSessionId(
-        headers,
-        dependencies.createFallbackSessionId,
-      );
-      if (authorizedClient.projectDir === undefined) {
-        return { authorized: true, sessionId };
+      const clientSessionId = parseClientSessionId(headers);
+      const effectiveSessionId =
+        clientSessionId ?? dependencies.createEffectiveSessionId();
+      if (!UUID_PATTERN.test(effectiveSessionId)) {
+        throw new Error("Auth identity generator returned an invalid UUID");
       }
+      const identity: AuthorizedRequestIdentity = {
+        ...(clientSessionId === undefined
+          ? {}
+          : { clientSessionId }),
+        ...(authorizedClient.projectDir === undefined
+          ? {}
+          : { projectDir: authorizedClient.projectDir }),
+      };
+      dependencies.onAuthorized?.(identity);
       return {
         authorized: true,
-        sessionId,
-        projectDir: authorizedClient.projectDir,
+        effectiveSessionId,
+        ...(clientSessionId === undefined ? {} : { clientSessionId }),
+        ...(authorizedClient.projectDir === undefined
+          ? {}
+          : { projectDir: authorizedClient.projectDir }),
       };
     },
   };

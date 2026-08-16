@@ -18,6 +18,7 @@ import {
   type HelloResult,
   type ModelsCommand,
   type ModelsCommandResult,
+  type RequestIdentitiesQueryResult,
   type RuntimeCommand,
   type RuntimeCommandResult,
   type SettingsCommand,
@@ -223,6 +224,13 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return result;
+    },
+    async getRequestIdentities(): Promise<RequestIdentitiesQueryResult> {
+      const response = await request({ type: "get_request_identities" });
+      if (response.type !== "request_identities_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
     },
     async executeModelsCommand(
       command: ModelsCommand,

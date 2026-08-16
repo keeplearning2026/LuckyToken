@@ -17,7 +17,7 @@ describe("Auth.resolve", () => {
   it("denies an unusable bearer credential without exposing lookup state", async () => {
     const auth = createAuth({
       authorizeToken: async () => undefined,
-      createFallbackSessionId: () => fallbackSession,
+      createEffectiveSessionId: () => fallbackSession,
     });
 
     await expect(
@@ -31,7 +31,7 @@ describe("Auth.resolve", () => {
     );
     const auth = createAuth({
       authorizeToken,
-      createFallbackSessionId: () => fallbackSession,
+      createEffectiveSessionId: () => fallbackSession,
     });
 
     const result = await auth.resolve(
@@ -40,7 +40,8 @@ describe("Auth.resolve", () => {
 
     expect(result).toEqual({
       authorized: true,
-      sessionId: primarySession,
+      effectiveSessionId: primarySession,
+      clientSessionId: primarySession,
       projectDir: "D:/project/example",
     });
     expect(authorizeToken).toHaveBeenCalledWith("valid-client-token");
@@ -54,12 +55,15 @@ describe("Auth.resolve", () => {
     );
     const auth = createAuth({
       authorizeToken,
-      createFallbackSessionId: () => fallbackSession,
+      createEffectiveSessionId: () => fallbackSession,
     });
 
     await expect(
       auth.resolve(new Headers({ "x-api-key": "valid-client-token" })),
-    ).resolves.toEqual({ authorized: true, sessionId: fallbackSession });
+    ).resolves.toEqual({
+      authorized: true,
+      effectiveSessionId: fallbackSession,
+    });
     expect(authorizeToken).toHaveBeenCalledWith("valid-client-token");
   });
 
@@ -67,7 +71,7 @@ describe("Auth.resolve", () => {
     const authorizeToken = vi.fn(async () => ({}));
     const auth = createAuth({
       authorizeToken,
-      createFallbackSessionId: () => fallbackSession,
+      createEffectiveSessionId: () => fallbackSession,
     });
 
     await expect(
@@ -82,10 +86,10 @@ describe("Auth.resolve", () => {
   });
 
   it("uses the documented session-header precedence when aliases conflict", async () => {
-    const createFallbackSessionId = vi.fn(() => fallbackSession);
+    const createEffectiveSessionId = vi.fn(() => fallbackSession);
     const auth = createAuth({
       authorizeToken: async () => ({}),
-      createFallbackSessionId,
+      createEffectiveSessionId,
     });
 
     await expect(
@@ -95,27 +99,90 @@ describe("Auth.resolve", () => {
           "x-client-request-id": secondarySession,
         }),
       ),
-    ).resolves.toEqual({ authorized: true, sessionId: primarySession });
-    expect(createFallbackSessionId).not.toHaveBeenCalled();
+    ).resolves.toEqual({
+      authorized: true,
+      effectiveSessionId: primarySession,
+      clientSessionId: primarySession,
+    });
+    expect(createEffectiveSessionId).not.toHaveBeenCalled();
   });
 
-  it("generates one fallback for absent or unusable session identities", async () => {
-    const createFallbackSessionId = vi.fn(() => fallbackSession);
+  it("creates an internal effective session id for absent or unusable client identities", async () => {
+    const createEffectiveSessionId = vi.fn(() => fallbackSession);
     const auth = createAuth({
       authorizeToken: async () => ({}),
-      createFallbackSessionId,
+      createEffectiveSessionId,
     });
 
     await expect(auth.resolve(authorizedHeaders())).resolves.toEqual({
       authorized: true,
-      sessionId: fallbackSession,
+      effectiveSessionId: fallbackSession,
     });
     await expect(
       auth.resolve(authorizedHeaders({ "x-session-id": "not-a-uuid" })),
     ).resolves.toEqual({
       authorized: true,
-      sessionId: fallbackSession,
+      effectiveSessionId: fallbackSession,
     });
-    expect(createFallbackSessionId).toHaveBeenCalledTimes(2);
+    expect(createEffectiveSessionId).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the effective session id internal when the client supplied its own", async () => {
+    const createEffectiveSessionId = vi.fn(() => fallbackSession);
+    const auth = createAuth({
+      authorizeToken: async () => ({}),
+      createEffectiveSessionId,
+    });
+
+    const result = await auth.resolve(
+      authorizedHeaders({ "x-session-id": primarySession }),
+    );
+    // The client identity and the internal identity never substitute for
+    // each other: the client's own valid header is retained as the effective
+    // identity, and no second identity is generated.
+    expect(result).toEqual({
+      authorized: true,
+      effectiveSessionId: primarySession,
+      clientSessionId: primarySession,
+    });
+    expect(createEffectiveSessionId).not.toHaveBeenCalled();
+  });
+
+  it("records only the client identity and project facts for authorized requests", async () => {
+    const onAuthorized = vi.fn();
+    const auth = createAuth({
+      authorizeToken: async () => ({ projectDir: "C:\\canonical\\project" }),
+      createEffectiveSessionId: () => fallbackSession,
+      onAuthorized,
+    });
+
+    await auth.resolve(
+      authorizedHeaders({ "x-session-id": primarySession }),
+    );
+    // The observation fact carries the client identity and project context
+    // but never the internal effective session identity.
+    expect(onAuthorized).toHaveBeenCalledWith({
+      clientSessionId: primarySession,
+      projectDir: "C:\\canonical\\project",
+    });
+
+    await auth.resolve(authorizedHeaders());
+    expect(onAuthorized).toHaveBeenLastCalledWith({
+      projectDir: "C:\\canonical\\project",
+    });
+    expect(
+      JSON.stringify(onAuthorized.mock.calls),
+    ).not.toContain(fallbackSession);
+  });
+
+  it("never observes denied requests", async () => {
+    const onAuthorized = vi.fn();
+    const auth = createAuth({
+      authorizeToken: async () => undefined,
+      createEffectiveSessionId: () => fallbackSession,
+      onAuthorized,
+    });
+    await auth.resolve(authorizedHeaders());
+    expect(onAuthorized).not.toHaveBeenCalled();
   });
 });
