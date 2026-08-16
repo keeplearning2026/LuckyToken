@@ -6,6 +6,21 @@ export {
   type AuthorizedClient,
 } from "./auth.js";
 export {
+  createRuntimeDiagnosticsStoreFactory,
+  parseRuntimeDiagnosticsConfiguration,
+  bindRuntimeDiagnosticsConfiguration,
+  redactDiagnosticTextValue,
+  type RuntimeDiagnosticDraft,
+  type RuntimeDiagnosticEvent,
+  type RuntimeDiagnosticLevel,
+  type RuntimeDiagnosticMessage,
+  type RuntimeDiagnosticQuery,
+  type RuntimeDiagnosticRecord,
+  type RuntimeDiagnosticsConfiguration,
+  type RuntimeDiagnosticsQueryResult,
+  type RuntimeDiagnosticsStore,
+} from "./runtime-diagnostics/index.js";
+export {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
   type LuckyTokenRuntimeOptions,

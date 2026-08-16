@@ -1,3 +1,9 @@
+import type {
+  RuntimeDiagnosticEvent,
+  RuntimeDiagnosticQuery,
+  RuntimeDiagnosticsQueryResult,
+} from "./diagnostics-contract.js";
+
 export const controlPlaneVersion = 1 as const;
 
 export interface ApplicationIdentity {
@@ -102,6 +108,19 @@ export interface ControlPlaneEndpoint {
   readonly capability: string;
 }
 
+export type {
+  ControlPlaneDiagnostics,
+  RuntimeDiagnosticDraft,
+  RuntimeDiagnosticEvent,
+  RuntimeDiagnosticLevel,
+  RuntimeDiagnosticMessage,
+  RuntimeDiagnosticQuery,
+  RuntimeDiagnosticRecord,
+  RuntimeDiagnosticsQueryResult,
+  RuntimeDiagnosticsStore,
+  RuntimeDiagnosticsStoreFactory,
+} from "./diagnostics-contract.js";
+
 export type HelloResult =
   | {
       readonly type: "compatible";
@@ -185,6 +204,12 @@ export interface ControlPlaneClient {
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
+  getDiagnostics(
+    query?: RuntimeDiagnosticQuery,
+  ): Promise<RuntimeDiagnosticsQueryResult>;
+  subscribeDiagnostics(
+    listener: (event: RuntimeDiagnosticEvent) => void,
+  ): Promise<() => Promise<void>>;
   subscribe(
     listener: (event: StatusEvent) => void,
   ): Promise<() => Promise<void>>;

@@ -41,6 +41,11 @@ import {
 import { startLuckyTokenHttpServer } from "./server.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
+import {
+  bindRuntimeDiagnosticsConfiguration,
+  createRuntimeDiagnosticsStoreFactory,
+} from "./runtime-diagnostics/index.js";
+import type { RuntimeDiagnosticsStore } from "./runtime-diagnostics/index.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
@@ -339,6 +344,12 @@ async function runServe(
   descriptorOverride?: string,
 ): Promise<void> {
   const config = await loadLuckyTokenCliConfig(configPath);
+  const diagnosticsStore: RuntimeDiagnosticsStore =
+    await createRuntimeDiagnosticsStoreFactory({
+      configuration: bindRuntimeDiagnosticsConfiguration(
+        config.runtimeDiagnostics,
+      ),
+    }).open();
   const controlPipe = await createProductionControlPipe();
   const provider: ApplicationStatus["provider"] =
     Object.keys(config.providerPackages).length === 0 &&
@@ -370,6 +381,7 @@ async function runServe(
           config,
           fetch: globalThis.fetch,
           shutdownSignal: shutdownController.signal,
+          diagnosticsStore,
           settingsRegistry,
         });
         const server = await startLuckyTokenHttpServer({
@@ -411,6 +423,7 @@ async function runServe(
     settingsProjection: () => settingsRegistry.snapshot(),
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
+    diagnostics: diagnosticsStore,
   });
   const descriptorPath = resolveControlPlaneDescriptorPath({
     homeDirectory: homedir(),
@@ -453,6 +466,7 @@ async function runServe(
     const cleanup = await Promise.allSettled([
       descriptor?.close() ?? Promise.resolve(),
       controlPlane.close(),
+      diagnosticsStore.close(),
     ]);
     if (cleanup.some((result) => result.status === "rejected")) {
       throw new Error("LuckyToken application resource cleanup failed");

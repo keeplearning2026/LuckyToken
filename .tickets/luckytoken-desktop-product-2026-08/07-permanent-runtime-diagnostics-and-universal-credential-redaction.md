@@ -8,7 +8,7 @@
 
 **Blocked by:** 01 — Versioned local Control Plane status tracer; 02 — Windows Desktop Shell and empty Dashboard.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm Runtime Diagnostics commands/queries/events and ex
 
 ## Acceptance criteria
 
-- [ ] Diagnostics permanently stores ordered structured info, warning, error, and critical events and exposes them through Control Plane queries/events.
-- [ ] An event may carry a request ID correlation without becoming part of the Request Ledger lifecycle.
-- [ ] Authorization, Proxy-Authorization, x-api-key, Cookie, Set-Cookie, LuckyToken Client tokens, and known query credentials lose all authentication capability before persistence.
-- [ ] Redacted records may preserve header names, authentication scheme/type, and a non-reversible fingerprint but cannot reconstruct the original value.
-- [ ] The same redaction contract applies recursively to nested facts, exceptions, import errors, raw captures, exports, backups, and fallback diagnostics.
-- [ ] Diagnostics records are not automatically aged out and remain queryable after application restart.
-- [ ] Diagnostics events delivered to UI/CLI never contain credentials even if their originating producer supplied unsafe facts.
-- [ ] Contract tests cover each credential class, mixed case, nested values, failure paths, and independently verify that known secret literals do not appear in any persisted/exported output.
+- [x] Diagnostics permanently stores ordered structured info, warning, error, and critical events and exposes them through Control Plane queries/events.
+- [x] An event may carry a request ID correlation without becoming part of the Request Ledger lifecycle.
+- [x] Authorization, Proxy-Authorization, x-api-key, Cookie, Set-Cookie, LuckyToken Client tokens, and known query credentials lose all authentication capability before persistence.
+- [x] Redacted records may preserve header names, authentication scheme/type, and a non-reversible fingerprint but cannot reconstruct the original value.
+- [x] The same redaction contract applies recursively to nested facts, exceptions, import errors, raw captures, exports, backups, and fallback diagnostics.
+- [x] Diagnostics records are not automatically aged out and remain queryable after application restart.
+- [x] Diagnostics events delivered to UI/CLI never contain credentials even if their originating producer supplied unsafe facts.
+- [x] Contract tests cover each credential class, mixed case, nested values, failure paths, and independently verify that known secret literals do not appear in any persisted/exported output.

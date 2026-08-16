@@ -11,6 +11,10 @@ import {
   type SettingsProjection,
   type StatusSnapshot,
 } from "./contracts.js";
+import {
+  type ControlPlaneDiagnostics,
+  normalizeDiagnosticQuery,
+} from "./diagnostics-contract.js";
 import { readFrame, writeFrame } from "./framing.js";
 import {
   assertPipeAccess,
@@ -18,6 +22,7 @@ import {
   type PipeConnection,
   type PipeServerFactory,
 } from "./pipe-transport.js";
+import { decodeDiagnosticQuery } from "./wire-diagnostics.js";
 import {
   compatibleHello,
   decodeApplicationStatus,
@@ -40,12 +45,20 @@ export interface StartControlPlaneOptions {
   readonly settingsCommandHandler?: SettingsCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
+  /**
+   * Explicit diagnostics ownership (Ticket 07): when present, the Control
+   * Plane serves bounded diagnostics queries and typed diagnostic events to
+   * subscribers that requested them. Status subscribers never receive
+   * diagnostic events.
+   */
+  readonly diagnostics?: ControlPlaneDiagnostics;
 }
 
 interface ConnectionState {
   readonly connection: PipeConnection;
   authorized: boolean;
   subscribed: boolean;
+  diagnosticsSubscribed: boolean;
 }
 
 export async function startApplicationStatusHost(
@@ -88,6 +101,27 @@ export async function startApplicationStatusHost(
   let publishQueue = Promise.resolve();
   const states = new Set<ConnectionState>();
   const tasks = new Set<Promise<void>>();
+  const diagnostics = options.diagnostics;
+  const emitDiagnostics = diagnostics === undefined
+    ? undefined
+    : () => {
+        const subscription = diagnostics.subscribe((event) => {
+          for (const state of states) {
+            if (!state.diagnosticsSubscribed) continue;
+            void writeFrame(state.connection, {
+              type: "event",
+              event: {
+                type: "diagnostic",
+                record: event.record,
+              },
+            }).catch(() => {
+              state.diagnosticsSubscribed = false;
+              void state.connection.close().catch(() => undefined);
+            });
+          }
+        });
+        return subscription.unsubscribe;
+      };
   const sendError = async (
     connection: PipeConnection,
     requestId: string,
@@ -110,12 +144,14 @@ export async function startApplicationStatusHost(
         if (frame.type === "malformed") {
           state.authorized = false;
           state.subscribed = false;
+          state.diagnosticsSubscribed = false;
           await sendError(state.connection, "", "invalid_request");
           continue;
         }
         if (isRecord(frame.value) && frame.value.type === "hello") {
           state.authorized = false;
           state.subscribed = false;
+          state.diagnosticsSubscribed = false;
         }
         const decoded = decodeClientRequest(frame.value);
         if (decoded.type === "invalid") {
@@ -159,6 +195,37 @@ export async function startApplicationStatusHost(
             type: "status_result",
             requestId: request.requestId,
             snapshot: current,
+          });
+        } else if (request.type === "get_diagnostics") {
+          if (diagnostics === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+          } else {
+            const query = decodeDiagnosticQuery(request.query);
+            if (query === undefined && request.query !== undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+            } else {
+              await writeFrame(state.connection, {
+                type: "diagnostics_result",
+                requestId: request.requestId,
+                result: diagnostics.query(normalizeDiagnosticQuery(query)),
+              });
+            }
+          }
+        } else if (request.type === "diagnostics_subscribe") {
+          if (diagnostics === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+          } else {
+            state.diagnosticsSubscribed = true;
+            await writeFrame(state.connection, {
+              type: "subscribed",
+              requestId: request.requestId,
+            });
+          }
+        } else if (request.type === "diagnostics_unsubscribe") {
+          state.diagnosticsSubscribed = false;
+          await writeFrame(state.connection, {
+            type: "unsubscribed",
+            requestId: request.requestId,
           });
         } else if (request.type === "runtime_command") {
           let execution: RuntimeCommandExecution;
@@ -245,6 +312,7 @@ export async function startApplicationStatusHost(
           });
         } else {
           state.subscribed = false;
+          state.diagnosticsSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -274,6 +342,7 @@ export async function startApplicationStatusHost(
         connection,
         authorized: false,
         subscribed: false,
+        diagnosticsSubscribed: false,
       };
       states.add(state);
       const task = serveConnection(state).catch(() => undefined);
@@ -316,12 +385,15 @@ export async function startApplicationStatusHost(
     return publishQueue;
   };
 
+  const diagnosticsListener = emitDiagnostics?.();
+
   return {
     endpoint: options.endpoint,
     publishStatus,
     async close() {
       if (closed) return;
       closed = true;
+      diagnosticsListener?.();
       await publishQueue.catch(() => undefined);
       await Promise.all(
         [...states].map((state) =>

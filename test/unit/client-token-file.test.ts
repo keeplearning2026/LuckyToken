@@ -41,10 +41,16 @@ describe("per-Client-Protocol token file", () => {
     );
     const authority = await loadFileClientTokenAuthority(path);
 
-    expect(Object.keys(authority)).toEqual(["authorize"]);
+    expect(Object.keys(authority)).toEqual(["authorize", "scrub"]);
     expect(Object.isFrozen(authority)).toBe(true);
     expect(authority.authorize("lt_generated_global")).toEqual({});
     expect(authority.authorize("wrong-token")).toBeUndefined();
+    // F4: the authority owns its raw token and exposes only a narrow scrub
+    // operation that removes it from arbitrary text.
+    expect(authority.scrub("token=lt_generated_global")).toBe(
+      "token=[REDACTED]",
+    );
+    expect(authority.scrub("benign text")).toBe("benign text");
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
       schemaVersion: "luckytoken-client-auth-v1",
       global: "lt_generated_global",

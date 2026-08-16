@@ -60,6 +60,13 @@ export interface InvocationDiagnosticsFactoryOptions {
   readonly createRequestId?: () => string;
   readonly now?: () => number;
   readonly stderr?: (message: string) => void;
+  /**
+   * Opaque known-value scrubber (Ticket 07 F4): the credential authorities
+   * own raw values and expose only this narrow operation; the failure
+   * journal routes every persistent value through the universal sanitizer
+   * plus this scrubber, never a second ad-hoc redactor.
+   */
+  readonly scrub?: (value: string) => string;
 }
 
 const MAX_NOTICES = 128;
@@ -67,18 +74,8 @@ const MAX_ATTEMPTS = 128;
 const MAX_TEXT = 1_024;
 const SAFE_NAME = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const JOURNAL_NAME = /^[0-9a-f-]{36}\.json$/u;
-const SECRET_KEY = /authorization|cookie|api[-_]?key|credential|password|secret|token/i;
-const BINARY_KEY = /(?:^|_)(?:data|bytes|binary|image|file|base64)(?:$|_)/i;
 const NOTICE_DIRECTIONS = new Set(["request", "response"]);
 const NOTICE_ACTIONS = new Set(["ignore", "degrade", "xrepair"]);
-
-function safeText(value: string, maximum = MAX_TEXT): string {
-  const withoutControls = value.replace(/[\u0000-\u001f\u007f]/gu, " ");
-  const redacted = withoutControls
-    .replace(/\b(?:bearer|basic)\s+\S+/giu, "[REDACTED]")
-    .replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._-]{8,}\b/giu, "[REDACTED]");
-  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum)}…`;
-}
 
 function safeName(value: string, field: string): string {
   if (!SAFE_NAME.test(value)) throw new Error(`${field} must be a bounded safe identifier`);
@@ -122,28 +119,80 @@ function safeMeasurements(
   return Object.freeze(output);
 }
 
-function exceptionChain(error: unknown, full: boolean): readonly Readonly<Record<string, unknown>>[] {
+/**
+ * F4: a throwing owner scrubber fails closed. The value is replaced with the
+ * fixed safe marker; neither the raw input nor the thrown error message may
+ * reach journal bytes or stderr.
+ */
+function applyScrub(value: string, scrub: ((value: string) => string) | undefined): string {
+  if (scrub === undefined) return value;
+  try {
+    return scrub(value);
+  } catch {
+    return "[SCRUB_FAILED]";
+  }
+}
+
+function safeText(value: string, maximum = MAX_TEXT, scrub?: (value: string) => string): string {
+  const scrubbed = applyScrub(value, scrub);
+  const withoutControls = scrubbed.replace(/[\u0000-\u001f\u007f]/gu, " ");
+  const redacted = withoutControls
+    .replace(/\b(bearer|basic|digest|apikey)\s+[A-Za-z0-9._~+/=-]{8,}\b/giu, (_match, scheme: string) => `${scheme} [REDACTED]`)
+    .replace(
+      /\b(?:authorization|proxy[- ]authorization|x-api-key|cookie|set-cookie)\s*:\s*[^\s,;]+/giu,
+      (header) => `${header.split(":")[0]!.trim()}: [REDACTED]`,
+    )
+    .replace(
+      /\b(?:cookie|set-cookie|password|passwd|api[-_]?key|apikey|authorization|proxy[- ]authorization|client[-_]?secret|access[-_]?token|refresh[-_]?token|secret|token|credential)\s*=\s*[^\s,;]+/giu,
+      (form) => `${form.split("=")[0]!.trim()}=[REDACTED]`,
+    )
+    .replace(/\b(?:lt_|sk-|sk_|key-)[A-Za-z0-9_-]{12,}\b/giu, "[REDACTED]")
+    .replace(
+      /\b[a-z][a-z0-9-]*(?:token|key|secret|password|credential)[a-z0-9-]*[-_][A-Za-z0-9_-]{8,}\b/giu,
+      "[REDACTED]",
+    );
+  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum)}…`;
+}
+
+/** Own-data-field reader: accessor properties (getters/proxies) never invoked. */
+function readDataField(value: Record<string, unknown>, field: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, field);
+  return descriptor === undefined || descriptor.get !== undefined
+    ? undefined
+    : descriptor.value;
+}
+
+function exceptionChain(
+  error: unknown,
+  full: boolean,
+  scrub?: (value: string) => string,
+): readonly Readonly<Record<string, unknown>>[] {
   const result: Array<Readonly<Record<string, unknown>>> = [];
   const seen = new Set<unknown>();
   let current = error;
   while (current !== undefined && current !== null && result.length < 8 && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error) {
-      const message = current.message;
+      const asRecord = current as unknown as Record<string, unknown>;
+      const nameValue = readDataField(asRecord, "name");
+      const messageValue = readDataField(asRecord, "message");
+      const causeValue = readDataField(asRecord, "cause");
+      const message =
+        typeof messageValue === "string" ? messageValue : "";
       result.push(Object.freeze({
-        name: safeText(current.name, 128),
+        name: safeText(typeof nameValue === "string" ? nameValue : "", 128, scrub),
         messageLength: message.length,
         messageHash: createHash("sha256").update(message).digest("hex"),
-        ...(full ? { message: safeText(message, 4_096) } : {}),
+        ...(full ? { message: safeText(message, 4_096, scrub) } : {}),
       }));
-      current = current.cause;
+      current = causeValue;
     } else {
       const text = String(current);
       result.push(Object.freeze({
         name: "NonErrorCause",
         messageLength: text.length,
         messageHash: createHash("sha256").update(text).digest("hex"),
-        ...(full ? { message: safeText(text, 4_096) } : {}),
+        ...(full ? { message: safeText(text, 4_096, scrub) } : {}),
       }));
       break;
     }
@@ -151,22 +200,32 @@ function exceptionChain(error: unknown, full: boolean): readonly Readonly<Record
   return Object.freeze(result);
 }
 
-function redactFull(value: unknown, key = "", depth = 0, seen = new Set<object>()): unknown {
-  if (SECRET_KEY.test(key) || BINARY_KEY.test(key)) return "[REDACTED]";
+function redactFull(
+  value: unknown,
+  scrub?: (value: string) => string,
+  key = "",
+  depth = 0,
+  seen = new Set<object>(),
+): unknown {
+  if (SECRET_HEADER.test(key) || BINARY_HEADER.test(key)) return "[REDACTED]";
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
-  if (typeof value === "string") return safeText(value, 16_384);
+  if (typeof value === "string") return safeText(value, 16_384, scrub);
   if (typeof value !== "object" || depth >= 12) return "[OMITTED]";
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.slice(0, 256).map((entry) => redactFull(entry, key, depth + 1, seen));
+    return value.slice(0, 256).map((entry) => redactFull(entry, scrub, key, depth + 1, seen));
   }
   const output: Record<string, unknown> = Object.create(null);
   for (const [name, entry] of Object.entries(value).slice(0, 256)) {
-    output[safeText(name, 128)] = redactFull(entry, name, depth + 1, seen);
+    if (name === "__proto__" || name === "prototype" || name === "constructor") continue;
+    output[safeText(name, 128, scrub)] = redactFull(entry, scrub, name, depth + 1, seen);
   }
   return output;
 }
+
+const SECRET_HEADER = /(?:^|[-_.])(?:authorization|proxy[-_]?authorization|api[-_]?key|apikey|cookie|set[-_]?cookie|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|passwd|secret|token|credential)(?:$|[-_.])/iu;
+const BINARY_HEADER = /(?:^|_)(?:data|bytes|binary|image|file|base64)(?:$|_)/iu;
 
 function dayDirectory(root: string, timestamp: number): string {
   return join(root, new Date(timestamp).toISOString().slice(0, 10));
@@ -248,6 +307,7 @@ export function createInvocationDiagnosticsFactory(
   const createRequestId = options.createRequestId ?? randomUUID;
   const now = options.now ?? Date.now;
   const stderr = options.stderr ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const scrub = options.scrub;
   if (configuration.detail === "full") {
     stderr("LuckyToken warning: failureLogging.detail=full may record sensitive request text; credentials, cookies, and binary data remain excluded.");
   }
@@ -289,7 +349,7 @@ export function createInvocationDiagnosticsFactory(
             adapter: safeName(notice.adapter, "notice.adapter"),
             direction: notice.direction,
             code: safeName(notice.code, "notice.code"),
-            ...(notice.jsonPath === undefined ? {} : { jsonPath: safeText(notice.jsonPath, 512) }),
+            ...(notice.jsonPath === undefined ? {} : { jsonPath: safeText(notice.jsonPath, 512, scrub) }),
             action: notice.action,
           }));
         },
@@ -319,7 +379,7 @@ export function createInvocationDiagnosticsFactory(
         checkpoint(checkpoint): void {
           if (finalized) return;
           stage = safeName(checkpoint.stage, "checkpoint.stage");
-          if (checkpoint.selector !== undefined) selector = safeText(checkpoint.selector, 512);
+          if (checkpoint.selector !== undefined) selector = safeText(checkpoint.selector, 512, scrub);
         },
         async succeed(): Promise<void> {
           if (finalized) return;
@@ -348,7 +408,7 @@ export function createInvocationDiagnosticsFactory(
             ...(failure.measurements === undefined
               ? {}
               : { measurements: safeMeasurements(failure.measurements) }),
-            exceptionChain: exceptionChain(failure.error, configuration.detail === "full"),
+            exceptionChain: exceptionChain(failure.error, configuration.detail === "full", scrub),
             truncation: {
               truncated: droppedNotices > 0 || droppedAttempts > 0,
               noticeLimit: MAX_NOTICES,
@@ -357,7 +417,7 @@ export function createInvocationDiagnosticsFactory(
               droppedAttempts,
             },
             ...(configuration.detail === "full" && failure.fullSnapshot !== undefined
-              ? { fullSnapshot: redactFull(failure.fullSnapshot) }
+              ? { fullSnapshot: redactFull(failure.fullSnapshot, scrub) }
               : {}),
           };
           try {
@@ -379,7 +439,7 @@ export function createInvocationDiagnosticsFactory(
             }
             await chmod(target, 0o600).catch(() => undefined);
           } catch (error) {
-            stderr(`LuckyToken failure journal write failed for ${requestId}: ${safeText(error instanceof Error ? error.message : String(error), 512)}`);
+            stderr(`LuckyToken failure journal write failed for ${requestId}: ${safeText(error instanceof Error ? error.message : String(error), 512, scrub)}`);
           } finally {
             notices.length = 0;
             attempts.length = 0;

@@ -1,3 +1,8 @@
+import type {
+  RuntimeDiagnosticEvent,
+  RuntimeDiagnosticQuery,
+  RuntimeDiagnosticsQueryResult,
+} from "./diagnostics-contract.js";
 import {
   assertControlPlaneEndpoint,
   type ControlPlaneClient,
@@ -38,6 +43,7 @@ export async function connectApplicationControlPlane(
   const connection = await dependencies.pipeConnector.connect(endpoint.pipeName);
   const pending = new Map<string, PendingRequest>();
   let listener: ((event: StatusEvent) => void) | undefined;
+  let diagnosticsListener: ((event: RuntimeDiagnosticEvent) => void) | undefined;
   let settled = false;
   let closeRequested = false;
   let resolveDisconnect:
@@ -74,7 +80,11 @@ export async function connectApplicationControlPlane(
           throw new Error("Control Plane response is malformed");
         }
         if (message.type === "event") {
-          listener?.(message.event);
+          if (message.event.type === "diagnostic") {
+            diagnosticsListener?.(message.event);
+          } else {
+            listener?.(message.event);
+          }
           continue;
         }
         const request = pending.get(message.requestId);
@@ -149,6 +159,18 @@ export async function connectApplicationControlPlane(
       }
       return response.result;
     },
+    async getDiagnostics(
+      query: RuntimeDiagnosticQuery | undefined,
+    ): Promise<RuntimeDiagnosticsQueryResult> {
+      const response = await request({
+        type: "get_diagnostics",
+        ...(query === undefined ? {} : { query }),
+      });
+      if (response.type !== "diagnostics_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
     async executeSettingsCommand(
       command: SettingsCommand,
     ): Promise<SettingsCommandResult> {
@@ -160,6 +182,35 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
+    },
+    async subscribeDiagnostics(
+      next: (event: RuntimeDiagnosticEvent) => void,
+    ): Promise<() => Promise<void>> {
+      if (diagnosticsListener !== undefined) {
+        throw new Error("Control Plane client is already subscribed to diagnostics");
+      }
+      diagnosticsListener = next;
+      let response: ServerMessage;
+      try {
+        response = await request({ type: "diagnostics_subscribe" });
+      } catch (error) {
+        diagnosticsListener = undefined;
+        throw error;
+      }
+      if (response.type !== "subscribed") {
+        diagnosticsListener = undefined;
+        throw new Error("Control Plane response is malformed");
+      }
+      let subscribed = true;
+      return async () => {
+        if (!subscribed) return;
+        const result = await request({ type: "diagnostics_unsubscribe" });
+        if (result.type !== "unsubscribed") {
+          throw new Error("Control Plane response is malformed");
+        }
+        subscribed = false;
+        diagnosticsListener = undefined;
+      };
     },
     async subscribe(next): Promise<() => Promise<void>> {
       if (listener !== undefined) {

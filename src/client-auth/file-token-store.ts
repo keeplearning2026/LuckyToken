@@ -14,6 +14,12 @@ export type ClientTokenScope =
 
 export interface ClientTokenAuthority {
   authorize(token: string): AuthorizedClient | undefined;
+  /**
+   * Narrow known-value scrub capability (Ticket 07 F4): removes this
+   * authority's own raw token values from text. The authority owns the raw
+   * values; no broad raw-secret array ever flows through unrelated modules.
+   */
+  scrub(value: string): string;
 }
 
 export interface FileClientTokenStore {
@@ -139,6 +145,16 @@ export async function loadFileClientTokenAuthority(
       projectDir,
     ]),
   );
+  const ownedTokens = [
+    ...(global === null ? [] : [global]),
+    ...Object.values(data.projects),
+  ].filter((token) => token.length > 0);
+  const escape = (text: string): string =>
+    text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const scrubPattern = new RegExp(
+    ownedTokens.map(escape).join("|"),
+    "gu",
+  );
   return Object.freeze({
     authorize: (token: string) => {
       if (token === global) return Object.freeze({});
@@ -147,6 +163,7 @@ export async function loadFileClientTokenAuthority(
         ? undefined
         : Object.freeze({ projectDir });
     },
+    scrub: (value: string) => value.replace(scrubPattern, "[REDACTED]"),
   });
 }
 

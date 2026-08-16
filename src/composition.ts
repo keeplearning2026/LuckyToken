@@ -13,9 +13,17 @@ import {
   type CoreServingCertificationManifest,
 } from "./core-serving-certification.js";
 import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
+import {
+  bindRuntimeDiagnosticsConfiguration,
+  createRuntimeDiagnosticsStoreFactory,
+  type RuntimeDiagnosticsStore,
+} from "./runtime-diagnostics/index.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
-import { loadFileClientTokenAuthority } from "./client-auth/file-token-store.js";
+import {
+  loadFileClientTokenAuthority,
+  type ClientTokenAuthority,
+} from "./client-auth/file-token-store.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
@@ -53,6 +61,59 @@ export interface ConfiguredPiModelsOptions {
   readonly now?: () => number;
 }
 
+/**
+ * Builds the narrow known-value scrubber (Ticket 07 F4) from every
+ * credential owner: Client Protocol token authorities expose their own
+ * scrub operation, and the Pi CredentialStore exposes only non-secret
+ * metadata plus per-provider reads through the standard contract.
+ */
+async function createCompositionScrubber(
+  owners: {
+    readonly clientAuthority: ClientTokenAuthority;
+    readonly responsesAuthority?: ClientTokenAuthority;
+    readonly credentials?: CredentialStore;
+  },
+): Promise<((value: string) => string) | undefined> {
+  const scrubbers: Array<(value: string) => string> = [];
+  scrubbers.push(owners.clientAuthority.scrub);
+  if (owners.responsesAuthority !== undefined) {
+    scrubbers.push(owners.responsesAuthority.scrub);
+  }
+  if (owners.credentials !== undefined) {
+    const listed = await owners.credentials.list().catch(() => undefined);
+    if (listed !== undefined) {
+      for (const info of listed) {
+        const credential = await owners.credentials
+          .read(info.providerId)
+          .catch(() => undefined);
+        if (credential === undefined) continue;
+        const values: string[] = [];
+        if (credential.type === "api_key") {
+          if (credential.key !== undefined) values.push(credential.key);
+          if (credential.env !== undefined) values.push(...Object.values(credential.env));
+        } else {
+          values.push(credential.access, credential.refresh);
+        }
+        const escape = (text: string): string =>
+          text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const pattern = new RegExp(
+          values.filter((value) => value.length > 0).map(escape).join("|"),
+          "gu",
+        );
+        if (values.some((value) => value.length > 0)) {
+          scrubbers.push((value: string) => value.replace(pattern, "[REDACTED]"));
+        }
+      }
+    }
+  }
+  if (scrubbers.length === 0) return undefined;
+  return (value: string) => {
+    let redacted = value;
+    for (const scrub of scrubbers) redacted = scrub(redacted);
+    return redacted;
+  };
+}
+
 export interface ConfiguredLuckyTokenCompositionOptions {
   readonly config: LuckyTokenCliConfig;
   readonly credentials?: CredentialStore;
@@ -62,6 +123,12 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly createSessionId?: () => string;
   readonly now?: () => number;
   readonly shutdownSignal?: AbortSignal;
+  /**
+   * Reuse an already-open Runtime Diagnostics store (Ticket 07), e.g. the
+   * one the Control Plane host owns. When absent the composition opens and
+   * returns its own store, which the caller must close.
+   */
+  readonly diagnosticsStore?: RuntimeDiagnosticsStore;
   /** Registered settings authority for protocol enablement; when absent every
    *  configured protocol is served (Ticket 03 behavior). */
   readonly settingsRegistry?: SettingsRegistry;
@@ -72,6 +139,8 @@ export interface ConfiguredLuckyTokenComposition {
   readonly certification: CoreServingCertificationManifest;
   /** User-configured models.json and external Provider Package registrations. */
   readonly userConfiguredProviderIds: readonly string[];
+  /** Permanent Runtime Diagnostics store (Ticket 07). */
+  readonly diagnosticsStore: RuntimeDiagnosticsStore;
 }
 
 export async function createConfiguredPiModels(
@@ -143,10 +212,16 @@ export async function createConfiguredLuckyTokenComposition(
   );
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const invocationDiagnostics = createInvocationDiagnosticsFactory({
-    configuration: config.failureLogging,
-    now,
-  });
+  const openaiResponsesConfig = Object.hasOwn(
+    config.clientProtocols,
+    openaiResponsesProtocolId,
+  )
+    ? config.clientProtocols[openaiResponsesProtocolId]
+    : undefined;
+  const responsesAuthority =
+    openaiResponsesConfig === undefined
+      ? undefined
+      : await loadFileClientTokenAuthority(openaiResponsesConfig.authFile);
   const { models, externalProviderIds, userConfiguredProviderIds } =
     await createConfiguredPiModels({
       piDirectory: config.pi.directory,
@@ -164,6 +239,33 @@ export async function createConfiguredLuckyTokenComposition(
       createUuid: createSessionId,
       now,
     });
+  // F4: build the narrow known-value scrubber from every credential owner.
+  // Each authority exposes only a scrub operation; no raw-secret arrays flow
+  // through unrelated modules.
+  const scrub = await createCompositionScrubber({
+    clientAuthority,
+    ...(responsesAuthority === undefined ? {} : { responsesAuthority }),
+    ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+  });
+  const invocationDiagnostics = createInvocationDiagnosticsFactory({
+    configuration: config.failureLogging,
+    now,
+    ...(scrub === undefined ? {} : { scrub }),
+  });
+  const diagnosticsStore: RuntimeDiagnosticsStore =
+    options.diagnosticsStore ??
+    (await createRuntimeDiagnosticsStoreFactory({
+      configuration: bindRuntimeDiagnosticsConfiguration(
+        config.runtimeDiagnostics,
+      ),
+      now,
+      ...(scrub === undefined ? {} : { scrub }),
+    }).open());
+  // Attach the known-value scrubber to a caller-provided store (F4): the
+  // store opened before credential authorities resolved in `serve`.
+  if (options.diagnosticsStore !== undefined && scrub !== undefined) {
+    diagnosticsStore.attachScrub(scrub);
+  }
   const auth = createAuth({
     authorizeToken: (token) => clientAuthority.authorize(token),
     createFallbackSessionId: createSessionId,
@@ -180,12 +282,6 @@ export async function createConfiguredLuckyTokenComposition(
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
   });
-  const openaiResponsesConfig = Object.hasOwn(
-    config.clientProtocols,
-    openaiResponsesProtocolId,
-  )
-    ? config.clientProtocols[openaiResponsesProtocolId]
-    : undefined;
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
   // Shared, unauthenticated model discovery: any client may learn the
   // selectors this endpoint serves, independent of Client Protocol Auth.
@@ -196,10 +292,7 @@ export async function createConfiguredLuckyTokenComposition(
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   );
-  if (openaiResponsesConfig !== undefined) {
-    const responsesAuthority = await loadFileClientTokenAuthority(
-      openaiResponsesConfig.authFile,
-    );
+  if (openaiResponsesConfig !== undefined && responsesAuthority !== undefined) {
     const responsesAuth = createAuth({
       authorizeToken: (token) => responsesAuthority.authorize(token),
       createFallbackSessionId: createSessionId,
@@ -257,5 +350,10 @@ export async function createConfiguredLuckyTokenComposition(
             },
           ],
         });
-  return Object.freeze({ runtime, certification, userConfiguredProviderIds });
+  return Object.freeze({
+    runtime,
+    certification,
+    userConfiguredProviderIds,
+    diagnosticsStore,
+  });
 }

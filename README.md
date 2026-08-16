@@ -36,7 +36,8 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
 │   ├── anthropic-messages.json         # Anthropic global/project local tokens
 │   └── openai-responses.json           # OpenAI Responses global/project local tokens
 ├── state/
-│   └── openai-responses.json           # durable Responses session history snapshot
+│   ├── openai-responses.json           # durable Responses session history snapshot
+│   └── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
 └── pi/
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
@@ -47,6 +48,26 @@ only global/project token scopes and do not identify or inspect another Client
 Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
 runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
 every `auth.json` are ignored by Git.
+
+## Permanent Runtime Diagnostics
+
+LuckyToken keeps a permanent, ordered stream of application-level
+info/warning/error/critical events in a diagnostics-owned versioned
+SQLite/WAL database (`.luckytoken/state/diagnostics/diagnostics.sqlite3` by
+default, configured under `runtimeDiagnostics.directory`). Records are never
+automatically aged out and survive application restarts. An event may carry a
+`requestId` for correlation only; it never becomes part of a Request Ledger.
+
+Every untrusted producer value passes through one recursive credential-
+redaction choke point before it is persisted, queried, or delivered: header
+names/values (Authorization, Proxy-Authorization, x-api-key, Cookie,
+Set-Cookie), Pi credential shapes (api_key/access/refresh), query/form
+credential keys, nested Errors/causes, cycles, accessors/proxies, and
+oversized values. Redacted records may preserve header names, authentication
+scheme/type, and a non-reversible keyed fingerprint, but never the original
+value. The same sanitized committed records are the only ones reachable
+through the Control Plane diagnostics query/typed-event surface (`get
+_diagnostics`, `diagnostics_subscribe`) and any fallback output.
 
 The CommandCode Private Provider is installed as the private workspace package
 `@luckytoken/provider-commandcode-private` and loaded from `node_modules`

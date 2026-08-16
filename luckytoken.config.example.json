@@ -63,6 +63,9 @@
     "maxFiles": 1000,
     "logCancellation": true
   },
+  "runtimeDiagnostics": {
+    "directory": "state/diagnostics"
+  },
   "pi": {
     "directory": "pi"
   },

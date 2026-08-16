@@ -1,3 +1,7 @@
+import type {
+  RuntimeDiagnosticEvent,
+  RuntimeDiagnosticsQueryResult,
+} from "./diagnostics-contract.js";
 import {
   controlPlaneVersion,
   type ApplicationIdentity,
@@ -15,6 +19,7 @@ import {
   type StatusEvent,
   type StatusSnapshot,
 } from "./contracts.js";
+import { decodeDiagnosticEvent, decodeDiagnosticRecord } from "./wire-diagnostics.js";
 
 export type RecordValue = Record<string, unknown>;
 
@@ -26,6 +31,13 @@ export type ClientRequest =
       readonly capability: string;
     }
   | { readonly type: "get_status"; readonly requestId: string }
+  | {
+      readonly type: "get_diagnostics";
+      readonly requestId: string;
+      readonly query?: unknown;
+    }
+  | { readonly type: "diagnostics_subscribe"; readonly requestId: string }
+  | { readonly type: "diagnostics_unsubscribe"; readonly requestId: string }
   | {
       readonly type: "runtime_command";
       readonly requestId: string;
@@ -62,6 +74,11 @@ export type ServerMessage =
       readonly result: RuntimeCommandResult;
     }
   | {
+      readonly type: "diagnostics_result";
+      readonly requestId: string;
+      readonly result: RuntimeDiagnosticsQueryResult;
+    }
+  | {
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
@@ -73,7 +90,10 @@ export type ServerMessage =
       readonly requestId: string;
       readonly code: ControlPlaneErrorCode;
     }
-  | { readonly type: "event"; readonly event: StatusEvent };
+  | {
+      readonly type: "event";
+      readonly event: StatusEvent | RuntimeDiagnosticEvent;
+    };
 
 export type DecodedClientRequest =
   | { readonly type: "valid"; readonly request: ClientRequest }
@@ -378,10 +398,22 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
   }
   if (
     value.type === "get_status" ||
+    value.type === "diagnostics_subscribe" ||
+    value.type === "diagnostics_unsubscribe" ||
     value.type === "subscribe" ||
     value.type === "unsubscribe"
   ) {
     return { type: "valid", request: { type: value.type, requestId } };
+  }
+  if (value.type === "get_diagnostics") {
+    return {
+      type: "valid",
+      request: {
+        type: "get_diagnostics",
+        requestId,
+        ...(value.query === undefined ? {} : { query: value.query }),
+      },
+    };
   }
   if (value.type === "runtime_command") {
     if (
@@ -567,9 +599,28 @@ function decodeRuntimeCommandResult(
   };
 }
 
+function decodeDiagnosticsResult(
+  value: unknown,
+): RuntimeDiagnosticsQueryResult | undefined {
+  if (!isRecord(value) || !Array.isArray(value.records)) return undefined;
+  const records = value.records
+    .map((entry) => decodeDiagnosticRecord(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (records.length !== value.records.length) return undefined;
+  if (typeof value.hasMore !== "boolean") return undefined;
+  return Object.freeze({
+    records: Object.freeze(records),
+    hasMore: value.hasMore,
+  });
+}
+
 export function decodeServerMessage(value: unknown): ServerMessage | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "event") {
+    const diagnostic = decodeDiagnosticEvent(value.event);
+    if (diagnostic !== undefined) {
+      return { type: "event", event: diagnostic };
+    }
     const event = decodeEvent(value.event);
     return event === undefined ? undefined : { type: "event", event };
   }
@@ -586,6 +637,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return snapshot === undefined
       ? undefined
       : { type: "status_result", requestId, snapshot };
+  }
+  if (value.type === "diagnostics_result") {
+    const result = decodeDiagnosticsResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "diagnostics_result", requestId, result };
   }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);

@@ -34,8 +34,12 @@ function commandCodeText(text: string): Response {
 
 describe("configured serving composition", () => {
   const directories: string[] = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void } }> = [];
 
   afterEach(async () => {
+    compositions.splice(0).forEach((composition) =>
+      composition.diagnosticsStore.close(),
+    );
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),
@@ -126,9 +130,11 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     expect(Object.keys(composition).sort()).toEqual([
       "certification",
+      "diagnosticsStore",
       "runtime",
       "userConfiguredProviderIds",
     ]);
@@ -201,6 +207,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
@@ -249,6 +256,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     expect(composition.certification.schemaVersion).toBe(
       "luckytoken-core-serving-certification-v1",
@@ -360,6 +368,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     // Anthropic token works on the Anthropic route only.
     const anthropic = await composition.runtime.handle(
