@@ -1,7 +1,3 @@
-import type {
-  ApiKeyAuth,
-} from "@earendil-works/pi-ai";
-
 import {
   ModelConfig,
   type ModelsJsonModel,
@@ -13,9 +9,10 @@ import {
  *
  * Schema validation is owned by `models-json-schema.ts` (extracted from Pi's
  * coding-agent ModelConfig), so user models.json files are schema-compatible
- * with the Pi ecosystem. This module parses/loads validated provider configs
- * and composes api-key auth; the effective built-in + user model composition
- * lives in `effective-composition.ts` (Ticket 09).
+ * with the Pi ecosystem. This module parses/loads validated provider configs;
+ * the effective built-in + user model composition lives in
+ * `effective-composition.ts` (Ticket 09) and the request-time auth/header
+ * composition lives in `request-composition.ts` (Ticket 10).
  */
 
 export type ModelsJsonModelDefinition = ModelsJsonModel;
@@ -61,52 +58,4 @@ export async function loadModelsJson(
   return Object.freeze({
     providers: Object.freeze(providers),
   });
-}
-
-/**
- * Compose the api-key auth for a models.json provider.
- *
- * The stored credential (from `login <provider>`) takes precedence; the
- * models.json `apiKey` field is a configured fallback, mirroring the
- * Pi Provider API-key auth pattern.
- */
-export function modelsJsonApiKeyAuth(
-  providerConfig: ModelsJsonProviderConfig,
-): ApiKeyAuth {
-  const configuredApiKey = providerConfig.apiKey?.trim();
-  if (configuredApiKey !== undefined && configuredApiKey.length === 0) {
-    throw new Error(
-      "models.json provider apiKey must be non-empty when present",
-    );
-  }
-  return {
-    name: "API key",
-    login: async (interaction) => {
-      interaction.signal.throwIfAborted();
-      const key = (
-        await interaction.prompt({
-          type: "secret",
-          message: "Enter the API key",
-        })
-      ).trim();
-      interaction.signal.throwIfAborted();
-      if (key.length === 0) {
-        throw new Error("API key must be non-empty");
-      }
-      return { type: "api_key", key };
-    },
-    resolve: async ({ credential, signal }) => {
-      signal.throwIfAborted();
-      const storedApiKey = credential?.key?.trim();
-      if (storedApiKey !== undefined && storedApiKey.length > 0) {
-        return {
-          auth: { apiKey: storedApiKey },
-          source: "stored credential",
-        };
-      }
-      return configuredApiKey !== undefined
-        ? { auth: { apiKey: configuredApiKey }, source: "configured api key" }
-        : undefined;
-    },
-  };
 }

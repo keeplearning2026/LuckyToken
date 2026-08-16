@@ -1,7 +1,28 @@
 import type {
+  Api,
+  AuthResult,
+  Model,
   ModelsSimpleStreamOptions,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
+
+/**
+ * Narrow Pi-typed request-local model derivation (Ticket 10): the
+ * composition root wires the Provider/request-composition implementation
+ * here, so Client Protocol modules never import Provider configuration
+ * code. The safe default is identity — a handler without a wired resolver
+ * performs no Provider-side transformation (models without request-local
+ * baseUrl facts are passed through unchanged).
+ */
+export type RequestModelResolver = (
+  model: Model<Api>,
+  resolution: AuthResult | undefined,
+) => Model<Api>;
+
+/** Safe default: no request-local transformation. */
+export const identityRequestModelResolver: RequestModelResolver = (
+  model,
+) => model;
 
 export class InvocationCompositionFailure extends Error {
   readonly kind = "InvocationCompositionFailure";

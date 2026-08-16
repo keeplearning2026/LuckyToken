@@ -7,6 +7,15 @@ export interface PassthroughAnthropicRequestOptions {
   readonly signal: AbortSignal;
   readonly fetch: FetchFunction;
   readonly upstreamHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Composed Provider-facing request facts (Ticket 10): the auth result's
+   * merged headers (built-in static model headers, configured provider/
+   * model headers, authHeader Authorization). These are the operator's
+   * authoritative request headers; client-forwarded headers merge below
+   * them and the resolved apiKey always owns `x-api-key`. Null values
+   * (ProviderHeaders) are ignored.
+   */
+  readonly composedHeaders?: Readonly<Record<string, string | null>>;
 }
 
 export interface PassthroughAnthropicResult {
@@ -90,21 +99,48 @@ function filterHeaders(
   return Object.freeze(output);
 }
 
+/** Request fields the transport itself owns: neither composed Provider
+ *  headers nor client headers may override them (mirrors the pinned SDK,
+ *  which sets these after merging default headers). */
+const TRANSPORT_OWNED = new Set(["content-type", "anthropic-version"]);
+
 function buildUpstreamHeaders(
-  apiKey: string,
+  apiKey: string | undefined,
   upstreamHeaders: Readonly<Record<string, string>> | undefined,
+  composedHeaders: Readonly<Record<string, string | null>> | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "x-api-key": apiKey,
     "content-type": "application/json",
     "anthropic-version": "2023-06-01",
   };
+  // Header-only auth (no resolved apiKey) must not fabricate an empty
+  // x-api-key field; a composed x-api-key then carries the credential.
+  const ownsApiKey = apiKey !== undefined && apiKey.length > 0;
+  if (ownsApiKey) {
+    headers["x-api-key"] = apiKey;
+  }
+  // Client-forwarded end-to-end headers (existing strict whitelist).
   if (upstreamHeaders !== undefined) {
     for (const [name, value] of Object.entries(upstreamHeaders)) {
       const lower = name.toLowerCase();
       if (HOP_BY_HOP.has(lower) || FORBIDDEN_RESPONSE_HEADERS.has(lower)) {
         continue;
       }
+      headers[lower] = value;
+    }
+  }
+  // Composed Provider-facing headers are the operator's authority: they
+  // merge above client headers and may carry their own Authorization or
+  // x-api-key (header-only auth). Hop-by-hop and transport-owned fields
+  // stay fixed; a composed x-api-key yields to the transport-generated
+  // credential whenever a resolved apiKey exists (lowercased names, so a
+  // mixed-case composed entry emits exactly one header).
+  if (composedHeaders !== undefined) {
+    for (const [name, value] of Object.entries(composedHeaders)) {
+      const lower = name.toLowerCase();
+      if (HOP_BY_HOP.has(lower) || TRANSPORT_OWNED.has(lower)) continue;
+      if (ownsApiKey && lower === "x-api-key") continue;
+      if (value === undefined || value === null) continue;
       headers[lower] = value;
     }
   }
@@ -169,9 +205,27 @@ export async function passthroughAnthropicRequest(
 ): Promise<PassthroughAnthropicResult> {
   const { model, rawBody, apiKey, signal, fetch: fetchImpl } = options;
   if (apiKey === undefined || apiKey.length === 0) {
-    throw new Error(
-      `No API key configured for passthrough provider: ${model.provider}`,
-    );
+    // Header-owned auth (e.g. ANTHROPIC_AUTH_TOKEN, authHeader) is a valid
+    // Provider-facing credential; mirror the pinned API-layer
+    // assertRequestAuth which accepts authorization/x-api-key/cf-aig-
+    // authorization without an apiKey.
+    const composed = options.composedHeaders ?? {};
+    const hasHeaderAuth = Object.entries(composed).some(([name, value]) => {
+      const lower = name.toLowerCase();
+      return (
+        (lower === "authorization" ||
+          lower === "x-api-key" ||
+          lower === "cf-aig-authorization") &&
+        value !== undefined &&
+        value !== null &&
+        value.trim().length > 0
+      );
+    });
+    if (!hasHeaderAuth) {
+      throw new Error(
+        `No API key configured for passthrough provider: ${model.provider}`,
+      );
+    }
   }
   const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
   const forwardedBody = rewriteModelSelector(rawBody, model.id);
@@ -179,7 +233,7 @@ export async function passthroughAnthropicRequest(
   try {
     upstream = await fetchImpl(endpoint, {
       method: "POST",
-      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
+      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders, options.composedHeaders),
       body: forwardedBody,
       signal,
     });

@@ -1,5 +1,7 @@
 import {
   createModels,
+  defaultProviderAuthContext,
+  type AuthContext,
   type CredentialStore,
   type FetchFunction,
   type Models,
@@ -32,8 +34,16 @@ import type { LuckyTokenCliConfig } from "./cli-config.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
+import {
+  createConfigValueResolver,
+  type ConfigValueAdapters,
+} from "./providers/config-value.js";
 import { loadModelsJson } from "./providers/models-json.js";
 import { registerLuckyTokenProviders } from "./providers/catalog.js";
+import {
+  createRequestCompositionModels,
+  resolveRequestModel,
+} from "./providers/request-composition.js";
 import {
   loadProviderPackages,
   type ImportProviderModule,
@@ -70,6 +80,18 @@ export interface ConfiguredPiModelsOptions {
    * bricking the data plane.
    */
   readonly onInvalidModelsJson?: (error: unknown) => void;
+  /**
+   * Ticket 10 deterministic env/command adapters for per-request config
+   * value resolution (apiKey/header values). Tests inject these; production
+   * defaults to `process.env` and a bounded shell. No cached resolution.
+   */
+  readonly configValueAdapters?: ConfigValueAdapters;
+  /**
+   * Auth context used by the Provider auth resolution (`ctx.env`). Defaults
+   * to the same env source as `configValueAdapters.envSource` so injected
+   * tests observe one deterministic environment.
+   */
+  readonly authContext?: AuthContext;
 }
 
 /**
@@ -145,6 +167,10 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly settingsRegistry?: SettingsRegistry;
   /** See `ConfiguredPiModelsOptions.onInvalidModelsJson`. */
   readonly onInvalidModelsJson?: (error: unknown) => void;
+  /** See `ConfiguredPiModelsOptions.configValueAdapters` (Ticket 10). */
+  readonly configValueAdapters?: ConfigValueAdapters;
+  /** See `ConfiguredPiModelsOptions.authContext` (Ticket 10). */
+  readonly authContext?: AuthContext;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -178,13 +204,33 @@ export async function createConfiguredPiModels(
     modelsJson = undefined;
     options.onInvalidModelsJson?.(error);
   }
+  // Ticket 10: one per-request config value resolver (literal / $ENV /
+  // !command, uncached) and one deterministic env source for both the
+  // resolver and the Provider auth context.
+  const envSource =
+    options.configValueAdapters?.envSource ??
+    ((name: string) => process.env[name]);
+  const configValues = createConfigValueResolver({
+    envSource,
+    ...(options.configValueAdapters?.commandRunner === undefined
+      ? {}
+      : { commandRunner: options.configValueAdapters.commandRunner }),
+  });
+  const authContext =
+    options.authContext ??
+    Object.freeze({
+      env: async (name: string) => envSource(name),
+      fileExists: defaultProviderAuthContext().fileExists,
+    });
   const mutableModels = createModels({
     credentials:
       options.credentials ??
       createFileCredentialStore(join(options.piDirectory, "auth.json")),
+    authContext,
   });
   const modelsJsonProviderIds = registerLuckyTokenProviders(mutableModels, {
     ...(modelsJson === undefined ? {} : { modelsJson }),
+    configValues,
   });
   const loaded = await loadProviderPackages({
     models: mutableModels,
@@ -198,7 +244,14 @@ export async function createConfiguredPiModels(
       ? {}
       : { importModule: options.importModule }),
   });
-  const models: Models = mutableModels;
+  // Ticket 10: the same effective Provider/model/runtime composition serves
+  // catalog facts and invocation; the facade adds only the per-request
+  // model-level configured header layer above the standard Pi auth path.
+  const models: Models = createRequestCompositionModels(
+    mutableModels,
+    modelsJson,
+    { configValues },
+  );
   return Object.freeze({
     models,
     externalProviderIds: loaded.providerIds,
@@ -293,6 +346,12 @@ export async function createConfiguredLuckyTokenComposition(
       ...(options.onInvalidModelsJson === undefined
         ? {}
         : { onInvalidModelsJson: options.onInvalidModelsJson }),
+      ...(options.configValueAdapters === undefined
+        ? {}
+        : { configValueAdapters: options.configValueAdapters }),
+      ...(options.authContext === undefined
+        ? {}
+        : { authContext: options.authContext }),
       createUuid: createSessionId,
       now,
     });
@@ -338,6 +397,9 @@ export async function createConfiguredLuckyTokenComposition(
       : { createMessageId: options.createMessageId }),
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
+    // Ticket 10: the Provider/request-composition seam owns request-local
+    // baseUrl derivation; the handler receives it as a narrow Pi-typed op.
+    resolveRequestModel,
   });
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
   // Shared, unauthenticated model discovery: any client may learn the
@@ -371,6 +433,9 @@ export async function createConfiguredLuckyTokenComposition(
         ? {}
         : { shutdownSignal: options.shutdownSignal }),
       now,
+      // Ticket 10: the Provider/request-composition seam owns request-local
+      // baseUrl derivation; the handler receives it as a narrow Pi-typed op.
+      resolveRequestModel,
     });
     clientProtocols.push(responses);
   }

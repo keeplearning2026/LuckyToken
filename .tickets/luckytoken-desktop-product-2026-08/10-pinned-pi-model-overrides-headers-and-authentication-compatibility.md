@@ -8,7 +8,7 @@
 
 **Blocked by:** 09 — Pinned Pi Provider overlay and model-upsert compatibility.
 
-**Status:** ready-for-agent
+**Status:** accepted-pending-wave-validation
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm models.json apply and effective catalog queries as
 
 ## Acceptance criteria
 
-- [ ] modelOverrides select and apply to their intended canonical models with pinned Pi merge and precedence semantics.
-- [ ] Provider-level and model-level headers merge or override exactly as the pinned baseline specifies.
-- [ ] compat fields retain their pinned schema meaning and are not generalized into unrelated LuckyToken flags.
-- [ ] authHeader affects Provider-facing authentication construction without entering Client Protocol or model-visible semantic state.
-- [ ] Supported OAuth/auth declarations compose without hardcoding Provider-specific flows in LuckyToken configuration code.
-- [ ] Explicit API/base URL fields follow the pinned built-in, Provider, model, and environment precedence rules.
-- [ ] Secret-source configuration is never copied into public catalog projections, Diagnostics, or errors.
-- [ ] A pinned compatibility matrix covers field combinations, deletion/absence, precedence conflicts, invalid forms, and effective controlled invocation facts.
+- [x] modelOverrides select and apply to their intended canonical models with pinned Pi merge and precedence semantics.
+- [x] Provider-level and model-level headers merge or override exactly as the pinned baseline specifies.
+- [x] compat fields retain their pinned schema meaning and are not generalized into unrelated LuckyToken flags.
+- [x] authHeader affects Provider-facing authentication construction without entering Client Protocol or model-visible semantic state.
+- [x] Supported OAuth/auth declarations compose without hardcoding Provider-specific flows in LuckyToken configuration code.
+- [x] Explicit API/base URL fields follow the pinned built-in, Provider, model, and environment precedence rules.
+- [x] Secret-source configuration is never copied into public catalog projections, Diagnostics, or errors.
+- [x] A pinned compatibility matrix covers field combinations, deletion/absence, precedence conflicts, invalid forms, and effective controlled invocation facts.

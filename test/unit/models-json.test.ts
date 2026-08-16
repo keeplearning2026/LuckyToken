@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  modelsJsonApiKeyAuth,
-  parseModelsJson,
-} from "../../src/providers/models-json.js";
+import { parseModelsJson } from "../../src/providers/models-json.js";
 
 describe("parseModelsJson", () => {
   it("parses a provider with models and provider-level defaults", () => {
@@ -52,36 +49,5 @@ describe("parseModelsJson", () => {
       }),
     );
     expect(config.providers["bad id"]?.baseUrl).toBe("https://x");
-  });
-});
-
-describe("modelsJsonApiKeyAuth", () => {
-  it("resolves from a configured apiKey", async () => {
-    const auth = modelsJsonApiKeyAuth({ apiKey: "sk-configured" });
-    const resolver = auth.resolve as unknown as (input: {
-      credential?: { key?: string };
-      signal: AbortSignal;
-    }) => Promise<unknown>;
-    const result = await resolver({ signal: new AbortController().signal });
-    expect(result).toMatchObject({
-      auth: { apiKey: "sk-configured" },
-      source: "configured api key",
-    });
-  });
-
-  it("prefers the stored credential over the configured key", async () => {
-    const auth = modelsJsonApiKeyAuth({ apiKey: "sk-configured" });
-    const resolver = auth.resolve as unknown as (input: {
-      credential?: { key?: string };
-      signal: AbortSignal;
-    }) => Promise<unknown>;
-    const result = await resolver({
-      credential: { key: "sk-stored" },
-      signal: new AbortController().signal,
-    });
-    expect(result).toMatchObject({
-      auth: { apiKey: "sk-stored" },
-      source: "stored credential",
-    });
   });
 });

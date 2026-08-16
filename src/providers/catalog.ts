@@ -9,16 +9,20 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
+import type { ConfigValueResolver } from "./config-value.js";
 import {
   composeConfiguredProvider,
   resolveCompositionBase,
   type EffectiveModelFacts,
 } from "./effective-composition.js";
-import {
-  modelsJsonApiKeyAuth,
-  type ModelsJsonConfig,
-  type ModelsJsonProviderConfig,
+import type {
+  ModelsJsonConfig,
+  ModelsJsonProviderConfig,
 } from "./models-json.js";
+import {
+  composeConfiguredAuth,
+  type RequestCompositionAdapters,
+} from "./request-composition.js";
 
 /**
  * LuckyToken base provider catalog.
@@ -26,22 +30,28 @@ import {
  * This imports Pi's own builtin implementations and applies the valid
  * models.json configuration over them with the same composition the
  * effective catalog projects (Ticket 09): a Provider entry overlays the
- * matching built-in Provider without losing unrelated built-in facts,
- * model entries upsert by canonical provider/model identity, and model
- * overrides apply last. A configured Provider with `oauth: "radius"` and a
- * `baseUrl` first swaps its same-id built-in baseline for the empty Radius
- * baseline (pinned configureRadiusProviders), so only configured models
- * compose. The served data plane therefore can never diverge from the
- * projected catalog.
+ * matching built-in Provider without losing unrelated built-in facts
+ * (including static built-in model headers), model entries upsert by
+ * canonical provider/model identity, and model overrides apply last. A
+ * configured Provider with `oauth: "radius"` and a `baseUrl` first swaps
+ * its same-id built-in baseline for the empty Radius baseline (pinned
+ * configureRadiusProviders), so only configured models compose. The served
+ * data plane therefore can never diverge from the projected catalog.
+ *
+ * Auth (Ticket 10): every configured Provider enters through the pinned
+ * request composition contract (`composeConfiguredAuth` — provider-composer
+ * composeApiKeyAuth/composeOAuthAuth): a stored credential wins, then the
+ * configured models.json `apiKey` (literal / `$ENV` / `!command`, resolved
+ * per request through injected adapters), then the inherited built-in
+ * auth; provider-level headers resolve per request into the auth result and
+ * `authHeader` adds `Authorization: Bearer` at this Provider-facing
+ * boundary only. OAuth declarations compose generically from the base
+ * Provider's oauth auth — no Provider-specific flow is hardcoded.
  *
  * Composition failures follow the pinned model-runtime isolation: a failed
  * custom Provider is dropped, a failed overlay keeps the untouched
  * built-in base, and the Control Plane catalog reports the same errors.
  *
- * Auth: custom Providers keep the stored-credential-then-configured-key
- * resolution; an overlaid built-in keeps its built-in auth unless the
- * models.json entry declares an `apiKey` (then the models.json key
- * resolution applies). Full header/auth composition is Ticket 10's scope.
  * External Provider Packages are loaded only after this base catalog is
  * complete, so their IDs cannot shadow Pi builtins or models.json entries.
  */
@@ -72,6 +82,7 @@ function createCustomProvider(
   providerId: string,
   config: ModelsJsonProviderConfig,
   composition: { readonly name: string; readonly baseUrl: string | undefined; readonly models: readonly EffectiveModelFacts[] },
+  adapters: RequestCompositionAdapters,
 ): Provider {
   return createProvider({
     id: providerId,
@@ -80,32 +91,30 @@ function createCustomProvider(
       ? {}
       : { baseUrl: composition.baseUrl }),
     models: composition.models as unknown as readonly Model<Api>[],
-    auth: { apiKey: modelsJsonApiKeyAuth(config) },
+    auth: composeConfiguredAuth(providerId, undefined, config, adapters),
     api: dispatchApiStreams(),
   });
 }
 
 /**
- * Overlay a built-in Provider: every unrelated built-in fact (auth, stream
- * behavior, dynamic model refresh, filters) survives; only name, baseUrl
- * and the effective model list are replaced by the composition.
+ * Overlay a built-in Provider: every unrelated built-in fact (stream
+ * behavior, dynamic model refresh, filters) survives; only name, baseUrl,
+ * auth and the effective model list are replaced by the composition.
  */
 function createOverlaidProvider(
+  providerId: string,
   base: Provider,
   config: ModelsJsonProviderConfig | undefined,
   composition: { readonly name: string; readonly baseUrl: string | undefined; readonly models: readonly EffectiveModelFacts[] },
+  adapters: RequestCompositionAdapters,
 ): Provider {
-  const auth =
-    config !== undefined && config.apiKey !== undefined
-      ? { apiKey: modelsJsonApiKeyAuth(config) }
-      : base.auth;
   return {
     ...base,
     name: composition.name,
     ...(composition.baseUrl === undefined
       ? {}
       : { baseUrl: composition.baseUrl }),
-    auth,
+    auth: composeConfiguredAuth(providerId, base, config, adapters),
     getModels: () => composition.models as unknown as readonly Model<Api>[],
   };
 }
@@ -113,6 +122,8 @@ function createOverlaidProvider(
 export interface LuckyTokenProviderDependencies {
   /** Optional parsed models.json for user-registered custom providers. */
   readonly modelsJson?: ModelsJsonConfig;
+  /** Ticket 10 per-request config value resolution (deterministic in tests). */
+  readonly configValues: ConfigValueResolver;
 }
 
 /**
@@ -126,6 +137,7 @@ export function registerLuckyTokenProviders(
   models: MutableModels,
   dependencies: LuckyTokenProviderDependencies,
 ): readonly string[] {
+  const adapters = Object.freeze({ configValues: dependencies.configValues });
   // Pi built-in providers are part of the LuckyToken provider collection:
   // every Pi provider (openai, anthropic, deepseek, ...) is registered so it
   // can be logged in and served through the same Anthropic endpoint.
@@ -153,10 +165,12 @@ export function registerLuckyTokenProviders(
     try {
       const composition = composeConfiguredProvider(providerId, base, config);
       if (base !== undefined) {
-        models.setProvider(createOverlaidProvider(base, config, composition));
+        models.setProvider(
+          createOverlaidProvider(providerId, base, config, composition, adapters),
+        );
       } else {
         models.setProvider(
-          createCustomProvider(providerId, config ?? {}, composition),
+          createCustomProvider(providerId, config ?? {}, composition, adapters),
         );
       }
     } catch {

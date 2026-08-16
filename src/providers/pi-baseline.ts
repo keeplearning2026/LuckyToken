@@ -23,9 +23,12 @@ export const PI_COMPATIBILITY_SOURCES: Readonly<{
   readonly modelConfig: string;
   readonly providerComposer: string;
   readonly modelRuntime: string;
+  readonly resolveConfigValue: string;
 }> = Object.freeze({
   modelConfig: "pi-agent/packages/coding-agent/src/core/model-config.ts",
   providerComposer:
     "pi-agent/packages/coding-agent/src/core/provider-composer.ts",
   modelRuntime: "pi-agent/packages/coding-agent/src/core/model-runtime.ts",
+  resolveConfigValue:
+    "pi-agent/packages/coding-agent/src/core/resolve-config-value.ts",
 });

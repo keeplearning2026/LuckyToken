@@ -26,6 +26,8 @@ import type { ClientProtocolHandler } from "../../http.js";
 import { resolveModel, ModelResolutionFailure } from "../../model-resolution.js";
 import {
   composeOptions,
+  identityRequestModelResolver,
+  type RequestModelResolver,
   type RouterOptionDefaults,
 } from "../options.js";
 import { InvalidRequest } from "./request.js";
@@ -81,6 +83,13 @@ export interface OpenAIResponsesHandlerOptions {
   readonly routerDefaults?: RouterOptionDefaults;
   readonly createResponseId?: () => string;
   readonly now?: () => number;
+  /**
+   * Narrow Pi-typed request-local model derivation (Ticket 10): the
+   * composition root wires the Provider/request-composition implementation.
+   * Defaults to identity so direct handler tests and handlers without a
+   * wired resolver pass the catalog model through unchanged.
+   */
+  readonly resolveRequestModel?: RequestModelResolver;
 }
 
 interface OpenAIResponsesDependencies {
@@ -94,6 +103,7 @@ interface OpenAIResponsesDependencies {
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
   readonly now: () => number;
+  readonly resolveRequestModel: RequestModelResolver;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -426,7 +436,19 @@ async function passthroughBranch(
     request.signal,
   );
   const apiKey = auth?.auth.apiKey;
-  if (apiKey === undefined) {
+  const composedHeaders = auth?.auth.headers;
+  const hasHeaderAuth =
+    composedHeaders !== undefined &&
+    Object.entries(composedHeaders).some(([name, value]) => {
+      const lower = name.toLowerCase();
+      return (
+        (lower === "authorization" || lower === "cf-aig-authorization") &&
+        value !== undefined &&
+        value !== null &&
+        value.trim().length > 0
+      );
+    });
+  if (apiKey === undefined && !hasHeaderAuth) {
     return toResponse(
       renderResponsesError(
         502,
@@ -439,12 +461,15 @@ async function passthroughBranch(
   try {
     upstream = await raceWithRequestSignal(
       passthroughResponsesRequest({
-        model,
+        model: dependencies.resolveRequestModel(model, auth),
         rawBody,
         apiKey,
         signal: request.signal,
         fetch: fetchImpl,
         upstreamHeaders: passthroughResponsesRequestHeaders(request),
+        ...(auth?.auth.headers === undefined
+          ? {}
+          : { composedHeaders: auth.auth.headers }),
       }),
       request.signal,
     );
@@ -649,6 +674,7 @@ export function createOpenAIResponsesHandler(
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),
     now: options.now ?? Date.now,
+    resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
   });
   return Object.freeze({
     method: "POST",

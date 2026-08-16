@@ -86,6 +86,11 @@ export interface EffectiveModelFacts {
   readonly maxTokens: number;
   readonly samplingParams?: Readonly<Record<string, unknown>>;
   readonly compat?: Readonly<Record<string, unknown>>;
+  /** Built-in static model headers (e.g. github-copilot/kimi-coding/nvidia).
+   *  Internal runtime fact only: pinned applyModelsJson/applyModelOverride
+   *  spread `{...model}` and thus preserve them; the public projection never
+   *  carries header values. */
+  readonly headers?: Readonly<Record<string, string>>;
   readonly layer: EffectiveModelLayer;
   /** Projected fields the `modelOverrides` entry contributed. */
   readonly overriddenFields: readonly string[];
@@ -140,6 +145,7 @@ const overrideProjectedFields: readonly string[] = [
   "cost",
   "contextWindow",
   "maxTokens",
+  "samplingParams",
   "compat",
 ];
 
@@ -290,6 +296,9 @@ function baseModelFacts(model: Model<Api>): EffectiveModelFacts {
     ...(model.compat === undefined
       ? {}
       : { compat: model.compat as Readonly<Record<string, unknown>> }),
+    ...(model.headers === undefined
+      ? {}
+      : { headers: Object.freeze({ ...model.headers }) }),
     layer: "builtin" as const,
     overriddenFields: Object.freeze([]),
   });

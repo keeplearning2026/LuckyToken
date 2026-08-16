@@ -7,6 +7,14 @@ export interface PassthroughResponsesRequestOptions {
   readonly signal: AbortSignal;
   readonly fetch: FetchFunction;
   readonly upstreamHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Composed Provider-facing request facts (Ticket 10): the auth result's
+   * merged headers (built-in static model headers, configured provider/
+   * model headers, authHeader Authorization). The resolved apiKey always
+   * owns the transport Authorization field; other composed headers merge
+   * above client-forwarded ones. Null values (ProviderHeaders) are ignored.
+   */
+  readonly composedHeaders?: Readonly<Record<string, string | null>>;
 }
 
 export interface PassthroughResponsesResult {
@@ -85,19 +93,41 @@ function filterHeaders(
 }
 
 function buildUpstreamHeaders(
-  apiKey: string,
+  apiKey: string | undefined,
   upstreamHeaders: Readonly<Record<string, string>> | undefined,
+  composedHeaders: Readonly<Record<string, string | null>> | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    authorization: `Bearer ${apiKey}`,
     "content-type": "application/json",
   };
+  // The transport owns the Bearer Authorization exactly when a non-empty
+  // API key resolved (pinned getClientApiKey): no fabricated `Bearer
+  // undefined`/`Bearer unused` for header-only auth.
+  const ownsAuthorization = apiKey !== undefined && apiKey.length > 0;
+  if (ownsAuthorization) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
   if (upstreamHeaders !== undefined) {
     for (const [name, value] of Object.entries(upstreamHeaders)) {
       const lower = name.toLowerCase();
       if (HOP_BY_HOP.has(lower) || FORBIDDEN_HEADERS.has(lower)) {
         continue;
       }
+      headers[lower] = value;
+    }
+  }
+  // Composed Provider-facing headers merge above client headers. When no
+  // API key resolved, a composed `authorization` (or `cf-aig-authorization`)
+  // is the credential and passes through untouched; with an API key the
+  // transport-owned Authorization stays authoritative.
+  if (composedHeaders !== undefined) {
+    for (const [name, value] of Object.entries(composedHeaders)) {
+      const lower = name.toLowerCase();
+      if (HOP_BY_HOP.has(lower) || lower === "content-type") {
+        continue;
+      }
+      if (ownsAuthorization && lower === "authorization") continue;
+      if (value === undefined || value === null) continue;
       headers[lower] = value;
     }
   }
@@ -161,9 +191,24 @@ export async function passthroughResponsesRequest(
 ): Promise<PassthroughResponsesResult> {
   const { model, rawBody, apiKey, signal, fetch: fetchImpl } = options;
   if (apiKey === undefined || apiKey.length === 0) {
-    throw new Error(
-      `No API key configured for passthrough provider: ${model.provider}`,
-    );
+    // Header-owned auth (e.g. cloudflare-ai-gateway's cf-aig-authorization,
+    // a composed authorization) is a valid Provider-facing credential;
+    // mirror the pinned getClientApiKey acceptance.
+    const composed = options.composedHeaders ?? {};
+    const hasHeaderAuth = Object.entries(composed).some(([name, value]) => {
+      const lower = name.toLowerCase();
+      return (
+        (lower === "authorization" || lower === "cf-aig-authorization") &&
+        value !== undefined &&
+        value !== null &&
+        value.trim().length > 0
+      );
+    });
+    if (!hasHeaderAuth) {
+      throw new Error(
+        `No API key configured for passthrough provider: ${model.provider}`,
+      );
+    }
   }
   const endpoint = joinEndpoint(model.baseUrl, "/v1/responses");
   const forwardedBody = rewriteModelSelector(rawBody, model.id);
@@ -171,7 +216,7 @@ export async function passthroughResponsesRequest(
   try {
     upstream = await fetchImpl(endpoint, {
       method: "POST",
-      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
+      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders, options.composedHeaders),
       body: forwardedBody,
       signal,
     });

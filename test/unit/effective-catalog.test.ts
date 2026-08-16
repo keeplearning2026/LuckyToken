@@ -383,6 +383,137 @@ describe("effective catalog composition", () => {
     ).toBe(false);
   });
 
+  it("applies every supported modelOverrides field with pinned merge semantics", () => {
+    const catalog = composeEffectiveCatalog({
+      anthropic: {
+        modelOverrides: {
+          "claude-opus-4-7": {
+            name: "Override name",
+            reasoning: false,
+            thinkingLevelMap: { high: "h2", xhigh: null },
+            input: ["text"],
+            cost: { output: 7, tiers: [{ inputTokensAbove: 1, input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }] },
+            contextWindow: 55555,
+            maxTokens: 33333,
+            samplingParams: { top_p: 0.5 },
+            compat: { supportsTemperature: true },
+          },
+        },
+      },
+    });
+    const model = catalog.providers
+      .find((provider) => provider.id === "anthropic")!
+      .models.find((entry) => entry.id === "claude-opus-4-7")!;
+    expect(model).toMatchObject({
+      layer: "overridden",
+      name: "Override name",
+      reasoning: false,
+      // Pinned: thinkingLevelMap shallow-merges into the base map; the
+      // override's explicit null replaces the base value.
+      thinkingLevelMap: { high: "h2", max: "max", xhigh: null },
+      input: ["text"],
+      // Pinned: cost merges per field; tiers replaces.
+      cost: {
+        input: 5,
+        output: 7,
+        cacheRead: 0.5,
+        cacheWrite: 6.25,
+        tiers: [{ inputTokensAbove: 1, input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }],
+      },
+      contextWindow: 55555,
+      maxTokens: 33333,
+      // Pinned: compat shallow-merges plus nested routing keys.
+      compat: {
+        forceAdaptiveThinking: true,
+        supportsTemperature: true,
+        supportsStrictTools: true,
+      },
+    });
+    // samplingParams is composed into the runtime facts (pinned field-wise
+    // merge) but not projected; the attribution records the contribution.
+    expect(model.overriddenFields).toEqual([
+      "name",
+      "reasoning",
+      "thinkingLevelMap",
+      "input",
+      "cost",
+      "contextWindow",
+      "maxTokens",
+      "samplingParams",
+      "compat",
+    ]);
+  });
+
+  it("applies modelOverrides after model upserts and merges nested compat keys", () => {
+    const catalog = composeEffectiveCatalog({
+      openai: {
+        models: [{ id: "gpt-4", compat: { supportsStrictMode: true } }],
+        modelOverrides: {
+          // The upserted model is the target; the override applies on top.
+          "gpt-4": {
+            compat: {
+              supportsStrictMode: false,
+              openRouterRouting: { only: ["a"] },
+            },
+          },
+        },
+      },
+    });
+    const model = catalog.providers
+      .find((provider) => provider.id === "openai")!
+      .models.find((entry) => entry.id === "gpt-4")!;
+    expect(model.layer).toBe("overridden");
+    expect(model.compat).toEqual({
+      supportsStrictMode: false,
+      openRouterRouting: { only: ["a"] },
+    });
+    // A nested routing key from the base survives a partial override merge.
+    const nested = composeEffectiveCatalog({
+      openai: {
+        modelOverrides: {
+          "gpt-4": {
+            compat: { openRouterRouting: { order: ["b"] } },
+          },
+        },
+      },
+    });
+    const nestedModel = nested.providers
+      .find((provider) => provider.id === "openai")!
+      .models.find((entry) => entry.id === "gpt-4")!;
+    expect(nestedModel.compat).toEqual({
+      supportsStrictMode: true,
+      openRouterRouting: { order: ["b"] },
+    });
+  });
+
+  it("resolves explicit baseUrl precedence: model definition, then Provider, then base defaults", () => {
+    const catalog = composeEffectiveCatalog({
+      openai: {
+        baseUrl: "https://provider.example.com",
+        models: [
+          { id: "gpt-4", baseUrl: "https://model.example.com" },
+          { id: "gpt-5", contextWindow: 42 },
+        ],
+      },
+    });
+    const openai = catalog.providers.find((provider) => provider.id === "openai")!;
+    // Model-level baseUrl wins over the Provider-level baseUrl.
+    expect(
+      openai.models.find((entry) => entry.id === "gpt-4")?.baseUrl,
+    ).toBe("https://model.example.com");
+    // Provider-level baseUrl wins for models without their own.
+    expect(
+      openai.models.find((entry) => entry.id === "gpt-5")?.baseUrl,
+    ).toBe("https://provider.example.com");
+    // Pinned applyModelsJson: the Provider-level baseUrl overlays every base
+    // model (Radius configs excepted), including untouched built-ins.
+    expect(
+      openai.models.find((entry) => entry.id === "gpt-4o")?.baseUrl,
+    ).toBe("https://provider.example.com");
+    // The Provider-level baseUrl itself wins over the built-in default.
+    expect(openai.baseUrl).toBe("https://provider.example.com");
+  });
+
   it("swaps a same-id built-in baseline for the Radius baseline with no built-in models", () => {
     // Pinned model-runtime configureRadiusProviders(): a configured Provider
     // with oauth "radius" and a baseUrl replaces the same-id built-in

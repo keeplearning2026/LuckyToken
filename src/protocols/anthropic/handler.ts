@@ -30,7 +30,12 @@ import {
   ModelResolutionFailure,
   resolveModel,
 } from "../../model-resolution.js";
-import { composeOptions, type RouterOptionDefaults } from "./options.js";
+import {
+  composeOptions,
+  identityRequestModelResolver,
+  type RequestModelResolver,
+  type RouterOptionDefaults,
+} from "./options.js";
 import { InvalidRequest, UnsupportedFeature } from "./failures.js";
 import {
   assertImplementedAnthropicProfile,
@@ -81,6 +86,13 @@ export interface AnthropicMessagesHandlerOptions {
   readonly maxRequestBytes: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
+  /**
+   * Narrow Pi-typed request-local model derivation (Ticket 10): the
+   * composition root wires the Provider/request-composition implementation.
+   * Defaults to identity so direct handler tests and handlers without a
+   * wired resolver pass the catalog model through unchanged.
+   */
+  readonly resolveRequestModel?: RequestModelResolver;
 }
 
 interface AnthropicMessagesDependencies {
@@ -94,6 +106,7 @@ interface AnthropicMessagesDependencies {
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
+  readonly resolveRequestModel: RequestModelResolver;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -374,7 +387,21 @@ async function passthroughBranch(
     request.signal,
   );
   const apiKey = auth?.auth.apiKey;
-  if (apiKey === undefined) {
+  const composedHeaders = auth?.auth.headers;
+  const hasHeaderAuth =
+    composedHeaders !== undefined &&
+    Object.entries(composedHeaders).some(([name, value]) => {
+      const lower = name.toLowerCase();
+      return (
+        (lower === "authorization" ||
+          lower === "x-api-key" ||
+          lower === "cf-aig-authorization") &&
+        value !== undefined &&
+        value !== null &&
+        value.trim().length > 0
+      );
+    });
+  if (apiKey === undefined && !hasHeaderAuth) {
     return toResponse(
       renderAnthropicError(
         502,
@@ -387,12 +414,15 @@ async function passthroughBranch(
   try {
     upstream = await raceWithRequestSignal(
       passthroughAnthropicRequest({
-        model,
+        model: dependencies.resolveRequestModel(model, auth),
         rawBody,
         apiKey,
         signal: request.signal,
         fetch: fetchImpl,
         upstreamHeaders: passthroughRequestHeaders(request),
+        ...(auth?.auth.headers === undefined
+          ? {}
+          : { composedHeaders: auth.auth.headers }),
       }),
       request.signal,
     );
@@ -468,6 +498,7 @@ export function createAnthropicMessagesHandler(
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,
+    resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
   });
   return Object.freeze({
     method: "POST",
