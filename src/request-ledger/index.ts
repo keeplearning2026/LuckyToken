@@ -53,6 +53,7 @@ export function createNoopRequestLedger(): RequestLedger {
       executing: () => undefined,
       rendering: () => undefined,
       terminal: () => undefined,
+      terminalUsage: () => undefined,
       notice: () => undefined,
       attempt: () => undefined,
       fail: () => undefined,

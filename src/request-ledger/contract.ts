@@ -31,3 +31,4 @@ export {
   type RequestLedgerStore,
   type RequestLedgerStoreFactory,
 } from "@luckytoken/application-control-plane/control-plane";
+export type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";

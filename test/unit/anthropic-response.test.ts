@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertOutboundResponseFidelity,
+  CLIENT_USAGE_CACHE_SPLIT_UNAVAILABLE_NOTICE_CODE,
+  CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE,
+  CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
+  CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE,
   convertAssistantMessageToAnthropic,
+  convertAssistantMessageToAnthropicWithPolicy,
 } from "../../src/protocols/anthropic/response.js";
 
 function usage(overrides: Partial<Usage> = {}): Usage {
@@ -228,6 +233,9 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(baseline.usage.output_tokens_details).toBeNull();
   });
 
+  // Ticket 20 additive: malformed usage is observability, not model-visible
+  // semantics — it must never discard an otherwise valid response. Each of
+  // these malformed shapes still yields a schema-valid target message.
   it.each([
     ["input", { input: -1 }],
     ["output", { output: 1.5 }],
@@ -235,14 +243,183 @@ describe("schema-complete Anthropic JSON response", () => {
     ["cache write", { cacheWrite: Number.POSITIVE_INFINITY }],
     ["reasoning subset", { output: 1, reasoning: 2 }],
     ["cache one-hour subset", { cacheWrite: 1, cacheWrite1h: 2 }],
-  ])("rejects malformed usage: %s", (_name, overrides) => {
-    expect(() =>
-      convertAssistantMessageToAnthropic(
+  ])("does not discard a valid response for malformed usage: %s", (_name, overrides) => {
+    const converted = convertAssistantMessageToAnthropicWithPolicy(
+      message({ usage: usage(overrides) }),
+      { selector: "client-selector", createMessageId: () => "opaque-id" },
+      { unknownPiContent: "error" },
+    );
+    expect(converted.message.type).toBe("message");
+    expect(converted.message.content).toEqual([
+      { citations: null, text: "hello", type: "text" },
+    ]);
+    expect(converted.notices.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["negative input", { input: -1 }],
+    ["fractional output", { output: 1.5 }],
+    ["NaN cache read", { cacheRead: Number.NaN }],
+    ["infinite cache write", { cacheWrite: Number.POSITIVE_INFINITY }],
+  ])(
+    "falls back to the atomic all-zero usage for an invalid required component (%s)",
+    (_name, overrides) => {
+      const converted = convertAssistantMessageToAnthropicWithPolicy(
         message({ usage: usage(overrides) }),
-        "client-selector",
-        "opaque-id",
-      ),
-    ).toThrow();
+        { selector: "client-selector", createMessageId: () => "opaque-id" },
+        { unknownPiContent: "error" },
+      );
+      expect(converted.message.usage).toEqual({
+        cache_creation: null,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        inference_geo: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        output_tokens_details: null,
+        server_tool_use: null,
+        service_tier: null,
+      });
+      const notice = converted.notices.find(
+        (entry) => entry.code === CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
+      );
+      expect(notice).toBeDefined();
+      expect(notice).toMatchObject({
+        adapter: "anthropic-messages",
+        direction: "response",
+        action: "degrade",
+      });
+    },
+  );
+
+  it("fallbacks for a missing required component and for a non-object usage object", () => {
+    const missing = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        usage: { ...usage(), cacheRead: undefined } as unknown as Usage,
+      }),
+      { selector: "client-selector" },
+      { unknownPiContent: "error" },
+    );
+    expect(missing.message.usage).toEqual({
+      cache_creation: null,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      inference_geo: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+    });
+    expect(missing.notices.map((notice) => notice.code)).toContain(
+      CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
+    );
+
+    const nonObject = convertAssistantMessageToAnthropicWithPolicy(
+      message({ usage: null as unknown as Usage }),
+      { selector: "client-selector" },
+      { unknownPiContent: "error" },
+    );
+    expect(nonObject.message.usage).toEqual({
+      cache_creation: null,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      inference_geo: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+    });
+    expect(nonObject.notices.map((notice) => notice.code)).toContain(
+      CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
+    );
+  });
+
+  it.each([
+    ["reasoning exceeding output", { output: 1, reasoning: 2 }, 1],
+    ["fractional reasoning", { reasoning: 1.5 }, 8],
+    ["negative reasoning", { reasoning: -1 }, 8],
+  ])(
+    "omits invalid optional reasoning and keeps valid required components (%s)",
+    (_name, overrides, expectedOutput) => {
+      const converted = convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          usage: usage({ input: 4, output: 8, ...(overrides as Partial<Usage>) }),
+        }),
+        { selector: "client-selector" },
+        { unknownPiContent: "error" },
+      );
+      expect(converted.message.usage.output_tokens_details).toBeNull();
+      expect(converted.message.usage.input_tokens).toBe(4);
+      expect(converted.message.usage.output_tokens).toBe(expectedOutput);
+      const notice = converted.notices.find(
+        (entry) => entry.code === CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE,
+      );
+      expect(notice).toBeDefined();
+      expect(notice!.jsonPath).toBe("$.usage.reasoning");
+    },
+  );
+
+  it.each([
+    ["exceeding total cache write", { cacheWrite: 1, cacheWrite1h: 2 }, 1],
+    ["fractional cache write", { cacheWrite: 3, cacheWrite1h: 1.5 }, 3],
+    ["negative cache write", { cacheWrite: 3, cacheWrite1h: -1 }, 3],
+  ])(
+    "drops only the invalid 1h/5m split and retains total cache write (%s)",
+    (_name, overrides, expectedWrite) => {
+      const converted = convertAssistantMessageToAnthropicWithPolicy(
+        message({ usage: usage(overrides as Partial<Usage>) }),
+        { selector: "client-selector" },
+        { unknownPiContent: "error" },
+      );
+      expect(converted.message.usage.cache_creation).toBeNull();
+      expect(converted.message.usage.cache_creation_input_tokens).toBe(
+        expectedWrite,
+      );
+      const notice = converted.notices.find(
+        (entry) => entry.code === CLIENT_USAGE_CACHE_SPLIT_UNAVAILABLE_NOTICE_CODE,
+      );
+      expect(notice).toBeDefined();
+      expect(notice!.jsonPath).toBe("$.usage.cacheWrite1h");
+    },
+  );
+
+  it("ignores extra usage-only keys with a bounded warning while preserving allowlisted components", () => {
+    const hostile = usage({ input: 4, output: 8, cacheRead: 3, cacheWrite: 7 }) as Usage & {
+      providerNativeUsage?: unknown;
+    };
+    hostile.providerNativeUsage = { inputTokens: -5, secret: "nope" };
+    const converted = convertAssistantMessageToAnthropicWithPolicy(
+      message({ usage: hostile }),
+      { selector: "client-selector" },
+      { unknownPiContent: "error" },
+    );
+    expect(converted.message.usage.input_tokens).toBe(4);
+    expect(converted.message.usage.output_tokens).toBe(8);
+    expect(converted.message.usage.cache_read_input_tokens).toBe(3);
+    expect(converted.message.usage.cache_creation_input_tokens).toBe(7);
+    expect(JSON.stringify(converted.message.usage)).not.toContain(
+      "providerNativeUsage",
+    );
+    expect(JSON.stringify(converted.message.usage)).not.toContain("secret");
+    expect(converted.notices.map((notice) => notice.code)).toContain(
+      CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE,
+    );
+  });
+
+  it("keeps totalTokens out of the Anthropic wire without a warning (no target total exists)", () => {
+    const converted = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        usage: usage({ input: 1, output: 2, totalTokens: -7 }),
+      }),
+      { selector: "client-selector" },
+      { unknownPiContent: "error" },
+    );
+    expect(converted.message.usage).not.toHaveProperty("totalTokens");
+    expect(converted.message.usage.input_tokens).toBe(1);
+    expect(converted.message.usage.output_tokens).toBe(2);
+    expect(converted.notices).toHaveLength(0);
   });
 
   it.each([

@@ -257,4 +257,113 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       .poll(() => diagnosticsStore.query(undefined).records.length)
       .toBe(2);
   });
+
+  it("captures the correct normalized terminal usage through the public composition path", async () => {
+    // Ticket 20 repair proof: the real src/composition.ts wires the
+    // usage-semantics resolver through the handler seam into core; a
+    // successful request must land a complete canonical snapshot in the
+    // real Request Ledger, observed through its public query. Worked
+    // example: upstream totalUsage {inputTokens:1, outputTokens:1,
+    // totalTokens:2} -> input 1, cacheRead 0, cacheWrite 0, output 1,
+    // normalizedTotal 2, cacheHitRate 0/1 = 0, complete.
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-ledger-serve-"));
+    directories.push(root);
+    const stateDirectory = join(root, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    await mkdir(piDirectory, { recursive: true });
+    const anthropicAuthFile = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await createFileClientTokenStore({ path: anthropicAuthFile }).create(
+      { type: "global" },
+      CLIENT_TOKEN,
+    );
+    const configPath = join(stateDirectory, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        server: { host: "127.0.0.1", port: 0 },
+        clientProtocols: {
+          "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
+        },
+        providerPackages: { "@luckytoken/provider-commandcode-private": {} },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const config = await loadLuckyTokenCliConfig(configPath);
+    const diagnosticsStore = await createRuntimeDiagnosticsStoreFactory({
+      configuration: parseRuntimeDiagnosticsConfiguration(
+        { directory: join(stateDirectory, "diagnostics") },
+        stateDirectory,
+      ),
+      now: () => 1_786_400_000_000,
+    }).open();
+    stores.push(diagnosticsStore);
+    const ledgerStore = await createRequestLedgerStoreFactory({
+      configuration: parseRequestLedgerConfiguration(
+        { directory: join(stateDirectory, "state", "request-ledger") },
+        stateDirectory,
+      ),
+      now: () => 1_786_400_000_000,
+    }).open();
+    stores.push(ledgerStore);
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: "provider-secret",
+    }));
+    const composition = await createConfiguredLuckyTokenComposition({
+      config,
+      credentials,
+      fetch: (async () => commandCodeText("composed answer")) as FetchFunction,
+      importModule: commandCodeProviderImportModule({
+        projectSnapshot: {
+          snapshot: async () => createEmptyServerConfig(),
+        },
+      }),
+      diagnosticsStore,
+      requestLedgerStore: ledgerStore,
+      now: () => 1_786_400_000_000,
+    });
+    stores.push(composition.requestLedger);
+
+    const response = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${CLIENT_TOKEN}`,
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain("composed answer");
+    const requestId = response.headers.get("x-luckytoken-request-id");
+    expect(requestId).toBeTruthy();
+    const records = ledgerStore.query(undefined).records;
+    expect(records).toHaveLength(1);
+    const snapshot = records[0]!.terminalUsage;
+    expect(snapshot).toMatchObject({
+      api: "commandcode-private",
+      completeness: "complete",
+      input: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 1,
+      normalizedTotal: 2,
+      cacheHitRate: 0,
+    });
+    expect(snapshot!.reasoning).toBeUndefined();
+    expect(snapshot!.evidence).toContain("semantic.ts");
+  });
 });

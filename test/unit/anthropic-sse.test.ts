@@ -3,7 +3,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
+  CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
   convertAssistantMessageToAnthropic,
+  convertAssistantMessageToAnthropicWithPolicy,
   type AnthropicResponseMessage,
 } from "../../src/protocols/anthropic/response.js";
 import {
@@ -178,6 +180,71 @@ describe("verifiable Anthropic Atomic SSE", () => {
       },
     });
     expect(events.at(-1)).toEqual({ type: "message_stop" });
+  });
+
+  it("renders a schema-valid stream with the atomic zero usage for malformed usage", () => {
+    // Ticket 20 additive: malformed usage must not discard the response on
+    // the streaming seam either. The target carries the all-zero fallback
+    // and the stream stays schema-valid while the content is preserved.
+    const converted = convertAssistantMessageToAnthropicWithPolicy(
+      {
+        role: "assistant",
+        api: "api",
+        provider: "provider",
+        model: "internal-model",
+        content: [{ type: "text", text: "complete" }],
+        usage: {
+          input: -1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      { selector: "client-selector" },
+      { unknownPiContent: "error" },
+    );
+    expect(converted.notices.map((notice) => notice.code)).toContain(
+      CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
+    );
+    const rendered = renderAnthropicAtomicSse(converted.message);
+    expect(rendered.status).toBe(200);
+    expect(rendered.contentType).toBe("text/event-stream");
+    const events = parseSse(rendered.body);
+    const start = events.find((entry) => entry.event === "message_start")!
+      .data as Extract<AnthropicAtomicSseEvent, { type: "message_start" }>;
+    expect(start.message.usage).toEqual({
+      cache_creation: null,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      inference_geo: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+    });
+    const delta = events.find((entry) => entry.event === "message_delta")!
+      .data as Extract<AnthropicAtomicSseEvent, { type: "message_delta" }>;
+    expect(delta.usage).toEqual({
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      server_tool_use: null,
+    });
+    const textDelta = events.find(
+      (entry) =>
+        entry.event === "content_block_delta" &&
+        (entry.data as { delta: { type: string } }).delta.type === "text_delta",
+    );
+    expect(textDelta).toBeDefined();
+    expect((textDelta!.data as { delta: { text: string } }).delta.text).toBe(
+      "complete",
+    );
   });
 
   it("uses a schema-valid constant cumulative usage trajectory", () => {

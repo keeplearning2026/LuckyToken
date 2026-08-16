@@ -6,11 +6,13 @@
  * accepted model request. It is deliberately NOT a second semantic request
  * model: it stores lifecycle phases/timestamps, the outcome, a bounded
  * narrow-fact summary (notices/attempts/safe failure/persistence warnings/
- * Pi stop reason), and the captured authority snapshots (alias/provider/
- * real model/client protocol/session/project). Raw protocol payloads never
- * enter the ledger. The handler owns acceptance and terminalization through
- * a handler-local entry; the store is the one SQLite/WAL authority.
+ * Pi stop reason), the captured authority snapshots (alias/provider/
+ * real model/client protocol/session/project), and the canonical
+ * terminal-usage snapshot (Ticket 20). Raw protocol payloads never enter
+ * the ledger. The handler owns acceptance and terminalization through a
+ * handler-local entry; the store is the one SQLite/WAL authority.
  */
+import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 
 export type LedgerPhase =
   | "accepted"
@@ -142,6 +144,11 @@ export interface RequestLedgerRecord {
   readonly effectiveSessionId?: string;
   readonly projectDir?: string;
   readonly facts?: Readonly<LedgerFacts>;
+  /** Ticket 20: the canonical terminal-usage snapshot captured at the Pi
+   *  terminal (terminalAt), stored independently from any Client Wire usage
+   *  representation. Absent only when no trustworthy Pi terminal occurred
+   *  (pre-execution rejections, malformed terminals). */
+  readonly terminalUsage?: Readonly<NormalizedTerminalUsage>;
 }
 
 /** Bounded ledger query: newest-first by id. `afterId` is the strictly-older
@@ -227,6 +234,10 @@ export interface RequestLedgerEntry {
     outcome: LedgerTerminalOutcome,
     facts?: LedgerTerminalFacts,
   ): void;
+  /** Ticket 20: persists the canonical terminal-usage snapshot captured at
+   *  the Pi terminal. Independent of Client Wire usage conversion; the
+   *  handler delivers it from the execution facts sink. */
+  terminalUsage(snapshot: NormalizedTerminalUsage): void;
   notice(notice: LedgerNotice): void;
   attempt(attempt: LedgerAttempt): void;
   fail(input: LedgerFailureInput): void;

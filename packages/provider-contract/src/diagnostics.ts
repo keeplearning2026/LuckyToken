@@ -1,6 +1,17 @@
 import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
 
+import type { NormalizedTerminalUsage } from "./usage.js";
+
 export * from "./upstream-failure.js";
+
+export type {
+  NormalizedTerminalUsage,
+  TerminalUsageClass,
+  UsageCompleteness,
+  UsageCompletenessReason,
+  UsageComponentSource,
+  UsageSemanticsDeclaration,
+} from "./usage.js";
 
 export interface ConversionNotice {
   readonly adapter: string;
@@ -22,6 +33,14 @@ export interface InvocationAttempt {
 export interface ExecutionFactsSink {
   notice(notice: ConversionNotice): void;
   attempt(attempt: InvocationAttempt): void;
+  /**
+   * Ticket 20: the canonical terminal-usage snapshot, delivered at the Pi
+   * terminal boundary in every branch (done/aborted/failed/unsupported)
+   * before execute() returns or throws. Optional so pre-existing sinks keep
+   * working; wired sinks persist it in the Request Ledger independently of
+   * Client Wire usage representations.
+   */
+  terminalUsage?(snapshot: NormalizedTerminalUsage): void;
 }
 
 const CONVERSION_NOTICE_DIAGNOSTIC_TYPE =

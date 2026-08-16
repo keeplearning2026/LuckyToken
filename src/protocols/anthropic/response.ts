@@ -129,6 +129,22 @@ export const UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE =
 export const STOP_REASON_NORMALIZED_NOTICE_CODE =
   "anthropic_stop_reason_normalized";
 
+/**
+ * Ticket 20 additive fail-open usage codes. Usage is observability, never
+ * model-visible semantic content: malformed usage degrades the Client Wire
+ * usage representation with a bounded structured notice, but never discards
+ * an otherwise valid response. No raw invalid value ever enters a notice
+ * fact — the code and jsonPath are the whole warning.
+ */
+export const CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_unavailable";
+export const CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE =
+  "client_usage_unknown_fields_ignored";
+export const CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_reasoning_unavailable";
+export const CLIENT_USAGE_CACHE_SPLIT_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_cache_write_split_unavailable";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -248,52 +264,121 @@ function copyToolInput(value: unknown, field: string): Record<string, JsonValue>
   return copied as Record<string, JsonValue>;
 }
 
-function requireCount(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new OutboundResponseFidelityFailure(
-      `${field} must be a non-negative safe integer`,
-    );
-  }
-  return value as number;
+function optionalCount(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? (value as number)
+    : undefined;
 }
 
-function convertUsage(message: AssistantMessage): AnthropicResponseUsage {
+/** The adapter-contract atomic fallback: every count zero, every optional
+ *  detail null, exactly per the Anthropic Messages usage schema. Never
+ *  clamps or repairs an individual invalid value into it. */
+function atomicFallbackUsage(): AnthropicResponseUsage {
+  return {
+    cache_creation: null,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+    inference_geo: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    output_tokens_details: null,
+    server_tool_use: null,
+    service_tier: null,
+  };
+}
+
+/**
+ * Fail-open Pi Usage → Anthropic usage conversion (Ticket 20 additive).
+ *
+ * - Required canonical components (input/cacheRead/cacheWrite/output) that
+ *   are valid non-negative safe integers render per the target protocol;
+ *   any invalid required component or a non-object/missing usage object
+ *   uses the one atomic all-zero fallback with a bounded warning. No
+ *   individual value is clamped, repaired, or echoed.
+ * - Invalid optional `reasoning` (including reasoning > output) omits the
+ *   optional thinking breakdown with a warning; valid required components
+ *   stay.
+ * - Invalid `cacheWrite1h` drops only the 1h/5m split with a warning and
+ *   retains the total cache write.
+ * - Extra/unknown usage-only keys are ignored with a bounded warning while
+ *   allowlisted valid components still render; they never leak to the wire.
+ * - Pi `totalTokens` has no Anthropic target field (the target schema has
+ *   no total), so it is never echoed and never triggers a warning.
+ *
+ * Strict fidelity for non-usage message/content/tool semantics is
+ * unchanged.
+ */
+function convertUsage(
+  message: AssistantMessage,
+  notices: ConversionNotice[],
+): AnthropicResponseUsage {
   const usage = message.usage as unknown;
   if (!isRecord(usage)) {
-    throw new OutboundResponseFidelityFailure("Pi usage must be an object");
+    notices.push(
+      responseNotice(CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE, "degrade", "$.usage"),
+    );
+    return atomicFallbackUsage();
   }
-  assertAllowedFields(usage, USAGE_FIELDS, "Pi usage");
-  const input = requireCount(usage.input, "usage.input");
-  const output = requireCount(usage.output, "usage.output");
-  const cacheRead = requireCount(usage.cacheRead, "usage.cacheRead");
-  const cacheWrite = requireCount(usage.cacheWrite, "usage.cacheWrite");
+  for (const key of Object.keys(usage)) {
+    if (!USAGE_FIELDS.has(key)) {
+      notices.push(
+        responseNotice(
+          CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE,
+          "degrade",
+          `$.usage.${key}`,
+        ),
+      );
+    }
+  }
+  const input = optionalCount(usage.input);
+  const output = optionalCount(usage.output);
+  const cacheRead = optionalCount(usage.cacheRead);
+  const cacheWrite = optionalCount(usage.cacheWrite);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    notices.push(
+      responseNotice(CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE, "degrade", "$.usage"),
+    );
+    return atomicFallbackUsage();
+  }
 
   let outputDetails: { thinking_tokens: number } | null = null;
   if (usage.reasoning !== undefined) {
-    const reasoning = requireCount(usage.reasoning, "usage.reasoning");
-    if (reasoning > output) {
-      throw new OutboundResponseFidelityFailure(
-        "usage.reasoning must be a subset of usage.output",
+    const reasoning = optionalCount(usage.reasoning);
+    if (reasoning === undefined || reasoning > output) {
+      notices.push(
+        responseNotice(
+          CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE,
+          "degrade",
+          "$.usage.reasoning",
+        ),
       );
+    } else {
+      outputDetails = { thinking_tokens: reasoning };
     }
-    outputDetails = { thinking_tokens: reasoning };
   }
 
   let cacheCreation: AnthropicResponseUsage["cache_creation"] = null;
   if (usage.cacheWrite1h !== undefined) {
-    const cacheWrite1h = requireCount(
-      usage.cacheWrite1h,
-      "usage.cacheWrite1h",
-    );
-    if (cacheWrite1h > cacheWrite) {
-      throw new OutboundResponseFidelityFailure(
-        "usage.cacheWrite1h must be a subset of usage.cacheWrite",
+    const cacheWrite1h = optionalCount(usage.cacheWrite1h);
+    if (cacheWrite1h === undefined || cacheWrite1h > cacheWrite) {
+      notices.push(
+        responseNotice(
+          CLIENT_USAGE_CACHE_SPLIT_UNAVAILABLE_NOTICE_CODE,
+          "degrade",
+          "$.usage.cacheWrite1h",
+        ),
       );
+    } else {
+      cacheCreation = {
+        ephemeral_1h_input_tokens: cacheWrite1h,
+        ephemeral_5m_input_tokens: cacheWrite - cacheWrite1h,
+      };
     }
-    cacheCreation = {
-      ephemeral_1h_input_tokens: cacheWrite1h,
-      ephemeral_5m_input_tokens: cacheWrite - cacheWrite1h,
-    };
   }
 
   return {
@@ -573,7 +658,7 @@ export function convertAssistantMessageToAnthropicWithPolicy(
       ),
     );
   }
-  const usage = convertUsage(message);
+  const usage = convertUsage(message, notices);
   const result: AnthropicResponseMessage = {
     id,
     container: null,
@@ -595,7 +680,10 @@ export function convertAssistantMessageToAnthropicWithPolicy(
 export function assertOutboundResponseFidelity(message: AssistantMessage): void {
   assertMessageEnvelope(message);
   convertContent(message, [], { unknownPiContent: "error" });
-  convertUsage(message);
+  // Usage is fail-open by design (Ticket 20 additive): malformed usage never
+  // discards an otherwise valid response and is not part of this strict
+  // fidelity assertion.
+  convertUsage(message, []);
 }
 
 export function renderAnthropicTextMessage(

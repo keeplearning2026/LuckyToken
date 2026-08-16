@@ -45,10 +45,11 @@ import {
   type RequestLedgerRecord,
   type RequestLedgerStore,
 } from "./contract.js";
+import { decodeNormalizedTerminalUsage, type NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 import { redactDiagnosticText } from "../runtime-diagnostics/redaction.js";
 
 const SCHEMA_NAME = "luckytoken_request_ledger";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_QUERY_LIMIT = 1_000;
 const DEFAULT_QUERY_LIMIT = 100;
 const MAX_NOTICES = 64;
@@ -95,6 +96,7 @@ interface Row {
   readonly effectiveSessionId: string | null;
   readonly projectDir: string | null;
   readonly facts: string | null;
+  readonly terminalUsage: string | null;
 }
 
 interface DraftFacts {
@@ -104,6 +106,10 @@ interface DraftFacts {
   readonly persistenceWarnings: number;
   readonly piStopReason?: string;
 }
+
+/** Ticket 20: the canonical terminal-usage snapshot draft (validated on
+ *  ingest by the shared decoder, never by guessing). */
+type TerminalUsageDraft = NonNullable<RequestLedgerRecord["terminalUsage"]>;
 
 /** In-memory authoritative draft of one request's committed row; the one
  *  representation rebuilt into every transition's full-column UPDATE. */
@@ -125,6 +131,7 @@ interface LedgerDraft {
   effectiveSessionId?: string;
   projectDir?: string;
   facts: DraftFacts;
+  terminalUsage?: TerminalUsageDraft;
   /** True once the narrow persistence-failure seam fired for this entry:
    *  one sanitized report per request, later faults only count warnings. */
   faultReported: boolean;
@@ -134,6 +141,13 @@ interface LedgerDraft {
  * Versioned schema; refuses unknown or foreign schema without mutation.
  * Must run before any write (including WAL pragmas) so foreign files are
  * never modified.
+ *
+ * v1 -> v2 (Ticket 20): adds the `terminal_usage` column carrying the
+ * canonical terminal-usage snapshot. The migration is atomic (one
+ * transaction), preserves every v1 row (existing rows keep their facts and
+ * a NULL snapshot — history stays truthful), and a failure rolls back
+ * leaving the v1 file untouched. Unknown/future schema versions are
+ * refused without mutation.
  */
 function initializeSchema(database: DatabaseSync): void {
   const existing = database
@@ -160,12 +174,14 @@ function initializeSchema(database: DatabaseSync): void {
     if (versionRow === undefined) {
       throw new Error("request ledger database has no schema version");
     }
-    if (versionRow.value !== SCHEMA_VERSION) {
-      throw new Error(
-        `request ledger database schema ${versionRow.value} is not supported (supported: ${SCHEMA_VERSION})`,
-      );
+    if (versionRow.value === SCHEMA_VERSION) return;
+    if (versionRow.value === 1) {
+      migrateV1ToV2(database);
+      return;
     }
-    return;
+    throw new Error(
+      `request ledger database schema ${versionRow.value} is not supported (supported: ${SCHEMA_VERSION})`,
+    );
   }
   if (existing.length > 0) {
     throw new Error("request ledger database contains an unknown schema");
@@ -189,7 +205,8 @@ function initializeSchema(database: DatabaseSync): void {
       client_session_id TEXT,
       effective_session_id TEXT,
       project_dir TEXT,
-      facts TEXT
+      facts TEXT,
+      terminal_usage TEXT
     );
     CREATE INDEX requests_id_desc ON requests (id DESC);
     CREATE INDEX requests_accepted ON requests (accepted_at, id);
@@ -199,6 +216,25 @@ function initializeSchema(database: DatabaseSync): void {
     INSERT INTO meta (key, value) VALUES ('schema_name', '${SCHEMA_NAME}');
     INSERT INTO meta (key, value) VALUES ('schema_version', ${SCHEMA_VERSION});
   `);
+}
+
+/**
+ * Atomic v1 -> v2 migration: one transaction adds the `terminal_usage`
+ * column and bumps the schema version. v1 rows are never rewritten; a
+ * failure rolls back to the untouched v1 file.
+ */
+function migrateV1ToV2(database: DatabaseSync): void {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec("ALTER TABLE requests ADD COLUMN terminal_usage TEXT");
+    database.exec(
+      "UPDATE meta SET value = 2 WHERE key = 'schema_version'",
+    );
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function decodeJson(value: string | null): unknown {
@@ -254,8 +290,29 @@ function decodeFacts(value: unknown): Readonly<LedgerFacts> | undefined {
   return Object.keys(output).length === 0 ? undefined : output;
 }
 
+/** Ticket 20: snapshot bytes carry the decoder-validated shape only. */
+function encodeTerminalUsage(
+  snapshot: TerminalUsageDraft | undefined,
+): string | null {
+  return snapshot === undefined ? null : JSON.stringify(snapshot);
+}
+
+function decodeTerminalUsage(
+  value: string | null,
+): Readonly<NormalizedTerminalUsage> | undefined {
+  if (value === null) return undefined;
+  try {
+    return decodeNormalizedTerminalUsage(JSON.parse(value) as unknown);
+  } catch {
+    throw new Error(
+      "request ledger database contains invalid terminal usage JSON",
+    );
+  }
+}
+
 function rowToRecord(row: Row): RequestLedgerRecord {
   const facts = decodeFacts(decodeJson(row.facts));
+  const terminalUsage = decodeTerminalUsage(row.terminalUsage);
   const record: RequestLedgerRecord = {
     id: row.id,
     requestId: row.requestId,
@@ -282,6 +339,7 @@ function rowToRecord(row: Row): RequestLedgerRecord {
       : { effectiveSessionId: row.effectiveSessionId }),
     ...(row.projectDir === null ? {} : { projectDir: row.projectDir }),
     ...(facts === undefined ? {} : { facts }),
+    ...(terminalUsage === undefined ? {} : { terminalUsage }),
   };
   return Object.freeze(record);
 }
@@ -391,8 +449,8 @@ export function createRequestLedgerStoreFactory(
            request_id, protocol_id, phase, outcome, accepted_at,
            execution_started_at, terminal_at, completed_at, client_http_status,
            external_alias, provider_id, real_model_id, client_session_id,
-           effective_session_id, project_dir, facts
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           effective_session_id, project_dir, facts, terminal_usage
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const update = database.prepare(
         `UPDATE requests SET
@@ -400,7 +458,7 @@ export function createRequestLedgerStoreFactory(
            terminal_at = ?, completed_at = ?, client_http_status = ?,
            external_alias = ?, provider_id = ?, real_model_id = ?,
            client_session_id = ?, effective_session_id = ?, project_dir = ?,
-           facts = ?
+           facts = ?, terminal_usage = ?
          WHERE id = ?`,
       );
       const selectBase = `SELECT
@@ -413,7 +471,7 @@ export function createRequestLedgerStoreFactory(
            real_model_id AS realModelId,
            client_session_id AS clientSessionId,
            effective_session_id AS effectiveSessionId,
-           project_dir AS projectDir, facts
+           project_dir AS projectDir, facts, terminal_usage AS terminalUsage
          FROM requests`;
       const eventListeners = new Set<(event: RequestLedgerEvent) => void>();
       let attachedScrub = scrub;
@@ -448,6 +506,7 @@ export function createRequestLedgerStoreFactory(
               entry.effectiveSessionId ?? null,
               entry.projectDir ?? null,
               encodeFacts(entry.facts),
+              encodeTerminalUsage(entry.terminalUsage),
               entry.id,
             );
             database.exec("COMMIT");
@@ -491,6 +550,7 @@ export function createRequestLedgerStoreFactory(
             effectiveSessionId: entry.effectiveSessionId ?? null,
             projectDir: entry.projectDir ?? null,
             facts: encodeFacts(entry.facts),
+            terminalUsage: encodeTerminalUsage(entry.terminalUsage),
           });
           for (const listener of eventListeners) {
             listener({ type: "request_ledger", record });
@@ -596,6 +656,7 @@ export function createRequestLedgerStoreFactory(
                   null,
                   null,
                   encodeFacts(entry.facts),
+                  null,
                 );
                 entry.id = Number(result.lastInsertRowid);
                 database.exec("COMMIT");
@@ -626,6 +687,7 @@ export function createRequestLedgerStoreFactory(
               effectiveSessionId: null,
               projectDir: null,
               facts: encodeFacts(entry.facts),
+              terminalUsage: null,
             });
             for (const listener of eventListeners) {
               listener({ type: "request_ledger", record });
@@ -750,6 +812,21 @@ export function createRequestLedgerStoreFactory(
                 countEntryFault(entry, error);
                 return;
               }
+              persistEntry(entry);
+            },
+            terminalUsage(snapshot: NormalizedTerminalUsage): void {
+              // The shared decoder is the one validator: an untrusted
+              // snapshot is refused (fail-open, counted) and never
+              // persisted, so committed bytes always re-decode.
+              const decoded = decodeNormalizedTerminalUsage(snapshot);
+              if (decoded === undefined) {
+                countEntryFault(
+                  entry,
+                  new Error("terminal usage snapshot failed validation"),
+                );
+                return;
+              }
+              entry.terminalUsage = decoded;
               persistEntry(entry);
             },
             notice(notice: LedgerNotice): void {

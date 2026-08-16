@@ -26,6 +26,7 @@ import {
   ExecutionAbortedError,
   ExecutionFailure,
   freezePiInvocation,
+  type ExecutionOperation,
 } from "../../execution.js";
 import {
   type ClientProtocolHandler,
@@ -121,12 +122,20 @@ export interface AnthropicMessagesHandlerOptions {
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
   /**
-   * Narrow Pi-typed request-local model derivation (Ticket 10): the
+   * Ticket 10: narrow Pi-typed request-local model derivation: the
    * composition root wires the Provider/request-composition implementation.
    * Defaults to identity so direct handler tests and handlers without a
    * wired resolver pass the catalog model through unchanged.
    */
   readonly resolveRequestModel?: RequestModelResolver;
+  /**
+   * Ticket 20: the neutral Pi execution operation. The composition root
+   * binds the Provider usage-semantics resolver into the operation
+   * (`createExecutionOperation`); the handler never names or carries
+   * Provider semantics data. Absent defaults to plain `execute`, whose
+   * snapshots are honest Partial undeclared_semantics.
+   */
+  readonly executeOperation?: ExecutionOperation;
 }
 
 interface AnthropicMessagesDependencies {
@@ -143,6 +152,7 @@ interface AnthropicMessagesDependencies {
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
   readonly resolveRequestModel: RequestModelResolver;
+  readonly executeOperation: ExecutionOperation;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -357,7 +367,7 @@ async function handleAnthropicMessages(
     );
     freezePiInvocation(model, invocation.context, piOptions);
     ledger.executing();
-    const message = await execute(
+    const message = await dependencies.executeOperation(
       dependencies.models,
       model,
       invocation.context,
@@ -370,6 +380,11 @@ async function handleAnthropicMessages(
         attempt: (attempt) => {
           diagnostics.attempt(attempt);
           ledger.attempt(attempt);
+        },
+        // Ticket 20: the canonical terminal-usage snapshot is persisted in
+        // the Request Ledger independently of Client Wire usage conversion.
+        terminalUsage: (snapshot) => {
+          ledger.terminalUsage(snapshot);
         },
       },
     );
@@ -764,6 +779,7 @@ export function createAnthropicMessagesHandler(
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,
     resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
+    executeOperation: options.executeOperation ?? execute,
   });
   return Object.freeze({
     method: "POST",

@@ -26,6 +26,7 @@ import {
   execute,
   ExecutionAbortedError,
   freezePiInvocation,
+  type ExecutionOperation,
 } from "../../execution.js";
 import type { ClientProtocolHandler } from "../../http.js";
 import { ModelResolutionFailure } from "../../model-resolution.js";
@@ -125,6 +126,14 @@ export interface OpenAIResponsesHandlerOptions {
    * wired resolver pass the catalog model through unchanged.
    */
   readonly resolveRequestModel?: RequestModelResolver;
+  /**
+   * Ticket 20: the neutral Pi execution operation. The composition root
+   * binds the Provider usage-semantics resolver into the operation
+   * (`createExecutionOperation`); the handler never names or carries
+   * Provider semantics data. Absent defaults to plain `execute`, whose
+   * snapshots are honest Partial undeclared_semantics.
+   */
+  readonly executeOperation?: ExecutionOperation;
 }
 
 interface OpenAIResponsesDependencies {
@@ -141,6 +150,7 @@ interface OpenAIResponsesDependencies {
   readonly createResponseId: () => string;
   readonly now: () => number;
   readonly resolveRequestModel: RequestModelResolver;
+  readonly executeOperation: ExecutionOperation;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -385,7 +395,7 @@ async function handleOpenAIResponses(
     diagnostics.checkpoint({ stage: "pi-execution", selector: invocation.selector });
     freezePiInvocation(model, invocation.context, piOptions);
     ledger.executing();
-    const message = await execute(
+    const message = await dependencies.executeOperation(
       dependencies.models,
       model,
       invocation.context,
@@ -398,6 +408,11 @@ async function handleOpenAIResponses(
         attempt: (attempt) => {
           diagnostics.attempt(attempt);
           ledger.attempt(attempt);
+        },
+        // Ticket 20: the canonical terminal-usage snapshot is persisted in
+        // the Request Ledger independently of Client Wire usage conversion.
+        terminalUsage: (snapshot) => {
+          ledger.terminalUsage(snapshot);
         },
       },
     );
@@ -914,6 +929,7 @@ export function createOpenAIResponsesHandler(
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),
     now: options.now ?? Date.now,
     resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
+    executeOperation: options.executeOperation ?? execute,
   });
   return Object.freeze({
     method: "POST",

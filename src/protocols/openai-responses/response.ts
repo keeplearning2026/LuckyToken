@@ -242,6 +242,22 @@ export interface ConversionNoticeSink {
   }): void;
 }
 
+/**
+ * Ticket 20 additive fail-open usage codes. Usage is observability, never
+ * model-visible semantic content: malformed usage degrades the Client Wire
+ * usage representation with a bounded structured notice, but never discards
+ * an otherwise valid response. No raw invalid value ever enters a notice
+ * fact — the code and jsonPath are the whole warning.
+ */
+export const CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_unavailable";
+export const CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE =
+  "client_usage_unknown_fields_ignored";
+export const CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_reasoning_unavailable";
+export const CLIENT_USAGE_TOTAL_UNAVAILABLE_NOTICE_CODE =
+  "client_usage_total_unavailable";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -253,43 +269,154 @@ function requireNonEmptyString(value: unknown, field: string): string {
   return value;
 }
 
-function requireCount(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new OutboundResponseFidelityFailure(
-      `${field} must be a non-negative safe integer`,
-    );
-  }
-  return value as number;
+/** The allowlisted Pi usage fields the Responses adapter recognizes; any
+ *  other usage-only key is ignored with a bounded warning and never leaks. */
+const RESPONSES_USAGE_FIELDS = new Set([
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "cacheWrite1h",
+  "reasoning",
+  "totalTokens",
+  "cost",
+]);
+
+function optionalCount(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? (value as number)
+    : undefined;
 }
 
-function convertUsage(message: AssistantMessage): ResponsesUsage {
+/** The adapter-contract atomic fallback: every count zero, exactly per the
+ *  Responses usage schema. Never clamps or repairs an individual invalid
+ *  value into it. */
+function atomicFallbackUsage(): ResponsesUsage {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    input_tokens_details: { cached_tokens: 0 },
+    output_tokens_details: { reasoning_tokens: 0 },
+  };
+}
+
+/** Bounded degradation notice routed through the conversion-notice sink. */
+function usageNotice(
+  sink: ConversionNoticeSink,
+  code: string,
+  jsonPath: string,
+): void {
+  sink.push({
+    adapter: "openai-responses",
+    direction: "response",
+    code,
+    jsonPath,
+    action: "degrade",
+  });
+}
+
+/**
+ * Fail-open Pi Usage → Responses usage conversion (Ticket 20 additive).
+ *
+ * - Required canonical components (input/cacheRead/cacheWrite/output) that
+ *   are valid non-negative safe integers render per the target protocol
+ *   when their target sums stay safe; any invalid required component, a
+ *   non-object/missing usage object, or an unsafe target sum uses the one
+ *   atomic all-zero fallback with a bounded warning. No individual value is
+ *   clamped, repaired, or echoed.
+ * - The target total is always derived from the target protocol formula
+ *   (input_tokens + output_tokens); Pi `totalTokens` is never echoed. An
+ *   invalid or partition-inconsistent Pi total emits a bounded warning.
+ * - Invalid optional `reasoning` (including reasoning > output) renders the
+ *   target's required neutral value (0) with a warning; valid required
+ *   components stay.
+ * - Extra/unknown usage-only keys are ignored with a bounded warning while
+ *   allowlisted valid components still render; they never leak to the wire.
+ * - `cacheWrite1h` has no Responses wire representation; the total cache
+ *   write still flows into input_tokens and the key stays silently ignored.
+ *
+ * Strict fidelity for non-usage message/content/tool semantics is
+ * unchanged.
+ */
+function convertUsage(
+  message: AssistantMessage,
+  notices: ConversionNoticeSink,
+): ResponsesUsage {
   const usage = message.usage as unknown;
   if (!isRecord(usage)) {
-    throw new OutboundResponseFidelityFailure("Pi usage must be an object");
+    usageNotice(notices, CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE, "$.usage");
+    return atomicFallbackUsage();
   }
-  const input = requireCount(usage.input, "usage.input");
-  const output = requireCount(usage.output, "usage.output");
-  const cacheRead = requireCount(usage.cacheRead, "usage.cacheRead");
-  const cacheWrite = requireCount(usage.cacheWrite, "usage.cacheWrite");
-  const reasoning =
-    usage.reasoning === undefined
-      ? 0
-      : requireCount(usage.reasoning, "usage.reasoning");
-  // Pi totalTokens does not have one cross-provider meaning: some providers
-  // include cacheRead/cacheWrite in it and some do not. The Responses target
-  // contract is total_tokens = input_tokens + output_tokens (input already
-  // includes cached tokens), so total is derived, never blindly echoed, and
-  // the wire object can never self-contradict.
-  requireCount(usage.totalTokens, "usage.totalTokens");
+  for (const key of Object.keys(usage)) {
+    if (!RESPONSES_USAGE_FIELDS.has(key)) {
+      usageNotice(
+        notices,
+        CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE,
+        `$.usage.${key}`,
+      );
+    }
+  }
+  const input = optionalCount(usage.input);
+  const output = optionalCount(usage.output);
+  const cacheRead = optionalCount(usage.cacheRead);
+  const cacheWrite = optionalCount(usage.cacheWrite);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    usageNotice(notices, CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE, "$.usage");
+    return atomicFallbackUsage();
+  }
+  // The Responses contract is input_tokens = input + cacheRead + cacheWrite
+  // (input includes cached tokens) and total_tokens = input_tokens +
+  // output_tokens. When a required target sum stops being a safe integer,
+  // the target cannot stay internally consistent: atomic fallback.
   const inputTokens = input + cacheRead + cacheWrite;
-  const result: ResponsesUsage = {
+  const total = inputTokens + output;
+  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(total)) {
+    usageNotice(notices, CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE, "$.usage");
+    return atomicFallbackUsage();
+  }
+  let reasoning = 0;
+  if (usage.reasoning !== undefined) {
+    const parsed = optionalCount(usage.reasoning);
+    if (parsed === undefined || parsed > output) {
+      usageNotice(
+        notices,
+        CLIENT_USAGE_REASONING_UNAVAILABLE_NOTICE_CODE,
+        "$.usage.reasoning",
+      );
+    } else {
+      reasoning = parsed;
+    }
+  }
+  // Pi totalTokens does not have one cross-provider meaning, so the wire
+  // total is derived, never blindly echoed. A Pi total that is invalid or
+  // inconsistent with the canonical component partition is a bounded
+  // structured warning, never a failure.
+  if (usage.totalTokens !== undefined) {
+    const parsed = optionalCount(usage.totalTokens);
+    if (
+      parsed === undefined ||
+      parsed !== input + cacheRead + cacheWrite + output
+    ) {
+      usageNotice(
+        notices,
+        CLIENT_USAGE_TOTAL_UNAVAILABLE_NOTICE_CODE,
+        "$.usage.totalTokens",
+      );
+    }
+  }
+  return {
     input_tokens: inputTokens,
     output_tokens: output,
-    total_tokens: inputTokens + output,
+    total_tokens: total,
     input_tokens_details: { cached_tokens: cacheRead },
     output_tokens_details: { reasoning_tokens: reasoning },
   };
-  return result;
 }
 
 function convertOutput(
@@ -533,17 +660,18 @@ export function convertAssistantMessageToResponses(
   previousResponseId: string | undefined,
 ): ResponsesResponseObject {
   assertMessageEnvelope(message);
+  const noticeSink: ConversionNoticeSink = {
+    push(notice): void {
+      if (renderState.notices !== undefined) renderState.notices.push(notice);
+    },
+  };
   const output = convertOutput(
     message,
     responseId,
     renderState.freeformToolNames ?? new Set(),
     renderState.namespaceReverse ?? {},
     renderState.unknownPiContent ?? "error",
-    {
-      push(notice): void {
-        if (renderState.notices !== undefined) renderState.notices.push(notice);
-      },
-    },
+    noticeSink,
   );
   const { status, error, incomplete_details } = convertStopReason(
     message.stopReason,
@@ -572,7 +700,7 @@ export function convertAssistantMessageToResponses(
     // never corrupt the already-rendered wire object.
     tools: deepFreezeTools(renderState.tools ?? []),
     top_p: renderState.topP ?? null,
-    usage: convertUsage(message),
+    usage: convertUsage(message, noticeSink),
   };
   if (previousResponseId !== undefined) {
     response.previous_response_id = previousResponseId;

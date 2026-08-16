@@ -220,12 +220,15 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
     const headerRequestId = response.headers.get("x-luckytoken-request-id");
     expect(headerRequestId).toBe("10000000-0000-4000-8000-000000000001");
 
-    await expect.poll(() => events).toHaveLength(7);
+    await expect.poll(() => events).toHaveLength(8);
     const typedEvents = events as RequestLedgerRecord[];
     expect(typedEvents.map((record) => record.phase)).toEqual([
       "accepted",
       "accepted",
       "accepted",
+      "execution",
+      // Ticket 20: the terminal-usage snapshot persists as its own
+      // transition at the Pi terminal, before the terminal outcome.
       "execution",
       "execution",
       "rendering",

@@ -1021,6 +1021,7 @@ export type {
   RequestLedgerStore,
   RequestLedgerStoreFactory,
 } from "./ledger-contract.js";
+export type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 export {
   LEDGER_OUTCOMES,
   LEDGER_PHASES,

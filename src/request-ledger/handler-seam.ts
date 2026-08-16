@@ -11,6 +11,7 @@
  */
 export { createNoopRequestLedger } from "./index.js";
 export type {
+  NormalizedTerminalUsage,
   RequestLedger,
   RequestLedgerEntry,
 } from "./contract.js";

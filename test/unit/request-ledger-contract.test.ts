@@ -108,6 +108,101 @@ describe("Request Ledger wire contract", () => {
     ).toBeUndefined();
   });
 
+  const completeSnapshot = {
+    api: "commandcode-private",
+    input: 5,
+    cacheRead: 4,
+    cacheWrite: 3,
+    output: 2,
+    reasoning: 1,
+    normalizedTotal: 14,
+    cacheHitRate: 4 / 12,
+    completeness: "complete",
+    evidence: "packages/provider-commandcode-private/src/semantic.ts:150-270",
+  };
+
+  it("decodes a complete terminal-usage snapshot under its own field", () => {
+    const record = decodeRequestLedgerRecord(
+      validRecord({ terminalUsage: completeSnapshot }),
+    );
+    expect(record).toBeDefined();
+    expect(record!.terminalUsage).toEqual(completeSnapshot);
+    expect(Object.isFrozen(record!.terminalUsage)).toBe(true);
+  });
+
+  it("decodes partial and unavailable snapshots with their reason", () => {
+    const partial = decodeRequestLedgerRecord(
+      validRecord({
+        terminalUsage: {
+          api: "anthropic-messages",
+          input: 7,
+          cacheRead: 1,
+          cacheWrite: 0,
+          output: 0,
+          completeness: "partial",
+          reason: "aborted",
+          evidence: "pi-agent/packages/ai/src/api/anthropic-messages.ts:574-586",
+        },
+      }),
+    );
+    expect(partial!.terminalUsage).toMatchObject({
+      completeness: "partial",
+      reason: "aborted",
+      input: 7,
+      cacheRead: 1,
+    });
+    expect(partial!.terminalUsage!.normalizedTotal).toBeUndefined();
+
+    const unavailable = decodeRequestLedgerRecord(
+      validRecord({
+        terminalUsage: {
+          api: "faux",
+          input: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          output: 0,
+          completeness: "unavailable",
+          reason: "unsupported_terminal",
+        },
+      }),
+    );
+    expect(unavailable!.terminalUsage).toMatchObject({
+      completeness: "unavailable",
+      reason: "unsupported_terminal",
+    });
+  });
+
+  it("rejects malformed terminal-usage snapshots instead of projecting them", () => {
+    expect(
+      decodeRequestLedgerRecord(validRecord({ terminalUsage: "usage" })),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(
+        validRecord({ terminalUsage: { ...completeSnapshot, leaked: 1 } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(
+        validRecord({ terminalUsage: { ...completeSnapshot, normalizedTotal: 15 } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(
+        validRecord({ terminalUsage: { ...completeSnapshot, reason: "failed" } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(
+        validRecord({ terminalUsage: { ...completeSnapshot, completeness: "partial" } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(
+        validRecord({ terminalUsage: { ...completeSnapshot, input: -2 } }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("decodes bounded facts and rejects malformed or oversized facts", () => {
     const record = decodeRequestLedgerRecord(
       validRecord({

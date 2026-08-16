@@ -9,6 +9,7 @@ import type {
   RequestLedgerQueryResult,
   RequestLedgerRecord,
 } from "./ledger-contract.js";
+import { decodeNormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 import { isRecord } from "./wire.js";
 
 /**
@@ -57,6 +58,7 @@ const LEDGER_RECORD_KEYS: ReadonlySet<string> = new Set([
   "effectiveSessionId",
   "projectDir",
   "facts",
+  "terminalUsage",
 ]);
 
 const LEDGER_FACTS_KEYS: ReadonlySet<string> = new Set([
@@ -410,6 +412,13 @@ export function decodeRequestLedgerRecord(
   }
   const facts = value.facts === undefined ? undefined : decodeFacts(value.facts);
   if (value.facts !== undefined && facts === undefined) return undefined;
+  const terminalUsage =
+    value.terminalUsage === undefined
+      ? undefined
+      : decodeNormalizedTerminalUsage(value.terminalUsage);
+  if (value.terminalUsage !== undefined && terminalUsage === undefined) {
+    return undefined;
+  }
   return Object.freeze({
     id: value.id as number,
     requestId,
@@ -434,6 +443,7 @@ export function decodeRequestLedgerRecord(
       : { effectiveSessionId: effectiveSessionId as string }),
     ...(projectDir === undefined ? {} : { projectDir }),
     ...(facts === undefined ? {} : { facts }),
+    ...(terminalUsage === undefined ? {} : { terminalUsage }),
   });
 }
 

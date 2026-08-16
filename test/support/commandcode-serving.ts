@@ -38,6 +38,9 @@ import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
 } from "../../src/runtime.js";
+import { resolveUsageSemantics } from "../../src/providers/usage-declarations.js";
+import { createExecutionOperation } from "../../src/execution.js";
+import type { UsageSemanticsResolver } from "@luckytoken/provider-contract/usage";
 
 export interface CommandCodeServingTestOptions {
   clientApiKey: string;
@@ -65,6 +68,9 @@ export interface CommandCodeServingTestOptions {
   requestLedger?: RequestLedger;
   /** Ticket 15 alias-only data plane seam (handler-level test stub). */
   aliasSource?: AliasModelSource;
+  /** Ticket 20 usage-semantics resolver; defaults to the real Provider
+   *  integration declaration table, mirroring the production composition. */
+  resolveUsageSemantics?: UsageSemanticsResolver;
 }
 
 export interface CommandCodeServingTestComposition {
@@ -192,6 +198,13 @@ export function createCommandCodeServingTestComposition(
     ...(options.aliasSource === undefined
       ? {}
       : { aliasSource: options.aliasSource }),
+    ...(options.resolveUsageSemantics === undefined
+      ? { executeOperation: createExecutionOperation(resolveUsageSemantics) }
+      : {
+          executeOperation: createExecutionOperation(
+            options.resolveUsageSemantics,
+          ),
+        }),
   });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [anthropic],

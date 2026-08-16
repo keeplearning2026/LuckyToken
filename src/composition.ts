@@ -69,6 +69,8 @@ import {
   createRequestCompositionModels,
   resolveRequestModel,
 } from "./providers/request-composition.js";
+import { resolveUsageSemantics } from "./providers/usage-declarations.js";
+import { createExecutionOperation } from "./execution.js";
 import {
   loadProviderPackages,
   type ImportProviderModule,
@@ -616,6 +618,10 @@ export async function createConfiguredLuckyTokenComposition(
     // Ticket 10: the Provider/request-composition seam owns request-local
     // baseUrl derivation; the handler receives it as a narrow Pi-typed op.
     resolveRequestModel,
+    // Ticket 20: the Provider integration side owns the usage-semantics
+    // declaration table; the composition binds it into the neutral
+    // execution operation the handler already knows.
+    executeOperation: createExecutionOperation(resolveUsageSemantics),
   });
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
   // Shared, unauthenticated model discovery: any client may learn the
@@ -657,6 +663,10 @@ export async function createConfiguredLuckyTokenComposition(
       // Ticket 10: the Provider/request-composition seam owns request-local
       // baseUrl derivation; the handler receives it as a narrow Pi-typed op.
       resolveRequestModel,
+      // Ticket 20: the Provider integration side owns the usage-semantics
+      // declaration table; the composition binds it into the neutral
+      // execution operation the handler already knows.
+      executeOperation: createExecutionOperation(resolveUsageSemantics),
     });
     clientProtocols.push(responses);
   }

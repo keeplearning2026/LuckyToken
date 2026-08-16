@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   execute,
+  createExecutionOperation,
   ExecutionAbortedError,
   ExecutionFailure,
   MalformedExecutionStreamError,
@@ -26,6 +27,7 @@ import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
 } from "@luckytoken/provider-contract/diagnostics";
+import { resolveUsageSemantics } from "../../src/providers/usage-declarations.js";
 
 const usage: Usage = {
   input: 0,
@@ -504,6 +506,230 @@ describe("Core atomic execution", () => {
     await expect(
       execute(fixture.models, model, context, { maxTokens: 10 }),
     ).rejects.toBeInstanceOf(MalformedExecutionStreamError);
+  });
+
+  it("submits the terminal-usage snapshot on a done terminal before returning", async () => {
+    const complete = message("stop");
+    const fixture = modelsFor(
+      streamFrom([{ type: "done", reason: "stop", message: complete }]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    const result = await execute(fixture.models, model, context, { maxTokens: 10 }, sink);
+
+    expect(result).toBe(complete);
+    expect(sink.terminalUsage).toHaveBeenCalledOnce();
+    // The fixture terminal carries the IR's all-zero absence encoding, so
+    // the snapshot is Partial usage_absent (never inferred from values);
+    // the fixture model api ("api") is also undeclared, but absence wins
+    // first.
+    expect(sink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: "api",
+        completeness: "partial",
+        reason: "usage_absent",
+        input: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 0,
+      }),
+    );
+  });
+
+  it("submits a failed-terminal snapshot before promoting failure", async () => {
+    const failedMessage = message("error", "fallback");
+    const fixture = modelsFor(
+      streamFrom([{ type: "error", reason: "error", error: failedMessage }]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    await expect(
+      execute(fixture.models, model, context, { maxTokens: 10 }, sink),
+    ).rejects.toBeInstanceOf(ExecutionFailure);
+    expect(sink.terminalUsage).toHaveBeenCalledOnce();
+    expect(sink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completeness: "partial", reason: "failed" }),
+    );
+  });
+
+  it("submits an aborted-terminal snapshot before the abort throws", async () => {
+    const abortedMessage = message("aborted");
+    const fixture = modelsFor(
+      streamFrom([
+        { type: "error", reason: "aborted", error: abortedMessage },
+      ]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    await expect(
+      execute(fixture.models, model, context, { maxTokens: 10 }, sink),
+    ).rejects.toBeInstanceOf(ExecutionAbortedError);
+    expect(sink.terminalUsage).toHaveBeenCalledOnce();
+    expect(sink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completeness: "partial", reason: "aborted" }),
+    );
+  });
+
+  it("submits an unsupported-terminal snapshot before rejecting deferred", async () => {
+    const fixture = modelsFor(
+      streamFrom([
+        { type: "done", reason: "deferred", message: message("deferred") },
+      ]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    await expect(
+      execute(fixture.models, model, context, { maxTokens: 10 }, sink),
+    ).rejects.toBeInstanceOf(UnsupportedExecutionOutcomeError);
+    expect(sink.terminalUsage).toHaveBeenCalledOnce();
+    expect(sink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completeness: "unavailable",
+        reason: "unsupported_terminal",
+      }),
+    );
+  });
+
+  it("submits no snapshot for malformed terminals whose message is untrustworthy", async () => {
+    const mismatch = modelsFor(
+      streamFrom([
+        { type: "done", reason: "stop", message: message("length") },
+      ]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    await expect(
+      execute(mismatch.models, model, context, { maxTokens: 10 }, sink),
+    ).rejects.toBeInstanceOf(MalformedExecutionStreamError);
+    expect(sink.terminalUsage).not.toHaveBeenCalled();
+  });
+
+  it("resolves the real declaration for a declared api and yields a complete snapshot", async () => {
+    const declaredModel: Model<string> = {
+      ...model,
+      api: "anthropic-messages",
+    };
+    const complete = message("stop");
+    complete.usage = {
+      input: 5,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 7,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const fixture = modelsFor(
+      streamFrom([{ type: "done", reason: "stop", message: complete }]),
+    );
+    const sink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    const result = await execute(
+      fixture.models,
+      declaredModel,
+      context,
+      { maxTokens: 10 },
+      sink,
+      resolveUsageSemantics,
+    );
+
+    expect(result).toBe(complete);
+    expect(sink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: "anthropic-messages",
+        completeness: "complete",
+        normalizedTotal: 7,
+        cacheHitRate: 0,
+      }),
+    );
+  });
+
+  it("binds the resolver into the neutral execution operation used by handlers", async () => {
+    const declaredModel: Model<string> = {
+      ...model,
+      api: "anthropic-messages",
+    };
+    const complete = message("stop");
+    complete.usage = {
+      input: 5,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 7,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const fixture = modelsFor(
+      streamFrom([{ type: "done", reason: "stop", message: complete }]),
+    );
+    const boundSink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+
+    const bound = createExecutionOperation(resolveUsageSemantics);
+    const result = await bound(
+      fixture.models,
+      declaredModel,
+      context,
+      { maxTokens: 10 },
+      boundSink,
+    );
+
+    expect(result).toBe(complete);
+    expect(boundSink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: "anthropic-messages",
+        completeness: "complete",
+        normalizedTotal: 7,
+      }),
+    );
+
+    // The unbound operation is the honest default: undeclared semantics.
+    const defaultSink: ExecutionFactsSink = {
+      notice: vi.fn(),
+      attempt: vi.fn(),
+      terminalUsage: vi.fn(),
+    };
+    const defaultFixture = modelsFor(
+      streamFrom([{ type: "done", reason: "stop", message: complete }]),
+    );
+    await createExecutionOperation()(
+      defaultFixture.models,
+      declaredModel,
+      context,
+      { maxTokens: 10 },
+      defaultSink,
+    );
+    expect(defaultSink.terminalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completeness: "partial",
+        reason: "undeclared_semantics",
+      }),
+    );
   });
 
   it("commits once, ignores a second terminal, and is not reversed by later abort", async () => {
