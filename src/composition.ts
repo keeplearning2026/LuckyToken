@@ -36,14 +36,23 @@ import {
   type LiveClientTokenAuthority,
 } from "./client-auth/live-authority.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
+import {
+  createLiveCredentialAuthority,
+  type LiveCredentialAuthority,
+} from "./credentials/authority.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import { createFileCredentialStore } from "./pi/file-credential-store.js";
 import {
   createConfigValueResolver,
   type ConfigValueAdapters,
+  type ConfigValueResolver,
+  type EnvSource,
 } from "./providers/config-value.js";
-import { loadModelsJson, type ModelsJsonConfig } from "./providers/models-json.js";
+import {
+  loadModelsJson,
+  type ModelsJsonConfig,
+} from "./providers/models-json.js";
 import {
   applyLuckyTokenProviderComposition,
   registerLuckyTokenProviders,
@@ -65,10 +74,7 @@ import {
   createOpenAIResponsesHandler,
   openaiResponsesProtocolId,
 } from "./protocols/openai-responses/handler.js";
-import {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntime,
-} from "./runtime.js";
+import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import type { SettingsRegistry } from "./settings/catalog.js";
 
@@ -117,49 +123,53 @@ export interface ConfiguredPiModelsOptions {
 }
 
 /**
+ * One deterministic config-value context (Ticket 10) shared by the Pi
+ * models' request composition and the Credential Authority: the same env
+ * source, the same resolver, the same auth context. Production defaults to
+ * `process.env` and a bounded shell; tests inject both adapters.
+ */
+function createCompositionConfigValueContext(
+  configValueAdapters: ConfigValueAdapters | undefined,
+  authContext: AuthContext | undefined,
+): {
+  readonly envSource: EnvSource;
+  readonly configValues: ConfigValueResolver;
+  readonly authContext: AuthContext;
+} {
+  const envSource =
+    configValueAdapters?.envSource ?? ((name: string) => process.env[name]);
+  const configValues = createConfigValueResolver({
+    envSource,
+    ...(configValueAdapters?.commandRunner === undefined
+      ? {}
+      : { commandRunner: configValueAdapters.commandRunner }),
+  });
+  const context =
+    authContext ??
+    Object.freeze({
+      env: async (name: string) => envSource(name),
+      fileExists: defaultProviderAuthContext().fileExists,
+    });
+  return { envSource, configValues, authContext: context };
+}
+
+/**
  * Builds the narrow known-value scrubber (Ticket 07 F4) from every
  * credential owner: Client Protocol token authorities expose their own
- * scrub operation, and the Pi CredentialStore exposes only non-secret
- * metadata plus per-provider reads through the standard contract.
+ * scrub operation, and the Credential Authority scrubs its owned stored
+ * values (raw plus env-resolved references; commands are never executed).
  */
-async function createCompositionScrubber(
-  owners: {
-    readonly clientAuthority: ClientTokenAuthority;
-    readonly responsesAuthority?: ClientTokenAuthority;
-    readonly credentials?: CredentialStore;
-  },
-): Promise<((value: string) => string) | undefined> {
-  const scrubbers: Array<(value: string) => string> = [];
-  scrubbers.push(owners.clientAuthority.scrub);
+async function createCompositionScrubber(owners: {
+  readonly clientAuthority: ClientTokenAuthority;
+  readonly responsesAuthority?: ClientTokenAuthority;
+  readonly credentialAuthority: LiveCredentialAuthority;
+}): Promise<((value: string) => string) | undefined> {
+  const scrubbers: Array<(value: string) => string> = [
+    owners.clientAuthority.scrub,
+    owners.credentialAuthority.scrub,
+  ];
   if (owners.responsesAuthority !== undefined) {
     scrubbers.push(owners.responsesAuthority.scrub);
-  }
-  if (owners.credentials !== undefined) {
-    const listed = await owners.credentials.list().catch(() => undefined);
-    if (listed !== undefined) {
-      for (const info of listed) {
-        const credential = await owners.credentials
-          .read(info.providerId)
-          .catch(() => undefined);
-        if (credential === undefined) continue;
-        const values: string[] = [];
-        if (credential.type === "api_key") {
-          if (credential.key !== undefined) values.push(credential.key);
-          if (credential.env !== undefined) values.push(...Object.values(credential.env));
-        } else {
-          values.push(credential.access, credential.refresh);
-        }
-        const escape = (text: string): string =>
-          text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-        const pattern = new RegExp(
-          values.filter((value) => value.length > 0).map(escape).join("|"),
-          "gu",
-        );
-        if (values.some((value) => value.length > 0)) {
-          scrubbers.push((value: string) => value.replace(pattern, "[REDACTED]"));
-        }
-      }
-    }
   }
   if (scrubbers.length === 0) return undefined;
   return (value: string) => {
@@ -211,6 +221,9 @@ export interface ConfiguredLuckyTokenComposition {
   readonly clientTokenAuthorities: Readonly<
     Record<string, LiveClientTokenAuthority>
   >;
+  /** Live Credential Authority (Ticket 12): the running Data Plane's single
+   *  serialized auth.json authority for UI/CLI credential commands. */
+  readonly credentialAuthority: LiveCredentialAuthority;
   /** Ticket 11 catalog runtime handle: served snapshot Models, recompose
    *  and atomic capture for the refresh controller. */
   readonly catalog: {
@@ -230,6 +243,10 @@ export async function createConfiguredPiModels(
   models: Models;
   externalProviderIds: readonly string[];
   userConfiguredProviderIds: readonly string[];
+  /** The parsed valid models.json used for this composition (absent when
+   *  the file is absent or invalid); the Credential Authority shares these
+   *  provider facts for its status classification. */
+  modelsJson?: ModelsJsonConfig;
   /** Ticket 11 catalog runtime handle: the served snapshot Models, the
    *  recompose capability and the atomic capture (one authoritative active
    *  catalog). */
@@ -252,21 +269,10 @@ export async function createConfiguredPiModels(
   // Ticket 10: one per-request config value resolver (literal / $ENV /
   // !command, uncached) and one deterministic env source for both the
   // resolver and the Provider auth context.
-  const envSource =
-    options.configValueAdapters?.envSource ??
-    ((name: string) => process.env[name]);
-  const configValues = createConfigValueResolver({
-    envSource,
-    ...(options.configValueAdapters?.commandRunner === undefined
-      ? {}
-      : { commandRunner: options.configValueAdapters.commandRunner }),
-  });
-  const authContext =
-    options.authContext ??
-    Object.freeze({
-      env: async (name: string) => envSource(name),
-      fileExists: defaultProviderAuthContext().fileExists,
-    });
+  const { configValues, authContext } = createCompositionConfigValueContext(
+    options.configValueAdapters,
+    options.authContext,
+  );
   const mutableModels = createModels({
     credentials:
       options.credentials ??
@@ -312,12 +318,10 @@ export async function createConfiguredPiModels(
             type: "api_key" | "oauth",
             interaction: never,
           ) =>
-            facade
-              .login(providerId, type, interaction)
-              .then((credential) => {
-                options.onProviderLogin?.(providerId);
-                return credential;
-              }),
+            facade.login(providerId, type, interaction).then((credential) => {
+              options.onProviderLogin?.(providerId);
+              return credential;
+            }),
         } as Models);
   // Ticket 11: the served Models resolve the one authoritative active
   // catalog snapshot; a capture atomically swaps it for new requests while
@@ -346,6 +350,7 @@ export async function createConfiguredPiModels(
       ...modelsJsonProviderIds,
       ...loaded.providerIds,
     ]),
+    ...(modelsJson === undefined ? {} : { modelsJson }),
     catalog: Object.freeze({
       models: served,
       recompose,
@@ -400,7 +405,9 @@ export async function createConfiguredLuckyTokenComposition(
     openaiResponsesConfig === undefined
       ? undefined
       : await createLiveClientTokenAuthority({
-          store: createFileClientTokenStore({ path: openaiResponsesConfig.authFile }),
+          store: createFileClientTokenStore({
+            path: openaiResponsesConfig.authFile,
+          }),
         });
   if (responsesAuthority !== undefined) {
     clientAuthorities[openaiResponsesProtocolId] = responsesAuthority;
@@ -423,43 +430,73 @@ export async function createConfiguredLuckyTokenComposition(
       enabledSetting === undefined ? true : enabledSetting.value !== false;
     if (enabled) await authority.ensureGlobal({ freshOnly: true });
   }
-  const { models, externalProviderIds, userConfiguredProviderIds, catalog } =
-    await createConfiguredPiModels({
-      piDirectory: config.pi.directory,
-      modelsJsonPath: config.pi.modelsJson,
-      ...(options.credentials === undefined
-        ? {}
-        : { credentials: options.credentials }),
-      fetch: options.fetch,
-      providerPackages: config.providerPackages,
-      ...(options.importModule === undefined
-        ? {}
-        : { importModule: options.importModule }),
-      ...(options.onInvalidModelsJson === undefined
-        ? {}
-        : { onInvalidModelsJson: options.onInvalidModelsJson }),
-      ...(options.configValueAdapters === undefined
-        ? {}
-        : { configValueAdapters: options.configValueAdapters }),
-      ...(options.authContext === undefined
-        ? {}
-        : { authContext: options.authContext }),
-      ...(options.modelsStore === undefined
-        ? {}
-        : { modelsStore: options.modelsStore }),
-      ...(options.onProviderLogin === undefined
-        ? {}
-        : { onProviderLogin: options.onProviderLogin }),
-      createUuid: createSessionId,
-      now,
-    });
+  const {
+    models,
+    externalProviderIds,
+    userConfiguredProviderIds,
+    modelsJson,
+    catalog,
+  } = await createConfiguredPiModels({
+    piDirectory: config.pi.directory,
+    modelsJsonPath: config.pi.modelsJson,
+    ...(options.credentials === undefined
+      ? {}
+      : { credentials: options.credentials }),
+    fetch: options.fetch,
+    providerPackages: config.providerPackages,
+    ...(options.importModule === undefined
+      ? {}
+      : { importModule: options.importModule }),
+    ...(options.onInvalidModelsJson === undefined
+      ? {}
+      : { onInvalidModelsJson: options.onInvalidModelsJson }),
+    ...(options.configValueAdapters === undefined
+      ? {}
+      : { configValueAdapters: options.configValueAdapters }),
+    ...(options.authContext === undefined
+      ? {}
+      : { authContext: options.authContext }),
+    ...(options.modelsStore === undefined
+      ? {}
+      : { modelsStore: options.modelsStore }),
+    ...(options.onProviderLogin === undefined
+      ? {}
+      : { onProviderLogin: options.onProviderLogin }),
+    createUuid: createSessionId,
+    now,
+  });
+  // Ticket 12: the running Data Plane's Credential Authority owns the one
+  // Pi-compatible auth.json. It shares the composition's resolver and auth
+  // context, so its status facts and the request path can never diverge.
+  // The models.json facts follow the live composed config: Ticket 11
+  // catalog refresh recomposes with a new config, so the authority reads
+  // through a slot the wrapped recompose keeps current.
+  const { configValues, authContext } = createCompositionConfigValueContext(
+    options.configValueAdapters,
+    options.authContext,
+  );
+  const credentialStore =
+    options.credentials ??
+    createFileCredentialStore(join(config.pi.directory, "auth.json"));
+  let composedModelsJson: ModelsJsonConfig | undefined = modelsJson;
+  const credentialAuthority = await createLiveCredentialAuthority({
+    store: credentialStore,
+    path: join(config.pi.directory, "auth.json"),
+    configValues,
+    authContext,
+    providers: () => models.getProviders(),
+    modelsJsonProviders: () =>
+      composedModelsJson?.providers ?? Object.freeze({}),
+    now,
+  });
   // F4: build the narrow known-value scrubber from every credential owner.
   // Each authority exposes only a scrub operation; no raw-secret arrays flow
-  // through unrelated modules.
+  // through unrelated modules. The Credential Authority scrubs its owned
+  // stored values (raw plus env-resolved references, never commands).
   const scrub = await createCompositionScrubber({
     clientAuthority,
     ...(responsesAuthority === undefined ? {} : { responsesAuthority }),
-    ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+    credentialAuthority,
   });
   const invocationDiagnostics = createInvocationDiagnosticsFactory({
     configuration: config.failureLogging,
@@ -493,7 +530,9 @@ export async function createConfiguredLuckyTokenComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     auth,
-    configuration: bindAnthropicConfiguration(anthropicConfig.adapterConfiguration),
+    configuration: bindAnthropicConfiguration(
+      anthropicConfig.adapterConfiguration,
+    ),
     invocationDiagnostics,
     passthroughFetch: options.fetch,
     ...(options.createMessageId === undefined
@@ -583,7 +622,18 @@ export async function createConfiguredLuckyTokenComposition(
     userConfiguredProviderIds,
     diagnosticsStore,
     clientTokenAuthorities: Object.freeze(clientAuthorities),
-    catalog,
+    credentialAuthority,
+    // Ticket 11 handle with the credential authority's live models.json
+    // facts kept current: a refresh recompose updates both the served
+    // catalog and the status classification source.
+    catalog: Object.freeze({
+      models: catalog.models,
+      recompose: (next: ModelsJsonConfig | undefined) => {
+        composedModelsJson = next;
+        catalog.recompose(next);
+      },
+      capture: catalog.capture,
+    }),
     requestIdentities,
   });
 }

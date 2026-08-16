@@ -27,6 +27,13 @@ export {
 } from "./runtime.js";
 export { createFileCredentialStore } from "./pi/file-credential-store.js";
 export {
+  createCredentialAuthorityStore,
+  createLiveCredentialAuthority,
+  type CredentialAuthorityStore,
+  type LiveCredentialAuthority,
+  type LiveCredentialAuthorityOptions,
+} from "./credentials/authority.js";
+export {
   startLuckyTokenHttpServer,
   type LuckyTokenHttpServerOptions,
   type RunningLuckyTokenHttpServer,

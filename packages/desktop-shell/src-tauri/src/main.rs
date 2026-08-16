@@ -10,8 +10,10 @@ use std::sync::Arc;
 
 use control_plane_v1::{
     AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
-    ClientTokenCommandResultWire, ClientTokenScopeWire, DiagnosticsWarningWire, ModelsCommand,
-    NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand, SettingsCommand,
+    ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
+    CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
+    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand,
+    SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
@@ -252,6 +254,75 @@ async fn shell_diagnostics_warnings(
     state.diagnostics_warnings().await
 }
 
+#[tauri::command]
+async fn shell_credentials_query(
+    state: State<'_, ShellBridge>,
+) -> Result<CredentialCommandResultWire, ()> {
+    state.credential_command(CredentialCommand::Query).await
+}
+
+#[tauri::command]
+async fn shell_credentials_login(
+    state: State<'_, ShellBridge>,
+    provider_id: String,
+    expected_revision: u64,
+    value: String,
+    overwrite: bool,
+) -> Result<CredentialCommandResultWire, ()> {
+    state
+        .credential_command(CredentialCommand::Login {
+            provider_id,
+            expected_revision,
+            value,
+            overwrite,
+        })
+        .await
+}
+
+#[tauri::command]
+async fn shell_credentials_logout(
+    state: State<'_, ShellBridge>,
+    provider_id: String,
+    expected_revision: u64,
+) -> Result<CredentialCommandResultWire, ()> {
+    state
+        .credential_command(CredentialCommand::Logout {
+            provider_id,
+            expected_revision,
+        })
+        .await
+}
+
+#[tauri::command]
+async fn shell_credentials_import_preview(
+    state: State<'_, ShellBridge>,
+    expected_revision: u64,
+    content: String,
+) -> Result<CredentialCommandResultWire, ()> {
+    state
+        .credential_command(CredentialCommand::ImportPreview {
+            expected_revision,
+            content,
+        })
+        .await
+}
+
+#[tauri::command]
+async fn shell_credentials_import_apply(
+    state: State<'_, ShellBridge>,
+    expected_revision: u64,
+    import_id: String,
+    selections: Vec<CredentialImportSelectionWire>,
+) -> Result<CredentialCommandResultWire, ()> {
+    state
+        .credential_command(CredentialCommand::ImportApply {
+            expected_revision,
+            import_id,
+            selections,
+        })
+        .await
+}
+
 async fn run_models_command(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -273,7 +344,11 @@ async fn shell_catalog_refresh(
     mode: String,
 ) -> Result<CatalogCommandResultWire, ()> {
     match mode.as_str() {
-        "background" => state.catalog_command(CatalogCommand::RefreshBackground).await,
+        "background" => {
+            state
+                .catalog_command(CatalogCommand::RefreshBackground)
+                .await
+        }
         "manual" => state.catalog_command(CatalogCommand::RefreshManual).await,
         _ => Err(()),
     }
@@ -457,6 +532,11 @@ fn main() {
             shell_models_query,
             shell_models_write_raw,
             shell_models_write_structured,
+            shell_credentials_query,
+            shell_credentials_login,
+            shell_credentials_logout,
+            shell_credentials_import_preview,
+            shell_credentials_import_apply,
             shell_catalog_query,
             shell_catalog_refresh,
         ])

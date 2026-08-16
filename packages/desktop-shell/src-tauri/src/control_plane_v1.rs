@@ -135,6 +135,8 @@ pub(crate) struct StatusSnapshot {
     pub(crate) ownership: Option<OwnershipWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) models: Option<ModelsProjectionWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) credentials: Option<CredentialProjectionWire>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,6 +310,91 @@ impl RuntimeCommand {
     }
 }
 
+/// Versioned Credential commands (Ticket 12): the renderer manages the one
+/// Pi-compatible auth.json through the single Credential Authority.
+/// Mutations carry the expected revision from a prior query so a stale UI
+/// can never overwrite a newer credential; import is confirmed Provider by
+/// Provider against the preview plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialCommand {
+    Query,
+    Login {
+        provider_id: String,
+        expected_revision: u64,
+        value: String,
+        overwrite: bool,
+    },
+    Logout {
+        provider_id: String,
+        expected_revision: u64,
+    },
+    ImportPreview {
+        expected_revision: u64,
+        content: String,
+    },
+    ImportApply {
+        expected_revision: u64,
+        import_id: String,
+        selections: Vec<CredentialImportSelectionWire>,
+    },
+}
+
+impl CredentialCommand {
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::Query => "desktop-credentials-query",
+            Self::Login { .. } => "desktop-credentials-login",
+            Self::Logout { .. } => "desktop-credentials-logout",
+            Self::ImportPreview { .. } => "desktop-credentials-import-preview",
+            Self::ImportApply { .. } => "desktop-credentials-import-apply",
+        }
+    }
+
+    fn wire(&self) -> Value {
+        match self {
+            Self::Query => json!({ "command": "query" }),
+            Self::Login {
+                provider_id,
+                expected_revision,
+                value,
+                overwrite,
+            } => json!({
+                "command": "login",
+                "providerId": provider_id,
+                "expectedRevision": expected_revision,
+                "value": value,
+                "overwrite": overwrite,
+            }),
+            Self::Logout {
+                provider_id,
+                expected_revision,
+            } => json!({
+                "command": "logout",
+                "providerId": provider_id,
+                "expectedRevision": expected_revision,
+            }),
+            Self::ImportPreview {
+                expected_revision,
+                content,
+            } => json!({
+                "command": "import_preview",
+                "expectedRevision": expected_revision,
+                "content": content,
+            }),
+            Self::ImportApply {
+                expected_revision,
+                import_id,
+                selections,
+            } => json!({
+                "command": "import_apply",
+                "expectedRevision": expected_revision,
+                "importId": import_id,
+                "selections": selections,
+            }),
+        }
+    }
+}
+
 pub(crate) enum ConnectResult {
     Connected(Box<dyn ControlPlaneSession>),
     VersionMismatch {
@@ -439,6 +526,8 @@ pub(crate) type CommandFuture =
 pub(crate) type SettingsCommandFuture = Pin<
     Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type AutoStartFuture =
+    Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
 
 pub(crate) type ClientTokenCommandFuture = Pin<
     Box<
@@ -470,6 +559,13 @@ pub(crate) type ModelsCommandFuture = Pin<
 pub(crate) type CatalogCommandFuture = Pin<
     Box<dyn Future<Output = Result<CatalogCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type CredentialCommandFuture = Pin<
+    Box<
+        dyn Future<Output = Result<CredentialCommandResultWire, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
 
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
@@ -483,6 +579,9 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn credential_command(&self, _command: CredentialCommand) -> CredentialCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
@@ -523,6 +622,86 @@ pub(crate) struct ClientTokenCommandResultWire {
     pub(crate) error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialImportSelectionWire {
+    #[serde(rename = "providerId")]
+    pub(crate) provider_id: String,
+    pub(crate) overwrite: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialImportEntryPreviewWire {
+    #[serde(rename = "providerId")]
+    pub(crate) provider_id: String,
+    #[serde(rename = "type")]
+    pub(crate) entry_type: String,
+    #[serde(rename = "wouldOverwrite")]
+    pub(crate) would_overwrite: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialImportApplyEntryResultWire {
+    #[serde(rename = "providerId")]
+    pub(crate) provider_id: String,
+    pub(crate) outcome: String,
+}
+
+/// Bounded per-Provider authentication facts (Ticket 12): credential
+/// values, environment names, command text and headers never cross this
+/// bridge.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct ProviderAuthStatusWire {
+    #[serde(rename = "providerId")]
+    pub(crate) provider_id: String,
+    pub(crate) stored: bool,
+    #[serde(rename = "storedType", skip_serializing_if = "Option::is_none")]
+    pub(crate) stored_type: Option<String>,
+    pub(crate) environment: bool,
+    #[serde(rename = "modelsJson")]
+    pub(crate) models_json: bool,
+    #[serde(rename = "commandDerived")]
+    pub(crate) command_derived: bool,
+    pub(crate) expired: bool,
+    pub(crate) unavailable: bool,
+    #[serde(rename = "effectiveSource")]
+    pub(crate) effective_source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialFileErrorWire {
+    pub(crate) kind: String,
+    pub(crate) message: String,
+}
+
+/// Sanitized auth.json projection merged into status snapshots (Ticket 12).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialProjectionWire {
+    pub(crate) revision: u64,
+    pub(crate) path: String,
+    pub(crate) present: bool,
+    pub(crate) valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<CredentialFileErrorWire>,
+    pub(crate) providers: Vec<ProviderAuthStatusWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CredentialCommandResultWire {
+    pub(crate) outcome: String,
+    pub(crate) revision: u64,
+    pub(crate) state: CredentialProjectionWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) changed: Option<bool>,
+    #[serde(rename = "importId", skip_serializing_if = "Option::is_none")]
+    pub(crate) import_id: Option<String>,
+    #[serde(rename = "previewEntries", skip_serializing_if = "Option::is_none")]
+    pub(crate) preview_entries: Option<Vec<CredentialImportEntryPreviewWire>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entries: Option<Vec<CredentialImportApplyEntryResultWire>>,
+}
+
 /// Sanitized Dashboard warning projection: only the safe fields of a
 /// diagnostics record are forwarded to the renderer; details/errors are
 /// deliberately never forwarded.
@@ -558,9 +737,6 @@ pub(crate) struct AutoStartResultWire {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) enabled: Option<bool>,
 }
-
-pub(crate) type AutoStartFuture =
-    Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct SettingsCommandResultWire {
@@ -718,6 +894,21 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_client_token_command_session(&pipe_name, capability, command).await
+        })
+    }
+
+    fn credential_command(&self, command: CredentialCommand) -> CredentialCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_credential_command_session(&pipe_name, capability, command).await
         })
     }
 
@@ -1229,6 +1420,134 @@ fn decode_client_token_command_result(
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
+async fn execute_credential_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: CredentialCommand,
+) -> Result<CredentialCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "credential_command",
+                    "requestId": command.request_id(),
+                    "command": command.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_credential_command_result(&result, &command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_credential_command_result(
+    value: &Value,
+    command: &CredentialCommand,
+) -> Result<CredentialCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("credential_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let outcome = result.get("outcome").and_then(Value::as_str);
+    if !matches!(
+        outcome,
+        Some(
+            "ok" | "conflict"
+                | "invalid"
+                | "unknown_provider"
+                | "overwrite_required"
+                | "storage_failure"
+                | "unavailable"
+        )
+    ) || result.get("revision").and_then(Value::as_u64).is_none()
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    // The sanitized projection is mandatory; credential values or raw
+    // credential shapes can never pass this boundary (the wire struct's
+    // strict Deserialize enforces the exact projection shape).
+    let wire = serde_json::from_value::<CredentialCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)?;
+    // Per-command extras: only the confirmed command's extras may ride on
+    // the result; a login/logout result can never carry import artifacts
+    // and vice versa.
+    match (command, outcome) {
+        (CredentialCommand::Login { .. } | CredentialCommand::Logout { .. }, Some("ok")) => {
+            if wire.import_id.is_some() || wire.preview_entries.is_some() || wire.entries.is_some()
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (CredentialCommand::ImportPreview { .. }, Some("ok")) => {
+            // An empty Pi-compatible auth.json is a valid import: the
+            // preview may legitimately carry zero entries.
+            if wire.import_id.as_deref().unwrap_or_default().is_empty()
+                || wire.preview_entries.is_none()
+                || wire.changed.is_some()
+                || wire.entries.is_some()
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (CredentialCommand::ImportApply { .. }, Some("ok")) => {
+            // An apply with zero confirmed selections is a valid no-op.
+            if wire.entries.is_none() || wire.changed.is_some() || wire.import_id.is_some() {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (CredentialCommand::Query, Some("ok")) => {
+            if wire.changed.is_some()
+                || wire.import_id.is_some()
+                || wire.preview_entries.is_some()
+                || wire.entries.is_some()
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        (_, _) => {
+            if wire.error.as_deref().unwrap_or_default().is_empty() {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            if matches!(command, CredentialCommand::ImportApply { .. }) {
+                if wire.entries.is_none() {
+                    return Err(ConnectionFailure::ProtocolError);
+                }
+            } else if wire.entries.is_some() || wire.preview_entries.is_some() {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+    }
+    Ok(wire)
+}
+
 async fn execute_models_command_session(
     pipe_name: &str,
     capability: String,
@@ -1362,7 +1681,10 @@ fn decode_catalog_command_result(
         .and_then(Value::as_object)
         .ok_or(ConnectionFailure::ProtocolError)?;
     if !snapshot.get("version").and_then(Value::as_u64).is_some()
-        || !snapshot.get("providers").and_then(Value::as_array).is_some()
+        || !snapshot
+            .get("providers")
+            .and_then(Value::as_array)
+            .is_some()
         || !snapshot
             .get("refreshErrors")
             .and_then(Value::as_array)
@@ -1371,8 +1693,7 @@ fn decode_catalog_command_result(
         return Err(ConnectionFailure::ProtocolError);
     }
     // A manual-only report must never ride on a non-ok outcome.
-    if result.get("outcome").and_then(Value::as_str) != Some("ok")
-        && result.contains_key("refresh")
+    if result.get("outcome").and_then(Value::as_str) != Some("ok") && result.contains_key("refresh")
     {
         return Err(ConnectionFailure::ProtocolError);
     }
@@ -1723,6 +2044,7 @@ struct StatusSnapshotWire {
     ownership: Option<OwnershipWire>,
 
     models: Option<ModelsProjectionWire>,
+    credentials: Option<CredentialProjectionWire>,
 }
 
 #[derive(Deserialize)]
@@ -1776,6 +2098,7 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
         ownership: wire.ownership,
 
         models: wire.models,
+        credentials: wire.credentials,
     })
 }
 
@@ -2761,6 +3084,338 @@ mod tests {
             result.sequence, 2,
             "status event after a skipped diagnostics event must surface"
         );
+    }
+
+    #[tokio::test]
+    async fn credential_command_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_credential_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CredentialCommand::Login {
+                    provider_id: "anthropic".to_owned(),
+                    expected_revision: 1,
+                    value: "sk-native-canary-1".to_owned(),
+                    overwrite: true,
+                },
+            )
+            .await
+            .expect("credential login must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("credential_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-credentials-login")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("login")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("providerId"))
+                .and_then(Value::as_str),
+            Some("anthropic")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("expectedRevision"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("overwrite"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        server
+            .send(&json!({
+                "type": "credential_command_result",
+                "requestId": "desktop-credentials-login",
+                "result": {
+                    "outcome": "ok",
+                    "revision": 2,
+                    "changed": true,
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": [{
+                            "providerId": "anthropic",
+                            "stored": true,
+                            "storedType": "api_key",
+                            "environment": false,
+                            "modelsJson": false,
+                            "commandDerived": false,
+                            "expired": false,
+                            "unavailable": false,
+                            "effectiveSource": "stored"
+                        }]
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("login must complete within the timeout")
+            .expect("login task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.revision, 2);
+        assert_eq!(result.changed, Some(true));
+        assert_eq!(result.state.providers[0].effective_source, "stored");
+    }
+
+    #[tokio::test]
+    async fn credential_import_preview_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_credential_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CredentialCommand::ImportPreview {
+                    expected_revision: 0,
+                    content: "{\"provider-a\":{\"type\":\"api_key\",\"key\":\"sk-x\"}}".to_owned(),
+                },
+            )
+            .await
+            .expect("import preview must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("credential_command")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("import_preview")
+        );
+        server
+            .send(&json!({
+                "type": "credential_command_result",
+                "requestId": "desktop-credentials-import-preview",
+                "result": {
+                    "outcome": "ok",
+                    "revision": 0,
+                    "importId": "import-native-1",
+                    "previewEntries": [{
+                        "providerId": "provider-a",
+                        "type": "api_key",
+                        "wouldOverwrite": true
+                    }],
+                    "state": {
+                        "revision": 0,
+                        "path": "C:\\auth.json",
+                        "present": false,
+                        "valid": false,
+                        "providers": []
+                    }
+                }
+            }))
+            .await;
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("preview must complete within the timeout")
+            .expect("preview task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(
+            result
+                .preview_entries
+                .as_ref()
+                .map(|entries| entries[0].provider_id.as_str()),
+            Some("provider-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_credential_dto_crosses_the_versioned_wire() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_credential_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CredentialCommand::Query,
+            )
+            .await
+            .expect("credential query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let _request = server.next_frame().await;
+        // The unavailable DTO carries a minimal value-free state with no
+        // path: the thin bridge must accept and project it.
+        server
+            .send(&json!({
+                "type": "credential_command_result",
+                "requestId": "desktop-credentials-query",
+                "result": {
+                    "outcome": "unavailable",
+                    "revision": 0,
+                    "state": {
+                        "revision": 0,
+                        "path": "",
+                        "present": false,
+                        "valid": false,
+                        "providers": []
+                    },
+                    "error": "Credential Authority is unavailable"
+                }
+            }))
+            .await;
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("query must complete within the timeout")
+            .expect("query task must not panic");
+        assert_eq!(result.outcome, "unavailable");
+        assert!(result.state.path.is_empty());
+        assert!(result.state.providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_credential_import_preview_crosses_the_versioned_wire() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_credential_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CredentialCommand::ImportPreview {
+                    expected_revision: 0,
+                    content: "{}".to_owned(),
+                },
+            )
+            .await
+            .expect("import preview must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let _request = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "credential_command_result",
+                "requestId": "desktop-credentials-import-preview",
+                "result": {
+                    "outcome": "ok",
+                    "revision": 0,
+                    "importId": "import-empty-1",
+                    "previewEntries": [],
+                    "state": {
+                        "revision": 0,
+                        "path": "C:' + BS + BS + 'auth.json",
+                        "present": false,
+                        "valid": false,
+                        "providers": []
+                    }
+                }
+            }))
+            .await;
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("preview must complete within the timeout")
+            .expect("preview task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.preview_entries.as_ref().map(Vec::len), Some(0));
     }
 }
 

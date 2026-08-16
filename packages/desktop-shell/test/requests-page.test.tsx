@@ -68,6 +68,17 @@ function makeShell(identities: {
       revision: 1,
       scopes: [],
     }),
+    executeCredentialCommand: async () => ({
+      outcome: "ok",
+      revision: 1,
+      state: {
+        revision: 1,
+        path: "C:\\auth.json",
+        present: true,
+        valid: true,
+        providers: [],
+      },
+    }),
     queryDiagnosticsWarnings: async () => [] as readonly DiagnosticsWarning[],
     getAutoStartStatus: async () => ({ enabled: false }),
     setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -78,9 +89,7 @@ function makeShell(identities: {
           id: 2,
           time: 1_700_000_000_000,
           protocolId: "anthropic-messages",
-          ...(identities.withClient
-            ? { clientSessionId: clientSession }
-            : {}),
+          ...(identities.withClient ? { clientSessionId: clientSession } : {}),
           ...(identities.projectDir === undefined
             ? {}
             : { projectDir: identities.projectDir }),
@@ -117,7 +126,9 @@ describe("Requests page public identity projection", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     await act(async () => {
-      root.render(<App shell={shell} retryConnection={async () => connectedState()} />);
+      root.render(
+        <App shell={shell} retryConnection={async () => connectedState()} />,
+      );
     });
     // Flush the async identities query effect.
     await act(async () => {
@@ -126,7 +137,9 @@ describe("Requests page public identity projection", () => {
   }
 
   it("renders the provided client session id and `-` for missing ones", async () => {
-    await render(makeShell({ withClient: true, projectDir: "C:\\canonical\\project" }));
+    await render(
+      makeShell({ withClient: true, projectDir: "C:\\canonical\\project" }),
+    );
     const text = container.textContent ?? "";
     // The client-provided id renders verbatim.
     expect(text).toContain(clientSession);

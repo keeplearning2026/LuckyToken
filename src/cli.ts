@@ -37,6 +37,9 @@ import {
   createProtocolEnablementSettingsHandler,
 } from "./client-auth/control-plane.js";
 import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
+import { runCredentialCli } from "./credentials/cli.js";
+import { createCredentialControlPlaneHandler } from "./credentials/control-plane.js";
+import type { LiveCredentialAuthority } from "./credentials/authority.js";
 import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
 import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
 import {
@@ -86,6 +89,7 @@ Usage:
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
+  luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken --help
 
@@ -99,6 +103,7 @@ Commands:
   control auto-start status|enable|disable  Query or change Windows login auto-start
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
+  control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
 
 Options:
@@ -115,6 +120,15 @@ control models commands:
                             file's raw content (compare-and-swap on <rev>)
   write-structured <rev> <file>  Replace models.json with the providers record in
                             <file> (compare-and-swap on <rev>, formatted)
+
+control credentials commands:
+  query                     Print the sanitized auth.json projection and per-Provider
+                            effective authentication status
+  login <provider> <value>  Store an API-key credential (literal, $ENV or !command
+                            source); replacing an occupied slot requires --overwrite
+  logout <provider>         Remove only the stored auth.json value
+  import <file>             Import a Pi-compatible auth.json Provider by Provider
+                            with overwrite confirmation
 
 control catalog commands:
   query                     Print the active catalog snapshot
@@ -140,7 +154,9 @@ interface LoginChoice {
   readonly label: string;
 }
 
-function parseArguments(args: readonly string[]): ParsedCliArguments | undefined {
+function parseArguments(
+  args: readonly string[],
+): ParsedCliArguments | undefined {
   if (args.includes("--help")) return undefined;
   let configPath: string | undefined;
   let descriptorPath: string | undefined;
@@ -148,7 +164,8 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     if (argument === "--config") {
-      if (configPath !== undefined) throw new Error("--config may be provided once");
+      if (configPath !== undefined)
+        throw new Error("--config may be provided once");
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) {
         throw new Error("--config requires a path");
@@ -169,7 +186,8 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
       index += 1;
       continue;
     }
-    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    if (argument.startsWith("-"))
+      throw new Error(`Unknown option: ${argument}`);
     positional.push(argument);
   }
   if (configPath === undefined) throw new Error("--config <path> is required");
@@ -186,7 +204,8 @@ function parseArguments(args: readonly string[]): ParsedCliArguments | undefined
   if (command !== "serve" && descriptorPath !== undefined) {
     throw new Error("--descriptor is only valid for serve or control status");
   }
-  const expectedPositionals = command === "serve" && first === "serve" ? 1 : command === "serve" ? 0 : 2;
+  const expectedPositionals =
+    command === "serve" && first === "serve" ? 1 : command === "serve" ? 0 : 2;
   if (positional.length > expectedPositionals) {
     throw new Error(`Too many arguments for ${command}`);
   }
@@ -236,7 +255,11 @@ function createTerminalInteraction(): {
 } {
   const promptOutput = new PromptOutput();
   const terminal = stdin.isTTY === true && stdout.isTTY === true;
-  const readline = createInterface({ input: stdin, output: promptOutput, terminal });
+  const readline = createInterface({
+    input: stdin,
+    output: promptOutput,
+    terminal,
+  });
   const question = (text: string, signal: AbortSignal | undefined) =>
     signal === undefined
       ? readline.question(text)
@@ -292,7 +315,9 @@ function loginChoices(models: Models, providerId?: string): LoginChoice[] {
         type: "oauth",
         label:
           oauth.loginLabel ??
-          (oauth.isSubscription === true ? "Use a subscription" : "Use an account"),
+          (oauth.isSubscription === true
+            ? "Use a subscription"
+            : "Use an account"),
       });
     }
     if (provider.auth.apiKey?.login !== undefined) {
@@ -318,7 +343,10 @@ async function chooseLogin(
   if (choices.length === 1) return choices[0] as LoginChoice;
   const selection = await interaction.prompt({
     type: "select",
-    message: providerId === undefined ? "Select a Provider login" : "Select a login method",
+    message:
+      providerId === undefined
+        ? "Select a Provider login"
+        : "Select a login method",
     options: choices.map((choice, index) => ({
       id: String(index),
       label:
@@ -338,25 +366,38 @@ async function runLogin(
 ): Promise<void> {
   const terminalInteraction = createTerminalInteraction();
   try {
-    const choice = await chooseLogin(models, terminalInteraction.interaction, providerId);
+    const choice = await chooseLogin(
+      models,
+      terminalInteraction.interaction,
+      providerId,
+    );
     await models.login(
       choice.provider.id,
       choice.type,
       terminalInteraction.interaction,
     );
-    stdout.write(`Authenticated ${choice.provider.name} using ${choice.label}.\n`);
+    stdout.write(
+      `Authenticated ${choice.provider.name} using ${choice.label}.\n`,
+    );
   } finally {
     terminalInteraction.close();
   }
 }
 
-async function runLogout(models: Models, providerId: string | undefined): Promise<void> {
+async function runLogout(
+  models: Models,
+  providerId: string | undefined,
+): Promise<void> {
   const providers = models
     .getProviders()
-    .filter((provider) => providerId === undefined || provider.id === providerId);
+    .filter(
+      (provider) => providerId === undefined || provider.id === providerId,
+    );
   if (providers.length === 0) {
     throw new Error(
-      providerId === undefined ? "No Provider is configured" : `Unknown Provider: ${providerId}`,
+      providerId === undefined
+        ? "No Provider is configured"
+        : `Unknown Provider: ${providerId}`,
     );
   }
   let provider = providers[0] as Provider;
@@ -377,7 +418,7 @@ async function runLogout(models: Models, providerId: string | undefined): Promis
     }
   }
   await models.logout(provider.id);
-  stdout.write(`Removed the stored credential for ${provider.name}.\n`);
+  stdout.write(`Stored credential removed for ${provider.name}.\n`);
 }
 
 async function attachToActiveInstance(descriptorPath: string): Promise<void> {
@@ -418,11 +459,9 @@ async function attachToActiveInstance(descriptorPath: string): Promise<void> {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
-  throw (
-    lastError instanceof Error
-      ? lastError
-      : new Error("Failed to attach to the active LuckyToken instance")
-  );
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to attach to the active LuckyToken instance");
 }
 
 async function runServe(
@@ -442,11 +481,9 @@ async function runServe(
     capability: randomBytes(32).toString("base64url"),
   });
   let descriptor:
-    | Awaited<ReturnType<typeof publishControlPlaneDescriptor>>
-    | undefined;
+    Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
   let supervisor:
-    | Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>>
-    | undefined;
+    Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>> | undefined;
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
   try {
@@ -509,12 +546,14 @@ async function runServe(
     // through this slot so commands and enable transitions always target the
     // current authorities (boot-time enabling is ensured by the composition).
     let tokenAuthorities:
-      | Readonly<Record<string, LiveClientTokenAuthority>>
-      | undefined;
+      Readonly<Record<string, LiveClientTokenAuthority>> | undefined;
+    let credentialAuthority: LiveCredentialAuthority | undefined;
     // Ticket 17 identity seam: the Control Plane serves the bounded public
     // request identity ledger from the running Data Plane composition.
     let requestIdentities:
-      | Awaited<ReturnType<typeof createConfiguredLuckyTokenComposition>>["requestIdentities"]
+      | Awaited<
+          ReturnType<typeof createConfiguredLuckyTokenComposition>
+        >["requestIdentities"]
       | undefined;
     const protocolNames = Object.freeze({
       [anthropicMessagesProtocolId]: "Anthropic Messages",
@@ -524,6 +563,9 @@ async function runServe(
       authorities: () => tokenAuthorities ?? Object.freeze({}),
       protocolNames,
       diagnostics: diagnosticsStore,
+    });
+    const credentialCommandHandler = createCredentialControlPlaneHandler({
+      authority: () => credentialAuthority,
     });
     const settingsCommandHandler = createProtocolEnablementSettingsHandler({
       settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
@@ -581,11 +623,15 @@ async function runServe(
               catalogController.onProviderLogin(providerId),
           });
           tokenAuthorities = composition.clientTokenAuthorities;
+          credentialAuthority = composition.credentialAuthority;
           requestIdentities = composition.requestIdentities;
           // Startup restore: the cached dynamic catalog is served before
           // any network refresh completes, then the non-blocking startup
           // background refresh is scheduled.
-          await catalogController.bind(composition.catalog, shutdownController.signal);
+          await catalogController.bind(
+            composition.catalog,
+            shutdownController.signal,
+          );
           const server = await startLuckyTokenHttpServer({
             runtime: composition.runtime,
             host: address.host,
@@ -651,8 +697,7 @@ async function runServe(
       process.once("SIGTERM", onTerminate);
     });
     let resolveCommandQuit:
-      | ((outcome: "drained" | "timed_out") => void)
-      | undefined;
+      ((outcome: "drained" | "timed_out") => void) | undefined;
     let resolveCommandQuitExited: (() => void) | undefined;
     const commandQuit = new Promise<"drained" | "timed_out">((resolve) => {
       resolveCommandQuit = resolve;
@@ -667,7 +712,11 @@ async function runServe(
     const cleanup = async (): Promise<void> => {
       if (supervisor !== undefined) {
         await supervisor
-          .execute("stop", (status) => controlPlane?.publishStatus(status) ?? Promise.resolve())
+          .execute(
+            "stop",
+            (status) =>
+              controlPlane?.publishStatus(status) ?? Promise.resolve(),
+          )
           .catch(() => undefined);
       }
       const results = await Promise.allSettled([
@@ -701,6 +750,8 @@ async function runServe(
         }),
       modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
       modelsProjection: () => modelsAuthority.snapshot(),
+      credentialCommandHandler,
+      credentialProjection: () => credentialAuthority?.snapshot(),
       // Ticket 11: versioned catalog queries and refresh commands against
       // the one authoritative active catalog snapshot.
       catalogCommandHandler: async (command) => {
@@ -835,7 +886,10 @@ async function runServe(
   } finally {
     if (supervisor !== undefined) {
       await supervisor
-        .execute("stop", (status) => controlPlane?.publishStatus(status) ?? Promise.resolve())
+        .execute(
+          "stop",
+          (status) => controlPlane?.publishStatus(status) ?? Promise.resolve(),
+        )
         .catch(() => undefined);
     }
     const results = await Promise.allSettled([
@@ -876,13 +930,16 @@ function parseSettingsCommand(args: readonly string[]): {
       index += 1;
       continue;
     }
-    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    if (argument.startsWith("-"))
+      throw new Error(`Unknown option: ${argument}`);
     positional.push(argument);
   }
-  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
+  if (descriptorPath === undefined)
+    throw new Error("--descriptor <path> is required");
   const action = positional[0];
   if (action === "query") {
-    if (positional.length > 1) throw new Error("settings query takes no key arguments");
+    if (positional.length > 1)
+      throw new Error("settings query takes no key arguments");
     return { descriptorPath, command: { command: "query" } };
   }
   if (action === "confirm") {
@@ -906,7 +963,9 @@ function parseSettingsCommand(args: readonly string[]): {
   throw new Error(`Unknown settings command: ${action ?? ""}`);
 }
 
-async function runControlSettingsCommand(args: readonly string[]): Promise<void> {
+async function runControlSettingsCommand(
+  args: readonly string[],
+): Promise<void> {
   const parsed = parseSettingsCommand(args);
   const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
   const client = await connectControlPlane(endpoint, {
@@ -916,7 +975,9 @@ async function runControlSettingsCommand(args: readonly string[]): Promise<void>
   try {
     const hello = await client.hello(controlPlaneVersion);
     if (hello.type === "incompatible") {
-      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
+      throw new Error(
+        `Control Plane contract v${controlPlaneVersion} is unsupported`,
+      );
     }
     const result = await client.executeSettingsCommand(parsed.command);
     stdout.write(`${JSON.stringify(result)}\n`);
@@ -946,11 +1007,7 @@ async function runControlCommand(
     }
     if (command === "auto-start") {
       const action = args[index];
-      if (
-        action === "status" ||
-        action === "enable" ||
-        action === "disable"
-      ) {
+      if (action === "status" || action === "enable" || action === "disable") {
         if (autoStartAction !== undefined) {
           throw new Error("auto-start action may be provided once");
         }
@@ -960,7 +1017,8 @@ async function runControlCommand(
     }
     throw new Error(`Unknown control option: ${args[index]}`);
   }
-  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
+  if (descriptorPath === undefined)
+    throw new Error("--descriptor <path> is required");
   if (command === "auto-start" && autoStartAction === undefined) {
     throw new Error("auto-start requires status, enable, or disable");
   }
@@ -972,7 +1030,9 @@ async function runControlCommand(
   try {
     const hello = await client.hello(controlPlaneVersion);
     if (hello.type === "incompatible") {
-      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
+      throw new Error(
+        `Control Plane contract v${controlPlaneVersion} is unsupported`,
+      );
     }
     const result =
       command === "status"
@@ -1011,7 +1071,8 @@ function parseModelsCommand(args: readonly string[]): {
       index += 1;
       continue;
     }
-    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    if (argument.startsWith("-"))
+      throw new Error(`Unknown option: ${argument}`);
     positional.push(argument);
   }
   if (descriptorPath === undefined) {
@@ -1068,11 +1129,7 @@ async function runControlModelsCommand(args: readonly string[]): Promise<void> {
     };
   } else {
     const raw = JSON.parse(await readFile(parsed.file as string, "utf8"));
-    if (
-      typeof raw !== "object" ||
-      raw === null ||
-      Array.isArray(raw)
-    ) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
       throw new Error("write-structured requires a providers object file");
     }
     command = {
@@ -1095,7 +1152,9 @@ async function runControlModelsCommand(args: readonly string[]): Promise<void> {
   }
 }
 
-async function runControlCatalogCommand(args: readonly string[]): Promise<void> {
+async function runControlCatalogCommand(
+  args: readonly string[],
+): Promise<void> {
   const action = args[0];
   if (
     action !== "query" &&
@@ -1124,18 +1183,19 @@ async function runControlCatalogCommand(args: readonly string[]): Promise<void> 
         : ({
             command: "refresh",
             mode:
-              action === "refresh-background" ? ("background" as const) : ("manual" as const),
+              action === "refresh-background"
+                ? ("background" as const)
+                : ("manual" as const),
           } as const);
     const result = await client.executeCatalogCommand(command);
-    stdout.write(`${JSON.stringify(result)}\n`);
+    stdout.write(`${JSON.stringify(result)}
+`);
   } finally {
     await client.close();
   }
 }
 
-export async function runLuckyTokenCli(
-  args: readonly string[],
-): Promise<void> {
+export async function runLuckyTokenCli(args: readonly string[]): Promise<void> {
   if (args[0] === "control") {
     const command = args[1];
     if (command === "settings") {
@@ -1144,6 +1204,10 @@ export async function runLuckyTokenCli(
     }
     if (command === "models") {
       await runControlModelsCommand(args.slice(2));
+      return;
+    }
+    if (command === "credentials") {
+      await runCredentialCli(args.slice(2));
       return;
     }
     if (command === "catalog") {

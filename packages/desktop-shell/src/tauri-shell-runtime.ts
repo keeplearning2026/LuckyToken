@@ -5,6 +5,8 @@ import type {
   CatalogCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
+  CredentialCommand,
+  CredentialCommandResult,
   MaskedClientTokenScope,
   ModelsCommand,
   RegisteredSetting,
@@ -16,6 +18,7 @@ import type {
 
 import {
   decodeCatalogCommandResult,
+  decodeCredentialCommandResult,
   decodeModelsCommandResult,
   decodeModelsProjection,
   projectControlPlaneState,
@@ -42,13 +45,16 @@ export type ShellCommand =
   | "shell_client_tokens_rotate"
   | "shell_client_tokens_remove"
   | "shell_diagnostics_warnings"
-
   | "shell_pick_directory"
   | "shell_request_identities"
-
   | "shell_models_query"
   | "shell_models_write_raw"
   | "shell_models_write_structured"
+  | "shell_credentials_query"
+  | "shell_credentials_login"
+  | "shell_credentials_logout"
+  | "shell_credentials_import_preview"
+  | "shell_credentials_import_apply"
   | "shell_catalog_query"
   | "shell_catalog_refresh";
 
@@ -56,7 +62,9 @@ export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
   listen(
     event: "luckytoken://shell-state",
-    listener: (event: Pick<Event<ControlPlaneBridgePayload>, "payload">) => void,
+    listener: (
+      event: Pick<Event<ControlPlaneBridgePayload>, "payload">,
+    ) => void,
   ): Promise<() => void>;
 }
 
@@ -81,6 +89,9 @@ export interface TauriDesktopRuntime {
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
+  executeCredentialCommand(
+    command: CredentialCommand,
+  ): Promise<CredentialCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   /** Native directory picker: the picked absolute path or undefined on
@@ -197,9 +208,7 @@ function decodeLanConfirmation(value: unknown) {
   };
 }
 
-function decodeOwnership(
-  value: unknown,
-): ApplicationOwnership | undefined {
+function decodeOwnership(value: unknown): ApplicationOwnership | undefined {
   if (
     !isRecord(value) ||
     !isRecord(value.owner) ||
@@ -228,7 +237,6 @@ function decodeAutoStartProjection(
     : undefined;
 }
 
-
 function decodeMaskedClientTokenScope(
   value: unknown,
 ): MaskedClientTokenScope | undefined {
@@ -248,7 +256,11 @@ function decodeMaskedClientTokenScope(
       : undefined;
   }
   return typeof value.projectDir === "string" && value.projectDir.length > 0
-    ? { type: "project", projectDir: value.projectDir, maskedToken: value.maskedToken }
+    ? {
+        type: "project",
+        projectDir: value.projectDir,
+        maskedToken: value.maskedToken,
+      }
     : undefined;
 }
 
@@ -384,7 +396,9 @@ function decodeRequestIdentitiesResult(
   return { records };
 }
 
-function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefined {
+function decodeDiagnosticsWarning(
+  value: unknown,
+): DiagnosticsWarning | undefined {
   if (
     !isRecord(value) ||
     !Number.isSafeInteger(value.id) ||
@@ -405,7 +419,9 @@ function decodeDiagnosticsWarning(value: unknown): DiagnosticsWarning | undefine
   };
 }
 
-function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefined {
+function decodeBridgePayload(
+  value: unknown,
+): ControlPlaneBridgePayload | undefined {
   if (
     !isRecord(value) ||
     !Number.isSafeInteger(value.revision) ||
@@ -540,7 +556,9 @@ export function createTauriDesktopRuntime(
             ? latest.modelsResult
             : undefined;
       latest =
-        models === undefined ? projected : { ...projected, modelsResult: models };
+        models === undefined
+          ? projected
+          : { ...projected, modelsResult: models };
     } else {
       latest = projected;
     }
@@ -597,13 +615,11 @@ export function createTauriDesktopRuntime(
             ? "shell_settings_set"
             : "shell_settings_confirm",
       ),
-    getAutoStartStatus: () =>
-      invokeAutoStart("shell_auto_start_status"),
+    getAutoStartStatus: () => invokeAutoStart("shell_auto_start_status"),
     setAutoStartEnabled: (enabled) =>
       invokeAutoStart(
         enabled ? "shell_auto_start_enable" : "shell_auto_start_disable",
       ),
-
 
     async executeClientTokenCommand(command) {
       // Client Token commands return their own result (masked scopes or the
@@ -652,6 +668,40 @@ export function createTauriDesktopRuntime(
       }
       return decoded;
     },
+    async executeCredentialCommand(command) {
+      // Credential commands return the sanitized projection and closed
+      // outcomes only; they never merge raw credential values.
+      const raw =
+        command.command === "query"
+          ? await bridge.invoke("shell_credentials_query")
+          : command.command === "login"
+            ? await bridge.invoke("shell_credentials_login", {
+                providerId: command.providerId,
+                expectedRevision: command.expectedRevision,
+                value: command.value,
+                overwrite: command.overwrite,
+              })
+            : command.command === "logout"
+              ? await bridge.invoke("shell_credentials_logout", {
+                  providerId: command.providerId,
+                  expectedRevision: command.expectedRevision,
+                })
+              : command.command === "import_preview"
+                ? await bridge.invoke("shell_credentials_import_preview", {
+                    expectedRevision: command.expectedRevision,
+                    content: command.content,
+                  })
+                : await bridge.invoke("shell_credentials_import_apply", {
+                    expectedRevision: command.expectedRevision,
+                    importId: command.importId,
+                    selections: command.selections,
+                  });
+      const decoded = decodeCredentialCommandResult(raw, command);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid credential result");
+      }
+      return decoded;
+    },
     async queryDiagnosticsWarnings() {
       const raw = await bridge.invoke("shell_diagnostics_warnings");
       if (!Array.isArray(raw)) {
@@ -659,7 +709,9 @@ export function createTauriDesktopRuntime(
       }
       const warnings = raw
         .map((entry) => decodeDiagnosticsWarning(entry))
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+        .filter(
+          (entry): entry is NonNullable<typeof entry> => entry !== undefined,
+        );
       if (warnings.length !== raw.length) {
         throw new Error("LuckyToken returned an invalid diagnostics result");
       }
@@ -678,7 +730,9 @@ export function createTauriDesktopRuntime(
       const raw = await bridge.invoke("shell_request_identities");
       const decoded = decodeRequestIdentitiesResult(raw);
       if (decoded === undefined) {
-        throw new Error("LuckyToken returned an invalid request identities result");
+        throw new Error(
+          "LuckyToken returned an invalid request identities result",
+        );
       }
       return decoded;
     },

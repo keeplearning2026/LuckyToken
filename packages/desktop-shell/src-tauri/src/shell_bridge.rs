@@ -10,9 +10,9 @@ use tokio::{
 use crate::control_plane_v1::{
     AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
     ClientTokenCommandResultWire, ConnectResult, ConnectionFailure, ControlPlaneConnector,
-    ControlPlaneSession, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
-    ModelsProjectionWire, RequestIdentityRecordWire, RuntimeCommand, SessionFailure,
-    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    ControlPlaneSession, CredentialCommand, CredentialCommandResultWire, DiagnosticsWarningWire,
+    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
+    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -388,6 +388,19 @@ impl ShellBridge {
             .map_err(|_| ())
     }
 
+    /// Ticket 12: versioned Credential commands for the Credentials page.
+    /// The sanitized projection and closed outcomes are returned as-is;
+    /// credential values never cross this bridge.
+    pub(crate) async fn credential_command(
+        &self,
+        command: CredentialCommand,
+    ) -> Result<CredentialCommandResultWire, ()> {
+        self.connector
+            .credential_command(command)
+            .await
+            .map_err(|_| ())
+    }
+
     /// Sanitized Dashboard warnings: a one-shot diagnostics query restricted
     /// to warning-or-worse records; the backend redaction boundary has
     /// already scrubbed credentials before they leave the Control Plane.
@@ -403,7 +416,10 @@ impl ShellBridge {
         &self,
         command: CatalogCommand,
     ) -> Result<CatalogCommandResultWire, ()> {
-        self.connector.catalog_command(command).await.map_err(|_| ())
+        self.connector
+            .catalog_command(command)
+            .await
+            .map_err(|_| ())
     }
 
     /// Ticket 17 identity seam: the recent authorized request identities
@@ -673,6 +689,7 @@ mod tests {
             ownership: None,
 
             models: None,
+            credentials: None,
         }
     }
 
@@ -749,6 +766,7 @@ mod tests {
                 ownership: None,
 
                 models: None,
+                credentials: None,
             }),
             models: None,
         };

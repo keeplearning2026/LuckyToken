@@ -29,9 +29,7 @@ import {
   createFileClientTokenStore,
   loadFileClientTokenAuthority,
 } from "../../src/client-auth/file-token-store.js";
-import {
-  createClientTokenControlPlaneHandler,
-} from "../../src/client-auth/control-plane.js";
+import { createClientTokenControlPlaneHandler } from "../../src/client-auth/control-plane.js";
 import {
   createLiveClientTokenAuthority,
   type LiveClientTokenAuthority,
@@ -118,7 +116,9 @@ describe("LuckyToken CLI", () => {
   async function startClientTokenBackend(options: {
     readonly authorities: Readonly<Record<string, LiveClientTokenAuthority>>;
   }): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-client-token-cp-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-client-token-cp-"),
+    );
     directories.push(directory);
     const endpoint = {
       pipeName: `\\\\.\\pipe\\luckytoken-cli-token-${process.pid}-${++nextClientTokenPipe}`,
@@ -152,15 +152,17 @@ describe("LuckyToken CLI", () => {
       controlPlanes.splice(0).map((controlPlane) => controlPlane.close()),
     );
     await Promise.all(
-      tcpServers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => server.close(() => resolve())),
-      ),
+      tcpServers
+        .splice(0)
+        .map(
+          (server) =>
+            new Promise<void>((resolve) => server.close(() => resolve())),
+        ),
     );
     await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
+      directories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
     );
   });
 
@@ -223,7 +225,9 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("issues runtime lifecycle commands through the active Control Plane", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-command-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-command-"),
+    );
     directories.push(directory);
     const transport = createNodePipeTransport();
     const supervisor = createDataPlaneRuntimeSupervisor({
@@ -298,7 +302,9 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("queries and sets registered settings through the same Control Plane commands", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-settings-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-settings-"),
+    );
     directories.push(directory);
     const transport = createNodePipeTransport();
     const registry = createSettingsRegistry({
@@ -365,7 +371,9 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("queries and writes the models.json catalog through the same Control Plane commands", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-models-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-models-"),
+    );
     directories.push(directory);
     const modelsJsonPath = join(directory, "models.json");
     const original = JSON.stringify(
@@ -511,12 +519,14 @@ describe("LuckyToken CLI", () => {
       state: { revision: 2, valid: true },
     });
     await expect(readFile(modelsJsonPath, "utf8")).resolves.toContain(
-      "\"ollama\"",
+      '"ollama"',
     );
   }, 60_000);
 
   it("does not echo descriptor contents when discovery is malformed", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-invalid-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-invalid-"),
+    );
     directories.push(directory);
     const descriptorPath = join(directory, "control-plane.json");
     const secret = "descriptor-capability-secret-01234567890123456789";
@@ -549,132 +559,140 @@ describe("LuckyToken CLI", () => {
       },
       expectedProvider: "configured" as const,
     },
-  ])("atomically owns discovery and reports $label as $expectedProvider", async ({
-    providerPackages,
-    expectedProvider,
-  }) => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-owned-"));
-    directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
-    const piDirectory = join(stateDirectory, "pi");
-    await mkdir(piDirectory, { recursive: true });
-    const authPath = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: authPath }).create(
-      { type: "global" },
-      "serve-test-token",
-    );
-    const responsesAuthPath = join(
-      stateDirectory,
-      "client-auth",
-      "openai-responses.json",
-    );
-    await createFileClientTokenStore({ path: responsesAuthPath }).create(
-      { type: "global" },
-      "serve-responses-test-token",
-    );
-    const configPath = join(stateDirectory, "config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        server: { host: "127.0.0.1", port: await reserveFreePort() },
-        clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
-          "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
-          },
-        },
-        ...(providerPackages === undefined ? {} : { providerPackages }),
-        pi: { directory: "pi" },
-      }),
-      "utf8",
-    );
-    const descriptorPath = join(stateDirectory, "control-plane.json");
-    await writeFile(descriptorPath, "stale-descriptor", "utf8");
-    const serve = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
-    children.push(serve);
-    const serveCapture = captureChild(serve);
-
-    await expect
-      .poll(async () => {
-        try {
-          const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-            pipeName?: unknown;
-            capability?: unknown;
-          };
-          return (
-            typeof parsed.pipeName === "string" &&
-            typeof parsed.capability === "string"
-          );
-        } catch {
-          return false;
-        }
-      }, { timeout: 10_000, interval: 50 })
-      .toBe(true);
-    const descriptor = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-      readonly capability: string;
-    };
-    const status = startCli([
-      "control",
-      "status",
-      "--descriptor",
-      descriptorPath,
-    ]);
-    children.push(status);
-    const statusResult = await captureChild(status).result;
-    expect(statusResult.code).toBe(0);
-    expect(JSON.parse(statusResult.stdout)).toMatchObject({
-      modelDataPlane: "running",
-      provider: expectedProvider,
-    });
-    expect(`${statusResult.stdout}\n${statusResult.stderr}`).not.toContain(
-      descriptor.capability,
-    );
-    expect(serveCapture.stdout()).toContain("POST http://127.0.0.1:");
-    expect(serveCapture.stdout()).toContain("/v1/messages");
-    expect(serveCapture.stdout()).toContain("/v1/responses");
-
-    serve.stdin.end("stop\n");
-    const serveResult = await Promise.race([
-      serveCapture.result,
-      new Promise<ChildResult>((resolve) =>
-        setTimeout(
-          () =>
-            resolve({
-              code: null,
-              stdout: serveCapture.stdout(),
-              stderr: serveCapture.stderr(),
-            }),
-          5_000,
-        ),
-      ),
-    ]);
-    if (serveResult.code === null) {
-      throw new Error(
-        `serve shutdown hung\nstdout:\n${serveResult.stdout}\nstderr:\n${serveResult.stderr}`,
+  ])(
+    "atomically owns discovery and reports $label as $expectedProvider",
+    async ({ providerPackages, expectedProvider }) => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "luckytoken-control-owned-"),
       );
-    }
-    expect(serveResult.code).toBe(0);
-    expect(`${serveResult.stdout}\n${serveResult.stderr}`).not.toContain(
-      descriptor.capability,
-    );
-    await expect(readFile(descriptorPath, "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(
-      (await readdir(stateDirectory)).filter((name) =>
-        name.startsWith("control-plane.json."),
-      ),
-    ).toEqual([]);
-  }, 30_000);
+      directories.push(directory);
+      const stateDirectory = join(directory, ".luckytoken");
+      const piDirectory = join(stateDirectory, "pi");
+      await mkdir(piDirectory, { recursive: true });
+      const authPath = join(
+        stateDirectory,
+        "client-auth",
+        "anthropic-messages.json",
+      );
+      await createFileClientTokenStore({ path: authPath }).create(
+        { type: "global" },
+        "serve-test-token",
+      );
+      const responsesAuthPath = join(
+        stateDirectory,
+        "client-auth",
+        "openai-responses.json",
+      );
+      await createFileClientTokenStore({ path: responsesAuthPath }).create(
+        { type: "global" },
+        "serve-responses-test-token",
+      );
+      const configPath = join(stateDirectory, "config.json");
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          server: { host: "127.0.0.1", port: await reserveFreePort() },
+          clientProtocols: {
+            "anthropic-messages": {
+              authFile: "client-auth/anthropic-messages.json",
+            },
+            "openai-responses": {
+              authFile: "client-auth/openai-responses.json",
+            },
+          },
+          ...(providerPackages === undefined ? {} : { providerPackages }),
+          pi: { directory: "pi" },
+        }),
+        "utf8",
+      );
+      const descriptorPath = join(stateDirectory, "control-plane.json");
+      await writeFile(descriptorPath, "stale-descriptor", "utf8");
+      const serve = startCli(
+        ["--config", configPath, "--descriptor", descriptorPath],
+        true,
+      );
+      children.push(serve);
+      const serveCapture = captureChild(serve);
+
+      await expect
+        .poll(
+          async () => {
+            try {
+              const parsed = JSON.parse(
+                await readFile(descriptorPath, "utf8"),
+              ) as {
+                pipeName?: unknown;
+                capability?: unknown;
+              };
+              return (
+                typeof parsed.pipeName === "string" &&
+                typeof parsed.capability === "string"
+              );
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 10_000, interval: 50 },
+        )
+        .toBe(true);
+      const descriptor = JSON.parse(await readFile(descriptorPath, "utf8")) as {
+        readonly capability: string;
+      };
+      const status = startCli([
+        "control",
+        "status",
+        "--descriptor",
+        descriptorPath,
+      ]);
+      children.push(status);
+      const statusResult = await captureChild(status).result;
+      expect(statusResult.code).toBe(0);
+      expect(JSON.parse(statusResult.stdout)).toMatchObject({
+        modelDataPlane: "running",
+        provider: expectedProvider,
+      });
+      expect(`${statusResult.stdout}\n${statusResult.stderr}`).not.toContain(
+        descriptor.capability,
+      );
+      expect(serveCapture.stdout()).toContain("POST http://127.0.0.1:");
+      expect(serveCapture.stdout()).toContain("/v1/messages");
+      expect(serveCapture.stdout()).toContain("/v1/responses");
+
+      serve.stdin.end("stop\n");
+      const serveResult = await Promise.race([
+        serveCapture.result,
+        new Promise<ChildResult>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                code: null,
+                stdout: serveCapture.stdout(),
+                stderr: serveCapture.stderr(),
+              }),
+            5_000,
+          ),
+        ),
+      ]);
+      if (serveResult.code === null) {
+        throw new Error(
+          `serve shutdown hung\nstdout:\n${serveResult.stdout}\nstderr:\n${serveResult.stderr}`,
+        );
+      }
+      expect(serveResult.code).toBe(0);
+      expect(`${serveResult.stdout}\n${serveResult.stderr}`).not.toContain(
+        descriptor.capability,
+      );
+      await expect(readFile(descriptorPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        (await readdir(stateDirectory)).filter((name) =>
+          name.startsWith("control-plane.json."),
+        ),
+      ).toEqual([]);
+    },
+    30_000,
+  );
 
   it("keeps the Control Plane available when the fixed Data Plane port is occupied", async () => {
     const blocker = createServer();
@@ -687,7 +705,9 @@ describe("LuckyToken CLI", () => {
     if (address === null || typeof address === "string") {
       throw new Error("Expected a TCP test address");
     }
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-failure-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-failure-"),
+    );
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
@@ -724,16 +744,21 @@ describe("LuckyToken CLI", () => {
     children.push(child);
     const serving = captureChild(child);
     await expect
-      .poll(async () => {
-        try {
-          const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-            readonly pipeName?: unknown;
-          };
-          return typeof parsed.pipeName === "string";
-        } catch {
-          return false;
-        }
-      }, { timeout: 10_000, interval: 50 })
+      .poll(
+        async () => {
+          try {
+            const parsed = JSON.parse(
+              await readFile(descriptorPath, "utf8"),
+            ) as {
+              readonly pipeName?: unknown;
+            };
+            return typeof parsed.pipeName === "string";
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10_000, interval: 50 },
+      )
       .toBe(true);
 
     const status = startCli([
@@ -870,12 +895,18 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("creates and lists a global token offline without ever printing it in the list", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-offline-"));
+    const root = await mkdtemp(
+      join(tmpdir(), "luckytoken-client-token-offline-"),
+    );
     directories.push(root);
     const stateDirectory = join(root, ".luckytoken");
     await mkdir(stateDirectory);
     const configPath = join(stateDirectory, "config.json");
-    const authFile = join(stateDirectory, "client-auth", "anthropic-messages.json");
+    const authFile = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
     await writeFile(
       configPath,
       JSON.stringify({
@@ -922,7 +953,9 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("creates, rotates, and removes one project token offline", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-token-offline-"));
+    const root = await mkdtemp(
+      join(tmpdir(), "luckytoken-client-token-offline-"),
+    );
     directories.push(root);
     const stateDirectory = join(root, ".luckytoken");
     const projectDir = join(root, "project");
@@ -1010,9 +1043,9 @@ describe("LuckyToken CLI", () => {
     ]);
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain("Removed project");
-    await expect(
-      loadFileClientTokenAuthority(authFile),
-    ).rejects.toThrow("must contain at least one token");
+    await expect(loadFileClientTokenAuthority(authFile)).rejects.toThrow(
+      "must contain at least one token",
+    );
     expect(newAuthority.authorize("rotated-project-token")).toEqual({
       projectDir,
     });
@@ -1172,8 +1205,9 @@ describe("LuckyToken CLI", () => {
     const logoutCapture = captureChild(logout);
     const logoutResult = await logoutCapture.result;
     expect(logoutResult.code).toBe(0);
+    // Ticket 12: logout reports the exact stored-credential removal message.
     expect(logoutResult.stdout).toContain(
-      "Removed the stored credential for CommandCode Private",
+      "Stored credential removed for CommandCode Private",
     );
     expect(`${logoutResult.stdout}\n${logoutResult.stderr}`).not.toContain(
       "stored-provider-secret",

@@ -49,13 +49,25 @@ import {
   type StatusEvent,
   type StatusSnapshot,
 } from "./contracts.js";
-import { decodeDiagnosticEvent, decodeDiagnosticRecord } from "./wire-diagnostics.js";
+import {
+  decodeDiagnosticEvent,
+  decodeDiagnosticRecord,
+} from "./wire-diagnostics.js";
 import {
   type ClientTokenCommand,
   type ClientTokenCommandResult,
+  type CredentialCommand,
+  type CredentialCommandResult,
+  type CredentialFileError,
+  type CredentialFileErrorKind,
+  type CredentialImportApplyEntryResult,
+  type CredentialImportEntryPreview,
+  type CredentialImportSelection,
+  type CredentialProjection,
   type ClientTokenDirectoryRejection,
   type ClientTokenScopeRef,
   type MaskedClientTokenScope,
+  type ProviderAuthStatus,
   type RequestIdentitiesQueryResult,
   type RequestIdentityRecord,
 } from "./contracts.js";
@@ -104,6 +116,11 @@ export type ClientRequest =
       readonly command: ModelsCommand;
     }
   | {
+      readonly type: "credential_command";
+      readonly requestId: string;
+      readonly command: CredentialCommand;
+    }
+  | {
       readonly type: "catalog_command";
       readonly requestId: string;
       readonly command: CatalogCommand;
@@ -112,10 +129,7 @@ export type ClientRequest =
   | { readonly type: "unsubscribe"; readonly requestId: string };
 
 export type ControlPlaneErrorCode =
-  | "invalid_request"
-  | "unauthorized"
-  | "hello_required"
-  | "unknown_command";
+  "invalid_request" | "unauthorized" | "hello_required" | "unknown_command";
 
 export type ServerMessage =
   | {
@@ -164,6 +178,11 @@ export type ServerMessage =
       readonly result: ModelsCommandResult;
     }
   | {
+      readonly type: "credential_command_result";
+      readonly requestId: string;
+      readonly result: CredentialCommandResult;
+    }
+  | {
       readonly type: "catalog_command_result";
       readonly requestId: string;
       readonly result: CatalogCommandResult;
@@ -193,8 +212,7 @@ export function isRecord(value: unknown): value is RecordValue {
 }
 
 export function decodeRequestId(value: unknown): string | undefined {
-  return typeof value === "string" &&
-    /^[A-Za-z0-9_-]{1,128}$/u.test(value)
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(value)
     ? value
     : undefined;
 }
@@ -259,6 +277,10 @@ export function decodeApplicationStatus(
   if (value.models !== undefined && models === undefined) {
     return undefined;
   }
+  const credentials = decodeCredentialProjection(value.credentials);
+  if (value.credentials !== undefined && credentials === undefined) {
+    return undefined;
+  }
   const catalog = decodeCatalogStatusProjection(value.catalog);
   if (value.catalog !== undefined && catalog === undefined) {
     return undefined;
@@ -279,6 +301,7 @@ export function decodeApplicationStatus(
     ...(dataPlane === undefined ? {} : { dataPlane }),
     ...(settings === undefined ? {} : { settings }),
     ...(models === undefined ? {} : { models }),
+    ...(credentials === undefined ? {} : { credentials }),
     ...(catalog === undefined ? {} : { catalog }),
     ...(confirmation === undefined ? {} : { confirmation }),
   };
@@ -290,12 +313,15 @@ function decodeRegisteredSetting(
   if (
     !isRecord(value) ||
     typeof value.key !== "string" ||
-    (value.type !== "boolean" && value.type !== "number" && value.type !== "string") ||
+    (value.type !== "boolean" &&
+      value.type !== "number" &&
+      value.type !== "string") ||
     (typeof value.default !== "boolean" &&
       typeof value.default !== "number" &&
       typeof value.default !== "string") ||
     (value.sensitivity !== "public" && value.sensitivity !== "secret") ||
-    (value.applyMode !== "hot-apply" && value.applyMode !== "restart-required") ||
+    (value.applyMode !== "hot-apply" &&
+      value.applyMode !== "restart-required") ||
     (typeof value.value !== "boolean" &&
       typeof value.value !== "number" &&
       typeof value.value !== "string")
@@ -475,7 +501,9 @@ function decodeCatalogProviderProjection(
       ? {}
       : { cachedAt: value.cachedAt as number }),
     models: Object.freeze(
-      models.filter((entry): entry is CatalogModelProjection => entry !== undefined),
+      models.filter(
+        (entry): entry is CatalogModelProjection => entry !== undefined,
+      ),
     ),
   });
 }
@@ -569,9 +597,9 @@ function decodeCatalogRefreshReport(
     return undefined;
   }
   const providers = value.providers.map(
-    (entry: unknown):
-      | CatalogRefreshReportProjection["providers"][number]
-      | undefined => {
+    (
+      entry: unknown,
+    ): CatalogRefreshReportProjection["providers"][number] | undefined => {
       if (!isRecord(entry) || typeof entry.providerId !== "string") {
         return undefined;
       }
@@ -608,16 +636,16 @@ function decodeCatalogRefreshReport(
     finishedAt: value.finishedAt as number,
     providers: Object.freeze(
       providers.filter(
-        (
-          entry,
-        ): entry is CatalogRefreshReportProjection["providers"][number] =>
+        (entry): entry is CatalogRefreshReportProjection["providers"][number] =>
           entry !== undefined,
       ),
     ),
   });
 }
 
-export function decodeCatalogCommand(value: unknown): CatalogCommand | undefined {
+export function decodeCatalogCommand(
+  value: unknown,
+): CatalogCommand | undefined {
   if (!isRecord(value) || value.command !== "query") {
     if (isRecord(value) && value.command === "refresh") {
       if (value.mode === "background" || value.mode === "manual") {
@@ -697,7 +725,9 @@ const modelsErrorKinds: ReadonlySet<string> = new Set([
   "storage",
 ]);
 
-export function decodeModelsFileError(value: unknown): ModelsFileError | undefined {
+export function decodeModelsFileError(
+  value: unknown,
+): ModelsFileError | undefined {
   if (
     !isRecord(value) ||
     typeof value.kind !== "string" ||
@@ -828,9 +858,7 @@ function decodeEffectiveModel(
   const input = value.input;
   if (
     !Array.isArray(input) ||
-    input.some(
-      (entry) => entry !== "text" && entry !== "image",
-    )
+    input.some((entry) => entry !== "text" && entry !== "image")
   ) {
     return undefined;
   }
@@ -861,12 +889,8 @@ function decodeEffectiveModel(
     contextWindow: value.contextWindow,
     maxTokens: value.maxTokens,
     layer: value.layer as EffectiveModelLayer,
-    ...(overriddenFields === undefined
-      ? {}
-      : { overriddenFields }),
-    ...(thinkingLevelMap === undefined
-      ? {}
-      : { thinkingLevelMap }),
+    ...(overriddenFields === undefined ? {} : { overriddenFields }),
+    ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
     ...(compat === undefined ? {} : { compat }),
   });
 }
@@ -948,14 +972,17 @@ function decodeEffectiveCatalog(
     baseline: Object.freeze({
       package: value.baseline.package as "@earendil-works/pi-coding-agent",
       version: value.baseline.version as "0.84.1",
-      schema: value.baseline.schema as "pi-coding-agent-0.84.1-models-json-schema",
+      schema: value.baseline
+        .schema as "pi-coding-agent-0.84.1-models-json-schema",
     }),
     providers: Object.freeze(providers),
     compositionErrors: Object.freeze(compositionErrors),
   });
 }
 
-export function decodeModelsFileState(value: unknown): ModelsFileState | undefined {
+export function decodeModelsFileState(
+  value: unknown,
+): ModelsFileState | undefined {
   if (
     !isRecord(value) ||
     typeof value.revision !== "number" ||
@@ -1011,7 +1038,10 @@ export function decodeModelsCommandResult(
   const error = decodeModelsFileError(value.error);
   if (value.error !== undefined && error === undefined) return undefined;
   if (value.outcome === "invalid") {
-    if (error === undefined || (error.kind !== "parse" && error.kind !== "schema")) {
+    if (
+      error === undefined ||
+      (error.kind !== "parse" && error.kind !== "schema")
+    ) {
       return undefined;
     }
   }
@@ -1055,6 +1085,401 @@ export function decodeModelsProjection(
   });
 }
 
+function decodeCredentialFileError(
+  value: unknown,
+): CredentialFileError | undefined {
+  if (
+    !isRecord(value) ||
+    (value.kind !== "parse" &&
+      value.kind !== "invalid" &&
+      value.kind !== "load") ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: value.kind as CredentialFileErrorKind,
+    message: value.message,
+  });
+}
+
+function decodeProviderAuthStatus(
+  value: unknown,
+): ProviderAuthStatus | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.stored !== "boolean" ||
+    (value.storedType !== undefined &&
+      value.storedType !== "api_key" &&
+      value.storedType !== "oauth") ||
+    typeof value.environment !== "boolean" ||
+    typeof value.modelsJson !== "boolean" ||
+    typeof value.commandDerived !== "boolean" ||
+    typeof value.expired !== "boolean" ||
+    typeof value.unavailable !== "boolean" ||
+    (value.effectiveSource !== "stored" &&
+      value.effectiveSource !== "environment" &&
+      value.effectiveSource !== "models.json" &&
+      value.effectiveSource !== "command" &&
+      value.effectiveSource !== "none")
+  ) {
+    return undefined;
+  }
+  // Bounded-fact consistency: a stored credential is the effective source
+  // when present and `unavailable` means no source resolves.
+  // Stored presence is a fact; the effective source follows request-time
+  // precedence and may differ when a stored reference cannot resolve.
+  if (value.unavailable !== (value.effectiveSource === "none"))
+    return undefined;
+  if (value.stored === true && value.storedType === undefined) return undefined;
+  if (value.stored === false && value.storedType !== undefined)
+    return undefined;
+  return Object.freeze({
+    providerId: value.providerId,
+    stored: value.stored,
+    ...(value.storedType === undefined ? {} : { storedType: value.storedType }),
+    environment: value.environment,
+    modelsJson: value.modelsJson,
+    commandDerived: value.commandDerived,
+    expired: value.expired,
+    unavailable: value.unavailable,
+    effectiveSource: value.effectiveSource,
+  });
+}
+
+function decodeProviderAuthStatuses(
+  value: unknown,
+): readonly ProviderAuthStatus[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const statuses = value
+    .map((entry) => decodeProviderAuthStatus(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return statuses.length === value.length ? Object.freeze(statuses) : undefined;
+}
+
+/** Sanitized auth.json projection (Ticket 12): file facts plus bounded
+ *  per-Provider status rows; strict decoding so credential values or raw
+ *  credential shapes can never cross the wire. */
+export function decodeCredentialProjection(
+  value: unknown,
+  options: { readonly allowEmptyPath?: boolean } = {},
+): CredentialProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    (value.path.length === 0 && options.allowEmptyPath !== true) ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean"
+  ) {
+    return undefined;
+  }
+  const error = decodeCredentialFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.valid && error !== undefined) return undefined;
+  const providers = decodeProviderAuthStatuses(value.providers);
+  if (providers === undefined) return undefined;
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    ...(error === undefined ? {} : { error }),
+    providers,
+  });
+}
+
+function decodeCredentialImportSelection(
+  value: unknown,
+): CredentialImportSelection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.overwrite !== "boolean"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    providerId: value.providerId,
+    overwrite: value.overwrite,
+  });
+}
+
+function decodeCredentialImportSelections(
+  value: unknown,
+): readonly CredentialImportSelection[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const selections = value
+    .map((entry) => decodeCredentialImportSelection(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return selections.length === value.length
+    ? Object.freeze(selections)
+    : undefined;
+}
+
+function decodeCredentialImportEntryPreview(
+  value: unknown,
+): CredentialImportEntryPreview | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    (value.type !== "api_key" && value.type !== "oauth") ||
+    typeof value.wouldOverwrite !== "boolean"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    providerId: value.providerId,
+    type: value.type,
+    wouldOverwrite: value.wouldOverwrite,
+  });
+}
+
+function decodeCredentialImportApplyEntryResult(
+  value: unknown,
+): CredentialImportApplyEntryResult | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    (value.outcome !== "applied" &&
+      value.outcome !== "unchanged" &&
+      value.outcome !== "skipped" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "overwrite_required")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    providerId: value.providerId,
+    outcome: value.outcome,
+  });
+}
+
+function decodeCredentialImportApplyEntryResults(
+  value: unknown,
+): readonly CredentialImportApplyEntryResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .map((entry) => decodeCredentialImportApplyEntryResult(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return entries.length === value.length ? Object.freeze(entries) : undefined;
+}
+
+export function decodeCredentialCommand(
+  value: unknown,
+): CredentialCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.command === "query") {
+    return { command: "query" };
+  }
+  if (
+    typeof value.expectedRevision !== "number" ||
+    !Number.isSafeInteger(value.expectedRevision) ||
+    (value.expectedRevision as number) < 0
+  ) {
+    return undefined;
+  }
+  const expectedRevision = value.expectedRevision as number;
+  if (value.command === "logout") {
+    if (typeof value.providerId !== "string" || value.providerId.length === 0) {
+      return undefined;
+    }
+    return {
+      command: "logout",
+      providerId: value.providerId,
+      expectedRevision,
+    };
+  }
+  if (value.command === "login") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.value !== "string" ||
+      typeof value.overwrite !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      command: "login",
+      providerId: value.providerId,
+      expectedRevision,
+      value: value.value,
+      overwrite: value.overwrite,
+    };
+  }
+  if (value.command === "import_preview") {
+    if (typeof value.content !== "string") return undefined;
+    return {
+      command: "import_preview",
+      expectedRevision,
+      content: value.content,
+    };
+  }
+  if (value.command === "import_apply") {
+    if (typeof value.importId !== "string" || value.importId.length === 0) {
+      return undefined;
+    }
+    const selections = decodeCredentialImportSelections(value.selections);
+    if (selections === undefined) return undefined;
+    return {
+      command: "import_apply",
+      expectedRevision,
+      importId: value.importId,
+      selections,
+    };
+  }
+  return undefined;
+}
+
+/** Validates a credential command result against the command that produced
+ *  it: `login`/`logout` may only carry `changed`, `import_preview` only the
+ *  masked plan, and `import_apply` only per-entry outcomes — a credential
+ *  value or raw credential shape can never pass. */
+export function decodeCredentialCommandResult(
+  value: unknown,
+  command: CredentialCommand,
+): CredentialCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "invalid" &&
+      value.outcome !== "unknown_provider" &&
+      value.outcome !== "overwrite_required" &&
+      value.outcome !== "storage_failure" &&
+      value.outcome !== "unavailable") ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome;
+  const revision = value.revision as number;
+  // The unavailable DTO carries a minimal value-free state (the authority
+  // is not running, so no path exists yet); every other outcome requires a
+  // normal non-empty projection.
+  const state = decodeCredentialProjection(value.state, {
+    allowEmptyPath: outcome === "unavailable",
+  });
+  if (state === undefined) return undefined;
+  if (outcome === "ok") {
+    if (typeof value.error === "string") return undefined;
+    if (command.command === "login" || command.command === "logout") {
+      if (value.changed !== undefined && typeof value.changed !== "boolean") {
+        return undefined;
+      }
+      if (value.importId !== undefined || value.previewEntries !== undefined) {
+        return undefined;
+      }
+      if (command.command === "logout" && value.entries !== undefined) {
+        return undefined;
+      }
+      return Object.freeze({
+        outcome,
+        revision,
+        state,
+        ...(value.changed === undefined ? {} : { changed: value.changed }),
+      });
+    }
+    if (command.command === "import_preview") {
+      if (typeof value.importId !== "string" || value.importId.length === 0) {
+        return undefined;
+      }
+      const previewEntries = decodeCredentialImportEntryPreviews(
+        value.previewEntries,
+      );
+      if (previewEntries === undefined) {
+        return undefined;
+      }
+      if (value.changed !== undefined || value.entries !== undefined) {
+        return undefined;
+      }
+      return Object.freeze({
+        outcome,
+        revision,
+        state,
+        importId: value.importId,
+        previewEntries,
+      });
+    }
+    if (command.command === "import_apply") {
+      const entries = decodeCredentialImportApplyEntryResults(value.entries);
+      if (entries === undefined) {
+        return undefined;
+      }
+      if (value.changed !== undefined || value.importId !== undefined) {
+        return undefined;
+      }
+      return Object.freeze({ outcome, revision, state, entries });
+    }
+    // query: no extras.
+    if (
+      value.changed !== undefined ||
+      value.importId !== undefined ||
+      value.previewEntries !== undefined ||
+      value.entries !== undefined
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ outcome, revision, state });
+  }
+  if (outcome === "unavailable") {
+    if (
+      typeof value.error !== "string" ||
+      value.error.length === 0 ||
+      value.changed !== undefined ||
+      value.importId !== undefined ||
+      value.previewEntries !== undefined ||
+      value.entries !== undefined
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ outcome, revision, state, error: value.error });
+  }
+  // conflict / invalid / unknown_provider / overwrite_required /
+  // storage_failure: error is required; import_apply may also carry the
+  // per-entry results.
+  if (typeof value.error !== "string" || value.error.length === 0) {
+    return undefined;
+  }
+  if (value.changed !== undefined || value.importId !== undefined) {
+    return undefined;
+  }
+  if (command.command === "import_apply") {
+    const entries = decodeCredentialImportApplyEntryResults(value.entries);
+    if (entries === undefined) return undefined;
+    return Object.freeze({
+      outcome,
+      revision,
+      state,
+      error: value.error,
+      entries,
+    });
+  }
+  if (value.previewEntries !== undefined || value.entries !== undefined) {
+    return undefined;
+  }
+  return Object.freeze({ outcome, revision, state, error: value.error });
+}
+
+function decodeCredentialImportEntryPreviews(
+  value: unknown,
+): readonly CredentialImportEntryPreview[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .map((entry) => decodeCredentialImportEntryPreview(entry))
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return entries.length === value.length ? Object.freeze(entries) : undefined;
+}
+
 export function decodeSettingsCommandResult(
   value: unknown,
 ): SettingsCommandResult | undefined {
@@ -1077,7 +1502,10 @@ export function decodeSettingsCommandResult(
   ) {
     return undefined;
   }
-  if (value.outcome !== "confirmation_required" && value.confirmation !== undefined) {
+  if (
+    value.outcome !== "confirmation_required" &&
+    value.confirmation !== undefined
+  ) {
     return undefined;
   }
   const confirmation =
@@ -1134,10 +1562,7 @@ export function decodeClientTokenCommand(
       ...(value.token === undefined ? {} : { token: value.token }),
     };
   }
-  if (
-    value.command === "rotate" ||
-    value.command === "remove"
-  ) {
+  if (value.command === "rotate" || value.command === "remove") {
     if (
       !Number.isSafeInteger(value.expectedRevision) ||
       (value.expectedRevision as number) < 0
@@ -1170,7 +1595,9 @@ export function decodeClientTokenCommand(
   return undefined;
 }
 
-function decodeClientTokenScopeRef(value: unknown): ClientTokenScopeRef | undefined {
+function decodeClientTokenScopeRef(
+  value: unknown,
+): ClientTokenScopeRef | undefined {
   if (!isRecord(value)) return undefined;
   if (value.type === "global") {
     return value.projectDir === undefined
@@ -1331,8 +1758,7 @@ function decodeDataPlaneStatus(
   } catch {
     return undefined;
   }
-  const originPort =
-    origin.port === "" ? 80 : Number.parseInt(origin.port, 10);
+  const originPort = origin.port === "" ? 80 : Number.parseInt(origin.port, 10);
   if (
     origin.protocol !== "http:" ||
     origin.username !== "" ||
@@ -1476,6 +1902,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
+  if (value.type === "credential_command") {
+    const command = decodeCredentialCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "credential_command",
+        requestId,
+        command,
+      },
+    };
+  }
   if (value.type === "catalog_command") {
     const command = decodeCatalogCommand(value.command);
     if (command === undefined) {
@@ -1493,9 +1933,7 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
   return { type: "invalid", requestId, code: "unknown_command" };
 }
 
-export function compatibleHello(
-  application: ApplicationIdentity,
-): HelloResult {
+export function compatibleHello(application: ApplicationIdentity): HelloResult {
   return {
     type: "compatible",
     application,
@@ -1692,7 +2130,11 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   const ownership = isRecord(value)
     ? decodeApplicationOwnership(value.ownership)
     : undefined;
-  if (isRecord(value) && value.ownership !== undefined && ownership === undefined) {
+  if (
+    isRecord(value) &&
+    value.ownership !== undefined &&
+    ownership === undefined
+  ) {
     return undefined;
   }
   return {
@@ -1734,7 +2176,8 @@ function decodeRuntimeCommandConflict(
   if (value.code === "runtime_unavailable") {
     return {
       code: value.code,
-      message: "Runtime lifecycle commands are unavailable in this application.",
+      message:
+        "Runtime lifecycle commands are unavailable in this application.",
     };
   }
   if (value.code === "application_restart_required") {
@@ -1966,7 +2409,34 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "models_command_result", requestId, result };
-
+  }
+  if (value.type === "credential_command_result") {
+    // The full per-command result validation happens against the client's
+    // own command (executeCredentialCommand); the host already validated
+    // this result before writing it. Only the shared fields are checked
+    // here so a malformed frame is still rejected at the wire boundary.
+    if (
+      !isRecord(value.result) ||
+      (value.result.outcome !== "ok" &&
+        value.result.outcome !== "conflict" &&
+        value.result.outcome !== "invalid" &&
+        value.result.outcome !== "unknown_provider" &&
+        value.result.outcome !== "overwrite_required" &&
+        value.result.outcome !== "storage_failure" &&
+        value.result.outcome !== "unavailable") ||
+      !Number.isSafeInteger(value.result.revision) ||
+      (value.result.revision as number) < 0 ||
+      decodeCredentialProjection(value.result.state, {
+        allowEmptyPath: value.result.outcome === "unavailable",
+      }) === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      type: "credential_command_result",
+      requestId,
+      result: value.result as unknown as CredentialCommandResult,
+    };
   }
   if (value.type === "catalog_command_result") {
     const result = decodeCatalogCommandResult(value.result);

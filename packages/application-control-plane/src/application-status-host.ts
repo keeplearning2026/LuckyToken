@@ -27,6 +27,11 @@ import {
   type RequestIdentityRecord,
 } from "./contracts.js";
 import {
+  type CredentialCommandHandler,
+  type CredentialCommandResult,
+  type CredentialProjection,
+} from "./contracts.js";
+import {
   type ControlPlaneDiagnostics,
   normalizeDiagnosticQuery,
 } from "./diagnostics-contract.js";
@@ -45,6 +50,7 @@ import {
   decodeCatalogCommandResult,
   decodeClientRequest,
   decodeClientTokenCommandResult,
+  decodeCredentialCommandResult,
   decodeModelsCommandResult,
   decodeRequestIdentityRecord,
   decodeRuntimeCommandExecution,
@@ -77,12 +83,17 @@ export interface StartControlPlaneOptions {
    * authorities.
    */
   readonly clientTokenCommandHandler?: ClientTokenCommandHandler;
+
   /** Optional request identity query handler (Ticket 17 identity seam):
    *  serves the recent authorized request identities used by the Requests
    *  surface and Ticket 18's ledger. */
   readonly requestIdentitiesHandler?: RequestIdentitiesQueryHandler;
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
+  /** Optional Credential command handler (Ticket 12): serves the versioned
+   *  credential management commands used by UI and CLI against the live
+   *  Credential Authority. */
+  readonly credentialCommandHandler?: CredentialCommandHandler;
   /**
    * Optional catalog command handler (Ticket 11): serves the versioned
    * catalog query/refresh commands against the authoritative active
@@ -93,6 +104,9 @@ export interface StartControlPlaneOptions {
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
   readonly modelsProjection?: () => ModelsProjection;
+  /** Live sanitized auth.json credential projection merged into every
+   *  snapshot (Ticket 12); absent until the Data Plane authority runs. */
+  readonly credentialProjection?: () => CredentialProjection | undefined;
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
@@ -136,6 +150,7 @@ export async function startApplicationStatusHost(
   ): Omit<StatusSnapshot, "sequence"> => {
     const projection = options.settingsProjection?.();
     const modelsProjection = options.modelsProjection?.();
+    const credentialProjection = options.credentialProjection?.();
     const catalogProjection = options.catalogProjection?.();
     return {
       ...status,
@@ -151,7 +166,12 @@ export async function startApplicationStatusHost(
               : { confirmation: projection.confirmation }),
           }),
       ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
-      ...(catalogProjection === undefined ? {} : { catalog: catalogProjection }),
+      ...(credentialProjection === undefined
+        ? {}
+        : { credentials: credentialProjection }),
+      ...(catalogProjection === undefined
+        ? {}
+        : { catalog: catalogProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -160,26 +180,27 @@ export async function startApplicationStatusHost(
   const states = new Set<ConnectionState>();
   const tasks = new Set<Promise<void>>();
   const diagnostics = options.diagnostics;
-  const emitDiagnostics = diagnostics === undefined
-    ? undefined
-    : () => {
-        const subscription = diagnostics.subscribe((event) => {
-          for (const state of states) {
-            if (!state.diagnosticsSubscribed) continue;
-            void writeFrame(state.connection, {
-              type: "event",
-              event: {
-                type: "diagnostic",
-                record: event.record,
-              },
-            }).catch(() => {
-              state.diagnosticsSubscribed = false;
-              void state.connection.close().catch(() => undefined);
-            });
-          }
-        });
-        return subscription.unsubscribe;
-      };
+  const emitDiagnostics =
+    diagnostics === undefined
+      ? undefined
+      : () => {
+          const subscription = diagnostics.subscribe((event) => {
+            for (const state of states) {
+              if (!state.diagnosticsSubscribed) continue;
+              void writeFrame(state.connection, {
+                type: "event",
+                event: {
+                  type: "diagnostic",
+                  record: event.record,
+                },
+              }).catch(() => {
+                state.diagnosticsSubscribed = false;
+                void state.connection.close().catch(() => undefined);
+              });
+            }
+          });
+          return subscription.unsubscribe;
+        };
   const sendError = async (
     connection: PipeConnection,
     requestId: string,
@@ -187,8 +208,7 @@ export async function startApplicationStatusHost(
   ) => {
     await writeFrame(connection, {
       type: "error",
-      requestId:
-        requestId === options.endpoint.capability ? "" : requestId,
+      requestId: requestId === options.endpoint.capability ? "" : requestId,
       code,
     });
   };
@@ -213,21 +233,25 @@ export async function startApplicationStatusHost(
         }
         const decoded = decodeClientRequest(frame.value);
         if (decoded.type === "invalid") {
-          await sendError(
-            state.connection,
-            decoded.requestId,
-            decoded.code,
-          );
+          await sendError(state.connection, decoded.requestId, decoded.code);
           continue;
         }
         const request = decoded.request;
         if (request.requestId === options.endpoint.capability) {
-          await sendError(state.connection, request.requestId, "invalid_request");
+          await sendError(
+            state.connection,
+            request.requestId,
+            "invalid_request",
+          );
           continue;
         }
         if (request.type === "hello") {
           if (request.capability !== options.endpoint.capability) {
-            await sendError(state.connection, request.requestId, "unauthorized");
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unauthorized",
+            );
           } else if (request.contractVersion !== controlPlaneVersion) {
             await writeFrame(state.connection, {
               type: "hello_result",
@@ -245,7 +269,11 @@ export async function startApplicationStatusHost(
           continue;
         }
         if (!state.authorized) {
-          await sendError(state.connection, request.requestId, "hello_required");
+          await sendError(
+            state.connection,
+            request.requestId,
+            "hello_required",
+          );
           continue;
         }
         if (request.type === "get_status") {
@@ -256,11 +284,19 @@ export async function startApplicationStatusHost(
           });
         } else if (request.type === "get_diagnostics") {
           if (diagnostics === undefined) {
-            await sendError(state.connection, request.requestId, "unknown_command");
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
           } else {
             const query = decodeDiagnosticQuery(request.query);
             if (query === undefined && request.query !== undefined) {
-              await sendError(state.connection, request.requestId, "invalid_request");
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
             } else {
               await writeFrame(state.connection, {
                 type: "diagnostics_result",
@@ -271,7 +307,11 @@ export async function startApplicationStatusHost(
           }
         } else if (request.type === "get_request_identities") {
           if (options.requestIdentitiesHandler === undefined) {
-            await sendError(state.connection, request.requestId, "unknown_command");
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
           } else {
             let records: RequestIdentityRecord[];
             try {
@@ -286,11 +326,19 @@ export async function startApplicationStatusHost(
                     record !== undefined,
                 );
               if (records.length !== result.records.length) {
-                await sendError(state.connection, request.requestId, "invalid_request");
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
                 continue;
               }
             } catch {
-              await sendError(state.connection, request.requestId, "invalid_request");
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
               continue;
             }
             await writeFrame(state.connection, {
@@ -301,7 +349,11 @@ export async function startApplicationStatusHost(
           }
         } else if (request.type === "diagnostics_subscribe") {
           if (diagnostics === undefined) {
-            await sendError(state.connection, request.requestId, "unknown_command");
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
           } else {
             state.diagnosticsSubscribed = true;
             await writeFrame(state.connection, {
@@ -559,6 +611,73 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "models_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "credential_command") {
+          if (options.credentialCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          // A credential command publishes only when it changed the
+          // authoritative revision: reads (query) are side-effect free and
+          // no-op writes do not broadcast. A revision change discovered by
+          // a command (e.g. an external edit) is a real file mutation and
+          // does publish, keeping subscribers current.
+          const credentialsBefore = options.credentialProjection?.();
+          let handled: CredentialCommandResult;
+          try {
+            handled = await options.credentialCommandHandler(request.command);
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              revision: 0,
+              state: {
+                revision: 0,
+                path: "",
+                present: false,
+                valid: false,
+                providers: [],
+              },
+              error: "Credential Authority is unavailable",
+            };
+          }
+          // Validate the handler result against the request command before
+          // it is written: credential values or raw credential shapes can
+          // never pass the wire boundary.
+          const result = decodeCredentialCommandResult(
+            handled,
+            request.command,
+          );
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          if (
+            handled.outcome === "ok" &&
+            credentialsBefore !== undefined &&
+            handled.revision !== credentialsBefore.revision
+          ) {
+            // A successful write changed the authoritative file: publish
+            // the resulting credential projection to every subscriber.
+            await publishStatus({
+              modelDataPlane: current.modelDataPlane,
+              provider: current.provider,
+              ...(current.dataPlane === undefined
+                ? {}
+                : { dataPlane: current.dataPlane }),
+            });
+          }
+          await writeFrame(state.connection, {
+            type: "credential_command_result",
             requestId: request.requestId,
             result,
           });

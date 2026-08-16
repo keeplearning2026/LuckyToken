@@ -41,6 +41,7 @@ import type {
   AuthContext,
   AuthResult,
   Context,
+  Credential,
   Model,
   ModelAuth,
   Models,
@@ -59,10 +60,7 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from "@earendil-works/pi-ai";
-import {
-  lazyStream,
-  ModelsError,
-} from "@earendil-works/pi-ai";
+import { lazyStream, ModelsError } from "@earendil-works/pi-ai";
 import type { ConfigValueResolver } from "./config-value.js";
 import type {
   ModelsJsonConfig,
@@ -118,6 +116,37 @@ function withConfiguredAuth(
   };
 }
 
+/**
+ * Pinned AuthStorage.read semantics for stored api-key credentials: the
+ * stored value may be a literal, a `$ENV`/`${ENV}` reference or a
+ * `!command` source, and is resolved with the same Ticket 10 resolver used
+ * for configured keys (uncached per request; never at status/scrub time).
+ * An unresolvable reference reads as no key, so the ambient source takes
+ * over exactly like Pi's `resolveConfigValue` returning undefined. The raw
+ * slot is never mutated — resolution is per read.
+ */
+async function resolveStoredApiKeyCredential(
+  providerId: string,
+  stored: Extract<Credential, { readonly type: "api_key" }>,
+  resolver: ConfigValueResolver,
+): Promise<Extract<Credential, { readonly type: "api_key" }>> {
+  if (stored.key === undefined) return stored;
+  try {
+    const resolved = resolver.resolveValueOrThrow(
+      stored.key,
+      `stored API key for provider "${providerId}"`,
+    );
+    return { ...stored, key: resolved };
+  } catch {
+    // An unresolvable reference reads as no key (pinned `resolveConfigValue`
+    // returning undefined), so the ambient source takes over.
+    return {
+      type: "api_key",
+      ...(stored.env === undefined ? {} : { env: stored.env }),
+    };
+  }
+}
+
 /** Pinned `configContextEnv`: collect ctx.env values for referenced names. */
 async function configContextEnv(
   values: readonly string[],
@@ -126,7 +155,9 @@ async function configContextEnv(
   explicit?: Readonly<Record<string, string>>,
 ): Promise<Record<string, string> | undefined> {
   const env: Record<string, string> = { ...explicit };
-  for (const name of new Set(values.flatMap((value) => resolver.getEnvVarNames(value)))) {
+  for (const name of new Set(
+    values.flatMap((value) => resolver.getEnvVarNames(value)),
+  )) {
     if (env[name] !== undefined) continue;
     const value = await ctx.env(name);
     if (value !== undefined) env[name] = value;
@@ -159,12 +190,21 @@ function composeApiKeyAuth(
       inherited?.login ??
       (async (interaction) => ({
         type: "api_key",
-        key: await interaction.prompt({ type: "secret", message: "Enter API key" }),
+        key: await interaction.prompt({
+          type: "secret",
+          message: "Enter API key",
+        }),
       })),
     check: async (input) => {
       if (input.credential) {
-        if (inherited?.check) return inherited.check(input);
-        if (input.credential.key) return { type: "api_key", source: "stored credential" };
+        const credential = await resolveStoredApiKeyCredential(
+          providerId,
+          input.credential,
+          adapters.configValues,
+        );
+        if (inherited?.check) return inherited.check({ ...input, credential });
+        if (credential.key)
+          return { type: "api_key", source: "stored credential" };
         const resolved = await inherited?.resolve(input);
         return resolved
           ? resolved.source === undefined
@@ -193,26 +233,38 @@ function composeApiKeyAuth(
     resolve: async (input) => {
       let result: AuthResult | undefined;
       if (input.credential) {
+        const credential = await resolveStoredApiKeyCredential(
+          providerId,
+          input.credential,
+          adapters.configValues,
+        );
         result = inherited
-          ? await inherited.resolve(input)
-          : input.credential.key
+          ? await inherited.resolve({ ...input, credential })
+          : credential.key
             ? {
-                auth: { apiKey: input.credential.key },
-                ...(input.credential.env === undefined
+                auth: { apiKey: credential.key },
+                ...(credential.env === undefined
                   ? {}
-                  : { env: input.credential.env }),
+                  : { env: credential.env }),
                 source: "stored credential",
               }
             : undefined;
       } else if (rawKey !== undefined) {
-        const env = await configContextEnv([rawKey], input.ctx, adapters.configValues);
+        const env = await configContextEnv(
+          [rawKey],
+          input.ctx,
+          adapters.configValues,
+        );
         const key = adapters.configValues.resolveValueOrThrow(
           rawKey,
           `API key for provider "${providerId}"`,
           env,
         );
         result = inherited
-          ? await inherited.resolve({ ...input, credential: { type: "api_key", key } })
+          ? await inherited.resolve({
+              ...input,
+              credential: { type: "api_key", key },
+            })
           : { auth: { apiKey: key }, source: "configured API key" };
       } else {
         result = await inherited?.resolve(input);
@@ -233,7 +285,10 @@ function composeApiKeyAuth(
         `provider "${providerId}"`,
         headerEnv,
       );
-      return { ...result, auth: withConfiguredAuth(result.auth, headers, authHeader) };
+      return {
+        ...result,
+        auth: withConfiguredAuth(result.auth, headers, authHeader),
+      };
     },
   };
 }
@@ -365,8 +420,9 @@ export function createRequestCompositionModels(
   config: ModelsJsonConfig | undefined,
   adapters: RequestCompositionAdapters,
 ): Models {
-  const providerConfig = (providerId: string): ModelsJsonProviderConfig | undefined =>
-    config?.providers[providerId];
+  const providerConfig = (
+    providerId: string,
+  ): ModelsJsonProviderConfig | undefined => config?.providers[providerId];
 
   const getAuth = (
     providerOrModel: string | Model<Api>,
@@ -401,7 +457,9 @@ export function createRequestCompositionModels(
     });
   };
 
-  const prepareRequest = async <TOptions extends ProviderRequestOptions & ModelsRequestTransforms>(
+  const prepareRequest = async <
+    TOptions extends ProviderRequestOptions & ModelsRequestTransforms,
+  >(
     model: Model<Api>,
     options: TOptions | undefined,
   ): Promise<{
@@ -410,18 +468,29 @@ export function createRequestCompositionModels(
     options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions;
   }> => {
     const provider = models.getProvider(model.provider);
-    if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
+    if (!provider)
+      throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
     const resolution = await getAuth(model, {
       ...(options?.apiKey === undefined ? {} : { apiKey: options.apiKey }),
       ...(options?.env === undefined ? {} : { env: options.env }),
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
-    if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
+    if (!resolution)
+      throw new ModelsError(
+        "auth",
+        `Provider is not configured: ${model.provider}`,
+      );
 
     const { transformHeaders, ...rawProviderOptions } = options ?? {};
-    const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> &
+    const providerOptions = rawProviderOptions as Omit<
+      TOptions,
+      "transformHeaders"
+    > &
       ProviderRequestOptions;
-    let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
+    let headers = mergeHeaders(
+      resolution.auth.headers,
+      providerOptions.headers,
+    );
     if (transformHeaders) headers = await transformHeaders(headers ?? {});
     const env =
       resolution.env || providerOptions.env
@@ -429,7 +498,9 @@ export function createRequestCompositionModels(
         : undefined;
     return {
       provider,
-      model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
+      model: resolution.auth.baseUrl
+        ? { ...model, baseUrl: resolution.auth.baseUrl }
+        : model,
       options: {
         ...providerOptions,
         apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
@@ -482,13 +553,19 @@ export function createRequestCompositionModels(
     getAvailable: (providerId?: string, options?: { signal?: AbortSignal }) =>
       models.getAvailable(providerId, options),
     getAuth,
-    login: (providerId: string, type: "api_key" | "oauth", interaction: never) =>
-      models.login(providerId, type, interaction),
+    login: (
+      providerId: string,
+      type: "api_key" | "oauth",
+      interaction: never,
+    ) => models.login(providerId, type, interaction),
     logout: (providerId: string, options?: { signal?: AbortSignal }) =>
       models.logout(providerId, options),
     stream,
-    complete: (model: Model<Api>, context: Context, options?: ModelsApiStreamOptions<Api>) =>
-      stream(model, context, options).result(),
+    complete: (
+      model: Model<Api>,
+      context: Context,
+      options?: ModelsApiStreamOptions<Api>,
+    ) => stream(model, context, options).result(),
     streamSimple,
     completeSimple: (
       model: Model<Api>,
@@ -508,7 +585,11 @@ export function createRequestCompositionModels(
             `Provider ${model.provider} does not support deferred responses`,
           );
         }
-        return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as never);
+        return prepared.provider.fetchDeferred(
+          prepared.model,
+          handle,
+          prepared.options as never,
+        );
       }).result(),
     cancelDeferred: async (
       model: Model<Api>,

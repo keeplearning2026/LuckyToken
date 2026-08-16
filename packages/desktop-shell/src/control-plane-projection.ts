@@ -9,6 +9,12 @@ import type {
   CatalogRefreshReportProjection,
   CatalogSnapshotProjection,
   CatalogStatusProjection,
+  CredentialCommand,
+  CredentialCommandResult,
+  CredentialFileError,
+  CredentialImportApplyEntryResult,
+  CredentialImportEntryPreview,
+  CredentialProjection,
   EffectiveCatalogCompositionError,
   EffectiveCatalogProjection,
   EffectiveModelLayer,
@@ -18,14 +24,14 @@ import type {
   ModelsCommandResult,
   ModelsFileError,
   ModelsProjection,
-
-
+  ProviderAuthStatus,
   RegisteredSetting,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
 
-export interface ConnectedControlPlaneBridgePayload
-  extends Readonly<Record<string, unknown>> {
+export interface ConnectedControlPlaneBridgePayload extends Readonly<
+  Record<string, unknown>
+> {
   readonly revision: number;
   readonly connection: "connected";
   readonly applicationVersion: string;
@@ -45,6 +51,9 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   readonly modelsResult?: ModelsCommandResult;
   /** Sanitized models.json projection from the status snapshot (Ticket 08). */
   readonly modelsProjection?: ModelsProjection;
+  /** Sanitized auth.json credential projection from the status snapshot
+   *  (Ticket 12): file facts plus bounded per-Provider auth status. */
+  readonly credentialsProjection?: CredentialProjection;
   /** Sanitized catalog lifecycle projection from the status snapshot
    *  (Ticket 11): version, refreshing flag, failed Provider ids. */
   readonly catalogStatus?: CatalogStatusProjection;
@@ -54,8 +63,9 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
  *  ambient internal variables, and secrets never appear. */
 export type RendererRegisteredSetting = RegisteredSetting;
 
-export interface VersionMismatchBridgePayload
-  extends Readonly<Record<string, unknown>> {
+export interface VersionMismatchBridgePayload extends Readonly<
+  Record<string, unknown>
+> {
   readonly revision: number;
   readonly connection: "version_mismatch";
   readonly requestedVersion: number;
@@ -68,15 +78,17 @@ export type ControlPlaneUnavailableReason =
   | "pipe_unavailable"
   | "protocol_error";
 
-export interface UnavailableBridgePayload
-  extends Readonly<Record<string, unknown>> {
+export interface UnavailableBridgePayload extends Readonly<
+  Record<string, unknown>
+> {
   readonly revision: number;
   readonly connection: "unavailable";
   readonly reason: ControlPlaneUnavailableReason;
 }
 
-export interface DisconnectedBridgePayload
-  extends Readonly<Record<string, unknown>> {
+export interface DisconnectedBridgePayload extends Readonly<
+  Record<string, unknown>
+> {
   readonly revision: number;
   readonly connection: "disconnected";
   readonly reason: "transport_lost";
@@ -92,17 +104,14 @@ export interface ControlPlaneErrorState {
   readonly revision: number;
   readonly kind: "error";
   readonly code:
-    | "version_mismatch"
-    | ControlPlaneUnavailableReason
-    | "transport_lost";
+    "version_mismatch" | ControlPlaneUnavailableReason | "transport_lost";
   readonly title: string;
   readonly detail: string;
   readonly action: string;
 }
 
 export type ControlPlaneState =
-  | ConnectedControlPlaneState
-  | ControlPlaneErrorState;
+  ConnectedControlPlaneState | ControlPlaneErrorState;
 
 function decodeRendererSetting(
   value: unknown,
@@ -110,12 +119,15 @@ function decodeRendererSetting(
   if (
     !isRecord(value) ||
     typeof value.key !== "string" ||
-    (value.type !== "boolean" && value.type !== "number" && value.type !== "string") ||
+    (value.type !== "boolean" &&
+      value.type !== "number" &&
+      value.type !== "string") ||
     (typeof value.default !== "boolean" &&
       typeof value.default !== "number" &&
       typeof value.default !== "string") ||
     (value.sensitivity !== "public" && value.sensitivity !== "secret") ||
-    (value.applyMode !== "hot-apply" && value.applyMode !== "restart-required") ||
+    (value.applyMode !== "hot-apply" &&
+      value.applyMode !== "restart-required") ||
     (typeof value.value !== "boolean" &&
       typeof value.value !== "number" &&
       typeof value.value !== "string")
@@ -220,7 +232,8 @@ function decodeEffectiveCatalog(
     baseline: Object.freeze({
       package: value.baseline.package as "@earendil-works/pi-coding-agent",
       version: value.baseline.version as "0.84.1",
-      schema: value.baseline.schema as "pi-coding-agent-0.84.1-models-json-schema",
+      schema: value.baseline
+        .schema as "pi-coding-agent-0.84.1-models-json-schema",
     }),
     providers: Object.freeze(providers),
     compositionErrors: Object.freeze(compositionErrors),
@@ -374,11 +387,13 @@ function decodeModelsFileError(value: unknown): ModelsFileError | undefined {
   });
 }
 
-function decodeModelsErrorLocation(value: unknown): {
-  readonly line: number;
-  readonly column: number;
-  readonly position?: number;
-} | undefined {
+function decodeModelsErrorLocation(value: unknown):
+  | {
+      readonly line: number;
+      readonly column: number;
+      readonly position?: number;
+    }
+  | undefined {
   if (
     !isRecord(value) ||
     !Number.isSafeInteger(value.line) ||
@@ -603,7 +618,9 @@ function decodeCatalogProvider(
       ? {}
       : { cachedAt: value.cachedAt as number }),
     models: Object.freeze(
-      models.filter((entry): entry is CatalogModelProjection => entry !== undefined),
+      models.filter(
+        (entry): entry is CatalogModelProjection => entry !== undefined,
+      ),
     ),
   });
 }
@@ -692,9 +709,9 @@ function decodeCatalogRefreshReport(
     return undefined;
   }
   const providers = value.providers.map(
-    (entry: unknown):
-      | CatalogRefreshReportProjection["providers"][number]
-      | undefined => {
+    (
+      entry: unknown,
+    ): CatalogRefreshReportProjection["providers"][number] | undefined => {
       if (!isRecord(entry) || typeof entry.providerId !== "string") {
         return undefined;
       }
@@ -731,9 +748,7 @@ function decodeCatalogRefreshReport(
     finishedAt: value.finishedAt as number,
     providers: Object.freeze(
       providers.filter(
-        (
-          entry,
-        ): entry is CatalogRefreshReportProjection["providers"][number] =>
+        (entry): entry is CatalogRefreshReportProjection["providers"][number] =>
           entry !== undefined,
       ),
     ),
@@ -798,6 +813,229 @@ export function decodeModelsProjection(
   });
 }
 
+/** Sanitized auth.json credential projection from the status snapshot:
+ *  file facts plus bounded per-Provider status rows; strict decoding so
+ *  credential values or raw credential shapes never reach the renderer. */
+export function decodeCredentialProjection(
+  value: unknown,
+  options: { readonly allowEmptyPath?: boolean } = {},
+): CredentialProjection | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    (value.path.length === 0 && options.allowEmptyPath !== true) ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean" ||
+    !Array.isArray(value.providers)
+  ) {
+    return undefined;
+  }
+  const error = decodeCredentialFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.valid && error !== undefined) return undefined;
+  const providers: ProviderAuthStatus[] = [];
+  for (const raw of value.providers) {
+    const row = decodeProviderAuthStatus(raw);
+    if (row === undefined) return undefined;
+    providers.push(row);
+  }
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    ...(error === undefined ? {} : { error }),
+    providers: Object.freeze(providers),
+  });
+}
+
+function decodeCredentialFileError(
+  value: unknown,
+): CredentialFileError | undefined {
+  if (
+    !isRecord(value) ||
+    (value.kind !== "parse" &&
+      value.kind !== "invalid" &&
+      value.kind !== "load") ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ kind: value.kind, message: value.message });
+}
+
+function decodeProviderAuthStatus(
+  value: unknown,
+): ProviderAuthStatus | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.stored !== "boolean" ||
+    (value.storedType !== undefined &&
+      value.storedType !== "api_key" &&
+      value.storedType !== "oauth") ||
+    typeof value.environment !== "boolean" ||
+    typeof value.modelsJson !== "boolean" ||
+    typeof value.commandDerived !== "boolean" ||
+    typeof value.expired !== "boolean" ||
+    typeof value.unavailable !== "boolean" ||
+    (value.effectiveSource !== "stored" &&
+      value.effectiveSource !== "environment" &&
+      value.effectiveSource !== "models.json" &&
+      value.effectiveSource !== "command" &&
+      value.effectiveSource !== "none")
+  ) {
+    return undefined;
+  }
+  // Stored presence is a fact; the effective source follows request-time
+  // precedence and may differ when a stored reference cannot resolve.
+  if (value.unavailable !== (value.effectiveSource === "none"))
+    return undefined;
+  if (value.stored === true && value.storedType === undefined) return undefined;
+  if (value.stored === false && value.storedType !== undefined)
+    return undefined;
+  return Object.freeze({
+    providerId: value.providerId,
+    stored: value.stored,
+    ...(value.storedType === undefined ? {} : { storedType: value.storedType }),
+    environment: value.environment,
+    modelsJson: value.modelsJson,
+    commandDerived: value.commandDerived,
+    expired: value.expired,
+    unavailable: value.unavailable,
+    effectiveSource: value.effectiveSource,
+  });
+}
+
+/** Per-command validation of a Credential command result (Ticket 12): the
+ *  renderer accepts only the sanitized projection, closed outcomes and the
+ *  per-command extras — a credential value or raw credential shape can
+ *  never pass. */
+export function decodeCredentialCommandResult(
+  value: unknown,
+  command: CredentialCommand,
+): CredentialCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "invalid" &&
+      value.outcome !== "unknown_provider" &&
+      value.outcome !== "overwrite_required" &&
+      value.outcome !== "storage_failure" &&
+      value.outcome !== "unavailable") ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome as CredentialCommandResult["outcome"];
+  const revision = value.revision as number;
+  // The unavailable DTO carries a minimal value-free state (no path exists
+  // while the authority is not running); every other outcome requires a
+  // normal non-empty projection.
+  const state = decodeCredentialProjection(value.state, {
+    allowEmptyPath: outcome === "unavailable",
+  });
+  if (state === undefined) return undefined;
+  if (outcome !== "ok") {
+    if (typeof value.error !== "string" || value.error.length === 0) {
+      return undefined;
+    }
+    if (command.command === "import_apply") {
+      const entries = decodeImportApplyEntries(value.entries);
+      if (entries === undefined) return undefined;
+      return { outcome, revision, state, error: value.error, entries };
+    }
+    if (value.entries !== undefined) return undefined;
+    return { outcome, revision, state, error: value.error };
+  }
+  if (command.command === "login" || command.command === "logout") {
+    if (value.changed !== undefined && typeof value.changed !== "boolean") {
+      return undefined;
+    }
+    return {
+      outcome,
+      revision,
+      state,
+      ...(value.changed === undefined ? {} : { changed: value.changed }),
+    };
+  }
+  if (command.command === "import_preview") {
+    if (
+      typeof value.importId !== "string" ||
+      value.importId.length === 0 ||
+      !Array.isArray(value.previewEntries)
+    ) {
+      return undefined;
+    }
+    const previewEntries: CredentialImportEntryPreview[] = [];
+    for (const raw of value.previewEntries) {
+      if (
+        !isRecord(raw) ||
+        typeof raw.providerId !== "string" ||
+        raw.providerId.length === 0 ||
+        (raw.type !== "api_key" && raw.type !== "oauth") ||
+        typeof raw.wouldOverwrite !== "boolean"
+      ) {
+        return undefined;
+      }
+      previewEntries.push({
+        providerId: raw.providerId,
+        type: raw.type,
+        wouldOverwrite: raw.wouldOverwrite,
+      });
+    }
+
+    return {
+      outcome,
+      revision,
+      state,
+      importId: value.importId,
+      previewEntries: Object.freeze(previewEntries),
+    };
+  }
+  if (command.command === "import_apply") {
+    const entries = decodeImportApplyEntries(value.entries);
+    if (entries === undefined) return undefined;
+    return { outcome, revision, state, entries };
+  }
+  if (value.changed !== undefined || value.importId !== undefined) {
+    return undefined;
+  }
+  return { outcome, revision, state };
+}
+
+function decodeImportApplyEntries(
+  value: unknown,
+): readonly CredentialImportApplyEntryResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries: CredentialImportApplyEntryResult[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.providerId !== "string" ||
+      raw.providerId.length === 0 ||
+      (raw.outcome !== "applied" &&
+        raw.outcome !== "unchanged" &&
+        raw.outcome !== "skipped" &&
+        raw.outcome !== "conflict" &&
+        raw.outcome !== "overwrite_required")
+    ) {
+      return undefined;
+    }
+    entries.push({
+      providerId: raw.providerId,
+      outcome: raw.outcome,
+    });
+  }
+  return Object.freeze(entries);
+}
+
 /** Developer Lab exposes only the settings the product UI actively renders.
  *  Unknown keys, ambient internal variables, unregistered experimental flags,
  *  and secret values never reach the renderer. */
@@ -828,7 +1066,8 @@ const unavailableCopy: Readonly<
     ControlPlaneUnavailableReason,
     Omit<ControlPlaneErrorState, "revision" | "kind" | "code">
   >
-> = {  descriptor_missing: {
+> = {
+  descriptor_missing: {
     title: "LuckyToken backend is not available",
     detail: "No active local Control Plane was found.",
     action: "Start LuckyToken, then reconnect.",
@@ -881,6 +1120,10 @@ export function projectControlPlaneState(
       payload.snapshot.models === undefined
         ? undefined
         : decodeModelsProjection(payload.snapshot.models);
+    const credentialsProjection =
+      payload.snapshot.credentials === undefined
+        ? undefined
+        : decodeCredentialProjection(payload.snapshot.credentials);
     const catalogStatus =
       payload.snapshot.catalog === undefined
         ? undefined
@@ -902,10 +1145,7 @@ export function projectControlPlaneState(
             message: confirmation.message,
           });
     const ownership = decodeOwnership(payload.snapshot.ownership);
-    if (
-      payload.snapshot.ownership !== undefined &&
-      ownership === undefined
-    ) {
+    if (payload.snapshot.ownership !== undefined && ownership === undefined) {
       // A connected snapshot whose owner identity is malformed cannot be
       // trusted for lifecycle decisions (quit, attach, auto-start).
       return Object.freeze({
@@ -934,14 +1174,14 @@ export function projectControlPlaneState(
                 : {
                     failure: Object.freeze({
                       code: dataPlane.failure.code,
-                      message:
-                        dataPlaneFailureCopy[dataPlane.failure.code],
+                      message: dataPlaneFailureCopy[dataPlane.failure.code],
                     }),
                   }),
             }),
           }),
       ...(settings === undefined ? {} : { settings }),
       ...(modelsProjection === undefined ? {} : { modelsProjection }),
+      ...(credentialsProjection === undefined ? {} : { credentialsProjection }),
       ...(catalogStatus === undefined ? {} : { catalogStatus }),
       ...(projectedConfirmation === undefined
         ? {}

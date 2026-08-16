@@ -103,6 +103,7 @@ mod tests {
                 ownership: None,
 
                 models: None,
+                credentials: None,
             }),
             models: None,
         };

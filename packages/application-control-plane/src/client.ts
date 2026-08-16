@@ -7,14 +7,12 @@ import {
   assertControlPlaneEndpoint,
   type ApplicationCommand,
   type ApplicationCommandResult,
-
   type CatalogCommand,
   type CatalogCommandResult,
-
   type ClientTokenCommand,
   type ClientTokenCommandResult,
-
-
+  type CredentialCommand,
+  type CredentialCommandResult,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
@@ -34,6 +32,7 @@ import type { PipeConnector } from "./pipe-transport.js";
 import {
   decodeCatalogCommandResult,
   decodeClientTokenCommandResult,
+  decodeCredentialCommandResult,
   decodeRequestId,
   decodeServerMessage,
   type RecordValue,
@@ -55,15 +54,17 @@ export async function connectApplicationControlPlane(
   dependencies: ControlPlaneClientDependencies,
 ): Promise<ControlPlaneClient> {
   assertControlPlaneEndpoint(endpoint);
-  const connection = await dependencies.pipeConnector.connect(endpoint.pipeName);
+  const connection = await dependencies.pipeConnector.connect(
+    endpoint.pipeName,
+  );
   const pending = new Map<string, PendingRequest>();
   let listener: ((event: StatusEvent) => void) | undefined;
-  let diagnosticsListener: ((event: RuntimeDiagnosticEvent) => void) | undefined;
+  let diagnosticsListener:
+    ((event: RuntimeDiagnosticEvent) => void) | undefined;
   let settled = false;
   let closeRequested = false;
   let resolveDisconnect:
-    | ((disconnect: ControlPlaneDisconnect) => void)
-    | undefined;
+    ((disconnect: ControlPlaneDisconnect) => void) | undefined;
   const disconnected = new Promise<ControlPlaneDisconnect>((resolve) => {
     resolveDisconnect = resolve;
   });
@@ -229,6 +230,25 @@ export async function connectApplicationControlPlane(
       }
       return result;
     },
+    async executeCredentialCommand(
+      command: CredentialCommand,
+    ): Promise<CredentialCommandResult> {
+      const response = await request({
+        type: "credential_command",
+        command,
+      });
+      if (response.type !== "credential_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      // The result shape depends on the command that was sent: credential
+      // values or raw credential shapes can never cross the wire. Re-
+      // validate against the local command.
+      const result = decodeCredentialCommandResult(response.result, command);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
     async getRequestIdentities(): Promise<RequestIdentitiesQueryResult> {
       const response = await request({ type: "get_request_identities" });
       if (response.type !== "request_identities_result") {
@@ -270,7 +290,9 @@ export async function connectApplicationControlPlane(
       next: (event: RuntimeDiagnosticEvent) => void,
     ): Promise<() => Promise<void>> {
       if (diagnosticsListener !== undefined) {
-        throw new Error("Control Plane client is already subscribed to diagnostics");
+        throw new Error(
+          "Control Plane client is already subscribed to diagnostics",
+        );
       }
       diagnosticsListener = next;
       let response: ServerMessage;

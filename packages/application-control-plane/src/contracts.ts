@@ -24,19 +24,13 @@ export interface ApplicationOwnership {
 
 export interface ApplicationStatus {
   readonly modelDataPlane:
-    | "stopped"
-    | "starting"
-    | "running"
-    | "stopping"
-    | "failed";
+    "stopped" | "starting" | "running" | "stopping" | "failed";
   readonly provider: "configured" | "unconfigured";
   readonly dataPlane?: DataPlaneStatus;
 }
 
 export type DataPlaneFailureCode =
-  | "port_in_use"
-  | "start_failed"
-  | "stop_failed";
+  "port_in_use" | "start_failed" | "stop_failed";
 
 export interface DataPlaneFailure {
   readonly code: DataPlaneFailureCode;
@@ -59,6 +53,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
   readonly models?: ModelsProjection;
+  /** Optional sanitized auth.json credential projection (Ticket 12). */
+  readonly credentials?: CredentialProjection;
   /** Optional sanitized catalog lifecycle projection (Ticket 11). */
   readonly catalog?: CatalogStatusProjection;
 }
@@ -152,10 +148,7 @@ export type EffectiveProviderLayer = "builtin" | "user" | "overlaid";
  *  layer: a model that is also overridden is labeled `overridden` and its
  *  `overriddenFields` names the fields the modelOverrides contributed. */
 export type EffectiveModelLayer =
-  | "builtin"
-  | "user"
-  | "upserted"
-  | "overridden";
+  "builtin" | "user" | "upserted" | "overridden";
 
 /** Public cost facts of an effective model (pinned shape). */
 export interface EffectiveModelCost {
@@ -226,24 +219,14 @@ export interface EffectiveCatalogProjection {
  * facts and carries a value-safe error).
  */
 export type CatalogProviderState =
-  | "known"
-  | "cached"
-  | "refreshing"
-  | "succeeded"
-  | "failed";
+  "known" | "cached" | "refreshing" | "succeeded" | "failed";
 
 /** Auth-based model usability in the active catalog snapshot. */
-export type CatalogModelAvailability =
-  | "available"
-  | "unavailable"
-  | "unknown";
+export type CatalogModelAvailability = "available" | "unavailable" | "unknown";
 
 /** What started a refresh run. */
 export type CatalogRefreshTrigger =
-  | "startup"
-  | "login"
-  | "page_open"
-  | "manual";
+  "startup" | "login" | "page_open" | "manual";
 
 /** One model in the active catalog snapshot. `dynamic` marks facts that
  *  came from the Provider's dynamic catalog overlay (cache or network). */
@@ -362,10 +345,7 @@ export type ModelsCommand =
     };
 
 export type ModelsCommandOutcome =
-  | "ok"
-  | "conflict"
-  | "invalid"
-  | "storage_failure";
+  "ok" | "conflict" | "invalid" | "storage_failure";
 
 export interface ModelsCommandResult {
   readonly outcome: ModelsCommandOutcome;
@@ -374,6 +354,148 @@ export interface ModelsCommandResult {
   /** Value-free failure detail: the rejected proposal's validation error
    *  (`invalid`) or the sanitized storage fault (`storage_failure`). */
   readonly error?: ModelsFileError;
+}
+
+/**
+ * Ticket 12 — API-key credential management and effective authentication
+ * status. One Provider has one stored auth.json slot; every mutation runs
+ * through the single serialized Credential Authority with a revision
+ * compare-and-swap, so UI and CLI can never lose a concurrent update.
+ */
+
+/** Effective auth source precedence (pinned Pi): stored credential, then
+ *  models.json configured key (literal/`$ENV`/`!command`), then ambient
+ *  environment. `none` means nothing resolves. */
+export type CredentialEffectiveSource =
+  "stored" | "environment" | "models.json" | "command" | "none";
+
+/**
+ * Bounded structural authentication facts for one Provider. Credential
+ * values, environment variable names, command text, headers and raw
+ * credential objects never appear in this projection.
+ */
+export interface ProviderAuthStatus {
+  readonly providerId: string;
+  /** The Provider's one stored auth.json slot is occupied. */
+  readonly stored: boolean;
+  readonly storedType?: "api_key" | "oauth";
+  /** An ambient (builtin) source resolves for this Provider. */
+  readonly environment: boolean;
+  /** models.json declares an apiKey for this Provider. */
+  readonly modelsJson: boolean;
+  /** The models.json apiKey is a `!command` source. */
+  readonly commandDerived: boolean;
+  /** A stored OAuth credential has expired. */
+  readonly expired: boolean;
+  /** No effective auth resolves for this Provider. */
+  readonly unavailable: boolean;
+  readonly effectiveSource: CredentialEffectiveSource;
+}
+
+export type CredentialFileErrorKind = "parse" | "invalid" | "load";
+
+/** Value-free auth.json file error (Ticket 12): syntax/shape locations and
+ *  structural descriptions only, never file content or credential values. */
+export interface CredentialFileError {
+  readonly kind: CredentialFileErrorKind;
+  readonly message: string;
+}
+
+/**
+ * Sanitized auth.json projection merged into status snapshots: file facts
+ * plus bounded per-Provider authentication status. No secret values.
+ */
+export interface CredentialProjection {
+  readonly revision: number;
+  readonly path: string;
+  readonly present: boolean;
+  readonly valid: boolean;
+  readonly error?: CredentialFileError;
+  readonly providers: readonly ProviderAuthStatus[];
+}
+
+/** One importable auth.json entry in a preview result (metadata only). */
+export interface CredentialImportEntryPreview {
+  readonly providerId: string;
+  readonly type: "api_key" | "oauth";
+  readonly wouldOverwrite: boolean;
+}
+
+/** One Provider selection of an import apply. */
+export interface CredentialImportSelection {
+  readonly providerId: string;
+  readonly overwrite: boolean;
+}
+
+/** Per-Provider outcome of an import apply. */
+export interface CredentialImportApplyEntryResult {
+  readonly providerId: string;
+  readonly outcome:
+    "applied" | "unchanged" | "skipped" | "conflict" | "overwrite_required";
+}
+
+/**
+ * Versioned Credential commands (Ticket 12): UI and CLI manage the
+ * Pi-compatible auth.json through these commands. Every mutation carries
+ * the expected revision from a prior query/preview so a stale UI/CLI can
+ * never overwrite a newer credential. `login` stores the value verbatim
+ * (literal secret, `$ENV` reference or `!command` source; resolution is the
+ * pinned Ticket 10 request-path behavior). `import_preview` validates a
+ * Pi-compatible auth.json payload and returns the Provider-by-Provider
+ * plan; `import_apply` writes only the selected Providers with the
+ * previewed overwrite confirmations.
+ */
+export type CredentialCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "login";
+      readonly providerId: string;
+      readonly expectedRevision: number;
+      readonly value: string;
+      /** Explicit confirmation that an occupied slot may be replaced. */
+      readonly overwrite: boolean;
+    }
+  | {
+      readonly command: "logout";
+      readonly providerId: string;
+      readonly expectedRevision: number;
+    }
+  | {
+      readonly command: "import_preview";
+      readonly expectedRevision: number;
+      readonly content: string;
+    }
+  | {
+      readonly command: "import_apply";
+      readonly expectedRevision: number;
+      readonly importId: string;
+      readonly selections: readonly CredentialImportSelection[];
+    };
+
+export type CredentialCommandOutcome =
+  | "ok"
+  | "conflict"
+  | "invalid"
+  | "unknown_provider"
+  | "overwrite_required"
+  | "storage_failure"
+  | "unavailable";
+
+export interface CredentialCommandResult {
+  readonly outcome: CredentialCommandOutcome;
+  /** The authoritative auth.json revision after the attempt. */
+  readonly revision: number;
+  /** Authoritative sanitized auth.json projection after the attempt. */
+  readonly state: CredentialProjection;
+  /** Value-free failure detail (`conflict`, `invalid`, `storage_failure`). */
+  readonly error?: string;
+  /** Present on successful login/logout: whether the file changed. */
+  readonly changed?: boolean;
+  /** Present on a successful import_preview: the apply session id. */
+  readonly importId?: string;
+  readonly previewEntries?: readonly CredentialImportEntryPreview[];
+  /** Present on import_apply: per-selection results. */
+  readonly entries?: readonly CredentialImportApplyEntryResult[];
 }
 
 export type SettingsCommand =
@@ -468,11 +590,7 @@ export type ClientTokenCommandOutcome =
 /** Value-free backend canonicalization failure taxonomy (never a raw
  *  input path). */
 export type ClientTokenDirectoryRejection =
-  | "not_found"
-  | "not_a_directory"
-  | "inaccessible"
-  | "race"
-  | "invalid";
+  "not_found" | "not_a_directory" | "inaccessible" | "race" | "invalid";
 
 /** Masked scope metadata; the mask marker guarantees the wire never carries
  *  a raw token in list/mutation results. */
@@ -526,8 +644,8 @@ export interface RequestIdentitiesQueryResult {
   readonly records: readonly RequestIdentityRecord[];
 }
 
-export type RequestIdentitiesQueryHandler = (
-) => Promise<RequestIdentitiesQueryResult>;
+export type RequestIdentitiesQueryHandler =
+  () => Promise<RequestIdentitiesQueryResult>;
 
 /** Public renderer projection: the client identity is always a displayable
  *  string and a missing one renders as `-`. The effective session identity
@@ -607,10 +725,7 @@ export interface RuntimeCommandConflict {
 }
 
 export type RuntimeCommandOutcome =
-  | "completed"
-  | "unchanged"
-  | "failed"
-  | "conflict";
+  "completed" | "unchanged" | "failed" | "conflict";
 
 export interface RuntimeCommandExecution {
   readonly outcome: RuntimeCommandOutcome;
@@ -634,9 +749,7 @@ export type RuntimeCommandHandler = (
 /** Handles Settings commands and returns a closed outcome plus the settings
  *  projection. The host owns the snapshot merge and the settings_changed
  *  event; it publishes only when an outcome actually changes state. */
-export type SettingsCommandHandler = (
-  command: SettingsCommand,
-) => Promise<{
+export type SettingsCommandHandler = (command: SettingsCommand) => Promise<{
   readonly outcome: SettingsCommandOutcome;
   readonly error?: string;
   readonly confirmation?: LanConfirmation;
@@ -649,6 +762,11 @@ export type SettingsCommandHandler = (
 export type ModelsCommandHandler = (
   command: ModelsCommand,
 ) => Promise<ModelsCommandResult>;
+
+/** Handles versioned Credential commands against the live authority. */
+export type CredentialCommandHandler = (
+  command: CredentialCommand,
+) => Promise<CredentialCommandResult>;
 
 /** Live settings projection merged into every published status snapshot. */
 export interface SettingsProjection {
@@ -674,7 +792,7 @@ export type ApplicationCommandOutcome =
   | "unsupported";
 
 export type ApplicationCommandConflictCode =
-  | "quit_requires_explicit_confirmation";
+  "quit_requires_explicit_confirmation";
 
 export interface ApplicationCommandConflict {
   readonly code: ApplicationCommandConflictCode;
@@ -716,7 +834,9 @@ export interface ControlPlaneClient {
   hello(version: number): Promise<HelloResult>;
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
-  executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
+  executeSettingsCommand(
+    command: SettingsCommand,
+  ): Promise<SettingsCommandResult>;
   executeApplicationCommand(
     command: ApplicationCommand,
   ): Promise<ApplicationCommandResult>;
@@ -724,6 +844,11 @@ export interface ControlPlaneClient {
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
+
+  executeCredentialCommand(
+    command: CredentialCommand,
+  ): Promise<CredentialCommandResult>;
+
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;

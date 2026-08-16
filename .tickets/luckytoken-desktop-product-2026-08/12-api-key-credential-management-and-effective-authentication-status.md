@@ -8,7 +8,7 @@
 
 **Blocked by:** 07 — Permanent Runtime Diagnostics and universal credential redaction; 10 — Pinned Pi modelOverrides, headers, and authentication compatibility.
 
-**Status:** ready-for-agent
+**Status:** accepted-pending-wave-validation
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm Credential Management commands/queries and control
 
 ## Acceptance criteria
 
-- [ ] API-key login supports a literal secret, environment-variable reference, and `!command` source with pinned Pi resolution behavior.
-- [ ] Each Provider has at most one active stored credential; a confirmed new login replaces the previous Provider entry atomically.
-- [ ] Logout reports “Stored credential removed” and removes only the stored auth.json value.
-- [ ] Authentication status separately reports stored, environment, models.json, command-derived, expired, unavailable, and effective source facts without returning secret values.
-- [ ] A Pi-compatible auth.json import is validated and merged Provider by Provider, asking before each overwrite and preserving unselected existing credentials.
-- [ ] UI and CLI credential mutations are serialized under the same authority and cannot lose concurrent updates.
-- [ ] auth.json retains pinned Pi-compatible format, local restrictive permissions, and explicit malformed-file errors.
-- [ ] Credential values never enter events, error messages, Diagnostics, public model catalogs, or masked status projections.
+- [x] API-key login supports a literal secret, environment-variable reference, and `!command` source with pinned Pi resolution behavior.
+- [x] Each Provider has at most one active stored credential; a confirmed new login replaces the previous Provider entry atomically.
+- [x] Logout reports “Stored credential removed” and removes only the stored auth.json value.
+- [x] Authentication status separately reports stored, environment, models.json, command-derived, expired, unavailable, and effective source facts without returning secret values.
+- [x] A Pi-compatible auth.json import is validated and merged Provider by Provider, asking before each overwrite and preserving unselected existing credentials.
+- [x] UI and CLI credential mutations are serialized under the same authority and cannot lose concurrent updates.
+- [x] auth.json retains pinned Pi-compatible format, local restrictive permissions, and explicit malformed-file errors.
+- [x] Credential values never enter events, error messages, Diagnostics, public model catalogs, or masked status projections.

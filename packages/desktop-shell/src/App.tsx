@@ -21,6 +21,7 @@ import type { ControlPlaneState } from "./control-plane-projection.js";
 import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
 
 import { ModelsFileWorkspace } from "./models-editors.js";
+import { CredentialsPage } from "./credentials-page.js";
 
 import {
   productPages,
@@ -193,14 +194,21 @@ export function App({ shell, retryConnection }: AppProps) {
               <p>{snapshot.connection.detail}</p>
               <small>{snapshot.connection.action}</small>
             </div>
-            <button disabled={retrying} onClick={() => void retry()} type="button">
+            <button
+              disabled={retrying}
+              onClick={() => void retry()}
+              type="button"
+            >
               {retrying ? "Reconnecting…" : "Retry"}
             </button>
           </section>
         ) : null}
         {snapshot.activePage === "dashboard" &&
         snapshot.connection.kind === "connected" ? (
-          <section className="runtime-controls" aria-label="Model gateway controls">
+          <section
+            className="runtime-controls"
+            aria-label="Model gateway controls"
+          >
             <div>
               <strong>Model gateway</strong>
               <p>
@@ -318,6 +326,13 @@ export function App({ shell, retryConnection }: AppProps) {
             shell={shell}
           />
         ) : null}
+        {snapshot.activePage === "credentials" &&
+        snapshot.connection.kind === "connected" ? (
+          <CredentialsPage
+            credentials={snapshot.connection.credentialsProjection}
+            shell={shell}
+          />
+        ) : null}
         {snapshot.activePage === "requests" &&
         snapshot.connection.kind === "connected" ? (
           <RequestsPage shell={shell} />
@@ -329,9 +344,7 @@ export function App({ shell, retryConnection }: AppProps) {
             busy={modelsCommand !== undefined}
             catalogBusy={catalogCommand !== undefined}
             connection={snapshot.connection}
-            mode={
-              snapshot.activePage === "providers" ? "providers" : "models"
-            }
+            mode={snapshot.activePage === "providers" ? "providers" : "models"}
             onCatalogCommand={executeCatalogCommand}
             onCommand={executeModelsCommand}
             {...(catalogResult === undefined ? {} : { catalogResult })}
@@ -397,7 +410,10 @@ function SettingsDeveloperLab({
   const port = settings?.["server.port"];
   const bindHost = settings?.["server.bindHost"];
   return (
-    <section className="settings-developer-lab" aria-label="Settings and Developer Lab">
+    <section
+      className="settings-developer-lab"
+      aria-label="Settings and Developer Lab"
+    >
       <div className="settings-group">
         <strong>Client Protocols</strong>
         {anthropic === undefined && responses === undefined ? (
@@ -512,7 +528,10 @@ function ModelsPage({
   readonly catalogBusy?: boolean;
   readonly catalogResult?: CatalogCommandResult;
   readonly catalogStatus?: CatalogStatusProjection;
-  readonly connection: Extract<ControlPlaneState, { readonly kind: "connected" }>;
+  readonly connection: Extract<
+    ControlPlaneState,
+    { readonly kind: "connected" }
+  >;
   readonly mode: "providers" | "models";
   readonly onCatalogCommand: (command: CatalogCommand) => void;
   readonly onCommand: (command: ModelsCommand) => void;
@@ -663,9 +682,7 @@ function ClientTokensPage({
   const [revealed, setRevealed] = useState<Readonly<Record<string, string>>>(
     {},
   );
-  const [copied, setCopied] = useState<Readonly<Record<string, boolean>>>(
-    {},
-  );
+  const [copied, setCopied] = useState<Readonly<Record<string, boolean>>>({});
   const [busy, setBusy] = useState<string | undefined>();
   const [confirming, setConfirming] = useState<
     Readonly<Record<string, "rotate" | "remove" | undefined>>
@@ -719,10 +736,7 @@ function ClientTokensPage({
     for (const protocol of TOKEN_PROTOCOLS) void refresh(protocol.id);
   }, [refresh]);
 
-  const run = async (
-    protocolId: string,
-    operation: () => Promise<void>,
-  ) => {
+  const run = async (protocolId: string, operation: () => Promise<void>) => {
     setBusy(protocolId);
     setErrors((previous) => ({ ...previous, [protocolId]: "" }));
     setConfirming((previous) => ({ ...previous, [protocolId]: undefined }));
@@ -781,9 +795,7 @@ function ClientTokensPage({
       if (result.outcome === "conflict") {
         // A concurrent UI/CLI mutation won: refresh instead of overwriting.
         await refresh(protocolId);
-        throw new Error(
-          "The token changed elsewhere; the list was refreshed.",
-        );
+        throw new Error("The token changed elsewhere; the list was refreshed.");
       }
       if (result.outcome !== "ok") {
         throw new Error(result.error ?? "Client Token operation failed");
@@ -813,7 +825,10 @@ function ClientTokensPage({
         await refresh(protocolId);
         throw new Error("This directory already has a token.");
       }
-      if (result.outcome === "invalid_directory" && result.reason !== undefined) {
+      if (
+        result.outcome === "invalid_directory" &&
+        result.reason !== undefined
+      ) {
         throw new Error(DIRECTORY_REJECTION_TEXT[result.reason]);
       }
       if (result.outcome === "conflict") {
@@ -848,8 +863,8 @@ function ClientTokensPage({
               <p>Not configured in this backend.</p>
             ) : scopeRows.length === 0 ? (
               <p className="client-token-warning">
-                No active client token — all model requests return 401 until
-                a token is created.
+                No active client token — all model requests return 401 until a
+                token is created.
               </p>
             ) : (
               <div className="client-token-scopes">
@@ -862,9 +877,7 @@ function ClientTokensPage({
                       : (scope.projectDir as string);
                   return (
                     <div className="client-token-scope" key={key}>
-                      <code title={label}>
-                        {secret ?? scope.maskedToken}
-                      </code>
+                      <code title={label}>{secret ?? scope.maskedToken}</code>
                       {scope.type === "project" ? (
                         <small className="client-token-dir">{label}</small>
                       ) : null}
@@ -893,8 +906,8 @@ function ClientTokensPage({
                               ? void mutate(protocol.id, {
                                   command: "rotate",
                                   protocolId: protocol.id,
-                                  expectedRevision:
-                                    (view as ProtocolTokenView).revision,
+                                  expectedRevision: (view as ProtocolTokenView)
+                                    .revision,
                                   scope: scopeRef(scope),
                                 })
                               : setConfirming((previous) => ({
@@ -916,8 +929,8 @@ function ClientTokensPage({
                               ? void mutate(protocol.id, {
                                   command: "remove",
                                   protocolId: protocol.id,
-                                  expectedRevision:
-                                    (view as ProtocolTokenView).revision,
+                                  expectedRevision: (view as ProtocolTokenView)
+                                    .revision,
                                   scope: scopeRef(scope),
                                 })
                               : setConfirming((previous) => ({
@@ -982,17 +995,22 @@ function RequestsPage({ shell }: { readonly shell: WindowsShellHost }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  const formatTime = (time: number) =>
-    new Date(time).toLocaleTimeString();
+  const formatTime = (time: number) => new Date(time).toLocaleTimeString();
   return (
     <section className="requests-page" aria-label="Requests">
       <div className="requests-toolbar">
         <strong>Recent authorized requests</strong>
-        <button disabled={rows.length === 0} onClick={() => void refresh()} type="button">
+        <button
+          disabled={rows.length === 0}
+          onClick={() => void refresh()}
+          type="button"
+        >
           Refresh
         </button>
       </div>
-      {error === undefined ? null : <p className="client-token-error">{error}</p>}
+      {error === undefined ? null : (
+        <p className="client-token-error">{error}</p>
+      )}
       {rows.length === 0 ? (
         <p>No requests yet. Authorized model requests appear here.</p>
       ) : (

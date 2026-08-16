@@ -23,10 +23,30 @@ describe("Windows desktop shell public lifecycle seam", () => {
     const shell = createWindowsShellHost({
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
+      }),
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
@@ -74,26 +94,51 @@ describe("Windows desktop shell public lifecycle seam", () => {
       sequence: 1,
       modelDataPlane: "stopped",
       provider: "unconfigured",
-      modelsProjection: { revision: 1, path: "C:\\models.json", present: true, valid: true },
+      modelsProjection: {
+        revision: 1,
+        path: "C:\\models.json",
+        present: true,
+        valid: true,
+      },
       modelsResult,
     };
     const shell = createWindowsShellHost({
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
       executeRuntimeCommand: async () => connected,
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
+      }),
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async (command) => {
         commands.push(command);
         return connected;
       },
-            getAutoStartStatus: async () => ({ enabled: false }),
+      getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
-subscribeControlPlane: () => () => undefined,
+      subscribeControlPlane: () => () => undefined,
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
@@ -128,16 +173,36 @@ subscribeControlPlane: () => () => undefined,
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -170,16 +235,36 @@ subscribeControlPlane: () => () => undefined,
       },
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -215,16 +300,36 @@ subscribeControlPlane: () => () => undefined,
       },
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -268,16 +373,36 @@ subscribeControlPlane: () => () => undefined,
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -319,16 +444,36 @@ subscribeControlPlane: () => () => undefined,
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -349,6 +494,7 @@ subscribeControlPlane: () => () => undefined,
       { id: "analytics", label: "Analytics" },
       { id: "providers", label: "Providers" },
       { id: "models-aliases", label: "Models & Aliases" },
+      { id: "credentials", label: "Credentials" },
       { id: "client-tokens", label: "Client Tokens" },
       { id: "diagnostics", label: "Diagnostics" },
       { id: "settings-developer-lab", label: "Settings / Developer Lab" },
@@ -378,16 +524,36 @@ subscribeControlPlane: () => () => undefined,
       connectControlPlane: async () => unavailable(1),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
         },
-      executeClientTokenCommand: async () => ({ outcome: "ok", revision: 1, scopes: [] }),
+      }),
+      executeClientTokenCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        scopes: [],
+      }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
-        },
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
       },
@@ -424,10 +590,11 @@ subscribeControlPlane: () => () => undefined,
       activePage: "dashboard",
       connection: { code: "transport_lost" },
     });
-    expect(observed.map((state) => (state.kind === "error" ? state.code : "connected"))).toEqual([
-      "descriptor_missing",
-      "transport_lost",
-    ]);
+    expect(
+      observed.map((state) =>
+        state.kind === "error" ? state.code : "connected",
+      ),
+    ).toEqual(["descriptor_missing", "transport_lost"]);
   });
 
   it("passes Windows login auto-start queries and changes to the runtime", async () => {
@@ -459,6 +626,9 @@ subscribeControlPlane: () => () => undefined,
       executeModelsCommand: async () => {
         throw new Error("unused models command");
       },
+      executeCredentialCommand: async () => {
+        throw new Error("unused credential command");
+      },
       executeClientTokenCommand: async () => {
         throw new Error("unused client token command");
       },
@@ -466,11 +636,16 @@ subscribeControlPlane: () => () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
       subscribeControlPlane: () => () => undefined,
-      disconnectControlPlane: async () => undefined,      executeCatalogCommand: async () => ({
+      disconnectControlPlane: async () => undefined,
+      executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
-
     });
     await shell.launch();
 
@@ -485,7 +660,6 @@ subscribeControlPlane: () => () => undefined,
     await shell.dispose();
   });
 });
-
 
 describe("WindowsShellHost client token commands", () => {
   it("delegates client token commands and Dashboard warning queries to the runtime", async () => {
@@ -517,6 +691,20 @@ describe("WindowsShellHost client token commands", () => {
           refreshErrors: [],
         },
       }),
+      executeCredentialCommand: async (command) => {
+        tokenResults.push(`credential:${command.command}`);
+        return {
+          outcome: "ok",
+          revision: 1,
+          state: {
+            revision: 1,
+            path: "C:\\auth.json",
+            present: true,
+            valid: true,
+            providers: [],
+          },
+        };
+      },
       queryDiagnosticsWarnings: async () => [
         {
           id: 1,
@@ -561,12 +749,21 @@ describe("WindowsShellHost client token commands", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.text).toBe("sanitized warning");
 
+    // Ticket 12: credential commands delegate to the runtime too.
+    await expect(
+      shell.executeCredentialCommand({ command: "query" }),
+    ).resolves.toMatchObject({ outcome: "ok" });
+    expect(tokenResults).toEqual(["list", "reveal", "credential:query"]);
+
     await shell.dispose();
   });
 
   it("rejects client token commands while the shell is closed", async () => {
     const shell = createWindowsShellHost({
       connectControlPlane: async () => {
+        throw new Error("unused");
+      },
+      executeCredentialCommand: async () => {
         throw new Error("unused");
       },
       executeClientTokenCommand: async () => {
@@ -588,7 +785,12 @@ describe("WindowsShellHost client token commands", () => {
       disconnectControlPlane: async () => undefined,
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
@@ -620,6 +822,17 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       executeClientTokenCommand: async () => {
         throw new Error("unused");
       },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -633,7 +846,12 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       },
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       executeModelsCommand: async () => {
         throw new Error("unused");
@@ -650,7 +868,9 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
     const shell = createWindowsShellHost(runtime);
     await shell.launch();
     await expect(shell.pickDirectory()).resolves.toBe("C:\\picked\\directory");
-    await expect(shell.getRequestIdentities()).resolves.toEqual({ records: [] });
+    await expect(shell.getRequestIdentities()).resolves.toEqual({
+      records: [],
+    });
     expect(calls).toEqual(["pick", "identities"]);
     await shell.dispose();
   });
@@ -663,6 +883,17 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       executeClientTokenCommand: async () => {
         throw new Error("unused");
       },
+      executeCredentialCommand: async () => ({
+        outcome: "ok",
+        revision: 1,
+        state: {
+          revision: 1,
+          path: "C:\\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -670,7 +901,12 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       getRequestIdentities: async () => ({ records: [] }),
       executeCatalogCommand: async () => ({
         outcome: "ok",
-        snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
+        snapshot: {
+          version: 1,
+          modelsJsonValid: true,
+          providers: [],
+          refreshErrors: [],
+        },
       }),
       executeModelsCommand: async () => {
         throw new Error("unused");

@@ -1,13 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -104,16 +98,18 @@ describe("LuckyToken CLI ownership lifecycle", () => {
       controlPlanes.splice(0).map((controlPlane) => controlPlane.close()),
     );
     await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
+      directories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
     );
   });
 
-  async function writeServeState(options: {
-    readonly settings?: Readonly<Record<string, unknown>>;
-    readonly port?: number;
-  } = {}) {
+  async function writeServeState(
+    options: {
+      readonly settings?: Readonly<Record<string, unknown>>;
+      readonly port?: number;
+    } = {},
+  ) {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-owner-cli-"));
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
@@ -122,7 +118,10 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        server: { host: "127.0.0.1", port: options.port ?? (await reserveFreePort()) },
+        server: {
+          host: "127.0.0.1",
+          port: options.port ?? (await reserveFreePort()),
+        },
         clientProtocols: {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",
@@ -158,21 +157,26 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     child?: ChildProcessWithoutNullStreams,
   ): Promise<unknown> {
     await expect
-      .poll(async () => {
-        // Under full-suite load, parallel tsx child boots can exceed a
-        // short budget; fail fast if the child exited instead of waiting.
-        if (child !== undefined && child.exitCode !== null) {
-          throw new Error(`serve exited before publishing its descriptor`);
-        }
-        try {
-          const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-            pipeName?: unknown;
-          };
-          return typeof parsed.pipeName === "string";
-        } catch {
-          return false;
-        }
-      }, { timeout: 30_000, interval: 50 })
+      .poll(
+        async () => {
+          // Under full-suite load, parallel tsx child boots can exceed a
+          // short budget; fail fast if the child exited instead of waiting.
+          if (child !== undefined && child.exitCode !== null) {
+            throw new Error(`serve exited before publishing its descriptor`);
+          }
+          try {
+            const parsed = JSON.parse(
+              await readFile(descriptorPath, "utf8"),
+            ) as {
+              pipeName?: unknown;
+            };
+            return typeof parsed.pipeName === "string";
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 30_000, interval: 50 },
+      )
       .toBe(true);
     return JSON.parse(await readFile(descriptorPath, "utf8"));
   }
@@ -300,7 +304,12 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
   it("an acknowledged quit drains the active set and exits the owner process", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli(["--config", configPath, "--descriptor", descriptorPath]);
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -333,7 +342,12 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     const { configPath, descriptorPath } = await writeServeState({
       settings: { "application.quitDrainTimeoutMs": 300 },
     });
-    const serve = startCli(["--config", configPath, "--descriptor", descriptorPath]);
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -365,7 +379,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
         authorization: "Bearer lt_any",
       },
     });
-    stalled.write('{"model":"','utf8');
+    stalled.write('{"model":"', "utf8");
     const aborted = new Promise<void>((resolve) => {
       stalled.once("error", () => resolve());
       stalled.once("close", () => resolve());
@@ -449,11 +463,7 @@ ${exit.stderr}`).toContain("timed out");
     });
     controlPlanes.push(host);
     const descriptorPath = join(directory, "control-plane.json");
-    await writeFile(
-      descriptorPath,
-      JSON.stringify(host.endpoint),
-      "utf8",
-    );
+    await writeFile(descriptorPath, JSON.stringify(host.endpoint), "utf8");
 
     const run = async (action: "status" | "enable" | "disable") => {
       const child = startCli([
@@ -496,7 +506,12 @@ ${exit.stderr}`).toContain("timed out");
 
   it("reads the effective Windows login auto-start status from the real serve", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli(["--config", configPath, "--descriptor", descriptorPath]);
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -520,9 +535,7 @@ ${exit.stderr}`).toContain("timed out");
     expect(parsed.command).toBe("auto_start");
     expect(parsed.outcome).toBe("ok");
     expect(typeof parsed.autoStart.enabled).toBe("boolean");
-    expect(`${result.stdout}\n${result.stderr}`).not.toContain(
-      "control-plane",
-    );
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("control-plane");
 
     // Windows cannot deliver SIGTERM to another process; end the owner
     // through the acknowledged application quit like an attached client.

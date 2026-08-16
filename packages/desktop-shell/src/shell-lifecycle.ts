@@ -4,6 +4,8 @@ import type {
   CatalogCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
+  CredentialCommand,
+  CredentialCommandResult,
   ModelsCommand,
   RequestIdentitiesQueryResult,
   RuntimeCommand,
@@ -17,6 +19,7 @@ export const productPages = Object.freeze([
   { id: "analytics", label: "Analytics" },
   { id: "providers", label: "Providers" },
   { id: "models-aliases", label: "Models & Aliases" },
+  { id: "credentials", label: "Credentials" },
   { id: "client-tokens", label: "Client Tokens" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "settings-developer-lab", label: "Settings / Developer Lab" },
@@ -43,6 +46,9 @@ export interface DesktopShellRuntime {
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
+  executeCredentialCommand(
+    command: CredentialCommand,
+  ): Promise<CredentialCommandResult>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   /** Native directory picker: the picked absolute path or undefined on
@@ -66,8 +72,7 @@ export interface ClosedDesktopShellSnapshot {
 }
 
 export type DesktopShellSnapshot =
-  | OpenDesktopShellSnapshot
-  | ClosedDesktopShellSnapshot;
+  OpenDesktopShellSnapshot | ClosedDesktopShellSnapshot;
 
 export interface WindowsShellHost {
   launch(): Promise<DesktopShellSnapshot>;
@@ -75,7 +80,9 @@ export interface WindowsShellHost {
   snapshot(): DesktopShellSnapshot;
   subscribe(listener: (snapshot: DesktopShellSnapshot) => void): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<DesktopShellSnapshot>;
-  executeSettingsCommand(command: SettingsCommand): Promise<DesktopShellSnapshot>;
+  executeSettingsCommand(
+    command: SettingsCommand,
+  ): Promise<DesktopShellSnapshot>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
@@ -83,6 +90,11 @@ export interface WindowsShellHost {
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
+
+  executeCredentialCommand(
+    command: CredentialCommand,
+  ): Promise<CredentialCommandResult>;
+
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   pickDirectory(): Promise<string | undefined>;
@@ -217,6 +229,12 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.executeClientTokenCommand(command);
+    },
+    executeCredentialCommand(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeCredentialCommand(command);
     },
     executeCatalogCommand(command) {
       if (current.lifecycle !== "open") {

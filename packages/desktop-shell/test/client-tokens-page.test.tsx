@@ -61,7 +61,9 @@ function connectedState(): ControlPlaneState {
 
 function makeShell(overrides: {
   readonly pick?: () => Promise<string | undefined>;
-  readonly onCommand?: (command: ClientTokenCommand) => Promise<ClientTokenCommandResult>;
+  readonly onCommand?: (
+    command: ClientTokenCommand,
+  ) => Promise<ClientTokenCommandResult>;
   readonly listScopes?: () => NonNullable<ClientTokenCommandResult["scopes"]>;
 }): WindowsShellHost {
   const listScopes =
@@ -69,7 +71,9 @@ function makeShell(overrides: {
     (() => [{ type: "global", maskedToken: "canary-g…lob" }]);
   const onCommand =
     overrides.onCommand ??
-    (async (_command: ClientTokenCommand): Promise<ClientTokenCommandResult> => ({
+    (async (
+      _command: ClientTokenCommand,
+    ): Promise<ClientTokenCommandResult> => ({
       outcome: "ok",
       revision: 1,
       scopes: listScopes(),
@@ -95,6 +99,17 @@ function makeShell(overrides: {
     executeRuntimeCommand: async () => snapshot,
     executeSettingsCommand: async () => snapshot,
     executeClientTokenCommand: onCommand,
+    executeCredentialCommand: async () => ({
+      outcome: "ok",
+      revision: 1,
+      state: {
+        revision: 1,
+        path: "C:\\auth.json",
+        present: true,
+        valid: true,
+        providers: [],
+      },
+    }),
     queryDiagnosticsWarnings: async () => [] as readonly DiagnosticsWarning[],
     getAutoStartStatus: async () => ({ enabled: false }),
     setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -125,7 +140,9 @@ describe("Client Tokens page native directory picker flows", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root.render(<App shell={shell} retryConnection={async () => connectedState()} />);
+      root.render(
+        <App shell={shell} retryConnection={async () => connectedState()} />,
+      );
     });
   }
 
@@ -136,7 +153,8 @@ describe("Client Tokens page native directory picker flows", () => {
     const add = buttons.find((button) =>
       button.textContent?.includes("Add directory token"),
     );
-    if (add === undefined) throw new Error("Add directory token button not found");
+    if (add === undefined)
+      throw new Error("Add directory token button not found");
     return add;
   }
 
@@ -146,7 +164,11 @@ describe("Client Tokens page native directory picker flows", () => {
       pick: async () => undefined,
       onCommand: async (command) => {
         commands.push(command);
-        return { outcome: "ok", revision: 1, scopes: [{ type: "global", maskedToken: "canary-g…lob" }] };
+        return {
+          outcome: "ok",
+          revision: 1,
+          scopes: [{ type: "global", maskedToken: "canary-g…lob" }],
+        };
       },
     });
     render(shell);
@@ -157,7 +179,9 @@ describe("Client Tokens page native directory picker flows", () => {
     expect(commands.filter((command) => command.command !== "list")).toEqual(
       [],
     );
-    expect(container.textContent).not.toContain("This directory already has a token");
+    expect(container.textContent).not.toContain(
+      "This directory already has a token",
+    );
   });
 
   it("creates one token for the picked directory and lists the canonical scope", async () => {
@@ -172,7 +196,11 @@ describe("Client Tokens page native directory picker flows", () => {
         if (command.command === "create") {
           projectScopes = [
             { type: "global", maskedToken: "canary-g…lob" },
-            { type: "project", projectDir: "C:\\canonical\\project", maskedToken: "canary-p…oje" },
+            {
+              type: "project",
+              projectDir: "C:\\canonical\\project",
+              maskedToken: "canary-p…oje",
+            },
           ];
           return { outcome: "ok", revision: 2, scopes: projectScopes };
         }
@@ -227,7 +255,9 @@ describe("Client Tokens page native directory picker flows", () => {
     );
     // The raw picked path never reaches the renderer error surface.
     expect(container.textContent).not.toContain("vanished");
-    expect(container.textContent).not.toContain("Selected directory is not usable");
+    expect(container.textContent).not.toContain(
+      "Selected directory is not usable",
+    );
   });
 
   it("reports an existing scope instead of creating a duplicate token", async () => {
@@ -248,7 +278,11 @@ describe("Client Tokens page native directory picker flows", () => {
           revision: 1,
           scopes: [
             { type: "global", maskedToken: "canary-g…lob" },
-            { type: "project", projectDir: "C:\\canonical\\project", maskedToken: "canary-p…oje" },
+            {
+              type: "project",
+              projectDir: "C:\\canonical\\project",
+              maskedToken: "canary-p…oje",
+            },
           ],
         };
       },

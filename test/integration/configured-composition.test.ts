@@ -37,13 +37,13 @@ describe("configured serving composition", () => {
   const compositions: Array<{ diagnosticsStore: { close(): void } }> = [];
 
   afterEach(async () => {
-    compositions.splice(0).forEach((composition) =>
-      composition.diagnosticsStore.close(),
-    );
+    compositions
+      .splice(0)
+      .forEach((composition) => composition.diagnosticsStore.close());
     await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
+      directories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
     );
   });
 
@@ -104,10 +104,10 @@ describe("configured serving composition", () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       if (String(input).includes("/provider/v1/models")) {
-        return new Response(
-          JSON.stringify({ object: "list", data: [] }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       upstreamRequests.push(new Request(input, init));
       return commandCodeText("configured through Pi");
@@ -136,6 +136,7 @@ describe("configured serving composition", () => {
       "catalog",
       "certification",
       "clientTokenAuthorities",
+      "credentialAuthority",
       "diagnosticsStore",
       "requestIdentities",
       "runtime",
@@ -149,7 +150,10 @@ describe("configured serving composition", () => {
     expect(composition.userConfiguredProviderIds).toEqual([
       "commandcode-private",
     ]);
-    expect(Object.keys(composition.runtime).sort()).toEqual(["handle", "routes"]);
+    expect(Object.keys(composition.runtime).sort()).toEqual([
+      "handle",
+      "routes",
+    ]);
     expect(composition.runtime.routes).toEqual([
       { method: "POST", pathname: "/v1/messages" },
       { method: "GET", pathname: "/v1/models" },
@@ -243,7 +247,10 @@ describe("configured serving composition", () => {
     const { configPath, clientToken, projectDir } =
       await writeConfiguration("project");
     const projectSnapshot = vi.fn(
-      async (input: { readonly projectDir: string; readonly signal: AbortSignal }) => {
+      async (input: {
+        readonly projectDir: string;
+        readonly signal: AbortSignal;
+      }) => {
         input.signal.throwIfAborted();
         return createEmptyServerConfig();
       },
@@ -338,12 +345,8 @@ describe("configured serving composition", () => {
       "utf8",
     );
     const config = await loadLuckyTokenCliConfig(configPath);
-    expect(config.pi.modelsJson).toBe(
-      join(dirname(configPath), "models.json"),
-    );
-    expect(config.pi.modelsJson).not.toBe(
-      join(piDirectory, "models.json"),
-    );
+    expect(config.pi.modelsJson).toBe(join(dirname(configPath), "models.json"));
+    expect(config.pi.modelsJson).not.toBe(join(piDirectory, "models.json"));
 
     const composition = await createConfiguredLuckyTokenComposition({
       config,
@@ -375,7 +378,9 @@ describe("configured serving composition", () => {
 
     // The invalid file never bricks the gateway: only the packaged provider
     // is registered and the skip is reported instead of thrown.
-    expect(composition.userConfiguredProviderIds).toEqual(["commandcode-private"]);
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "commandcode-private",
+    ]);
     expect(invalid).toHaveLength(1);
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/models"),
@@ -384,7 +389,9 @@ describe("configured serving composition", () => {
   });
 
   it("registers the optional OpenAI Responses protocol with its own auth and state file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-responses-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-composition-responses-"),
+    );
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -521,5 +528,4 @@ describe("configured serving composition", () => {
       "commandcode-private/deepseek/deepseek-v4-flash",
     );
   });
-
 });
