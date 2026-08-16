@@ -195,6 +195,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
+    key: "diagnostics.deepCapture.enabled",
+    type: "boolean",
+    default: false,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
     key: "server.port",
     type: "number",
     default: 3000,

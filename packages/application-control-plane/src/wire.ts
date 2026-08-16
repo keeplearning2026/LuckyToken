@@ -51,6 +51,8 @@ import {
   type ModelsFileErrorKind,
   type ModelsFileState,
   type ModelsProjection,
+  type CaptureEvent,
+  type CaptureQueryResult,
   type RegisteredSetting,
   type RequestLedgerEvent,
   type RequestLedgerQueryResult,
@@ -71,6 +73,11 @@ import {
   decodeRequestLedgerEvent,
   decodeRequestLedgerResult,
 } from "./wire-ledger.js";
+import {
+  decodeCaptureEvent,
+  decodeCaptureQuery,
+  decodeCaptureQueryResult,
+} from "./wire-capture.js";
 import {
   type AuthCommand,
   type AuthCommandResult,
@@ -123,6 +130,13 @@ export type ClientRequest =
     }
   | { readonly type: "ledger_subscribe"; readonly requestId: string }
   | { readonly type: "ledger_unsubscribe"; readonly requestId: string }
+  | {
+      readonly type: "get_capture";
+      readonly requestId: string;
+      readonly query?: unknown;
+    }
+  | { readonly type: "capture_subscribe"; readonly requestId: string }
+  | { readonly type: "capture_unsubscribe"; readonly requestId: string }
   | {
       readonly type: "runtime_command";
       readonly requestId: string;
@@ -211,6 +225,11 @@ export type ServerMessage =
       readonly result: RequestLedgerQueryResult;
     }
   | {
+      readonly type: "capture_result";
+      readonly requestId: string;
+      readonly result: CaptureQueryResult;
+    }
+  | {
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
@@ -267,7 +286,8 @@ export type ServerMessage =
       readonly event:
         | StatusEvent
         | RuntimeDiagnosticEvent
-        | RequestLedgerEvent;
+        | RequestLedgerEvent
+        | CaptureEvent;
     };
 
 export type DecodedClientRequest =
@@ -2533,6 +2553,25 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
   ) {
     return { type: "valid", request: { type: value.type, requestId } };
   }
+  if (value.type === "get_capture") {
+    if (value.query === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const query = decodeCaptureQuery(value.query);
+    if (query === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "get_capture", requestId, query },
+    };
+  }
+  if (
+    value.type === "capture_subscribe" ||
+    value.type === "capture_unsubscribe"
+  ) {
+    return { type: "valid", request: { type: value.type, requestId } };
+  }
   if (value.type === "runtime_command") {
     if (
       value.command !== "start" &&
@@ -3077,6 +3116,10 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     if (ledger !== undefined) {
       return { type: "event", event: ledger };
     }
+    const capture = decodeCaptureEvent(value.event);
+    if (capture !== undefined) {
+      return { type: "event", event: capture };
+    }
     const event = decodeEvent(value.event);
     return event === undefined ? undefined : { type: "event", event };
   }
@@ -3111,6 +3154,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "request_ledger_result", requestId, result };
+  }
+  if (value.type === "capture_result") {
+    const result = decodeCaptureQueryResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "capture_result", requestId, result };
   }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);

@@ -384,6 +384,7 @@ async function createAliasDataPlaneFixture(
   const close = async () => {
     await composition.diagnosticsStore.close();
     await composition.requestLedger.close();
+        composition.deepCaptureStore.close();
     await rm(directory, { recursive: true, force: true });
   };
   fixtures.push({ close });

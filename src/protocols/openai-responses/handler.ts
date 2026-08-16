@@ -18,6 +18,12 @@ import {
   type RequestLedgerEntry,
 } from "../../request-ledger/handler-seam.js";
 import {
+  createNoopDeepCaptureAuthority,
+  createNoopCaptureEntry,
+  type DeepCaptureAuthority,
+  type DeepCaptureEntry,
+} from "../../deep-diagnostics/handler-seam.js";
+import {
   bindOpenAIResponsesConfiguration,
   parseOpenAIResponsesConfiguration,
   type OpenAIResponsesConfiguration,
@@ -112,6 +118,13 @@ export interface OpenAIResponsesHandlerOptions {
    * observer (the header contract still holds).
    */
   readonly requestLedger?: RequestLedger;
+  /**
+   * Ticket 22 Deep Diagnostics capture authority: the wrapper reads one
+   * immutable acceptance-time enable snapshot per request and collects
+   * raw request/response artifacts while enabled. Absent means the no-op
+   * authority (no capture ever begins).
+   */
+  readonly deepCapture?: DeepCaptureAuthority;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -142,6 +155,7 @@ interface OpenAIResponsesDependencies {
   readonly configuration: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly requestLedger: RequestLedger;
+  readonly deepCapture: DeepCaptureAuthority;
   readonly sessionState: ResponseSessionState;
   readonly passthroughFetch: FetchFunction;
   readonly aliasSource: AliasModelSource | undefined;
@@ -170,6 +184,58 @@ function attachRequestId(response: Response, requestId: string): Response {
     statusText: response.statusText,
     headers,
   });
+}
+
+/** Own-data header facts for the capture observer: the universal redaction
+ *  choke point is the safety net; nothing is pre-filtered here. */
+function headerRecord(headers: Headers): Record<string, string> {
+  return Object.fromEntries(headers.entries());
+}
+
+const textDecoder = new TextDecoder();
+
+/** Ticket 22 isolation: capture infrastructure must never affect request
+ *  handling. A hostile/throwing authority falls back to the safe disabled
+ *  entry; the request id correlation always survives. */
+function beginCapture(
+  dependencies: OpenAIResponsesDependencies,
+  request: Request,
+  requestId: string,
+): DeepCaptureEntry {
+  try {
+    return dependencies.deepCapture.begin({
+      requestId,
+      protocolId: openaiResponsesProtocolId,
+      requestHeaders: headerRecord(request.headers),
+    });
+  } catch {
+    return createNoopCaptureEntry(requestId);
+  }
+}
+
+/** Ticket 22 isolation: the delivered response is cloned and read only when
+ *  the acceptance decision enabled capture (zero cost while disabled), and
+ *  any clone/read/callback failure degrades to a partial capture — it can
+ *  never replace or change the model response. */
+async function captureDeliveredResponse(
+  capture: DeepCaptureEntry,
+  response: Response,
+): Promise<void> {
+  if (!capture.decision.enabled) return;
+  try {
+    const responseBytes = await response.clone().arrayBuffer();
+    capture.response(
+      response.status,
+      headerRecord(new Headers(response.headers)),
+      textDecoder.decode(responseBytes),
+    );
+  } catch {
+    try {
+      capture.fail("response-capture-failed");
+    } catch {
+      // The capture seam must never affect the response path.
+    }
+  }
 }
 
 async function raceWithRequestSignal<T>(
@@ -241,6 +307,7 @@ async function handleOpenAIResponses(
   request: Request,
   diagnostics: InvocationDiagnostics,
   ledger: RequestLedgerEntry,
+  capture: DeepCaptureEntry,
 ): Promise<Response> {
   try {
     request.signal.throwIfAborted();
@@ -294,6 +361,19 @@ async function handleOpenAIResponses(
           "Request exceeds the configured maximum size",
         ),
       );
+    }
+    // Ticket 22: the raw request body is collected for the capture observer
+    // exactly as the request path produced it; sanitization happens at the
+    // one store choke point before commit. A throwing capture seam is
+    // isolated — it can only degrade the capture, never the request.
+    try {
+      capture.requestBody(rawBody);
+    } catch {
+      try {
+        capture.fail("request-body-capture-failed");
+      } catch {
+        // The capture seam must never affect the request path.
+      }
     }
     const body: unknown = JSON.parse(rawBody);
 
@@ -550,8 +630,13 @@ async function handleOpenAIResponsesWithDiagnostics(
   // carry the exact id of this accepted request.
   const ledger = dependencies.requestLedger.begin(openaiResponsesProtocolId);
   requestIds.set(request, ledger.requestId);
+  // Ticket 22: the capture observer reads the one global enable snapshot at
+  // the same acceptance line and keeps it immutable for this request; the
+  // request id is the ledger's — capture never mints its own. begin is
+  // isolated: a throwing authority falls back to the safe disabled entry.
+  const capture = beginCapture(dependencies, request, ledger.requestId);
   try {
-    const response = await handleOpenAIResponses(dependencies, request, diagnostics, ledger);
+    const response = await handleOpenAIResponses(dependencies, request, diagnostics, ledger, capture);
     if (response.status >= 400) {
       await diagnostics.fail({
         classification: response.status >= 500 ? "runtime-failure" : "client-failure",
@@ -563,7 +648,17 @@ async function handleOpenAIResponsesWithDiagnostics(
     // Terminal response preparation: the final Response exists (rendered +
     // request id attached below), so the ledger commits the terminal row.
     ledger.completed(response.status);
-    return attachRequestId(response, ledger.requestId);
+    // The request id header is attached first: the captured bytes are the
+    // exact response the client receives, and the request id survives as a
+    // safe correlation fact (never treated as a client credential).
+    const delivered = attachRequestId(response, ledger.requestId);
+    await captureDeliveredResponse(capture, delivered);
+    try {
+      capture.finalize();
+    } catch {
+      // Capture finalize must never affect the response path.
+    }
+    return delivered;
   } catch (error) {
     const aborted =
       request.signal.aborted ||
@@ -580,6 +675,16 @@ async function handleOpenAIResponsesWithDiagnostics(
       aborted ? "aborted" : "failed",
       aborted ? undefined : { clientHttpStatus: 500 },
     );
+    try {
+      capture.fail(aborted ? "aborted" : "unhandled-failure");
+    } catch {
+      // The capture seam must never affect the response path.
+    }
+    try {
+      capture.finalize();
+    } catch {
+      // The capture seam must never affect the response path.
+    }
     await diagnostics.fail({
       classification: aborted ? "caller-cancellation" : "unhandled-failure",
       cancellation: request.signal.aborted,
@@ -921,6 +1026,7 @@ export function createOpenAIResponsesHandler(
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     requestLedger: options.requestLedger ?? createNoopRequestLedger(),
+    deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     sessionState,
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     aliasSource: options.aliasSource,

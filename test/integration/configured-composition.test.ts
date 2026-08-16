@@ -34,7 +34,11 @@ function commandCodeText(text: string): Response {
 
 describe("configured serving composition", () => {
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
+  const compositions: Array<{
+    diagnosticsStore: { close(): void };
+    requestLedger: { close(): void };
+    deepCaptureStore: { close(): void };
+  }> = [];
 
   afterEach(async () => {
     compositions
@@ -42,6 +46,7 @@ describe("configured serving composition", () => {
       .forEach((composition) => {
         composition.diagnosticsStore.close();
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
       });
     await Promise.all(
       directories
@@ -140,6 +145,8 @@ describe("configured serving composition", () => {
       "certification",
       "clientTokenAuthorities",
       "credentialAuthority",
+      "deepCapture",
+      "deepCaptureStore",
       "diagnosticsStore",
       "requestIdentities",
       "requestLedger",

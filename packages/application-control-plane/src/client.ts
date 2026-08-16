@@ -8,6 +8,11 @@ import type {
   RequestLedgerQuery,
   RequestLedgerQueryResult,
 } from "./ledger-contract.js";
+import type {
+  CaptureEvent,
+  CaptureQuery,
+  CaptureQueryResult,
+} from "./capture-contract.js";
 import {
   assertControlPlaneEndpoint,
   type AliasCommand,
@@ -86,6 +91,7 @@ export async function connectApplicationControlPlane(
   let diagnosticsListener:
     ((event: RuntimeDiagnosticEvent) => void) | undefined;
   let ledgerListener: ((event: RequestLedgerEvent) => void) | undefined;
+  let captureListener: ((event: CaptureEvent) => void) | undefined;
   let settled = false;
   let closeRequested = false;
   let resolveDisconnect:
@@ -127,6 +133,8 @@ export async function connectApplicationControlPlane(
             diagnosticsListener?.(message.event);
           } else if (message.event.type === "request_ledger") {
             ledgerListener?.(message.event);
+          } else if (message.event.type === "capture_state_changed") {
+            captureListener?.(message.event);
           } else {
             listener?.(message.event);
           }
@@ -479,6 +487,47 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return result;
+    },
+    async getCapture(query: CaptureQuery): Promise<CaptureQueryResult> {
+      const response = await request({
+        type: "get_capture",
+        query,
+      });
+      if (response.type !== "capture_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async subscribeCapture(
+      next: (event: CaptureEvent) => void,
+    ): Promise<() => Promise<void>> {
+      if (captureListener !== undefined) {
+        throw new Error(
+          "Control Plane client is already subscribed to capture events",
+        );
+      }
+      captureListener = next;
+      let response: ServerMessage;
+      try {
+        response = await request({ type: "capture_subscribe" });
+      } catch (error) {
+        captureListener = undefined;
+        throw error;
+      }
+      if (response.type !== "subscribed") {
+        captureListener = undefined;
+        throw new Error("Control Plane response is malformed");
+      }
+      let subscribed = true;
+      return async () => {
+        if (!subscribed) return;
+        const result = await request({ type: "capture_unsubscribe" });
+        if (result.type !== "unsubscribed") {
+          throw new Error("Control Plane response is malformed");
+        }
+        subscribed = false;
+        captureListener = undefined;
+      };
     },
     async subscribeDiagnostics(
       next: (event: RuntimeDiagnosticEvent) => void,

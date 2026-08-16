@@ -32,6 +32,15 @@ describe("Settings Developer Lab renderer projection", () => {
             applyMode: "hot-apply",
             value: true,
           },
+          "diagnostics.deepCapture.enabled": {
+            key: "diagnostics.deepCapture.enabled",
+            type: "boolean",
+            default: false,
+            validation: { type: "boolean" },
+            sensitivity: "public",
+            applyMode: "hot-apply",
+            value: true,
+          },
           "server.port": {
             key: "server.port",
             type: "number",
@@ -69,6 +78,7 @@ describe("Settings Developer Lab renderer projection", () => {
       kind: "connected",
       settings: {
         "protocols.anthropic-messages.enabled": { value: false },
+        "diagnostics.deepCapture.enabled": { value: true },
         "server.port": { value: 3210, effective: 3000 },
       },
     });

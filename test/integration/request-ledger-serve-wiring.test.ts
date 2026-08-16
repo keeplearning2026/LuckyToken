@@ -195,6 +195,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       now: () => 1_786_400_000_000,
     });
     stores.push(composition.requestLedger);
+    stores.push(composition.deepCaptureStore);
 
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
@@ -329,6 +330,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       now: () => 1_786_400_000_000,
     });
     stores.push(composition.requestLedger);
+    stores.push(composition.deepCaptureStore);
 
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {

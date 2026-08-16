@@ -8,6 +8,11 @@ import type {
   RequestLedgerQuery,
   RequestLedgerQueryResult,
 } from "./ledger-contract.js";
+import type {
+  CaptureEvent,
+  CaptureQuery,
+  CaptureQueryResult,
+} from "./capture-contract.js";
 
 export const controlPlaneVersion = 1 as const;
 
@@ -1047,6 +1052,27 @@ export {
   type RequestUsageProjection,
 } from "./ledger-projection.js";
 
+export type {
+  CaptureDraft,
+  CaptureEvent,
+  CaptureEventFact,
+  CaptureFailureDraft,
+  CapturePersistedState,
+  CaptureQuery,
+  CaptureQueryResult,
+  CaptureRecord,
+  CaptureState,
+  CaptureTimingEntry,
+  CaptureWriteFailure,
+  ControlPlaneCapture,
+  DeepCaptureStore,
+  DeepCaptureStoreFactory,
+} from "./capture-contract.js";
+export {
+  CAPTURE_STATES,
+  assertCaptureState,
+} from "./capture-contract.js";
+
 export type HelloResult =
   | {
       readonly type: "compatible";
@@ -1232,6 +1258,13 @@ export interface ControlPlaneClient {
    *  diagnostics subscribers. */
   subscribeRequestLedger(
     listener: (event: RequestLedgerEvent) => void,
+  ): Promise<() => Promise<void>>;
+  /** Ticket 22: one bounded capture query by the Ticket 18 request id. */
+  getCapture(query: CaptureQuery): Promise<CaptureQueryResult>;
+  /** Ticket 22: opt-in typed capture-state events (narrow facts only);
+   *  never delivered to status, diagnostics, or ledger subscribers. */
+  subscribeCapture(
+    listener: (event: CaptureEvent) => void,
   ): Promise<() => Promise<void>>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,

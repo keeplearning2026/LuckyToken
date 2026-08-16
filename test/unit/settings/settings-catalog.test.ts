@@ -23,6 +23,7 @@ describe("authoritative registered settings catalog", () => {
     expect(catalog.map((setting) => setting.key)).toEqual([
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
+      "diagnostics.deepCapture.enabled",
       "server.port",
       "server.bindHost",
       "application.quitDrainTimeoutMs",

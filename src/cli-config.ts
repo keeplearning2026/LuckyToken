@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
 import { parseRuntimeDiagnosticsConfiguration, type RuntimeDiagnosticsConfiguration } from "./runtime-diagnostics/configuration.js";
 import { parseRequestLedgerConfiguration, type RequestLedgerConfiguration } from "./request-ledger/configuration.js";
+import { parseDeepDiagnosticsConfiguration, type DeepDiagnosticsConfiguration } from "./deep-diagnostics/configuration.js";
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
@@ -41,6 +42,8 @@ export interface LuckyTokenCliConfig {
   readonly runtimeDiagnostics: RuntimeDiagnosticsConfiguration;
   /** Ticket 18 Request Ledger store configuration. */
   readonly requestLedger: RequestLedgerConfiguration;
+  /** Ticket 22 Deep Diagnostics capture configuration. */
+  readonly deepDiagnostics: DeepDiagnosticsConfiguration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,7 +128,7 @@ export async function loadLuckyTokenCliConfig(
   }
   assertKeys(
     root,
-    ["server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "pi", "limits"],
+    ["server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "deepDiagnostics", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
@@ -272,6 +275,10 @@ export async function loadLuckyTokenCliConfig(
     ),
     requestLedger: parseRequestLedgerConfiguration(
       root.requestLedger,
+      directory,
+    ),
+    deepDiagnostics: parseDeepDiagnosticsConfiguration(
+      root.deepDiagnostics,
       directory,
     ),
   };

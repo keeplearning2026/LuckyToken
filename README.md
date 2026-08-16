@@ -37,7 +37,8 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
 │   └── openai-responses.json           # OpenAI Responses global/project local tokens
 ├── state/
 │   ├── openai-responses.json           # durable Responses session history snapshot
-│   └── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
+│   ├── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
+│   └── deep-diagnostics/               # bounded Deep Diagnostics capture SQLite/WAL store
 └── pi/
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
@@ -48,6 +49,44 @@ only global/project token scopes and do not identify or inspect another Client
 Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
 runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
 every `auth.json` are ignored by Git.
+
+## Globally Controlled Deep Diagnostics Capture
+
+LuckyToken can deliberately capture raw request/response artifacts for
+future requests while a single global switch is on. The switch is the
+registered hot-apply setting `diagnostics.deepCapture.enabled` (default
+`false`, config default under `deepDiagnostics.enabled`), controllable through
+the Control Plane settings command — the desktop Settings / Developer Lab
+toggle and `control settings set diagnostics.deepCapture.enabled true`.
+
+While enabled, every request accepted by a Client Protocol handler captures
+its original request body, the exact response bytes the client receives
+(including the `x-luckytoken-request-id` correlation header), safe header
+maps, and ordered event timing. The acceptance-time enable snapshot is
+immutable: enabling affects only subsequently accepted requests, and
+disabling never erases already captured data or interrupts an in-flight
+capture. Disabled capture costs nothing on the request path (no body clone
+or read) and capture faults never alter model responses.
+
+Every artifact passes the same Ticket 07 universal redaction choke point as
+Runtime Diagnostics (structural redaction for JSON bodies, the universal
+text/header sanitizers, and the credential-owner known-value scrubber; the
+capture store fails closed until the scrubber is attached). The complete
+persisted record is budgeted in UTF-8 bytes below the Control Plane frame
+ceiling (`maxCaptureBytes` per record, never above it), so every committed
+capture is retrievable through the framed Control Plane query
+(`get_capture`) — raw bodies never reach disk, events, or the wire
+unredacted.
+
+Retention is bounded by configurable age (`retentionAgeMs`, measured from
+the acceptance-time snapshot) and capacity (`maxCaptures`) under
+`deepDiagnostics`; eviction deletes capture rows only, writes a tiny
+tombstone, and never touches the permanent Request Ledger or diagnostics
+records. A request detail can truthfully distinguish `no-capture`,
+`captured`, `partial`, `failed`, and `expired` states. A capture write fault
+never changes a model response; it retries once with a minimal failed-state
+marker and otherwise reports only a sanitized critical diagnostic (request
+id + fixed code).
 
 ## Permanent Runtime Diagnostics
 

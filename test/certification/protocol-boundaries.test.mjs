@@ -34,6 +34,11 @@ const CLIENT_SHARED_SEAMS = new Set([
   // contract + safe no-op); persistence/configuration/store DTOs stay out
   // of the protocol boundary.
   "request-ledger/handler-seam.ts",
+  // Ticket 22 neutral handler seam: both Client Protocols observe the one
+  // global Deep Diagnostics capture decision only through this narrow seam
+  // (authority contract + safe no-op); persistence/configuration/store
+  // DTOs stay out of the protocol boundary.
+  "deep-diagnostics/handler-seam.ts",
 ]);
 
 function slash(value) {

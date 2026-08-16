@@ -32,6 +32,13 @@ import {
   createRequestLedgerStoreFactory,
   type RequestLedgerStore,
 } from "./request-ledger/index.js";
+import {
+  bindDeepDiagnosticsConfiguration,
+  createDeepCaptureAuthority,
+  createDeepCaptureStoreFactory,
+  type DeepCaptureAuthority,
+  type DeepCaptureStore,
+} from "./deep-diagnostics/index.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import {
@@ -209,6 +216,13 @@ export interface ConfiguredLuckyTokenCompositionOptions {
    * returns its own store, which the caller must close.
    */
   readonly requestLedgerStore?: RequestLedgerStore;
+  /**
+   * Reuse an already-open Deep Diagnostics capture store (Ticket 22), e.g.
+   * the one the Control Plane host owns. When absent the composition opens
+   * and returns its own store, which the caller must close. The store
+   * fails closed until the credential-owner scrubber is attached.
+   */
+  readonly deepCaptureStore?: DeepCaptureStore;
   /** Registered settings authority for protocol enablement; when absent every
    *  configured protocol is served (Ticket 03 behavior). */
   readonly settingsRegistry?: SettingsRegistry;
@@ -261,6 +275,13 @@ export interface ConfiguredLuckyTokenComposition {
   /** Permanent Request Lifecycle Ledger store (Ticket 18): the one SQLite/
    *  WAL authority for request lifecycle facts. */
   readonly requestLedger: RequestLedgerStore;
+  /** Bounded Deep Diagnostics capture store (Ticket 22): the one SQLite/
+   *  WAL authority for deliberately captured raw request/response
+   *  artifacts under age + capacity retention. */
+  readonly deepCaptureStore: DeepCaptureStore;
+  /** The one global capture authority (Ticket 22): reads the registered
+   *  hot-apply enable setting once per accepted request. */
+  readonly deepCapture: DeepCaptureAuthority;
 }
 
 export async function createConfiguredPiModels(
@@ -575,6 +596,52 @@ export async function createConfiguredLuckyTokenComposition(
   ) {
     requestLedger.attachScrub(scrub);
   }
+  // Ticket 22: the bounded capture store is its own audit surface with the
+  // same one universal redaction choke point and the same credential-owner
+  // scrubber as the diagnostics store and the ledger. It fails closed until
+  // the scrubber is attached (raw bodies must never reach disk under a
+  // pattern-only downgrade); a capture write fault never changes a model
+  // response — it is reported through the narrow sanitized diagnostics
+  // seam (request id + message hash only).
+  const deepCaptureStore: DeepCaptureStore =
+    options.deepCaptureStore ??
+    (await createDeepCaptureStoreFactory({
+      configuration: bindDeepDiagnosticsConfiguration(config.deepDiagnostics),
+      now,
+      ...(scrub === undefined ? {} : { scrub }),
+    }).open());
+  if (options.deepCaptureStore !== undefined && scrub !== undefined) {
+    deepCaptureStore.attachScrub(scrub);
+  }
+  // The one global capture authority: the registered hot-apply setting is
+  // the live enable state; each request reads one immutable snapshot at
+  // acceptance (in-flight requests keep it after a toggle).
+  const deepCapture = createDeepCaptureAuthority({
+    store: deepCaptureStore,
+    now,
+    readEnabled: () => {
+      if (registry === undefined) return config.deepDiagnostics.enabled;
+      const setting = registry.query(["diagnostics.deepCapture.enabled"])[
+        "diagnostics.deepCapture.enabled"
+      ];
+      if (setting === undefined) return config.deepDiagnostics.enabled;
+      return setting.value === true;
+    },
+    onWriteFailure: (failure) => {
+      try {
+        diagnosticsStore.append({
+          level: "critical",
+          text: "Deep Diagnostics capture failure",
+          ...(failure.requestId.length === 0
+            ? {}
+            : { requestId: failure.requestId }),
+          details: { code: failure.code },
+        });
+      } catch {
+        // The diagnostics seam must never affect the request path.
+      }
+    },
+  });
   // Ticket 17 identity seam: the internal effective session identity is
   // created per request by the auth boundary; only the optional client
   // identity and canonical project context may reach the public observer.
@@ -608,6 +675,7 @@ export async function createConfiguredLuckyTokenComposition(
     ),
     invocationDiagnostics,
     requestLedger,
+    deepCapture,
     passthroughFetch: options.fetch,
     ...(options.createMessageId === undefined
       ? {}
@@ -652,6 +720,7 @@ export async function createConfiguredLuckyTokenComposition(
       ),
       invocationDiagnostics,
       requestLedger,
+      deepCapture,
       stateFile,
       passthroughFetch: options.fetch,
       ...(aliasSource === undefined ? {} : { aliasSource }),
@@ -722,5 +791,7 @@ export async function createConfiguredLuckyTokenComposition(
     }),
     requestIdentities,
     requestLedger,
+    deepCaptureStore,
+    deepCapture,
   });
 }

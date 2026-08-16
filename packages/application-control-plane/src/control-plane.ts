@@ -71,6 +71,20 @@ export {
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
   type ControlPlaneRequestLedger,
+  type CaptureDraft,
+  type CaptureEvent,
+  type CaptureEventFact,
+  type CaptureFailureDraft,
+  type CapturePersistedState,
+  type CaptureQuery,
+  type CaptureQueryResult,
+  type CaptureRecord,
+  type CaptureState,
+  type CaptureTimingEntry,
+  type CaptureWriteFailure,
+  type ControlPlaneCapture,
+  type DeepCaptureStore,
+  type DeepCaptureStoreFactory,
   type DataPlaneFailure,
   type DataPlaneFailureCode,
   type DataPlaneStatus,
@@ -176,6 +190,10 @@ export {
   assertLedgerPhase,
 } from "./contracts.js";
 export {
+  CAPTURE_STATES,
+  assertCaptureState,
+} from "./contracts.js";
+export {
   RUNTIME_DIAGNOSTIC_LEVELS,
   RUNTIME_DIAGNOSTIC_SEVERITY,
   assertRuntimeDiagnosticLevel,
@@ -193,6 +211,8 @@ export {
   type PipeTransport,
 } from "./pipe-transport.js";
 export { createNodePipeTransport } from "./node-pipe-transport.js";
+
+export { maxControlPlaneFrameBytes } from "./framing.js";
 
 import {
   connectApplicationControlPlane,

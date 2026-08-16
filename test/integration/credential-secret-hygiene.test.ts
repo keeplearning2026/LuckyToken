@@ -21,7 +21,7 @@ describe("credential canary hygiene across public surfaces", () => {
   const CANARY_IMPORT_KEY = "sk-import-canary-555";
 
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
 
   afterEach(async () => {
     compositions
@@ -29,6 +29,7 @@ describe("credential canary hygiene across public surfaces", () => {
       .forEach((composition) => {
         composition.diagnosticsStore.close();
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
       });
     await Promise.all(
       directories

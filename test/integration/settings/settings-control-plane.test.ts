@@ -157,6 +157,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     expect(Object.keys(settings)).toEqual([
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
+      "diagnostics.deepCapture.enabled",
       "server.port",
       "server.bindHost",
       "application.quitDrainTimeoutMs",

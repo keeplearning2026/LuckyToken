@@ -43,6 +43,7 @@ import {
   normalizeDiagnosticQuery,
 } from "./diagnostics-contract.js";
 import type { ControlPlaneRequestLedger } from "./ledger-contract.js";
+import type { ControlPlaneCapture } from "./capture-contract.js";
 import { readFrame, writeFrame } from "./framing.js";
 import {
   assertPipeAccess,
@@ -55,6 +56,11 @@ import {
   decodeRequestLedgerQuery,
   decodeRequestLedgerRecord,
 } from "./wire-ledger.js";
+import {
+  decodeCaptureQuery,
+  decodeCaptureQueryResult,
+  decodeCaptureRecord,
+} from "./wire-capture.js";
 import {
   compatibleHello,
   decodeAliasCommandResult,
@@ -153,6 +159,14 @@ export interface StartControlPlaneOptions {
    * clients are unaffected).
    */
   readonly requestLedger?: ControlPlaneRequestLedger;
+  /**
+   * Explicit Deep Diagnostics capture ownership (Ticket 22): when present,
+   * the Control Plane serves bounded capture queries by request id and
+   * opt-in typed capture-state events (narrow facts only, never bodies).
+   * Status, diagnostics, and ledger subscribers never receive capture
+   * events, and an absent capture store is served as `unknown_command`.
+   */
+  readonly capture?: ControlPlaneCapture;
 }
 
 interface ConnectionState {
@@ -161,6 +175,7 @@ interface ConnectionState {
   subscribed: boolean;
   diagnosticsSubscribed: boolean;
   ledgerSubscribed: boolean;
+  captureSubscribed: boolean;
   /** One in-flight Provider-auth login flow on this connection (Ticket
    *  13); interaction events/prompt responses are routed by its id. */
   authFlow: AuthFlowState | undefined;
@@ -248,6 +263,7 @@ export async function startApplicationStatusHost(
   const tasks = new Set<Promise<void>>();
   const diagnostics = options.diagnostics;
   const ledger = options.requestLedger;
+  const capture = options.capture;
   const emitDiagnostics =
     diagnostics === undefined
       ? undefined
@@ -284,6 +300,24 @@ export async function startApplicationStatusHost(
                 },
               }).catch(() => {
                 state.ledgerSubscribed = false;
+                void state.connection.close().catch(() => undefined);
+              });
+            }
+          });
+          return subscription.unsubscribe;
+        };
+  const emitCapture =
+    capture === undefined
+      ? undefined
+      : () => {
+          const subscription = capture.subscribe((event) => {
+            for (const state of states) {
+              if (!state.captureSubscribed) continue;
+              void writeFrame(state.connection, {
+                type: "event",
+                event,
+              }).catch(() => {
+                state.captureSubscribed = false;
                 void state.connection.close().catch(() => undefined);
               });
             }
@@ -611,6 +645,83 @@ export async function startApplicationStatusHost(
           }
         } else if (request.type === "ledger_unsubscribe") {
           state.ledgerSubscribed = false;
+          await writeFrame(state.connection, {
+            type: "unsubscribed",
+            requestId: request.requestId,
+          });
+        } else if (request.type === "get_capture") {
+          if (capture === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const query = decodeCaptureQuery(request.query);
+            if (query === undefined) {
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
+            } else {
+              let result;
+              try {
+                result = capture.query(query);
+              } catch {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
+              // Strict per-record validation at the wire boundary: a record
+              // with an unknown key or an invalid bounded value is rejected
+              // instead of delivered.
+              if (
+                result.record !== undefined &&
+                decodeCaptureRecord(result.record) === undefined
+              ) {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
+              const decoded = decodeCaptureQueryResult(result);
+              if (decoded === undefined) {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
+              await writeFrame(state.connection, {
+                type: "capture_result",
+                requestId: request.requestId,
+                result: decoded,
+              });
+            }
+          }
+        } else if (request.type === "capture_subscribe") {
+          if (capture === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            state.captureSubscribed = true;
+            await writeFrame(state.connection, {
+              type: "subscribed",
+              requestId: request.requestId,
+            });
+          }
+        } else if (request.type === "capture_unsubscribe") {
+          state.captureSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -1125,6 +1236,7 @@ export async function startApplicationStatusHost(
           state.subscribed = false;
           state.diagnosticsSubscribed = false;
           state.ledgerSubscribed = false;
+          state.captureSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -1162,6 +1274,7 @@ export async function startApplicationStatusHost(
         subscribed: false,
         diagnosticsSubscribed: false,
         ledgerSubscribed: false,
+        captureSubscribed: false,
         authFlow: undefined,
       };
       states.add(state);
@@ -1207,6 +1320,7 @@ export async function startApplicationStatusHost(
 
   const diagnosticsListener = emitDiagnostics?.();
   const ledgerListener = emitLedger?.();
+  const captureListener = emitCapture?.();
 
   return {
     endpoint: options.endpoint,
@@ -1216,6 +1330,7 @@ export async function startApplicationStatusHost(
       closed = true;
       diagnosticsListener?.();
       ledgerListener?.();
+      captureListener?.();
       await publishQueue.catch(() => undefined);
       await Promise.all(
         [...states].map((state) =>

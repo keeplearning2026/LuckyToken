@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { createAuth } from "../../src/auth.js";
 import type { AliasModelSource } from "../../src/alias-model-seam.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
+import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   certifyServingComposition,
@@ -66,6 +67,9 @@ export interface CommandCodeServingTestOptions {
   /** Ticket 18 Request Lifecycle Ledger observer; absent means the handler
    *  uses its no-op observer. */
   requestLedger?: RequestLedger;
+  /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
+   *  uses its no-op authority. */
+  deepCapture?: DeepCaptureAuthority;
   /** Ticket 15 alias-only data plane seam (handler-level test stub). */
   aliasSource?: AliasModelSource;
   /** Ticket 20 usage-semantics resolver; defaults to the real Provider
@@ -195,6 +199,9 @@ export function createCommandCodeServingTestComposition(
     ...(options.requestLedger === undefined
       ? {}
       : { requestLedger: options.requestLedger }),
+    ...(options.deepCapture === undefined
+      ? {}
+      : { deepCapture: options.deepCapture }),
     ...(options.aliasSource === undefined
       ? {}
       : { aliasSource: options.aliasSource }),

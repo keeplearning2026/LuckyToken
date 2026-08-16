@@ -10,6 +10,7 @@ import type {
   AuthOptionsProjection,
   AuthPromptOption,
   AuthProviderOption,
+  CaptureQueryResult,
   CatalogCommandResult,
   CatalogModelAvailability,
   CatalogModelProjection,
@@ -1574,6 +1575,7 @@ function decodeAuthInfoLinks(value: unknown): readonly AuthInfoLink[] | undefine
 const rendererSettingKeys: ReadonlySet<string> = new Set([
   "protocols.anthropic-messages.enabled",
   "protocols.openai-responses.enabled",
+  "diagnostics.deepCapture.enabled",
   "server.port",
   "server.bindHost",
 ]);
@@ -1591,6 +1593,57 @@ function projectSettings(
     result[key] = setting;
   }
   return Object.freeze(result);
+}
+
+/**
+ * Ticket 22 request-detail capture projection: derives the five truthful
+ * capture states of one request detail from the Control Plane capture
+ * query. Pure and deterministic — the renderer never derives capture
+ * state from raw capture bytes.
+ */
+export interface CaptureDetailProjection {
+  /** The five-state capture status of the request. */
+  readonly state: CaptureQueryResult["state"];
+  /** Stable user-facing label for the state. */
+  readonly label: string;
+  /** One-line value-free explanation; never carries capture bytes. */
+  readonly detail: string;
+}
+
+const CAPTURE_DETAIL_COPY: Readonly<
+  Record<CaptureQueryResult["state"], Omit<CaptureDetailProjection, "state">>
+> = {
+  "no-capture": {
+    label: "No capture",
+    detail: "This request was accepted while deep diagnostics capture was off.",
+  },
+  captured: {
+    label: "Captured",
+    detail: "Request and response artifacts are stored under bounded retention.",
+  },
+  partial: {
+    label: "Partial capture",
+    detail: "Capture began but fewer artifacts than a full capture were stored.",
+  },
+  failed: {
+    label: "Capture failed",
+    detail: "The capture store write failed; only the failure marker was stored.",
+  },
+  expired: {
+    label: "Capture expired",
+    detail: "The raw capture was evicted by age or capacity; the request record remains.",
+  },
+};
+
+export function projectCaptureDetail(
+  capture: CaptureQueryResult,
+): CaptureDetailProjection {
+  const copy = CAPTURE_DETAIL_COPY[capture.state];
+  return Object.freeze({
+    state: capture.state,
+    label: copy.label,
+    detail: copy.detail,
+  });
 }
 
 const unavailableCopy: Readonly<

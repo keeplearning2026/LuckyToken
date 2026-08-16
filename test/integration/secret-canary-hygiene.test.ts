@@ -53,7 +53,7 @@ describe("secret canary hygiene across public surfaces", () => {
   const CANARY_MODEL_HEADER = "model-header-canary-55555";
 
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
   const children: ChildProcessWithoutNullStreams[] = [];
   const hosts: RunningControlPlane[] = [];
   let nextPipe = 0;
@@ -62,6 +62,7 @@ describe("secret canary hygiene across public surfaces", () => {
     compositions.splice(0).forEach((composition) => {
       composition.diagnosticsStore.close();
       composition.requestLedger.close();
+        composition.deepCaptureStore.close();
     });
     await Promise.all(hosts.splice(0).map((host) => host.close()));
     children.splice(0).forEach((child) => child.kill());

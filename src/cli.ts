@@ -73,6 +73,11 @@ import {
   createRequestLedgerStoreFactory,
 } from "./request-ledger/index.js";
 import type { RequestLedgerStore } from "./request-ledger/index.js";
+import {
+  bindDeepDiagnosticsConfiguration,
+  createDeepCaptureStoreFactory,
+} from "./deep-diagnostics/index.js";
+import type { DeepCaptureStore } from "./deep-diagnostics/index.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
@@ -515,6 +520,7 @@ async function runServe(
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
   let requestLedgerStore: RequestLedgerStore | undefined;
+  let deepCaptureStore: DeepCaptureStore | undefined;
   try {
     try {
       descriptor = await publishControlPlaneDescriptor({
@@ -562,6 +568,16 @@ async function runServe(
       },
     }).open();
     const ownedLedgerStore = requestLedgerStore;
+    // Ticket 22: the bounded capture store opens once at serve level and
+    // survives Data Plane restarts; it stays fail-closed (no appends)
+    // until the running Data Plane composition attaches the credential-
+    // owner scrubber, so raw bodies never reach disk pattern-only.
+    deepCaptureStore = await createDeepCaptureStoreFactory({
+      configuration: bindDeepDiagnosticsConfiguration(
+        config.deepDiagnostics,
+      ),
+    }).open();
+    const ownedCaptureStore = deepCaptureStore;
     const controlPipe = await createProductionControlPipe();
     // The canonical LuckyToken-owned models.json: defaults to `models.json`
     // next to the config file (the desktop layout's `~/.luckytoken/models.json`)
@@ -591,6 +607,7 @@ async function runServe(
         initial: {
           "server.port": config.server.port,
           "server.bindHost": config.server.host,
+          "diagnostics.deepCapture.enabled": config.deepDiagnostics.enabled,
         },
       },
     );
@@ -706,6 +723,7 @@ async function runServe(
             shutdownSignal: shutdownController.signal,
             diagnosticsStore: ownedDiagnosticsStore,
             requestLedgerStore: ownedLedgerStore,
+            deepCaptureStore: ownedCaptureStore,
             settingsRegistry,
             modelsStore: catalogCacheStore,
             // Ticket 14/15: the one alias registry owns the data plane
@@ -820,6 +838,7 @@ async function runServe(
         controlPlane?.close() ?? Promise.resolve(),
         diagnosticsStore?.close() ?? Promise.resolve(),
         requestLedgerStore?.close() ?? Promise.resolve(),
+        deepCaptureStore?.close() ?? Promise.resolve(),
       ]);
       catalogController.dispose();
       if (results.some((result) => result.status === "rejected")) {
@@ -845,6 +864,9 @@ async function runServe(
       // (bounded query + opt-in typed events) from the serve-level store,
       // even while the Data Plane is stopped.
       requestLedger: requestLedgerStore,
+      // Ticket 22: the Control Plane serves bounded capture queries and
+      // opt-in typed capture-state events from the serve-level store.
+      capture: deepCaptureStore,
       requestIdentitiesHandler: () =>
         Promise.resolve({
           records: requestIdentities?.list() ?? Object.freeze([]),

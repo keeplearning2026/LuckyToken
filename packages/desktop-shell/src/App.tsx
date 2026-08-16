@@ -431,6 +431,7 @@ function SettingsDeveloperLab({
 }: SettingsDeveloperLabProps) {
   const anthropic = settings?.["protocols.anthropic-messages.enabled"];
   const responses = settings?.["protocols.openai-responses.enabled"];
+  const deepCapture = settings?.["diagnostics.deepCapture.enabled"];
   const port = settings?.["server.port"];
   const bindHost = settings?.["server.bindHost"];
   return (
@@ -476,6 +477,32 @@ function SettingsDeveloperLab({
                 />
               </label>
             )}
+          </div>
+        )}
+      </div>
+      <div className="settings-group">
+        <strong>Deep diagnostics</strong>
+        {deepCapture === undefined ? (
+          <p>No registered deep diagnostics settings are available.</p>
+        ) : (
+          <div className="settings-rows">
+            <label className="settings-row">
+              <span>
+                Capture raw request/response artifacts
+                <small>
+                  Hot-applies to requests accepted while enabled; raw capture
+                  is redacted and kept under bounded retention.
+                </small>
+              </span>
+              <input
+                checked={deepCapture.value === true}
+                disabled={busy}
+                onChange={(event) =>
+                  onSet(deepCapture.key, event.target.checked)
+                }
+                type="checkbox"
+              />
+            </label>
           </div>
         )}
       </div>

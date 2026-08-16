@@ -247,6 +247,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
         // The previous composition's ledger store closes with its data
         // plane; the shared diagnostics store and settings registry stay.
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
         composition = await buildComposition();
         server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
@@ -261,6 +262,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
         await host.close();
         composition.diagnosticsStore.close();
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
       },
     };
     fixtures.push(fixture);
@@ -845,6 +847,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
         // The previous composition's ledger store closes with its data
         // plane; the shared diagnostics store and settings registry stay.
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
         composition = await buildComposition();
         server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
@@ -859,6 +862,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
         await host.close();
         composition.diagnosticsStore.close();
         composition.requestLedger.close();
+        composition.deepCaptureStore.close();
       },
     };
     fixtures.push(fixture);

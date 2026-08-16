@@ -66,6 +66,13 @@
   "runtimeDiagnostics": {
     "directory": "state/diagnostics"
   },
+  "deepDiagnostics": {
+    "directory": "state/deep-diagnostics",
+    "enabled": false,
+    "maxCaptureBytes": 4194304,
+    "retentionAgeMs": 604800000,
+    "maxCaptures": 1000
+  },
   "pi": {
     "directory": "pi"
   },

@@ -20,12 +20,13 @@ import { createConfiguredLuckyTokenComposition } from "../../src/composition.js"
  */
 describe("effective composition in the data plane", () => {
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
 
   afterEach(async () => {
     compositions.splice(0).forEach((composition) => {
       composition.diagnosticsStore.close();
       composition.requestLedger.close();
+        composition.deepCaptureStore.close();
     });
     await Promise.all(
       directories.splice(0).map((directory) =>
