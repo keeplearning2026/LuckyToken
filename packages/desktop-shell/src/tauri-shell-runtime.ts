@@ -1,5 +1,6 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
+  RegisteredSetting,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -107,6 +108,41 @@ function decodeDataPlaneStatus(value: unknown) {
   };
 }
 
+function decodeRegisteredSettings(
+  value: unknown,
+): Readonly<Record<string, RegisteredSetting>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, RegisteredSetting> = Object.create(null);
+  for (const [key, setting] of Object.entries(value)) {
+    if (!isRecord(setting) || typeof setting.key !== "string") {
+      return undefined;
+    }
+    // Minimal structural check; the renderer projection (projectSettings)
+    // performs the strict allowlist validation before anything renders.
+    result[key] = setting as unknown as RegisteredSetting;
+  }
+  return Object.keys(result).length === 0 ? undefined : Object.freeze(result);
+}
+
+function decodeLanConfirmation(value: unknown) {
+  if (
+    !isRecord(value) ||
+    typeof value.actionId !== "string" ||
+    value.actionId.length === 0 ||
+    value.settingKey !== "server.bindHost" ||
+    typeof value.value !== "string" ||
+    typeof value.message !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    actionId: value.actionId,
+    settingKey: "server.bindHost" as const,
+    value: value.value,
+    message: value.message,
+  };
+}
+
 function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefined {
   if (
     !isRecord(value) ||
@@ -146,6 +182,10 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
     ) {
       return undefined;
     }
+    // The settings and LAN-confirmation projections are validated by the
+    // renderer allowlist; forward the raw snapshot fields unchanged.
+    const settings = decodeRegisteredSettings(snapshot.settings);
+    const confirmation = decodeLanConfirmation(snapshot.confirmation);
     return {
       revision,
       connection: "connected",
@@ -156,6 +196,8 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
         modelDataPlane: snapshot.modelDataPlane,
         provider: snapshot.provider,
         ...(dataPlane === undefined ? {} : { dataPlane }),
+        ...(settings === undefined ? {} : { settings }),
+        ...(confirmation === undefined ? {} : { confirmation }),
       },
     };
   }

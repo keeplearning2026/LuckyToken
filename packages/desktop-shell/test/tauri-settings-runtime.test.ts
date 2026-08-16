@@ -38,16 +38,28 @@ describe("Tauri settings runtime commands", () => {
     };
     const runtime = createTauriDesktopRuntime(bridge);
 
-    await runtime.executeSettingsCommand({
+    const setState = await runtime.executeSettingsCommand({
       command: "set",
       key: "protocols.anthropic-messages.enabled",
       value: false,
     });
-    await runtime.executeSettingsCommand({
+    const queryState = await runtime.executeSettingsCommand({
       command: "query",
       keys: ["protocols.anthropic-messages.enabled"],
     });
 
     expect(calls).toEqual(["shell_settings_set", "shell_settings_query"]);
+    // The settings projection must reach the renderer through the live
+    // bridge: the set result applies false, the query result keeps true.
+    expect(setState.kind).toBe("connected");
+    if (setState.kind !== "connected") return;
+    expect(setState.settings?.["protocols.anthropic-messages.enabled"]?.value).toBe(
+      false,
+    );
+    expect(queryState.kind).toBe("connected");
+    if (queryState.kind !== "connected") return;
+    expect(
+      queryState.settings?.["protocols.anthropic-messages.enabled"]?.value,
+    ).toBe(true);
   });
 });

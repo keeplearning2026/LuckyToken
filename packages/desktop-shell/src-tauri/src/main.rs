@@ -3,13 +3,20 @@
 mod control_plane_v1;
 mod native_discovery;
 mod shell_bridge;
+mod tray_lifecycle;
+mod tray_surface;
 
 use std::sync::Arc;
 
 use control_plane_v1::{NativeControlPlaneConnector, RuntimeCommand, SettingsCommand};
 use native_discovery::NativeControlPlaneDiscovery;
-use shell_bridge::{ShellBridge, ShellStateDto, TauriMainWindowEmitter};
-use tauri::{Manager, State};
+use shell_bridge::{ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    Manager, State,
+};
+use tray_surface::{TrayStateEmitter, TRAY_ID, TRAY_QUIT_ID, TRAY_SHOW_ID};
 
 #[tauri::command]
 async fn shell_snapshot(state: State<'_, ShellBridge>) -> Result<ShellStateDto, ()> {
@@ -21,9 +28,7 @@ async fn shell_retry(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
 ) -> Result<ShellStateDto, ()> {
-    Ok(state
-        .retry(Arc::new(TauriMainWindowEmitter::new(app)))
-        .await)
+    Ok(state.retry(shell_emitter(app)).await)
 }
 
 async fn run_runtime_command(
@@ -31,9 +36,7 @@ async fn run_runtime_command(
     state: State<'_, ShellBridge>,
     command: RuntimeCommand,
 ) -> Result<ShellStateDto, ()> {
-    Ok(state
-        .runtime_command(command, Arc::new(TauriMainWindowEmitter::new(app)))
-        .await)
+    Ok(state.runtime_command(command, shell_emitter(app)).await)
 }
 
 #[tauri::command]
@@ -65,9 +68,7 @@ async fn run_settings_command(
     state: State<'_, ShellBridge>,
     command: SettingsCommand,
 ) -> Result<ShellStateDto, ()> {
-    Ok(state
-        .settings_command(command, Arc::new(TauriMainWindowEmitter::new(app)))
-        .await)
+    Ok(state.settings_command(command, shell_emitter(app)).await)
 }
 
 #[tauri::command]
@@ -94,26 +95,64 @@ async fn shell_settings_confirm(
     run_settings_command(app, state, SettingsCommand::Confirm).await
 }
 
+/// Fans a bridge state emission out to every public surface: the renderer
+/// window and the tray. Exactly one bridge operation is ever active (the
+/// bridge aborts the previous one on retry), so both surfaces always observe
+/// the same revisioned state stream.
+struct CompositeEmitter {
+    emitters: Vec<Arc<dyn ShellStateEmitter>>,
+}
+
+impl ShellStateEmitter for CompositeEmitter {
+    fn emit(&self, state: &ShellStateDto) {
+        for emitter in &self.emitters {
+            emitter.emit(state);
+        }
+    }
+}
+
+fn shell_emitter(app: tauri::AppHandle) -> Arc<dyn ShellStateEmitter> {
+    let window: Arc<dyn ShellStateEmitter> = Arc::new(TauriMainWindowEmitter::new(app.clone()));
+    let mut emitters: Vec<Arc<dyn ShellStateEmitter>> = vec![window];
+    if let Some(tray) = app.try_state::<Arc<TrayStateEmitter>>() {
+        let tray: Arc<dyn ShellStateEmitter> = tray.inner().clone();
+        emitters.push(tray);
+    }
+    Arc::new(CompositeEmitter { emitters })
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn quit_application(app: &tauri::AppHandle, bridge: &ShellBridge) {
+    let bridge = bridge.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        bridge.shutdown().await;
+        app.exit(0);
+    });
+}
+
 fn main() {
     let app = tauri::Builder::default()
         // Single-instance must be registered first so a second process never
         // initializes a competing Control Plane connection.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .on_window_event(|window, event| {
+            // Window Close is a hide, never a quit: the application and the
+            // Data Plane stay alive and the tray keeps the window reachable.
+            // The explicit Quit intent belongs exclusively to the tray Quit
+            // command (TRAY_QUIT_ID); Close never aliases to it.
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let bridge = window.state::<ShellBridge>().inner().clone();
-                    let app_handle = window.app_handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        bridge.shutdown().await;
-                        app_handle.exit(0);
-                    });
+                    let _ = window.hide();
                 }
             }
         })
@@ -125,9 +164,50 @@ fn main() {
             let discovery = NativeControlPlaneDiscovery::from_app(app.handle());
             let bridge = ShellBridge::new(Arc::new(NativeControlPlaneConnector::new(discovery)));
             app.manage(bridge.clone());
-            let emitter = Arc::new(TauriMainWindowEmitter::new(app.handle().clone()));
+            // Exactly one tray icon is created once at setup with stable menu
+            // item ids; repeated Close/Show cycles never rebuild it, so no
+            // tray icon or menu subscription is ever duplicated. The managed
+            // TrayStateEmitter keeps the tray icon and menu alive for the
+            // whole application lifetime.
+            let surface = Arc::new(tray_surface::TraySurface::new());
+            app.manage(surface.clone());
+            let status_item = MenuItem::with_id(
+                app,
+                "tray-status",
+                surface.current_label(),
+                false,
+                None::<&str>,
+            )?;
+            let show_item =
+                MenuItem::with_id(app, TRAY_SHOW_ID, "Show LuckyToken", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, TRAY_QUIT_ID, "Quit LuckyToken", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let tray_menu =
+                Menu::with_items(app, &[&status_item, &separator, &show_item, &quit_item])?;
+            let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    TRAY_SHOW_ID => show_main_window(app),
+                    TRAY_QUIT_ID => {
+                        let bridge = app.state::<ShellBridge>().inner().clone();
+                        quit_application(app, &bridge);
+                    }
+                    _ => {}
+                });
+            if let Some(icon) = app.default_window_icon() {
+                builder = builder.icon(icon.clone());
+            }
+            let tray = builder.build(app)?;
+            let tray_emitter = Arc::new(TrayStateEmitter::new(surface.clone(), status_item, tray));
+            app.manage(tray_emitter.clone());
+            // One bridge operation serves both surfaces; the automatic Start
+            // is the native connector's one-shot gate.
+            let bridge_for_task = bridge.clone();
+            let emitter = shell_emitter(app.handle().clone());
             tauri::async_runtime::spawn(async move {
-                bridge.retry(emitter).await;
+                bridge_for_task.retry(emitter).await;
             });
             Ok(())
         })

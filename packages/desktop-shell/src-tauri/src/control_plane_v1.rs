@@ -208,13 +208,28 @@ impl ControlPlaneSession for ConnectedSession {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<StatusSnapshot, SessionFailure>> + Send + '_>> {
         Box::pin(async move {
-            let value = read_json_frame(&mut self.pipe)
-                .await
-                .map_err(|failure| match failure {
-                    FrameFailure::Io => SessionFailure::TransportLost,
-                    FrameFailure::Protocol => SessionFailure::ProtocolError,
-                })?;
-            decode_status_event(&value).ok_or(SessionFailure::ProtocolError)
+            // The status-only subscription skips typed non-status events
+            // (e.g. Ticket 07 diagnostics events) instead of treating them
+            // as protocol errors: they belong to other subscribers and must
+            // never tear down the status stream.
+            loop {
+                let value =
+                    read_json_frame(&mut self.pipe)
+                        .await
+                        .map_err(|failure| match failure {
+                            FrameFailure::Io => SessionFailure::TransportLost,
+                            FrameFailure::Protocol => SessionFailure::ProtocolError,
+                        })?;
+                match decode_status_event(&value) {
+                    Some(snapshot) => return Ok(snapshot),
+                    None => match decode_foreign_event(&value) {
+                        // A well-formed but non-status typed event: skip it.
+                        Some(()) => continue,
+                        // Malformed or unreadable status frames stay fatal.
+                        None => return Err(SessionFailure::ProtocolError),
+                    },
+                }
+            }
         })
     }
 }
@@ -708,6 +723,19 @@ fn decode_status_event(value: &Value) -> Option<StatusSnapshot> {
     (snapshot.sequence == sequence).then_some(snapshot)
 }
 
+/// Recognizes a well-formed Control Plane `event` frame whose inner event is
+/// typed but not `status_changed` (e.g. Ticket 07 diagnostics events). Such
+/// frames are foreign to the status-only subscription and are skipped, never
+/// consumed or treated as protocol errors.
+fn decode_foreign_event(value: &Value) -> Option<()> {
+    if value.get("type").and_then(Value::as_str) != Some("event") {
+        return None;
+    }
+    let event = value.get("event")?;
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    (event_type != "status_changed").then_some(())
+}
+
 #[derive(Clone, Copy)]
 enum FrameFailure {
     Io,
@@ -1055,5 +1083,112 @@ mod tests {
             }
         }))
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn status_subscription_skips_diagnostics_typed_events_without_tearing_down() {
+        // Ticket 07 adds typed diagnostics events to the Control Plane wire.
+        // The status-only bridge subscription must never consume them and
+        // must keep serving status events that follow them.
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+
+        let session_task = tokio::spawn(async move {
+            let session = connect_session(&pipe_name, "desktop-test-capability".to_owned(), false)
+                .await
+                .expect("session must negotiate a compatible hello");
+            let ConnectResult::Connected(mut session) = session else {
+                panic!("reconnect must produce a connected session");
+            };
+            session.next_status().await
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let status = server.next_frame().await;
+        assert_eq!(
+            status.get("type").and_then(Value::as_str),
+            Some("get_status")
+        );
+        server
+            .send(&json!({
+                "type": "status_result",
+                "requestId": "desktop-status",
+                "snapshot": {
+                    "sequence": 1,
+                    "modelDataPlane": "running",
+                    "provider": "unconfigured"
+                }
+            }))
+            .await;
+        let subscribe = server.next_frame().await;
+        assert_eq!(
+            subscribe.get("type").and_then(Value::as_str),
+            Some("subscribe")
+        );
+        server
+            .send(&json!({"type": "subscribed", "requestId": "desktop-subscribe"}))
+            .await;
+
+        // A diagnostics-typed event on the status subscription must be
+        // skipped, not treated as a protocol error.
+        server
+            .send(&json!({
+                "type": "event",
+                "event": {
+                    "type": "diagnostic",
+                    "record": {
+                        "id": "diag-1",
+                        "kind": "invocation",
+                        "createdAt": "2026-08-15T00:00:00.000Z",
+                        "data": {"raw": "redacted"}
+                    }
+                }
+            }))
+            .await;
+        // The following status event must still surface.
+        server
+            .send(&json!({
+                "type": "event",
+                "event": {
+                    "type": "status_changed",
+                    "sequence": 2,
+                    "snapshot": {
+                        "sequence": 2,
+                        "modelDataPlane": "running",
+                        "provider": "unconfigured"
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("status must surface within the timeout")
+            .expect("status session task must not panic")
+            .expect("status event after a skipped diagnostics event must not be a protocol error");
+        assert_eq!(
+            result.sequence, 2,
+            "status event after a skipped diagnostics event must surface"
+        );
     }
 }
