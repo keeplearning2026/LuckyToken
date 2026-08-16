@@ -115,7 +115,10 @@ export interface ModelsFileError {
 /** Full authoritative models.json state returned by the models commands.
  *  `raw` is the exact current file content (or "" when the file is absent)
  *  so the raw editor can round-trip bytes; `providers` is the parsed record
- *  for the structured editor and carries provider/model extension fields. */
+ *  for the structured editor and carries provider/model extension fields.
+ *  `catalog` (Ticket 09) is the effective built-in + user catalog projection
+ *  and is present exactly when `valid` is true; it never carries credentials
+ *  or request auth state. */
 export interface ModelsFileState {
   readonly revision: number;
   readonly path: string;
@@ -123,7 +126,92 @@ export interface ModelsFileState {
   readonly valid: boolean;
   readonly raw: string;
   readonly providers?: Readonly<Record<string, unknown>>;
+  /** Effective Provider/model catalog (Ticket 09). */
+  readonly catalog?: EffectiveCatalogProjection;
   readonly error?: ModelsFileError;
+}
+
+/**
+ * The repository-pinned Pi implementation that the effective catalog
+ * composition is compatible with. Every effective catalog projection
+ * identifies its baseline so consumers can tell which schema/semantics
+ * produced the result.
+ */
+export interface EffectiveCatalogBaseline {
+  readonly package: "@earendil-works/pi-coding-agent";
+  readonly version: "0.84.1";
+  readonly schema: "pi-coding-agent-0.84.1-models-json-schema";
+}
+
+/** Source layer of an effective Provider entry. */
+export type EffectiveProviderLayer = "builtin" | "user" | "overlaid";
+
+/** Source layer of an effective model entry. `overridden` is the topmost
+ *  layer: a model that is also overridden is labeled `overridden` and its
+ *  `overriddenFields` names the fields the modelOverrides contributed. */
+export type EffectiveModelLayer =
+  | "builtin"
+  | "user"
+  | "upserted"
+  | "overridden";
+
+/** Public cost facts of an effective model (pinned shape). */
+export interface EffectiveModelCost {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly tiers?: readonly unknown[];
+}
+
+/**
+ * One effective model: the exact facts Pi would construct from the same
+ * valid input. Credential and request-state fields (apiKey, headers, auth)
+ * never appear here — Ticket 10 owns header/auth compatibility.
+ */
+export interface EffectiveModelProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly api: string;
+  readonly provider: string;
+  readonly baseUrl: string;
+  readonly reasoning: boolean;
+  readonly input: readonly ("text" | "image")[];
+  readonly cost: EffectiveModelCost;
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+  readonly layer: EffectiveModelLayer;
+  /** Fields the provider `modelOverrides` contributed to this model. */
+  readonly overriddenFields?: readonly string[];
+  readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
+  readonly compat?: Readonly<Record<string, unknown>>;
+}
+
+/** One effective Provider: built-in base facts overlaid by user config. */
+export interface EffectiveProviderProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUrl?: string;
+  readonly layer: EffectiveProviderLayer;
+  readonly models: readonly EffectiveModelProjection[];
+}
+
+/** Value-free per-Provider composition failure (pinned Pi wording). */
+export interface EffectiveCatalogCompositionError {
+  readonly providerId: string;
+  readonly message: string;
+}
+
+/**
+ * The authoritative effective Provider/model catalog (Ticket 09): Pi
+ * built-ins as the lower layer with valid models.json configuration applied
+ * above them with pinned Pi semantics. One projection, no credentials.
+ */
+export interface EffectiveCatalogProjection {
+  readonly schemaVersion: "luckytoken-effective-catalog-v1";
+  readonly baseline: EffectiveCatalogBaseline;
+  readonly providers: readonly EffectiveProviderProjection[];
+  readonly compositionErrors: readonly EffectiveCatalogCompositionError[];
 }
 
 export type ModelsCommand =

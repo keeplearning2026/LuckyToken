@@ -18,6 +18,7 @@ import {
   createModelsJsonAuthority,
   type ModelsJsonFileSystem,
 } from "../../src/models-config/authority.js";
+import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
 /**
  * Ticket 08 public seam: the versioned Control Plane models catalog commands.
@@ -50,6 +51,7 @@ describe("models.json through the Control Plane", () => {
     const path = options.file ?? join(options.directory, "models.json");
     const authority = createModelsJsonAuthority({
       path,
+      compose: (providers) => composeEffectiveCatalog(providers),
       ...(options.fileSystem === undefined ? {} : { fileSystem: options.fileSystem }),
     });
     const endpoint: ControlPlaneEndpoint = {

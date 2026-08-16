@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  EffectiveCatalogProjection,
+  EffectiveModelLayer,
+  EffectiveModelProjection,
+  EffectiveProviderLayer,
+  EffectiveProviderProjection,
   ModelsCommand,
   ModelsCommandResult,
   ModelsFileError,
@@ -17,6 +22,11 @@ import type {
  * editor round-trips the exact bytes. Both save through the same Control
  * Plane models commands with compare-and-swap revisions: a stale revision
  * returns an explicit conflict banner instead of losing updates.
+ *
+ * Ticket 09 adds the read-only effective catalog view: the exact catalog
+ * the Control Plane composes from the authoritative file plus the Pi
+ * built-in base, with the built-in / user / overridden source layers
+ * distinguished. The renderer never builds a second catalog registry.
  */
 
 export type ModelsFileErrorKind = ModelsFileError["kind"];
@@ -732,6 +742,129 @@ function StructuredModelsEditor({ providers, version, disabled, onChange }: Mode
   );
 }
 
+const providerLayerLabel: Readonly<Record<EffectiveProviderLayer, string>> = {
+  builtin: "built-in",
+  user: "user-defined",
+  overlaid: "built-in + overlay",
+};
+
+const modelLayerLabel: Readonly<Record<EffectiveModelLayer, string>> = {
+  builtin: "built-in",
+  user: "user-defined",
+  upserted: "user-upserted",
+  overridden: "overridden",
+};
+
+function LayerBadge({ label }: { readonly label: string }) {
+  return <span className="effective-badge">{label}</span>;
+}
+
+function EffectiveModelRow({
+  model,
+}: {
+  readonly model: EffectiveModelProjection;
+}) {
+  return (
+    <li className="effective-model">
+      <span className="effective-model-id">
+        <strong>{model.id}</strong>
+        <LayerBadge label={modelLayerLabel[model.layer]} />
+      </span>
+      <span className="effective-model-facts">
+        {model.name !== model.id ? (
+          <span className="effective-fact">{model.name}</span>
+        ) : null}
+        <span className="effective-fact">{model.api}</span>
+        <span className="effective-fact">{model.baseUrl || "—"}</span>
+        <span className="effective-fact">
+          context {model.contextWindow} · max {model.maxTokens}
+        </span>
+        <span className="effective-fact">
+          {model.reasoning ? "reasoning" : "non-reasoning"}
+        </span>
+        <span className="effective-fact">{model.input.join("+")}</span>
+        {model.overriddenFields === undefined ? null : (
+          <span className="effective-fact effective-overridden-fields">
+            overridden: {model.overriddenFields.join(", ")}
+          </span>
+        )}
+      </span>
+    </li>
+  );
+}
+
+function EffectiveProviderCard({
+  provider,
+}: {
+  readonly provider: EffectiveProviderProjection;
+}) {
+  return (
+    <div className="models-card effective-provider">
+      <div className="models-card-head">
+        <strong>{provider.id}</strong>
+        <LayerBadge label={providerLayerLabel[provider.layer]} />
+      </div>
+      <div className="effective-provider-facts">
+        <span className="effective-fact">{provider.name}</span>
+        <span className="effective-fact">{provider.baseUrl ?? "—"}</span>
+        <span className="effective-fact">
+          {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <ul className="effective-models">
+        {provider.models.map((model) => (
+          <EffectiveModelRow key={model.id} model={model} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EffectiveCatalogView({
+  catalog,
+  state,
+}: {
+  readonly catalog: EffectiveCatalogProjection | undefined;
+  readonly state: ModelsFileState | undefined;
+}) {
+  if (catalog === undefined) {
+    return (
+      <p className="models-empty" role="status">
+        {state === undefined
+          ? "Loading the effective catalog…"
+          : !state.present
+            ? "Save a valid models.json to see the effective catalog."
+            : "The effective catalog is unavailable while models.json is not loadable."}
+      </p>
+    );
+  }
+  return (
+    <div className="effective-catalog" aria-label="effective catalog">
+      <div className="effective-catalog-head">
+        <span className="effective-fact">
+          Effective catalog · Pi baseline {catalog.baseline.package}{" "}
+          {catalog.baseline.version}
+        </span>
+      </div>
+      {catalog.compositionErrors.length === 0 ? null : (
+        <div className="models-error effective-errors" role="alert">
+          <strong>Some Providers were not composed</strong>
+          <p>
+            {catalog.compositionErrors
+              .map((entry) => `${entry.providerId}: ${entry.message}`)
+              .join("\n")}
+          </p>
+        </div>
+      )}
+      <div className="models-stack">
+        {catalog.providers.map((provider) => (
+          <EffectiveProviderCard key={provider.id} provider={provider} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export interface ModelsFileWorkspaceProps {
   readonly result: ModelsCommandResult | undefined;
   readonly projection: ModelsProjection | undefined;
@@ -750,7 +883,9 @@ export function ModelsFileWorkspace({
   onCommand,
   onReload,
 }: ModelsFileWorkspaceProps) {
-  const [tab, setTab] = useState<"structured" | "raw">("structured");
+  const [tab, setTab] = useState<"structured" | "raw" | "effective">(
+    "structured",
+  );
   // Every draft is bound to the exact authoritative revision its content was
   // created from. A save can never carry a revision newer than its draft
   // content: it always submits the draft's baseRevision, so a stale draft is
@@ -962,7 +1097,17 @@ export function ModelsFileWorkspace({
         >
           Raw JSON editor
         </button>
+        <button
+          className={tab === "effective" ? "active" : ""}
+          onClick={() => setTab("effective")}
+          type="button"
+        >
+          Effective catalog
+        </button>
       </div>
+      {tab === "effective" ? (
+        <EffectiveCatalogView catalog={state?.catalog} state={state} />
+      ) : null}
       {tab === "structured" ? (
         <>
           {mode === "providers" ? (

@@ -1,7 +1,5 @@
 import type {
-  Api,
   ApiKeyAuth,
-  Model,
 } from "@earendil-works/pi-ai";
 
 import {
@@ -15,8 +13,9 @@ import {
  *
  * Schema validation is owned by `models-json-schema.ts` (extracted from Pi's
  * coding-agent ModelConfig), so user models.json files are schema-compatible
- * with the Pi ecosystem. This module converts validated provider configs
- * into Pi `Model` objects and api-key auth.
+ * with the Pi ecosystem. This module parses/loads validated provider configs
+ * and composes api-key auth; the effective built-in + user model composition
+ * lives in `effective-composition.ts` (Ticket 09).
  */
 
 export type ModelsJsonModelDefinition = ModelsJsonModel;
@@ -61,57 +60,6 @@ export async function loadModelsJson(
   if (Object.keys(providers).length === 0) return undefined;
   return Object.freeze({
     providers: Object.freeze(providers),
-  });
-}
-
-/**
- * Build a Pi `Model` from a models.json definition.
- *
- * `baseUrl` and `api` fall back to the provider-level values so a provider
- * can declare them once and models inherit them.
- */
-export function modelsJsonModel(
-  providerId: string,
-  definition: ModelsJsonModelDefinition,
-  providerConfig: ModelsJsonProviderConfig,
-): Model<string> {
-  const api = definition.api ?? providerConfig.api;
-  if (api === undefined) {
-    throw new Error(
-      `models.json provider ${providerId}, model ${definition.id}: no "api" specified`,
-    );
-  }
-  const baseUrl = definition.baseUrl ?? providerConfig.baseUrl;
-  if (baseUrl === undefined) {
-    throw new Error(
-      `models.json provider ${providerId}, model ${definition.id}: no "baseUrl" specified`,
-    );
-  }
-  const input = [...(definition.input ?? ["text"])];
-  const cost = definition.cost
-    ? {
-        input: definition.cost.input,
-        output: definition.cost.output,
-        cacheRead: definition.cost.cacheRead,
-        cacheWrite: definition.cost.cacheWrite,
-      }
-    : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  Object.freeze(input);
-  Object.freeze(cost);
-  return Object.freeze({
-    id: definition.id,
-    name: definition.name ?? definition.id,
-    api: api as Api,
-    provider: providerId,
-    baseUrl,
-    reasoning: definition.reasoning ?? false,
-    ...(definition.thinkingLevelMap === undefined
-      ? {}
-      : { thinkingLevelMap: definition.thinkingLevelMap }),
-    input,
-    cost,
-    contextWindow: definition.contextWindow ?? 128_000,
-    maxTokens: definition.maxTokens ?? 16_384,
   });
 }
 

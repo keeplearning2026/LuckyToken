@@ -1,6 +1,11 @@
 import type {
   ApplicationOwnership,
-
+  EffectiveCatalogCompositionError,
+  EffectiveCatalogProjection,
+  EffectiveModelLayer,
+  EffectiveModelProjection,
+  EffectiveProviderLayer,
+  EffectiveProviderProjection,
   ModelsCommandResult,
   ModelsFileError,
   ModelsProjection,
@@ -134,6 +139,201 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const effectiveModelLayers: ReadonlySet<string> = new Set([
+  "builtin",
+  "user",
+  "upserted",
+  "overridden",
+]);
+
+const effectiveProviderLayers: ReadonlySet<string> = new Set([
+  "builtin",
+  "user",
+  "overlaid",
+]);
+
+function decodeThinkingLevelMap(
+  value: unknown,
+): Readonly<Record<string, string | null>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, string | null> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string" && entry !== null) return undefined;
+    result[key] = entry;
+  }
+  return Object.freeze(result);
+}
+
+function decodeEffectiveCatalog(
+  value: unknown,
+): EffectiveCatalogProjection | undefined {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== "luckytoken-effective-catalog-v1" ||
+    !isRecord(value.baseline) ||
+    typeof value.baseline.package !== "string" ||
+    value.baseline.package.length === 0 ||
+    typeof value.baseline.version !== "string" ||
+    value.baseline.version.length === 0 ||
+    typeof value.baseline.schema !== "string" ||
+    value.baseline.schema.length === 0 ||
+    !Array.isArray(value.providers) ||
+    !Array.isArray(value.compositionErrors)
+  ) {
+    return undefined;
+  }
+  const providers: EffectiveProviderProjection[] = [];
+  for (const rawProvider of value.providers) {
+    const provider = decodeEffectiveProvider(rawProvider);
+    if (provider === undefined) return undefined;
+    providers.push(provider);
+  }
+  const compositionErrors: EffectiveCatalogCompositionError[] = [];
+  for (const entry of value.compositionErrors) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.providerId !== "string" ||
+      entry.providerId.length === 0 ||
+      typeof entry.message !== "string" ||
+      entry.message.length === 0
+    ) {
+      return undefined;
+    }
+    compositionErrors.push(
+      Object.freeze({ providerId: entry.providerId, message: entry.message }),
+    );
+  }
+  return Object.freeze({
+    schemaVersion: "luckytoken-effective-catalog-v1",
+    baseline: Object.freeze({
+      package: value.baseline.package as "@earendil-works/pi-coding-agent",
+      version: value.baseline.version as "0.84.1",
+      schema: value.baseline.schema as "pi-coding-agent-0.84.1-models-json-schema",
+    }),
+    providers: Object.freeze(providers),
+    compositionErrors: Object.freeze(compositionErrors),
+  });
+}
+
+function decodeEffectiveProvider(
+  value: unknown,
+): EffectiveProviderProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.layer !== "string" ||
+    !effectiveProviderLayers.has(value.layer) ||
+    !Array.isArray(value.models)
+  ) {
+    return undefined;
+  }
+  if (value.baseUrl !== undefined && typeof value.baseUrl !== "string") {
+    return undefined;
+  }
+  const models: EffectiveModelProjection[] = [];
+  for (const rawModel of value.models) {
+    const model = decodeEffectiveModel(rawModel);
+    if (model === undefined) return undefined;
+    models.push(model);
+  }
+  return Object.freeze({
+    id: value.id,
+    name: value.name,
+    ...(value.baseUrl === undefined ? {} : { baseUrl: value.baseUrl }),
+    layer: value.layer as EffectiveProviderLayer,
+    models: Object.freeze(models),
+  });
+}
+
+function decodeEffectiveModel(
+  value: unknown,
+): EffectiveModelProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.api !== "string" ||
+    value.api.length === 0 ||
+    typeof value.provider !== "string" ||
+    value.provider.length === 0 ||
+    typeof value.baseUrl !== "string" ||
+    typeof value.reasoning !== "boolean" ||
+    typeof value.contextWindow !== "number" ||
+    typeof value.maxTokens !== "number" ||
+    typeof value.layer !== "string" ||
+    !effectiveModelLayers.has(value.layer)
+  ) {
+    return undefined;
+  }
+  const input = value.input;
+  if (
+    !Array.isArray(input) ||
+    input.some((entry) => entry !== "text" && entry !== "image")
+  ) {
+    return undefined;
+  }
+  const cost = value.cost;
+  if (
+    !isRecord(cost) ||
+    typeof cost.input !== "number" ||
+    typeof cost.output !== "number" ||
+    typeof cost.cacheRead !== "number" ||
+    typeof cost.cacheWrite !== "number" ||
+    (cost.tiers !== undefined && !Array.isArray(cost.tiers))
+  ) {
+    return undefined;
+  }
+  const overriddenFields = value.overriddenFields;
+  if (
+    overriddenFields !== undefined &&
+    (!Array.isArray(overriddenFields) ||
+      overriddenFields.some((entry) => typeof entry !== "string"))
+  ) {
+    return undefined;
+  }
+  if (value.layer !== "overridden" && overriddenFields !== undefined) {
+    return undefined;
+  }
+  const thinkingLevelMap = decodeThinkingLevelMap(value.thinkingLevelMap);
+  if (value.thinkingLevelMap !== undefined && thinkingLevelMap === undefined) {
+    return undefined;
+  }
+  if (value.compat !== undefined && !isRecord(value.compat)) {
+    return undefined;
+  }
+  return Object.freeze({
+    id: value.id,
+    name: value.name,
+    api: value.api,
+    provider: value.provider,
+    baseUrl: value.baseUrl,
+    reasoning: value.reasoning,
+    input: Object.freeze([...input]),
+    cost: Object.freeze({
+      input: cost.input,
+      output: cost.output,
+      cacheRead: cost.cacheRead,
+      cacheWrite: cost.cacheWrite,
+      ...(cost.tiers === undefined
+        ? {}
+        : { tiers: Object.freeze([...cost.tiers]) }),
+    }),
+    contextWindow: value.contextWindow,
+    maxTokens: value.maxTokens,
+    layer: value.layer as EffectiveModelLayer,
+    ...(overriddenFields === undefined
+      ? {}
+      : { overriddenFields: Object.freeze([...overriddenFields]) }),
+    ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
+    ...(value.compat === undefined ? {} : { compat: value.compat }),
+  });
+}
+
 const modelsErrorKinds: ReadonlySet<string> = new Set([
   "parse",
   "schema",
@@ -235,6 +435,14 @@ export function decodeModelsCommandResult(
   if (providers === undefined && state.present && state.valid) {
     return undefined;
   }
+  // Ticket 09: a valid state carries exactly the effective catalog; an
+  // invalid state never does.
+  const catalog = decodeEffectiveCatalog(state.catalog);
+  if (state.catalog !== undefined && catalog === undefined) {
+    return undefined;
+  }
+  if (state.valid && catalog === undefined) return undefined;
+  if (!state.valid && catalog !== undefined) return undefined;
   const commandError = decodeModelsFileError(value.error);
   if (value.error !== undefined && commandError === undefined) {
     return undefined;
@@ -259,6 +467,7 @@ export function decodeModelsCommandResult(
       valid: state.valid,
       raw: state.raw,
       ...(providers === undefined ? {} : { providers }),
+      ...(catalog === undefined ? {} : { catalog }),
       ...(error === undefined ? {} : { error }),
     }),
     ...(commandError === undefined ? {} : { error: commandError }),

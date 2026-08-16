@@ -69,6 +69,7 @@ import { createFileSettingsStore } from "./settings/file-store.js";
 import { resolveEffectiveSettings } from "./settings/data-plane.js";
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
+import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 
 const HELP = `LuckyToken
 
@@ -468,6 +469,7 @@ async function runServe(
     // never read or written implicitly.
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
+      compose: (providers) => composeEffectiveCatalog(providers),
     });
     const modelsState = await modelsAuthority.query();
     const provider: ApplicationStatus["provider"] =

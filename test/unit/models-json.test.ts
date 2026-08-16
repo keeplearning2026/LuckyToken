@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   modelsJsonApiKeyAuth,
-  modelsJsonModel,
   parseModelsJson,
 } from "../../src/providers/models-json.js";
 
@@ -53,34 +52,6 @@ describe("parseModelsJson", () => {
       }),
     );
     expect(config.providers["bad id"]?.baseUrl).toBe("https://x");
-  });
-});
-
-describe("modelsJsonModel", () => {
-  it("builds a Pi Model inheriting provider baseUrl and api", () => {
-    const model = modelsJsonModel(
-      "my-anthropic",
-      { id: "claude-sonnet", contextWindow: 200000 },
-      { baseUrl: "https://gateway.example.com", api: "anthropic-messages" },
-    );
-    expect(model).toMatchObject({
-      id: "claude-sonnet",
-      provider: "my-anthropic",
-      api: "anthropic-messages",
-      baseUrl: "https://gateway.example.com",
-      contextWindow: 200000,
-      maxTokens: 16384,
-      reasoning: false,
-    });
-  });
-
-  it("requires api and baseUrl", () => {
-    expect(() =>
-      modelsJsonModel("p", { id: "m" }, {}),
-    ).toThrow(/no "api" specified/);
-    expect(() =>
-      modelsJsonModel("p", { id: "m" }, { api: "anthropic-messages" }),
-    ).toThrow(/no "baseUrl" specified/);
   });
 });
 

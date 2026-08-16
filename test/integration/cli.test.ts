@@ -40,6 +40,7 @@ import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "../../src/settings/control-plane.js";
 import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
 import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
+import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -381,7 +382,10 @@ describe("LuckyToken CLI", () => {
       2,
     );
     await writeFile(modelsJsonPath, original, "utf8");
-    const authority = createModelsJsonAuthority({ path: modelsJsonPath });
+    const authority = createModelsJsonAuthority({
+      path: modelsJsonPath,
+      compose: (providers) => composeEffectiveCatalog(providers),
+    });
     const transport = createNodePipeTransport();
     const controlPlane = await startControlPlane({
       endpoint: {

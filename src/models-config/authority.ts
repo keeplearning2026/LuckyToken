@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
 import type {
+  EffectiveCatalogProjection,
   ModelsCommandResult,
   ModelsFileError,
   ModelsFileState,
@@ -96,6 +97,16 @@ export interface ModelsJsonAuthorityOptions {
   readonly path: string;
   readonly fileSystem?: ModelsJsonFileSystem;
   readonly lock?: ModelsJsonLock;
+  /**
+   * Effective catalog composition (Ticket 09): computes the public
+   * built-in + user catalog projection from a parsed valid providers
+   * record. The authority is the single owner of the file facts; the
+   * composer is the single owner of the pinned Pi semantics, and the
+   * resulting projection rides on every valid authoritative state.
+   */
+  readonly compose: (
+    providers: Readonly<Record<string, unknown>>,
+  ) => EffectiveCatalogProjection;
 }
 
 export interface ModelsJsonAuthority {
@@ -385,6 +396,9 @@ function buildState(
   raw: string,
   present: boolean,
   readError: unknown | undefined,
+  compose: (
+    providers: Readonly<Record<string, unknown>>,
+  ) => EffectiveCatalogProjection,
 ): ModelsFileState {
   if (!present) {
     return Object.freeze({
@@ -434,6 +448,9 @@ function buildState(
   }
   const providers = (parsedResult.parsed as { readonly providers: Record<string, unknown> })
     .providers;
+  // The effective catalog (Ticket 09) is part of every valid authoritative
+  // state; the composer never leaks credentials or auth state into it.
+  const catalog = compose(providers);
   return Object.freeze({
     revision,
     path,
@@ -441,6 +458,7 @@ function buildState(
     valid: true,
     raw,
     providers: Object.freeze(providers),
+    catalog,
   });
 }
 
@@ -450,6 +468,7 @@ export function createModelsJsonAuthority(
   const path = options.path;
   const fileSystem = options.fileSystem ?? nodeFileSystem;
   const lock = options.lock ?? createNodeLock();
+  const compose = options.compose;
   let current: ModelsFileState = Object.freeze({
     revision: 0,
     path,
@@ -485,7 +504,7 @@ export function createModelsJsonAuthority(
     refreshed = true;
     diskPresent = present;
     diskRaw = raw;
-    const next = buildState(path, current.revision, raw, present, readError);
+    const next = buildState(path, current.revision, raw, present, readError, compose);
     if (firstObservation) {
       // The first observation is the baseline: the existing file's content
       // is revision 0, never a bump over the fictional empty state.
@@ -583,6 +602,7 @@ export function createModelsJsonAuthority(
       valid: true,
       raw: nextRaw,
       providers,
+      catalog: compose(providers),
     });
     current = next;
     return Object.freeze({ outcome: "ok", state: next });

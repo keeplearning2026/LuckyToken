@@ -8,7 +8,7 @@
 
 **Blocked by:** 08 — Structured and raw models.json management.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm the effective catalog query and models.json apply 
 
 ## Acceptance criteria
 
-- [ ] The exact pinned Pi source/schema version used as the compatibility baseline is recorded and test fixtures identify it.
-- [ ] Built-in Providers and models form the lower catalog layer before user configuration is applied.
-- [ ] A custom Provider is added with the same required/defaulted fields and validation behavior as pinned Pi.
-- [ ] A Provider entry overlays the matching built-in Provider according to pinned Pi precedence rather than replacing unrelated Provider facts.
-- [ ] A model entry upserts the canonical Provider/model target with pinned Pi identity and field semantics.
-- [ ] Multiple Providers and model upserts compose deterministically regardless of UI versus CLI edit origin.
-- [ ] The Providers and Models & Aliases pages show the effective result and distinguish source layer without inventing a second catalog authority.
-- [ ] Compatibility tests compare effective public catalog projections and relevant errors for a representative matrix of valid and malformed inputs.
+- [x] The exact pinned Pi source/schema version used as the compatibility baseline is recorded and test fixtures identify it.
+- [x] Built-in Providers and models form the lower catalog layer before user configuration is applied.
+- [x] A custom Provider is added with the same required/defaulted fields and validation behavior as pinned Pi.
+- [x] A Provider entry overlays the matching built-in Provider according to pinned Pi precedence rather than replacing unrelated Provider facts.
+- [x] A model entry upserts the canonical Provider/model target with pinned Pi identity and field semantics.
+- [x] Multiple Providers and model upserts compose deterministically regardless of UI versus CLI edit origin.
+- [x] The Providers and Models & Aliases pages show the effective result and distinguish source layer without inventing a second catalog authority.
+- [x] Compatibility tests compare effective public catalog projections and relevant errors for a representative matrix of valid and malformed inputs.

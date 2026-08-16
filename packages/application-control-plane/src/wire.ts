@@ -13,6 +13,13 @@ import {
   type ApplicationOwnership,
   type ApplicationStatus,
   type DataPlaneFailure,
+  type EffectiveCatalogCompositionError,
+  type EffectiveCatalogProjection,
+  type EffectiveModelCost,
+  type EffectiveModelLayer,
+  type EffectiveModelProjection,
+  type EffectiveProviderLayer,
+  type EffectiveProviderProjection,
   type HelloResult,
   type LanConfirmation,
   type ModelsCommand,
@@ -406,6 +413,212 @@ function decodeModelsFileErrorLocation(
   });
 }
 
+const effectiveModelLayers: ReadonlySet<string> = new Set([
+  "builtin",
+  "user",
+  "upserted",
+  "overridden",
+]);
+
+const effectiveProviderLayers: ReadonlySet<string> = new Set([
+  "builtin",
+  "user",
+  "overlaid",
+]);
+
+function decodeStringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (value.some((entry) => typeof entry !== "string")) return undefined;
+  return Object.freeze([...value]);
+}
+
+function decodeEffectiveModelCost(
+  value: unknown,
+): EffectiveModelCost | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.input !== "number" ||
+    typeof value.output !== "number" ||
+    typeof value.cacheRead !== "number" ||
+    typeof value.cacheWrite !== "number"
+  ) {
+    return undefined;
+  }
+  const tiers = value.tiers;
+  if (tiers !== undefined && !Array.isArray(tiers)) return undefined;
+  return Object.freeze({
+    input: value.input,
+    output: value.output,
+    cacheRead: value.cacheRead,
+    cacheWrite: value.cacheWrite,
+    ...(tiers === undefined ? {} : { tiers: Object.freeze([...tiers]) }),
+  });
+}
+
+function decodeThinkingLevelMap(
+  value: unknown,
+): Readonly<Record<string, string | null>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: Record<string, string | null> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string" && entry !== null) return undefined;
+    result[key] = entry;
+  }
+  return Object.freeze(result);
+}
+
+function decodeEffectiveModel(
+  value: unknown,
+): EffectiveModelProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.api !== "string" ||
+    value.api.length === 0 ||
+    typeof value.provider !== "string" ||
+    value.provider.length === 0 ||
+    typeof value.baseUrl !== "string" ||
+    typeof value.reasoning !== "boolean" ||
+    typeof value.contextWindow !== "number" ||
+    typeof value.maxTokens !== "number" ||
+    typeof value.layer !== "string" ||
+    !effectiveModelLayers.has(value.layer)
+  ) {
+    return undefined;
+  }
+  const input = value.input;
+  if (
+    !Array.isArray(input) ||
+    input.some(
+      (entry) => entry !== "text" && entry !== "image",
+    )
+  ) {
+    return undefined;
+  }
+  const cost = decodeEffectiveModelCost(value.cost);
+  if (cost === undefined) return undefined;
+  const overriddenFields = decodeStringArray(value.overriddenFields);
+  if (value.overriddenFields !== undefined && overriddenFields === undefined) {
+    return undefined;
+  }
+  const thinkingLevelMap = decodeThinkingLevelMap(value.thinkingLevelMap);
+  if (value.thinkingLevelMap !== undefined && thinkingLevelMap === undefined) {
+    return undefined;
+  }
+  const compat = value.compat;
+  if (compat !== undefined && !isRecord(compat)) return undefined;
+  if (value.layer !== "overridden" && overriddenFields !== undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    id: value.id,
+    name: value.name,
+    api: value.api,
+    provider: value.provider,
+    baseUrl: value.baseUrl,
+    reasoning: value.reasoning,
+    input: Object.freeze([...input]),
+    cost,
+    contextWindow: value.contextWindow,
+    maxTokens: value.maxTokens,
+    layer: value.layer as EffectiveModelLayer,
+    ...(overriddenFields === undefined
+      ? {}
+      : { overriddenFields }),
+    ...(thinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap }),
+    ...(compat === undefined ? {} : { compat }),
+  });
+}
+
+function decodeEffectiveProvider(
+  value: unknown,
+): EffectiveProviderProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.layer !== "string" ||
+    !effectiveProviderLayers.has(value.layer) ||
+    !Array.isArray(value.models)
+  ) {
+    return undefined;
+  }
+  if (value.baseUrl !== undefined && typeof value.baseUrl !== "string") {
+    return undefined;
+  }
+  const models: EffectiveModelProjection[] = [];
+  for (const model of value.models) {
+    const decoded = decodeEffectiveModel(model);
+    if (decoded === undefined) return undefined;
+    models.push(decoded);
+  }
+  return Object.freeze({
+    id: value.id,
+    name: value.name,
+    ...(value.baseUrl === undefined ? {} : { baseUrl: value.baseUrl }),
+    layer: value.layer as EffectiveProviderLayer,
+    models: Object.freeze(models),
+  });
+}
+
+function decodeEffectiveCatalog(
+  value: unknown,
+): EffectiveCatalogProjection | undefined {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== "luckytoken-effective-catalog-v1" ||
+    !isRecord(value.baseline) ||
+    typeof value.baseline.package !== "string" ||
+    value.baseline.package.length === 0 ||
+    typeof value.baseline.version !== "string" ||
+    value.baseline.version.length === 0 ||
+    typeof value.baseline.schema !== "string" ||
+    value.baseline.schema.length === 0 ||
+    !Array.isArray(value.providers) ||
+    !Array.isArray(value.compositionErrors)
+  ) {
+    return undefined;
+  }
+  const providers: EffectiveProviderProjection[] = [];
+  for (const provider of value.providers) {
+    const decoded = decodeEffectiveProvider(provider);
+    if (decoded === undefined) return undefined;
+    providers.push(decoded);
+  }
+  const compositionErrors: EffectiveCatalogCompositionError[] = [];
+  for (const entry of value.compositionErrors) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.providerId !== "string" ||
+      entry.providerId.length === 0 ||
+      typeof entry.message !== "string" ||
+      entry.message.length === 0
+    ) {
+      return undefined;
+    }
+    compositionErrors.push(
+      Object.freeze({ providerId: entry.providerId, message: entry.message }),
+    );
+  }
+  return Object.freeze({
+    schemaVersion: "luckytoken-effective-catalog-v1",
+    baseline: Object.freeze({
+      package: value.baseline.package as "@earendil-works/pi-coding-agent",
+      version: value.baseline.version as "0.84.1",
+      schema: value.baseline.schema as "pi-coding-agent-0.84.1-models-json-schema",
+    }),
+    providers: Object.freeze(providers),
+    compositionErrors: Object.freeze(compositionErrors),
+  });
+}
+
 export function decodeModelsFileState(value: unknown): ModelsFileState | undefined {
   if (
     !isRecord(value) ||
@@ -427,6 +640,12 @@ export function decodeModelsFileState(value: unknown): ModelsFileState | undefin
   if (providers !== undefined && !isRecord(providers)) return undefined;
   if (providers !== undefined && !value.valid) return undefined;
   if (providers === undefined && value.valid && value.present) return undefined;
+  // Ticket 09: a valid state carries exactly the effective catalog; an
+  // invalid state never does.
+  const catalog = decodeEffectiveCatalog(value.catalog);
+  if (value.catalog !== undefined && catalog === undefined) return undefined;
+  if (value.valid && catalog === undefined) return undefined;
+  if (!value.valid && catalog !== undefined) return undefined;
   return Object.freeze({
     revision: value.revision as number,
     path: value.path,
@@ -434,6 +653,7 @@ export function decodeModelsFileState(value: unknown): ModelsFileState | undefin
     valid: value.valid,
     raw: value.raw,
     ...(providers === undefined ? {} : { providers }),
+    ...(catalog === undefined ? {} : { catalog }),
     ...(error === undefined ? {} : { error }),
   });
 }

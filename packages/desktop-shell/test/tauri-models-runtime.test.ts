@@ -11,6 +11,17 @@ import {
  * a newer one arrives.
  */
 describe("Tauri models runtime commands", () => {
+  const catalogFixture = {
+    schemaVersion: "luckytoken-effective-catalog-v1",
+    baseline: {
+      package: "@earendil-works/pi-coding-agent",
+      version: "0.84.1",
+      schema: "pi-coding-agent-0.84.1-models-json-schema",
+    },
+    providers: [],
+    compositionErrors: [],
+  };
+
   function connectedPayload(
     revision: number,
     extra: Record<string, unknown> = {},
@@ -46,6 +57,7 @@ describe("Tauri models runtime commands", () => {
               valid: true,
               raw,
               providers: { ollama: { baseUrl: "http://x" } },
+              catalog: catalogFixture,
             },
           },
         });
@@ -104,6 +116,7 @@ describe("Tauri models runtime commands", () => {
                 valid: true,
                 raw: "raw-content",
                 providers: {},
+                catalog: catalogFixture,
               },
             },
           });
