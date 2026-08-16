@@ -44,6 +44,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
   /** Present only while a non-loopback bind action waits for confirmation. */
   readonly confirmation?: LanConfirmation;
+  /** Optional sanitized models.json projection (Ticket 08). */
+  readonly models?: ModelsProjection;
 }
 
 /** Registered setting: type, default, validation, sensitivity, and apply mode
@@ -65,6 +67,78 @@ export interface LanConfirmation {
   readonly settingKey: "server.bindHost";
   readonly value: string;
   readonly message: string;
+}
+
+/**
+ * Sanitized models.json file projection (Ticket 08). Merged into published
+ * status snapshots: only the revision, file location, presence, validity and
+ * a value-free error are visible; raw content and provider data never reach
+ * the status stream.
+ */
+export interface ModelsProjection {
+  readonly revision: number;
+  readonly path: string;
+  readonly present: boolean;
+  readonly valid: boolean;
+  readonly error?: ModelsFileError;
+}
+
+export type ModelsFileErrorKind = "parse" | "schema" | "load" | "storage";
+
+/** Exact source location for syntax errors: 1-based line/column plus the
+ *  character position within the parsed (comment-stripped) text. */
+export interface ModelsFileErrorLocation {
+  readonly line: number;
+  readonly column: number;
+  readonly position?: number;
+}
+
+export interface ModelsFileError {
+  readonly kind: ModelsFileErrorKind;
+  readonly message: string;
+  readonly location?: ModelsFileErrorLocation;
+}
+
+/** Full authoritative models.json state returned by the models commands.
+ *  `raw` is the exact current file content (or "" when the file is absent)
+ *  so the raw editor can round-trip bytes; `providers` is the parsed record
+ *  for the structured editor and carries provider/model extension fields. */
+export interface ModelsFileState {
+  readonly revision: number;
+  readonly path: string;
+  readonly present: boolean;
+  readonly valid: boolean;
+  readonly raw: string;
+  readonly providers?: Readonly<Record<string, unknown>>;
+  readonly error?: ModelsFileError;
+}
+
+export type ModelsCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "write_raw";
+      readonly revision: number;
+      readonly content: string;
+    }
+  | {
+      readonly command: "write_structured";
+      readonly revision: number;
+      readonly providers: Readonly<Record<string, unknown>>;
+    };
+
+export type ModelsCommandOutcome =
+  | "ok"
+  | "conflict"
+  | "invalid"
+  | "storage_failure";
+
+export interface ModelsCommandResult {
+  readonly outcome: ModelsCommandOutcome;
+  /** The authoritative state after the attempt (current revision). */
+  readonly state: ModelsFileState;
+  /** Value-free failure detail: the rejected proposal's validation error
+   *  (`invalid`) or the sanitized storage fault (`storage_failure`). */
+  readonly error?: ModelsFileError;
 }
 
 export type SettingsCommand =
@@ -192,6 +266,13 @@ export type SettingsCommandHandler = (
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
 }>;
 
+/** Handles models.json catalog commands and returns a closed outcome plus
+ *  the authoritative file state. The host owns the snapshot merge and the
+ *  status publish on state-changing outcomes. */
+export type ModelsCommandHandler = (
+  command: ModelsCommand,
+) => Promise<ModelsCommandResult>;
+
 /** Live settings projection merged into every published status snapshot. */
 export interface SettingsProjection {
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
@@ -204,6 +285,7 @@ export interface ControlPlaneClient {
   getStatus(): Promise<StatusSnapshot>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettingsCommand(command: SettingsCommand): Promise<SettingsCommandResult>;
+  executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

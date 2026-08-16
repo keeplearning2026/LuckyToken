@@ -8,8 +8,9 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, RuntimeCommand,
-    SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, ModelsCommand,
+    ModelsCommandResultWire, ModelsProjectionWire, RuntimeCommand, SessionFailure, SettingsCommand,
+    StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -39,6 +40,8 @@ pub(crate) enum ShellStateDto {
         #[serde(rename = "contractVersion")]
         contract_version: u64,
         snapshot: Box<StatusSnapshot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        models: Option<Box<ModelsCommandResultWire>>,
     },
     VersionMismatch {
         revision: u64,
@@ -64,12 +67,14 @@ impl ShellStateDto {
                 application_version,
                 contract_version,
                 snapshot,
+                models,
                 ..
             } => Self::Connected {
                 revision: next,
                 application_version,
                 contract_version,
                 snapshot,
+                models,
             },
             Self::VersionMismatch {
                 requested_version,
@@ -233,6 +238,7 @@ impl ShellBridge {
                             application_version,
                             contract_version: CONTROL_PLANE_VERSION,
                             snapshot: Box::new(snapshot),
+                            models: None,
                         },
                     )
                     .await
@@ -280,6 +286,60 @@ impl ShellBridge {
                             application_version,
                             contract_version: CONTROL_PLANE_VERSION,
                             snapshot: merged,
+                            models: None,
+                        },
+                    )
+                    .await
+            }
+            Err(failure) => {
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Unavailable {
+                            revision: 0,
+                            reason: unavailable_reason(failure),
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+
+    pub(crate) async fn models_command(
+        &self,
+        command: ModelsCommand,
+        emitter: Arc<dyn ShellStateEmitter>,
+    ) -> ShellStateDto {
+        let (application_version, current_snapshot) = match self.snapshot().await {
+            ShellStateDto::Connected {
+                application_version,
+                snapshot,
+                ..
+            } => (application_version, snapshot),
+            current => return current,
+        };
+        match self.connector.models_command(command).await {
+            Ok(result) => {
+                // Merge the authoritative models state into the current
+                // snapshot's sanitized projection; the full result (raw
+                // content and providers) rides on the DTO for the editors.
+                let mut merged = current_snapshot.clone();
+                merged.models = Some(ModelsProjectionWire {
+                    revision: result.state.revision,
+                    path: result.state.path.clone(),
+                    present: result.state.present,
+                    valid: result.state.valid,
+                    error: result.state.error.clone(),
+                });
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Connected {
+                            revision: 0,
+                            application_version,
+                            contract_version: CONTROL_PLANE_VERSION,
+                            snapshot: merged,
+                            models: Some(Box::new(result)),
                         },
                     )
                     .await
@@ -357,6 +417,7 @@ async fn run_operation(
                         application_version: session.application_version().to_owned(),
                         contract_version: CONTROL_PLANE_VERSION,
                         snapshot: Box::new(session.snapshot().clone()),
+                        models: None,
                     },
                 )
                 .await;
@@ -372,6 +433,7 @@ async fn run_operation(
                                     application_version: session.application_version().to_owned(),
                                     contract_version: CONTROL_PLANE_VERSION,
                                     snapshot: Box::new(snapshot),
+                                    models: None,
                                 },
                             )
                             .await;
@@ -551,6 +613,7 @@ mod tests {
             data_plane: None,
             settings: None,
             confirmation: None,
+            models: None,
         }
     }
 
@@ -624,7 +687,9 @@ mod tests {
                 data_plane: None,
                 settings: None,
                 confirmation: None,
+                models: None,
             }),
+            models: None,
         };
 
         assert_eq!(

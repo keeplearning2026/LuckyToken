@@ -68,6 +68,57 @@ describe("LuckyToken CLI configuration", () => {
     expect(config.clientProtocols["toString"]).toBeUndefined();
   });
 
+  it("defaults the canonical models.json to the config data directory and never to Pi Agent's or the Pi credential directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
+    directories.push(directory);
+    const path = join(directory, "config.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        server: { port: 0 },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+
+    const config = await loadLuckyTokenCliConfig(path);
+    // The canonical models.json sits next to the config file (the desktop
+    // layout's `~/.luckytoken/models.json`), never inside the Pi credential
+    // directory (`<pi.directory>/models.json`) and never Pi Agent's own
+    // `~/.pi/agent/models.json`.
+    expect(config.pi.modelsJson).toBe(resolve(directory, "models.json"));
+    expect(config.pi.modelsJson).not.toBe(resolve(directory, "pi", "models.json"));
+    expect(config.pi.modelsJson).not.toContain(join("pi", "models.json"));
+    expect(config.pi.modelsJson).not.toContain(".pi");
+    expect(config.pi.modelsJson).not.toContain("agent");
+    expect(config.pi.modelsJson.startsWith(resolve(directory))).toBe(true);
+
+    // An explicit modelsJson keeps its own resolution.
+    const explicitPath = join(directory, "config-explicit.json");
+    await writeFile(
+      explicitPath,
+      JSON.stringify({
+        server: { port: 0 },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        pi: { directory: "pi", modelsJson: "models/custom.json" },
+      }),
+      "utf8",
+    );
+    const explicit = await loadLuckyTokenCliConfig(explicitPath);
+    expect(explicit.pi.modelsJson).toBe(
+      resolve(directory, "models", "custom.json"),
+    );
+  });
+
   it("preserves raw configuration under validated Provider Package names", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
     directories.push(directory);

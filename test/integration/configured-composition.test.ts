@@ -311,6 +311,70 @@ describe("configured serving composition", () => {
     );
   });
 
+  it("loads the canonical models.json from the config data directory by default", async () => {
+    const { configPath, piDirectory } = await writeConfiguration();
+    // The canonical default is `models.json` next to the config file
+    // (the desktop layout's `~/.luckytoken/models.json`), not the Pi
+    // credential directory and never Pi Agent's own data directory.
+    await writeFile(
+      join(dirname(configPath), "models.json"),
+      JSON.stringify({
+        providers: {
+          "my-anthropic": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            models: [{ id: "claude-sonnet" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const config = await loadLuckyTokenCliConfig(configPath);
+    expect(config.pi.modelsJson).toBe(
+      join(dirname(configPath), "models.json"),
+    );
+    expect(config.pi.modelsJson).not.toBe(
+      join(piDirectory, "models.json"),
+    );
+
+    const composition = await createConfiguredLuckyTokenComposition({
+      config,
+      fetch: async () => commandCodeText("unused"),
+    });
+    compositions.push(composition);
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "my-anthropic",
+      "commandcode-private",
+    ]);
+  });
+
+  it("keeps the data plane running when models.json is invalid and reports the skip", async () => {
+    const { configPath } = await writeConfiguration();
+    await writeFile(
+      join(dirname(configPath), "models.json"),
+      '{ "providers": { "broken": { "baseUrl": 42 } } }',
+      "utf8",
+    );
+    const config = await loadLuckyTokenCliConfig(configPath);
+    const invalid: unknown[] = [];
+
+    const composition = await createConfiguredLuckyTokenComposition({
+      config,
+      fetch: async () => commandCodeText("unused"),
+      onInvalidModelsJson: (error) => invalid.push(error),
+    });
+    compositions.push(composition);
+
+    // The invalid file never bricks the gateway: only the packaged provider
+    // is registered and the skip is reported instead of thrown.
+    expect(composition.userConfiguredProviderIds).toEqual(["commandcode-private"]);
+    expect(invalid).toHaveLength(1);
+    const response = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/models"),
+    );
+    expect(response.status).toBe(200);
+  });
+
   it("registers the optional OpenAI Responses protocol with its own auth and state file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-responses-"));
     directories.push(directory);

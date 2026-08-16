@@ -157,7 +157,27 @@ npm start -- control status --descriptor .luckytoken/control-plane.json
 npm start -- control start --descriptor .luckytoken/control-plane.json
 npm start -- control stop --descriptor .luckytoken/control-plane.json
 npm start -- control restart --descriptor .luckytoken/control-plane.json
+npm start -- control settings query --descriptor .luckytoken/control-plane.json
 ```
+
+The canonical `models.json` is always LuckyToken-owned: it defaults to
+`models.json` next to the config file, so the desktop layout places it at
+`~/.luckytoken/models.json` — never inside the Pi credential directory
+(`<pi.directory>/models.json`) and never Pi Agent's own data directory
+(`~/.pi/agent/models.json`). An explicit `pi.modelsJson` overrides the
+default. Providers and Models & Aliases pages in the desktop edit the same
+file through the Control Plane, and the CLI exposes the identical commands:
+
+```powershell
+npm start -- control models query --descriptor .luckytoken/control-plane.json
+npm start -- control models write-raw <revision> <content-file> --descriptor .luckytoken/control-plane.json
+npm start -- control models write-structured <revision> <providers-file> --descriptor .luckytoken/control-plane.json
+```
+
+Every write validates the proposed content first, takes the file lock, and
+replaces the file atomically; a write based on a stale revision returns an
+explicit `conflict` and never overwrites newer content. An invalid existing
+file is reported with its exact path and error and is never auto-overwritten.
 
 Startup prints every served route, normally:
 

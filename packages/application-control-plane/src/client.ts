@@ -9,6 +9,8 @@ import {
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
   type HelloResult,
+  type ModelsCommand,
+  type ModelsCommandResult,
   type RuntimeCommand,
   type RuntimeCommandResult,
   type SettingsCommand,
@@ -179,6 +181,18 @@ export async function connectApplicationControlPlane(
         command,
       });
       if (response.type !== "settings_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async executeModelsCommand(
+      command: ModelsCommand,
+    ): Promise<ModelsCommandResult> {
+      const response = await request({
+        type: "models_command",
+        command,
+      });
+      if (response.type !== "models_command_result") {
         throw new Error("Control Plane response is malformed");
       }
       return response.result;

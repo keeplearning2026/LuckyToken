@@ -59,6 +59,13 @@ export interface ConfiguredPiModelsOptions {
   readonly importModule?: ImportProviderModule;
   readonly createUuid?: () => string;
   readonly now?: () => number;
+  /**
+   * Called when models.json exists but cannot be parsed or validated
+   * (Ticket 08): the gateway keeps running without models.json providers and
+   * the Control Plane authority exposes the exact file error instead of
+   * bricking the data plane.
+   */
+  readonly onInvalidModelsJson?: (error: unknown) => void;
 }
 
 /**
@@ -132,6 +139,8 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   /** Registered settings authority for protocol enablement; when absent every
    *  configured protocol is served (Ticket 03 behavior). */
   readonly settingsRegistry?: SettingsRegistry;
+  /** See `ConfiguredPiModelsOptions.onInvalidModelsJson`. */
+  readonly onInvalidModelsJson?: (error: unknown) => void;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -150,7 +159,16 @@ export async function createConfiguredPiModels(
   externalProviderIds: readonly string[];
   userConfiguredProviderIds: readonly string[];
 }> {
-  const modelsJson = await loadModelsJson(options.modelsJsonPath);
+  // A broken models.json must never brick the data plane (Ticket 08): the
+  // gateway starts without models.json providers and the Control Plane
+  // authority exposes the exact file error for inspection instead.
+  let modelsJson: Awaited<ReturnType<typeof loadModelsJson>>;
+  try {
+    modelsJson = await loadModelsJson(options.modelsJsonPath);
+  } catch (error) {
+    modelsJson = undefined;
+    options.onInvalidModelsJson?.(error);
+  }
   const mutableModels = createModels({
     credentials:
       options.credentials ??
@@ -225,9 +243,7 @@ export async function createConfiguredLuckyTokenComposition(
   const { models, externalProviderIds, userConfiguredProviderIds } =
     await createConfiguredPiModels({
       piDirectory: config.pi.directory,
-      ...(config.pi.modelsJson === undefined
-        ? {}
-        : { modelsJsonPath: config.pi.modelsJson }),
+      modelsJsonPath: config.pi.modelsJson,
       ...(options.credentials === undefined
         ? {}
         : { credentials: options.credentials }),
@@ -236,6 +252,9 @@ export async function createConfiguredLuckyTokenComposition(
       ...(options.importModule === undefined
         ? {}
         : { importModule: options.importModule }),
+      ...(options.onInvalidModelsJson === undefined
+        ? {}
+        : { onInvalidModelsJson: options.onInvalidModelsJson }),
       createUuid: createSessionId,
       now,
     });

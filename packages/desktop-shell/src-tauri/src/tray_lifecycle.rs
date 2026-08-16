@@ -92,6 +92,7 @@ mod tests {
             }),
             settings: None,
             confirmation: None,
+            models: None,
         }
     }
 

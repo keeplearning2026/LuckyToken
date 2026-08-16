@@ -9,6 +9,13 @@ import {
   type DataPlaneFailure,
   type HelloResult,
   type LanConfirmation,
+  type ModelsCommand,
+  type ModelsCommandResult,
+  type ModelsFileError,
+  type ModelsFileErrorLocation,
+  type ModelsFileErrorKind,
+  type ModelsFileState,
+  type ModelsProjection,
   type RegisteredSetting,
   type RuntimeCommand,
   type RuntimeCommandConflict,
@@ -48,6 +55,11 @@ export type ClientRequest =
       readonly requestId: string;
       readonly command: SettingsCommand;
     }
+  | {
+      readonly type: "models_command";
+      readonly requestId: string;
+      readonly command: ModelsCommand;
+    }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
 
@@ -82,6 +94,11 @@ export type ServerMessage =
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
+    }
+  | {
+      readonly type: "models_command_result";
+      readonly requestId: string;
+      readonly result: ModelsCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -140,6 +157,10 @@ export function decodeApplicationStatus(
   if (value.settings !== undefined && settings === undefined) {
     return undefined;
   }
+  const models = decodeModelsProjection(value.models);
+  if (value.models !== undefined && models === undefined) {
+    return undefined;
+  }
   const confirmation =
     value.confirmation === undefined
       ? undefined
@@ -155,6 +176,7 @@ export function decodeApplicationStatus(
     provider: value.provider,
     ...(dataPlane === undefined ? {} : { dataPlane }),
     ...(settings === undefined ? {} : { settings }),
+    ...(models === undefined ? {} : { models }),
     ...(confirmation === undefined ? {} : { confirmation }),
   };
 }
@@ -260,6 +282,190 @@ function decodeSettingsCommand(value: unknown): SettingsCommand | undefined {
     return { command: "confirm", actionId: value.actionId };
   }
   return undefined;
+}
+
+export function decodeModelsCommand(value: unknown): ModelsCommand | undefined {
+  if (!isRecord(value) || typeof value.command !== "string") {
+    return undefined;
+  }
+  if (value.command === "query") return { command: "query" };
+  const revision = value.revision;
+  if (
+    typeof revision !== "number" ||
+    !Number.isSafeInteger(revision) ||
+    (revision as number) < 0
+  ) {
+    return undefined;
+  }
+  if (value.command === "write_raw") {
+    if (typeof value.content !== "string") return undefined;
+    return {
+      command: "write_raw",
+      revision: revision as number,
+      content: value.content,
+    };
+  }
+  if (value.command === "write_structured") {
+    if (!isRecord(value.providers)) return undefined;
+    return {
+      command: "write_structured",
+      revision: revision as number,
+      providers: value.providers,
+    };
+  }
+  return undefined;
+}
+
+const modelsErrorKinds: ReadonlySet<string> = new Set([
+  "parse",
+  "schema",
+  "load",
+  "storage",
+]);
+
+export function decodeModelsFileError(value: unknown): ModelsFileError | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.kind !== "string" ||
+    !modelsErrorKinds.has(value.kind) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  const location = decodeModelsFileErrorLocation(value.location);
+  if (value.location !== undefined && location === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: value.kind as ModelsFileErrorKind,
+    message: value.message,
+    ...(location === undefined ? {} : { location }),
+  });
+}
+
+function decodeModelsFileErrorLocation(
+  value: unknown,
+): ModelsFileErrorLocation | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.line !== "number" ||
+    !Number.isSafeInteger(value.line) ||
+    (value.line as number) < 1 ||
+    typeof value.column !== "number" ||
+    !Number.isSafeInteger(value.column) ||
+    (value.column as number) < 1
+  ) {
+    return undefined;
+  }
+  const position = value.position;
+  if (
+    (position !== undefined &&
+      (typeof position !== "number" ||
+        !Number.isSafeInteger(position) ||
+        (position as number) < 0)) ||
+    (position === undefined && value.position !== undefined)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    line: value.line as number,
+    column: value.column as number,
+    ...(position === undefined ? {} : { position: position as number }),
+  });
+}
+
+export function decodeModelsFileState(value: unknown): ModelsFileState | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    value.path.length === 0 ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean" ||
+    typeof value.raw !== "string"
+  ) {
+    return undefined;
+  }
+  const error = decodeModelsFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.valid && error !== undefined) return undefined;
+  const providers = value.providers;
+  if (providers !== undefined && !isRecord(providers)) return undefined;
+  if (providers !== undefined && !value.valid) return undefined;
+  if (providers === undefined && value.valid && value.present) return undefined;
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    raw: value.raw,
+    ...(providers === undefined ? {} : { providers }),
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+export function decodeModelsCommandResult(
+  value: unknown,
+): ModelsCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "invalid" &&
+      value.outcome !== "storage_failure")
+  ) {
+    return undefined;
+  }
+  const state = decodeModelsFileState(value.state);
+  if (state === undefined) return undefined;
+  const error = decodeModelsFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.outcome === "invalid") {
+    if (error === undefined || (error.kind !== "parse" && error.kind !== "schema")) {
+      return undefined;
+    }
+  }
+  if (value.outcome === "storage_failure") {
+    if (error === undefined || error.kind !== "storage") return undefined;
+  }
+  if (value.outcome !== "invalid" && value.outcome !== "storage_failure") {
+    if (error !== undefined) return undefined;
+  }
+  return Object.freeze({
+    outcome: value.outcome as ModelsCommandResult["outcome"],
+    state,
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+export function decodeModelsProjection(
+  value: unknown,
+): ModelsProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    value.path.length === 0 ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean"
+  ) {
+    return undefined;
+  }
+  const error = decodeModelsFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.valid && error !== undefined) return undefined;
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    ...(error === undefined ? {} : { error }),
+  });
 }
 
 export function decodeSettingsCommandResult(
@@ -437,6 +643,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       type: "valid",
       request: {
         type: "settings_command",
+        requestId,
+        command,
+      },
+    };
+  }
+  if (value.type === "models_command") {
+    const command = decodeModelsCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "models_command",
         requestId,
         command,
       },
@@ -655,6 +875,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "settings_command_result", requestId, result };
+  }
+  if (value.type === "models_command_result") {
+    const result = decodeModelsCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "models_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

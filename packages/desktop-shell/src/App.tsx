@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import type {
+  ModelsCommand,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ControlPlaneState } from "./control-plane-projection.js";
+import { ModelsFileWorkspace } from "./models-editors.js";
 import {
   productPages,
   type DesktopShellSnapshot,
@@ -24,6 +26,7 @@ export function App({ shell, retryConnection }: AppProps) {
   const [retrying, setRetrying] = useState(false);
   const [runtimeCommand, setRuntimeCommand] = useState<RuntimeCommand>();
   const [settingsCommand, setSettingsCommand] = useState<SettingsCommand>();
+  const [modelsCommand, setModelsCommand] = useState<ModelsCommand>();
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -62,6 +65,15 @@ export function App({ shell, retryConnection }: AppProps) {
       await shell.executeSettingsCommand(command);
     } finally {
       setSettingsCommand(undefined);
+    }
+  };
+
+  const executeModelsCommand = async (command: ModelsCommand) => {
+    setModelsCommand(command);
+    try {
+      await shell.executeModelsCommand(command);
+    } finally {
+      setModelsCommand(undefined);
     }
   };
 
@@ -177,6 +189,18 @@ export function App({ shell, retryConnection }: AppProps) {
             onSet={(key, value) =>
               void executeSettingsCommand({ command: "set", key, value })
             }
+          />
+        ) : null}
+        {(snapshot.activePage === "providers" ||
+          snapshot.activePage === "models-aliases") &&
+        snapshot.connection.kind === "connected" ? (
+          <ModelsPage
+            busy={modelsCommand !== undefined}
+            connection={snapshot.connection}
+            mode={
+              snapshot.activePage === "providers" ? "providers" : "models"
+            }
+            onCommand={executeModelsCommand}
           />
         ) : null}
         <section className="empty-page">
@@ -334,6 +358,36 @@ function SettingsDeveloperLab({
         </div>
       )}
     </section>
+  );
+}
+
+function ModelsPage({
+  busy,
+  connection,
+  mode,
+  onCommand,
+}: {
+  readonly busy: boolean;
+  readonly connection: Extract<ControlPlaneState, { readonly kind: "connected" }>;
+  readonly mode: "providers" | "models";
+  readonly onCommand: (command: ModelsCommand) => void;
+}) {
+  // The first visit to a models page loads the authoritative revision; the
+  // sanitized snapshot projection keeps the workspace fresh afterwards.
+  useEffect(() => {
+    if (connection.modelsResult === undefined) {
+      onCommand({ command: "query" });
+    }
+  }, [connection.modelsResult, onCommand]);
+  return (
+    <ModelsFileWorkspace
+      busy={busy}
+      mode={mode}
+      onCommand={onCommand}
+      onReload={() => onCommand({ command: "query" })}
+      projection={connection.modelsProjection}
+      result={connection.modelsResult}
+    />
   );
 }
 

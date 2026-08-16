@@ -138,6 +138,124 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
   background: linear-gradient(135deg, transparent 48%, #b6cec8 49%, #b6cec8 51%, transparent 52%), #edf5f3;
 }
 
+/* Ticket 08: models.json workspace (Providers / Models & Aliases) */
+.models-workspace {
+  display: grid;
+  gap: 14px;
+  max-width: 980px;
+}
+.models-file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid #dce4e1;
+  border-radius: 12px;
+  padding: 14px 18px;
+  background: #fff;
+}
+.models-file-card strong, .models-file-card small { display: block; }
+.models-file-card small {
+  margin-top: 3px;
+  color: #7a838e;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+.models-file-facts { display: flex; gap: 8px; flex-wrap: wrap; }
+.models-error {
+  border: 1px solid #ead6b9;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fffaf2;
+  color: #6b5a48;
+}
+.models-error strong { color: #8a4b13; }
+.models-error p { margin: 6px 0; white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.models-error small { color: #8b7762; }
+.models-external, .models-conflict {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #e3cfae;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: #fffbf4;
+  color: #6b5a48;
+  font-size: 13px;
+}
+.models-conflict { border-color: #dcb98a; }
+.models-external button, .models-conflict button, .models-save-row button, .models-card-head button, .models-subgroup-head button, .models-add, .models-add-row button, .models-tabs button {
+  border: 1px solid #6f958b;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: #174d42;
+  background: #fff;
+  cursor: pointer;
+}
+.models-external button:disabled, .models-conflict button:disabled, .models-save-row button:disabled, .models-card-head button:disabled, .models-subgroup-head button:disabled, .models-add:disabled, .models-add-row button:disabled, .models-tabs button:disabled { cursor: default; opacity: .45; }
+.models-tabs { display: flex; gap: 6px; }
+.models-tabs button.active { color: #fff; background: #1f6f5f; border-color: #1f6f5f; }
+.models-stack { display: grid; gap: 14px; }
+.models-card {
+  border: 1px solid #e1e4e9;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fff;
+}
+.models-card-head, .models-subgroup-head, .models-add-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.models-card-head strong, .models-subgroup-head strong { color: #174d42; }
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px 14px;
+}
+.models-field { display: grid; gap: 4px; font-size: 12px; color: #56606d; }
+.models-field input[type="text"], .models-field input[type="password"], .models-field input[type="number"], .models-field select, .models-field textarea, .models-raw, .models-add-row select {
+  border: 1px solid #d3d9df;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #17202d;
+  background: #fff;
+  font: inherit;
+}
+.models-field textarea, .models-raw {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.models-field-check { display: flex; align-items: center; gap: 10px; }
+.models-field-check input { width: 15px; height: 15px; }
+.models-check-group { display: flex; gap: 14px; }
+.models-check-group label { display: flex; align-items: center; gap: 5px; }
+.models-invalid { color: #b03a2e; }
+.models-extensions {
+  margin-top: 10px;
+  border-top: 1px dashed #d3d9df;
+  padding-top: 10px;
+}
+.models-subgroup { margin-top: 12px; }
+.models-subgroup-head { margin-bottom: 8px; }
+.models-empty { color: #7a838e; }
+.models-raw {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+}
+.models-save-row { display: flex; align-items: center; gap: 10px; }
+.models-save { color: #fff !important; background: #1f6f5f !important; border-color: #1f6f5f !important; font-weight: 650; }
+.models-saved { margin-bottom: 0; color: #17604f; font-size: 13px; }
+.models-add { justify-self: start; }
+.models-add-row { justify-content: flex-start; }
+
+
 @media (max-width: 850px) {
   .shell { grid-template-columns: 210px minmax(0, 1fr); }
   main { padding: 28px; }

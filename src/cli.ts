@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { stdin, stdout } from "node:process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -34,7 +34,9 @@ import {
   createNodePipeTransport,
   startControlPlane,
   type ApplicationStatus,
+  type ControlPlaneClient,
   type ControlPlaneEndpoint,
+  type ModelsCommand,
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -50,6 +52,8 @@ import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { resolveEffectiveSettings } from "./settings/data-plane.js";
+import { createModelsJsonAuthority } from "./models-config/authority.js";
+import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
 
 const HELP = `LuckyToken
 
@@ -61,6 +65,7 @@ Usage:
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
+  luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -71,6 +76,7 @@ Commands:
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
+  control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -79,6 +85,13 @@ Options:
   --token <value>  Use an explicit token for create/rotate
   --descriptor <path>  Current-user Control Plane discovery descriptor
   --help           Show this help
+
+control models commands:
+  query                     Print the authoritative models.json state
+  write-raw <rev> <file>    Validate and atomically replace models.json with the
+                            file's raw content (compare-and-swap on <rev>)
+  write-structured <rev> <file>  Replace models.json with the providers record in
+                            <file> (compare-and-swap on <rev>, formatted)
 `;
 
 type ParsedCliArguments =
@@ -351,11 +364,21 @@ async function runServe(
       ),
     }).open();
   const controlPipe = await createProductionControlPipe();
+  // The canonical LuckyToken-owned models.json: defaults to `models.json`
+  // next to the config file (the desktop layout's `~/.luckytoken/models.json`)
+  // unless the config overrides it. The Pi Agent default data directory is
+  // never read or written implicitly.
+  const modelsAuthority = createModelsJsonAuthority({
+    path: config.pi.modelsJson,
+  });
+  const modelsState = await modelsAuthority.query();
   const provider: ApplicationStatus["provider"] =
-    Object.keys(config.providerPackages).length === 0 &&
-    config.pi.modelsJson === undefined
-      ? "unconfigured"
-      : "configured";
+    Object.keys(config.providerPackages).length > 0 ||
+    (modelsState.present &&
+      modelsState.valid &&
+      Object.keys(modelsState.providers ?? {}).length > 0)
+      ? "configured"
+      : "unconfigured";
   const settingsRegistry = createSettingsRegistry(
     createFileSettingsStore(
       join(dirname(configPath), ".luckytoken", "settings.json"),
@@ -420,7 +443,9 @@ async function runServe(
     initialStatus: supervisor.initialStatus,
     runtimeCommandHandler: supervisor.execute,
     settingsCommandHandler: createSettingsControlPlaneHandler(settingsRegistry),
+    modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
     settingsProjection: () => settingsRegistry.snapshot(),
+    modelsProjection: () => modelsAuthority.snapshot(),
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
     diagnostics: diagnosticsStore,
@@ -539,11 +564,114 @@ async function runControlSettingsCommand(args: readonly string[]): Promise<void>
     pipeConnector: createNodePipeTransport(),
   });
   try {
-    const hello = await client.hello(controlPlaneVersion);
-    if (hello.type === "incompatible") {
-      throw new Error(`Control Plane contract v${controlPlaneVersion} is unsupported`);
-    }
+    await assertCompatibleControlPlane(client);
     const result = await client.executeSettingsCommand(parsed.command);
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
+function parseModelsCommand(args: readonly string[]): {
+  readonly descriptorPath: string;
+  readonly action: "query" | "write_raw" | "write_structured";
+  readonly revision?: number;
+  readonly file?: string;
+} {
+  let descriptorPath: string | undefined;
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--descriptor") {
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    positional.push(argument);
+  }
+  if (descriptorPath === undefined) {
+    throw new Error("--descriptor <path> is required");
+  }
+  const action = positional[0];
+  if (action === "query") {
+    if (positional.length > 1) {
+      throw new Error("models query takes no arguments");
+    }
+    return { descriptorPath, action: "query" };
+  }
+  const revision = positional[1];
+  const file = positional[2];
+  if (
+    (action !== "write-raw" && action !== "write-structured") ||
+    !/^[0-9]+$/u.test(revision ?? "") ||
+    file === undefined ||
+    positional.length > 3
+  ) {
+    throw new Error(
+      "models write-raw|write-structured requires <revision> <file>",
+    );
+  }
+  return {
+    descriptorPath,
+    action: action === "write-raw" ? "write_raw" : "write_structured",
+    revision: Number.parseInt(revision as string, 10),
+    file,
+  };
+}
+
+async function assertCompatibleControlPlane(
+  client: ControlPlaneClient,
+): Promise<void> {
+  const hello = await client.hello(controlPlaneVersion);
+  if (hello.type === "incompatible") {
+    throw new Error(
+      `Control Plane contract v${controlPlaneVersion} is unsupported`,
+    );
+  }
+}
+
+async function runControlModelsCommand(args: readonly string[]): Promise<void> {
+  const parsed = parseModelsCommand(args);
+  let command: ModelsCommand;
+  if (parsed.action === "query") {
+    command = { command: "query" };
+  } else if (parsed.action === "write_raw") {
+    command = {
+      command: "write_raw",
+      revision: parsed.revision as number,
+      content: await readFile(parsed.file as string, "utf8"),
+    };
+  } else {
+    const raw = JSON.parse(await readFile(parsed.file as string, "utf8"));
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      Array.isArray(raw)
+    ) {
+      throw new Error("write-structured requires a providers object file");
+    }
+    command = {
+      command: "write_structured",
+      revision: parsed.revision as number,
+      providers: raw as Record<string, unknown>,
+    };
+  }
+  const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    await assertCompatibleControlPlane(client);
+    const result = await client.executeModelsCommand(command);
     stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await client.close();
@@ -592,6 +720,10 @@ export async function runLuckyTokenCli(
       await runControlSettingsCommand(args.slice(2));
       return;
     }
+    if (command === "models") {
+      await runControlModelsCommand(args.slice(2));
+      return;
+    }
     if (
       command !== "status" &&
       command !== "start" &&
@@ -626,9 +758,7 @@ export async function runLuckyTokenCli(
   const config = await loadLuckyTokenCliConfig(parsed.configPath);
   const configured = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
-    ...(config.pi.modelsJson === undefined
-      ? {}
-      : { modelsJsonPath: config.pi.modelsJson }),
+    modelsJsonPath: config.pi.modelsJson,
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
   });

@@ -100,7 +100,9 @@ mod tests {
                 }),
                 settings: None,
                 confirmation: None,
+                models: None,
             }),
+            models: None,
         };
 
         let gateway = project_gateway_state(&state);

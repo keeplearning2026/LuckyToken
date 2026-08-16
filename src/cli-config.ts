@@ -24,8 +24,11 @@ export interface LuckyTokenCliConfig {
   >;
   readonly pi: {
     readonly directory: string;
-    /** Optional models.json path; defaults to `<pi.directory>/models.json`. */
-    readonly modelsJson?: string;
+    /** Canonical models.json path; defaults to `models.json` next to the
+     *  config file (LuckyToken's own user data directory — the desktop
+     *  layout's `~/.luckytoken/models.json`). The Pi Agent default data
+     *  directory is never read or written implicitly. */
+    readonly modelsJson: string;
   };
   readonly limits: {
     readonly maxRequestBytes: number;
@@ -237,9 +240,10 @@ export async function loadLuckyTokenCliConfig(
     clientProtocols: resolvedClientProtocols,
     pi: Object.freeze({
       directory: fromConfigDirectory(piDirectoryValue, directory),
-      ...(modelsJsonValue === undefined
-        ? {}
-        : { modelsJson: fromConfigDirectory(modelsJsonValue, directory) }),
+      modelsJson: fromConfigDirectory(
+        modelsJsonValue ?? "models.json",
+        directory,
+      ),
     }),
     limits: Object.freeze({
       maxRequestBytes: safeInteger(

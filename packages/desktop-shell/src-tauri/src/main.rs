@@ -8,7 +8,9 @@ mod tray_surface;
 
 use std::sync::Arc;
 
-use control_plane_v1::{NativeControlPlaneConnector, RuntimeCommand, SettingsCommand};
+use control_plane_v1::{
+    ModelsCommand, NativeControlPlaneConnector, RuntimeCommand, SettingsCommand,
+};
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter};
 use tauri::{
@@ -93,6 +95,50 @@ async fn shell_settings_confirm(
     state: State<'_, ShellBridge>,
 ) -> Result<ShellStateDto, ()> {
     run_settings_command(app, state, SettingsCommand::Confirm).await
+}
+
+async fn run_models_command(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    command: ModelsCommand,
+) -> Result<ShellStateDto, ()> {
+    Ok(state.models_command(command, shell_emitter(app)).await)
+}
+
+#[tauri::command]
+async fn shell_models_query(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    run_models_command(app, state, ModelsCommand::Query).await
+}
+
+#[tauri::command]
+async fn shell_models_write_raw(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    revision: u64,
+    content: String,
+) -> Result<ShellStateDto, ()> {
+    run_models_command(app, state, ModelsCommand::WriteRaw { revision, content }).await
+}
+
+#[tauri::command]
+async fn shell_models_write_structured(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    revision: u64,
+    providers: serde_json::Value,
+) -> Result<ShellStateDto, ()> {
+    run_models_command(
+        app,
+        state,
+        ModelsCommand::WriteStructured {
+            revision,
+            providers,
+        },
+    )
+    .await
 }
 
 /// Fans a bridge state emission out to every public surface: the renderer
@@ -219,7 +265,10 @@ fn main() {
             shell_restart,
             shell_settings_query,
             shell_settings_set,
-            shell_settings_confirm
+            shell_settings_confirm,
+            shell_models_query,
+            shell_models_write_raw,
+            shell_models_write_structured
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");

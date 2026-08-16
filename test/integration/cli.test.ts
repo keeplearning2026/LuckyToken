@@ -29,6 +29,8 @@ import {
 import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "../../src/settings/control-plane.js";
+import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
+import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -305,6 +307,154 @@ describe("LuckyToken CLI", () => {
     expect(setOutcome.code).toBe(0);
     expect(JSON.parse(setOutcome.stdout)).toMatchObject({ outcome: "applied" });
   }, 30_000);
+
+  it("queries and writes the models.json catalog through the same Control Plane commands", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-models-"));
+    directories.push(directory);
+    const modelsJsonPath = join(directory, "models.json");
+    const original = JSON.stringify(
+      {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-completions",
+            apiKey: "ollama",
+            models: [{ id: "llama3.1:8b" }],
+          },
+        },
+      },
+      null,
+      2,
+    );
+    await writeFile(modelsJsonPath, original, "utf8");
+    const authority = createModelsJsonAuthority({ path: modelsJsonPath });
+    const transport = createNodePipeTransport();
+    const controlPlane = await startControlPlane({
+      endpoint: {
+        pipeName: `\\\\.\\\pipe\\\luckytoken-cli-models-${process.pid}`,
+        capability: "cli-models-capability-0123456789012345678",
+      },
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "configured",
+      },
+      modelsCommandHandler: createModelsControlPlaneHandler(authority),
+      modelsProjection: () => authority.snapshot(),
+      pipeServerFactory: transport,
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(
+      descriptorPath,
+      JSON.stringify(controlPlane.endpoint),
+      "utf8",
+    );
+
+    const query = startCli([
+      "control",
+      "models",
+      "query",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(query);
+    const queryResult = await captureChild(query).result;
+    expect(queryResult.code).toBe(0);
+    expect(JSON.parse(queryResult.stdout)).toMatchObject({
+      outcome: "ok",
+      state: {
+        revision: 0,
+        path: modelsJsonPath,
+        present: true,
+        valid: true,
+        raw: original,
+      },
+    });
+    expect(queryResult.stdout).not.toContain("cli-models-capability");
+
+    // A raw write through the CLI applies atomically on the same revision.
+    const next =
+      '{\n  "providers": {\n    "ollama": {\n      "baseUrl": "http://localhost:11434/v1",\n      "api": "openai-completions",\n      "models": [\n        { "id": "llama3.1:8b", "name": "Llama 3.1 8B (Local)" }\n      ]\n    }\n  }\n}\n';
+    const contentFile = join(directory, "next-models.json");
+    await writeFile(contentFile, next, "utf8");
+    const applied = startCli([
+      "control",
+      "models",
+      "write-raw",
+      "0",
+      contentFile,
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(applied);
+    const appliedResult = await captureChild(applied).result;
+    expect(appliedResult.code).toBe(0);
+    expect(JSON.parse(appliedResult.stdout)).toMatchObject({
+      outcome: "ok",
+      state: { revision: 1, valid: true, raw: next },
+    });
+    await expect(readFile(modelsJsonPath, "utf8")).resolves.toBe(next);
+
+    // A second CLI process with a stale revision gets an explicit conflict.
+    const staleFile = join(directory, "stale-models.json");
+    await writeFile(
+      staleFile,
+      '{ "providers": { "other": { "baseUrl": "http://x", "api": "openai-completions", "models": [{ "id": "m" }] } } }',
+      "utf8",
+    );
+    const stale = startCli([
+      "control",
+      "models",
+      "write-raw",
+      "0",
+      staleFile,
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(stale);
+    const staleResult = await captureChild(stale).result;
+    expect(staleResult.code).toBe(0);
+    expect(JSON.parse(staleResult.stdout)).toMatchObject({
+      outcome: "conflict",
+      state: { revision: 1 },
+    });
+    await expect(readFile(modelsJsonPath, "utf8")).resolves.toBe(next);
+
+    // A structured write shares the same revision stream with the raw one.
+    const providersFile = join(directory, "providers.json");
+    await writeFile(
+      providersFile,
+      JSON.stringify({
+        ollama: {
+          baseUrl: "http://localhost:11434/v1",
+          api: "openai-completions",
+          models: [{ id: "llama3.1:8b" }],
+        },
+      }),
+      "utf8",
+    );
+    const structured = startCli([
+      "control",
+      "models",
+      "write-structured",
+      "1",
+      providersFile,
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(structured);
+    const structuredResult = await captureChild(structured).result;
+    expect(structuredResult.code).toBe(0);
+    expect(JSON.parse(structuredResult.stdout)).toMatchObject({
+      outcome: "ok",
+      state: { revision: 2, valid: true },
+    });
+    await expect(readFile(modelsJsonPath, "utf8")).resolves.toContain(
+      "\"ollama\"",
+    );
+  }, 60_000);
 
   it("does not echo descriptor contents when discovery is malformed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-invalid-"));

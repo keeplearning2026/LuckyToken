@@ -1,11 +1,14 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
+  ModelsCommand,
   RegisteredSetting,
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
+  decodeModelsCommandResult,
+  decodeModelsProjection,
   projectControlPlaneState,
   type ControlPlaneBridgePayload,
   type ControlPlaneState,
@@ -19,10 +22,13 @@ export type ShellCommand =
   | "shell_restart"
   | "shell_settings_query"
   | "shell_settings_set"
-  | "shell_settings_confirm";
+  | "shell_settings_confirm"
+  | "shell_models_query"
+  | "shell_models_write_raw"
+  | "shell_models_write_structured";
 
 export interface NativeTauriBridge {
-  invoke(command: ShellCommand, args?: never): Promise<unknown>;
+  invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
   listen(
     event: "luckytoken://shell-state",
     listener: (event: Pick<Event<ControlPlaneBridgePayload>, "payload">) => void,
@@ -34,6 +40,7 @@ export interface TauriDesktopRuntime {
   retryControlPlane(): Promise<ControlPlaneState>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+  executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
   disconnectControlPlane(): Promise<void>;
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
@@ -183,9 +190,19 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
       return undefined;
     }
     // The settings and LAN-confirmation projections are validated by the
-    // renderer allowlist; forward the raw snapshot fields unchanged.
+    // renderer allowlist; forward the raw snapshot fields unchanged. The
+    // sanitized models projection is decoded strictly here and the full
+    // models command result rides alongside the payload.
     const settings = decodeRegisteredSettings(snapshot.settings);
     const confirmation = decodeLanConfirmation(snapshot.confirmation);
+    const modelsProjection = decodeModelsProjection(snapshot.models);
+    if (snapshot.models !== undefined && modelsProjection === undefined) {
+      return undefined;
+    }
+    const models = decodeModelsCommandResult(value.models);
+    if (value.models !== undefined && models === undefined) {
+      return undefined;
+    }
     return {
       revision,
       connection: "connected",
@@ -197,8 +214,10 @@ function decodeBridgePayload(value: unknown): ControlPlaneBridgePayload | undefi
         provider: snapshot.provider,
         ...(dataPlane === undefined ? {} : { dataPlane }),
         ...(settings === undefined ? {} : { settings }),
+        ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
         ...(confirmation === undefined ? {} : { confirmation }),
       },
+      ...(models === undefined ? {} : { models }),
     };
   }
   if (
@@ -249,7 +268,22 @@ export function createTauriDesktopRuntime(
     if (latest !== undefined && payload.revision <= latest.revision) {
       return latest;
     }
-    latest = projectControlPlaneState(payload);
+    const projected = projectControlPlaneState(payload);
+    if (projected.kind === "connected") {
+      // The full models result from a models command sticks on the state
+      // until a newer one arrives; status events (which never carry one)
+      // keep the last result so the editors never lose their data.
+      const models =
+        payload.connection === "connected" && payload.models !== undefined
+          ? payload.models
+          : latest?.kind === "connected" && latest.modelsResult !== undefined
+            ? latest.modelsResult
+            : undefined;
+      latest =
+        models === undefined ? projected : { ...projected, modelsResult: models };
+    } else {
+      latest = projected;
+    }
     for (const subscriber of subscribers) subscriber(latest);
     return latest;
   };
@@ -265,9 +299,12 @@ export function createTauriDesktopRuntime(
     await listenTask;
   };
 
-  const invokeState = async (command: ShellCommand): Promise<ControlPlaneState> => {
+  const invokeState = async (
+    command: ShellCommand,
+    args?: unknown,
+  ): Promise<ControlPlaneState> => {
     await ensureListening();
-    return accept(await bridge.invoke(command));
+    return accept(await bridge.invoke(command, args));
   };
 
   return {
@@ -288,6 +325,19 @@ export function createTauriDesktopRuntime(
           : command.command === "set"
             ? "shell_settings_set"
             : "shell_settings_confirm",
+      ),
+    executeModelsCommand: (command) =>
+      invokeState(
+        command.command === "query"
+          ? "shell_models_query"
+          : command.command === "write_raw"
+            ? "shell_models_write_raw"
+            : "shell_models_write_structured",
+        command.command === "query"
+          ? undefined
+          : command.command === "write_raw"
+            ? { revision: command.revision, content: command.content }
+            : { revision: command.revision, providers: command.providers },
       ),
     async disconnectControlPlane() {
       await listenTask;

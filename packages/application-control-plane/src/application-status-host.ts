@@ -4,6 +4,8 @@ import {
   type ApplicationIdentity,
   type ApplicationStatus,
   type ControlPlaneEndpoint,
+  type ModelsCommandHandler,
+  type ModelsProjection,
   type RunningControlPlane,
   type RuntimeCommandExecution,
   type RuntimeCommandHandler,
@@ -27,6 +29,7 @@ import {
   compatibleHello,
   decodeApplicationStatus,
   decodeClientRequest,
+  decodeModelsCommandResult,
   decodeRuntimeCommandExecution,
   decodeSettingsCommandResult,
   incompatibleHello,
@@ -43,8 +46,12 @@ export interface StartControlPlaneOptions {
   readonly runtimeCommandHandler?: RuntimeCommandHandler;
   /** Optional Settings command handler (Ticket 06). */
   readonly settingsCommandHandler?: SettingsCommandHandler;
+  /** Optional models.json catalog command handler (Ticket 08). */
+  readonly modelsCommandHandler?: ModelsCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
+  /** Live sanitized models.json projection merged into every snapshot. */
+  readonly modelsProjection?: () => ModelsProjection;
   /**
    * Explicit diagnostics ownership (Ticket 07): when present, the Control
    * Plane serves bounded diagnostics queries and typed diagnostic events to
@@ -84,6 +91,7 @@ export async function startApplicationStatusHost(
     status: ApplicationStatus,
   ): Omit<StatusSnapshot, "sequence"> => {
     const projection = options.settingsProjection?.();
+    const modelsProjection = options.modelsProjection?.();
     return {
       ...status,
       ...(projection === undefined
@@ -94,6 +102,7 @@ export async function startApplicationStatusHost(
               ? {}
               : { confirmation: projection.confirmation }),
           }),
+      ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -301,6 +310,51 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "settings_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "models_command") {
+          if (options.modelsCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          // A models command publishes only when it changed the authoritative
+          // revision: reads (query) are side-effect free, and byte-identical
+          // no-op writes do not broadcast a state change. A revision change
+          // discovered by a command (e.g. an external edit) is a real file
+          // mutation and does publish, keeping subscribers current.
+          const modelsBefore = options.modelsProjection?.();
+          const handled = await options.modelsCommandHandler(request.command);
+          const result = decodeModelsCommandResult(handled);
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          if (
+            handled.outcome === "ok" &&
+            modelsBefore !== undefined &&
+            result.state.revision !== modelsBefore.revision
+          ) {
+            // A successful write changed the authoritative file: publish the
+            // resulting models projection (and revision) to every subscriber.
+            await publishStatus({
+              modelDataPlane: current.modelDataPlane,
+              provider: current.provider,
+              ...(current.dataPlane === undefined
+                ? {}
+                : { dataPlane: current.dataPlane }),
+            });
+          }
+          await writeFrame(state.connection, {
+            type: "models_command_result",
             requestId: request.requestId,
             result,
           });
