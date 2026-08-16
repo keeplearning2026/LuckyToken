@@ -23,6 +23,12 @@ const CLIENT_SHARED_SEAMS = new Set([
   "model-resolution.ts",
   "invocation-diagnostics/index.ts",
   "protocols/options.ts",
+  // Ticket 15 neutral data-plane seams: both Client Protocols resolve
+  // aliases and project passthrough bodies through these narrow shared
+  // modules; neither imports concrete Providers or protocol modules
+  // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
+  "alias-model-seam.ts",
+  "protocols/sse-lines.ts",
 ]);
 
 function slash(value) {
