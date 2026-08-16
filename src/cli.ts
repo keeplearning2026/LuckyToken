@@ -75,6 +75,9 @@ import { createModelsControlPlaneHandler } from "./models-config/control-plane.j
 import { createCatalogCacheStore } from "./providers/catalog-cache.js";
 import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
+import { stripJsonComments } from "./providers/models-json-schema.js";
+import { createAliasRegistryAuthority } from "./aliases/authority.js";
+import { createAliasControlPlaneHandler } from "./aliases/control-plane.js";
 
 const HELP = `LuckyToken
 
@@ -91,6 +94,7 @@ Usage:
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
   luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
+  luckytoken control aliases <query|write> [<revision> <file>] --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -105,6 +109,7 @@ Commands:
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
   control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
+  control aliases query|write  Read the authoritative alias registry or replace the user mapping record
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -134,6 +139,13 @@ control catalog commands:
   query                     Print the active catalog snapshot
   refresh-background        Schedule a non-blocking background refresh
   refresh-manual            Run a forced refresh with per-Provider results
+
+control aliases commands:
+  query                     Print the authoritative model-aliases.json state
+                            (revision, file facts, effective registry)
+  write <rev> <file>        Validate and atomically replace the user mapping
+                            record with the file's content (compare-and-swap
+                            on <rev>; the file must be { "aliases": {...} })
 `;
 
 type ParsedCliArguments =
@@ -591,10 +603,34 @@ async function runServe(
       diagnostics: diagnosticsStore,
       now: Date.now,
       onSnapshot: () => {
+        // Ticket 14: a catalog swap changes the facts aliases validate
+        // against; recompute and hot-apply for new request snapshots.
+        aliasAuthority.onCatalogSnapshot();
         // Republish the full latest ApplicationStatus (modelDataPlane,
         // provider AND dataPlane origin/port/failure facts) so the fresh
         // catalog projection rides on a complete status snapshot.
         controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+      },
+    });
+    // Ticket 14: the transparent LuckyToken-owned model-aliases.json sits
+    // next to models.json. The authority owns locking, revisions, atomic
+    // persistence, validation against the authoritative catalog snapshot
+    // and the captured resolver snapshots (new requests hot-apply;
+    // in-flight snapshots never remap).
+    const aliasAuthority = createAliasRegistryAuthority({
+      path: join(dirname(config.pi.modelsJson), "model-aliases.json"),
+      catalogFacts: () => {
+        const snapshot = catalogController.snapshot();
+        const knownTargets = new Set<string>();
+        for (const provider of snapshot.providers) {
+          for (const model of provider.models) {
+            knownTargets.add(`${provider.providerId}\u0000${model.id}`);
+          }
+        }
+        return {
+          catalogVersion: snapshot.version,
+          knownTargets,
+        };
       },
     });
     let lastPublishedStatus: ApplicationStatus = Object.freeze({
@@ -798,6 +834,11 @@ async function runServe(
           ),
         });
       },
+      // Ticket 14: versioned alias registry commands against the one
+      // authoritative model-aliases.json authority; the sanitized
+      // projection rides on every published snapshot.
+      aliasCommandHandler: createAliasControlPlaneHandler(aliasAuthority),
+      aliasesProjection: () => aliasAuthority.snapshot(),
       applicationCommandHandler: async (command, publishStatus) => {
         switch (command.command) {
           case "attach":
@@ -1195,7 +1236,125 @@ async function runControlCatalogCommand(
   }
 }
 
-export async function runLuckyTokenCli(args: readonly string[]): Promise<void> {
+function parseAliasesCommand(args: readonly string[]): {
+  readonly descriptorPath: string;
+  readonly action: "query" | "write";
+  readonly revision?: number;
+  readonly file?: string;
+} {
+  let descriptorPath: string | undefined;
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--descriptor") {
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    positional.push(argument);
+  }
+  if (descriptorPath === undefined) {
+    throw new Error("--descriptor <path> is required");
+  }
+  const action = positional[0];
+  if (action === "query") {
+    if (positional.length > 1) {
+      throw new Error("aliases query takes no arguments");
+    }
+    return { descriptorPath, action: "query" };
+  }
+  const revision = positional[1];
+  const file = positional[2];
+  if (
+    action !== "write" ||
+    !/^[0-9]+$/u.test(revision ?? "") ||
+    file === undefined ||
+    positional.length > 3
+  ) {
+    throw new Error("aliases write requires <revision> <file>");
+  }
+  return {
+    descriptorPath,
+    action: "write",
+    revision: Number.parseInt(revision as string, 10),
+    file,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Read and validate the transparent alias proposal file before any write:
+ *  the same JSON-with-comments flavor the authority parses, a root object
+ *  with a required non-null non-array `aliases` record. A malformed
+ *  proposal is rejected value-safely with a clear error — an empty mapping
+ *  is never guessed, so a bad file can never wipe the registry. */
+async function readAliasProposalFile(
+  filePath: string,
+): Promise<Record<string, unknown>> {
+  let text: string;
+  try {
+    text = await readFile(filePath, "utf8");
+  } catch {
+    throw new Error(`Cannot read the aliases proposal file: ${filePath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonComments(text));
+  } catch (error) {
+    throw new Error(
+      `The aliases proposal file is not a valid proposal: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("aliases proposal must be a JSON object");
+  }
+  if (!isRecord(parsed.aliases)) {
+    throw new Error("aliases proposal must contain an aliases object");
+  }
+  return parsed.aliases;
+}
+
+async function runControlAliasesCommand(args: readonly string[]): Promise<void> {
+  const parsed = parseAliasesCommand(args);
+  const command =
+    parsed.action === "query"
+      ? ({ command: "query" } as const)
+      : ({
+          command: "write",
+          revision: parsed.revision as number,
+          // The proposal file is validated before the write: the transparent
+          // { "aliases": {...} } shape is required as-is and never guessed.
+          aliases: await readAliasProposalFile(parsed.file as string),
+        } as const);
+  const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    await assertCompatibleControlPlane(client);
+    const result = await client.executeAliasCommand(command);
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
+export async function runLuckyTokenCli(
+  args: readonly string[],
+): Promise<void> {
   if (args[0] === "control") {
     const command = args[1];
     if (command === "settings") {
@@ -1212,6 +1371,10 @@ export async function runLuckyTokenCli(args: readonly string[]): Promise<void> {
     }
     if (command === "catalog") {
       await runControlCatalogCommand(args.slice(2));
+      return;
+    }
+    if (command === "aliases") {
+      await runControlAliasesCommand(args.slice(2));
       return;
     }
     if (

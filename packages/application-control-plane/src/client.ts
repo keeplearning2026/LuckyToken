@@ -5,6 +5,8 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   assertControlPlaneEndpoint,
+  type AliasCommand,
+  type AliasCommandResult,
   type ApplicationCommand,
   type ApplicationCommandResult,
   type CatalogCommand,
@@ -30,6 +32,7 @@ import {
 import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
+  decodeAliasCommandResult,
   decodeCatalogCommandResult,
   decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
@@ -281,6 +284,22 @@ export async function connectApplicationControlPlane(
       // Strictly validate the projection crossing the pipe: the catalog
       // snapshot must never carry malformed or unexpected state.
       const result = decodeCatalogCommandResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult> {
+      const response = await request({
+        type: "alias_command",
+        command,
+      });
+      if (response.type !== "alias_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      // Strictly validate the state crossing the pipe: the alias registry
+      // must never carry malformed or unexpected state.
+      const result = decodeAliasCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   projectRequestIdentity,
+  type AliasCommand,
+  type AliasCommandResult,
+  type AliasStatusProjection,
   type CatalogCommand,
   type CatalogCommandResult,
   type ClientTokenCommand,
@@ -77,6 +80,8 @@ export function App({ shell, retryConnection }: AppProps) {
   const [modelsCommand, setModelsCommand] = useState<ModelsCommand>();
   const [catalogCommand, setCatalogCommand] = useState<CatalogCommand>();
   const [catalogResult, setCatalogResult] = useState<CatalogCommandResult>();
+  const [aliasCommand, setAliasCommand] = useState<AliasCommand>();
+  const [aliasResult, setAliasResult] = useState<AliasCommandResult>();
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -149,6 +154,16 @@ export function App({ shell, retryConnection }: AppProps) {
       setCatalogResult(result);
     } finally {
       setCatalogCommand(undefined);
+    }
+  };
+
+  const executeAliasCommand = async (command: AliasCommand) => {
+    setAliasCommand(command);
+    try {
+      const result = await shell.executeAliasCommand(command);
+      setAliasResult(result);
+    } finally {
+      setAliasCommand(undefined);
     }
   };
 
@@ -343,14 +358,22 @@ export function App({ shell, retryConnection }: AppProps) {
           <ModelsPage
             busy={modelsCommand !== undefined}
             catalogBusy={catalogCommand !== undefined}
+            aliasBusy={aliasCommand !== undefined}
             connection={snapshot.connection}
-            mode={snapshot.activePage === "providers" ? "providers" : "models"}
+            mode={
+              snapshot.activePage === "providers" ? "providers" : "models"
+            }
+            onAliasCommand={executeAliasCommand}
             onCatalogCommand={executeCatalogCommand}
             onCommand={executeModelsCommand}
+            {...(aliasResult === undefined ? {} : { aliasResult })}
             {...(catalogResult === undefined ? {} : { catalogResult })}
             {...(snapshot.connection.catalogStatus === undefined
               ? {}
               : { catalogStatus: snapshot.connection.catalogStatus })}
+            {...(snapshot.connection.aliasesProjection === undefined
+              ? {}
+              : { aliasProjection: snapshot.connection.aliasesProjection })}
           />
         ) : null}
         <section className="empty-page">
@@ -516,15 +539,22 @@ function SettingsDeveloperLab({
 
 function ModelsPage({
   busy,
+  aliasBusy = false,
+  aliasResult,
+  aliasProjection,
   catalogBusy = false,
   catalogResult,
   catalogStatus,
   connection,
   mode,
+  onAliasCommand,
   onCatalogCommand,
   onCommand,
 }: {
   readonly busy: boolean;
+  readonly aliasBusy?: boolean;
+  readonly aliasResult?: AliasCommandResult;
+  readonly aliasProjection?: AliasStatusProjection;
   readonly catalogBusy?: boolean;
   readonly catalogResult?: CatalogCommandResult;
   readonly catalogStatus?: CatalogStatusProjection;
@@ -533,6 +563,7 @@ function ModelsPage({
     { readonly kind: "connected" }
   >;
   readonly mode: "providers" | "models";
+  readonly onAliasCommand: (command: AliasCommand) => void;
   readonly onCatalogCommand: (command: CatalogCommand) => void;
   readonly onCommand: (command: ModelsCommand) => void;
 }) {
@@ -545,14 +576,18 @@ function ModelsPage({
   }, [connection.modelsResult, onCommand]);
   return (
     <ModelsFileWorkspace
+      aliasBusy={aliasBusy}
       busy={busy}
       catalogBusy={catalogBusy}
       mode={mode}
+      onAliasCommand={onAliasCommand}
       onCatalogCommand={onCatalogCommand}
       onCommand={onCommand}
       onReload={() => onCommand({ command: "query" })}
       projection={connection.modelsProjection}
       result={connection.modelsResult}
+      {...(aliasResult === undefined ? {} : { aliasResult })}
+      {...(aliasProjection === undefined ? {} : { aliasProjection })}
       {...(catalogResult === undefined ? {} : { catalogResult })}
       {...(catalogStatus === undefined ? {} : { catalogStatus })}
     />

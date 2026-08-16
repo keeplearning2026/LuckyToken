@@ -57,6 +57,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly credentials?: CredentialProjection;
   /** Optional sanitized catalog lifecycle projection (Ticket 11). */
   readonly catalog?: CatalogStatusProjection;
+  /** Optional sanitized model-aliases.json projection (Ticket 14). */
+  readonly aliases?: AliasStatusProjection;
 }
 
 /** Registered setting: type, default, validation, sensitivity, and apply mode
@@ -330,6 +332,146 @@ export interface CatalogCommandResult {
 export type CatalogCommandHandler = (
   command: CatalogCommand,
 ) => Promise<CatalogCommandResult>;
+
+/**
+ * Source layer of an effective alias: `default` is a curated built-in
+ * mapping (the lower layer), `user` is an explicit mapping from the
+ * manually editable LuckyToken-owned model-aliases.json (the authority
+ * layer, always winning).
+ */
+export type AliasLayer = "default" | "user";
+
+/** Distinguished alias validation failure category (Ticket 14):
+ *  `invalid` is a malformed alias/target, `ambiguous` is a target that
+ *  cannot name one canonical model (or an alias colliding with the
+ *  canonical Provider/model selector syntax), `unknown` is a well-formed
+ *  target absent from the authoritative catalog snapshot, and `duplicate`
+ *  is a canonical target that already has an effective alias. */
+export type AliasValidationCode =
+  | "invalid"
+  | "ambiguous"
+  | "unknown"
+  | "duplicate";
+
+/** Canonical Provider/model target of one alias. */
+export interface AliasCanonicalTarget {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** One effective alias in the authoritative registry. */
+export interface EffectiveAliasProjection {
+  readonly alias: string;
+  readonly target: AliasCanonicalTarget;
+  readonly layer: AliasLayer;
+}
+
+/** One rejected alias entry with a fixed value-safe message. */
+export interface AliasValidationErrorProjection {
+  readonly alias: string;
+  readonly code: AliasValidationCode;
+  readonly message: string;
+}
+
+/**
+ * The authoritative effective alias registry (Ticket 14): curated defaults
+ * as the lower layer, explicit user mappings as the authority layer, and
+ * every rejected entry distinguished by failure category. Never carries
+ * credentials or file content.
+ */
+export interface EffectiveAliasRegistryProjection {
+  readonly defaultsVersion: number;
+  readonly aliases: readonly EffectiveAliasProjection[];
+  readonly errors: readonly AliasValidationErrorProjection[];
+}
+
+/** Value-free failure kinds of the model-aliases.json authority. */
+export type AliasFileErrorKind =
+  | "parse"
+  | "schema"
+  | "validation"
+  | "load"
+  | "storage";
+
+/** Value-free failure of the model-aliases.json authority; `entries` is
+ *  present exactly for kind `validation` and carries the per-alias failure
+ *  categories (never raw content or guessed repairs). */
+export interface AliasFileError {
+  readonly kind: AliasFileErrorKind;
+  readonly message: string;
+  readonly entries?: readonly AliasValidationErrorProjection[];
+}
+
+/**
+ * Full authoritative model-aliases.json state returned by the alias
+ * commands. `raw` is the exact current file content (or "" when the file
+ * is absent) so manual round-trips stay byte-exact; `aliases` is the
+ * parsed user mapping record (valid files only); `effective` is the
+ * authoritative merged registry (defaults + user mappings) and is present
+ * whenever the file is absent or valid — a broken file contributes no
+ * user mappings, never a guessed repair. `catalogVersion` is the Ticket 11
+ * catalog snapshot the effective registry was validated against.
+ */
+export interface AliasFileState {
+  readonly revision: number;
+  readonly path: string;
+  readonly present: boolean;
+  readonly valid: boolean;
+  readonly raw: string;
+  readonly defaultsVersion: number;
+  readonly catalogVersion: number;
+  readonly aliases?: Readonly<Record<string, unknown>>;
+  readonly effective?: EffectiveAliasRegistryProjection;
+  readonly error?: AliasFileError;
+}
+
+/** Sanitized model-aliases.json projection merged into status snapshots:
+ *  revision, location, presence, validity and value-free error only — never
+ *  content. */
+export interface AliasStatusProjection {
+  readonly revision: number;
+  readonly path: string;
+  readonly present: boolean;
+  readonly valid: boolean;
+  readonly defaultsVersion: number;
+  readonly error?: AliasFileError;
+}
+
+/**
+ * Versioned alias registry commands (Ticket 14): query the one
+ * authoritative model-aliases.json state and the merged effective registry,
+ * or replace the user mapping record with compare-and-swap on the revision
+ * the client was served. A rejected proposal (invalid, ambiguous, unknown
+ * or duplicate target) never replaces the active registry.
+ */
+export type AliasCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "write";
+      readonly revision: number;
+      readonly aliases: Readonly<Record<string, unknown>>;
+    };
+
+export type AliasCommandOutcome =
+  | "ok"
+  | "conflict"
+  | "invalid"
+  | "storage_failure";
+
+export interface AliasCommandResult {
+  readonly outcome: AliasCommandOutcome;
+  /** The authoritative state after the attempt (current revision). */
+  readonly state: AliasFileState;
+  /** Value-free failure detail: the rejected proposal's validation errors
+   *  (`invalid`) or the sanitized storage fault (`storage_failure`). */
+  readonly error?: AliasFileError;
+}
+
+/** Handles versioned alias registry commands against the live authority. */
+export type AliasCommandHandler = (
+  command: AliasCommand,
+) => Promise<AliasCommandResult>;
+
 
 export type ModelsCommand =
   | { readonly command: "query" }
@@ -852,6 +994,7 @@ export interface ControlPlaneClient {
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
+  executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

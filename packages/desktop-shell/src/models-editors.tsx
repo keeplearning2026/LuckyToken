@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  AliasCommand,
+  AliasCommandResult,
+  AliasFileError,
+  AliasFileState,
+  AliasStatusProjection,
+  AliasValidationErrorProjection,
   CatalogCommand,
   CatalogCommandResult,
   CatalogProviderProjection,
+  CatalogSnapshotProjection,
   CatalogStatusProjection,
+  EffectiveAliasProjection,
   EffectiveCatalogProjection,
   EffectiveModelLayer,
   EffectiveModelProjection,
@@ -31,6 +39,14 @@ import type {
  * the Control Plane composes from the authoritative file plus the Pi
  * built-in base, with the built-in / user / overridden source layers
  * distinguished. The renderer never builds a second catalog registry.
+ *
+ * Ticket 14 adds the Aliases tab: the authoritative effective alias
+ * registry (curated defaults lower layer + explicit user mappings) shown
+ * against every known model with its availability, effective alias, source
+ * layer and validation errors, plus a structured editor for the user
+ * mapping record (compare-and-swap on the authoritative revision). The
+ * renderer derives the view strictly from the backend projections; it never
+ * builds a second alias registry.
  */
 
 export type ModelsFileErrorKind = ModelsFileError["kind"];
@@ -1020,6 +1036,496 @@ function CatalogRefreshView({
   );
 }
 
+/** One known model row of the alias registry view: the model identity
+ *  comes from the authoritative projections (effective catalog + active
+ *  catalog snapshot); availability comes from the snapshot. */
+interface KnownModelRow {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly availability: "available" | "unavailable" | "unknown";
+}
+
+/** Union of the effective catalog models and the active snapshot models,
+ *  deduplicated by canonical (provider, model) identity. */
+function collectKnownModels(
+  state: ModelsFileState | undefined,
+  snapshot: CatalogSnapshotProjection | undefined,
+): KnownModelRow[] {
+  const rows = new Map<string, KnownModelRow>();
+  const availabilityByKey = new Map<string, "available" | "unavailable" | "unknown">();
+  for (const provider of snapshot?.providers ?? []) {
+    for (const model of provider.models) {
+      availabilityByKey.set(
+        `${provider.providerId}\u0000${model.id}`,
+        model.availability,
+      );
+    }
+  }
+  const add = (providerId: string, modelId: string) => {
+    const key = `${providerId}\u0000${modelId}`;
+    if (rows.has(key)) return;
+    rows.set(key, {
+      providerId,
+      modelId,
+      availability: availabilityByKey.get(key) ?? "unknown",
+    });
+  };
+  for (const provider of state?.catalog?.providers ?? []) {
+    for (const model of provider.models) add(provider.id, model.id);
+  }
+  for (const provider of snapshot?.providers ?? []) {
+    for (const model of provider.models) add(provider.providerId, model.id);
+  }
+  return [...rows.values()].sort((a, b) =>
+    a.providerId === b.providerId
+      ? a.modelId.localeCompare(b.modelId)
+      : a.providerId.localeCompare(b.providerId),
+  );
+}
+
+const aliasLayerLabels: Readonly<Record<"default" | "user", string>> = {
+  default: "curated default",
+  user: "user mapping",
+};
+
+const aliasValidationCodeLabels: Readonly<
+  Record<AliasValidationErrorProjection["code"], string>
+> = {
+  invalid: "invalid",
+  ambiguous: "ambiguous",
+  unknown: "unknown target",
+  duplicate: "duplicate target",
+};
+
+/** The structured user mapping editor draft bound to the authoritative
+ *  revision it was created from; saves always submit `baseRevision`. */
+interface AliasDraft {
+  readonly aliases: Record<string, unknown>;
+  readonly baseRevision: number;
+}
+
+function createAliasDraft(
+  state: AliasFileState | undefined,
+): Record<string, unknown> | undefined {
+  if (state === undefined) return undefined;
+  if (state.present && state.valid && state.aliases !== undefined) {
+    return structuredClone(state.aliases);
+  }
+  // An absent file starts from an empty record (creating it); a broken
+  // file starts empty too (repairing it with an explicit user save).
+  return {};
+}
+
+function aliasCommandErrorLabel(
+  result: AliasCommandResult | undefined,
+): { readonly title: string; readonly detail: string } | undefined {
+  if (result === undefined) return undefined;
+  if (result.outcome === "conflict") return undefined;
+  if (result.outcome === "storage_failure") {
+    return {
+      title: "The alias file could not be written",
+      detail:
+        result.error?.message ??
+        "The write failed and the file was left untouched.",
+    };
+  }
+  if (result.outcome === "invalid") {
+    return {
+      title: "The alias change was rejected before replacing the file",
+      detail:
+        result.error?.message ??
+        "The proposed aliases cannot map to canonical targets.",
+    };
+  }
+  return undefined;
+}
+
+function AliasErrorPanel({
+  error,
+}: {
+  readonly error: AliasFileError;
+}) {
+  return (
+    <div className="models-error" role="alert">
+      <strong>model-aliases.json is not loadable</strong>
+      <p>{error.message}</p>
+    </div>
+  );
+}
+
+/** Ticket 14 Aliases tab: every known model with its availability, the
+ *  effective alias (with source layer), validation errors, and the
+ *  structured user mapping editor (compare-and-swap on the authoritative
+ *  revision). The renderer only composes the authoritative projections. */
+function AliasRegistryView({
+  result,
+  projection,
+  state,
+  snapshot,
+  busy,
+  onWrite,
+  onReload,
+}: {
+  readonly result: AliasCommandResult | undefined;
+  readonly projection: AliasStatusProjection | undefined;
+  readonly state: ModelsFileState | undefined;
+  readonly snapshot: CatalogSnapshotProjection | undefined;
+  readonly busy: boolean;
+  readonly onWrite: (
+    aliases: Record<string, unknown>,
+    baseRevision: number,
+  ) => void;
+  readonly onReload: () => void;
+}) {
+  const aliasState = result?.state;
+  const [draft, setDraft] = useState<AliasDraft>();
+  const [reloadBase, setReloadBase] = useState<AliasFileState>();
+  const [submitIntent, setSubmitIntent] = useState<
+    | (AliasDraft & { readonly resultAtSubmit: AliasCommandResult | undefined })
+    | undefined
+  >();
+
+  const effective = aliasState?.effective;
+  const aliasesByTarget = new Map<string, EffectiveAliasProjection>();
+  const aliasErrorsByAlias = new Map<string, AliasValidationErrorProjection>();
+  for (const entry of effective?.aliases ?? []) {
+    aliasesByTarget.set(`${entry.target.provider}\u0000${entry.target.model}`, entry);
+  }
+  for (const entry of effective?.errors ?? []) {
+    aliasErrorsByAlias.set(entry.alias, entry);
+  }
+  const rows = collectKnownModels(state, snapshot);
+
+  useEffect(() => {
+    const intent = submitIntent;
+    if (intent === undefined) return;
+    if (result === undefined || result === intent.resultAtSubmit) return;
+    // Re-base the draft only when the result provably corresponds to the
+    // submitted intent: same revision step and same content.
+    if (
+      result.outcome === "ok" &&
+      result.state.revision === intent.baseRevision + 1 &&
+      JSON.stringify(result.state.aliases) ===
+        JSON.stringify(intent.aliases) &&
+      draft !== undefined
+    ) {
+      setDraft({ aliases: draft.aliases, baseRevision: result.state.revision });
+    }
+    setSubmitIntent(undefined);
+  }, [result, submitIntent, draft]);
+
+  useEffect(() => {
+    if (
+      draft === undefined &&
+      aliasState !== undefined &&
+      aliasState !== reloadBase
+    ) {
+      setDraft({
+        aliases: createAliasDraft(aliasState) ?? {},
+        baseRevision: aliasState.revision,
+      });
+    }
+  }, [aliasState, draft, reloadBase]);
+
+  const reload = () => {
+    setSubmitIntent(undefined);
+    setDraft(undefined);
+    setReloadBase(aliasState);
+    onReload();
+  };
+
+  const externalChange =
+    projection !== undefined &&
+    aliasState !== undefined &&
+    projection.revision > aliasState.revision;
+  const staleDraft =
+    aliasState !== undefined &&
+    draft !== undefined &&
+    draft.baseRevision !== aliasState.revision;
+  const draftsPending = aliasState !== undefined && draft === undefined;
+  const message = aliasCommandErrorLabel(result);
+
+  const updateEntry = (alias: string, next: Record<string, unknown>) => {
+    if (draft === undefined) return;
+    const updated: Record<string, unknown> = { ...draft.aliases };
+    delete updated[alias];
+    updated[next.alias as string] = { provider: next.provider, model: next.model };
+    setDraft({ ...draft, aliases: updated });
+  };
+  const removeEntry = (alias: string) => {
+    if (draft === undefined) return;
+    const updated: Record<string, unknown> = { ...draft.aliases };
+    delete updated[alias];
+    setDraft({ ...draft, aliases: updated });
+  };
+  const addEntry = (alias: string, provider: string, model: string) => {
+    if (draft === undefined) return;
+    const existing = draft.aliases[alias];
+    if (
+      isRecord(existing) &&
+      (existing.provider !== provider || existing.model !== model)
+    ) {
+      // Refuse to overwrite a draft entry that already uses this alias name
+      // for another model; that entry's editor row is its single authority.
+      return;
+    }
+    setDraft({
+      ...draft,
+      aliases: {
+        ...draft.aliases,
+        [alias]: { provider, model },
+      },
+    });
+  };
+  const save = () => {
+    if (draft === undefined) return;
+    setSubmitIntent({
+      aliases: draft.aliases,
+      baseRevision: draft.baseRevision,
+      resultAtSubmit: result,
+    });
+    // The write always carries the draft's bound base revision — never a
+    // newer served state revision — so a retained stale draft is rejected
+    // by the Control Plane CAS instead of overwriting an external edit.
+    onWrite(draft.aliases, draft.baseRevision);
+  };
+
+  return (
+    <div className="alias-registry" aria-label="alias registry">
+      <div className="models-file-card">
+        <div>
+          <strong>model-aliases.json</strong>
+          <small>
+            {aliasState === undefined ? "Loading…" : aliasState.path}
+          </small>
+        </div>
+        <div className="models-file-facts">
+          <span className="badge connected">revision {aliasState?.revision ?? 0}</span>
+          {aliasState === undefined ? null : aliasState.valid ? (
+            <span className="badge connected">
+              {aliasState.present ? "valid" : "not created yet"}
+            </span>
+          ) : (
+            <span className="badge error">invalid</span>
+          )}
+          <span className="badge connected">
+            defaults v{effective?.defaultsVersion ?? 0}
+          </span>
+        </div>
+      </div>
+      {externalChange ? (
+        <div className="models-external" role="status">
+          The alias file changed elsewhere (revision {projection?.revision}).{" "}
+          <button disabled={busy} onClick={reload} type="button">
+            Reload aliases
+          </button>
+        </div>
+      ) : null}
+      {aliasState !== undefined &&
+      !aliasState.valid &&
+      aliasState.error !== undefined ? (
+        <AliasErrorPanel error={aliasState.error} />
+      ) : null}
+      {message === undefined ? null : (
+        <div className="models-error" role="alert">
+          <strong>{message.title}</strong>
+          <p>{message.detail}</p>
+        </div>
+      )}
+      {result?.outcome === "conflict" && !staleDraft ? (
+        <div className="models-conflict">
+          <button disabled={busy} onClick={reload} type="button">
+            Reload current aliases
+          </button>
+          <span>The draft is kept — reload it onto the current revision.</span>
+        </div>
+      ) : null}
+      {staleDraft ? (
+        <div className="models-conflict" role="alert">
+          <strong>Draft is based on revision {draft?.baseRevision}</strong>
+          <span> The alias file changed to revision {aliasState?.revision}.</span>
+          <button disabled={busy} onClick={reload} type="button">
+            Reload (discard draft)
+          </button>
+        </div>
+      ) : null}
+      {draftsPending ? (
+        <p className="models-empty" role="status">
+          Loading the current alias file…
+        </p>
+      ) : null}
+      <div className="models-card alias-models">
+        <div className="models-card-head">
+          <strong>Effective aliases by model</strong>
+        </div>
+        <p className="models-empty">
+          Every known model; unmapped models stay manageable and can receive
+          an alias at any time.
+        </p>
+        <ul className="alias-model-list">
+          {rows.map((row) => {
+            const alias = aliasesByTarget.get(
+              `${row.providerId}\u0000${row.modelId}`,
+            );
+            const aliasError =
+              alias === undefined ? undefined : aliasErrorsByAlias.get(alias.alias);
+            // The draft may already own this alias name for a different
+            // model; the Add action must never clobber that entry.
+            const existingEntry =
+              draft === undefined ? undefined : draft.aliases[row.modelId];
+            const draftOwned =
+              isRecord(existingEntry) &&
+              (existingEntry.provider !== row.providerId ||
+                existingEntry.model !== row.modelId);
+            return (
+              <li className="alias-model-row" key={`${row.providerId}\u0000${row.modelId}`}>
+                <span className="effective-model-id">
+                  <strong>{row.modelId}</strong>
+                  <span className="effective-fact">{row.providerId}</span>
+                </span>
+                <span className="effective-model-facts">
+                  <span
+                    className={`catalog-state catalog-state-${row.availability}`}
+                  >
+                    {row.availability}
+                  </span>
+                  {alias === undefined ? (
+                    <span className="effective-fact">no alias</span>
+                  ) : (
+                    <>
+                      <span className="effective-fact">{alias.alias}</span>
+                      <LayerBadge label={aliasLayerLabels[alias.layer]} />
+                    </>
+                  )}
+                  {aliasError === undefined ? null : (
+                    <span className="effective-fact alias-error">
+                      {aliasError.code}: {aliasError.message}
+                    </span>
+                  )}
+                  {alias === undefined ? (
+                    <button
+                      disabled={busy || draft === undefined || draftOwned}
+                      onClick={() => addEntry(row.modelId, row.providerId, row.modelId)}
+                      title={
+                        draftOwned
+                          ? "This alias name is already used for another model in the draft"
+                          : undefined
+                      }
+                      type="button"
+                    >
+                      Add alias
+                    </button>
+                  ) : null}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      {(effective?.errors.length ?? 0) > 0 ? (
+        <div className="models-error" role="alert">
+          <strong>Alias validation errors</strong>
+          <p>
+            {effective?.errors
+              .map(
+                (entry) =>
+                  `"${entry.alias}" (${aliasValidationCodeLabels[entry.code]}): ${entry.message}`,
+              )
+              .join("\n")}
+          </p>
+        </div>
+      ) : null}
+      <div className="models-card alias-editor">
+        <div className="models-card-head">
+          <strong>User mapping editor</strong>
+          <span className="effective-fact">
+            curated defaults are never edited here
+          </span>
+        </div>
+        {draft === undefined ? null : (
+          <ul className="alias-editor-list">
+            {Object.entries(draft.aliases).map(([alias, ref]) => {
+              const target = isRecord(ref) ? ref : {};
+              return (
+                <li className="alias-editor-row" key={alias}>
+                  <input
+                    aria-label="alias name"
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateEntry(alias, {
+                        ...target,
+                        alias: event.target.value,
+                        provider:
+                          typeof target.provider === "string"
+                            ? target.provider
+                            : "",
+                        model:
+                          typeof target.model === "string" ? target.model : "",
+                      })
+                    }
+                    value={alias}
+                  />
+                  <input
+                    aria-label="provider id"
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateEntry(alias, {
+                        ...target,
+                        alias,
+                        provider: event.target.value,
+                      })
+                    }
+                    value={typeof target.provider === "string" ? target.provider : ""}
+                  />
+                  <input
+                    aria-label="model id"
+                    disabled={busy}
+                    onChange={(event) =>
+                      updateEntry(alias, {
+                        ...target,
+                        alias,
+                        model: event.target.value,
+                      })
+                    }
+                    value={typeof target.model === "string" ? target.model : ""}
+                  />
+                  <button
+                    disabled={busy}
+                    onClick={() => removeEntry(alias)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="models-add-row">
+          <button
+            disabled={busy || draft === undefined}
+            onClick={() => addEntry("new-alias", "", "")}
+            type="button"
+          >
+            + Add alias
+          </button>
+          <button
+            className="models-save"
+            disabled={busy || draft === undefined}
+            onClick={save}
+            type="button"
+          >
+            {busy ? "Saving…" : "Save user mappings"}
+          </button>
+          <button disabled={busy} onClick={reload} type="button">
+            Reload
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface ModelsFileWorkspaceProps {
   readonly result: ModelsCommandResult | undefined;
   readonly projection: ModelsProjection | undefined;
@@ -1036,6 +1542,14 @@ export interface ModelsFileWorkspaceProps {
   /** Ticket 11: catalog query/refresh commands (page-open background
    *  refresh, manual refresh). */
   readonly onCatalogCommand?: (command: CatalogCommand) => void;
+  /** Ticket 14: the latest alias command result (query / write). */
+  readonly aliasResult?: AliasCommandResult;
+  /** Ticket 14: sanitized model-aliases.json projection from status events. */
+  readonly aliasProjection?: AliasStatusProjection;
+  /** Ticket 14: an alias command is in flight. */
+  readonly aliasBusy?: boolean;
+  /** Ticket 14: alias registry commands (query, compare-and-swap write). */
+  readonly onAliasCommand?: (command: AliasCommand) => void;
 }
 
 /** One authoritative file, structured and raw editors on the same revision. */
@@ -1050,13 +1564,18 @@ export function ModelsFileWorkspace({
   catalogStatus,
   catalogBusy = false,
   onCatalogCommand,
+  aliasResult,
+  aliasProjection,
+  aliasBusy = false,
+  onAliasCommand,
 }: ModelsFileWorkspaceProps) {
   const [tab, setTab] = useState<
-    "structured" | "raw" | "effective" | "refresh"
+    "structured" | "raw" | "effective" | "refresh" | "aliases"
   >("structured");
   // Ticket 11: opening the Models & Aliases page schedules a non-blocking
   // background refresh and loads the authoritative active catalog snapshot
-  // exactly once per mount.
+  // exactly once per mount. Ticket 14: the alias registry state is loaded
+  // with it.
   const openedCatalog = useRef(false);
   useEffect(() => {
     if (openedCatalog.current) return;
@@ -1065,6 +1584,13 @@ export function ModelsFileWorkspace({
     onCatalogCommand({ command: "refresh", mode: "background" });
     onCatalogCommand({ command: "query" });
   }, [onCatalogCommand]);
+  const openedAliases = useRef(false);
+  useEffect(() => {
+    if (openedAliases.current) return;
+    openedAliases.current = true;
+    if (onAliasCommand === undefined) return;
+    onAliasCommand({ command: "query" });
+  }, [onAliasCommand]);
   // Every draft is bound to the exact authoritative revision its content was
   // created from. A save can never carry a revision newer than its draft
   // content: it always submits the draft's baseRevision, so a stale draft is
@@ -1290,6 +1816,13 @@ export function ModelsFileWorkspace({
         >
           Catalog refresh
         </button>
+        <button
+          className={tab === "aliases" ? "active" : ""}
+          onClick={() => setTab("aliases")}
+          type="button"
+        >
+          Aliases
+        </button>
       </div>
       {tab === "effective" ? (
         <EffectiveCatalogView catalog={state?.catalog} state={state} />
@@ -1302,6 +1835,26 @@ export function ModelsFileWorkspace({
           }
           result={catalogResult}
           status={catalogStatus}
+        />
+      ) : null}
+      {tab === "aliases" ? (
+        <AliasRegistryView
+          busy={aliasBusy}
+          onReload={() => onAliasCommand?.({ command: "query" })}
+          onWrite={(aliases, baseRevision) => {
+            // The draft's bound base revision is authoritative: a retained
+            // stale draft must never be silently rebased onto the newest
+            // served state revision.
+            onAliasCommand?.({
+              command: "write",
+              revision: baseRevision,
+              aliases,
+            });
+          }}
+          projection={aliasProjection}
+          result={aliasResult}
+          snapshot={catalogResult?.snapshot}
+          state={state}
         />
       ) : null}
       {tab === "structured" ? (

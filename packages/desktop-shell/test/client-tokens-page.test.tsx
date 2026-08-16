@@ -120,6 +120,19 @@ function makeShell(overrides: {
       outcome: "ok",
       snapshot: { version: 1, modelsJsonValid: true, providers: [], refreshErrors: [] },
     }),
+    executeAliasCommand: async () => ({
+      outcome: "ok",
+      state: {
+        revision: 0,
+        path: "C:\\model-aliases.json",
+        present: false,
+        valid: false,
+        raw: "",
+        defaultsVersion: 1,
+        catalogVersion: 1,
+        effective: { defaultsVersion: 1, aliases: [], errors: [] },
+      },
+    }),
     dispose: async () => undefined,
   };
 }

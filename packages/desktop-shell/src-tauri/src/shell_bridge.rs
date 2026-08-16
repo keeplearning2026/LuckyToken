@@ -8,11 +8,12 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
-    ClientTokenCommandResultWire, ConnectResult, ConnectionFailure, ControlPlaneConnector,
-    ControlPlaneSession, CredentialCommand, CredentialCommandResultWire, DiagnosticsWarningWire,
-    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
-    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    AliasCommand, AliasCommandResultWire, AutoStartAction, CatalogCommand,
+    CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
+    ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
+    CredentialCommandResultWire, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
+    ModelsProjectionWire, RequestIdentityRecordWire, RuntimeCommand, SessionFailure,
+    SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
@@ -422,6 +423,16 @@ impl ShellBridge {
             .map_err(|_| ())
     }
 
+    /// Ticket 14: versioned alias registry commands (query / write with a
+    /// compare-and-swap revision). The result carries only the sanitized
+    /// authoritative state projection; the renderer re-validates strictly.
+    pub(crate) async fn alias_command(
+        &self,
+        command: AliasCommand,
+    ) -> Result<AliasCommandResultWire, ()> {
+        self.connector.alias_command(command).await.map_err(|_| ())
+    }
+
     /// Ticket 17 identity seam: the recent authorized request identities
     /// (optional client session id, canonical project context). The native
     /// bridge rejects records carrying the internal effective session id
@@ -689,6 +700,7 @@ mod tests {
             ownership: None,
 
             models: None,
+            aliases: None,
             credentials: None,
         }
     }
@@ -766,6 +778,7 @@ mod tests {
                 ownership: None,
 
                 models: None,
+                aliases: None,
                 credentials: None,
             }),
             models: None,

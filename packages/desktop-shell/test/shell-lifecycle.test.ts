@@ -48,6 +48,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           providers: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -131,6 +144,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           providers: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async (command) => {
         commands.push(command);
@@ -199,6 +225,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -259,6 +298,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       queryDiagnosticsWarnings: async () => [],
@@ -324,6 +376,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       queryDiagnosticsWarnings: async () => [],
@@ -399,6 +464,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       queryDiagnosticsWarnings: async () => [],
       executeModelsCommand: async () => {
         throw new Error("unused models command");
@@ -468,6 +546,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       queryDiagnosticsWarnings: async () => [],
@@ -548,6 +639,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       queryDiagnosticsWarnings: async () => [],
@@ -646,6 +750,19 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
     });
     await shell.launch();
 
@@ -689,6 +806,19 @@ describe("WindowsShellHost client token commands", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       executeCredentialCommand: async (command) => {
@@ -792,6 +922,19 @@ describe("WindowsShellHost client token commands", () => {
           refreshErrors: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
     });
@@ -853,6 +996,19 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
           refreshErrors: [],
         },
       }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
+        },
+      }),
       executeModelsCommand: async () => {
         throw new Error("unused");
       },
@@ -906,6 +1062,19 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
           modelsJsonValid: true,
           providers: [],
           refreshErrors: [],
+        },
+      }),
+      executeAliasCommand: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 0,
+          path: "C:\model-aliases.json",
+          present: false,
+          valid: false,
+          raw: "",
+          defaultsVersion: 1,
+          catalogVersion: 1,
+          effective: { defaultsVersion: 1, aliases: [], errors: [] },
         },
       }),
       executeModelsCommand: async () => {

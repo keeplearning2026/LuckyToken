@@ -4,6 +4,16 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   controlPlaneVersion,
+  type AliasCanonicalTarget,
+  type AliasCommand,
+  type AliasCommandResult,
+  type AliasFileError,
+  type AliasFileErrorKind,
+  type AliasFileState,
+  type AliasLayer,
+  type AliasStatusProjection,
+  type AliasValidationCode,
+  type AliasValidationErrorProjection,
   type ApplicationCommand,
   type ApplicationCommandConflict,
   type ApplicationCommandExecution,
@@ -23,6 +33,8 @@ import {
   type CatalogSnapshotProjection,
   type CatalogStatusProjection,
   type DataPlaneFailure,
+  type EffectiveAliasProjection,
+  type EffectiveAliasRegistryProjection,
   type EffectiveCatalogCompositionError,
   type EffectiveCatalogProjection,
   type EffectiveModelCost,
@@ -125,6 +137,11 @@ export type ClientRequest =
       readonly requestId: string;
       readonly command: CatalogCommand;
     }
+  | {
+      readonly type: "alias_command";
+      readonly requestId: string;
+      readonly command: AliasCommand;
+    }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
 
@@ -186,6 +203,11 @@ export type ServerMessage =
       readonly type: "catalog_command_result";
       readonly requestId: string;
       readonly result: CatalogCommandResult;
+    }
+  | {
+      readonly type: "alias_command_result";
+      readonly requestId: string;
+      readonly result: AliasCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -285,6 +307,10 @@ export function decodeApplicationStatus(
   if (value.catalog !== undefined && catalog === undefined) {
     return undefined;
   }
+  const aliases = decodeAliasStatusProjection(value.aliases);
+  if (value.aliases !== undefined && aliases === undefined) {
+    return undefined;
+  }
   const confirmation =
     value.confirmation === undefined
       ? undefined
@@ -303,6 +329,7 @@ export function decodeApplicationStatus(
     ...(models === undefined ? {} : { models }),
     ...(credentials === undefined ? {} : { credentials }),
     ...(catalog === undefined ? {} : { catalog }),
+    ...(aliases === undefined ? {} : { aliases }),
     ...(confirmation === undefined ? {} : { confirmation }),
   };
 }
@@ -683,6 +710,292 @@ export function decodeCatalogCommandResult(
     outcome: value.outcome as CatalogCommandResult["outcome"],
     snapshot,
     ...(refresh === undefined ? {} : { refresh }),
+  });
+}
+
+export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
+  if (!isRecord(value) || typeof value.command !== "string") {
+    return undefined;
+  }
+  if (value.command === "query") return { command: "query" };
+  const revision = value.revision;
+  if (
+    typeof revision !== "number" ||
+    !Number.isSafeInteger(revision) ||
+    (revision as number) < 0
+  ) {
+    return undefined;
+  }
+  if (value.command === "write" && isRecord(value.aliases)) {
+    return {
+      command: "write",
+      revision: revision as number,
+      aliases: Object.freeze({ ...value.aliases }),
+    };
+  }
+  return undefined;
+}
+
+const aliasValidationCodes: ReadonlySet<string> = new Set([
+  "invalid",
+  "ambiguous",
+  "unknown",
+  "duplicate",
+]);
+
+function decodeAliasValidationError(
+  value: unknown,
+): AliasValidationErrorProjection | undefined {
+  if (
+    !isRecord(value) ||
+    // The failing alias may itself be the invalid input (e.g. an empty
+    // key), so any string is a valid error entry.
+    typeof value.alias !== "string" ||
+    typeof value.code !== "string" ||
+    !aliasValidationCodes.has(value.code) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    alias: value.alias,
+    code: value.code as AliasValidationCode,
+    message: value.message,
+  });
+}
+
+function decodeAliasTarget(
+  value: unknown,
+): AliasCanonicalTarget | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.provider !== "string" ||
+    value.provider.length === 0 ||
+    typeof value.model !== "string" ||
+    value.model.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ provider: value.provider, model: value.model });
+}
+
+function decodeEffectiveAlias(
+  value: unknown,
+): EffectiveAliasProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.alias !== "string" ||
+    value.alias.length === 0 ||
+    (value.layer !== "default" && value.layer !== "user")
+  ) {
+    return undefined;
+  }
+  const target = decodeAliasTarget(value.target);
+  if (target === undefined) return undefined;
+  return Object.freeze({
+    alias: value.alias,
+    target,
+    layer: value.layer as AliasLayer,
+  });
+}
+
+function decodeEffectiveAliasRegistry(
+  value: unknown,
+): EffectiveAliasRegistryProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.defaultsVersion !== "number" ||
+    !Number.isSafeInteger(value.defaultsVersion) ||
+    (value.defaultsVersion as number) < 0 ||
+    !Array.isArray(value.aliases) ||
+    !Array.isArray(value.errors)
+  ) {
+    return undefined;
+  }
+  const aliases = value.aliases.map(decodeEffectiveAlias);
+  if (aliases.some((entry) => entry === undefined)) return undefined;
+  const errors = value.errors.map(decodeAliasValidationError);
+  if (errors.some((entry) => entry === undefined)) return undefined;
+  return Object.freeze({
+    defaultsVersion: value.defaultsVersion as number,
+    aliases: Object.freeze(
+      aliases.filter(
+        (entry): entry is EffectiveAliasProjection => entry !== undefined,
+      ),
+    ),
+    errors: Object.freeze(
+      errors.filter(
+        (entry): entry is AliasValidationErrorProjection => entry !== undefined,
+      ),
+    ),
+  });
+}
+
+const aliasErrorKinds: ReadonlySet<string> = new Set([
+  "parse",
+  "schema",
+  "validation",
+  "load",
+  "storage",
+]);
+
+export function decodeAliasFileError(
+  value: unknown,
+): AliasFileError | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.kind !== "string" ||
+    !aliasErrorKinds.has(value.kind) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  const rawEntries = value.entries;
+  if (rawEntries !== undefined && !Array.isArray(rawEntries)) {
+    return undefined;
+  }
+  const entries =
+    rawEntries === undefined
+      ? undefined
+      : rawEntries.map(decodeAliasValidationError);
+  if (value.entries !== undefined && entries === undefined) return undefined;
+  if (
+    value.entries !== undefined &&
+    entries !== undefined &&
+    entries.some((entry) => entry === undefined)
+  ) {
+    return undefined;
+  }
+  // Per-alias entries exist exactly for the validation kind.
+  if (value.kind !== "validation" && value.entries !== undefined) {
+    return undefined;
+  }
+  if (value.kind === "validation" && value.entries === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: value.kind as AliasFileErrorKind,
+    message: value.message,
+    ...(entries === undefined
+      ? {}
+      : {
+          entries: Object.freeze(
+            entries.filter(
+              (entry): entry is AliasValidationErrorProjection =>
+                entry !== undefined,
+            ),
+          ),
+        }),
+  });
+}
+
+export function decodeAliasFileState(value: unknown): AliasFileState | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    value.path.length === 0 ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean" ||
+    typeof value.raw !== "string" ||
+    typeof value.defaultsVersion !== "number" ||
+    !Number.isSafeInteger(value.defaultsVersion) ||
+    (value.defaultsVersion as number) < 0 ||
+    typeof value.catalogVersion !== "number" ||
+    !Number.isSafeInteger(value.catalogVersion) ||
+    (value.catalogVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  const error = decodeAliasFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  const aliases = value.aliases;
+  if (aliases !== undefined && !isRecord(aliases)) return undefined;
+  if (!value.present && aliases !== undefined) return undefined;
+  if (aliases !== undefined && !value.valid) return undefined;
+  if (aliases === undefined && value.present && value.valid) return undefined;
+  const effective = decodeEffectiveAliasRegistry(value.effective);
+  if (effective === undefined) {
+    // The effective registry is always authoritative: defaults apply even
+    // when the file is absent or broken (a broken file contributes no user
+    // mappings, never a repair).
+    return undefined;
+  }
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    raw: value.raw,
+    defaultsVersion: value.defaultsVersion as number,
+    catalogVersion: value.catalogVersion as number,
+    ...(aliases === undefined ? {} : { aliases }),
+    ...(effective === undefined ? {} : { effective }),
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+export function decodeAliasCommandResult(
+  value: unknown,
+): AliasCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "invalid" &&
+      value.outcome !== "storage_failure")
+  ) {
+    return undefined;
+  }
+  const state = decodeAliasFileState(value.state);
+  if (state === undefined) return undefined;
+  const error = decodeAliasFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  if (value.outcome === "invalid" && error === undefined) return undefined;
+  if (value.outcome === "storage_failure" && error === undefined) {
+    return undefined;
+  }
+  if (value.outcome === "ok" || value.outcome === "conflict") {
+    if (error !== undefined) return undefined;
+  }
+  return Object.freeze({
+    outcome: value.outcome as AliasCommandResult["outcome"],
+    state,
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+export function decodeAliasStatusProjection(
+  value: unknown,
+): AliasStatusProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.revision !== "number" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    value.path.length === 0 ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean" ||
+    typeof value.defaultsVersion !== "number" ||
+    !Number.isSafeInteger(value.defaultsVersion) ||
+    (value.defaultsVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  const error = decodeAliasFileError(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    defaultsVersion: value.defaultsVersion as number,
+    ...(error === undefined ? {} : { error }),
   });
 }
 
@@ -1930,6 +2243,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
+  if (value.type === "alias_command") {
+    const command = decodeAliasCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "alias_command",
+        requestId,
+        command,
+      },
+    };
+  }
   return { type: "invalid", requestId, code: "unknown_command" };
 }
 
@@ -2443,6 +2770,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "catalog_command_result", requestId, result };
+  }
+  if (value.type === "alias_command_result") {
+    const result = decodeAliasCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "alias_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

@@ -1,4 +1,8 @@
 import type {
+  AliasCommandResult,
+  AliasFileError,
+  AliasStatusProjection,
+  AliasValidationErrorProjection,
   ApplicationOwnership,
   CatalogCommandResult,
   CatalogModelAvailability,
@@ -57,6 +61,9 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   /** Sanitized catalog lifecycle projection from the status snapshot
    *  (Ticket 11): version, refreshing flag, failed Provider ids. */
   readonly catalogStatus?: CatalogStatusProjection;
+  /** Sanitized model-aliases.json projection from the status snapshot
+   *  (Ticket 14): revision, file facts, defaults version. */
+  readonly aliasesProjection?: AliasStatusProjection;
 }
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
@@ -785,6 +792,262 @@ export function decodeCatalogCommandResult(
   });
 }
 
+const aliasValidationCodes: ReadonlySet<string> = new Set([
+  "invalid",
+  "ambiguous",
+  "unknown",
+  "duplicate",
+]);
+
+const aliasErrorKinds: ReadonlySet<string> = new Set([
+  "parse",
+  "schema",
+  "validation",
+  "load",
+  "storage",
+]);
+
+function decodeAliasValidationErrorProjection(
+  value: unknown,
+): AliasValidationErrorProjection | undefined {
+  if (
+    !isRecord(value) ||
+    // The failing alias may itself be the invalid input (e.g. an empty
+    // key), so any string is a valid error entry.
+    typeof value.alias !== "string" ||
+    typeof value.code !== "string" ||
+    !aliasValidationCodes.has(value.code) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    alias: value.alias,
+    code: value.code as AliasValidationErrorProjection["code"],
+    message: value.message,
+  });
+}
+
+function decodeAliasFileErrorProjection(
+  value: unknown,
+): AliasFileError | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.kind !== "string" ||
+    !aliasErrorKinds.has(value.kind) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0
+  ) {
+    return undefined;
+  }
+  const rawEntries = value.entries;
+  if (rawEntries !== undefined && !Array.isArray(rawEntries)) {
+    return undefined;
+  }
+  const entries =
+    rawEntries === undefined
+      ? undefined
+      : rawEntries
+          .map(decodeAliasValidationErrorProjection)
+          .filter(
+            (entry): entry is NonNullable<typeof entry> => entry !== undefined,
+          );
+  if (rawEntries !== undefined && entries?.length !== rawEntries.length) {
+    return undefined;
+  }
+  // Per-alias entries exist exactly for the validation kind.
+  if (value.kind !== "validation" && value.entries !== undefined) {
+    return undefined;
+  }
+  if (value.kind === "validation" && value.entries === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: value.kind as AliasFileError["kind"],
+    message: value.message,
+    ...(entries === undefined ? {} : { entries: Object.freeze(entries) }),
+  });
+}
+
+function decodeAliasTargetRef(value: unknown): {
+  readonly provider: string;
+  readonly model: string;
+} | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.provider !== "string" ||
+    value.provider.length === 0 ||
+    typeof value.model !== "string" ||
+    value.model.length === 0
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ provider: value.provider, model: value.model });
+}
+
+function decodeEffectiveAliasProjection(
+  value: unknown,
+): {
+  readonly alias: string;
+  readonly target: { readonly provider: string; readonly model: string };
+  readonly layer: "default" | "user";
+} | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.alias !== "string" ||
+    value.alias.length === 0 ||
+    (value.layer !== "default" && value.layer !== "user")
+  ) {
+    return undefined;
+  }
+  const target = decodeAliasTargetRef(value.target);
+  if (target === undefined) return undefined;
+  return Object.freeze({
+    alias: value.alias,
+    target,
+    layer: value.layer as "default" | "user",
+  });
+}
+
+function decodeEffectiveAliasRegistryProjection(
+  value: unknown,
+): {
+  readonly defaultsVersion: number;
+  readonly aliases: readonly {
+    readonly alias: string;
+    readonly target: { readonly provider: string; readonly model: string };
+    readonly layer: "default" | "user";
+  }[];
+  readonly errors: readonly AliasValidationErrorProjection[];
+} | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.defaultsVersion) ||
+    (value.defaultsVersion as number) < 0 ||
+    !Array.isArray(value.aliases) ||
+    !Array.isArray(value.errors)
+  ) {
+    return undefined;
+  }
+  const aliases = value.aliases
+    .map(decodeEffectiveAliasProjection)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (aliases.length !== value.aliases.length) return undefined;
+  const errors = value.errors
+    .map(decodeAliasValidationErrorProjection)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (errors.length !== value.errors.length) return undefined;
+  return Object.freeze({
+    defaultsVersion: value.defaultsVersion as number,
+    aliases: Object.freeze(aliases),
+    errors: Object.freeze(errors),
+  });
+}
+
+/** Strict decode of the full alias registry state crossing the bridge; the
+ *  renderer keeps only value-free errors, the parsed user record and the
+ *  authoritative effective registry. */
+export function decodeAliasCommandResult(
+  value: unknown,
+): AliasCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "invalid" &&
+      value.outcome !== "storage_failure")
+  ) {
+    return undefined;
+  }
+  const state = value.state;
+  if (
+    !isRecord(state) ||
+    !Number.isSafeInteger(state.revision) ||
+    (state.revision as number) < 0 ||
+    typeof state.path !== "string" ||
+    state.path.length === 0 ||
+    typeof state.present !== "boolean" ||
+    typeof state.valid !== "boolean" ||
+    typeof state.raw !== "string" ||
+    !Number.isSafeInteger(state.defaultsVersion) ||
+    (state.defaultsVersion as number) < 0 ||
+    !Number.isSafeInteger(state.catalogVersion) ||
+    (state.catalogVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  const error = decodeAliasFileErrorProjection(state.error);
+  if (state.error !== undefined && error === undefined) return undefined;
+  const aliases = state.aliases;
+  if (aliases !== undefined && !isRecord(aliases)) return undefined;
+  if (!state.present && aliases !== undefined) return undefined;
+  if (aliases !== undefined && !state.valid) return undefined;
+  if (aliases === undefined && state.present && state.valid) return undefined;
+  const effective = decodeEffectiveAliasRegistryProjection(state.effective);
+  if (effective === undefined) return undefined;
+  const commandError = decodeAliasFileErrorProjection(value.error);
+  if (value.error !== undefined && commandError === undefined) {
+    return undefined;
+  }
+  if (value.outcome === "invalid" && commandError === undefined) {
+    return undefined;
+  }
+  if (value.outcome === "storage_failure" && commandError === undefined) {
+    return undefined;
+  }
+  if (value.outcome === "ok" || value.outcome === "conflict") {
+    if (commandError !== undefined) return undefined;
+  }
+  return Object.freeze({
+    outcome: value.outcome as AliasCommandResult["outcome"],
+    state: Object.freeze({
+      revision: state.revision as number,
+      path: state.path,
+      present: state.present,
+      valid: state.valid,
+      raw: state.raw,
+      defaultsVersion: state.defaultsVersion as number,
+      catalogVersion: state.catalogVersion as number,
+      ...(aliases === undefined ? {} : { aliases }),
+      ...(effective === undefined ? {} : { effective }),
+      ...(error === undefined ? {} : { error }),
+    }),
+    ...(commandError === undefined ? {} : { error: commandError }),
+  });
+}
+
+/** Sanitized model-aliases.json projection from the status snapshot:
+ *  revision, location, presence, validity and value-free error — never
+ *  content. */
+export function decodeAliasStatusProjection(
+  value: unknown,
+): AliasStatusProjection | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.path !== "string" ||
+    value.path.length === 0 ||
+    typeof value.present !== "boolean" ||
+    typeof value.valid !== "boolean" ||
+    !Number.isSafeInteger(value.defaultsVersion) ||
+    (value.defaultsVersion as number) < 0
+  ) {
+    return undefined;
+  }
+  const error = decodeAliasFileErrorProjection(value.error);
+  if (value.error !== undefined && error === undefined) return undefined;
+  return Object.freeze({
+    revision: value.revision as number,
+    path: value.path,
+    present: value.present,
+    valid: value.valid,
+    defaultsVersion: value.defaultsVersion as number,
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
 /** Sanitized models.json projection from the status snapshot: revision,
  *  location, presence, validity and value-free error — never content. */
 export function decodeModelsProjection(
@@ -1128,6 +1391,10 @@ export function projectControlPlaneState(
       payload.snapshot.catalog === undefined
         ? undefined
         : decodeCatalogStatusProjection(payload.snapshot.catalog);
+    const aliasesProjection =
+      payload.snapshot.aliases === undefined
+        ? undefined
+        : decodeAliasStatusProjection(payload.snapshot.aliases);
     const confirmation = payload.snapshot.confirmation;
     const projectedConfirmation =
       confirmation === undefined ||
@@ -1183,6 +1450,9 @@ export function projectControlPlaneState(
       ...(modelsProjection === undefined ? {} : { modelsProjection }),
       ...(credentialsProjection === undefined ? {} : { credentialsProjection }),
       ...(catalogStatus === undefined ? {} : { catalogStatus }),
+      ...(aliasesProjection === undefined
+        ? {}
+        : { aliasesProjection }),
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),

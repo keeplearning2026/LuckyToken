@@ -9,11 +9,11 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
-    ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
-    CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
-    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand,
-    SettingsCommand,
+    AliasCommand, AliasCommandResultWire, AutoStartAction, CatalogCommand,
+    CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire,
+    ClientTokenScopeWire, CredentialCommand, CredentialCommandResultWire,
+    CredentialImportSelectionWire, DiagnosticsWarningWire, ModelsCommand,
+    NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
@@ -355,6 +355,22 @@ async fn shell_catalog_refresh(
 }
 
 #[tauri::command]
+async fn shell_aliases_query(state: State<'_, ShellBridge>) -> Result<AliasCommandResultWire, ()> {
+    state.alias_command(AliasCommand::Query).await
+}
+
+#[tauri::command]
+async fn shell_aliases_write(
+    state: State<'_, ShellBridge>,
+    revision: u64,
+    aliases: serde_json::Value,
+) -> Result<AliasCommandResultWire, ()> {
+    state
+        .alias_command(AliasCommand::Write { revision, aliases })
+        .await
+}
+
+#[tauri::command]
 async fn shell_models_query(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -539,6 +555,8 @@ fn main() {
             shell_credentials_import_apply,
             shell_catalog_query,
             shell_catalog_refresh,
+            shell_aliases_query,
+            shell_aliases_write,
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");

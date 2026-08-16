@@ -1,6 +1,9 @@
 import {
   assertControlPlaneEndpoint,
   controlPlaneVersion,
+  type AliasCommandHandler,
+  type AliasCommandResult,
+  type AliasStatusProjection,
   type ApplicationCommandHandler,
   type ApplicationCommandResult,
   type ApplicationCommandResultDeliveredHandler,
@@ -45,6 +48,7 @@ import {
 import { decodeDiagnosticQuery } from "./wire-diagnostics.js";
 import {
   compatibleHello,
+  decodeAliasCommandResult,
   decodeApplicationCommandExecution,
   decodeApplicationStatus,
   decodeCatalogCommandResult,
@@ -100,6 +104,10 @@ export interface StartControlPlaneOptions {
    * catalog snapshot.
    */
   readonly catalogCommandHandler?: CatalogCommandHandler;
+  /** Optional alias registry command handler (Ticket 14): serves the
+   *  versioned alias commands against the live model-aliases.json
+   *  authority. */
+  readonly aliasCommandHandler?: AliasCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
@@ -110,6 +118,9 @@ export interface StartControlPlaneOptions {
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
+  /** Live sanitized model-aliases.json projection merged into every
+   *  published snapshot (Ticket 14). */
+  readonly aliasesProjection?: () => AliasStatusProjection;
   /**
    * Explicit diagnostics ownership (Ticket 07): when present, the Control
    * Plane serves bounded diagnostics queries and typed diagnostic events to
@@ -152,6 +163,7 @@ export async function startApplicationStatusHost(
     const modelsProjection = options.modelsProjection?.();
     const credentialProjection = options.credentialProjection?.();
     const catalogProjection = options.catalogProjection?.();
+    const aliasesProjection = options.aliasesProjection?.();
     return {
       ...status,
       ...(options.ownership === undefined
@@ -172,6 +184,9 @@ export async function startApplicationStatusHost(
       ...(catalogProjection === undefined
         ? {}
         : { catalog: catalogProjection }),
+      ...(aliasesProjection === undefined
+        ? {}
+        : { aliases: aliasesProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -566,6 +581,57 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "catalog_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "alias_command") {
+          if (options.aliasCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          // An alias command publishes only when it changed the
+          // authoritative revision (external edits discovered by a query or
+          // a successful write); read-only queries never broadcast.
+          const aliasesBefore = options.aliasesProjection?.();
+          let handled: AliasCommandResult;
+          try {
+            handled = await options.aliasCommandHandler(request.command);
+          } catch {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          const result = decodeAliasCommandResult(handled);
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          if (
+            handled.outcome === "ok" &&
+            aliasesBefore !== undefined &&
+            result.state.revision !== aliasesBefore.revision
+          ) {
+            await publishStatus({
+              modelDataPlane: current.modelDataPlane,
+              provider: current.provider,
+              ...(current.dataPlane === undefined
+                ? {}
+                : { dataPlane: current.dataPlane }),
+            });
+          }
+          await writeFrame(state.connection, {
+            type: "alias_command_result",
             requestId: request.requestId,
             result,
           });

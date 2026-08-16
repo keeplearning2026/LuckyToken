@@ -95,6 +95,7 @@ mod tests {
             ownership: None,
 
             models: None,
+            aliases: None,
             credentials: None,
         }
     }

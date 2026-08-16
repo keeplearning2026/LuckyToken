@@ -1,5 +1,7 @@
 import type { Event } from "@tauri-apps/api/event";
 import type {
+  AliasCommand,
+  AliasCommandResult,
   ApplicationOwnership,
   CatalogCommand,
   CatalogCommandResult,
@@ -17,6 +19,8 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
+  decodeAliasCommandResult,
+  decodeAliasStatusProjection,
   decodeCatalogCommandResult,
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
@@ -56,7 +60,9 @@ export type ShellCommand =
   | "shell_credentials_import_preview"
   | "shell_credentials_import_apply"
   | "shell_catalog_query"
-  | "shell_catalog_refresh";
+  | "shell_catalog_refresh"
+  | "shell_aliases_query"
+  | "shell_aliases_write";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -86,6 +92,7 @@ export interface TauriDesktopRuntime {
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
+  executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -474,6 +481,10 @@ function decodeBridgePayload(
     if (snapshot.models !== undefined && modelsProjection === undefined) {
       return undefined;
     }
+    const aliasesProjection = decodeAliasStatusProjection(snapshot.aliases);
+    if (snapshot.aliases !== undefined && aliasesProjection === undefined) {
+      return undefined;
+    }
     const models = decodeModelsCommandResult(value.models);
     if (value.models !== undefined && models === undefined) {
       return undefined;
@@ -490,6 +501,9 @@ function decodeBridgePayload(
         ...(dataPlane === undefined ? {} : { dataPlane }),
         ...(settings === undefined ? {} : { settings }),
         ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
+        ...(aliasesProjection === undefined
+          ? {}
+          : { aliases: aliasesProjection }),
         ...(confirmation === undefined ? {} : { confirmation }),
         ...(ownership === undefined ? {} : { ownership }),
       },
@@ -760,6 +774,20 @@ export function createTauriDesktopRuntime(
       const decoded = decodeCatalogCommandResult(raw);
       if (decoded === undefined) {
         throw new Error("LuckyToken returned an invalid catalog result");
+      }
+      return decoded;
+    },
+    async executeAliasCommand(command) {
+      const raw =
+        command.command === "query"
+          ? await bridge.invoke("shell_aliases_query")
+          : await bridge.invoke("shell_aliases_write", {
+              revision: command.revision,
+              aliases: command.aliases,
+            });
+      const decoded = decodeAliasCommandResult(raw);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid alias result");
       }
       return decoded;
     },

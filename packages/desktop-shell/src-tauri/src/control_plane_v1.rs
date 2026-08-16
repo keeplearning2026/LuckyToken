@@ -135,6 +135,8 @@ pub(crate) struct StatusSnapshot {
     pub(crate) ownership: Option<OwnershipWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) models: Option<ModelsProjectionWire>,
+    #[serde(rename = "aliases", skip_serializing_if = "Option::is_none")]
+    pub(crate) aliases: Option<AliasesProjectionWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credentials: Option<CredentialProjectionWire>,
 }
@@ -287,6 +289,36 @@ impl ModelsCommand {
                 "command": "write_structured",
                 "revision": revision,
                 "providers": providers,
+            }),
+        }
+    }
+}
+
+/// Ticket 14: versioned alias registry commands — query the authoritative
+/// model-aliases.json state or replace the user mapping record with a
+/// compare-and-swap on the revision the client was served. Thin
+/// allowlisted transport only; all domain/persistence/snapshot logic lives
+/// in TypeScript.
+pub(crate) enum AliasCommand {
+    Query,
+    Write { revision: u64, aliases: Value },
+}
+
+impl AliasCommand {
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::Query => "desktop-aliases-query",
+            Self::Write { .. } => "desktop-aliases-write",
+        }
+    }
+
+    fn wire(&self) -> Value {
+        match self {
+            Self::Query => json!({ "command": "query" }),
+            Self::Write { revision, aliases } => json!({
+                "command": "write",
+                "revision": revision,
+                "aliases": aliases,
             }),
         }
     }
@@ -567,6 +599,10 @@ pub(crate) type CredentialCommandFuture = Pin<
     >,
 >;
 
+pub(crate) type AliasCommandFuture = Pin<
+    Box<dyn Future<Output = Result<AliasCommandResultWire, ConnectionFailure>> + Send + 'static>,
+>;
+
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
     fn command(&self, _command: RuntimeCommand) -> CommandFuture {
@@ -594,6 +630,9 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn catalog_command(&self, _command: CatalogCommand) -> CatalogCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn alias_command(&self, _command: AliasCommand) -> AliasCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
 }
@@ -796,6 +835,85 @@ pub(crate) struct ModelsProjectionWire {
     pub(crate) error: Option<ModelsFileErrorWire>,
 }
 
+/// Ticket 14 thin wire shapes: the sanitized model-aliases.json projection
+/// (status snapshots), the value-free file error, the one effective alias
+/// entry, the rejected entry, and the full authoritative state + command
+/// result. The renderer re-validates every payload strictly.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasFileErrorWire {
+    pub(crate) kind: String,
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entries: Option<Vec<AliasValidationErrorWire>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasValidationErrorWire {
+    pub(crate) alias: String,
+    pub(crate) code: String,
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasCanonicalTargetWire {
+    pub(crate) provider: String,
+    pub(crate) model: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasEffectiveAliasWire {
+    pub(crate) alias: String,
+    pub(crate) target: AliasCanonicalTargetWire,
+    pub(crate) layer: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasEffectiveRegistryWire {
+    #[serde(rename = "defaultsVersion")]
+    pub(crate) defaults_version: u64,
+    pub(crate) aliases: Vec<AliasEffectiveAliasWire>,
+    pub(crate) errors: Vec<AliasValidationErrorWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasFileStateWire {
+    pub(crate) revision: u64,
+    pub(crate) path: String,
+    pub(crate) present: bool,
+    pub(crate) valid: bool,
+    pub(crate) raw: String,
+    #[serde(rename = "defaultsVersion")]
+    pub(crate) defaults_version: u64,
+    #[serde(rename = "catalogVersion")]
+    pub(crate) catalog_version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) aliases: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effective: Option<AliasEffectiveRegistryWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<AliasFileErrorWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasCommandResultWire {
+    pub(crate) outcome: String,
+    pub(crate) state: AliasFileStateWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<AliasFileErrorWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AliasesProjectionWire {
+    pub(crate) revision: u64,
+    pub(crate) path: String,
+    pub(crate) present: bool,
+    pub(crate) valid: bool,
+    #[serde(rename = "defaultsVersion")]
+    pub(crate) defaults_version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<AliasFileErrorWire>,
+}
+
 pub(crate) struct NativeControlPlaneConnector {
     discovery: NativeControlPlaneDiscovery,
     auto_start_consumed: Arc<AtomicBool>,
@@ -968,6 +1086,20 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_catalog_command_session(&pipe_name, capability, command).await
+        })
+    }
+    fn alias_command(&self, command: AliasCommand) -> AliasCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_alias_command_session(&pipe_name, capability, command).await
         })
     }
 }
@@ -1701,6 +1833,79 @@ fn decode_catalog_command_result(
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
+/// Ticket 14: alias registry command session — same negotiation as the
+/// models/catalog commands; the command payload is the versioned
+/// alias_command wire and the result decodes strictly (allowlisted
+/// outcomes, value-free errors). Thin transport only.
+async fn execute_alias_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: AliasCommand,
+) -> Result<AliasCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "alias_command",
+                    "requestId": command.request_id(),
+                    "command": command.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_alias_command_result(&result, &command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_alias_command_result(
+    value: &Value,
+    command: &AliasCommand,
+) -> Result<AliasCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("alias_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if !matches!(
+        result.get("outcome").and_then(Value::as_str),
+        Some("ok" | "conflict" | "invalid" | "storage_failure")
+    ) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    if result.get("state").and_then(Value::as_object).is_none() {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    serde_json::from_value::<AliasCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)
+}
+
 fn valid_masked_scopes(value: Option<&Value>) -> bool {
     let Some(scopes) = value.and_then(Value::as_array) else {
         return false;
@@ -2044,6 +2249,7 @@ struct StatusSnapshotWire {
     ownership: Option<OwnershipWire>,
 
     models: Option<ModelsProjectionWire>,
+    aliases: Option<AliasesProjectionWire>,
     credentials: Option<CredentialProjectionWire>,
 }
 
@@ -2098,6 +2304,7 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
         ownership: wire.ownership,
 
         models: wire.models,
+        aliases: wire.aliases,
         credentials: wire.credentials,
     })
 }
@@ -2220,38 +2427,80 @@ where
 }
 
 #[cfg(test)]
+use tokio::net::windows::named_pipe::NamedPipeServer;
+
+#[cfg(test)]
+fn test_pipe_name() -> String {
+    format!(
+        r"\\.\pipe\luckytoken-desktop-test-{}-{}",
+        std::process::id(),
+        rand_test_suffix()
+    )
+}
+
+#[cfg(test)]
+fn rand_test_suffix() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after the epoch")
+        .as_nanos() as u64;
+    // Parallel tests in one binary share the process id and can observe
+    // the same nanosecond; a per-call counter makes every pipe name
+    // unique so `first_pipe_instance` never collides across tests.
+    nanos ^ COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+async fn read_frame_length(reader: &mut NamedPipeServer) -> Result<usize, std::io::Error> {
+    let mut header = [0_u8; 4];
+    reader.read_exact(&mut header).await?;
+    Ok(u32::from_be_bytes(header) as usize)
+}
+
+#[cfg(test)]
+async fn write_frame_bytes(
+    writer: &mut NamedPipeServer,
+    value: &Value,
+) -> Result<(), std::io::Error> {
+    let body = serde_json::to_vec(value).map_err(|_| std::io::ErrorKind::InvalidData)?;
+    writer.write_all(&(body.len() as u32).to_be_bytes()).await?;
+    writer.write_all(&body).await
+}
+
+#[cfg(test)]
+struct TestPipeServer {
+    server: NamedPipeServer,
+}
+
+#[cfg(test)]
+impl TestPipeServer {
+    async fn next_frame(&mut self) -> Value {
+        let length = read_frame_length(&mut self.server)
+            .await
+            .expect("test server must read a frame header");
+        let mut body = vec![0_u8; length];
+        self.server
+            .read_exact(&mut body)
+            .await
+            .expect("test server must read a frame body");
+        serde_json::from_slice(&body).expect("test server must parse the frame body")
+    }
+
+    async fn send(&mut self, value: &Value) {
+        write_frame_bytes(&mut self.server, value)
+            .await
+            .expect("test server must write a frame");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::windows::named_pipe::{NamedPipeServer, ServerOptions},
-        time::timeout,
-    };
-
-    struct TestPipeServer {
-        server: NamedPipeServer,
-    }
-
-    impl TestPipeServer {
-        async fn next_frame(&mut self) -> Value {
-            let length = read_frame_length(&mut self.server)
-                .await
-                .expect("test server must read a frame header");
-            let mut body = vec![0_u8; length];
-            self.server
-                .read_exact(&mut body)
-                .await
-                .expect("test server must read a frame body");
-            serde_json::from_slice(&body).expect("test server must parse the frame body")
-        }
-
-        async fn send(&mut self, value: &Value) {
-            write_frame_bytes(&mut self.server, value)
-                .await
-                .expect("test server must write a frame");
-        }
-    }
+    use tokio::{net::windows::named_pipe::ServerOptions, time::timeout};
 
     #[tokio::test]
     async fn reconnect_session_must_begin_with_get_status_and_never_auto_start() {
@@ -2895,43 +3144,6 @@ mod tests {
         .is_none());
     }
 
-    fn test_pipe_name() -> String {
-        format!(
-            r"\\.\pipe\luckytoken-desktop-test-{}-{}",
-            std::process::id(),
-            rand_test_suffix()
-        )
-    }
-
-    fn rand_test_suffix() -> u64 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::time::{SystemTime, UNIX_EPOCH};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must be after the epoch")
-            .as_nanos() as u64;
-        // Parallel tests in one binary share the process id and can observe
-        // the same nanosecond; a per-call counter makes every pipe name
-        // unique so `first_pipe_instance` never collides across tests.
-        nanos ^ COUNTER.fetch_add(1, Ordering::Relaxed)
-    }
-
-    async fn read_frame_length(reader: &mut NamedPipeServer) -> Result<usize, std::io::Error> {
-        let mut header = [0_u8; 4];
-        reader.read_exact(&mut header).await?;
-        Ok(u32::from_be_bytes(header) as usize)
-    }
-
-    async fn write_frame_bytes(
-        writer: &mut NamedPipeServer,
-        value: &Value,
-    ) -> Result<(), std::io::Error> {
-        let body = serde_json::to_vec(value).map_err(|_| std::io::ErrorKind::InvalidData)?;
-        writer.write_all(&(body.len() as u32).to_be_bytes()).await?;
-        writer.write_all(&body).await
-    }
-
     #[test]
     fn failed_status_is_allowlisted_and_requires_the_configured_port() {
         let raw = json!({
@@ -3561,5 +3773,289 @@ mod ticket17_directory_scope_tests {
             ] }
         });
         assert!(decode_request_identities(&not_uuid).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ticket14_alias_transport_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::{net::windows::named_pipe::ServerOptions, time::timeout};
+
+    fn alias_result_state() -> Value {
+        json!({
+            "revision": 3,
+            "path": "C:\\app\\data\\model-aliases.json",
+            "present": true,
+            "valid": true,
+            "raw": "{\"aliases\":{}}",
+            "defaultsVersion": 1,
+            "catalogVersion": 4,
+            "aliases": {
+                "gpt-4o": { "provider": "anthropic", "model": "claude-3-5-sonnet" }
+            },
+            "effective": {
+                "defaultsVersion": 1,
+                "aliases": [{
+                    "alias": "gpt-4o",
+                    "target": {
+                        "provider": "anthropic",
+                        "model": "claude-3-5-sonnet"
+                    },
+                    "layer": "user"
+                }],
+                "errors": []
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn alias_query_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_alias_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                AliasCommand::Query,
+            )
+            .await
+            .expect("alias query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("alias_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-aliases-query")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("query")
+        );
+        server
+            .send(&json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-query",
+                "result": {
+                    "outcome": "ok",
+                    "state": alias_result_state()
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("alias query must complete within the timeout")
+            .expect("alias query task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.state.revision, 3);
+        assert!(result.state.present);
+        assert!(result.state.valid);
+        assert_eq!(result.state.defaults_version, 1);
+        assert_eq!(result.state.catalog_version, 4);
+        let effective = result
+            .state
+            .effective
+            .expect("query result must carry the effective registry");
+        assert_eq!(effective.aliases.len(), 1);
+        assert_eq!(effective.aliases[0].alias, "gpt-4o");
+        assert_eq!(effective.aliases[0].target.provider, "anthropic");
+        assert_eq!(effective.aliases[0].layer, "user");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn alias_write_serializes_revision_and_aliases_and_decodes_the_result() {
+        let command = AliasCommand::Write {
+            revision: 3,
+            aliases: json!({
+                "gpt-4o": { "provider": "anthropic", "model": "claude-3-5-sonnet" }
+            }),
+        };
+        assert_eq!(command.request_id(), "desktop-aliases-write");
+        let wire = command.wire();
+        assert_eq!(wire["command"], "write");
+        assert_eq!(wire["revision"], 3);
+        assert_eq!(wire["aliases"]["gpt-4o"]["provider"], "anthropic");
+
+        // A rejected proposal surfaces as a sanitized invalid outcome.
+        let decoded = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-write",
+                "result": {
+                    "outcome": "invalid",
+                    "state": alias_result_state(),
+                    "error": {
+                        "kind": "validation",
+                        "message": "1 rejected alias proposal",
+                        "entries": [{
+                            "alias": "…",
+                            "code": "invalid",
+                            "message": "alias must be a non-empty trimmed string"
+                        }]
+                    }
+                }
+            }),
+            &command,
+        )
+        .expect("invalid write result must decode");
+        assert_eq!(decoded.outcome, "invalid");
+        let error = decoded.error.expect("invalid result must carry the error");
+        assert_eq!(error.kind, "validation");
+        let entries = error.entries.expect("validation error must carry entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].code, "invalid");
+        assert!(decoded.state.aliases.is_some());
+
+        // A conflict outcome (stale revision) decodes without an error.
+        let conflict = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-write",
+                "result": {
+                    "outcome": "conflict",
+                    "state": alias_result_state()
+                }
+            }),
+            &command,
+        )
+        .expect("conflict write result must decode");
+        assert_eq!(conflict.outcome, "conflict");
+    }
+
+    #[test]
+    fn alias_command_result_rejects_malformed_outcomes_shapes_and_request_ids() {
+        let command = AliasCommand::Write {
+            revision: 3,
+            aliases: json!({"gpt-4o": "anthropic/claude-3-5-sonnet"}),
+        };
+        // An outcome outside the taxonomy never decodes.
+        let unknown_outcome = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-write",
+                "result": {"outcome": "pending", "state": alias_result_state()}
+            }),
+            &command,
+        );
+        assert_eq!(unknown_outcome, Err(ConnectionFailure::ProtocolError));
+        // A mismatched request id never decodes.
+        let wrong_request = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-query",
+                "result": {"outcome": "ok", "state": alias_result_state()}
+            }),
+            &command,
+        );
+        assert_eq!(wrong_request, Err(ConnectionFailure::ProtocolError));
+        // A missing state never decodes.
+        let missing_state = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-write",
+                "result": {"outcome": "ok"}
+            }),
+            &command,
+        );
+        assert_eq!(missing_state, Err(ConnectionFailure::ProtocolError));
+        // A state with a malformed shape (missing required field) never decodes.
+        let malformed_state = decode_alias_command_result(
+            &json!({
+                "type": "alias_command_result",
+                "requestId": "desktop-aliases-write",
+                "result": {
+                    "outcome": "ok",
+                    "state": {"revision": 3, "path": "C:\\x", "present": true}
+                }
+            }),
+            &command,
+        );
+        assert_eq!(malformed_state, Err(ConnectionFailure::ProtocolError));
+    }
+
+    #[test]
+    fn status_snapshot_wire_accepts_the_aliases_projection() {
+        let raw = json!({
+            "sequence": 5,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "aliases": {
+                "revision": 3,
+                "path": "C:\\app\\data\\model-aliases.json",
+                "present": true,
+                "valid": true,
+                "defaultsVersion": 1,
+                "error": null
+            }
+        });
+        let status = decode_status_snapshot(&raw).expect("status with aliases must decode");
+        let aliases = status
+            .aliases
+            .as_ref()
+            .expect("aliases projection must flow through");
+        assert_eq!(aliases.revision, 3);
+        assert!(aliases.present);
+        assert!(aliases.valid);
+        assert_eq!(aliases.defaults_version, 1);
+        // The sanitized projection round-trips into the renderer payload
+        // exactly (camelCase key, no leaked content beyond the projection).
+        assert_eq!(
+            serde_json::to_value(&status).expect("serialize status"),
+            json!({
+                "sequence": 5,
+                "modelDataPlane": "running",
+                "provider": "configured",
+                "aliases": {
+                    "revision": 3,
+                    "path": "C:\\app\\data\\model-aliases.json",
+                    "present": true,
+                    "valid": true,
+                    "defaultsVersion": 1
+                }
+            })
+        );
+        // A malformed aliases projection still rejects the whole snapshot.
+        assert!(decode_status_snapshot(&json!({
+            "sequence": 6,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "aliases": {"revision": 3}
+        }))
+        .is_none());
     }
 }
