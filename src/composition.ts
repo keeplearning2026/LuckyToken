@@ -27,6 +27,11 @@ import {
   createRuntimeDiagnosticsStoreFactory,
   type RuntimeDiagnosticsStore,
 } from "./runtime-diagnostics/index.js";
+import {
+  bindRequestLedgerConfiguration,
+  createRequestLedgerStoreFactory,
+  type RequestLedgerStore,
+} from "./request-ledger/index.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import {
@@ -196,6 +201,12 @@ export interface ConfiguredLuckyTokenCompositionOptions {
    * returns its own store, which the caller must close.
    */
   readonly diagnosticsStore?: RuntimeDiagnosticsStore;
+  /**
+   * Reuse an already-open Request Ledger store (Ticket 18), e.g. the one
+   * the Control Plane host owns. When absent the composition opens and
+   * returns its own store, which the caller must close.
+   */
+  readonly requestLedgerStore?: RequestLedgerStore;
   /** Registered settings authority for protocol enablement; when absent every
    *  configured protocol is served (Ticket 03 behavior). */
   readonly settingsRegistry?: SettingsRegistry;
@@ -245,6 +256,9 @@ export interface ConfiguredLuckyTokenComposition {
    *  public ledger of authorized request identities that the Requests
    *  surface and Ticket 18's permanent ledger build on. */
   readonly requestIdentities: RequestIdentityObserver;
+  /** Permanent Request Lifecycle Ledger store (Ticket 18): the one SQLite/
+   *  WAL authority for request lifecycle facts. */
+  readonly requestLedger: RequestLedgerStore;
 }
 
 export async function createConfiguredPiModels(
@@ -527,6 +541,38 @@ export async function createConfiguredLuckyTokenComposition(
   if (options.diagnosticsStore !== undefined && scrub !== undefined) {
     diagnosticsStore.attachScrub(scrub);
   }
+  // Ticket 18: the Request Ledger is its own audit surface. Pattern
+  // redaction is its baseline; the same credential-owner scrubber is
+  // attached (replacing on Data Plane restarts). A ledger persistence fault
+  // never changes a model response — it is reported through the narrow
+  // sanitized diagnostics seam (request id + message hash only).
+  const requestLedger: RequestLedgerStore =
+    options.requestLedgerStore ??
+    (await createRequestLedgerStoreFactory({
+      configuration: bindRequestLedgerConfiguration(config.requestLedger),
+      now,
+      ...(scrub === undefined ? {} : { scrub }),
+      onPersistenceFailure: (failure) => {
+        try {
+          diagnosticsStore.append({
+            level: "critical",
+            text: "Request Ledger persistence failure",
+            ...(failure.requestId.length === 0
+              ? {}
+              : { requestId: failure.requestId }),
+            details: { messageHash: failure.messageHash },
+          });
+        } catch {
+          // The diagnostics seam must never affect the request path.
+        }
+      },
+    }).open());
+  if (
+    options.requestLedgerStore !== undefined &&
+    scrub !== undefined
+  ) {
+    requestLedger.attachScrub(scrub);
+  }
   // Ticket 17 identity seam: the internal effective session identity is
   // created per request by the auth boundary; only the optional client
   // identity and canonical project context may reach the public observer.
@@ -559,6 +605,7 @@ export async function createConfiguredLuckyTokenComposition(
       anthropicConfig.adapterConfiguration,
     ),
     invocationDiagnostics,
+    requestLedger,
     passthroughFetch: options.fetch,
     ...(options.createMessageId === undefined
       ? {}
@@ -598,6 +645,7 @@ export async function createConfiguredLuckyTokenComposition(
         openaiResponsesConfig.adapterConfiguration,
       ),
       invocationDiagnostics,
+      requestLedger,
       stateFile,
       passthroughFetch: options.fetch,
       ...(aliasSource === undefined ? {} : { aliasSource }),
@@ -663,5 +711,6 @@ export async function createConfiguredLuckyTokenComposition(
       capture: catalog.capture,
     }),
     requestIdentities,
+    requestLedger,
   });
 }

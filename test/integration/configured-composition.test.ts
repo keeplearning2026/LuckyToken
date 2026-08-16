@@ -34,12 +34,15 @@ function commandCodeText(text: string): Response {
 
 describe("configured serving composition", () => {
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void } }> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
 
   afterEach(async () => {
     compositions
       .splice(0)
-      .forEach((composition) => composition.diagnosticsStore.close());
+      .forEach((composition) => {
+        composition.diagnosticsStore.close();
+        composition.requestLedger.close();
+      });
     await Promise.all(
       directories
         .splice(0)
@@ -139,6 +142,7 @@ describe("configured serving composition", () => {
       "credentialAuthority",
       "diagnosticsStore",
       "requestIdentities",
+      "requestLedger",
       "runtime",
       "userConfiguredProviderIds",
     ]);

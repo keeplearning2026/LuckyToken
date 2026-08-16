@@ -311,6 +311,9 @@ describe("canonical directory Client token scopes over real HTTP", () => {
       sessions,
       async restart() {
         await server.close();
+        // The previous composition's ledger store closes with its data
+        // plane; the shared diagnostics store and settings registry stay.
+        composition.requestLedger.close();
         composition = await buildComposition();
         server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
@@ -324,6 +327,7 @@ describe("canonical directory Client token scopes over real HTTP", () => {
         await client.close();
         await host.close();
         composition.diagnosticsStore.close();
+        composition.requestLedger.close();
       },
     };
     fixtures.push(fixture);

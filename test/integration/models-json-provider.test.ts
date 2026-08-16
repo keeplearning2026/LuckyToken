@@ -30,12 +30,13 @@ function anthropicJsonResponse(text: string): Response {
 
 describe("models.json custom provider registration", () => {
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void } }> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void } }> = [];
 
   afterEach(async () => {
-    compositions.splice(0).forEach((composition) =>
-      composition.diagnosticsStore.close(),
-    );
+    compositions.splice(0).forEach((composition) => {
+      composition.diagnosticsStore.close();
+      composition.requestLedger.close();
+    });
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),

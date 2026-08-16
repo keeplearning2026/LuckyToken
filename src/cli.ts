@@ -68,6 +68,11 @@ import {
   createRuntimeDiagnosticsStoreFactory,
 } from "./runtime-diagnostics/index.js";
 import type { RuntimeDiagnosticsStore } from "./runtime-diagnostics/index.js";
+import {
+  bindRequestLedgerConfiguration,
+  createRequestLedgerStoreFactory,
+} from "./request-ledger/index.js";
+import type { RequestLedgerStore } from "./request-ledger/index.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
@@ -509,6 +514,7 @@ async function runServe(
     Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>> | undefined;
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
+  let requestLedgerStore: RequestLedgerStore | undefined;
   try {
     try {
       descriptor = await publishControlPlaneDescriptor({
@@ -531,6 +537,31 @@ async function runServe(
       ),
     }).open();
     const ownedDiagnosticsStore = diagnosticsStore;
+    // Ticket 18: the permanent Request Ledger opens once at serve level and
+    // survives Data Plane restarts (recovery on this open is idempotent).
+    // The composition attaches the credential-owner scrubber when the Data
+    // Plane runs; pattern redaction is the baseline until then. Persistence
+    // faults are reported through the same narrow sanitized diagnostics
+    // seam as the composition-created store: one Critical per request, with
+    // the message hash only — never fault text or credentials.
+    requestLedgerStore = await createRequestLedgerStoreFactory({
+      configuration: bindRequestLedgerConfiguration(config.requestLedger),
+      onPersistenceFailure: (failure) => {
+        try {
+          ownedDiagnosticsStore.append({
+            level: "critical",
+            text: "Request Ledger persistence failure",
+            ...(failure.requestId.length === 0
+              ? {}
+              : { requestId: failure.requestId }),
+            details: { messageHash: failure.messageHash },
+          });
+        } catch {
+          // The diagnostics seam must never affect the request path.
+        }
+      },
+    }).open();
+    const ownedLedgerStore = requestLedgerStore;
     const controlPipe = await createProductionControlPipe();
     // The canonical LuckyToken-owned models.json: defaults to `models.json`
     // next to the config file (the desktop layout's `~/.luckytoken/models.json`)
@@ -674,6 +705,7 @@ async function runServe(
             fetch: globalThis.fetch,
             shutdownSignal: shutdownController.signal,
             diagnosticsStore: ownedDiagnosticsStore,
+            requestLedgerStore: ownedLedgerStore,
             settingsRegistry,
             modelsStore: catalogCacheStore,
             // Ticket 14/15: the one alias registry owns the data plane
@@ -787,6 +819,7 @@ async function runServe(
         descriptor?.close() ?? Promise.resolve(),
         controlPlane?.close() ?? Promise.resolve(),
         diagnosticsStore?.close() ?? Promise.resolve(),
+        requestLedgerStore?.close() ?? Promise.resolve(),
       ]);
       catalogController.dispose();
       if (results.some((result) => result.status === "rejected")) {
@@ -808,6 +841,10 @@ async function runServe(
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
       clientTokenCommandHandler,
+      // Ticket 18: the Control Plane serves the permanent Request Ledger
+      // (bounded query + opt-in typed events) from the serve-level store,
+      // even while the Data Plane is stopped.
+      requestLedger: requestLedgerStore,
       requestIdentitiesHandler: () =>
         Promise.resolve({
           records: requestIdentities?.list() ?? Object.freeze([]),

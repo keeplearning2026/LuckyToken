@@ -244,6 +244,9 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
         // rebuilt (fresh authorities from the persisted files) against the
         // same shared diagnostics store and settings registry.
         await server.close();
+        // The previous composition's ledger store closes with its data
+        // plane; the shared diagnostics store and settings registry stay.
+        composition.requestLedger.close();
         composition = await buildComposition();
         server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
@@ -257,6 +260,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
         await client.close();
         await host.close();
         composition.diagnosticsStore.close();
+        composition.requestLedger.close();
       },
     };
     fixtures.push(fixture);
@@ -838,6 +842,9 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
       responsesAuthFile,
       async restart() {
         await server.close();
+        // The previous composition's ledger store closes with its data
+        // plane; the shared diagnostics store and settings registry stay.
+        composition.requestLedger.close();
         composition = await buildComposition();
         server = await startLuckyTokenHttpServer({
           runtime: composition.runtime,
@@ -851,6 +858,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
         await client.close();
         await host.close();
         composition.diagnosticsStore.close();
+        composition.requestLedger.close();
       },
     };
     fixtures.push(fixture);

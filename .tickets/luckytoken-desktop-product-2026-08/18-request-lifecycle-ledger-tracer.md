@@ -8,7 +8,7 @@
 
 **Blocked by:** 07 — Permanent Runtime Diagnostics and universal credential redaction; 15 — Alias-only Model Data Plane; 17 — Canonical directory Client token scopes.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm Request Ledger queries/events and the real Data Pl
 
 ## Acceptance criteria
 
-- [ ] The handler assigns a safe unique request ID at acceptedAt and records an accepted request before model execution begins.
-- [ ] Every success and error response carries `x-luckytoken-request-id`; protocol error bodies include it where the target protocol permits.
-- [ ] The Ledger exposes live phase transitions for accepted, execution, rendering, and terminal preparation without claiming socket-consumption completion.
-- [ ] acceptedAt is handler acceptance, executionStartedAt is Pi invocation start, terminalAt is the Pi terminal outcome, and completedAt is terminal response preparation.
-- [ ] Each record snapshots externalAlias, Provider ID, real model ID, Client Protocol, projectDir, clientSessionId, and effectiveSessionId from the request's captured authorities.
-- [ ] Lifecycle updates collect narrow facts from Auth, alias/model resolution, Pi execution, rendering, HTTP finalization, conversion notices, attempts, and safe failures without carrying protocol-native payloads by default.
-- [ ] Successful, failed, aborted, rejected-auth, unknown-alias, and unavailable-alias requests reach one explicit terminal record.
-- [ ] Restart tests prove terminal structured records are permanent and running records recover into a truthful interrupted/unknown terminal state rather than disappearing.
+- [x] The handler assigns a safe unique request ID at acceptedAt and records an accepted request before model execution begins.
+- [x] Every success and error response carries `x-luckytoken-request-id`; protocol error bodies include it where the target protocol permits.
+- [x] The Ledger exposes live phase transitions for accepted, execution, rendering, and terminal preparation without claiming socket-consumption completion.
+- [x] acceptedAt is handler acceptance, executionStartedAt is Pi invocation start, terminalAt is the Pi terminal outcome, and completedAt is terminal response preparation.
+- [x] Each record snapshots externalAlias, Provider ID, real model ID, Client Protocol, projectDir, clientSessionId, and effectiveSessionId from the request's captured authorities.
+- [x] Lifecycle updates collect narrow facts from Auth, alias/model resolution, Pi execution, rendering, HTTP finalization, conversion notices, attempts, and safe failures without carrying protocol-native payloads by default.
+- [x] Successful, failed, aborted, rejected-auth, unknown-alias, and unavailable-alias requests reach one explicit terminal record.
+- [x] Restart tests prove terminal structured records are permanent and running records recover into a truthful interrupted/unknown terminal state rather than disappearing.

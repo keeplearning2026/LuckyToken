@@ -12,6 +12,11 @@ import {
   type InvocationDiagnosticsFactory,
 } from "../../invocation-diagnostics/index.js";
 import {
+  createNoopRequestLedger,
+  type RequestLedger,
+  type RequestLedgerEntry,
+} from "../../request-ledger/handler-seam.js";
+import {
   bindAnthropicConfiguration,
   parseAnthropicConfiguration,
   type AnthropicConfiguration,
@@ -75,6 +80,15 @@ import {
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
+/**
+ * Ticket 18 correlation: the accepted ledger request id of every request
+ * currently being handled (weak: entries vanish with the Request object).
+ * The HTTP boundary reads it only to correlate a transport-synthesized
+ * error response with the persisted ledger row; the ledger module never
+ * enters the transport layer.
+ */
+const requestIds = new WeakMap<Request, string>();
+
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;
@@ -93,6 +107,13 @@ export interface AnthropicMessagesHandlerOptions {
    * always wires the real authority in production.
    */
   readonly aliasSource?: AliasModelSource;
+  /**
+   * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
+   * handler-local entry at acceptance, drives the lifecycle transitions,
+   * and attaches the request id to every response. Absent means the no-op
+   * observer (the header contract still holds).
+   */
+  readonly requestLedger?: RequestLedger;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -113,6 +134,7 @@ interface AnthropicMessagesDependencies {
   readonly auth: Auth;
   readonly configuration: AnthropicConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
+  readonly requestLedger: RequestLedger;
   readonly passthroughFetch: FetchFunction;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
@@ -134,6 +156,18 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   }
   return new Response(prepared.body, {
     status: prepared.status,
+    headers,
+  });
+}
+
+/** Every Data Plane response of this handler carries the ledger request id
+ *  exactly once (success, error, and passthrough alike). */
+function attachRequestId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-luckytoken-request-id", requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
     headers,
   });
 }
@@ -178,17 +212,20 @@ async function handleAnthropicMessages(
   dependencies: AnthropicMessagesDependencies,
   request: Request,
   diagnostics: InvocationDiagnostics,
+  ledger: RequestLedgerEntry,
 ): Promise<Response> {
   try {
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-validation" });
     const receivedAt = dependencies.now();
     if (!hasJsonContentType(request.headers)) {
+      ledger.terminal("failed", { clientHttpStatus: 415 });
       return toResponse(
         renderAnthropicError(
           415,
           "invalid_request_error",
           "Content-Type must be application/json",
+          ledger.requestId,
         ),
       );
     }
@@ -198,23 +235,36 @@ async function handleAnthropicMessages(
       request.signal,
     );
     if (!authResult.authorized) {
+      ledger.terminal("rejected-auth", { clientHttpStatus: 401 });
       return toResponse(
         renderAnthropicError(
           401,
           "authentication_error",
           "Invalid authorization credentials",
+          ledger.requestId,
         ),
       );
     }
+    ledger.authorized({
+      effectiveSessionId: authResult.effectiveSessionId,
+      ...(authResult.clientSessionId === undefined
+        ? {}
+        : { clientSessionId: authResult.clientSessionId }),
+      ...(authResult.projectDir === undefined
+        ? {}
+        : { projectDir: authResult.projectDir }),
+    });
 
     const sourceProfile = resolveAnthropicSourceProfile(request.headers);
     const rawBody = await readRawBody(request, dependencies.maxRequestBytes);
     if (rawBody === undefined) {
+      ledger.terminal("failed", { clientHttpStatus: 413 });
       return toResponse(
         renderAnthropicError(
           413,
           "request_too_large",
           "Request exceeds the configured maximum size",
+          ledger.requestId,
         ),
       );
     }
@@ -232,20 +282,35 @@ async function handleAnthropicMessages(
       selector,
     );
     if (resolution.kind === "unknown") {
+      ledger.aliasCaptured({ externalAlias: selector });
+      ledger.terminal("unknown-alias", { clientHttpStatus: 404 });
       return toResponse(
-        renderAnthropicError(404, "not_found_error", `Unknown model: ${selector}`),
+        renderAnthropicError(
+          404,
+          "not_found_error",
+          `Unknown model: ${selector}`,
+          ledger.requestId,
+        ),
       );
     }
     if (resolution.kind === "unavailable") {
+      ledger.aliasCaptured({ externalAlias: selector });
+      ledger.terminal("unavailable-alias", { clientHttpStatus: 502 });
       return toResponse(
         renderAnthropicError(
           502,
           "api_error",
           "The requested model is not currently available",
+          ledger.requestId,
         ),
       );
     }
     const model = resolution.model;
+    ledger.modelResolved({
+      externalAlias: resolution.alias,
+      providerId: model.provider,
+      realModelId: model.id,
+    });
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
@@ -258,6 +323,7 @@ async function handleAnthropicMessages(
         model,
         rawBody,
         diagnostics,
+        ledger,
         projectAlias,
       );
     }
@@ -275,6 +341,7 @@ async function handleAnthropicMessages(
     );
     for (const notice of invocation.notices) {
       diagnostics.notice(notice);
+      ledger.notice(notice);
     }
     diagnostics.checkpoint({ stage: "pi-composition", selector });
     const piOptions = composeOptions(
@@ -289,18 +356,27 @@ async function handleAnthropicMessages(
       dependencies.routerDefaults,
     );
     freezePiInvocation(model, invocation.context, piOptions);
+    ledger.executing();
     const message = await execute(
       dependencies.models,
       model,
       invocation.context,
       piOptions,
       {
-        notice: (notice) => diagnostics.notice(notice),
-        attempt: (attempt) => diagnostics.attempt(attempt),
+        notice: (notice) => {
+          diagnostics.notice(notice);
+          ledger.notice(notice);
+        },
+        attempt: (attempt) => {
+          diagnostics.attempt(attempt);
+          ledger.attempt(attempt);
+        },
       },
     );
-    diagnostics.checkpoint({ stage: "client-render", selector });
     request.signal.throwIfAborted();
+    ledger.terminal("success", { piStopReason: message.stopReason });
+    diagnostics.checkpoint({ stage: "client-render", selector });
+    ledger.rendering();
     const responseConversion = convertAssistantMessageToAnthropicWithPolicy(
       message,
       {
@@ -311,6 +387,7 @@ async function handleAnthropicMessages(
     );
     for (const notice of responseConversion.notices) {
       diagnostics.notice(notice);
+      ledger.notice(notice);
     }
     const target = responseConversion.message;
     const prepared = invocation.renderState.stream
@@ -323,26 +400,48 @@ async function handleAnthropicMessages(
       throw new HttpRequestAbortedError(request.signal.reason);
     }
     if (error instanceof ExecutionAbortedError) {
+      ledger.terminal("aborted", { clientHttpStatus: 500 });
       return toResponse(
-        renderAnthropicError(500, "api_error", "Model execution was aborted"),
+        renderAnthropicError(
+          500,
+          "api_error",
+          "Model execution was aborted",
+          ledger.requestId,
+        ),
       );
     }
     if (error instanceof SyntaxError) {
+      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderAnthropicError(
           400,
           "invalid_request_error",
           "Request body is not valid JSON",
+          ledger.requestId,
         ),
       );
     }
     if (error instanceof InvalidRequest || error instanceof UnsupportedFeature) {
+      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
-        renderAnthropicError(400, "invalid_request_error", error.message),
+        renderAnthropicError(
+          400,
+          "invalid_request_error",
+          error.message,
+          ledger.requestId,
+        ),
       );
     }
     if (error instanceof ModelResolutionFailure) {
-      return toResponse(renderAnthropicError(404, "not_found_error", error.message));
+      ledger.terminal("failed", { clientHttpStatus: 404 });
+      return toResponse(
+        renderAnthropicError(
+          404,
+          "not_found_error",
+          error.message,
+          ledger.requestId,
+        ),
+      );
     }
     if (
       error instanceof ExecutionFailure &&
@@ -350,12 +449,14 @@ async function handleAnthropicMessages(
       error.failure.kind !== "caller_cancellation"
     ) {
       const mapping = mapUpstreamFailureFact(error.failure);
+      ledger.terminal("failed", { clientHttpStatus: mapping.status });
+      ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
         renderAnthropicError(
           mapping.status,
           mapping.type,
           mapping.message,
-          requestIdFromFact(error.failure),
+          requestIdFromFact(error.failure) ?? ledger.requestId,
           mapping.safeHeaders,
         ),
       );
@@ -371,12 +472,25 @@ async function handleAnthropicMessages(
       "reason" in error &&
       error.reason === "error"
     ) {
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
-        renderAnthropicError(502, "api_error", "Upstream provider failed"),
+        renderAnthropicError(
+          502,
+          "api_error",
+          "Upstream provider failed",
+          ledger.requestId,
+        ),
       );
     }
+    ledger.terminal("failed", { clientHttpStatus: 500 });
     return toResponse(
-      renderAnthropicError(500, "api_error", "Internal server error"),
+      renderAnthropicError(
+        500,
+        "api_error",
+        "Internal server error",
+        ledger.requestId,
+      ),
     );
   }
 }
@@ -386,8 +500,15 @@ async function handleAnthropicMessagesWithDiagnostics(
   request: Request,
 ): Promise<Response> {
   const diagnostics = dependencies.invocationDiagnostics.begin(anthropicMessagesProtocolId);
+  // Ticket 18: the handler assigns the safe unique request id and records an
+  // accepted request at handler entry, before content-type/body/auth/model
+  // validation and before Pi execution. The correlation is published before
+  // the first await so a transport-synthesized error response can still
+  // carry the exact id of this accepted request.
+  const ledger = dependencies.requestLedger.begin(anthropicMessagesProtocolId);
+  requestIds.set(request, ledger.requestId);
   try {
-    const response = await handleAnthropicMessages(dependencies, request, diagnostics);
+    const response = await handleAnthropicMessages(dependencies, request, diagnostics, ledger);
     if (response.status >= 400) {
       await diagnostics.fail({
         classification: response.status >= 500 ? "runtime-failure" : "client-failure",
@@ -396,10 +517,29 @@ async function handleAnthropicMessagesWithDiagnostics(
     } else {
       await diagnostics.succeed();
     }
-    return response;
+    // Terminal response preparation: the final Response exists (rendered +
+    // request id attached below), so the ledger commits the terminal row.
+    ledger.completed(response.status);
+    return attachRequestId(response, ledger.requestId);
   } catch (error) {
+    const aborted =
+      request.signal.aborted ||
+      error instanceof HttpRequestAbortedError ||
+      error instanceof ExecutionAbortedError;
+    // The truthful terminal outcome is recorded before the diagnostics seam
+    // runs, so a throwing diagnostics seam can never lose it. An unexpected
+    // failure still reaches the client as a transport-synthesized 500 (when
+    // the client is live), so the status is recorded too.
+    ledger.fail({
+      classification: aborted ? "caller-cancellation" : "unhandled-failure",
+      error,
+    });
+    ledger.terminal(
+      aborted ? "aborted" : "failed",
+      aborted ? undefined : { clientHttpStatus: 500 },
+    );
     await diagnostics.fail({
-      classification: request.signal.aborted ? "caller-cancellation" : "unhandled-failure",
+      classification: aborted ? "caller-cancellation" : "unhandled-failure",
       cancellation: request.signal.aborted,
       error,
     });
@@ -423,6 +563,7 @@ async function passthroughBranch(
   model: Model<string>,
   rawBody: string,
   diagnostics: InvocationDiagnostics,
+  ledger: RequestLedgerEntry,
   alias: string | undefined,
 ): Promise<Response> {
   const auth = await raceWithRequestSignal(
@@ -445,16 +586,19 @@ async function passthroughBranch(
       );
     });
   if (apiKey === undefined && !hasHeaderAuth) {
+    ledger.terminal("failed", { clientHttpStatus: 502 });
     return toResponse(
       renderAnthropicError(
         502,
         "api_error",
         `Provider is not configured: ${model.provider}`,
+        ledger.requestId,
       ),
     );
   }
   let upstream: PassthroughAnthropicResult;
   try {
+    ledger.executing();
     upstream = await raceWithRequestSignal(
       passthroughAnthropicRequest({
         model: dependencies.resolveRequestModel(model, auth),
@@ -482,6 +626,8 @@ async function passthroughBranch(
       // exception. The client sees fixed actionable text — the raw cause
       // may name the endpoint or the canonical target and goes only to
       // the sanitized diagnostics journal.
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error });
       await diagnostics.fail({
         classification: "runtime-failure",
         stage: "native-passthrough",
@@ -495,6 +641,7 @@ async function passthroughBranch(
           error.kind === "AnthropicPassthroughTransportError"
             ? "Upstream provider request failed"
             : "Upstream provider response could not be read",
+          ledger.requestId,
         ),
       );
     }
@@ -503,6 +650,7 @@ async function passthroughBranch(
   request.signal.throwIfAborted();
   if (upstream.status >= 400 && alias === undefined) {
     // Legacy handler seam: upstream error responses pass through verbatim.
+    ledger.terminal("failed", { clientHttpStatus: upstream.status });
     await diagnostics.fail({
       classification: "runtime-failure",
       stage: "native-passthrough",
@@ -516,6 +664,7 @@ async function passthroughBranch(
     // Alias mode never forwards upstream error bytes: arbitrary upstream
     // error text or headers could name the canonical target. The client
     // receives a legal fixed value-free error instead.
+    ledger.terminal("failed", { clientHttpStatus: 502 });
     await diagnostics.fail({
       classification: "runtime-failure",
       stage: "native-passthrough",
@@ -525,7 +674,12 @@ async function passthroughBranch(
         : { safeIds: { requestId: upstream.headers["request-id"] } }),
     });
     return toResponse(
-      renderAnthropicError(502, "api_error", "Upstream provider failed"),
+      renderAnthropicError(
+        502,
+        "api_error",
+        "Upstream provider failed",
+        ledger.requestId,
+      ),
     );
   }
   // Ticket 15 symmetry: a successful upstream response must expose the
@@ -542,6 +696,8 @@ async function passthroughBranch(
     if ("error" in projected) {
       // The detailed projection reason is value-free and useful for
       // diagnostics; the client sees only the fixed safe envelope.
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error: projected.error });
       await diagnostics.fail({
         classification: "runtime-failure",
         stage: "native-passthrough",
@@ -557,6 +713,9 @@ async function passthroughBranch(
       );
     }
     body = projected.body;
+  }
+  if (upstream.status < 400) {
+    ledger.terminal("success", { clientHttpStatus: upstream.status });
   }
   return new Response(body, {
     status: upstream.status,
@@ -596,6 +755,7 @@ export function createAnthropicMessagesHandler(
         : bindAnthropicConfiguration(options.configuration),
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
+    requestLedger: options.requestLedger ?? createNoopRequestLedger(),
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
@@ -610,5 +770,6 @@ export function createAnthropicMessagesHandler(
     pathname: "/v1/messages",
     handle: (request: Request) =>
       handleAnthropicMessagesWithDiagnostics(dependencies, request),
+    requestIdFor: (request: Request) => requestIds.get(request),
   });
 }

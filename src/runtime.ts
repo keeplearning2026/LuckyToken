@@ -22,6 +22,7 @@ function snapshotClientProtocol(
   const method = protocol.method;
   const pathname = protocol.pathname;
   const handle = protocol.handle;
+  const requestIdFor = protocol.requestIdFor;
   if (method.length === 0 || pathname.length === 0 || !pathname.startsWith("/")) {
     throw new Error("Client Protocol route must have a method and absolute pathname");
   }
@@ -29,6 +30,9 @@ function snapshotClientProtocol(
     method,
     pathname,
     handle: (request: Request) => handle.call(protocol, request),
+    ...(requestIdFor === undefined
+      ? {}
+      : { requestIdFor: (request: Request) => requestIdFor.call(protocol, request) }),
   });
 }
 

@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
 import { parseRuntimeDiagnosticsConfiguration, type RuntimeDiagnosticsConfiguration } from "./runtime-diagnostics/configuration.js";
+import { parseRequestLedgerConfiguration, type RequestLedgerConfiguration } from "./request-ledger/configuration.js";
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
@@ -38,6 +39,8 @@ export interface LuckyTokenCliConfig {
   readonly failureLogging: FailureLoggingConfiguration;
   /** Permanent Runtime Diagnostics configuration (Ticket 07). */
   readonly runtimeDiagnostics: RuntimeDiagnosticsConfiguration;
+  /** Ticket 18 Request Ledger store configuration. */
+  readonly requestLedger: RequestLedgerConfiguration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,7 +125,7 @@ export async function loadLuckyTokenCliConfig(
   }
   assertKeys(
     root,
-    ["server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "pi", "limits"],
+    ["server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
@@ -265,6 +268,10 @@ export async function loadLuckyTokenCliConfig(
     failureLogging: parseFailureLoggingConfiguration(root.failureLogging, directory),
     runtimeDiagnostics: parseRuntimeDiagnosticsConfiguration(
       root.runtimeDiagnostics,
+      directory,
+    ),
+    requestLedger: parseRequestLedgerConfiguration(
+      root.requestLedger,
       directory,
     ),
   };

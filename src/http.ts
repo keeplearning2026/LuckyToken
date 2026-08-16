@@ -2,6 +2,15 @@ export interface ClientProtocolHandler {
   readonly method: string;
   readonly pathname: string;
   handle(request: Request): Promise<Response>;
+  /**
+   * Ticket 18 correlation seam: the accepted request id assigned to
+   * `request` while the handler is processing it, when the handler assigns
+   * one. Opaque correlation only — the HTTP boundary never interprets it,
+   * never generates one, and never imports the Request Ledger. The transport
+   * uses it so a synthesized error response still carries the exact ledger
+   * request id of a real accepted request.
+   */
+  readonly requestIdFor?: (request: Request) => string | undefined;
 }
 
 export interface HttpBoundaryDependencies {
@@ -12,11 +21,16 @@ export interface HttpBoundaryDependencies {
 
 export class HttpRequestAbortedError extends Error {
   readonly reason: unknown;
+  /** Ticket 18 correlation: the accepted ledger request id of the aborted
+   *  request, when the HTTP boundary could determine it (exact id, never
+   *  generated here). */
+  readonly requestId: string | undefined;
 
-  constructor(reason?: unknown) {
+  constructor(reason?: unknown, requestId?: string) {
     super("HTTP request is no longer writable");
     this.name = "HttpRequestAbortedError";
     this.reason = reason;
+    this.requestId = requestId;
   }
 }
 
@@ -116,15 +130,17 @@ export async function handleHttpRequest(
     dependencies.shutdownSignal,
     dependencies.requestTimeoutMs,
   );
+  let routedRequest: Request | undefined;
+  let protocol: ClientProtocolHandler | undefined;
 
   try {
     assertWritable(lifecycle);
-    const protocol = selectClientProtocol(dependencies.clientProtocols, request);
+    protocol = selectClientProtocol(dependencies.clientProtocols, request);
     if (protocol === undefined) {
       lifecycle.markDelivered();
       return new Response(null, { status: 404 });
     }
-    const routedRequest = new Request(request, { signal: lifecycle.signal });
+    routedRequest = new Request(request, { signal: lifecycle.signal });
     const response = await raceWithRequestSignal(
       protocol.handle(routedRequest),
       lifecycle.signal,
@@ -133,10 +149,21 @@ export async function handleHttpRequest(
     lifecycle.markDelivered();
     return response;
   } catch (error) {
+    // The exact accepted ledger request id, when the handler published one
+    // for this request (opaque correlation; never guessed or generated).
+    const requestId =
+      routedRequest === undefined
+        ? undefined
+        : protocol?.requestIdFor?.(routedRequest);
     if (lifecycle.signal.aborted || error instanceof HttpRequestAbortedError) {
-      throw new HttpRequestAbortedError(lifecycle.signal.reason);
+      throw new HttpRequestAbortedError(lifecycle.signal.reason, requestId);
     }
-    return new Response(null, { status: 500 });
+    return new Response(null, {
+      status: 500,
+      ...(requestId === undefined
+        ? {}
+        : { headers: { "x-luckytoken-request-id": requestId } }),
+    });
   } finally {
     lifecycle.dispose();
   }

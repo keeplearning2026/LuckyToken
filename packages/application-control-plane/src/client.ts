@@ -3,6 +3,11 @@ import type {
   RuntimeDiagnosticQuery,
   RuntimeDiagnosticsQueryResult,
 } from "./diagnostics-contract.js";
+import type {
+  RequestLedgerEvent,
+  RequestLedgerQuery,
+  RequestLedgerQueryResult,
+} from "./ledger-contract.js";
 import {
   assertControlPlaneEndpoint,
   type AliasCommand,
@@ -80,6 +85,7 @@ export async function connectApplicationControlPlane(
   let listener: ((event: StatusEvent) => void) | undefined;
   let diagnosticsListener:
     ((event: RuntimeDiagnosticEvent) => void) | undefined;
+  let ledgerListener: ((event: RequestLedgerEvent) => void) | undefined;
   let settled = false;
   let closeRequested = false;
   let resolveDisconnect:
@@ -119,6 +125,8 @@ export async function connectApplicationControlPlane(
         if (message.type === "event") {
           if (message.event.type === "diagnostic") {
             diagnosticsListener?.(message.event);
+          } else if (message.event.type === "request_ledger") {
+            ledgerListener?.(message.event);
           } else {
             listener?.(message.event);
           }
@@ -382,6 +390,49 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
+    },
+    async getRequestLedger(
+      query: RequestLedgerQuery | undefined,
+    ): Promise<RequestLedgerQueryResult> {
+      const response = await request({
+        type: "get_request_ledger",
+        ...(query === undefined ? {} : { query }),
+      });
+      if (response.type !== "request_ledger_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async subscribeRequestLedger(
+      next: (event: RequestLedgerEvent) => void,
+    ): Promise<() => Promise<void>> {
+      if (ledgerListener !== undefined) {
+        throw new Error(
+          "Control Plane client is already subscribed to the request ledger",
+        );
+      }
+      ledgerListener = next;
+      let response: ServerMessage;
+      try {
+        response = await request({ type: "ledger_subscribe" });
+      } catch (error) {
+        ledgerListener = undefined;
+        throw error;
+      }
+      if (response.type !== "subscribed") {
+        ledgerListener = undefined;
+        throw new Error("Control Plane response is malformed");
+      }
+      let subscribed = true;
+      return async () => {
+        if (!subscribed) return;
+        const result = await request({ type: "ledger_unsubscribe" });
+        if (result.type !== "unsubscribed") {
+          throw new Error("Control Plane response is malformed");
+        }
+        subscribed = false;
+        ledgerListener = undefined;
+      };
     },
     async executeModelsCommand(
       command: ModelsCommand,

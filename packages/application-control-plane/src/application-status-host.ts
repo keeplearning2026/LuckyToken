@@ -42,6 +42,7 @@ import {
   type ControlPlaneDiagnostics,
   normalizeDiagnosticQuery,
 } from "./diagnostics-contract.js";
+import type { ControlPlaneRequestLedger } from "./ledger-contract.js";
 import { readFrame, writeFrame } from "./framing.js";
 import {
   assertPipeAccess,
@@ -50,6 +51,10 @@ import {
   type PipeServerFactory,
 } from "./pipe-transport.js";
 import { decodeDiagnosticQuery } from "./wire-diagnostics.js";
+import {
+  decodeRequestLedgerQuery,
+  decodeRequestLedgerRecord,
+} from "./wire-ledger.js";
 import {
   compatibleHello,
   decodeAliasCommandResult,
@@ -140,6 +145,14 @@ export interface StartControlPlaneOptions {
    * diagnostic events.
    */
   readonly diagnostics?: ControlPlaneDiagnostics;
+  /**
+   * Explicit Request Ledger ownership (Ticket 18): when present, the
+   * Control Plane serves bounded ledger queries and opt-in typed committed-
+   * record events. Status and diagnostics subscribers never receive ledger
+   * events, and an absent ledger is served as `unknown_command` (legacy
+   * clients are unaffected).
+   */
+  readonly requestLedger?: ControlPlaneRequestLedger;
 }
 
 interface ConnectionState {
@@ -147,6 +160,7 @@ interface ConnectionState {
   authorized: boolean;
   subscribed: boolean;
   diagnosticsSubscribed: boolean;
+  ledgerSubscribed: boolean;
   /** One in-flight Provider-auth login flow on this connection (Ticket
    *  13); interaction events/prompt responses are routed by its id. */
   authFlow: AuthFlowState | undefined;
@@ -233,6 +247,7 @@ export async function startApplicationStatusHost(
   const states = new Set<ConnectionState>();
   const tasks = new Set<Promise<void>>();
   const diagnostics = options.diagnostics;
+  const ledger = options.requestLedger;
   const emitDiagnostics =
     diagnostics === undefined
       ? undefined
@@ -248,6 +263,27 @@ export async function startApplicationStatusHost(
                 },
               }).catch(() => {
                 state.diagnosticsSubscribed = false;
+                void state.connection.close().catch(() => undefined);
+              });
+            }
+          });
+          return subscription.unsubscribe;
+        };
+  const emitLedger =
+    ledger === undefined
+      ? undefined
+      : () => {
+          const subscription = ledger.subscribe((event) => {
+            for (const state of states) {
+              if (!state.ledgerSubscribed) continue;
+              void writeFrame(state.connection, {
+                type: "event",
+                event: {
+                  type: "request_ledger",
+                  record: event.record,
+                },
+              }).catch(() => {
+                state.ledgerSubscribed = false;
                 void state.connection.close().catch(() => undefined);
               });
             }
@@ -500,6 +536,81 @@ export async function startApplicationStatusHost(
           }
         } else if (request.type === "diagnostics_unsubscribe") {
           state.diagnosticsSubscribed = false;
+          await writeFrame(state.connection, {
+            type: "unsubscribed",
+            requestId: request.requestId,
+          });
+        } else if (request.type === "get_request_ledger") {
+          if (ledger === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const query = decodeRequestLedgerQuery(request.query);
+            if (query === undefined && request.query !== undefined) {
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
+            } else {
+              let result;
+              try {
+                result = ledger.query(query);
+              } catch {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
+              // Strict per-record validation at the wire boundary: a record
+              // with an unknown key, an invalid bounded value, or the
+              // effective session identity projected as the client id is
+              // rejected instead of delivered.
+              const records = result.records
+                .map((record) => decodeRequestLedgerRecord(record))
+                .filter(
+                  (record): record is NonNullable<typeof record> =>
+                    record !== undefined,
+                );
+              if (
+                records.length !== result.records.length ||
+                typeof result.hasMore !== "boolean"
+              ) {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
+              await writeFrame(state.connection, {
+                type: "request_ledger_result",
+                requestId: request.requestId,
+                result: { records, hasMore: result.hasMore },
+              });
+            }
+          }
+        } else if (request.type === "ledger_subscribe") {
+          if (ledger === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            state.ledgerSubscribed = true;
+            await writeFrame(state.connection, {
+              type: "subscribed",
+              requestId: request.requestId,
+            });
+          }
+        } else if (request.type === "ledger_unsubscribe") {
+          state.ledgerSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -1013,6 +1124,7 @@ export async function startApplicationStatusHost(
         } else {
           state.subscribed = false;
           state.diagnosticsSubscribed = false;
+          state.ledgerSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -1049,6 +1161,7 @@ export async function startApplicationStatusHost(
         authorized: false,
         subscribed: false,
         diagnosticsSubscribed: false,
+        ledgerSubscribed: false,
         authFlow: undefined,
       };
       states.add(state);
@@ -1093,6 +1206,7 @@ export async function startApplicationStatusHost(
   };
 
   const diagnosticsListener = emitDiagnostics?.();
+  const ledgerListener = emitLedger?.();
 
   return {
     endpoint: options.endpoint,
@@ -1101,6 +1215,7 @@ export async function startApplicationStatusHost(
       if (closed) return;
       closed = true;
       diagnosticsListener?.();
+      ledgerListener?.();
       await publishQueue.catch(() => undefined);
       await Promise.all(
         [...states].map((state) =>

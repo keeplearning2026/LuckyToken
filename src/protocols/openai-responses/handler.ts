@@ -13,6 +13,11 @@ import {
   type InvocationDiagnosticsFactory,
 } from "../../invocation-diagnostics/index.js";
 import {
+  createNoopRequestLedger,
+  type RequestLedger,
+  type RequestLedgerEntry,
+} from "../../request-ledger/handler-seam.js";
+import {
   bindOpenAIResponsesConfiguration,
   parseOpenAIResponsesConfiguration,
   type OpenAIResponsesConfiguration,
@@ -67,6 +72,15 @@ import {
 
 export const openaiResponsesProtocolId = "openai-responses";
 
+/**
+ * Ticket 18 correlation: the accepted ledger request id of every request
+ * currently being handled (weak: entries vanish with the Request object).
+ * The HTTP boundary reads it only to correlate a transport-synthesized
+ * error response with the persisted ledger row; the ledger module never
+ * enters the transport layer.
+ */
+const requestIds = new WeakMap<Request, string>();
+
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
   readonly auth: Auth;
@@ -90,6 +104,13 @@ export interface OpenAIResponsesHandlerOptions {
    * always wires the real authority in production.
    */
   readonly aliasSource?: AliasModelSource;
+  /**
+   * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
+   * handler-local entry at acceptance, drives the lifecycle transitions,
+   * and attaches the request id to every response. Absent means the no-op
+   * observer (the header contract still holds).
+   */
+  readonly requestLedger?: RequestLedger;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -111,6 +132,7 @@ interface OpenAIResponsesDependencies {
   readonly auth: Auth;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
+  readonly requestLedger: RequestLedger;
   readonly sessionState: ResponseSessionState;
   readonly passthroughFetch: FetchFunction;
   readonly aliasSource: AliasModelSource | undefined;
@@ -125,6 +147,18 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   return new Response(prepared.body, {
     status: prepared.status,
     headers: { "content-type": prepared.contentType },
+  });
+}
+
+/** Every Data Plane response of this handler carries the ledger request id
+ *  exactly once (success, error, and passthrough alike). */
+function attachRequestId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-luckytoken-request-id", requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
@@ -173,6 +207,7 @@ async function readRawBody(
 async function rememberAfterSuccess(
   dependencies: OpenAIResponsesDependencies,
   diagnostics: InvocationDiagnostics,
+  ledger: RequestLedgerEntry,
   rawBody: unknown,
   rendered: ResponsesResponseObject,
 ): Promise<void> {
@@ -180,12 +215,14 @@ async function rememberAfterSuccess(
   // module. Awaiting remember provides in-process read-after-write for an
   // admitted checkpoint; disk persistence remains debounced and best-effort.
   await dependencies.sessionState.remember(rawBody, rendered, (code) => {
-    diagnostics.notice({
+    const notice = {
       adapter: openaiResponsesProtocolId,
-      direction: "request",
+      direction: "request" as const,
       code,
-      action: "degrade",
-    });
+      action: "degrade" as const,
+    };
+    diagnostics.notice(notice);
+    ledger.notice(notice);
   });
 }
 
@@ -193,11 +230,13 @@ async function handleOpenAIResponses(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
   diagnostics: InvocationDiagnostics,
+  ledger: RequestLedgerEntry,
 ): Promise<Response> {
   try {
     request.signal.throwIfAborted();
     diagnostics.checkpoint({ stage: "client-validation" });
     if (!hasJsonContentType(request.headers)) {
+      ledger.terminal("failed", { clientHttpStatus: 415 });
       return toResponse(
         renderResponsesError(
           415,
@@ -212,6 +251,7 @@ async function handleOpenAIResponses(
       request.signal,
     );
     if (!authResult.authorized) {
+      ledger.terminal("rejected-auth", { clientHttpStatus: 401 });
       return toResponse(
         renderResponsesError(
           401,
@@ -220,6 +260,15 @@ async function handleOpenAIResponses(
         ),
       );
     }
+    ledger.authorized({
+      effectiveSessionId: authResult.effectiveSessionId,
+      ...(authResult.clientSessionId === undefined
+        ? {}
+        : { clientSessionId: authResult.clientSessionId }),
+      ...(authResult.projectDir === undefined
+        ? {}
+        : { projectDir: authResult.projectDir }),
+    });
 
     const rawBody = await readRawBody(
       request,
@@ -227,6 +276,7 @@ async function handleOpenAIResponses(
       request.signal,
     );
     if (rawBody === undefined) {
+      ledger.terminal("failed", { clientHttpStatus: 413 });
       return toResponse(
         renderResponsesError(
           413,
@@ -252,6 +302,8 @@ async function handleOpenAIResponses(
       selector,
     );
     if (resolution.kind === "unknown") {
+      ledger.aliasCaptured({ externalAlias: selector });
+      ledger.terminal("unknown-alias", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(
           400,
@@ -262,6 +314,8 @@ async function handleOpenAIResponses(
       );
     }
     if (resolution.kind === "unavailable") {
+      ledger.aliasCaptured({ externalAlias: selector });
+      ledger.terminal("unavailable-alias", { clientHttpStatus: 503 });
       return toResponse(
         renderResponsesError(
           503,
@@ -272,6 +326,11 @@ async function handleOpenAIResponses(
       );
     }
     const model = resolution.model;
+    ledger.modelResolved({
+      externalAlias: resolution.alias,
+      providerId: model.provider,
+      realModelId: model.id,
+    });
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
@@ -284,6 +343,7 @@ async function handleOpenAIResponses(
         model,
         rawBody,
         diagnostics,
+        ledger,
         projectAlias,
       );
     }
@@ -309,6 +369,7 @@ async function handleOpenAIResponses(
     );
     for (const notice of invocation.notices) {
       diagnostics.notice(notice);
+      ledger.notice(notice);
     }
     const piOptions = composeInvocationOptions(
       invocation,
@@ -323,18 +384,27 @@ async function handleOpenAIResponses(
     );
     diagnostics.checkpoint({ stage: "pi-execution", selector: invocation.selector });
     freezePiInvocation(model, invocation.context, piOptions);
+    ledger.executing();
     const message = await execute(
       dependencies.models,
       model,
       invocation.context,
       piOptions,
       {
-        notice: (notice) => diagnostics.notice(notice),
-        attempt: (attempt) => diagnostics.attempt(attempt),
+        notice: (notice) => {
+          diagnostics.notice(notice);
+          ledger.notice(notice);
+        },
+        attempt: (attempt) => {
+          diagnostics.attempt(attempt);
+          ledger.attempt(attempt);
+        },
       },
     );
     request.signal.throwIfAborted();
+    ledger.terminal("success", { piStopReason: message.stopReason });
     diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });
+    ledger.rendering();
 
     const responseId = dependencies.createResponseId();
     const renderState = buildRenderState(
@@ -342,6 +412,7 @@ async function handleOpenAIResponses(
       dependencies.configuration.conversion.response.unknownPiContent,
       (notice) => {
         diagnostics.notice(notice);
+        ledger.notice(notice);
       },
     );
     const rendered = convertAssistantMessageToResponses(
@@ -357,7 +428,13 @@ async function handleOpenAIResponses(
     );
     // The state module owns continuation representation. Give it only this
     // turn's raw request; expansion is used solely for the current invocation.
-    await rememberAfterSuccess(dependencies, diagnostics, body, rendered);
+    await rememberAfterSuccess(
+      dependencies,
+      diagnostics,
+      ledger,
+      body,
+      rendered,
+    );
 
     const prepared = invocation.renderState.stream
       ? renderResponsesSse(rendered)
@@ -369,6 +446,7 @@ async function handleOpenAIResponses(
       throw new ExecutionAbortedError(request.signal.reason);
     }
     if (error instanceof SyntaxError) {
+      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(
           400,
@@ -378,16 +456,19 @@ async function handleOpenAIResponses(
       );
     }
     if (error instanceof InvalidRequest) {
+      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
     }
     if (error instanceof ResponseStateConversionFailure) {
+      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
     }
     if (error instanceof ModelResolutionFailure) {
+      ledger.terminal("failed", { clientHttpStatus: 404 });
       return toResponse(
         renderResponsesError(404, "not_found_error", error.message),
       );
@@ -410,6 +491,8 @@ async function handleOpenAIResponses(
       };
       if (execution.failure !== undefined) {
         const mapping = mapUpstreamFailureFact(execution.failure);
+        ledger.terminal("failed", { clientHttpStatus: mapping.status });
+        ledger.fail({ classification: "runtime-failure", error });
         return renderResponsesErrorResponse({
           status: mapping.status,
           type: mapping.type,
@@ -427,10 +510,13 @@ async function handleOpenAIResponses(
       "reason" in error &&
       error.reason === "error"
     ) {
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
         renderResponsesError(502, "api_error", "Upstream provider failed"),
       );
     }
+    ledger.terminal("failed", { clientHttpStatus: 500 });
     return toResponse(
       renderResponsesError(500, "api_error", "Internal server error"),
     );
@@ -442,8 +528,15 @@ async function handleOpenAIResponsesWithDiagnostics(
   request: Request,
 ): Promise<Response> {
   const diagnostics = dependencies.invocationDiagnostics.begin(openaiResponsesProtocolId);
+  // Ticket 18: the handler assigns the safe unique request id and records an
+  // accepted request at handler entry, before content-type/body/auth/model
+  // validation and before Pi execution. The correlation is published before
+  // the first await so a transport-synthesized error response can still
+  // carry the exact id of this accepted request.
+  const ledger = dependencies.requestLedger.begin(openaiResponsesProtocolId);
+  requestIds.set(request, ledger.requestId);
   try {
-    const response = await handleOpenAIResponses(dependencies, request, diagnostics);
+    const response = await handleOpenAIResponses(dependencies, request, diagnostics, ledger);
     if (response.status >= 400) {
       await diagnostics.fail({
         classification: response.status >= 500 ? "runtime-failure" : "client-failure",
@@ -452,10 +545,28 @@ async function handleOpenAIResponsesWithDiagnostics(
     } else {
       await diagnostics.succeed();
     }
-    return response;
+    // Terminal response preparation: the final Response exists (rendered +
+    // request id attached below), so the ledger commits the terminal row.
+    ledger.completed(response.status);
+    return attachRequestId(response, ledger.requestId);
   } catch (error) {
+    const aborted =
+      request.signal.aborted ||
+      error instanceof ExecutionAbortedError;
+    // The truthful terminal outcome is recorded before the diagnostics seam
+    // runs, so a throwing diagnostics seam can never lose it. An unexpected
+    // failure still reaches the client as a transport-synthesized 500 (when
+    // the client is live), so the status is recorded too.
+    ledger.fail({
+      classification: aborted ? "caller-cancellation" : "unhandled-failure",
+      error,
+    });
+    ledger.terminal(
+      aborted ? "aborted" : "failed",
+      aborted ? undefined : { clientHttpStatus: 500 },
+    );
     await diagnostics.fail({
-      classification: request.signal.aborted ? "caller-cancellation" : "unhandled-failure",
+      classification: aborted ? "caller-cancellation" : "unhandled-failure",
       cancellation: request.signal.aborted,
       error,
     });
@@ -479,6 +590,7 @@ async function passthroughBranch(
   model: Model<string>,
   rawBody: string,
   diagnostics: InvocationDiagnostics,
+  ledger: RequestLedgerEntry,
   alias: string | undefined,
 ): Promise<Response> {
   const auth = await raceWithRequestSignal(
@@ -499,6 +611,7 @@ async function passthroughBranch(
       );
     });
   if (apiKey === undefined && !hasHeaderAuth) {
+    ledger.terminal("failed", { clientHttpStatus: 502 });
     return toResponse(
       renderResponsesError(
         502,
@@ -509,6 +622,7 @@ async function passthroughBranch(
   }
   let upstream: PassthroughResponsesResult;
   try {
+    ledger.executing();
     upstream = await raceWithRequestSignal(
       passthroughResponsesRequest({
         model: dependencies.resolveRequestModel(model, auth),
@@ -536,6 +650,8 @@ async function passthroughBranch(
       // sees fixed actionable text — the raw cause may name the endpoint
       // or the canonical target and goes only to the sanitized
       // diagnostics journal.
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error });
       await diagnostics.fail({
         classification: "runtime-failure",
         stage: "native-passthrough",
@@ -557,6 +673,7 @@ async function passthroughBranch(
   request.signal.throwIfAborted();
   if (upstream.status >= 400 && alias === undefined) {
     // Legacy handler seam: upstream error responses pass through verbatim.
+    ledger.terminal("failed", { clientHttpStatus: upstream.status });
     await diagnostics.fail({
       classification: "runtime-failure",
       stage: "native-passthrough",
@@ -570,6 +687,7 @@ async function passthroughBranch(
     // Alias mode never forwards upstream error bytes: arbitrary upstream
     // error text or headers could name the canonical target. The client
     // receives a legal fixed value-free error instead.
+    ledger.terminal("failed", { clientHttpStatus: 502 });
     await diagnostics.fail({
       classification: "runtime-failure",
       stage: "native-passthrough",
@@ -596,6 +714,8 @@ async function passthroughBranch(
     if ("error" in projected) {
       // The detailed projection reason is value-free and useful for
       // diagnostics; the client sees only the fixed safe envelope.
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      ledger.fail({ classification: "runtime-failure", error: projected.error });
       await diagnostics.fail({
         classification: "runtime-failure",
         stage: "native-passthrough",
@@ -611,6 +731,9 @@ async function passthroughBranch(
       );
     }
     body = projected.body;
+  }
+  if (upstream.status < 400) {
+    ledger.terminal("success", { clientHttpStatus: upstream.status });
   }
   return new Response(body, {
     status: upstream.status,
@@ -782,6 +905,7 @@ export function createOpenAIResponsesHandler(
     configuration,
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
+    requestLedger: options.requestLedger ?? createNoopRequestLedger(),
     sessionState,
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     aliasSource: options.aliasSource,
@@ -796,5 +920,6 @@ export function createOpenAIResponsesHandler(
     pathname: "/v1/responses",
     handle: (request: Request) =>
       handleOpenAIResponsesWithDiagnostics(dependencies, request),
+    requestIdFor: (request: Request) => requestIds.get(request),
   });
 }

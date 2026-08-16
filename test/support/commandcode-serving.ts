@@ -7,6 +7,8 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { createAuth } from "../../src/auth.js";
+import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   certifyServingComposition,
@@ -58,6 +60,11 @@ export interface CommandCodeServingTestOptions {
   anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
   invocationDiagnostics?: InvocationDiagnosticsFactory;
+  /** Ticket 18 Request Lifecycle Ledger observer; absent means the handler
+   *  uses its no-op observer. */
+  requestLedger?: RequestLedger;
+  /** Ticket 15 alias-only data plane seam (handler-level test stub). */
+  aliasSource?: AliasModelSource;
 }
 
 export interface CommandCodeServingTestComposition {
@@ -179,6 +186,12 @@ export function createCommandCodeServingTestComposition(
     ...(options.invocationDiagnostics === undefined
       ? {}
       : { invocationDiagnostics: options.invocationDiagnostics }),
+    ...(options.requestLedger === undefined
+      ? {}
+      : { requestLedger: options.requestLedger }),
+    ...(options.aliasSource === undefined
+      ? {}
+      : { aliasSource: options.aliasSource }),
   });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [anthropic],

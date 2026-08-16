@@ -3,6 +3,11 @@ import type {
   RuntimeDiagnosticQuery,
   RuntimeDiagnosticsQueryResult,
 } from "./diagnostics-contract.js";
+import type {
+  RequestLedgerEvent,
+  RequestLedgerQuery,
+  RequestLedgerQueryResult,
+} from "./ledger-contract.js";
 
 export const controlPlaneVersion = 1 as const;
 
@@ -992,6 +997,37 @@ export type {
   RuntimeDiagnosticsStoreFactory,
 } from "./diagnostics-contract.js";
 
+export type {
+  ControlPlaneRequestLedger,
+  LedgerAliasFact,
+  LedgerAttempt,
+  LedgerAuthFacts,
+  LedgerFailureInput,
+  LedgerFailureSummary,
+  LedgerFacts,
+  LedgerModelSnapshot,
+  LedgerNotice,
+  LedgerOutcome,
+  LedgerPersistenceFailure,
+  LedgerPhase,
+  LedgerTerminalFacts,
+  LedgerTerminalOutcome,
+  RequestLedger,
+  RequestLedgerEntry,
+  RequestLedgerEvent,
+  RequestLedgerQuery,
+  RequestLedgerQueryResult,
+  RequestLedgerRecord,
+  RequestLedgerStore,
+  RequestLedgerStoreFactory,
+} from "./ledger-contract.js";
+export {
+  LEDGER_OUTCOMES,
+  LEDGER_PHASES,
+  assertLedgerOutcome,
+  assertLedgerPhase,
+} from "./ledger-contract.js";
+
 export type HelloResult =
   | {
       readonly type: "compatible";
@@ -1169,6 +1205,15 @@ export interface ControlPlaneClient {
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  /** Ticket 18: bounded Request Ledger query (newest-first, pageable). */
+  getRequestLedger(
+    query?: RequestLedgerQuery,
+  ): Promise<RequestLedgerQueryResult>;
+  /** Ticket 18: opt-in typed ledger events; never delivered to status or
+   *  diagnostics subscribers. */
+  subscribeRequestLedger(
+    listener: (event: RequestLedgerEvent) => void,
+  ): Promise<() => Promise<void>>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

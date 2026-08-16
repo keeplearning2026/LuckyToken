@@ -29,6 +29,11 @@ const CLIENT_SHARED_SEAMS = new Set([
   // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
   "alias-model-seam.ts",
   "protocols/sse-lines.ts",
+  // Ticket 18 neutral handler seam: both Client Protocols observe the
+  // Request Lifecycle Ledger only through this narrow seam (observer
+  // contract + safe no-op); persistence/configuration/store DTOs stay out
+  // of the protocol boundary.
+  "request-ledger/handler-seam.ts",
 ]);
 
 function slash(value) {

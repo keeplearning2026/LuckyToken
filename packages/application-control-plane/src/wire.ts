@@ -52,6 +52,8 @@ import {
   type ModelsFileState,
   type ModelsProjection,
   type RegisteredSetting,
+  type RequestLedgerEvent,
+  type RequestLedgerQueryResult,
   type RuntimeCommand,
   type RuntimeCommandConflict,
   type RuntimeCommandExecution,
@@ -65,6 +67,10 @@ import {
   decodeDiagnosticEvent,
   decodeDiagnosticRecord,
 } from "./wire-diagnostics.js";
+import {
+  decodeRequestLedgerEvent,
+  decodeRequestLedgerResult,
+} from "./wire-ledger.js";
 import {
   type AuthCommand,
   type AuthCommandResult,
@@ -110,6 +116,13 @@ export type ClientRequest =
   | { readonly type: "get_request_identities"; readonly requestId: string }
   | { readonly type: "diagnostics_subscribe"; readonly requestId: string }
   | { readonly type: "diagnostics_unsubscribe"; readonly requestId: string }
+  | {
+      readonly type: "get_request_ledger";
+      readonly requestId: string;
+      readonly query?: unknown;
+    }
+  | { readonly type: "ledger_subscribe"; readonly requestId: string }
+  | { readonly type: "ledger_unsubscribe"; readonly requestId: string }
   | {
       readonly type: "runtime_command";
       readonly requestId: string;
@@ -193,6 +206,11 @@ export type ServerMessage =
       readonly result: RequestIdentitiesQueryResult;
     }
   | {
+      readonly type: "request_ledger_result";
+      readonly requestId: string;
+      readonly result: RequestLedgerQueryResult;
+    }
+  | {
       readonly type: "settings_command_result";
       readonly requestId: string;
       readonly result: SettingsCommandResult;
@@ -246,7 +264,10 @@ export type ServerMessage =
     }
   | {
       readonly type: "event";
-      readonly event: StatusEvent | RuntimeDiagnosticEvent;
+      readonly event:
+        | StatusEvent
+        | RuntimeDiagnosticEvent
+        | RequestLedgerEvent;
     };
 
 export type DecodedClientRequest =
@@ -2496,6 +2517,22 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       request: { type: "get_request_identities", requestId },
     };
   }
+  if (value.type === "get_request_ledger") {
+    return {
+      type: "valid",
+      request: {
+        type: "get_request_ledger",
+        requestId,
+        ...(value.query === undefined ? {} : { query: value.query }),
+      },
+    };
+  }
+  if (
+    value.type === "ledger_subscribe" ||
+    value.type === "ledger_unsubscribe"
+  ) {
+    return { type: "valid", request: { type: value.type, requestId } };
+  }
   if (value.type === "runtime_command") {
     if (
       value.command !== "start" &&
@@ -3036,6 +3073,10 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     if (diagnostic !== undefined) {
       return { type: "event", event: diagnostic };
     }
+    const ledger = decodeRequestLedgerEvent(value.event);
+    if (ledger !== undefined) {
+      return { type: "event", event: ledger };
+    }
     const event = decodeEvent(value.event);
     return event === undefined ? undefined : { type: "event", event };
   }
@@ -3064,6 +3105,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "request_identities_result", requestId, result };
+  }
+  if (value.type === "request_ledger_result") {
+    const result = decodeRequestLedgerResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "request_ledger_result", requestId, result };
   }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);

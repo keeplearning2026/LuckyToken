@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 
+import { HttpRequestAbortedError } from "./http.js";
 import type { LuckyTokenRuntime } from "./runtime.js";
 
 export interface LuckyTokenHttpServerOptions {
@@ -145,9 +146,26 @@ export async function startLuckyTokenHttpServer(
           await writeWebResponse(response, result);
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        // A live client (not disconnected, not destroyed) still receives a
+        // truthful 500 when the request was cancelled or the handler failed
+        // unexpectedly. A real accepted request keeps its exact ledger
+        // request id through the transport-synthesized response (Ticket 18
+        // correlation seam on the aborted-error rejection); a disconnected
+        // client cannot receive a response and never gets one.
         if (!controller.signal.aborted && !response.destroyed) {
-          if (!response.headersSent) response.writeHead(500);
+          const requestId =
+            error instanceof HttpRequestAbortedError
+              ? error.requestId
+              : undefined;
+          if (!response.headersSent) {
+            response.writeHead(
+              500,
+              requestId === undefined
+                ? undefined
+                : { "x-luckytoken-request-id": requestId },
+            );
+          }
           response.end();
         }
       })
