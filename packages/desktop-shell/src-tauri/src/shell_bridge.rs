@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 
 use serde::Serialize;
 use tauri::Emitter;
@@ -8,7 +11,8 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    AliasCommand, AliasCommandResultWire, AutoStartAction, CatalogCommand,
+    AliasCommand, AliasCommandResultWire, AuthCommand, AuthCommandResultWire,
+    AuthInteractionResponse, AuthLoginSession, AutoStartAction, CatalogCommand,
     CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
     CredentialCommandResultWire, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
@@ -17,6 +21,9 @@ use crate::control_plane_v1::{
 };
 
 const SHELL_STATE_EVENT: &str = "luckytoken://shell-state";
+/// Renderer channel for typed Provider-auth interaction events (Ticket 13):
+/// the bridge forwards allowlisted events here while a login is pending.
+const AUTH_EVENT: &str = "luckytoken://auth-event";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +116,13 @@ pub(crate) trait ShellStateEmitter: Send + Sync {
     fn emit(&self, state: &ShellStateDto);
 }
 
+/// Typed Provider-auth interaction events forwarded to the renderer
+/// (Ticket 13). The payload is opaque JSON that the renderer strictly
+/// re-decodes; the bridge is a trust boundary.
+pub(crate) trait AuthEventEmitter: Send + Sync {
+    fn emit(&self, event: &serde_json::Value);
+}
+
 pub(crate) struct TauriMainWindowEmitter {
     app: tauri::AppHandle,
 }
@@ -122,6 +136,22 @@ impl TauriMainWindowEmitter {
 impl ShellStateEmitter for TauriMainWindowEmitter {
     fn emit(&self, state: &ShellStateDto) {
         let _ = self.app.emit_to("main", SHELL_STATE_EVENT, state);
+    }
+}
+
+pub(crate) struct TauriAuthEventEmitter {
+    app: tauri::AppHandle,
+}
+
+impl TauriAuthEventEmitter {
+    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl AuthEventEmitter for TauriAuthEventEmitter {
+    fn emit(&self, event: &serde_json::Value) {
+        let _ = self.app.emit_to("main", AUTH_EVENT, event);
     }
 }
 
@@ -177,6 +207,40 @@ pub(crate) struct ShellBridge {
     connector: Arc<dyn ControlPlaneConnector>,
     renderer_state: Arc<RendererStateStore>,
     lifecycle: Arc<OperationLifecycle>,
+    /// The one active desktop login flow: the write half used by
+    /// `auth_respond`, removed (identity-safely) when that flow ends and
+    /// by `shutdown`.
+    auth_session: Arc<tokio::sync::Mutex<Option<AuthLoginSession>>>,
+    /// Single-flight gate for the public login seam: while one login is
+    /// active a second `shell_auth_login` is refused before it can open a
+    /// pipe session, so flows never replace or tear each other down.
+    auth_login_active: Arc<AtomicBool>,
+    /// Per-flow correlation id source: every accepted login gets a
+    /// distinct id, so stale responses from earlier flows are rejected.
+    auth_login_sequence: Arc<AtomicU64>,
+}
+
+/// RAII single-flight gate: released when the login task ends (including
+/// when the command future is dropped), so a refused or aborted login can
+/// never leave the seam permanently locked.
+struct AuthLoginGate(Arc<AtomicBool>);
+
+impl AuthLoginGate {
+    fn acquire(flag: &Arc<AtomicBool>) -> Result<Self, String> {
+        if flag.swap(true, Ordering::SeqCst) {
+            return Err(
+                "Another sign-in is already in progress. Wait for it to finish, then try again."
+                    .to_owned(),
+            );
+        }
+        Ok(Self(flag.clone()))
+    }
+}
+
+impl Drop for AuthLoginGate {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl ShellBridge {
@@ -187,6 +251,9 @@ impl ShellBridge {
             lifecycle: Arc::new(OperationLifecycle {
                 active: Mutex::new(None),
             }),
+            auth_session: Arc::new(tokio::sync::Mutex::new(None)),
+            auth_login_active: Arc::new(AtomicBool::new(false)),
+            auth_login_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -402,6 +469,96 @@ impl ShellBridge {
             .map_err(|_| ())
     }
 
+    /// Ticket 13: one-shot auth query — the per-Provider login options
+    /// plus the refreshed effective authentication status.
+    pub(crate) async fn auth_query(&self) -> Result<AuthCommandResultWire, ()> {
+        self.connector.auth_query().await.map_err(|_| ())
+    }
+
+    /// Ticket 13: long-lived Provider-owned login. Typed interaction
+    /// events are forwarded to the renderer as they arrive; the future
+    /// resolves with the terminal result (success, cancelled, failure).
+    ///
+    /// Single-flight at the public seam: while one login is active a
+    /// second login is refused with an actionable value-free message
+    /// before it can open a pipe session, so flows never replace or tear
+    /// each other down. Every accepted login carries its own correlation
+    /// id. Cleanup is identity-safe: the terminal path only closes the
+    /// session this task installed, so an old task can never remove a
+    /// different active session.
+    pub(crate) async fn auth_login(
+        &self,
+        provider_id: String,
+        auth_type: String,
+        emitter: Arc<dyn AuthEventEmitter>,
+    ) -> Result<AuthCommandResultWire, String> {
+        let _gate = AuthLoginGate::acquire(&self.auth_login_active)?;
+        let request_id = format!(
+            "desktop-auth-login-{}",
+            self.auth_login_sequence.fetch_add(1, Ordering::SeqCst)
+        );
+        let command = AuthCommand::Login {
+            provider_id,
+            auth_type,
+            request_id: request_id.clone(),
+        };
+        let start = {
+            let emitter = emitter.clone();
+            self.connector
+                .auth_login(command, Box::new(move |event| emitter.emit(&event)))
+                .await
+                .map_err(|_| {
+                    "The Control Plane could not start the sign-in flow. Check that LuckyToken is running and try again."
+                        .to_owned()
+                })?
+        };
+        let session = start.session;
+        {
+            let mut active = self.auth_session.lock().await;
+            let _ = active.replace(session);
+        }
+        let outcome = match start.result.await {
+            Ok(Ok(outcome)) => outcome,
+            _ => {
+                return Err("The sign-in flow did not complete. Cancel and try again.".to_owned());
+            }
+        };
+        // Identity-safe cleanup: the single-flight gate guarantees this
+        // task is the only login, but the check keeps an old task from
+        // ever removing a different active session.
+        let mut active = self.auth_session.lock().await;
+        if active
+            .as_ref()
+            .is_some_and(|session| session.request_id() == request_id)
+        {
+            active.take();
+        }
+        Ok(outcome)
+    }
+
+    /// Ticket 13: routes one typed response (prompt answer or cancel) into
+    /// the active login flow. Without an active flow the response is
+    /// rejected; a `prompt_response` whose prompt id is not the active
+    /// flow's current pending prompt (a stale response from an earlier
+    /// flow, or a duplicate) is rejected locally and never written.
+    pub(crate) async fn auth_respond(
+        &self,
+        response: &AuthInteractionResponse,
+    ) -> Result<(), String> {
+        let mut active = self.auth_session.lock().await;
+        let Some(session) = active.as_mut() else {
+            return Err("There is no active sign-in to respond to.".to_owned());
+        };
+        match session.respond(response).await {
+            Ok(()) => Ok(()),
+            Err(ConnectionFailure::ProtocolError) => Err(
+                "The sign-in is no longer waiting for that response. Continue the current sign-in or cancel it."
+                    .to_owned(),
+            ),
+            Err(_) => Err("The sign-in connection was lost. Cancel and try again.".to_owned()),
+        }
+    }
+
     /// Sanitized Dashboard warnings: a one-shot diagnostics query restricted
     /// to warning-or-worse records; the backend redaction boundary has
     /// already scrubbed credentials before they leave the Control Plane.
@@ -444,6 +601,9 @@ impl ShellBridge {
     pub(crate) async fn shutdown(&self) {
         let mut active = self.lifecycle.active.lock().await;
         abort_and_join(active.take()).await;
+        // Closing the auth session aborts its reader loop and pipe: the
+        // host aborts any Provider-owned flow still pending.
+        self.auth_session.lock().await.take();
     }
 }
 
@@ -564,7 +724,8 @@ fn unavailable_reason(failure: ConnectionFailure) -> UnavailableReason {
 mod tests {
     use super::*;
     use crate::control_plane_v1::{
-        AutoStartFuture, AutoStartResultWire, ConnectFuture, ConnectResult, ConnectionFailure,
+        execute_auth_login_session, AuthCommand, AuthLoginFuture, AutoStartFuture,
+        AutoStartResultWire, ConnectFuture, ConnectResult, ConnectionFailure,
         ControlPlaneConnector, ControlPlaneSession, ModelDataPlaneState, ProviderState,
         SessionFailure, StatusSnapshot,
     };
@@ -882,5 +1043,722 @@ mod tests {
         first.await.expect("first retry joined");
         second.await.expect("second retry joined");
         assert!(bridge.lifecycle.active.lock().await.is_none());
+    }
+
+    struct RecordingAuthEmitter {
+        events: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl AuthEventEmitter for RecordingAuthEmitter {
+        fn emit(&self, event: &serde_json::Value) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    /// Connector that opens real named pipes for each login (the test
+    /// drives the server side, exercising the full relay path).
+    struct ScriptedPipeAuthConnector {
+        pipes: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ControlPlaneConnector for ScriptedPipeAuthConnector {
+        fn connect(&self) -> ConnectFuture {
+            Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+        }
+
+        fn auth_login(
+            &self,
+            command: AuthCommand,
+            on_event: Box<dyn FnMut(serde_json::Value) + Send + 'static>,
+        ) -> AuthLoginFuture {
+            let pipe_name = self
+                .pipes
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("script has no pipe left");
+            Box::pin(async move {
+                execute_auth_login_session(
+                    &pipe_name,
+                    "desktop-test-capability".to_owned(),
+                    command,
+                    on_event,
+                )
+                .await
+            })
+        }
+    }
+
+    fn auth_test_pipe_name() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after the epoch")
+            .as_nanos() as u64;
+        format!(
+            r"\\.\pipe\luckytoken-desktop-auth-test-{}-{}",
+            std::process::id(),
+            nanos ^ COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
+    struct TestAuthPipeServer {
+        server: tokio::net::windows::named_pipe::NamedPipeServer,
+    }
+
+    impl TestAuthPipeServer {
+        async fn next_frame(&mut self) -> serde_json::Value {
+            use tokio::io::AsyncReadExt;
+            let mut header = [0_u8; 4];
+            self.server
+                .read_exact(&mut header)
+                .await
+                .expect("test server must read a frame header");
+            let length = u32::from_be_bytes(header) as usize;
+            let mut body = vec![0_u8; length];
+            self.server
+                .read_exact(&mut body)
+                .await
+                .expect("test server must read a frame body");
+            serde_json::from_slice(&body).expect("test server must parse the frame body")
+        }
+
+        async fn send(&mut self, value: &serde_json::Value) {
+            use tokio::io::AsyncWriteExt;
+            let body = serde_json::to_vec(value).expect("test frame must serialize");
+            self.server
+                .write_all(&(body.len() as u32).to_be_bytes())
+                .await
+                .expect("test server must write a frame header");
+            self.server
+                .write_all(&body)
+                .await
+                .expect("test server must write a frame body");
+        }
+    }
+
+    async fn accept_auth_login(
+        server: &mut TestAuthPipeServer,
+        provider_id: &str,
+    ) -> (String, String, String) {
+        let hello = server.next_frame().await;
+        assert_eq!(
+            hello.get("type").and_then(serde_json::Value::as_str),
+            Some("hello")
+        );
+        server
+            .send(&serde_json::json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(serde_json::Value::as_str),
+            Some("auth_command")
+        );
+        let request_id = request
+            .get("requestId")
+            .and_then(serde_json::Value::as_str)
+            .expect("login command must carry a per-flow request id")
+            .to_owned();
+        assert!(
+            request_id.starts_with("desktop-auth-login-"),
+            "every accepted login must carry a distinct correlation id"
+        );
+        let provider = request
+            .get("command")
+            .and_then(|raw| raw.get("providerId"))
+            .and_then(serde_json::Value::as_str)
+            .expect("login command must carry the provider id")
+            .to_owned();
+        let auth_type = request
+            .get("command")
+            .and_then(|raw| raw.get("authType"))
+            .and_then(serde_json::Value::as_str)
+            .expect("login command must carry the auth type")
+            .to_owned();
+        assert_eq!(provider, provider_id);
+        (provider, auth_type, request_id)
+    }
+
+    #[tokio::test]
+    async fn auth_login_forwards_events_and_auth_respond_routes_into_the_active_session() {
+        let pipe_name = auth_test_pipe_name();
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let events = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let emitted = events.clone();
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: Arc::new(std::sync::Mutex::new(vec![pipe_name.clone()])),
+        }));
+        let login_task = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter { events: emitted }),
+                    )
+                    .await
+            }
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestAuthPipeServer { server };
+        let (_provider, auth_type, request_id) = accept_auth_login(&mut server, "anthropic").await;
+        assert_eq!(auth_type, "oauth");
+
+        // Typed events must be forwarded to the renderer, stamped with the
+        // flow's own correlation id.
+        server
+            .send(&serde_json::json!({
+                "type": "auth_interaction_event",
+                "requestId": request_id,
+                "event": {"type": "auth_url", "url": "https://example.com/authorize"}
+            }))
+            .await;
+        server
+            .send(&serde_json::json!({
+                "type": "auth_interaction_event",
+                "requestId": request_id,
+                "event": {"type": "prompt", "promptId": "p1", "kind": "text", "message": "Enter the code"}
+            }))
+            .await;
+        let forwarded = timeout(Duration::from_secs(5), async {
+            loop {
+                let captured = {
+                    let captured = events.lock().unwrap();
+                    (captured.len() == 2).then(|| captured.clone())
+                };
+                if let Some(captured) = captured {
+                    break captured;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("typed events must be forwarded");
+        assert_eq!(forwarded[0]["type"], serde_json::json!("auth_url"));
+        assert_eq!(forwarded[1]["promptId"], serde_json::json!("p1"));
+
+        // A typed response for the outstanding prompt routes into the
+        // active session, stamped with the flow's correlation id.
+        bridge
+            .auth_respond(&AuthInteractionResponse::PromptResponse {
+                prompt_id: "p1".to_owned(),
+                value: "FAKE-CODE".to_owned(),
+            })
+            .await
+            .expect("response must route into the active session");
+        let response = server.next_frame().await;
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("auth_interaction_response")
+        );
+        assert_eq!(
+            response
+                .get("requestId")
+                .and_then(serde_json::Value::as_str),
+            Some(request_id.as_str())
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("value"))
+                .and_then(serde_json::Value::as_str),
+            Some("FAKE-CODE")
+        );
+
+        // A duplicate of the already-answered prompt is rejected locally:
+        // the slot is cleared after the accepted response, so nothing is
+        // written a second time.
+        assert!(bridge
+            .auth_respond(&AuthInteractionResponse::PromptResponse {
+                prompt_id: "p1".to_owned(),
+                value: "FAKE-CODE".to_owned(),
+            })
+            .await
+            .is_err());
+        assert!(timeout(Duration::from_millis(200), server.next_frame(),)
+            .await
+            .is_err());
+
+        server
+            .send(&serde_json::json!({
+                "type": "auth_command_result",
+                "requestId": request_id,
+                "result": {
+                    "outcome": "ok",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": []
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), login_task)
+            .await
+            .expect("login must complete within the timeout")
+            .expect("login task must not panic")
+            .expect("login must succeed");
+        assert_eq!(result.outcome, "ok");
+        bridge.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_second_concurrent_login_is_refused_before_installing_a_new_session() {
+        let pipe_name = auth_test_pipe_name();
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let pipes = Arc::new(std::sync::Mutex::new(vec![pipe_name.clone()]));
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: pipes.clone(),
+        }));
+        let login_a = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter {
+                            events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                        }),
+                    )
+                    .await
+            }
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestAuthPipeServer { server };
+        let (_, _, request_id) = accept_auth_login(&mut server, "anthropic").await;
+        // Keep flow A pending on a prompt.
+        server
+            .send(&serde_json::json!({
+                "type": "auth_interaction_event",
+                "requestId": request_id,
+                "event": {"type": "prompt", "promptId": "p1", "kind": "text", "message": "Enter the code"}
+            }))
+            .await;
+
+        // A concurrent second login is refused with an actionable message
+        // before it can open or replace another pipe session.
+        let refusal = bridge
+            .auth_login(
+                "my-gateway".to_owned(),
+                "oauth".to_owned(),
+                Arc::new(RecordingAuthEmitter {
+                    events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                }),
+            )
+            .await
+            .expect_err("a concurrent login must be refused");
+        assert!(refusal.contains("already in progress"));
+        assert!(
+            pipes.lock().unwrap().is_empty(),
+            "the refused login must never open a pipe session"
+        );
+
+        // Flow A is untouched: its session still routes responses.
+        bridge
+            .auth_respond(&AuthInteractionResponse::Cancel)
+            .await
+            .expect("the first login must still accept responses");
+        let response = server.next_frame().await;
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("auth_interaction_response")
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("cancel")
+        );
+
+        // After flow A ends the seam accepts a fresh login again.
+        server
+            .send(&serde_json::json!({
+                "type": "auth_command_result",
+                "requestId": request_id,
+                "result": {
+                    "outcome": "cancelled",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": []
+                    },
+                    "error": "Sign-in was cancelled"
+                }
+            }))
+            .await;
+        timeout(Duration::from_secs(5), login_a)
+            .await
+            .expect("first login must complete within the timeout")
+            .expect("first login task must not panic")
+            .expect("first login must finish");
+        bridge.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn completion_of_an_old_task_cannot_close_a_newer_accepted_session() {
+        let pipe_a = auth_test_pipe_name();
+        let server_a = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_a)
+            .expect("test server must create its pipe");
+        let pipe_b = auth_test_pipe_name();
+        let server_b = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_b)
+            .expect("test server must create its pipe");
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: Arc::new(std::sync::Mutex::new(vec![pipe_a.clone()])),
+        }));
+        let login_a = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter {
+                            events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                        }),
+                    )
+                    .await
+            }
+        });
+        server_a
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server_a = TestAuthPipeServer { server: server_a };
+        let (_, _, request_id_a) = accept_auth_login(&mut server_a, "anthropic").await;
+
+        // Keep flow A pending, then force the slot to hold a newer
+        // session while A's own session object stays alive in the test
+        // (the single-flight gate normally prevents this; the identity
+        // check must hold even then). Moving A's session out of the slot
+        // keeps its reader running, so A can still complete normally.
+        let start_b_task = tokio::spawn(async move {
+            execute_auth_login_session(
+                &pipe_b,
+                "desktop-test-capability".to_owned(),
+                AuthCommand::Login {
+                    provider_id: "my-gateway".to_owned(),
+                    auth_type: "oauth".to_owned(),
+                    request_id: "desktop-auth-login-999".to_owned(),
+                },
+                |_| {},
+            )
+            .await
+            .expect("the newer session must negotiate")
+        });
+        server_b
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server_b = TestAuthPipeServer { server: server_b };
+        let (_, _, request_id_b) = accept_auth_login(&mut server_b, "my-gateway").await;
+        assert_eq!(request_id_b, "desktop-auth-login-999");
+        let start_b = timeout(Duration::from_secs(5), start_b_task)
+            .await
+            .expect("the newer session must start within the timeout")
+            .expect("the newer session task must not panic");
+        let held_a = bridge.auth_session.lock().await.replace(start_b.session);
+        let held_a = held_a.expect("flow A's session must be installed");
+
+        // Flow A completes normally: its identity-safe cleanup must not
+        // remove the newer session from the slot.
+        server_a
+            .send(&serde_json::json!({
+                "type": "auth_command_result",
+                "requestId": request_id_a,
+                "result": {
+                    "outcome": "ok",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": []
+                    }
+                }
+            }))
+            .await;
+        timeout(Duration::from_secs(5), login_a)
+            .await
+            .expect("first login must complete within the timeout")
+            .expect("first login task must not panic")
+            .expect("first login must succeed");
+
+        let slot = bridge.auth_session.lock().await;
+        let remaining = slot
+            .as_ref()
+            .expect("the newer session must still be installed");
+        assert_eq!(
+            remaining.request_id(),
+            "desktop-auth-login-999",
+            "the old task's completion must never close the newer session"
+        );
+        drop(slot);
+        bridge
+            .auth_respond(&AuthInteractionResponse::Cancel)
+            .await
+            .expect("the newer session must still route responses");
+        let response = server_b.next_frame().await;
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("auth_interaction_response")
+        );
+        // Releasing the held flow-A session only aborts its (already
+        // completed) reader.
+        drop(held_a);
+        bridge.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_stale_prompt_response_is_rejected_and_never_delivered_to_the_current_flow() {
+        let pipe_a = auth_test_pipe_name();
+        let server_a = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_a)
+            .expect("test server must create its pipe");
+        let pipe_b = auth_test_pipe_name();
+        let server_b = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_b)
+            .expect("test server must create its pipe");
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: Arc::new(std::sync::Mutex::new(vec![pipe_b.clone(), pipe_a.clone()])),
+        }));
+        let login_a = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter {
+                            events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                        }),
+                    )
+                    .await
+            }
+        });
+        server_a
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server_a = TestAuthPipeServer { server: server_a };
+        let (_, _, request_id_a) = accept_auth_login(&mut server_a, "anthropic").await;
+        // Flow A asks its prompt, then completes cancelled.
+        server_a
+            .send(&serde_json::json!({
+                "type": "auth_interaction_event",
+                "requestId": request_id_a,
+                "event": {"type": "prompt", "promptId": "stale-prompt-a", "kind": "text", "message": "Enter the code"}
+            }))
+            .await;
+        server_a
+            .send(&serde_json::json!({
+                "type": "auth_command_result",
+                "requestId": request_id_a,
+                "result": {
+                    "outcome": "cancelled",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": []
+                    },
+                    "error": "Sign-in was cancelled"
+                }
+            }))
+            .await;
+        timeout(Duration::from_secs(5), login_a)
+            .await
+            .expect("first login must complete within the timeout")
+            .expect("first login task must not panic")
+            .expect("first login must finish");
+
+        // Flow B is accepted afterwards with its own correlation id.
+        let login_b = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter {
+                            events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                        }),
+                    )
+                    .await
+            }
+        });
+        server_b
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server_b = TestAuthPipeServer { server: server_b };
+        let (_, _, request_id_b) = accept_auth_login(&mut server_b, "anthropic").await;
+        assert_ne!(
+            request_id_a, request_id_b,
+            "flows must not share correlation ids"
+        );
+        server_b
+            .send(&serde_json::json!({
+                "type": "auth_interaction_event",
+                "requestId": request_id_b,
+                "event": {"type": "prompt", "promptId": "current-prompt-b", "kind": "text", "message": "Enter the code"}
+            }))
+            .await;
+
+        // A response carrying flow A's prompt id is rejected locally and
+        // never written to flow B's pipe.
+        let stale = bridge
+            .auth_respond(&AuthInteractionResponse::PromptResponse {
+                prompt_id: "stale-prompt-a".to_owned(),
+                value: "FAKE-CODE".to_owned(),
+            })
+            .await
+            .expect_err("a stale prompt response must be rejected");
+        assert!(stale.contains("no longer waiting"));
+        assert!(
+            timeout(Duration::from_millis(200), server_b.next_frame())
+                .await
+                .is_err(),
+            "the stale response must never reach the current flow"
+        );
+
+        // The current flow's own prompt still routes normally.
+        bridge
+            .auth_respond(&AuthInteractionResponse::PromptResponse {
+                prompt_id: "current-prompt-b".to_owned(),
+                value: "FAKE-CODE".to_owned(),
+            })
+            .await
+            .expect("the current prompt response must route");
+        let response = server_b.next_frame().await;
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("auth_interaction_response")
+        );
+        assert_eq!(
+            response
+                .get("requestId")
+                .and_then(serde_json::Value::as_str),
+            Some(request_id_b.as_str())
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("promptId"))
+                .and_then(serde_json::Value::as_str),
+            Some("current-prompt-b")
+        );
+
+        server_b
+            .send(&serde_json::json!({
+                "type": "auth_command_result",
+                "requestId": request_id_b,
+                "result": {
+                    "outcome": "ok",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": []
+                    }
+                }
+            }))
+            .await;
+        timeout(Duration::from_secs(5), login_b)
+            .await
+            .expect("second login must complete within the timeout")
+            .expect("second login task must not panic")
+            .expect("second login must succeed");
+        bridge.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn auth_respond_without_an_active_login_is_rejected() {
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+        let rejection = bridge
+            .auth_respond(&AuthInteractionResponse::Cancel)
+            .await
+            .expect_err("a response without an active login must be rejected");
+        assert!(rejection.contains("no active sign-in"));
+        bridge.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_an_active_login_and_joins_bounded() {
+        let pipe_name = auth_test_pipe_name();
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let bridge = ShellBridge::new(Arc::new(ScriptedPipeAuthConnector {
+            pipes: Arc::new(std::sync::Mutex::new(vec![pipe_name.clone()])),
+        }));
+        let login_task = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .auth_login(
+                        "anthropic".to_owned(),
+                        "oauth".to_owned(),
+                        Arc::new(RecordingAuthEmitter {
+                            events: Arc::new(std::sync::Mutex::new(Vec::new())),
+                        }),
+                    )
+                    .await
+            }
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestAuthPipeServer { server };
+        let _ = accept_auth_login(&mut server, "anthropic").await;
+
+        timeout(Duration::from_secs(1), bridge.shutdown())
+            .await
+            .expect("shutdown is bounded while a login is pending");
+        timeout(Duration::from_secs(5), login_task)
+            .await
+            .expect("login must abort within the timeout")
+            .expect("login task must not panic")
+            .expect_err("shutdown must abort the pending login");
     }
 }

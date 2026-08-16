@@ -4,6 +4,12 @@ import type {
   AliasStatusProjection,
   AliasValidationErrorProjection,
   ApplicationOwnership,
+  AuthCommandResult,
+  AuthInfoLink,
+  AuthInteractionEvent,
+  AuthOptionsProjection,
+  AuthPromptOption,
+  AuthProviderOption,
   CatalogCommandResult,
   CatalogModelAvailability,
   CatalogModelProjection,
@@ -1297,6 +1303,269 @@ function decodeImportApplyEntries(
     });
   }
   return Object.freeze(entries);
+}
+
+/** Ticket 13: strict decode of the per-Provider login options projection
+ *  crossing the bridge. Only Provider-declared metadata passes; the
+ *  renderer never invents an account/subscription label. */
+export function decodeAuthOptionsProjection(
+  value: unknown,
+): AuthOptionsProjection | undefined {
+  if (!isRecord(value) || !Array.isArray(value.providers)) return undefined;
+  const providers: AuthProviderOption[] = [];
+  for (const raw of value.providers) {
+    const option = decodeAuthProviderOption(raw);
+    if (option === undefined) return undefined;
+    providers.push(option);
+  }
+  return Object.freeze({ providers: Object.freeze(providers) });
+}
+
+function decodeAuthProviderOption(value: unknown): AuthProviderOption | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.account !== "boolean" ||
+    typeof value.subscription !== "boolean" ||
+    typeof value.apiKey !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (
+    (value.accountLabel !== undefined &&
+      (typeof value.accountLabel !== "string" ||
+        value.accountLabel.length === 0)) ||
+    (value.apiKeyLabel !== undefined &&
+      (typeof value.apiKeyLabel !== "string" ||
+        value.apiKeyLabel.length === 0))
+  ) {
+    return undefined;
+  }
+  // The metadata rule: a subscription is always an account flow.
+  if (value.subscription === true && value.account !== true) return undefined;
+  const status = decodeProviderAuthStatus(value.status);
+  if (status === undefined) return undefined;
+  return Object.freeze({
+    providerId: value.providerId,
+    name: value.name,
+    account: value.account,
+    subscription: value.subscription,
+    ...(value.accountLabel === undefined
+      ? {}
+      : { accountLabel: value.accountLabel as string }),
+    apiKey: value.apiKey,
+    ...(value.apiKeyLabel === undefined
+      ? {}
+      : { apiKeyLabel: value.apiKeyLabel as string }),
+    status,
+  });
+}
+
+/** Ticket 13: strict decode of a Provider-auth command result crossing the
+ *  bridge. Only closed outcomes, the sanitized credential projection and
+ *  the Provider-declared options pass; a value-free error is required for
+ *  every non-ok outcome and raw error text can never pass. */
+export function decodeAuthCommandResult(
+  value: unknown,
+): AuthCommandResult | undefined {  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "cancelled" &&
+      value.outcome !== "failed" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "unknown_provider" &&
+      value.outcome !== "unsupported" &&
+      value.outcome !== "storage_failure" &&
+      value.outcome !== "unavailable")
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome as AuthCommandResult["outcome"];
+  const state = decodeCredentialProjection(value.state, {
+    allowEmptyPath: outcome === "unavailable",
+  });
+  if (state === undefined) return undefined;
+  const options =
+    value.options === undefined
+      ? undefined
+      : decodeAuthOptionsProjection(value.options);
+  if (value.options !== undefined && options === undefined) return undefined;
+  if (outcome !== "ok") {
+    if (typeof value.error !== "string" || value.error.length === 0) {
+      return undefined;
+    }
+    if (options !== undefined) return undefined;
+    return { outcome, state, error: value.error };
+  }
+  if (typeof value.error === "string") return undefined;
+  // Only a query carries the options projection; a login never does.
+  return options === undefined
+    ? { outcome, state }
+    : { outcome, state, options };
+}
+
+/** Ticket 13: strict decode of one typed interaction event crossing the
+ *  bridge. Only the allowlisted event shapes pass; malformed or
+ *  secret-bearing extensions are dropped. */
+export function decodeAuthInteractionEvent(
+  value: unknown,
+): AuthInteractionEvent | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "info") {
+    if (typeof value.message !== "string") return undefined;
+    const links = decodeAuthInfoLinks(value.links);
+    if (value.links !== undefined && links === undefined) return undefined;
+    return Object.freeze({
+      type: "info",
+      message: value.message,
+      ...(links === undefined ? {} : { links }),
+    });
+  }
+  if (value.type === "auth_url") {
+    if (typeof value.url !== "string" || value.url.length === 0) {
+      return undefined;
+    }
+    if (
+      value.instructions !== undefined &&
+      typeof value.instructions !== "string"
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      type: "auth_url",
+      url: value.url,
+      ...(value.instructions === undefined
+        ? {}
+        : { instructions: value.instructions as string }),
+    });
+  }
+  if (value.type === "device_code") {
+    if (
+      typeof value.userCode !== "string" ||
+      value.userCode.length === 0 ||
+      typeof value.verificationUri !== "string" ||
+      value.verificationUri.length === 0 ||
+      (value.intervalSeconds !== undefined &&
+        (typeof value.intervalSeconds !== "number" ||
+          !Number.isSafeInteger(value.intervalSeconds) ||
+          (value.intervalSeconds as number) < 1)) ||
+      (value.expiresInSeconds !== undefined &&
+        (typeof value.expiresInSeconds !== "number" ||
+          !Number.isSafeInteger(value.expiresInSeconds) ||
+          (value.expiresInSeconds as number) < 1))
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      type: "device_code",
+      userCode: value.userCode,
+      verificationUri: value.verificationUri,
+      ...(value.intervalSeconds === undefined
+        ? {}
+        : { intervalSeconds: value.intervalSeconds as number }),
+      ...(value.expiresInSeconds === undefined
+        ? {}
+        : { expiresInSeconds: value.expiresInSeconds as number }),
+    });
+  }
+  if (value.type === "progress") {
+    if (typeof value.message !== "string") return undefined;
+    return Object.freeze({ type: "progress", message: value.message });
+  }
+  if (value.type === "prompt") {
+    const prompt = decodeAuthPromptEvent(value);
+    if (prompt === undefined) return undefined;
+    return Object.freeze(prompt);
+  }
+  return undefined;
+}
+
+function decodeAuthPromptEvent(value: Record<string, unknown>):
+  | Extract<AuthInteractionEvent, { readonly type: "prompt" }>
+  | undefined {
+  if (
+    (value.kind !== "text" &&
+      value.kind !== "secret" &&
+      value.kind !== "manual_code" &&
+      value.kind !== "select") ||
+    typeof value.promptId !== "string" ||
+    value.promptId.length === 0 ||
+    typeof value.message !== "string" ||
+    (value.placeholder !== undefined &&
+      typeof value.placeholder !== "string")
+  ) {
+    return undefined;
+  }
+  const options = decodeAuthPromptOptions(value.options);
+  if (value.options !== undefined && options === undefined) return undefined;
+  if (value.kind !== "select" && options !== undefined) return undefined;
+  if (value.kind === "select" && options === undefined) return undefined;
+  return {
+    type: "prompt",
+    promptId: value.promptId,
+    kind: value.kind,
+    message: value.message,
+    ...(value.placeholder === undefined
+      ? {}
+      : { placeholder: value.placeholder as string }),
+    ...(options === undefined ? {} : { options }),
+  };
+}
+
+function decodeAuthPromptOptions(
+  value: unknown,
+): readonly AuthPromptOption[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const options: AuthPromptOption[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.id !== "string" ||
+      raw.id.length === 0 ||
+      typeof raw.label !== "string" ||
+      raw.label.length === 0 ||
+      (raw.description !== undefined &&
+        typeof raw.description !== "string")
+    ) {
+      return undefined;
+    }
+    options.push(
+      Object.freeze({
+        id: raw.id,
+        label: raw.label,
+        ...(raw.description === undefined
+          ? {}
+          : { description: raw.description as string }),
+      }),
+    );
+  }
+  return Object.freeze(options);
+}
+
+function decodeAuthInfoLinks(value: unknown): readonly AuthInfoLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const links: AuthInfoLink[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.url !== "string" ||
+      raw.url.length === 0 ||
+      (raw.label !== undefined &&
+        (typeof raw.label !== "string" || raw.label.length === 0))
+    ) {
+      return undefined;
+    }
+    links.push(
+      Object.freeze({
+        url: raw.url,
+        ...(raw.label === undefined ? {} : { label: raw.label as string }),
+      }),
+    );
+  }
+  return Object.freeze(links);
 }
 
 /** Developer Lab exposes only the settings the product UI actively renders.

@@ -79,6 +79,11 @@ function makeShell(identities: {
         providers: [],
       },
     }),
+    executeAuthCommand: async () => {
+      throw new Error("unused auth command");
+    },
+    respondAuthInteraction: async () => undefined,
+    openUrl: async () => undefined,
     queryDiagnosticsWarnings: async () => [] as readonly DiagnosticsWarning[],
     getAutoStartStatus: async () => ({ enabled: false }),
     setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),

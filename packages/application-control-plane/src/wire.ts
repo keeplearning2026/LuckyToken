@@ -66,6 +66,14 @@ import {
   decodeDiagnosticRecord,
 } from "./wire-diagnostics.js";
 import {
+  type AuthCommand,
+  type AuthCommandResult,
+  type AuthInfoLink,
+  type AuthInteractionEvent,
+  type AuthInteractionResponse,
+  type AuthOptionsProjection,
+  type AuthPromptOption,
+  type AuthProviderOption,
   type ClientTokenCommand,
   type ClientTokenCommandResult,
   type CredentialCommand,
@@ -133,6 +141,16 @@ export type ClientRequest =
       readonly command: CredentialCommand;
     }
   | {
+      readonly type: "auth_command";
+      readonly requestId: string;
+      readonly command: AuthCommand;
+    }
+  | {
+      readonly type: "auth_interaction_response";
+      readonly requestId: string;
+      readonly response: AuthInteractionResponse;
+    }
+  | {
       readonly type: "catalog_command";
       readonly requestId: string;
       readonly command: CatalogCommand;
@@ -198,6 +216,16 @@ export type ServerMessage =
       readonly type: "credential_command_result";
       readonly requestId: string;
       readonly result: CredentialCommandResult;
+    }
+  | {
+      readonly type: "auth_command_result";
+      readonly requestId: string;
+      readonly result: AuthCommandResult;
+    }
+  | {
+      readonly type: "auth_interaction_event";
+      readonly requestId: string;
+      readonly event: AuthInteractionEvent;
     }
   | {
       readonly type: "catalog_command_result";
@@ -1417,7 +1445,7 @@ function decodeCredentialFileError(
   });
 }
 
-function decodeProviderAuthStatus(
+export function decodeProviderAuthStatus(
   value: unknown,
 ): ProviderAuthStatus | undefined {
   if (
@@ -1791,6 +1819,328 @@ function decodeCredentialImportEntryPreviews(
     .map((entry) => decodeCredentialImportEntryPreview(entry))
     .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
   return entries.length === value.length ? Object.freeze(entries) : undefined;
+}
+
+/** Ticket 13: strict decode of the per-Provider login options projection. */
+export function decodeAuthOptionsProjection(
+  value: unknown,
+): AuthOptionsProjection | undefined {
+  if (!isRecord(value) || !Array.isArray(value.providers)) return undefined;
+  const providers: AuthProviderOption[] = [];
+  for (const raw of value.providers) {
+    const option = decodeAuthProviderOption(raw);
+    if (option === undefined) return undefined;
+    providers.push(option);
+  }
+  return Object.freeze({ providers: Object.freeze(providers) });
+}
+
+function decodeAuthProviderOption(value: unknown): AuthProviderOption | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    value.providerId.length === 0 ||
+    typeof value.name !== "string" ||
+    value.name.length === 0 ||
+    typeof value.account !== "boolean" ||
+    typeof value.subscription !== "boolean" ||
+    typeof value.apiKey !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (
+    (value.accountLabel !== undefined &&
+      (typeof value.accountLabel !== "string" ||
+        value.accountLabel.length === 0)) ||
+    (value.apiKeyLabel !== undefined &&
+      (typeof value.apiKeyLabel !== "string" ||
+        value.apiKeyLabel.length === 0))
+  ) {
+    return undefined;
+  }
+  // A subscription is always an account flow: the metadata rule means
+  // `subscription` can never be true while `account` is false.
+  if (value.subscription === true && value.account !== true) return undefined;
+  const status = decodeProviderAuthStatus(value.status);
+  if (status === undefined) return undefined;
+  return Object.freeze({
+    providerId: value.providerId,
+    name: value.name,
+    account: value.account,
+    subscription: value.subscription,
+    ...(value.accountLabel === undefined
+      ? {}
+      : { accountLabel: value.accountLabel as string }),
+    apiKey: value.apiKey,
+    ...(value.apiKeyLabel === undefined
+      ? {}
+      : { apiKeyLabel: value.apiKeyLabel as string }),
+    status,
+  });
+}
+
+/** Ticket 13: strict decode of one typed interaction event crossing the
+ *  wire. Only the allowlisted event shapes pass; anything else (including
+ *  any secret-bearing extension) is rejected. */
+export function decodeAuthInteractionEvent(
+  value: unknown,
+): AuthInteractionEvent | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "info") {
+    if (typeof value.message !== "string") return undefined;
+    const links = decodeAuthInfoLinks(value.links);
+    if (value.links !== undefined && links === undefined) return undefined;
+    return Object.freeze({
+      type: "info",
+      message: value.message,
+      ...(links === undefined ? {} : { links }),
+    });
+  }
+  if (value.type === "auth_url") {
+    if (typeof value.url !== "string" || value.url.length === 0) {
+      return undefined;
+    }
+    if (
+      value.instructions !== undefined &&
+      typeof value.instructions !== "string"
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      type: "auth_url",
+      url: value.url,
+      ...(value.instructions === undefined
+        ? {}
+        : { instructions: value.instructions as string }),
+    });
+  }
+  if (value.type === "device_code") {
+    if (
+      typeof value.userCode !== "string" ||
+      value.userCode.length === 0 ||
+      typeof value.verificationUri !== "string" ||
+      value.verificationUri.length === 0 ||
+      (value.intervalSeconds !== undefined &&
+        (typeof value.intervalSeconds !== "number" ||
+          !Number.isSafeInteger(value.intervalSeconds) ||
+          (value.intervalSeconds as number) < 1)) ||
+      (value.expiresInSeconds !== undefined &&
+        (typeof value.expiresInSeconds !== "number" ||
+          !Number.isSafeInteger(value.expiresInSeconds) ||
+          (value.expiresInSeconds as number) < 1))
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      type: "device_code",
+      userCode: value.userCode,
+      verificationUri: value.verificationUri,
+      ...(value.intervalSeconds === undefined
+        ? {}
+        : { intervalSeconds: value.intervalSeconds as number }),
+      ...(value.expiresInSeconds === undefined
+        ? {}
+        : { expiresInSeconds: value.expiresInSeconds as number }),
+    });
+  }
+  if (value.type === "progress") {
+    if (typeof value.message !== "string") return undefined;
+    return Object.freeze({ type: "progress", message: value.message });
+  }
+  if (value.type === "prompt") {
+    const prompt = decodeAuthPromptEvent(value);
+    if (prompt === undefined) return undefined;
+    return Object.freeze(prompt);
+  }
+  return undefined;
+}
+
+function decodeAuthPromptEvent(value: RecordValue):
+  | Extract<AuthInteractionEvent, { readonly type: "prompt" }>
+  | undefined {
+  if (
+    (value.kind !== "text" &&
+      value.kind !== "secret" &&
+      value.kind !== "manual_code" &&
+      value.kind !== "select") ||
+    typeof value.promptId !== "string" ||
+    value.promptId.length === 0 ||
+    typeof value.message !== "string" ||
+    (value.placeholder !== undefined &&
+      typeof value.placeholder !== "string")
+  ) {
+    return undefined;
+  }
+  const options = decodeAuthPromptOptions(value.options);
+  if (value.options !== undefined && options === undefined) return undefined;
+  if (value.kind !== "select" && options !== undefined) return undefined;
+  if (value.kind === "select" && options === undefined) return undefined;
+  return {
+    type: "prompt",
+    promptId: value.promptId,
+    kind: value.kind,
+    message: value.message,
+    ...(value.placeholder === undefined
+      ? {}
+      : { placeholder: value.placeholder as string }),
+    ...(options === undefined ? {} : { options }),
+  };
+}
+
+function decodeAuthPromptOptions(
+  value: unknown,
+): readonly AuthPromptOption[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const options: AuthPromptOption[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.id !== "string" ||
+      raw.id.length === 0 ||
+      typeof raw.label !== "string" ||
+      raw.label.length === 0 ||
+      (raw.description !== undefined &&
+        typeof raw.description !== "string")
+    ) {
+      return undefined;
+    }
+    options.push(
+      Object.freeze({
+        id: raw.id,
+        label: raw.label,
+        ...(raw.description === undefined
+          ? {}
+          : { description: raw.description as string }),
+      }),
+    );
+  }
+  return Object.freeze(options);
+}
+
+function decodeAuthInfoLinks(value: unknown): readonly AuthInfoLink[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const links: AuthInfoLink[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.url !== "string" ||
+      raw.url.length === 0 ||
+      (raw.label !== undefined &&
+        (typeof raw.label !== "string" || raw.label.length === 0))
+    ) {
+      return undefined;
+    }
+    links.push(
+      Object.freeze({
+        url: raw.url,
+        ...(raw.label === undefined ? {} : { label: raw.label as string }),
+      }),
+    );
+  }
+  return Object.freeze(links);
+}
+
+/** Ticket 13: strict decode of a client interaction response. */
+export function decodeAuthInteractionResponse(
+  value: unknown,
+): AuthInteractionResponse | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "cancel") {
+    return Object.freeze({ type: "cancel" });
+  }
+  if (value.type === "prompt_response") {
+    if (
+      typeof value.promptId !== "string" ||
+      value.promptId.length === 0 ||
+      typeof value.value !== "string"
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      type: "prompt_response",
+      promptId: value.promptId,
+      value: value.value,
+    });
+  }
+  return undefined;
+}
+
+/** Ticket 13: strict decode of an auth command. */
+export function decodeAuthCommand(value: unknown): AuthCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.command === "query") {
+    return Object.freeze({ command: "query" });
+  }
+  if (value.command === "login") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      (value.authType !== "oauth" && value.authType !== "api_key")
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      command: "login",
+      providerId: value.providerId,
+      authType: value.authType,
+    });
+  }
+  return undefined;
+}
+
+/**
+ * Ticket 13: validates an auth command result against the command that
+ * produced it. `query` may carry the options projection; `login` never
+ * does. Non-ok outcomes require a value-free error; no credential value
+ * or raw error text can pass.
+ */
+export function decodeAuthCommandResult(
+  value: unknown,
+  command: AuthCommand,
+): AuthCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" &&
+      value.outcome !== "cancelled" &&
+      value.outcome !== "failed" &&
+      value.outcome !== "conflict" &&
+      value.outcome !== "unknown_provider" &&
+      value.outcome !== "unsupported" &&
+      value.outcome !== "storage_failure" &&
+      value.outcome !== "unavailable")
+  ) {
+    return undefined;
+  }
+  const outcome = value.outcome as AuthCommandResult["outcome"];
+  // The unavailable DTO carries a minimal value-free state (no path exists
+  // while the authority is not running); every other outcome requires a
+  // normal non-empty projection.
+  const state = decodeCredentialProjection(value.state, {
+    allowEmptyPath: outcome === "unavailable",
+  });
+  if (state === undefined) return undefined;
+  const options =
+    value.options === undefined
+      ? undefined
+      : decodeAuthOptionsProjection(value.options);
+  if (value.options !== undefined && options === undefined) return undefined;
+  if (outcome !== "ok") {
+    if (typeof value.error !== "string" || value.error.length === 0) {
+      return undefined;
+    }
+    // Non-ok outcomes never carry a projection; a failed query reports a
+    // fixed value-free error instead.
+    if (options !== undefined) return undefined;
+    return Object.freeze({ outcome, state, error: value.error });
+  }
+  if (typeof value.error === "string") return undefined;
+  if (command.command === "query") {
+    if (options === undefined) return undefined;
+    return Object.freeze({ outcome, state, options });
+  }
+  // login: never carries the options projection.
+  if (options !== undefined) return undefined;
+  return Object.freeze({ outcome, state });
 }
 
 export function decodeSettingsCommandResult(
@@ -2226,6 +2576,34 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
         type: "credential_command",
         requestId,
         command,
+      },
+    };
+  }
+  if (value.type === "auth_command") {
+    const command = decodeAuthCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "auth_command",
+        requestId,
+        command,
+      },
+    };
+  }
+  if (value.type === "auth_interaction_response") {
+    const response = decodeAuthInteractionResponse(value.response);
+    if (response === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "auth_interaction_response",
+        requestId,
+        response,
       },
     };
   }
@@ -2763,6 +3141,42 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       type: "credential_command_result",
       requestId,
       result: value.result as unknown as CredentialCommandResult,
+    };
+  }
+  if (value.type === "auth_command_result") {
+    // The full per-command result validation happens against the client's
+    // own command (executeAuthCommand); the host already validated this
+    // result before writing it. Only the shared fields are checked here so
+    // a malformed frame is still rejected at the wire boundary.
+    if (
+      !isRecord(value.result) ||
+      (value.result.outcome !== "ok" &&
+        value.result.outcome !== "cancelled" &&
+        value.result.outcome !== "failed" &&
+        value.result.outcome !== "conflict" &&
+        value.result.outcome !== "unknown_provider" &&
+        value.result.outcome !== "unsupported" &&
+        value.result.outcome !== "storage_failure" &&
+        value.result.outcome !== "unavailable") ||
+      decodeCredentialProjection(value.result.state, {
+        allowEmptyPath: value.result.outcome === "unavailable",
+      }) === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      type: "auth_command_result",
+      requestId,
+      result: value.result as unknown as AuthCommandResult,
+    };
+  }
+  if (value.type === "auth_interaction_event") {
+    const event = decodeAuthInteractionEvent(value.event);
+    if (event === undefined) return undefined;
+    return {
+      type: "auth_interaction_event",
+      requestId,
+      event,
     };
   }
   if (value.type === "catalog_command_result") {

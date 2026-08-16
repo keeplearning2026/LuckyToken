@@ -640,6 +640,166 @@ export interface CredentialCommandResult {
   readonly entries?: readonly CredentialImportApplyEntryResult[];
 }
 
+/**
+ * Ticket 13 — Provider-owned account/subscription authentication projection.
+ *
+ * The top-level UI choices are exactly "Use an account or subscription" and
+ * "Use an API key". Only Provider metadata may mark a flow as a true
+ * subscription: `subscription` below is `provider.auth.oauth.isSubscription`
+ * and nothing else may label a flow. The Provider owns every authentication
+ * step; the renderer projects typed interaction events and never branches on
+ * Provider ids or implements Provider-specific OAuth/API-key protocols.
+ */
+
+/** One Provider's interactive login options, projected from Provider
+ *  metadata only (never renderer labels). */
+export interface AuthProviderOption {
+  readonly providerId: string;
+  readonly name: string;
+  /** The Provider declares an account/OAuth login. */
+  readonly account: boolean;
+  /** True only when Provider metadata (`oauth.isSubscription`) marks the
+   *  account flow as a real subscription; OAuth/account alone is never
+   *  mislabeled as a subscription. */
+  readonly subscription: boolean;
+  /** Provider-declared label for the account login option. */
+  readonly accountLabel?: string;
+  /** The Provider declares API-key auth (the Ticket 12 stored-value path). */
+  readonly apiKey: boolean;
+  /** Provider-declared label for the API-key login option. */
+  readonly apiKeyLabel?: string;
+  /** Bounded effective authentication status facts (Ticket 12 shape). */
+  readonly status: ProviderAuthStatus;
+}
+
+/** The authoritative per-Provider login options for one auth query. */
+export interface AuthOptionsProjection {
+  readonly providers: readonly AuthProviderOption[];
+}
+
+export interface AuthInfoLink {
+  readonly url: string;
+  readonly label?: string;
+}
+
+/** One option of a Provider-owned select prompt. */
+export interface AuthPromptOption {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+}
+
+/**
+ * Typed interaction events projected from the Provider-owned
+ * AuthInteraction. Browser/device URLs are always visible and copyable
+ * (opening is an OS capability of the thin desktop shell, with a manual
+ * fallback); prompts carry a correlation id so responses never cross
+ * flows. No credential or code value ever leaves the flow. Cancellation,
+ * success and failure are terminal outcomes of the login command result.
+ */
+export type AuthInteractionEvent =
+  | {
+      readonly type: "info";
+      readonly message: string;
+      readonly links?: readonly AuthInfoLink[];
+    }
+  | {
+      readonly type: "auth_url";
+      readonly url: string;
+      readonly instructions?: string;
+    }
+  | {
+      readonly type: "device_code";
+      readonly userCode: string;
+      readonly verificationUri: string;
+      readonly intervalSeconds?: number;
+      readonly expiresInSeconds?: number;
+    }
+  | { readonly type: "progress"; readonly message: string }
+  | {
+      readonly type: "prompt";
+      readonly promptId: string;
+      readonly kind: "text" | "secret" | "manual_code" | "select";
+      readonly message: string;
+      readonly placeholder?: string;
+      readonly options?: readonly AuthPromptOption[];
+    };
+
+/** A client response inside one in-flight Provider-owned login flow. */
+export type AuthInteractionResponse =
+  | {
+      readonly type: "prompt_response";
+      readonly promptId: string;
+      readonly value: string;
+    }
+  | { readonly type: "cancel" };
+
+/**
+ * The interaction channel the Control Plane host provides to the auth
+ * command handler for one in-flight login: `notify` projects typed events
+ * to the client, `prompt` waits for the client's response to a typed
+ * prompt, and `signal` aborts the whole flow (connection lost, cancel).
+ */
+export interface AuthInteractionChannel {
+  readonly signal: AbortSignal;
+  notify(event: AuthInteractionEvent): Promise<void>;
+  prompt(input: {
+    readonly kind: "text" | "secret" | "manual_code" | "select";
+    readonly message: string;
+    readonly placeholder?: string;
+    readonly options?: readonly AuthPromptOption[];
+  }): Promise<string>;
+}
+
+/**
+ * Versioned Provider-auth commands (Ticket 13): `query` returns the
+ * per-Provider login options plus the refreshed effective authentication
+ * status; `login` runs a Provider-owned login flow through the typed
+ * interaction channel and atomically persists the returned credential
+ * through the Ticket 12 Credential Authority's serialization seam (the
+ * same store and revision machinery — no second credential authority). UI
+ * and CLI use this same contract. Logout stays on the Ticket 12
+ * credential channel: it is the same backend contract surface.
+ */
+export type AuthCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "login";
+      readonly providerId: string;
+      readonly authType: "oauth" | "api_key";
+    };
+
+export type AuthCommandOutcome =
+  | "ok"
+  | "cancelled"
+  | "failed"
+  | "conflict"
+  | "unknown_provider"
+  | "unsupported"
+  | "storage_failure"
+  | "unavailable";
+
+export interface AuthCommandResult {
+  readonly outcome: AuthCommandOutcome;
+  /** Authoritative sanitized auth.json projection after the attempt. */
+  readonly state: CredentialProjection;
+  /** Present on query: the per-Provider login options. */
+  readonly options?: AuthOptionsProjection;
+  /** Value-free failure detail (fixed templates; never raw errors). */
+  readonly error?: string;
+}
+
+/**
+ * Handles versioned Provider-auth commands. The interaction channel is
+ * live only for a `login` command; `query` never uses it. Implementations
+ * must keep failure messages value-free and must never delete an
+ * unrelated Provider's credential.
+ */
+export type AuthCommandHandler = (
+  command: AuthCommand,
+  interaction: AuthInteractionChannel,
+) => Promise<AuthCommandResult>;
+
 export type SettingsCommand =
   | {
       readonly command: "query";
@@ -990,6 +1150,20 @@ export interface ControlPlaneClient {
   executeCredentialCommand(
     command: CredentialCommand,
   ): Promise<CredentialCommandResult>;
+
+  /** Ticket 13: run a versioned Provider-auth command; interaction events
+   *  of an in-flight login are delivered to `onInteraction` until the
+   *  command resolves with its terminal outcome. Prompt responses and
+   *  cancellation are sent with `respondAuthInteraction`. */
+  executeAuthCommand(
+    command: AuthCommand,
+    onInteraction?: (event: AuthInteractionEvent) => void,
+  ): Promise<AuthCommandResult>;
+
+  /** Ticket 13: send a prompt response or cancellation into the one
+   *  in-flight login flow of this connection. Rejects when no login is
+   *  pending or the response is invalid. */
+  respondAuthInteraction(response: AuthInteractionResponse): Promise<void>;
 
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;

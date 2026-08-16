@@ -9,15 +9,17 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    AliasCommand, AliasCommandResultWire, AutoStartAction, CatalogCommand,
-    CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire,
-    ClientTokenScopeWire, CredentialCommand, CredentialCommandResultWire,
-    CredentialImportSelectionWire, DiagnosticsWarningWire, ModelsCommand,
-    NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand, SettingsCommand,
+    decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AuthCommandResultWire,
+    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
+    ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
+    CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
+    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RuntimeCommand,
+    SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
-    AutoStartDto, ShellBridge, ShellStateDto, ShellStateEmitter, TauriMainWindowEmitter,
+    AuthEventEmitter, AutoStartDto, ShellBridge, ShellStateDto, ShellStateEmitter,
+    TauriAuthEventEmitter, TauriMainWindowEmitter,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -323,6 +325,79 @@ async fn shell_credentials_import_apply(
         .await
 }
 
+#[tauri::command]
+async fn shell_auth_query(state: State<'_, ShellBridge>) -> Result<AuthCommandResultWire, ()> {
+    state.auth_query().await
+}
+
+#[tauri::command]
+async fn shell_auth_login(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+    provider_id: String,
+    auth_type: String,
+) -> Result<AuthCommandResultWire, String> {
+    if auth_type != "oauth" && auth_type != "api_key" {
+        return Err("Unsupported sign-in type".to_owned());
+    }
+    let emitter: Arc<dyn AuthEventEmitter> = Arc::new(TauriAuthEventEmitter::new(app));
+    state.auth_login(provider_id, auth_type, emitter).await
+}
+
+#[tauri::command]
+async fn shell_auth_respond(
+    state: State<'_, ShellBridge>,
+    response: serde_json::Value,
+) -> Result<(), String> {
+    let response = decode_auth_interaction_response(&response).ok_or_else(|| {
+        "The sign-in response is not valid. Continue the current sign-in or cancel it.".to_owned()
+    })?;
+    state.auth_respond(&response).await
+}
+
+#[tauri::command]
+async fn shell_open_url(url: String) -> Result<(), ()> {
+    open_authorized_url(&url)
+}
+
+/// OS browser opening (Ticket 13): the thin desktop shell owns URL
+/// opening — the renderer never opens URLs itself. Only http/https URLs
+/// pass the strict allowlist; the UI always keeps the URL visible and
+/// copyable as the manual fallback. rundll32's FileProtocolHandler is
+/// used so no extra crate is introduced for one OS capability.
+fn open_authorized_url(url: &str) -> Result<(), ()> {
+    if !is_authorized_http_url(url) {
+        return Err(());
+    }
+    std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| ())
+}
+
+/// Strict http/https allowlist: no scheme outside http(s), a non-empty
+/// host without credentials, and no whitespace, control characters or
+/// quotes anywhere in the URL.
+fn is_authorized_http_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let Some(host) = rest.split(['/', '?', '#']).next() else {
+        return false;
+    };
+    !host.is_empty()
+        && !host.contains('@')
+        && !url.contains('"')
+        && !url.contains('\'')
+        && !url.chars().any(char::is_whitespace)
+        && !url.chars().any(char::is_control)
+}
+
 async fn run_models_command(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -553,6 +628,10 @@ fn main() {
             shell_credentials_logout,
             shell_credentials_import_preview,
             shell_credentials_import_apply,
+            shell_auth_query,
+            shell_auth_login,
+            shell_auth_respond,
+            shell_open_url,
             shell_catalog_query,
             shell_catalog_refresh,
             shell_aliases_query,
@@ -566,4 +645,41 @@ fn main() {
             tauri::async_runtime::block_on(bridge.shutdown());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_authorized_http_url, open_authorized_url};
+
+    #[test]
+    fn authorized_http_url_allowlist_rejects_non_http_and_tainted_urls() {
+        assert!(is_authorized_http_url(
+            "https://example.com/authorize?client=abc"
+        ));
+        assert!(is_authorized_http_url("http://127.0.0.1:3000/callback"));
+        assert!(is_authorized_http_url(
+            "https://example.com/device?code=FAKE-USER-CODE"
+        ));
+        // Non-http schemes never open.
+        assert!(!is_authorized_http_url(
+            "file:///C:/Windows/System32/calc.exe"
+        ));
+        assert!(!is_authorized_http_url("javascript:alert(1)"));
+        assert!(!is_authorized_http_url("ftp://example.com/file"));
+        // Credentials, empty hosts and tainted characters never open.
+        assert!(!is_authorized_http_url("https://user:pass@example.com"));
+        assert!(!is_authorized_http_url("https://"));
+        assert!(!is_authorized_http_url(""));
+        assert!(!is_authorized_http_url(
+            "https://example.com/path with space"
+        ));
+        assert!(!is_authorized_http_url("https://example.com/\"quoted\""));
+        assert!(!is_authorized_http_url("https://example.com/\nline"));
+    }
+
+    #[test]
+    fn opening_an_unauthorized_url_never_spawns_an_os_process() {
+        assert!(open_authorized_url("file:///C:/Windows/System32/calc.exe").is_err());
+        assert!(open_authorized_url("javascript:alert(1)").is_err());
+    }
 }

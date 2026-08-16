@@ -9,6 +9,10 @@ import {
   type AliasCommandResult,
   type ApplicationCommand,
   type ApplicationCommandResult,
+  type AuthCommand,
+  type AuthCommandResult,
+  type AuthInteractionEvent,
+  type AuthInteractionResponse,
   type CatalogCommand,
   type CatalogCommandResult,
   type ClientTokenCommand,
@@ -33,6 +37,7 @@ import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
   decodeAliasCommandResult,
+  decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
@@ -52,6 +57,15 @@ interface PendingRequest {
   readonly reject: (error: Error) => void;
 }
 
+/** One in-flight Provider-auth flow (Ticket 13): interaction events are
+ *  dispatched to the caller until the terminal result arrives. */
+interface PendingAuthFlow {
+  readonly command: AuthCommand;
+  readonly onInteraction: (event: AuthInteractionEvent) => void;
+  readonly resolve: (result: AuthCommandResult) => void;
+  readonly reject: (error: Error) => void;
+}
+
 export async function connectApplicationControlPlane(
   endpoint: ControlPlaneEndpoint,
   dependencies: ControlPlaneClientDependencies,
@@ -61,6 +75,8 @@ export async function connectApplicationControlPlane(
     endpoint.pipeName,
   );
   const pending = new Map<string, PendingRequest>();
+  const pendingAuth = new Map<string, PendingAuthFlow>();
+  let activeAuthRequestId: string | undefined;
   let listener: ((event: StatusEvent) => void) | undefined;
   let diagnosticsListener:
     ((event: RuntimeDiagnosticEvent) => void) | undefined;
@@ -77,6 +93,8 @@ export async function connectApplicationControlPlane(
     settled = true;
     for (const request of pending.values()) request.reject(error);
     pending.clear();
+    for (const flow of pendingAuth.values()) flow.reject(error);
+    pendingAuth.clear();
     resolveDisconnect?.({ reason });
   };
 
@@ -107,14 +125,42 @@ export async function connectApplicationControlPlane(
           continue;
         }
         const request = pending.get(message.requestId);
-        if (request === undefined) continue;
-        pending.delete(message.requestId);
-        if (message.type === "error") {
-          request.reject(
-            new Error(`Control Plane request failed: ${message.code}`),
-          );
-        } else {
-          request.resolve(message);
+        if (request !== undefined) {
+          pending.delete(message.requestId);
+          if (message.type === "error") {
+            request.reject(
+              new Error(`Control Plane request failed: ${message.code}`),
+            );
+          } else {
+            request.resolve(message);
+          }
+          continue;
+        }
+        // Ticket 13: auth interaction events and the terminal result of an
+        // in-flight login are routed by their flow requestId, never through
+        // the generic request/response machinery.
+        if (message.type === "auth_interaction_event") {
+          const flow = pendingAuth.get(message.requestId);
+          if (flow !== undefined) {
+            try {
+              flow.onInteraction(message.event);
+            } catch {
+              // A listener failure never tears down the connection.
+            }
+          }
+          continue;
+        }
+        if (message.type === "auth_command_result") {
+          const flow = pendingAuth.get(message.requestId);
+          if (flow === undefined) continue;
+          pendingAuth.delete(message.requestId);
+          const result = decodeAuthCommandResult(message.result, flow.command);
+          if (result === undefined) {
+            flow.reject(new Error("Control Plane response is malformed"));
+          } else {
+            flow.resolve(result);
+          }
+          continue;
         }
       }
     } catch (error) {
@@ -251,6 +297,84 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return result;
+    },
+    async executeAuthCommand(
+      command: AuthCommand,
+      onInteraction?: (event: AuthInteractionEvent) => void,
+    ): Promise<AuthCommandResult> {
+      // A login command stays pending across typed interaction events; it
+      // resolves only with the terminal `auth_command_result` frame.
+      if (settled) {
+        throw new Error("Control Plane request is unavailable");
+      }
+      const requestId = decodeRequestId(dependencies.createRequestId());
+      if (
+        requestId === undefined ||
+        pending.has(requestId) ||
+        pendingAuth.has(requestId)
+      ) {
+        throw new Error("Control Plane request is unavailable");
+      }
+      const result = new Promise<AuthCommandResult>((resolve, reject) => {
+        pendingAuth.set(requestId, {
+          command,
+          onInteraction: onInteraction ?? (() => undefined),
+          resolve,
+          reject,
+        });
+        // The host allows one in-flight login per connection: the first
+        // login owns the interaction response slot until it settles.
+        if (command.command === "login" && activeAuthRequestId === undefined) {
+          activeAuthRequestId = requestId;
+        }
+      });
+      void result.catch(() => undefined);
+      void result.then(
+        () => {
+          if (activeAuthRequestId === requestId) activeAuthRequestId = undefined;
+        },
+        () => {
+          if (activeAuthRequestId === requestId) activeAuthRequestId = undefined;
+        },
+      );
+      try {
+        await writeFrame(connection, {
+          type: "auth_command",
+          command,
+          requestId,
+        });
+      } catch (error) {
+        const safeError =
+          error instanceof Error
+            ? new Error(`Control Plane disconnected: ${error.message}`)
+            : new Error("Control Plane disconnected");
+        settle("transport_lost", safeError);
+        await connection.close().catch(() => undefined);
+      }
+      return result;
+    },
+    async respondAuthInteraction(
+      response: AuthInteractionResponse,
+    ): Promise<void> {
+      const requestId = activeAuthRequestId;
+      if (settled || requestId === undefined || !pendingAuth.has(requestId)) {
+        throw new Error("No sign-in is waiting for a response");
+      }
+      try {
+        await writeFrame(connection, {
+          type: "auth_interaction_response",
+          requestId,
+          response,
+        });
+      } catch (error) {
+        const safeError =
+          error instanceof Error
+            ? new Error(`Control Plane disconnected: ${error.message}`)
+            : new Error("Control Plane disconnected");
+        settle("transport_lost", safeError);
+        await connection.close().catch(() => undefined);
+        throw safeError;
+      }
     },
     async getRequestIdentities(): Promise<RequestIdentitiesQueryResult> {
       const response = await request({ type: "get_request_identities" });

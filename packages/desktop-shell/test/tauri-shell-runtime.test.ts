@@ -522,3 +522,285 @@ describe("Tauri directory-scoped client token commands, picker, and request iden
     );
   });
 });
+
+describe("Tauri shell runtime auth seam (Ticket 13)", () => {
+  it("queries the Provider login options through the native bridge", async () => {
+    const calls: string[] = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command) => {
+        calls.push(command);
+        return {
+          outcome: "ok",
+          state: {
+            revision: 1,
+            path: "C:\auth.json",
+            present: false,
+            valid: false,
+            providers: [],
+          },
+          options: {
+            providers: [
+              {
+                providerId: "anthropic",
+                name: "Anthropic",
+                account: true,
+                subscription: true,
+                apiKey: true,
+                status: {
+                  providerId: "anthropic",
+                  stored: false,
+                  environment: false,
+                  modelsJson: false,
+                  commandDerived: false,
+                  expired: false,
+                  unavailable: true,
+                  effectiveSource: "none",
+                },
+              },
+            ],
+          },
+        };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    const result = await runtime.executeAuthCommand({ command: "query" });
+
+    expect(calls).toEqual(["shell_auth_query"]);
+    expect(result.outcome).toBe("ok");
+    expect(result.options?.providers[0]).toMatchObject({
+      providerId: "anthropic",
+      subscription: true,
+    });
+  });
+
+  it("login listens to the auth-event channel, forwards decoded events and unlistens on the terminal result", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    let authListener:
+      | ((event: { readonly payload: unknown }) => void)
+      | undefined;
+    let unlistened = 0;
+    let invokeLogin: (() => void) | undefined;
+    const received: unknown[] = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      listenAuthEvent: async (listener) => {
+        authListener = listener;
+        return () => {
+          unlistened += 1;
+        };
+      },
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        if (command === "shell_auth_login") {
+          // Typed events arrive on the auth channel while the login is
+          // pending, then the terminal result resolves the invoke.
+          authListener?.({
+            payload: {
+              type: "auth_url",
+              url: "https://example.com/authorize",
+            },
+          });
+          authListener?.({
+            payload: {
+              type: "prompt",
+              promptId: "p1",
+              kind: "text",
+              message: "Enter the code",
+            },
+          });
+          return new Promise((resolve) => {
+            invokeLogin = () =>
+              resolve({
+                outcome: "ok",
+                state: {
+                  revision: 2,
+                  path: "C:\auth.json",
+                  present: true,
+                  valid: true,
+                  providers: [],
+                },
+              });
+          });
+        }
+        return undefined;
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    const pending = runtime.executeAuthCommand(
+      { command: "login", providerId: "anthropic", authType: "oauth" },
+      (event) => received.push(event),
+    );
+    // The listener registration resolves, the login invoke starts and the
+    // typed events are delivered — then the terminal result resolves it.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(calls[0]).toEqual({
+      command: "shell_auth_login",
+      args: { providerId: "anthropic", authType: "oauth" },
+    });
+    // The events were forwarded decoded, in order, before the result.
+    expect(received).toHaveLength(2);
+    expect(received[0]).toMatchObject({ type: "auth_url" });
+    expect(received[1]).toMatchObject({ type: "prompt", promptId: "p1" });
+    invokeLogin?.();
+    const result = await pending;
+    expect(result.outcome).toBe("ok");
+    expect(unlistened).toBe(1);
+  });
+
+  it("an undecodable interaction event fails the whole login flow", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      listenAuthEvent: async (listener) => {
+        listener({
+          payload: { type: "evil", secret: "canary-runtime-secret" },
+        });
+        return () => undefined;
+      },
+      invoke: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 2,
+          path: "C:\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await expect(
+      runtime.executeAuthCommand({
+        command: "login",
+        providerId: "anthropic",
+        authType: "oauth",
+      }),
+    ).rejects.toThrow("invalid auth interaction event");
+  });
+
+  it("rejects a login result that carries the options projection", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      listenAuthEvent: async () => () => undefined,
+      invoke: async () => ({
+        outcome: "ok",
+        state: {
+          revision: 2,
+          path: "C:\auth.json",
+          present: true,
+          valid: true,
+          providers: [],
+        },
+        options: { providers: [] },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await expect(
+      runtime.executeAuthCommand({
+        command: "login",
+        providerId: "anthropic",
+        authType: "oauth",
+      }),
+    ).rejects.toThrow("invalid auth result");
+  });
+
+  it("routes typed responses through the native bridge", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        return undefined;
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await runtime.respondAuthInteraction({
+      type: "prompt_response",
+      promptId: "p1",
+      value: "FAKE-CODE",
+    });
+
+    expect(calls).toEqual([
+      {
+        command: "shell_auth_respond",
+        args: {
+          response: { type: "prompt_response", promptId: "p1", value: "FAKE-CODE" },
+        },
+      },
+    ]);
+  });
+
+  it("opens only http(s) URLs through the native shell", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        return undefined;
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await runtime.openUrl("https://example.com/authorize");
+    await runtime.openUrl("http://127.0.0.1:3000/callback");
+    await expect(runtime.openUrl("file:///C:/secret")).rejects.toThrow(
+      "non-http(s)",
+    );
+    await expect(runtime.openUrl("javascript:alert(1)")).rejects.toThrow(
+      "non-http(s)",
+    );
+
+    expect(calls).toEqual([
+      { command: "shell_open_url", args: { url: "https://example.com/authorize" } },
+      { command: "shell_open_url", args: { url: "http://127.0.0.1:3000/callback" } },
+    ]);
+  });
+});
+
+describe("Tauri shell runtime auth conflict seam (Ticket 13 repair)", () => {
+  it("surfaces the value-free conflict rejection of a refused concurrent login", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      listenAuthEvent: async () => () => undefined,
+      invoke: async () => {
+        throw new Error(
+          "Another sign-in is already in progress. Wait for it to finish, then try again.",
+        );
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await expect(
+      runtime.executeAuthCommand({
+        command: "login",
+        providerId: "anthropic",
+        authType: "oauth",
+      }),
+    ).rejects.toThrow("Another sign-in is already in progress.");
+  });
+
+  it("surfaces the stale-response rejection of the active flow", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => {
+        throw new Error(
+          "The sign-in is no longer waiting for that response. Continue the current sign-in or cancel it.",
+        );
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await expect(
+      runtime.respondAuthInteraction({
+        type: "prompt_response",
+        promptId: "stale-prompt",
+        value: "FAKE-CODE",
+      }),
+    ).rejects.toThrow("The sign-in is no longer waiting for that response.");
+  });
+});

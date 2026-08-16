@@ -11,8 +11,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient},
+    sync::{oneshot, Notify},
 };
 
 use crate::native_discovery::{DiscoveryFailure, NativeControlPlaneDiscovery};
@@ -427,6 +428,47 @@ impl CredentialCommand {
     }
 }
 
+/// Versioned Provider-auth commands (Ticket 13): `query` returns the
+/// per-Provider login options plus the refreshed effective authentication
+/// status; `login` runs a Provider-owned interactive flow through the
+/// typed interaction channel. Rust stays a thin allowlisted transport: no
+/// Provider branches or auth state machine ever live here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AuthCommand {
+    Query,
+    Login {
+        provider_id: String,
+        auth_type: String,
+        /// Per-flow correlation id stamped on the command frame, the
+        /// interaction events and the interaction responses.
+        request_id: String,
+    },
+}
+
+impl AuthCommand {
+    fn request_id(&self) -> &str {
+        match self {
+            Self::Query => "desktop-auth-query",
+            Self::Login { request_id, .. } => request_id,
+        }
+    }
+
+    fn wire(&self) -> Value {
+        match self {
+            Self::Query => json!({ "command": "query" }),
+            Self::Login {
+                provider_id,
+                auth_type,
+                ..
+            } => json!({
+                "command": "login",
+                "providerId": provider_id,
+                "authType": auth_type,
+            }),
+        }
+    }
+}
+
 pub(crate) enum ConnectResult {
     Connected(Box<dyn ControlPlaneSession>),
     VersionMismatch {
@@ -598,10 +640,14 @@ pub(crate) type CredentialCommandFuture = Pin<
             + 'static,
     >,
 >;
-
 pub(crate) type AliasCommandFuture = Pin<
     Box<dyn Future<Output = Result<AliasCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type AuthQueryFuture = Pin<
+    Box<dyn Future<Output = Result<AuthCommandResultWire, ConnectionFailure>> + Send + 'static>,
+>;
+pub(crate) type AuthLoginFuture =
+    Pin<Box<dyn Future<Output = Result<AuthLoginStart, ConnectionFailure>> + Send + 'static>>;
 
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
@@ -618,6 +664,16 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn credential_command(&self, _command: CredentialCommand) -> CredentialCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn auth_query(&self) -> AuthQueryFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn auth_login(
+        &self,
+        _command: AuthCommand,
+        _on_event: Box<dyn FnMut(Value) + Send + 'static>,
+    ) -> AuthLoginFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn diagnostics_warnings(&self) -> DiagnosticsWarningsFuture {
@@ -739,6 +795,147 @@ pub(crate) struct CredentialCommandResultWire {
     pub(crate) preview_entries: Option<Vec<CredentialImportEntryPreviewWire>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) entries: Option<Vec<CredentialImportApplyEntryResultWire>>,
+}
+
+/// Versioned Provider-auth result envelope (Ticket 13): the sanitized
+/// auth.json projection (the same strict shape as the Ticket 12 credential
+/// command — credential values can never pass), the Provider-declared
+/// options as opaque JSON (the renderer re-decodes them strictly), and a
+/// value-free error. Non-ok outcomes never carry options; a login result
+/// never carries options.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct AuthCommandResultWire {
+    pub(crate) outcome: String,
+    pub(crate) state: CredentialProjectionWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) options: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+/// A typed client response routed into one in-flight Provider-owned login
+/// flow (Ticket 13). Only the two allowlisted shapes exist; the response
+/// carries a prompt correlation id so answers never cross flows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AuthInteractionResponse {
+    PromptResponse { prompt_id: String, value: String },
+    Cancel,
+}
+
+impl AuthInteractionResponse {
+    fn wire(&self) -> Value {
+        match self {
+            Self::PromptResponse { prompt_id, value } => json!({
+                "type": "prompt_response",
+                "promptId": prompt_id,
+                "value": value,
+            }),
+            Self::Cancel => json!({ "type": "cancel" }),
+        }
+    }
+}
+
+/// Strict response decode at the native bridge: only the two allowlisted
+/// shapes pass; anything else is rejected before it reaches the pipe.
+pub(crate) fn decode_auth_interaction_response(value: &Value) -> Option<AuthInteractionResponse> {
+    let object = value.as_object()?;
+    match object.get("type").and_then(Value::as_str) {
+        Some("cancel") => Some(AuthInteractionResponse::Cancel),
+        Some("prompt_response") => {
+            let prompt_id = object.get("promptId").and_then(Value::as_str)?;
+            let value = object.get("value").and_then(Value::as_str)?;
+            if prompt_id.is_empty() {
+                return None;
+            }
+            Some(AuthInteractionResponse::PromptResponse {
+                prompt_id: prompt_id.to_owned(),
+                value: value.to_owned(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The long-lived login session handle: the write half stays in the shell
+/// bridge so typed responses can be routed into the flow. Dropping the
+/// session aborts the reader loop and closes the pipe, so a replaced or
+/// shut-down login can never keep forwarding events and the Control Plane
+/// host sees the connection loss and aborts the Provider-owned flow.
+///
+/// The session also owns the flow's correlation id (stamped on every
+/// response frame) and the current pending prompt id: a `prompt_response`
+/// whose prompt id does not match the flow's outstanding prompt is
+/// rejected locally and never written to the pipe, so a stale response
+/// from an earlier completed/cancelled flow can never reach — or tear
+/// down — the active flow.
+pub(crate) struct AuthLoginSession {
+    pub(crate) write: tokio::io::WriteHalf<NamedPipeClient>,
+    request_id: String,
+    current_prompt: Arc<tokio::sync::Mutex<Option<String>>>,
+    pub(crate) cancel: Arc<Notify>,
+}
+
+impl Drop for AuthLoginSession {
+    fn drop(&mut self) {
+        self.cancel.notify_one();
+    }
+}
+
+impl AuthLoginSession {
+    /// The per-flow correlation id stamped on the command/event/response
+    /// frames of this login.
+    pub(crate) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    /// Routes one typed response into the active login flow. A
+    /// `prompt_response` must match the flow's current pending prompt id
+    /// (the prompt the reader loop last forwarded); a mismatch — a stale
+    /// response from an earlier flow, or a duplicate of an already
+    /// answered prompt — is rejected before anything is written. `cancel`
+    /// is always valid. After a successful write the pending slot is
+    /// cleared until the next prompt event arrives.
+    pub(crate) async fn respond(
+        &mut self,
+        response: &AuthInteractionResponse,
+    ) -> Result<(), ConnectionFailure> {
+        if let AuthInteractionResponse::PromptResponse { prompt_id, .. } = response {
+            let mut pending = self.current_prompt.lock().await;
+            if pending.as_deref() != Some(prompt_id.as_str()) {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            write_json_frame(
+                &mut self.write,
+                &json!({
+                    "type": "auth_interaction_response",
+                    "requestId": self.request_id,
+                    "response": response.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            *pending = None;
+            return Ok(());
+        }
+        write_json_frame(
+            &mut self.write,
+            &json!({
+                "type": "auth_interaction_response",
+                "requestId": self.request_id,
+                "response": response.wire(),
+            }),
+        )
+        .await
+        .map_err(FrameFailure::connection_failure)
+    }
+}
+
+/// The start of one login flow: the shared session handle plus the
+/// terminal result, resolved by the reader loop once the Control Plane
+/// answers the login command.
+pub(crate) struct AuthLoginStart {
+    pub(crate) session: AuthLoginSession,
+    pub(crate) result: oneshot::Receiver<Result<AuthCommandResultWire, ConnectionFailure>>,
 }
 
 /// Sanitized Dashboard warning projection: only the safe fields of a
@@ -1027,6 +1224,40 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_credential_command_session(&pipe_name, capability, command).await
+        })
+    }
+
+    fn auth_query(&self) -> AuthQueryFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_auth_query_session(&pipe_name, capability).await
+        })
+    }
+
+    fn auth_login(
+        &self,
+        command: AuthCommand,
+        on_event: Box<dyn FnMut(Value) + Send + 'static>,
+    ) -> AuthLoginFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_auth_login_session(&pipe_name, capability, command, on_event).await
         })
     }
 
@@ -1680,6 +1911,282 @@ fn decode_credential_command_result(
     Ok(wire)
 }
 
+/// One-shot auth query (Ticket 13): negotiate, send the query, and expect
+/// exactly one result frame — the host never emits interaction events for
+/// a query (it runs with a no-op channel), so any other frame is a
+/// protocol error.
+async fn execute_auth_query_session(
+    pipe_name: &str,
+    capability: String,
+) -> Result<AuthCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "auth_command",
+                    "requestId": AuthCommand::Query.request_id(),
+                    "command": AuthCommand::Query.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_auth_command_result(&result, &AuthCommand::Query)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// Long-lived login session (Ticket 13): negotiate, send the login
+/// command, then hand the pipe to a reader loop that forwards allowlisted
+/// typed interaction events to the renderer and resolves the flow with the
+/// terminal result. The returned session keeps the write half so typed
+/// responses can be routed into the flow; dropping it aborts the reader
+/// (the Control Plane host then sees the connection loss and aborts the
+/// Provider-owned flow).
+pub(crate) async fn execute_auth_login_session(
+    pipe_name: &str,
+    capability: String,
+    command: AuthCommand,
+    on_event: impl FnMut(Value) + Send + 'static,
+) -> Result<AuthLoginStart, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "auth_command",
+                    "requestId": command.request_id(),
+                    "command": command.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let (read, write) = split(pipe);
+            let (result_sender, result_receiver) = oneshot::channel();
+            let request_id = command.request_id().to_owned();
+            let cancel = Arc::new(Notify::new());
+            let current_prompt = Arc::new(tokio::sync::Mutex::new(None));
+            tokio::spawn(auth_login_reader(
+                read,
+                request_id.clone(),
+                command,
+                cancel.clone(),
+                current_prompt.clone(),
+                on_event,
+                result_sender,
+            ));
+            Ok(AuthLoginStart {
+                session: AuthLoginSession {
+                    write,
+                    request_id,
+                    current_prompt,
+                    cancel,
+                },
+                result: result_receiver,
+            })
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// The login reader loop: forwards allowlisted typed interaction events to
+/// the renderer and resolves the flow with the terminal result. Any other
+/// frame — including a malformed or secret-bearing event extension — is a
+/// protocol error; a closed pipe is a transport failure (the host aborts
+/// the flow on connection loss). The cancellation notify aborts the loop
+/// when the session is replaced or the shell shuts down, so a dead login
+/// never keeps forwarding events. Each forwarded prompt records its id as
+/// the flow's current pending prompt so `respond` can reject stale
+/// responses locally.
+async fn auth_login_reader<R>(
+    mut read: R,
+    request_id: String,
+    command: AuthCommand,
+    cancel: Arc<Notify>,
+    current_prompt: Arc<tokio::sync::Mutex<Option<String>>>,
+    mut on_event: impl FnMut(Value) + Send + 'static,
+    result_sender: oneshot::Sender<Result<AuthCommandResultWire, ConnectionFailure>>,
+) where
+    R: AsyncRead + Unpin,
+{
+    loop {
+        tokio::select! {
+            _ = cancel.notified() => {
+                let _ = result_sender.send(Err(ConnectionFailure::PipeUnavailable));
+                return;
+            }
+            frame = read_json_frame(&mut read) => {
+                match frame {
+                    Err(FrameFailure::Io) => {
+                        let _ = result_sender.send(Err(ConnectionFailure::PipeUnavailable));
+                        return;
+                    }
+                    Err(FrameFailure::Protocol) => {
+                        let _ = result_sender.send(Err(ConnectionFailure::ProtocolError));
+                        return;
+                    }
+                    Ok(value) => {
+                        if value.get("type").and_then(Value::as_str)
+                            == Some("auth_interaction_event")
+                            && value.get("requestId").and_then(Value::as_str)
+                                == Some(request_id.as_str())
+                        {
+                            match decode_auth_interaction_event(&value) {
+                                Some(event) => {
+                                    if event.get("type").and_then(Value::as_str)
+                                        == Some("prompt")
+                                    {
+                                        if let Some(prompt_id) =
+                                            event.get("promptId").and_then(Value::as_str)
+                                        {
+                                            *current_prompt.lock().await =
+                                                Some(prompt_id.to_owned());
+                                        }
+                                    }
+                                    on_event(event);
+                                    continue;
+                                }
+                                None => {
+                                    let _ = result_sender.send(Err(ConnectionFailure::ProtocolError));
+                                    return;
+                                }
+                            }
+                        }
+                        if value.get("type").and_then(Value::as_str)
+                            == Some("auth_command_result")
+                        {
+                            let _ = result_sender.send(decode_auth_command_result(&value, &command));
+                            return;
+                        }
+                        let _ = result_sender.send(Err(ConnectionFailure::ProtocolError));
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Allowlisted typed interaction event: only the five event kinds pass the
+/// native bridge; the payload rides as opaque JSON and the renderer
+/// strictly re-decodes it (the bridge is a trust boundary).
+fn decode_auth_interaction_event(value: &Value) -> Option<Value> {
+    let event = value.get("event")?;
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    matches!(
+        event_type,
+        "info" | "auth_url" | "device_code" | "progress" | "prompt"
+    )
+    .then(|| event.clone())
+}
+
+/// Strict auth result decode at the native bridge, validated against the
+/// command that produced it: `query` may carry the options projection,
+/// `login` never does; non-ok outcomes require a value-free error and
+/// never carry options; only the unavailable DTO may carry an empty path.
+fn decode_auth_command_result(
+    value: &Value,
+    command: &AuthCommand,
+) -> Result<AuthCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("auth_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let outcome = result.get("outcome").and_then(Value::as_str);
+    if !matches!(
+        outcome,
+        Some(
+            "ok" | "cancelled"
+                | "failed"
+                | "conflict"
+                | "unknown_provider"
+                | "unsupported"
+                | "storage_failure"
+                | "unavailable"
+        )
+    ) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let wire = serde_json::from_value::<AuthCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)?;
+    // The unavailable DTO carries a minimal value-free state (no path);
+    // every other outcome requires the normal non-empty projection.
+    if wire.state.path.is_empty() && outcome != Some("unavailable") {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    match outcome {
+        Some("ok") => {
+            // Value-free rule: an ok outcome never carries an error.
+            if wire.error.is_some() {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            match command {
+                AuthCommand::Query => {
+                    if wire.options.is_none() {
+                        return Err(ConnectionFailure::ProtocolError);
+                    }
+                }
+                AuthCommand::Login { .. } => {
+                    if wire.options.is_some() {
+                        return Err(ConnectionFailure::ProtocolError);
+                    }
+                }
+            }
+        }
+        _ => {
+            // Non-ok outcomes require a value-free error and never carry
+            // the options projection.
+            if wire.error.as_deref().is_none_or(str::is_empty) || wire.options.is_some() {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+    }
+    Ok(wire)
+}
+
 async fn execute_models_command_session(
     pipe_name: &str,
     capability: String,
@@ -1812,15 +2319,15 @@ fn decode_catalog_command_result(
         .get("snapshot")
         .and_then(Value::as_object)
         .ok_or(ConnectionFailure::ProtocolError)?;
-    if !snapshot.get("version").and_then(Value::as_u64).is_some()
-        || !snapshot
+    if snapshot.get("version").and_then(Value::as_u64).is_none()
+        || snapshot
             .get("providers")
             .and_then(Value::as_array)
-            .is_some()
-        || !snapshot
+            .is_none()
+        || snapshot
             .get("refreshErrors")
             .and_then(Value::as_array)
-            .is_some()
+            .is_none()
     {
         return Err(ConnectionFailure::ProtocolError);
     }
@@ -3628,6 +4135,572 @@ mod tests {
             .expect("preview task must not panic");
         assert_eq!(result.outcome, "ok");
         assert_eq!(result.preview_entries.as_ref().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
+    async fn auth_query_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_auth_query_session(&pipe_name, "desktop-test-capability".to_owned())
+                .await
+                .expect("auth query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        assert_eq!(
+            hello.get("contractVersion").and_then(Value::as_u64),
+            Some(CONTROL_PLANE_VERSION)
+        );
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("auth_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-auth-query")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("query")
+        );
+        server
+            .send(&json!({
+                "type": "auth_command_result",
+                "requestId": "desktop-auth-query",
+                "result": {
+                    "outcome": "ok",
+                    "state": {
+                        "revision": 1,
+                        "path": "C:\\auth.json",
+                        "present": false,
+                        "valid": false,
+                        "providers": []
+                    },
+                    "options": {
+                        "providers": [{
+                            "providerId": "anthropic",
+                            "name": "Anthropic",
+                            "account": true,
+                            "subscription": true,
+                            "apiKey": true,
+                            "status": {
+                                "providerId": "anthropic",
+                                "stored": false,
+                                "environment": false,
+                                "modelsJson": false,
+                                "commandDerived": false,
+                                "expired": false,
+                                "unavailable": false,
+                                "effectiveSource": "none"
+                            }
+                        }]
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("auth query must complete within the timeout")
+            .expect("auth query task must not panic");
+        assert_eq!(result.outcome, "ok");
+        let options = result.options.expect("query result must carry options");
+        assert_eq!(options["providers"][0]["providerId"], json!("anthropic"));
+        assert_eq!(
+            options["providers"][0]["subscription"],
+            json!(true),
+            "only Provider metadata may mark a flow as a true subscription"
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_login_session_forwards_typed_events_and_routes_responses() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let forwarded_events = events.clone();
+        let events_for_forward = events.clone();
+        let session_task = tokio::spawn(async move {
+            let mut session = execute_auth_login_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                AuthCommand::Login {
+                    provider_id: "anthropic".to_owned(),
+                    auth_type: "oauth".to_owned(),
+                    request_id: "desktop-auth-login-1".to_owned(),
+                },
+                move |event| events_for_forward.lock().unwrap().push(event),
+            )
+            .await
+            .expect("auth login must negotiate");
+            // Wait until both typed events are forwarded (the prompt event
+            // sets the flow's pending prompt slot) before answering.
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    let ready = {
+                        let captured = forwarded_events.lock().unwrap();
+                        captured.len() == 2
+                    };
+                    if ready {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("typed events must be forwarded before the response");
+            session
+                .session
+                .respond(&AuthInteractionResponse::PromptResponse {
+                    prompt_id: "p1".to_owned(),
+                    value: "FAKE-USER-CODE".to_owned(),
+                })
+                .await
+                .expect("response must route into the session");
+            session
+                .result
+                .await
+                .expect("login flow must resolve")
+                .expect("login flow must succeed")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("auth_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-auth-login-1")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("login")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("providerId"))
+                .and_then(Value::as_str),
+            Some("anthropic")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("authType"))
+                .and_then(Value::as_str),
+            Some("oauth")
+        );
+
+        // Two typed events arrive; both must be forwarded in order before
+        // the response routes back.
+        server
+            .send(&json!({
+                "type": "auth_interaction_event",
+                "requestId": "desktop-auth-login-1",
+                "event": {"type": "auth_url", "url": "https://example.com/authorize"}
+            }))
+            .await;
+        server
+            .send(&json!({
+                "type": "auth_interaction_event",
+                "requestId": "desktop-auth-login-1",
+                "event": {"type": "prompt", "promptId": "p1", "kind": "text", "message": "Enter the code"}
+            }))
+            .await;
+        let forwarded = timeout(Duration::from_secs(5), async {
+            loop {
+                let captured = {
+                    let captured = events.lock().unwrap();
+                    (captured.len() == 2).then(|| captured.clone())
+                };
+                if let Some(captured) = captured {
+                    break captured;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("typed events must be forwarded");
+        assert_eq!(forwarded[0]["type"], json!("auth_url"));
+        assert_eq!(forwarded[1]["promptId"], json!("p1"));
+
+        // The typed response must cross the pipe with the Rust-stamped
+        // request id.
+        let response = server.next_frame().await;
+        assert_eq!(
+            response.get("type").and_then(Value::as_str),
+            Some("auth_interaction_response")
+        );
+        assert_eq!(
+            response.get("requestId").and_then(Value::as_str),
+            Some("desktop-auth-login-1")
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("type"))
+                .and_then(Value::as_str),
+            Some("prompt_response")
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("promptId"))
+                .and_then(Value::as_str),
+            Some("p1")
+        );
+        assert_eq!(
+            response
+                .get("response")
+                .and_then(|raw| raw.get("value"))
+                .and_then(Value::as_str),
+            Some("FAKE-USER-CODE")
+        );
+
+        server
+            .send(&json!({
+                "type": "auth_command_result",
+                "requestId": "desktop-auth-login-1",
+                "result": {
+                    "outcome": "ok",
+                    "state": {
+                        "revision": 2,
+                        "path": "C:\\auth.json",
+                        "present": true,
+                        "valid": true,
+                        "providers": [{
+                            "providerId": "anthropic",
+                            "stored": true,
+                            "storedType": "oauth",
+                            "environment": false,
+                            "modelsJson": false,
+                            "commandDerived": false,
+                            "expired": false,
+                            "unavailable": false,
+                            "effectiveSource": "stored"
+                        }]
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("login must complete within the timeout")
+            .expect("login task must not panic");
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(
+            result.state.providers[0].stored_type.as_deref(),
+            Some("oauth")
+        );
+        assert!(
+            result.options.is_none(),
+            "a login result never carries options"
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_login_session_rejects_malformed_or_foreign_frames_as_protocol_errors() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            let session = execute_auth_login_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                AuthCommand::Login {
+                    provider_id: "anthropic".to_owned(),
+                    auth_type: "oauth".to_owned(),
+                    request_id: "desktop-auth-login-1".to_owned(),
+                },
+                |_| {},
+            )
+            .await
+            .expect("auth login must negotiate");
+            session
+                .result
+                .await
+                .expect("login flow must resolve")
+                .expect_err("a malformed event must fail the flow")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let _request = server.next_frame().await;
+        // A secret-bearing event outside the allowlist is a protocol
+        // error: it must never be forwarded to the renderer.
+        server
+            .send(&json!({
+                "type": "auth_interaction_event",
+                "requestId": "desktop-auth-login-1",
+                "event": {"type": "evil", "secret": "canary-native-secret"}
+            }))
+            .await;
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("login must fail within the timeout")
+            .expect("login task must not panic");
+        assert_eq!(result, ConnectionFailure::ProtocolError);
+    }
+
+    #[tokio::test]
+    async fn auth_login_session_rejects_foreign_frames_as_protocol_errors() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            let session = execute_auth_login_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                AuthCommand::Login {
+                    provider_id: "anthropic".to_owned(),
+                    auth_type: "oauth".to_owned(),
+                    request_id: "desktop-auth-login-1".to_owned(),
+                },
+                |_| {},
+            )
+            .await
+            .expect("auth login must negotiate");
+            session
+                .result
+                .await
+                .expect("login flow must resolve")
+                .expect_err("a foreign frame must fail the flow")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let _request = server.next_frame().await;
+        // A status frame on the auth connection is never a valid event or
+        // result: strict projection rejects it.
+        server
+            .send(&json!({
+                "type": "status_result",
+                "requestId": "desktop-status",
+                "snapshot": {
+                    "sequence": 1,
+                    "modelDataPlane": "running",
+                    "provider": "unconfigured"
+                }
+            }))
+            .await;
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("login must fail within the timeout")
+            .expect("login task must not panic");
+        assert_eq!(result, ConnectionFailure::ProtocolError);
+    }
+
+    #[test]
+    fn auth_command_result_rejects_value_free_violations() {
+        let query = AuthCommand::Query;
+        let login = AuthCommand::Login {
+            provider_id: "anthropic".to_owned(),
+            auth_type: "oauth".to_owned(),
+            request_id: "desktop-auth-login-1".to_owned(),
+        };
+        let state = json!({
+            "revision": 0,
+            "path": "C:\\auth.json",
+            "present": false,
+            "valid": false,
+            "providers": []
+        });
+        let valid_options = json!({"providers": []});
+        let frame = |result: Value| {
+            json!({
+                "type": "auth_command_result",
+                "requestId": "desktop-auth-query",
+                "result": result
+            })
+        };
+        // An ok query without options never decodes.
+        assert!(decode_auth_command_result(
+            &frame(json!({
+                "outcome": "ok",
+                "state": state.clone()
+            })),
+            &query
+        )
+        .is_err());
+        // An ok query never carries an error.
+        assert!(decode_auth_command_result(
+            &frame(json!({
+                "outcome": "ok",
+                "state": state.clone(),
+                "options": valid_options.clone(),
+                "error": "must not ride on ok"
+            })),
+            &query
+        )
+        .is_err());
+        // Non-ok outcomes require a value-free error.
+        assert!(decode_auth_command_result(
+            &frame(json!({
+                "outcome": "failed",
+                "state": state.clone(),
+                "error": ""
+            })),
+            &query
+        )
+        .is_err());
+        // Non-ok outcomes never carry options.
+        assert!(decode_auth_command_result(
+            &frame(json!({
+                "outcome": "failed",
+                "state": state.clone(),
+                "error": "Sign-in did not complete.",
+                "options": valid_options
+            })),
+            &query
+        )
+        .is_err());
+        // A login result never carries options.
+        let login_frame = |result: Value| {
+            json!({
+                "type": "auth_command_result",
+                "requestId": "desktop-auth-login-1",
+                "result": result
+            })
+        };
+        assert!(decode_auth_command_result(
+            &login_frame(json!({
+                "outcome": "ok",
+                "state": state.clone(),
+                "options": {"providers": []}
+            })),
+            &login
+        )
+        .is_err());
+        // The unavailable DTO may carry the minimal empty-path state.
+        let unavailable = decode_auth_command_result(
+            &frame(json!({
+                "outcome": "unavailable",
+                "state": {
+                    "revision": 0,
+                    "path": "",
+                    "present": false,
+                    "valid": false,
+                    "providers": []
+                },
+                "error": "Credential Authority is unavailable"
+            })),
+            &query,
+        )
+        .expect("the unavailable DTO must decode with its empty path");
+        assert_eq!(unavailable.outcome, "unavailable");
+        // A non-unavailable outcome with an empty path never decodes.
+        assert!(decode_auth_command_result(
+            &frame(json!({
+                "outcome": "ok",
+                "state": {
+                    "revision": 0,
+                    "path": "",
+                    "present": false,
+                    "valid": false,
+                    "providers": []
+                },
+                "options": {"providers": []}
+            })),
+            &query
+        )
+        .is_err());
+        // A valid ok query decodes with its options.
+        let decoded = decode_auth_command_result(
+            &frame(json!({
+                "outcome": "ok",
+                "state": state.clone(),
+                "options": {"providers": []}
+            })),
+            &query,
+        )
+        .expect("valid ok query must decode");
+        assert_eq!(decoded.outcome, "ok");
+        assert!(decoded.options.is_some());
     }
 }
 

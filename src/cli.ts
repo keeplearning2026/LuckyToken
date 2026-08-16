@@ -38,7 +38,9 @@ import {
 } from "./client-auth/control-plane.js";
 import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
 import { runCredentialCli } from "./credentials/cli.js";
+import { runAuthCli } from "./credentials/auth-cli.js";
 import { createCredentialControlPlaneHandler } from "./credentials/control-plane.js";
+import { createAuthLoginControlPlaneHandler } from "./credentials/login-control-plane.js";
 import type { LiveCredentialAuthority } from "./credentials/authority.js";
 import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
 import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
@@ -93,6 +95,7 @@ Usage:
   luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
   luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
+  luckytoken control auth <query|login> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken control aliases <query|write> [<revision> <file>] --descriptor <path>
   luckytoken --help
@@ -108,6 +111,7 @@ Commands:
   control settings query|set|confirm  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
   control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
+  control auth query|login  Run Provider-owned account/subscription or API-key login
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
   control aliases query|write  Read the authoritative alias registry or replace the user mapping record
 
@@ -134,6 +138,13 @@ control credentials commands:
   logout <provider>         Remove only the stored auth.json value
   import <file>             Import a Pi-compatible auth.json Provider by Provider
                             with overwrite confirmation
+
+control auth commands:
+  query                     Print the per-Provider login options and effective
+                            authentication status
+  login <provider> <account|api-key>  Run the Provider-owned interactive login flow
+                            through the typed interaction contract (browser,
+                            device code, prompts); secret input is masked on a TTY
 
 control catalog commands:
   query                     Print the active catalog snapshot
@@ -560,6 +571,9 @@ async function runServe(
     let tokenAuthorities:
       Readonly<Record<string, LiveClientTokenAuthority>> | undefined;
     let credentialAuthority: LiveCredentialAuthority | undefined;
+    /** Ticket 13: the served Pi Models backing Provider-owned login flows
+     *  (set when the Data Plane composition runs). */
+    let authModels: Models | undefined;
     // Ticket 17 identity seam: the Control Plane serves the bounded public
     // request identity ledger from the running Data Plane composition.
     let requestIdentities:
@@ -577,6 +591,15 @@ async function runServe(
       diagnostics: diagnosticsStore,
     });
     const credentialCommandHandler = createCredentialControlPlaneHandler({
+      authority: () => credentialAuthority,
+    });
+    // Ticket 13: Provider-owned auth login through the same Control Plane
+    // contract as the UI/CLI credential commands. The served Models own
+    // every authentication step; a successful login persists through the
+    // Credential Authority's store and schedules the Ticket 11 catalog
+    // refresh through the composition's login seam.
+    const authCommandHandler = createAuthLoginControlPlaneHandler({
+      models: () => authModels,
       authority: () => credentialAuthority,
     });
     const settingsCommandHandler = createProtocolEnablementSettingsHandler({
@@ -660,6 +683,7 @@ async function runServe(
           });
           tokenAuthorities = composition.clientTokenAuthorities;
           credentialAuthority = composition.credentialAuthority;
+          authModels = composition.catalog.models;
           requestIdentities = composition.requestIdentities;
           // Startup restore: the cached dynamic catalog is served before
           // any network refresh completes, then the non-blocking startup
@@ -788,6 +812,9 @@ async function runServe(
       modelsProjection: () => modelsAuthority.snapshot(),
       credentialCommandHandler,
       credentialProjection: () => credentialAuthority?.snapshot(),
+      // Ticket 13: versioned Provider-auth commands (query/login) with the
+      // typed interaction channel for in-flight login flows.
+      authCommandHandler,
       // Ticket 11: versioned catalog queries and refresh commands against
       // the one authoritative active catalog snapshot.
       catalogCommandHandler: async (command) => {
@@ -1367,6 +1394,10 @@ export async function runLuckyTokenCli(
     }
     if (command === "credentials") {
       await runCredentialCli(args.slice(2));
+      return;
+    }
+    if (command === "auth") {
+      await runAuthCli(args.slice(2));
       return;
     }
     if (command === "catalog") {

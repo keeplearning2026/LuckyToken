@@ -30,6 +30,10 @@ import {
   type RequestIdentityRecord,
 } from "./contracts.js";
 import {
+  type AuthCommandHandler,
+  type AuthCommandResult,
+  type AuthInteractionChannel,
+  type AuthInteractionEvent,
   type CredentialCommandHandler,
   type CredentialCommandResult,
   type CredentialProjection,
@@ -51,6 +55,7 @@ import {
   decodeAliasCommandResult,
   decodeApplicationCommandExecution,
   decodeApplicationStatus,
+  decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeClientRequest,
   decodeClientTokenCommandResult,
@@ -99,6 +104,13 @@ export interface StartControlPlaneOptions {
    *  Credential Authority. */
   readonly credentialCommandHandler?: CredentialCommandHandler;
   /**
+   * Optional Provider-auth command handler (Ticket 13): serves the
+   * versioned auth query/login commands. A login gets a live interaction
+   * channel bound to the requesting connection; typed interaction events
+   * and prompt responses round-trip through it until the terminal result.
+   */
+  readonly authCommandHandler?: AuthCommandHandler;
+  /**
    * Optional catalog command handler (Ticket 11): serves the versioned
    * catalog query/refresh commands against the authoritative active
    * catalog snapshot.
@@ -135,7 +147,33 @@ interface ConnectionState {
   authorized: boolean;
   subscribed: boolean;
   diagnosticsSubscribed: boolean;
+  /** One in-flight Provider-auth login flow on this connection (Ticket
+   *  13); interaction events/prompt responses are routed by its id. */
+  authFlow: AuthFlowState | undefined;
 }
+
+/** One in-flight Provider-auth login flow (Ticket 13). */
+interface AuthFlowState {
+  readonly requestId: string;
+  readonly controller: AbortController;
+  pendingPrompt: {
+    readonly promptId: string;
+    resolve(value: string): void;
+    reject(error: Error): void;
+  } | undefined;
+  /** True once the terminal result was written or the flow was aborted. */
+  settled: boolean;
+}
+
+/** Minimal value-free projection for unavailable/busy results (the
+ *  authority is not running, so no path exists yet). */
+const EMPTY_CREDENTIAL_PROJECTION: CredentialProjection = Object.freeze({
+  revision: 0,
+  path: "",
+  present: false,
+  valid: false,
+  providers: Object.freeze([]),
+});
 
 export async function startApplicationStatusHost(
   options: StartControlPlaneOptions,
@@ -227,6 +265,90 @@ export async function startApplicationStatusHost(
       code,
     });
   };
+
+  /** A channel for commands that never interact (query). */
+  const NOOP_AUTH_CHANNEL: AuthInteractionChannel = Object.freeze({
+    signal: new AbortController().signal,
+    notify: async () => undefined,
+    prompt: async () => {
+      throw new Error("Interaction is not available for this command");
+    },
+  });
+
+  /** Abort a flow and reject its pending prompt (cancel / connection
+   *  loss / completion). */
+  const abortAuthFlow = (flow: AuthFlowState, reason: Error): void => {
+    flow.settled = true;
+    flow.controller.abort(reason);
+    const pending = flow.pendingPrompt;
+    flow.pendingPrompt = undefined;
+    pending?.reject(reason);
+  };
+
+  /** One in-flight login flow: typed events are written to the owning
+   *  connection, prompt responses resolve the pending prompt, and a lost
+   *  connection or cancel aborts the whole Provider-owned flow. */
+  const createAuthFlow = (
+    state: ConnectionState,
+    requestId: string,
+  ): { readonly flow: AuthFlowState; readonly channel: AuthInteractionChannel } => {
+    const controller = new AbortController();
+    let promptSequence = 0;
+    const flow: AuthFlowState = {
+      requestId,
+      controller,
+      pendingPrompt: undefined,
+      settled: false,
+    };
+    const channel: AuthInteractionChannel = Object.freeze({
+      signal: controller.signal,
+      notify(event: AuthInteractionEvent): Promise<void> {
+        return writeFrame(state.connection, {
+          type: "auth_interaction_event",
+          requestId,
+          event,
+        }).catch(() => {
+          // The client is gone: never leave the Provider-owned login
+          // running forever against a dead connection.
+          abortAuthFlow(flow, new Error("Control Plane connection lost"));
+        });
+      },
+      prompt(input: {
+        readonly kind: "text" | "secret" | "manual_code" | "select";
+        readonly message: string;
+        readonly placeholder?: string;
+        readonly options?: readonly {
+          readonly id: string;
+          readonly label: string;
+          readonly description?: string;
+        }[];
+      }): Promise<string> {
+        return new Promise<string>((resolve, reject) => {
+          if (flow.pendingPrompt !== undefined || flow.settled) {
+            reject(new Error("Sign-in prompt is not available"));
+            return;
+          }
+          promptSequence += 1;
+          const promptId = `${requestId}-prompt-${promptSequence}`;
+          flow.pendingPrompt = { promptId, resolve, reject };
+          void writeFrame(state.connection, {
+            type: "auth_interaction_event",
+            requestId,
+            event: { type: "prompt", promptId, ...input },
+          }).catch(() => {
+            if (flow.pendingPrompt?.promptId === promptId) {
+              flow.pendingPrompt = undefined;
+            }
+            abortAuthFlow(flow, new Error("Control Plane connection lost"));
+          });
+        });
+      },
+    });
+    return { flow, channel };
+  };
+
+  const fallbackAuthState = (): CredentialProjection =>
+    options.credentialProjection?.() ?? EMPTY_CREDENTIAL_PROJECTION;
 
   const serveConnection = async (state: ConnectionState): Promise<void> => {
     try {
@@ -747,6 +869,141 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             result,
           });
+        } else if (request.type === "auth_command") {
+          if (options.authCommandHandler === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+            continue;
+          }
+          if (request.command.command === "login") {
+            if (state.authFlow !== undefined) {
+              // One in-flight login per connection: a second login is
+              // refused instead of racing the Provider-owned flow.
+              await writeFrame(state.connection, {
+                type: "auth_command_result",
+                requestId: request.requestId,
+                result: {
+                  outcome: "conflict",
+                  state: fallbackAuthState(),
+                  error: "Another sign-in is already in progress",
+                },
+              });
+              continue;
+            }
+            // The login runs as a task: interaction responses arrive on
+            // this connection while the Provider-owned flow is pending.
+            const { flow, channel } = createAuthFlow(state, request.requestId);
+            state.authFlow = flow;
+            void (async () => {
+              const credentialsBefore = options.credentialProjection?.();
+              let handled: AuthCommandResult;
+              try {
+                handled = await options.authCommandHandler!(
+                  request.command,
+                  channel,
+                );
+              } catch {
+                handled = {
+                  outcome: "unavailable",
+                  state: fallbackAuthState(),
+                  error: "Provider sign-in is unavailable",
+                };
+              }
+              const result = decodeAuthCommandResult(handled, request.command);
+              if (result === undefined) {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+              } else {
+                await writeFrame(state.connection, {
+                  type: "auth_command_result",
+                  requestId: request.requestId,
+                  result,
+                }).catch(() => undefined);
+                if (
+                  result.outcome === "ok" &&
+                  credentialsBefore !== undefined &&
+                  result.state.revision !== credentialsBefore.revision
+                ) {
+                  // A successful login changed the authoritative file:
+                  // publish the resulting credential projection (and the
+                  // scheduled Ticket 11 catalog refresh) to subscribers.
+                  await publishStatus({
+                    modelDataPlane: current.modelDataPlane,
+                    provider: current.provider,
+                    ...(current.dataPlane === undefined
+                      ? {}
+                      : { dataPlane: current.dataPlane }),
+                  });
+                }
+              }
+              if (state.authFlow === flow) state.authFlow = undefined;
+              abortAuthFlow(
+                flow,
+                new Error("Sign-in flow finished"),
+              );
+            })();
+            continue;
+          }
+          // query: never uses the interaction channel.
+          let handled: AuthCommandResult;
+          try {
+            handled = await options.authCommandHandler(
+              request.command,
+              NOOP_AUTH_CHANNEL,
+            );
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              state: fallbackAuthState(),
+              error: "Provider sign-in is unavailable",
+            };
+          }
+          const result = decodeAuthCommandResult(handled, request.command);
+          if (result === undefined) {
+            await sendError(state.connection, request.requestId, "invalid_request");
+          } else {
+            await writeFrame(state.connection, {
+              type: "auth_command_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
+        } else if (request.type === "auth_interaction_response") {
+          const flow = state.authFlow;
+          if (
+            flow === undefined ||
+            flow.settled ||
+            request.requestId !== flow.requestId
+          ) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "invalid_request",
+            );
+            continue;
+          }
+          if (request.response.type === "cancel") {
+            // Reject the pending prompt and abort the flow; the login
+            // resolves with a terminal cancelled result.
+            abortAuthFlow(
+              flow,
+              new Error("Sign-in cancelled"),
+            );
+            continue;
+          }
+          const pending = flow.pendingPrompt;
+          if (pending === undefined || pending.promptId !== request.response.promptId) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "invalid_request",
+            );
+            continue;
+          }
+          flow.pendingPrompt = undefined;
+          pending.resolve(request.response.value);
         } else if (request.type === "subscribe") {
           state.subscribed = true;
           await writeFrame(state.connection, {
@@ -764,6 +1021,12 @@ export async function startApplicationStatusHost(
       }
     } finally {
       states.delete(state);
+      if (state.authFlow !== undefined) {
+        abortAuthFlow(
+          state.authFlow,
+          new Error("Control Plane connection closed"),
+        );
+      }
       await state.connection.close().catch(() => undefined);
     }
   };
@@ -786,6 +1049,7 @@ export async function startApplicationStatusHost(
         authorized: false,
         subscribed: false,
         diagnosticsSubscribed: false,
+        authFlow: undefined,
       };
       states.add(state);
       const task = serveConnection(state).catch(() => undefined);

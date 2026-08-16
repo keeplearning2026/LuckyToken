@@ -48,6 +48,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           providers: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -144,6 +149,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           providers: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -225,6 +235,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -300,6 +315,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -378,6 +398,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -464,6 +489,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -548,6 +578,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -641,6 +676,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
           refreshErrors: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       executeAliasCommand: async () => ({
         outcome: "ok",
         state: {
@@ -736,6 +776,11 @@ describe("Windows desktop shell public lifecycle seam", () => {
       executeClientTokenCommand: async () => {
         throw new Error("unused client token command");
       },
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       queryDiagnosticsWarnings: async () => [],
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
@@ -835,6 +880,11 @@ describe("WindowsShellHost client token commands", () => {
           },
         };
       },
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       queryDiagnosticsWarnings: async () => [
         {
           id: 1,
@@ -899,6 +949,11 @@ describe("WindowsShellHost client token commands", () => {
       executeClientTokenCommand: async () => {
         throw new Error("unused");
       },
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       queryDiagnosticsWarnings: async () => [],
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -976,6 +1031,11 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
           providers: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       queryDiagnosticsWarnings: async () => [],
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
@@ -1050,6 +1110,11 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
           providers: [],
         },
       }),
+      executeAuthCommand: async () => {
+        throw new Error("unused auth command");
+      },
+      respondAuthInteraction: async () => undefined,
+      openUrl: async () => undefined,
       queryDiagnosticsWarnings: async () => [],
       getAutoStartStatus: async () => ({ enabled: false }),
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),

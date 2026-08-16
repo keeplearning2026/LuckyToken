@@ -3,6 +3,10 @@ import type {
   AliasCommand,
   AliasCommandResult,
   ApplicationOwnership,
+  AuthCommand,
+  AuthCommandResult,
+  AuthInteractionEvent,
+  AuthInteractionResponse,
   CatalogCommand,
   CatalogCommandResult,
   ClientTokenCommand,
@@ -21,6 +25,8 @@ import type {
 import {
   decodeAliasCommandResult,
   decodeAliasStatusProjection,
+  decodeAuthCommandResult,
+  decodeAuthInteractionEvent,
   decodeCatalogCommandResult,
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
@@ -59,6 +65,10 @@ export type ShellCommand =
   | "shell_credentials_logout"
   | "shell_credentials_import_preview"
   | "shell_credentials_import_apply"
+  | "shell_auth_query"
+  | "shell_auth_login"
+  | "shell_auth_respond"
+  | "shell_open_url"
   | "shell_catalog_query"
   | "shell_catalog_refresh"
   | "shell_aliases_query"
@@ -71,6 +81,14 @@ export interface NativeTauriBridge {
     listener: (
       event: Pick<Event<ControlPlaneBridgePayload>, "payload">,
     ) => void,
+  ): Promise<() => void>;
+  /** Typed Provider-auth interaction events (Ticket 13): the native shell
+   *  forwards allowlisted events here while a login flow is pending. The
+   *  payload is opaque JSON; the runtime strictly re-decodes it. Required
+   *  for the account/subscription login flow; the runtime fails that flow
+   *  explicitly when a bridge does not provide it. */
+  listenAuthEvent?(
+    listener: (event: Pick<Event<unknown>, "payload">) => void,
   ): Promise<() => void>;
 }
 
@@ -99,6 +117,21 @@ export interface TauriDesktopRuntime {
   executeCredentialCommand(
     command: CredentialCommand,
   ): Promise<CredentialCommandResult>;
+  /** Ticket 13: Provider-owned login commands (query | login) over the
+   *  typed interaction channel; interaction events are dispatched to
+   *  `onInteraction` as they arrive and the promise resolves with the
+   *  terminal outcome. */
+  executeAuthCommand(
+    command: AuthCommand,
+    onInteraction?: (event: AuthInteractionEvent) => void,
+  ): Promise<AuthCommandResult>;
+  /** Ticket 13: routes one typed response (prompt answer or cancel) into
+   *  the active login flow. */
+  respondAuthInteraction(response: AuthInteractionResponse): Promise<void>;
+  /** Ticket 13: opens a browser/verification URL through the OS. Only
+   *  http/https URLs are accepted; the UI always keeps the URL visible
+   *  and copyable as the manual fallback. */
+  openUrl(url: string): Promise<void>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   /** Native directory picker: the picked absolute path or undefined on
@@ -124,6 +157,23 @@ const dataPlaneFailureMessages = {
   stop_failed:
     "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
 } as const;
+
+/** Strict http/https URL guard for OS browser opening (Ticket 13): the
+ *  renderer never opens URLs itself and never passes a non-http(s) URL to
+ *  the native shell. */
+function isHttpUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.username === "" &&
+    parsed.password === ""
+  );
+}
 
 function decodeDataPlaneStatus(value: unknown) {
   if (
@@ -715,6 +765,64 @@ export function createTauriDesktopRuntime(
         throw new Error("LuckyToken returned an invalid credential result");
       }
       return decoded;
+    },
+    async executeAuthCommand(command, onInteraction) {
+      if (command.command === "query") {
+        const raw = await bridge.invoke("shell_auth_query");
+        const decoded = decodeAuthCommandResult(raw);
+        if (decoded === undefined || decoded.options === undefined) {
+          throw new Error("LuckyToken returned an invalid auth result");
+        }
+        return decoded;
+      }
+      // Login: subscribe to the auth-event channel before invoking so no
+      // typed event is ever lost. Only strictly decoded events are
+      // dispatched; an undecodable event is a protocol violation that
+      // fails the whole flow (a skipped prompt could silently hang the
+      // Provider-owned flow).
+      if (bridge.listenAuthEvent === undefined) {
+        throw new Error("Native bridge does not support auth events");
+      }
+      let interactionError: Error | undefined;
+      const unlisten = await bridge.listenAuthEvent((event) => {
+        const decoded = decodeAuthInteractionEvent(event.payload);
+        if (decoded === undefined) {
+          interactionError ??= new Error(
+            "LuckyToken returned an invalid auth interaction event",
+          );
+          return;
+        }
+        onInteraction?.(decoded);
+      });
+      try {
+        const raw = await bridge.invoke("shell_auth_login", {
+          providerId: command.providerId,
+          authType: command.authType,
+        });
+        if (interactionError !== undefined) throw interactionError;
+        const decoded = decodeAuthCommandResult(raw);
+        if (decoded === undefined || decoded.options !== undefined) {
+          throw new Error("LuckyToken returned an invalid auth result");
+        }
+        return decoded;
+      } finally {
+        // The terminal result ends the flow: no further events can be
+        // prompted after it, so the per-flow listener is released.
+        await unlisten();
+      }
+    },
+    async respondAuthInteraction(response) {
+      // The response is typed at the call site; the native bridge
+      // re-validates the wire shape strictly before routing it.
+      await bridge.invoke("shell_auth_respond", { response });
+    },
+    async openUrl(url) {
+      // The OS layer re-validates; this guard prevents even attempting a
+      // non-http(s) open from the renderer.
+      if (!isHttpUrl(url)) {
+        throw new Error("Refusing to open a non-http(s) URL");
+      }
+      await bridge.invoke("shell_open_url", { url });
     },
     async queryDiagnosticsWarnings() {
       const raw = await bridge.invoke("shell_diagnostics_warnings");

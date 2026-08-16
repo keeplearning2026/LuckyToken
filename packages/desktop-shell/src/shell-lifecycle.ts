@@ -2,6 +2,10 @@ import type { ControlPlaneState } from "./control-plane-projection.js";
 import type {
   AliasCommand,
   AliasCommandResult,
+  AuthCommand,
+  AuthCommandResult,
+  AuthInteractionEvent,
+  AuthInteractionResponse,
   CatalogCommand,
   CatalogCommandResult,
   ClientTokenCommand,
@@ -52,6 +56,12 @@ export interface DesktopShellRuntime {
   executeCredentialCommand(
     command: CredentialCommand,
   ): Promise<CredentialCommandResult>;
+  executeAuthCommand(
+    command: AuthCommand,
+    onInteraction?: (event: AuthInteractionEvent) => void,
+  ): Promise<AuthCommandResult>;
+  respondAuthInteraction(response: AuthInteractionResponse): Promise<void>;
+  openUrl(url: string): Promise<void>;
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
   /** Native directory picker: the picked absolute path or undefined on
@@ -98,6 +108,15 @@ export interface WindowsShellHost {
   executeCredentialCommand(
     command: CredentialCommand,
   ): Promise<CredentialCommandResult>;
+
+  executeAuthCommand(
+    command: AuthCommand,
+    onInteraction?: (event: AuthInteractionEvent) => void,
+  ): Promise<AuthCommandResult>;
+
+  respondAuthInteraction(response: AuthInteractionResponse): Promise<void>;
+
+  openUrl(url: string): Promise<void>;
 
   queryDiagnosticsWarnings(): Promise<readonly DiagnosticsWarning[]>;
 
@@ -239,6 +258,24 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.executeCredentialCommand(command);
+    },
+    executeAuthCommand(command, onInteraction) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeAuthCommand(command, onInteraction);
+    },
+    respondAuthInteraction(response) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.respondAuthInteraction(response);
+    },
+    openUrl(url) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.openUrl(url);
     },
     executeCatalogCommand(command) {
       if (current.lifecycle !== "open") {
