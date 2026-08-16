@@ -8,7 +8,7 @@
 
 **Blocked by:** 02 — Windows Desktop Shell and empty Dashboard; 11 — Model catalog cache, refresh, and Provider error isolation.
 
-**Status:** accepted-pending-wave-validation
+**Status:** completed
 
 ## Implementation method
 

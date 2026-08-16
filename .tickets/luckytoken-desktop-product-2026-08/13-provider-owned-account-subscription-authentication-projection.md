@@ -8,7 +8,7 @@
 
 **Blocked by:** 11 — Model catalog cache, refresh, and Provider error isolation; 12 — API-key credential management and effective authentication status.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm Credential Management/AuthInteraction commands and
 
 ## Acceptance criteria
 
-- [ ] The top-level choices are “Use an account or subscription” and “Use an API key”; only Provider metadata can label a flow as a true subscription.
-- [ ] Browser auth URLs are opened automatically when possible and remain visible/copyable with manual fallback.
-- [ ] Device-code flows open the verification page when possible and display/copy the user code with instructions.
-- [ ] Manual code, select, text, secret, progress, info, cancellation, and failure interactions round-trip through the Provider-owned AuthInteraction contract.
-- [ ] The renderer contains no Provider ID branches that implement Provider-specific OAuth or API-key protocols.
-- [ ] Successful login atomically replaces the Provider credential, refreshes effective auth status, and schedules catalog refresh.
-- [ ] Refresh failure or expired login produces actionable non-secret state without deleting a still-valid unrelated Provider credential.
-- [ ] Contract tests cover browser callback, device code, manual code, select, text, secret, progress, cancel, replacement, refresh, logout, and ambient authentication.
+- [x] The top-level choices are “Use an account or subscription” and “Use an API key”; only Provider metadata can label a flow as a true subscription.
+- [x] Browser auth URLs are opened automatically when possible and remain visible/copyable with manual fallback.
+- [x] Device-code flows open the verification page when possible and display/copy the user code with instructions.
+- [x] Manual code, select, text, secret, progress, info, cancellation, and failure interactions round-trip through the Provider-owned AuthInteraction contract.
+- [x] The renderer contains no Provider ID branches that implement Provider-specific OAuth or API-key protocols.
+- [x] Successful login atomically replaces the Provider credential, refreshes effective auth status, and schedules catalog refresh.
+- [x] Refresh failure or expired login produces actionable non-secret state without deleting a still-valid unrelated Provider credential.
+- [x] Contract tests cover browser callback, device code, manual code, select, text, secret, progress, cancel, replacement, refresh, logout, and ambient authentication.

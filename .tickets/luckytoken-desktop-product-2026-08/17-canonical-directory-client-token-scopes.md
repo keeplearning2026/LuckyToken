@@ -8,7 +8,7 @@
 
 **Blocked by:** 16 — Live protocol-global Client Token Authority.
 
-**Status:** accepted-pending-wave-validation
+**Status:** completed
 
 ## Implementation method
 

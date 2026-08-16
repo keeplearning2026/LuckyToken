@@ -8,7 +8,7 @@
 
 **Blocked by:** 09 — Pinned Pi Provider overlay and model-upsert compatibility.
 
-**Status:** accepted-pending-wave-validation
+**Status:** completed
 
 ## Implementation method
 

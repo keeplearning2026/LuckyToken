@@ -8,7 +8,7 @@
 
 **Blocked by:** 10 — Pinned Pi modelOverrides, headers, and authentication compatibility.
 
-**Status:** accepted-pending-wave-validation
+**Status:** completed
 
 ## Implementation method
 
