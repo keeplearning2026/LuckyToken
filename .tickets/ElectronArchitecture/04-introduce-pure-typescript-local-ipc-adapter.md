@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 — Freeze migration seams and architecture guards.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] The Control Plane transport interface has a Node-based local IPC adapter for server and client connections with bounded reads, writes, close, and disconnect behavior.
-- [ ] Framing and transport failure behavior are verifiable with deterministic tests that do not require Electron.
-- [ ] Platform-specific address creation is isolated from Control Plane commands, results, projections, and event semantics.
-- [ ] Existing semantic Control Plane tests can run against an injected non-native transport without learning Windows-specific pipe details.
+- [x] The Control Plane transport interface has a Node-based local IPC adapter for server and client connections with bounded reads, writes, close, and disconnect behavior.
+- [x] Framing and transport failure behavior are verifiable with deterministic tests that do not require Electron.
+- [x] Platform-specific address creation is isolated from Control Plane commands, results, projections, and event semantics.
+- [x] Existing semantic Control Plane tests can run against an injected non-native transport without learning Windows-specific pipe details.

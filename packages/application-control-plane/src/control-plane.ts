@@ -307,6 +307,10 @@ export {
   type PipeTransport,
 } from "./pipe-transport.js";
 export { createNodePipeTransport } from "./node-pipe-transport.js";
+export {
+  createLocalIpcAddress,
+  type LocalIpcAddressOptions,
+} from "./local-ipc-address.js";
 
 export { maxControlPlaneFrameBytes } from "./framing.js";
 
