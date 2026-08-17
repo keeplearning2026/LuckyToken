@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
-
-export type ProductPage = "home" | "providers" | "connect" | "activity" | "settings";
+import type { ProductPage } from "../app/navigation.js";
 
 type BackendStatus = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["getStatus"]>>;
 

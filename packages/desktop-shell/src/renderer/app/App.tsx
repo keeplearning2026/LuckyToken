@@ -1,20 +1,14 @@
 import { useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
-import { HomePage, type ProductPage } from "../home/HomePage.js";
+import { ConnectPage } from "../connect/ConnectPage.js";
+import { HomePage } from "../home/HomePage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
+import { productPages as pages, type ProductPage } from "./navigation.js";
 
 export interface AppProps {
   readonly api: LuckyTokenDesktopApi;
 }
-
-const pages: ReadonlyArray<Readonly<{ id: ProductPage; label: string }>> = Object.freeze([
-  { id: "home", label: "Home" },
-  { id: "providers", label: "Providers" },
-  { id: "connect", label: "Connect" },
-  { id: "activity", label: "Activity" },
-  { id: "settings", label: "Settings" },
-]);
 
 function Placeholder({ page }: { readonly page: Exclude<ProductPage, "home"> }) {
   const title = pages.find((entry) => entry.id === page)?.label ?? page;
@@ -64,6 +58,8 @@ export function App({ api }: AppProps) {
           <HomePage api={api} navigate={setPage} />
         ) : page === "providers" ? (
           <ProvidersPage api={api} />
+        ) : page === "connect" ? (
+          <ConnectPage api={api} navigate={setPage} />
         ) : (
           <Placeholder page={page} />
         )}

@@ -118,6 +118,20 @@ button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
 .badge { white-space: nowrap; border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 650; }
 .badge.good { background: #e5f3e9; color: #276b43; }
 .badge.warning { background: #faeee1; color: #945e1f; }
+.badge.neutral { background: #eef0f2; color: #596069; }
+.integration-card h4 { margin: 18px 0 6px; font-size: 17px; }
+.connect-prerequisite h2 { margin: 7px 0 8px; }
+.connect-prerequisite p:not(.eyebrow) { color: #676c73; line-height: 1.5; }
+.connect-prerequisite button, .integration-card > button {
+  margin-top: 10px;
+  border: 1px solid #2f3439;
+  border-radius: 8px;
+  background: #292d31;
+  color: #fff;
+  padding: 8px 12px;
+}
+.muted-card { background: #fafafa; }
+.warning-list { margin: 14px 0 0; padding-left: 20px; color: #7a5d32; }
 .button-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
 .product-notice { max-width: 980px; margin: 0; padding: 10px 13px; border-radius: 9px; background: #eef1f4; color: #4d535a; }
 .auth-interaction { display: grid; gap: 12px; }
