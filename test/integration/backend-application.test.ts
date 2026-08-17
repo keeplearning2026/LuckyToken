@@ -11,12 +11,17 @@ import {
   createNodePipeTransport,
 } from "@luckytoken/application-control-plane/control-plane";
 
-import { startLuckyTokenApplication } from "../../src/application.js";
+import {
+  startLuckyTokenApplication,
+  type RunningLuckyTokenApplication,
+} from "../../src/application.js";
 import { readControlPlaneDescriptor } from "../../src/control-plane-discovery.js";
 
 const roots: string[] = [];
+const applications: RunningLuckyTokenApplication[] = [];
 
 afterEach(async () => {
+  await Promise.allSettled(applications.splice(0).map((application) => application.close()));
   await Promise.allSettled(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -104,6 +109,7 @@ describe("Backend Application public lifecycle seam", () => {
     });
     expect(started.kind).toBe("running");
     if (started.kind !== "running") return;
+    applications.push(started.application);
 
     const endpoint = await readControlPlaneDescriptor(descriptorPath);
     const client = await connectControlPlane(endpoint, {
@@ -125,6 +131,91 @@ describe("Backend Application public lifecycle seam", () => {
     await expect(started.application.close()).resolves.toBeUndefined();
     await expect(started.application.exited).resolves.toMatchObject({
       reason: "closed",
+    });
+  });
+
+  it("starts incompatible configuration in recovery-only mode", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    await writeFile(configPath, "{ invalid json", "utf8");
+
+    const started = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(started.kind).toBe("running");
+    if (started.kind !== "running") return;
+    applications.push(started.application);
+
+    const endpoint = await readControlPlaneDescriptor(descriptorPath);
+    const client = await connectControlPlane(endpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await client.hello(controlPlaneVersion);
+      await expect(client.getStatus()).resolves.toMatchObject({
+        modelDataPlane: "stopped",
+        recovery: { mode: "incompatible_configuration" },
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("attaches a second start attempt to the active application", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const first = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(first.kind).toBe("running");
+    if (first.kind !== "running") return;
+    applications.push(first.application);
+
+    const second = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "desktop",
+    });
+
+    expect(second.kind).toBe("attached");
+    if (second.kind === "attached") {
+      expect(second.ownership?.owner.pid).toBe(process.pid);
+      expect(second.ownership?.owner.kind).toBe("cli");
+    }
+  });
+
+  it("delivers an ownership-aware quit result before the application exits", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const started = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(started.kind).toBe("running");
+    if (started.kind !== "running") return;
+    applications.push(started.application);
+
+    const endpoint = await readControlPlaneDescriptor(descriptorPath);
+    const client = await connectControlPlane(endpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await client.hello(controlPlaneVersion);
+      const result = await client.executeApplicationCommand({
+        command: "quit",
+        acknowledged: true,
+      });
+      expect(result.outcome).toBe("drained");
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+
+    await expect(started.application.exited).resolves.toEqual({
+      reason: "drained",
     });
   });
 });
