@@ -8,7 +8,7 @@
 
 **Blocked by:** 11 — Model catalog cache, refresh, and Provider error isolation; 18 — Request Lifecycle Ledger tracer.
 
-**Status:** ready-for-agent
+**Status:** integrated
 
 ## Implementation method
 

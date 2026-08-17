@@ -8,7 +8,7 @@
 
 **Blocked by:** 19 — Complete Requests page and request-detail contract; 20 — Provider terminal-usage normalization and completeness.
 
-**Status:** ready-for-agent
+**Status:** integrated
 
 ## Implementation method
 
