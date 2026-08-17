@@ -18,6 +18,7 @@ import { Writable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
+import { startLuckyTokenApplication } from "./application.js";
 import { createFirstRunConfig as writeFirstRunConfig } from "./first-run-config.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import {
@@ -699,7 +700,7 @@ async function runRecoveryControlPlane(
   }
 }
 
-async function runServe(
+async function legacyRunServe(
   configPath: string,
   descriptorOverride?: string,
   ownerKind: "cli" | "desktop" = "cli",
@@ -1535,6 +1536,78 @@ async function runServe(
     if (results.some((result) => result.status === "rejected")) {
       throw new Error("LuckyToken application resource cleanup failed");
     }
+  }
+}
+
+async function runServe(
+  configPath: string,
+  descriptorOverride?: string,
+  ownerKind: "cli" | "desktop" = "cli",
+  desktopExe?: string,
+  createFirstRunConfig = false,
+): Promise<void> {
+  const started = await startLuckyTokenApplication({
+    configPath,
+    ...(descriptorOverride === undefined
+      ? {}
+      : { descriptorOverride }),
+    ownerKind,
+    ...(desktopExe === undefined ? {} : { desktopExe }),
+    createFirstRunConfig,
+    events: {
+      onRoute: (route) => {
+        stdout.write(
+          `LuckyToken ${route.method} ${route.origin}${route.pathname}\n`,
+        );
+      },
+      onAttached: (ownership) => {
+        const owner = ownership?.owner;
+        stdout.write(
+          `LuckyToken is already running: attached to the active instance${
+            owner === undefined
+              ? ""
+              : ` owned by PID ${owner.pid} (${owner.kind})`
+          }. No second Data Plane was started.\n`,
+        );
+      },
+    },
+  });
+  if (started.kind === "attached") return;
+
+  const application = started.application;
+  let finishSignal: (() => void) | undefined;
+  const signal = new Promise<void>((resolveSignal) => {
+    const finish = () => {
+      process.off("SIGINT", finish);
+      process.off("SIGTERM", finish);
+      finishSignal = undefined;
+      resolveSignal();
+    };
+    finishSignal = finish;
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  });
+
+  const first = await Promise.race([
+    signal.then(() => "signal" as const),
+    application.exited.then(() => "application" as const),
+  ]);
+  const exit =
+    first === "signal"
+      ? await application.requestShutdown()
+      : await application.exited;
+  if (first !== "signal" && finishSignal !== undefined) {
+    process.off("SIGINT", finishSignal);
+    process.off("SIGTERM", finishSignal);
+  }
+  if (exit.reason === "drained" || exit.reason === "timed_out") {
+    stdout.write(
+      `LuckyToken: application quit — ${
+        exit.reason === "drained"
+          ? "active requests drained"
+          : "drain timed out; remaining requests aborted"
+      }\n`,
+    );
   }
 }
 
