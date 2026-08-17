@@ -232,10 +232,6 @@ async function prepareIsolatedCodexHome(
   modelsList?: { data?: Array<{ id?: string }> },
 ): Promise<string> {
   const inheritedCodexHome = process.env[CODEX_HOME_ENV_KEY]?.trim();
-  const sourceCodexHome =
-    inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
-      ? inheritedCodexHome
-      : join(homedir(), ".codex");
   // Prefer the explicitly generated catalog from the self-hosted endpoint;
   // fall back to the user's ~/.codex/luckytoken-catalog.json when the model
   // entry exists there (legacy CommandCode runs).
