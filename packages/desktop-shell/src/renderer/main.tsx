@@ -1,23 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { App } from "./app/App.js";
 import "./renderer.css";
-
-function DesktopSkeleton() {
-  return (
-    <main className="desktop-skeleton">
-      <p className="eyebrow">LUCKYTOKEN</p>
-      <h1>Desktop shell ready</h1>
-      <p>Electron security and lifecycle foundations are active.</p>
-    </main>
-  );
-}
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("LuckyToken desktop root is missing");
 
 createRoot(root).render(
   <StrictMode>
-    <DesktopSkeleton />
+    <App api={window.luckytoken} />
   </StrictMode>,
 );

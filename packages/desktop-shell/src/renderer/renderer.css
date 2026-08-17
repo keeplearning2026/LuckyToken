@@ -1,34 +1,94 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1f2937;
-  background: #f7f7f8;
+  color: #202124;
+  background: #f5f6f7;
+  font-synthesis: none;
 }
 
-body {
-  margin: 0;
-  min-width: 320px;
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 760px; min-height: 100vh; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+
+.product-shell {
   min-height: 100vh;
+  display: grid;
+  grid-template-columns: 218px minmax(0, 1fr);
 }
 
-.desktop-skeleton {
-  box-sizing: border-box;
-  max-width: 760px;
+.product-sidebar {
+  border-right: 1px solid #e1e3e6;
+  background: #ffffff;
+  padding: 20px 14px;
+}
+
+.product-brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 0 8px 22px;
+}
+
+.product-brand div { display: grid; gap: 2px; }
+.product-brand small { color: #72767d; }
+.product-mark {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid #d8dade;
+  font-weight: 750;
+}
+
+.product-sidebar nav { display: grid; gap: 4px; }
+.product-sidebar nav button {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #555b63;
+  padding: 9px 11px;
+  text-align: left;
+}
+.product-sidebar nav button:hover { background: #f3f4f5; }
+.product-sidebar nav button.active { background: #ebeef2; color: #17191c; font-weight: 650; }
+
+.product-main { min-width: 0; padding: 28px 34px 52px; }
+.product-header { max-width: 980px; margin: 0 auto 26px; }
+.product-header h1 { margin: 4px 0 0; font-size: 28px; font-weight: 680; }
+.eyebrow { margin: 0; color: #7b8087; font-size: 11px; font-weight: 750; letter-spacing: .12em; }
+
+.hero-card, .feature-placeholder {
+  max-width: 980px;
   margin: 0 auto;
-  padding: 72px 32px;
+  background: #fff;
+  border: 1px solid #e0e2e5;
+  border-radius: 14px;
+  padding: 34px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
 }
-
-.desktop-skeleton h1 {
-  margin: 8px 0 12px;
-  font-size: 32px;
+.hero-card { position: relative; }
+.hero-card h2, .feature-placeholder h1 { margin: 8px 0 10px; font-size: 24px; }
+.hero-card p:not(.eyebrow), .feature-placeholder p:not(.eyebrow) { max-width: 680px; color: #646970; line-height: 1.55; }
+.hero-card button {
+  margin-top: 12px;
+  border: 1px solid #2e3338;
+  border-radius: 8px;
+  background: #25282c;
+  color: #fff;
+  padding: 9px 14px;
 }
-
-.desktop-skeleton p {
-  line-height: 1.6;
+.hero-card button:disabled { opacity: .55; cursor: default; }
+.status-dot {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #8b8f94;
 }
-
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-}
+.status-dot.ready { background: #2f8f57; }
+.status-dot.starting { background: #b67a20; }
+.status-dot.attention { background: #b4443d; }
+.status-dot.stopped { background: #858a91; }

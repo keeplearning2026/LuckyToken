@@ -4,10 +4,10 @@
 
 **Blocked by:** 09 — Run LuckyToken as a tray-only Electron product; 12 — Expose the typed preload desktop contract.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Opening the management UI queries current Backend state rather than relying on retained renderer state from a previous window.
-- [ ] Home clearly distinguishes ready, starting, stopped, unavailable, and actionable-attention states using typed Backend facts.
-- [ ] The primary action invokes the appropriate typed desktop operation and reflects pending/result state without making the renderer an authority for gateway status.
-- [ ] Home behavior is fully testable with a fake Desktop API through real user interactions such as clicks and visible assertions.
-- [ ] The app shell establishes the new product navigation without recreating the old engineering-oriented page list.
+- [x] Opening the management UI queries current Backend state rather than relying on retained renderer state from a previous window.
+- [x] Home clearly distinguishes ready, starting, stopped, unavailable, and actionable-attention states using typed Backend facts.
+- [x] The primary action invokes the appropriate typed desktop operation and reflects pending/result state without making the renderer an authority for gateway status.
+- [x] Home behavior is fully testable with a fake Desktop API through real user interactions such as clicks and visible assertions.
+- [x] The app shell establishes the new product navigation without recreating the old engineering-oriented page list.
