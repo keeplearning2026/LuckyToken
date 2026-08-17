@@ -10,6 +10,24 @@ export function launcherConfig() {
   };
 }
 
+/**
+ * Ticket 26 hardening: the NSIS installer must clear its saved install
+ * location on uninstall, or a later install restores the previous (possibly
+ * temporary or custom) directory. This is the single source of truth for
+ * the hook wiring the certification suite enforces.
+ */
+export function releaseNsisHookConfig() {
+  return {
+    // Relative to src-tauri/, where tauri.release.conf.json lives.
+    hooksFile: "installer-hooks.nsh",
+    // The uninstall-time hook macro must unconditionally delete the
+    // install-location memory key (Tauri's stock uninstaller only clears it
+    // when the user opts to delete application data).
+    requiredMacro: "NSIS_HOOK_PREUNINSTALL",
+    requiredFragment: 'DeleteRegKey HKCU "${MANUPRODUCTKEY}"',
+  };
+}
+
 /** Parses launcher.json exactly; undefined for any malformed or foreign
  *  shape. Never invents defaults. */
 export function parseLauncherJson(value) {

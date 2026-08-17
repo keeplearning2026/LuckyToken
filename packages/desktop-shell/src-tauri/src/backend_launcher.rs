@@ -52,11 +52,30 @@ pub(crate) enum LauncherFailure {
 }
 
 fn resolve_against(base: &Path, value: PathBuf) -> PathBuf {
-    if value.is_absolute() {
+    let resolved = if value.is_absolute() {
         value
     } else {
         base.join(value)
-    }
+    };
+    // The bundled Node backend crashes with EISDIR on Windows verbatim
+    // paths ("\\?\C:\..."), which Tauri's resource_dir returns. Normalize
+    // here so the spawned backend always receives plain paths regardless
+    // of how the base directory was produced.
+    normalize_for_node(resolved)
+}
+
+/// Strips a Windows verbatim prefix ("\\?\") so Node's realpath resolution
+/// accepts the path. Plain paths pass through unchanged.
+#[cfg(windows)]
+fn normalize_for_node(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    let plain = value.strip_prefix(r"\\?\").unwrap_or(&value);
+    PathBuf::from(plain)
+}
+
+#[cfg(not(windows))]
+fn normalize_for_node(path: PathBuf) -> PathBuf {
+    path
 }
 
 pub(crate) struct BackendLauncher {
@@ -69,17 +88,14 @@ pub(crate) struct BackendLauncher {
 impl BackendLauncher {
     pub(crate) fn from_paths(
         launcher_path: Option<PathBuf>,
+        base_dir: PathBuf,
         exe_dir: PathBuf,
         home_dir: PathBuf,
     ) -> Self {
         let config = launcher_path.and_then(|path| {
-            let base = path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| exe_dir.clone());
             std::fs::read(&path)
                 .ok()
-                .and_then(|bytes| LauncherConfig::parse(&bytes, &base).ok())
+                .and_then(|bytes| LauncherConfig::parse(&bytes, &base_dir).ok())
         });
         Self {
             config,
@@ -243,5 +259,77 @@ mod tests {
                 std::ffi::OsStr::new("--create-first-run-config"),
             ]
         );
+    }
+
+    #[test]
+    fn from_paths_resolves_relative_backend_paths_against_the_given_base_dir() {
+        // Unpacked source tree: launcher.json lives inside backend/ while its
+        // relative backend paths are anchored at the desktop-shell package
+        // root. The base_dir must be that root, not launcher.json's parent.
+        let temp = std::env::temp_dir().join(format!(
+            "luckytoken-launcher-test-{}",
+            std::process::id()
+        ));
+        let package_root = temp.join("desktop-shell");
+        let backend_dir = package_root.join("backend");
+        std::fs::create_dir_all(&backend_dir).expect("create backend dir");
+        let launcher_path = backend_dir.join("launcher.json");
+        std::fs::write(
+            &launcher_path,
+            r#"{"backendNodeExecutable":"backend\\node\\node.exe","backendCliScript":"backend\\dist\\cli.js"}"#,
+        )
+        .expect("write launcher.json");
+
+        let launcher = BackendLauncher::from_paths(
+            Some(launcher_path),
+            package_root.clone(),
+            PathBuf::new(),
+            PathBuf::new(),
+        );
+        assert!(launcher.available());
+        let config = launcher.config.expect("config parsed");
+        assert_eq!(
+            config.backend_node_executable,
+            package_root.join(r"backend\node\node.exe")
+        );
+        assert_eq!(
+            config.backend_cli_script,
+            package_root.join(r"backend\dist\cli.js")
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn backend_command_never_passes_verbatim_windows_paths_to_node() {
+        // Tauri's resource_dir returns verbatim paths ("\\?\C:\...") on
+        // Windows. The bundled Node backend crashes with EISDIR when given
+        // one, so every path in the spawned command must be plain. The
+        // caller normalizes base_dir before from_paths; this test locks the
+        // contract that a verbatim base still yields plain argv entries.
+        #[cfg(windows)]
+        {
+            let base = PathBuf::from(r"\\?\C:\Program Files\LuckyToken");
+            let config = LauncherConfig::parse(
+                br#"{"backendNodeExecutable":"backend\\node\\node.exe","backendCliScript":"backend\\dist\\cli.js"}"#,
+                &base,
+            )
+            .expect("parse with verbatim base");
+            let command = build_backend_command(
+                &config,
+                Path::new(r"C:\Program Files\LuckyToken\LuckyToken.exe"),
+                Path::new(r"C:\Users\Alice"),
+            )
+            .expect("command assembly");
+            let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+            assert!(
+                args.iter().all(|arg| !arg.to_string_lossy().contains(r"\\?\")),
+                "backend argv must never contain a verbatim prefix: {args:?}"
+            );
+            assert_eq!(
+                args[0],
+                std::ffi::OsStr::new(r"C:\Program Files\LuckyToken\backend\dist\cli.js")
+            );
+        }
     }
 }

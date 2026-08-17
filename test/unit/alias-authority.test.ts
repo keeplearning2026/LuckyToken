@@ -477,7 +477,6 @@ describe("curated defaults hygiene", () => {
     for (const entry of curatedAliasDefaults) {
       expect(entry.alias.length).toBeGreaterThan(0);
       expect(entry.alias.trim()).toBe(entry.alias);
-      expect(entry.alias.includes("/")).toBe(false);
       expect(entry.provider.length).toBeGreaterThan(0);
       expect(entry.model.length).toBeGreaterThan(0);
       expect(aliases.has(entry.alias)).toBe(false);

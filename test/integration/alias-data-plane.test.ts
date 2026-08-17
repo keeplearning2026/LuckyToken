@@ -9,6 +9,8 @@ import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import type { CodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
+import type { CodexNativeModelSource } from "../../src/integrations/codex/native-models.js";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { parseModelsJson } from "../../src/providers/models-json.js";
@@ -234,6 +236,10 @@ function commandCodeTargets(): Set<string> {
 
 async function createAliasDataPlaneFixture(
   initialAliases: Readonly<Record<string, unknown>>,
+  options: {
+    readonly codexLocalAuth?: CodexLocalCredentialAuthority;
+    readonly codexNativeModels?: CodexNativeModelSource;
+  } = {},
 ): Promise<AliasDataPlaneFixture> {
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-alias-plane-"));
   const stateDirectory = join(directory, ".luckytoken");
@@ -329,7 +335,7 @@ async function createAliasDataPlaneFixture(
     if (url.includes("/provider/v1/models")) return undefined;
     if (url.includes("api.commandcode.ai")) return "commandcode";
     if (url.includes("/v1/messages")) return "anthropic";
-    if (url.includes("/v1/responses")) return "responses";
+    if (url.includes("/v1/responses") || url.includes("/codex/responses")) return "responses";
     return undefined;
   };
   const fetch: FetchFunction = async (input, init) => {
@@ -381,6 +387,12 @@ async function createAliasDataPlaneFixture(
     createMessageId: () => "msg_alias_plane",
     createSessionId: () => "00000000-0000-4000-8000-000000000300",
     now: () => NOW,
+    ...(options.codexLocalAuth === undefined
+      ? {}
+      : { codexLocalAuth: options.codexLocalAuth }),
+    ...(options.codexNativeModels === undefined
+      ? {}
+      : { codexNativeModels: options.codexNativeModels }),
   });
   const close = async () => {
     await composition.diagnosticsStore.close();
@@ -442,13 +454,256 @@ const INITIAL_ALIASES = Object.freeze({
     provider: "commandcode-private",
     model: "deepseek/deepseek-v4-flash",
   },
-  luna: "commandcode-private/gpt-5.6-luna",
+  "commandcode-private/gpt-5.6-luna": "commandcode-private/gpt-5.6-luna",
   sonnet: "my-anthropic/claude-sonnet",
   gpt: "my-openai/gpt-4o",
   ghost: "my-anthropic/claude-opus",
 });
 
 describe("alias-only model data plane", () => {
+  it("keeps native Codex request support outside alias resolution in the configured production composition", async () => {
+    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
+      isAvailable: async () => true,
+      authorizeToken: async (token: string) => (token === "codex-token" ? Object.freeze({}) : undefined),
+      resolveForwardAuth: async (headers: Headers) =>
+        headers.get("authorization") === "Bearer codex-token"
+          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
+          : undefined,
+      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
+    });
+    const codexNativeModels: CodexNativeModelSource = Object.freeze({
+      has: (id: string) => id === "gpt-native",
+      models: () => Object.freeze([]),
+    });
+    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
+      codexLocalAuth,
+      codexNativeModels,
+    });
+
+    const pending = fixture.runtime.handle(
+      responsesRequest({ model: "gpt-native", input: "hello" }, "codex-token"),
+    );
+    const call = await fixture.nextUpstreamCall();
+    expect(call.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(JSON.parse(call.body)).toMatchObject({ model: "gpt-native" });
+    call.respond(responsesJson("native answer", "gpt-native"));
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ model: "gpt-native" });
+  });
+
+  it("serves native Codex /responses/compact through the configured production runtime", async () => {
+    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
+      isAvailable: async () => true,
+      authorizeToken: async (token: string) => (token === "codex-token" ? Object.freeze({}) : undefined),
+      resolveForwardAuth: async (headers: Headers) =>
+        headers.get("authorization") === "Bearer codex-token"
+          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
+          : undefined,
+      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
+    });
+    const codexNativeModels: CodexNativeModelSource = Object.freeze({
+      has: (id: string) => id === "gpt-native",
+      models: () => Object.freeze([]),
+    });
+    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
+      codexLocalAuth,
+      codexNativeModels,
+    });
+    const pending = fixture.runtime.handle(
+      new Request("http://luckytoken.test/v1/responses/compact", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer codex-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-native",
+          input: [{ type: "message", role: "user", content: "hello" }],
+        }),
+      }),
+    );
+    const call = await fixture.nextUpstreamCall();
+    expect(call.url).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
+    call.respond(
+      new Response(JSON.stringify({ output: [{ type: "message", role: "user", content: [] }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const response = await pending;
+    expect(response.status).toBe(200);
+  });
+
+  it("returns the one synthetic compaction item Codex requires for routed remote-compaction v2", async () => {
+    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
+      isAvailable: async () => true,
+      authorizeToken: async (token: string) =>
+        token === "codex-token" ? Object.freeze({}) : undefined,
+      resolveForwardAuth: async (headers: Headers) =>
+        headers.get("authorization") === "Bearer codex-token"
+          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
+          : undefined,
+      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
+    });
+    const codexNativeModels: CodexNativeModelSource = Object.freeze({
+      has: (id: string) => id === "gpt-native",
+      models: () => Object.freeze([]),
+    });
+    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
+      codexLocalAuth,
+      codexNativeModels,
+    });
+    const pending = fixture.runtime.handle(
+      responsesRequest(
+        {
+          model: "flash",
+          stream: true,
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "EARLIER CONTEXT" }],
+            },
+            { type: "compaction_trigger" },
+          ],
+        },
+        "codex-token",
+      ),
+    );
+    const call = await fixture.nextUpstreamCall();
+    call.respond(commandCodeText("HANDOFF SUMMARY"));
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const wire = await response.text();
+    const events = wire
+      .split(/\n\n/u)
+      .flatMap((frame): Array<Record<string, unknown>> => {
+        const line = frame
+          .split("\n")
+          .find((candidate) => candidate.startsWith("data: "));
+        if (line === undefined || line === "data: [DONE]") return [];
+        return [JSON.parse(line.slice(6)) as Record<string, unknown>];
+      });
+    const completedItems = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => event.item as Record<string, unknown>);
+    expect(completedItems).toHaveLength(1);
+    expect(completedItems[0]).toMatchObject({ type: "compaction" });
+    expect(completedItems[0]?.encrypted_content).toEqual(
+      expect.stringMatching(/^luckytoken1:/u),
+    );
+  });
+
+  it("fails routed remote-compaction v2 when the summarizer produces no text", async () => {
+    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
+      isAvailable: async () => true,
+      authorizeToken: async (token: string) =>
+        token === "codex-token" ? Object.freeze({}) : undefined,
+      resolveForwardAuth: async (headers: Headers) =>
+        headers.get("authorization") === "Bearer codex-token"
+          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
+          : undefined,
+      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
+    });
+    const codexNativeModels: CodexNativeModelSource = Object.freeze({
+      has: (id: string) => id === "gpt-native",
+      models: () => Object.freeze([]),
+    });
+    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
+      codexLocalAuth,
+      codexNativeModels,
+    });
+    const pending = fixture.runtime.handle(
+      responsesRequest(
+        {
+          model: "flash",
+          stream: true,
+          input: [
+            { type: "message", role: "user", content: "history" },
+            { type: "compaction_trigger" },
+          ],
+        },
+        "codex-token",
+      ),
+    );
+    const call = await fixture.nextUpstreamCall();
+    call.respond(
+      new Response(
+        `${JSON.stringify({
+          type: "finish",
+          finishReason: "stop",
+          totalUsage: { inputTokens: 2, outputTokens: 0, totalTokens: 2 },
+        })}\n`,
+      ),
+    );
+
+    const response = await pending;
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "api_error" },
+    });
+  });
+
+  it("replays a LuckyToken compaction envelope as summary context for the routed model", async () => {
+    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
+      isAvailable: async () => true,
+      authorizeToken: async (token: string) =>
+        token === "codex-token" ? Object.freeze({}) : undefined,
+      resolveForwardAuth: async (headers: Headers) =>
+        headers.get("authorization") === "Bearer codex-token"
+          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
+          : undefined,
+      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
+    });
+    const codexNativeModels: CodexNativeModelSource = Object.freeze({
+      has: (id: string) => id === "gpt-native",
+      models: () => Object.freeze([]),
+    });
+    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
+      codexLocalAuth,
+      codexNativeModels,
+    });
+    const encoded = `luckytoken1:${Buffer.from("STORED HANDOFF SUMMARY", "utf8").toString("base64")}`;
+    const pending = fixture.runtime.handle(
+      responsesRequest(
+        {
+          model: "flash",
+          input: [
+            {
+              type: "compaction",
+              id: "cmp_saved",
+              encrypted_content: encoded,
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "AFTER COMPACTION" }],
+            },
+          ],
+        },
+        "codex-token",
+      ),
+    );
+    const first = await Promise.race([
+      fixture.nextUpstreamCall().then((call) => ({ kind: "call" as const, call })),
+      pending.then((response) => ({ kind: "response" as const, response })),
+    ]);
+    expect(first.kind).toBe("call");
+    if (first.kind !== "call") return;
+    const upstream = JSON.parse(first.call.body) as { params?: { messages?: unknown[] } };
+    const upstreamText = JSON.stringify(upstream.params?.messages ?? []);
+    expect(upstreamText).toContain("STORED HANDOFF SUMMARY");
+    expect(upstreamText).toContain("AFTER COMPACTION");
+    expect(upstreamText).not.toContain("luckytoken1:");
+    first.call.respond(commandCodeText("continued"));
+    const response = await pending;
+    expect(response.status).toBe(200);
+  });
+
   it("dispatches a callable alias to its captured canonical target and echoes the alias", async () => {
     const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES);
     const pending = fixture.runtime.handle(
@@ -479,7 +734,10 @@ describe("alias-only model data plane", () => {
   it("dispatches a callable alias through the Responses converted path", async () => {
     const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES);
     const pending = fixture.runtime.handle(
-      responsesRequest({ model: "luna", input: "hello" }, fixture.responsesToken),
+      responsesRequest(
+        { model: "commandcode-private/gpt-5.6-luna", input: "hello" },
+        fixture.responsesToken,
+      ),
     );
     const call = await fixture.nextUpstreamCall();
     call.respond(commandCodeText("converted through Pi"));
@@ -488,7 +746,7 @@ describe("alias-only model data plane", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       object: "response",
-      model: "luna",
+      model: "commandcode-private/gpt-5.6-luna",
       output: [{ type: "message", content: [{ type: "output_text", text: "converted through Pi" }] }],
     });
     const upstream = JSON.parse(call.body) as { params: { model: string } };
@@ -524,7 +782,7 @@ describe("alias-only model data plane", () => {
     expect(fixture.upstreamCallCount()).toBe(0);
   });
 
-  it("rejects canonical provider/model selectors even when they are callable", async () => {
+  it("rejects unconfigured provider/model-shaped selectors even when their canonical target is callable", async () => {
     const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES);
     const anthropic = await fixture.runtime.handle(
       anthropicRequest(
@@ -763,7 +1021,7 @@ describe("alias-only model data plane", () => {
     expect(responsesBody).not.toContain("gpt-4o");
   });
 
-  it("serves unauthenticated discovery listing only callable mapped aliases with real owned_by and no model ids", async () => {
+  it("serves unauthenticated discovery listing only callable mapped aliases with real owned_by", async () => {
     const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES);
     const response = await fixture.runtime.handle(
       new Request("http://luckytoken.test/v1/models", { method: "GET" }),
@@ -775,20 +1033,20 @@ describe("alias-only model data plane", () => {
     };
     expect(list.object).toBe("list");
     expect(list.data).toEqual([
+      { id: "commandcode-private/gpt-5.6-luna", object: "model", created: NOW / 1000, owned_by: "commandcode-private" },
       { id: "flash", object: "model", created: NOW / 1000, owned_by: "commandcode-private" },
       { id: "gpt", object: "model", created: NOW / 1000, owned_by: "my-openai" },
-      { id: "luna", object: "model", created: NOW / 1000, owned_by: "commandcode-private" },
       { id: "sonnet", object: "model", created: NOW / 1000, owned_by: "my-anthropic" },
     ]);
     const serialized = JSON.stringify(list);
     // "ghost" is configured but its target is not callable: hidden.
     expect(serialized).not.toContain("ghost");
-    // Real model ids never appear; only aliases and real providers do.
+    // Unmapped canonical identities never appear. A configured alias may
+    // intentionally contain provider/model-shaped text, including a model id.
     expect(serialized).not.toContain("claude-sonnet");
     expect(serialized).not.toContain("gpt-4o");
     expect(serialized).not.toContain("deepseek-v4-flash");
     expect(serialized).not.toContain("claude-opus");
-    expect(serialized).not.toContain("/");
   });
 
   it("hot alias replacement applies to new requests only while the in-flight request keeps its captured alias and canonical target", async () => {

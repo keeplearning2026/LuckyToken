@@ -156,6 +156,9 @@ function makeShell(options: {
     executeAliasCommand: async () => {
       throw new Error("unused alias command");
     },
+    executeCodexIntegrationCommand: async () => {
+      throw new Error("unused Codex integration command");
+    },
     dispose: async () => undefined,
     getAnalytics: async (query) => {
       queries.push(query);

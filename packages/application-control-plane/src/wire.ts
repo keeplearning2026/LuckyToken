@@ -24,6 +24,10 @@ import {
   type ApplicationStatus,
   type CatalogCommand,
   type CatalogCommandResult,
+  type CodexIntegrationCommand,
+  type CodexIntegrationCommandResult,
+  type CodexIntegrationObservedState,
+  type CodexIntegrationProjection,
   type CatalogModelAvailability,
   type CatalogModelProjection,
   type CatalogProviderProjection,
@@ -257,6 +261,11 @@ export type ClientRequest =
       readonly requestId: string;
       readonly command: AliasCommand;
     }
+  | {
+      readonly type: "codex_integration_command";
+      readonly requestId: string;
+      readonly command: CodexIntegrationCommand;
+    }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
 
@@ -373,6 +382,11 @@ export type ServerMessage =
       readonly type: "alias_command_result";
       readonly requestId: string;
       readonly result: AliasCommandResult;
+    }
+  | {
+      readonly type: "codex_integration_command_result";
+      readonly requestId: string;
+      readonly result: CodexIntegrationCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -880,6 +894,82 @@ export function decodeCatalogCommandResult(
     snapshot,
     ...(refresh === undefined ? {} : { refresh }),
   });
+}
+
+export function decodeCodexIntegrationCommand(
+  value: unknown,
+): CodexIntegrationCommand | undefined {
+  if (!isRecord(value) || typeof value.command !== "string") return undefined;
+  if (value.command === "query") return { command: "query" };
+  if (value.command === "sync_catalog") return { command: "sync_catalog" };
+  if (value.command === "set_enabled" && typeof value.enabled === "boolean") {
+    return { command: "set_enabled", enabled: value.enabled };
+  }
+  return undefined;
+}
+
+const codexObservedStates: ReadonlySet<string> = new Set([
+  "native",
+  "managed",
+  "drifted",
+  "conflict",
+  "unavailable",
+]);
+
+export function decodeCodexIntegrationProjection(
+  value: unknown,
+): CodexIntegrationProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.desiredEnabled !== "boolean" ||
+    typeof value.observedState !== "string" ||
+    !codexObservedStates.has(value.observedState) ||
+    typeof value.codexHome !== "string" ||
+    value.codexHome.length === 0 ||
+    typeof value.configPath !== "string" ||
+    value.configPath.length === 0 ||
+    typeof value.catalogPath !== "string" ||
+    value.catalogPath.length === 0 ||
+    typeof value.restartRequired !== "boolean" ||
+    !Array.isArray(value.warnings) ||
+    value.warnings.some((warning) => typeof warning !== "string")
+  ) {
+    return undefined;
+  }
+  if (value.endpoint !== undefined && typeof value.endpoint !== "string") {
+    return undefined;
+  }
+  if (
+    value.modelCount !== undefined &&
+    (typeof value.modelCount !== "number" ||
+      !Number.isSafeInteger(value.modelCount) ||
+      value.modelCount < 0)
+  ) {
+    return undefined;
+  }
+  if (value.message !== undefined && typeof value.message !== "string") {
+    return undefined;
+  }
+  return Object.freeze({
+    desiredEnabled: value.desiredEnabled,
+    observedState: value.observedState as CodexIntegrationObservedState,
+    codexHome: value.codexHome,
+    configPath: value.configPath,
+    catalogPath: value.catalogPath,
+    ...(value.endpoint === undefined ? {} : { endpoint: value.endpoint }),
+    ...(value.modelCount === undefined ? {} : { modelCount: value.modelCount }),
+    warnings: Object.freeze([...(value.warnings as string[])]),
+    restartRequired: value.restartRequired,
+    ...(value.message === undefined ? {} : { message: value.message }),
+  });
+}
+
+export function decodeCodexIntegrationCommandResult(
+  value: unknown,
+): CodexIntegrationCommandResult | undefined {
+  if (!isRecord(value)) return undefined;
+  const state = decodeCodexIntegrationProjection(value.state);
+  return state === undefined ? undefined : Object.freeze({ state });
 }
 
 export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
@@ -2904,6 +2994,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
+  if (value.type === "codex_integration_command") {
+    const command = decodeCodexIntegrationCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "codex_integration_command",
+        requestId,
+        command,
+      },
+    };
+  }
   return { type: "invalid", requestId, code: "unknown_command" };
 }
 
@@ -3539,6 +3643,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "alias_command_result", requestId, result };
+  }
+  if (value.type === "codex_integration_command_result") {
+    const result = decodeCodexIntegrationCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "codex_integration_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

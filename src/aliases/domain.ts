@@ -17,10 +17,11 @@
  *   error instead of guessing which alias wins;
  * - validation against the authoritative Ticket 11 catalog snapshot
  *   distinguishes `invalid` (malformed alias/target), `ambiguous` (a target
- *   that cannot name one canonical model, or an alias colliding with the
- *   canonical provider/model selector syntax), `unknown` (well-formed but
- *   absent from the active catalog) and `duplicate` (canonical target
- *   already mapped) — without ever replacing the active registry.
+ *   that cannot name one canonical model), `unknown` (well-formed but absent
+ *   from the active catalog) and `duplicate` (canonical target already
+ *   mapped) — without ever replacing the active registry. Alias text is an
+ *   opaque external identity and may contain `/`; canonical identity is
+ *   determined only by the explicit mapped target.
  *
  * All inputs are injected (catalog snapshot facts, defaults, defaults
  * version) so tests are deterministic; this module never touches the
@@ -46,9 +47,8 @@ export interface CuratedAliasDefault {
  *  invalid (bounded, value-safe). */
 export const MAX_ALIAS_LENGTH = 128;
 
-/** Canonical separator between provider and model in string targets and in
- *  canonical selectors; an alias containing it collides with canonical
- *  Provider/model selector syntax and is rejected as ambiguous. */
+/** Canonical separator between provider and model in string-form targets.
+ *  Alias keys are opaque external identities and may contain this character. */
 const CANONICAL_SEPARATOR = "/";
 
 /** Deterministic canonical key for one canonical target. */
@@ -169,12 +169,6 @@ function aliasKeyError(alias: string): Omit<AliasValidationErrorProjection, "ali
     return {
       code: "invalid",
       message: `Alias "${alias}" is not valid: it must not start or end with whitespace.`,
-    };
-  }
-  if (alias.includes(CANONICAL_SEPARATOR)) {
-    return {
-      code: "ambiguous",
-      message: `Alias "${alias}" is ambiguous: it uses the reserved Provider/model separator "/".`,
     };
   }
   if (alias.length > MAX_ALIAS_LENGTH) {

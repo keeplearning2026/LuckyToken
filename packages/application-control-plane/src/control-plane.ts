@@ -37,6 +37,11 @@ export {
   type CatalogRefreshTrigger,
   type CatalogSnapshotProjection,
   type CatalogStatusProjection,
+  type CodexIntegrationCommand,
+  type CodexIntegrationCommandHandler,
+  type CodexIntegrationCommandResult,
+  type CodexIntegrationObservedState,
+  type CodexIntegrationProjection,
   type ClientTokenCommand,
   type ClientTokenCommandHandler,
   type ClientTokenCommandOutcome,
@@ -248,6 +253,7 @@ export {
   protocolDisplayName,
 } from "./contracts.js";
 export { decodeRequestLedgerEvent, decodeRequestLedgerQuery, decodeRequestLedgerRecord, decodeRequestLedgerResult } from "./wire-ledger.js";
+export { decodeCodexIntegrationCommandResult } from "./wire.js";
 export { decodeCaptureEvent, decodeCaptureQuery, decodeCaptureQueryResult, decodeCaptureRecord } from "./wire-capture.js";
 export {
   LEDGER_OUTCOMES,

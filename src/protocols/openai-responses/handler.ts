@@ -48,6 +48,11 @@ import {
 } from "../options.js";
 import { InvalidRequest } from "./request.js";
 import {
+  readResponsesRequestBody,
+  ResponsesRequestBodyTooLargeError,
+  UnsupportedResponsesContentEncodingError,
+} from "./request-body.js";
+import {
   convertAssistantMessageToResponses,
   renderResponsesError,
   renderResponsesErrorResponse,
@@ -76,6 +81,18 @@ import {
   projectResponsesPassthroughBody,
   type PassthroughResponsesResult,
 } from "./passthrough.js";
+import type { CodexLocalCredentialAuthority } from "../../integrations/codex/local-auth.js";
+import type { CodexNativeModelSource } from "../../integrations/codex/native-models.js";
+import { executeCodexNativeBranch } from "./codex-native-branch.js";
+import {
+  buildCodexRoutedCompactionRequest,
+  CodexRoutedCompactionSummaryError,
+  expandLuckyTokenCompactionEnvelopes,
+  hasLuckyTokenCompactionEnvelope,
+  isCodexRoutedCompactionRequest,
+  projectRoutedCompactionResponse,
+} from "./codex-routed-compaction.js";
+import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";
 
 export const openaiResponsesProtocolId = "openai-responses";
 
@@ -147,6 +164,11 @@ export interface OpenAIResponsesHandlerOptions {
    * snapshots are honest Partial undeclared_semantics.
    */
   readonly executeOperation?: ExecutionOperation;
+  /** Optional native Codex capability. It is independent of local Codex
+   *  config management: when wired, authenticated bare native model ids can
+   *  use the client-owned Codex OAuth passthrough path. */
+  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
+  readonly codexNativeModels?: CodexNativeModelSource;
 }
 
 interface OpenAIResponsesDependencies {
@@ -165,6 +187,8 @@ interface OpenAIResponsesDependencies {
   readonly now: () => number;
   readonly resolveRequestModel: RequestModelResolver;
   readonly executeOperation: ExecutionOperation;
+  readonly codexLocalAuth: CodexLocalCredentialAuthority | undefined;
+  readonly codexNativeModels: CodexNativeModelSource | undefined;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -262,24 +286,6 @@ function hasJsonContentType(headers: Headers): boolean {
   );
 }
 
-async function readRawBody(
-  request: Request,
-  maximumBytes: number,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  const declaredLength = request.headers.get("content-length");
-  if (
-    /^[0-9]+$/u.test(declaredLength ?? "") &&
-    Number(declaredLength) > maximumBytes
-  ) {
-    return undefined;
-  }
-  const rawBody = await raceWithRequestSignal(request.text(), signal);
-  return new TextEncoder().encode(rawBody).byteLength <= maximumBytes
-    ? rawBody
-    : undefined;
-}
-
 async function rememberAfterSuccess(
   dependencies: OpenAIResponsesDependencies,
   diagnostics: InvocationDiagnostics,
@@ -347,21 +353,11 @@ async function handleOpenAIResponses(
         : { projectDir: authResult.projectDir }),
     });
 
-    const rawBody = await readRawBody(
+    const decodedBody = await readResponsesRequestBody(
       request,
       dependencies.maxRequestBytes,
-      request.signal,
     );
-    if (rawBody === undefined) {
-      ledger.terminal("failed", { clientHttpStatus: 413 });
-      return toResponse(
-        renderResponsesError(
-          413,
-          "request_too_large",
-          "Request exceeds the configured maximum size",
-        ),
-      );
-    }
+    const rawBody = decodedBody.text;
     // Ticket 22: the raw request body is collected for the capture observer
     // exactly as the request path produced it; sanitization happens at the
     // one store choke point before commit. A throwing capture seam is
@@ -375,13 +371,55 @@ async function handleOpenAIResponses(
         // The capture seam must never affect the request path.
       }
     }
-    const body: unknown = JSON.parse(rawBody);
+    const body: unknown = decodedBody.json;
 
     // Native passthrough selection happens before any conversion or local
     // state expansion: a model declared Responses-wire-compatible forwards
     // the raw request verbatim to the upstream endpoint, never through Pi.
     const selector = extractResponsesModelSelector(body);
     diagnostics.checkpoint({ stage: "model-resolution", selector });
+    if (
+      dependencies.codexLocalAuth !== undefined &&
+      dependencies.codexNativeModels?.has(selector) === true
+    ) {
+      const forwardAuth = await raceWithRequestSignal(
+        dependencies.codexLocalAuth.resolveForwardAuth(request.headers),
+        request.signal,
+      );
+      if (forwardAuth !== undefined) {
+        ledger.modelResolved({
+          externalAlias: selector,
+          providerId: "openai-codex",
+          realModelId: selector,
+        });
+        return executeCodexNativeBranch({
+          request,
+          rawBody,
+          forwardAuth,
+          fetch: dependencies.passthroughFetch,
+          diagnostics,
+          ledger,
+        });
+      }
+    }
+    const codexCompactionRequested = isCodexRoutedCompactionRequest(body);
+    const codexReplayRequested = hasLuckyTokenCompactionEnvelope(body);
+    const routedCodexAuthenticated =
+      (codexCompactionRequested || codexReplayRequested) &&
+      dependencies.codexLocalAuth !== undefined &&
+      (await raceWithRequestSignal(
+        dependencies.codexLocalAuth.resolveForwardAuth(request.headers),
+        request.signal,
+      )) !== undefined;
+    const routedCodexCompaction =
+      codexCompactionRequested && routedCodexAuthenticated;
+    const routedCodexReplay = codexReplayRequested && routedCodexAuthenticated;
+    const routedCompactionStream =
+      routedCodexCompaction &&
+      typeof body === "object" &&
+      body !== null &&
+      (body as Record<string, unknown>).stream === true;
+
     // Ticket 15: the request captures one immutable alias snapshot at
     // acceptance; the resolved canonical target reaches the standard Pi
     // Provider invocation path. Bare ids and canonical selectors are never
@@ -425,7 +463,11 @@ async function handleOpenAIResponses(
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
       dependencies.aliasSource === undefined ? undefined : resolution.alias;
-    if (isResponsesNativePassthroughModel(model)) {
+    if (
+      !routedCodexCompaction &&
+      !routedCodexReplay &&
+      isResponsesNativePassthroughModel(model)
+    ) {
       return passthroughBranch(
         dependencies,
         dependencies.passthroughFetch,
@@ -452,8 +494,14 @@ async function handleOpenAIResponses(
           )
         : body;
 
+    const replayExpanded = routedCodexReplay
+      ? expandLuckyTokenCompactionEnvelopes(expanded)
+      : expanded;
+    const executionBody = routedCodexCompaction
+      ? buildCodexRoutedCompactionRequest(replayExpanded)
+      : replayExpanded;
     const invocation = convertResponsesRequest(
-      expanded,
+      executionBody,
       dependencies.now(),
       dependencies.configuration.conversion.request,
     );
@@ -510,7 +558,7 @@ async function handleOpenAIResponses(
         ledger.notice(notice);
       },
     );
-    const rendered = convertAssistantMessageToResponses(
+    const renderedBase = convertAssistantMessageToResponses(
       message,
       renderState,
       responseId,
@@ -521,24 +569,50 @@ async function handleOpenAIResponses(
             | undefined)
         : undefined,
     );
-    // The state module owns continuation representation. Give it only this
-    // turn's raw request; expansion is used solely for the current invocation.
-    await rememberAfterSuccess(
-      dependencies,
-      diagnostics,
-      ledger,
-      body,
-      rendered,
-    );
+    const rendered = routedCodexCompaction
+      ? projectRoutedCompactionResponse(renderedBase, message)
+      : renderedBase;
+    // Compaction replaces the client's history, so the synthetic summary
+    // turn must never be recorded as an ordinary continuation checkpoint.
+    if (!routedCodexCompaction) {
+      await rememberAfterSuccess(
+        dependencies,
+        diagnostics,
+        ledger,
+        body,
+        rendered,
+      );
+    }
 
-    const prepared = invocation.renderState.stream
-      ? renderResponsesSse(rendered)
-      : renderResponsesJson(rendered);
+    const prepared =
+      (routedCodexCompaction ? routedCompactionStream : invocation.renderState.stream)
+        ? renderResponsesSse(rendered)
+        : renderResponsesJson(rendered);
     request.signal.throwIfAborted();
     return toResponse(prepared);
   } catch (error) {
     if (request.signal.aborted || error instanceof ExecutionAbortedError) {
       throw new ExecutionAbortedError(request.signal.reason);
+    }
+    if (error instanceof ResponsesRequestBodyTooLargeError) {
+      ledger.terminal("failed", { clientHttpStatus: 413 });
+      return toResponse(
+        renderResponsesError(
+          413,
+          "request_too_large",
+          "Request exceeds the configured maximum size",
+        ),
+      );
+    }
+    if (error instanceof UnsupportedResponsesContentEncodingError) {
+      ledger.terminal("failed", { clientHttpStatus: 415 });
+      return toResponse(
+        renderResponsesError(
+          415,
+          "invalid_request_error",
+          "Unsupported Content-Encoding",
+        ),
+      );
     }
     if (error instanceof SyntaxError) {
       ledger.terminal("failed", { clientHttpStatus: 400 });
@@ -547,6 +621,17 @@ async function handleOpenAIResponses(
           400,
           "invalid_request_error",
           "Request body is not valid JSON",
+        ),
+      );
+    }
+    if (error instanceof CodexRoutedCompactionSummaryError) {
+      ledger.fail({ classification: "runtime-failure", error });
+      ledger.terminal("failed", { clientHttpStatus: 502 });
+      return toResponse(
+        renderResponsesError(
+          502,
+          "api_error",
+          "Routed compaction summarizer produced no text",
         ),
       );
     }
@@ -791,6 +876,12 @@ async function passthroughBranch(
     throw error;
   }
   request.signal.throwIfAborted();
+  const terminalUsage = extractResponsesPassthroughUsage(
+    upstream.body,
+    upstream.headers["content-type"] ?? "",
+    model.api,
+  );
+  if (terminalUsage !== undefined) ledger.terminalUsage(terminalUsage);
   if (upstream.status >= 400 && alias === undefined) {
     // Legacy handler seam: upstream error responses pass through verbatim.
     ledger.terminal("failed", { clientHttpStatus: upstream.status });
@@ -1036,6 +1127,8 @@ export function createOpenAIResponsesHandler(
     now: options.now ?? Date.now,
     resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
     executeOperation: options.executeOperation ?? execute,
+    codexLocalAuth: options.codexLocalAuth,
+    codexNativeModels: options.codexNativeModels,
   });
   return Object.freeze({
     method: "POST",

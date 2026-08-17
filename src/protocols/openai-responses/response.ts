@@ -94,11 +94,18 @@ function parseVerifiedContinuityEnvelope(
   return envelope as unknown as ResponsesContinuityEnvelopeV1;
 }
 
+export interface ResponsesCompactionOutputItem {
+  readonly type: "compaction";
+  readonly id: string;
+  readonly encrypted_content: string;
+}
+
 export type ResponsesOutputItem =
   | ResponsesMessageOutputItem
   | ResponsesFunctionCallOutputItem
   | ResponsesCustomToolCallOutputItem
-  | ResponsesReasoningOutputItem;
+  | ResponsesReasoningOutputItem
+  | ResponsesCompactionOutputItem;
 
 /**
  * The SDK `ResponseError` shape carried inside a failed Response object. The

@@ -14,7 +14,8 @@ use crate::backup_wire::{BackupCommand, BackupResultWire};
 use crate::control_plane_v1::{
     AliasCommand, AliasCommandResultWire, AnalyticsResultWire, AuthCommand, AuthCommandResultWire,
     AuthInteractionResponse, AuthLoginSession, AutoStartAction, CatalogCommand,
-    CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
+    CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire,
+    CodexIntegrationCommand, CodexIntegrationCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
     CredentialCommandResultWire, DiagnosticsWarningWire, HistoryCommand, HistoryCommandResultWire,
     ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
@@ -710,6 +711,16 @@ impl ShellBridge {
         self.connector.alias_command(command).await.map_err(|_| ())
     }
 
+    pub(crate) async fn codex_integration_command(
+        &self,
+        command: CodexIntegrationCommand,
+    ) -> Result<CodexIntegrationCommandResultWire, ()> {
+        self.connector
+            .codex_integration_command(command)
+            .await
+            .map_err(|_| ())
+    }
+
     /// Ticket 17 identity seam: the recent authorized request identities
     /// (optional client session id, canonical project context). The native
     /// bridge rejects records carrying the internal effective session id
@@ -925,10 +936,12 @@ mod tests {
     use super::*;
     use crate::control_plane_v1::{
         execute_auth_login_session, AuthCommand, AuthLoginFuture, AutoStartFuture,
-        AutoStartResultWire, ConnectFuture, ConnectResult, ConnectionFailure,
-        ControlPlaneConnector, ControlPlaneSession, HistoryCommand, HistoryCommandFuture,
-        HistoryCommandResultWire, HistoryCountsWire, HistoryQueryResultWire, HistoryRangeWire,
-        ModelDataPlaneState, ProviderState, SessionFailure, StatusSnapshot,
+        AutoStartResultWire, CodexIntegrationCommand, CodexIntegrationCommandFuture,
+        CodexIntegrationCommandResultWire, CodexIntegrationProjectionWire, ConnectFuture,
+        ConnectResult, ConnectionFailure, ControlPlaneConnector, ControlPlaneSession,
+        HistoryCommand, HistoryCommandFuture, HistoryCommandResultWire, HistoryCountsWire,
+        HistoryQueryResultWire, HistoryRangeWire, ModelDataPlaneState, ProviderState,
+        SessionFailure, StatusSnapshot,
     };
     use std::pin::Pin;
     use std::{
@@ -1198,6 +1211,56 @@ mod tests {
 
     struct HistoryRecordingConnector {
         commands: Arc<std::sync::Mutex<Vec<HistoryCommand>>>,
+    }
+
+    struct CodexIntegrationRecordingConnector {
+        commands: Arc<std::sync::Mutex<Vec<CodexIntegrationCommand>>>,
+    }
+
+    impl ControlPlaneConnector for CodexIntegrationRecordingConnector {
+        fn connect(&self) -> ConnectFuture {
+            Box::pin(async { std::future::pending().await })
+        }
+
+        fn codex_integration_command(
+            &self,
+            command: CodexIntegrationCommand,
+        ) -> CodexIntegrationCommandFuture {
+            self.commands.lock().unwrap().push(command);
+            Box::pin(async {
+                Ok(CodexIntegrationCommandResultWire {
+                    state: CodexIntegrationProjectionWire {
+                        desired_enabled: false,
+                        observed_state: "native".to_owned(),
+                        codex_home: "C:\\Users\\user\\.codex".to_owned(),
+                        config_path: "C:\\Users\\user\\.codex\\config.toml".to_owned(),
+                        catalog_path: "C:\\Users\\user\\.luckytoken\\integrations\\codex\\model-catalog.json".to_owned(),
+                        endpoint: Some("http://127.0.0.1:3000/v1".to_owned()),
+                        model_count: Some(8),
+                        warnings: Vec::new(),
+                        restart_required: false,
+                        message: None,
+                    },
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_integration_query_routes_through_the_thin_shell_bridge() {
+        let commands = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let bridge = ShellBridge::new(Arc::new(CodexIntegrationRecordingConnector {
+            commands: commands.clone(),
+        }));
+
+        let result = bridge
+            .codex_integration_command(CodexIntegrationCommand::Query)
+            .await
+            .expect("Codex integration query must return its allowlisted DTO");
+
+        assert_eq!(result.state.observed_state, "native");
+        assert_eq!(result.state.model_count, Some(8));
+        assert_eq!(commands.lock().unwrap().len(), 1);
     }
 
     impl ControlPlaneConnector for HistoryRecordingConnector {

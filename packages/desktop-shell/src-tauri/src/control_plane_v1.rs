@@ -551,6 +551,33 @@ impl AliasCommand {
     }
 }
 
+pub(crate) enum CodexIntegrationCommand {
+    Query,
+    SetEnabled(bool),
+    SyncCatalog,
+}
+
+impl CodexIntegrationCommand {
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::Query => "desktop-codex-integration-query",
+            Self::SetEnabled(_) => "desktop-codex-integration-set-enabled",
+            Self::SyncCatalog => "desktop-codex-integration-sync-catalog",
+        }
+    }
+
+    fn wire(&self) -> Value {
+        match self {
+            Self::Query => json!({ "command": "query" }),
+            Self::SetEnabled(enabled) => json!({
+                "command": "set_enabled",
+                "enabled": enabled,
+            }),
+            Self::SyncCatalog => json!({ "command": "sync_catalog" }),
+        }
+    }
+}
+
 impl RuntimeCommand {
     fn as_str(self) -> &'static str {
         match self {
@@ -1204,6 +1231,13 @@ pub(crate) type CredentialCommandFuture = Pin<
 pub(crate) type AliasCommandFuture = Pin<
     Box<dyn Future<Output = Result<AliasCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type CodexIntegrationCommandFuture = Pin<
+    Box<
+        dyn Future<Output = Result<CodexIntegrationCommandResultWire, ConnectionFailure>>
+            + Send
+            + 'static,
+    >,
+>;
 pub(crate) type AuthQueryFuture = Pin<
     Box<dyn Future<Output = Result<AuthCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
@@ -1298,6 +1332,12 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn alias_command(&self, _command: AliasCommand) -> AliasCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn codex_integration_command(
+        &self,
+        _command: CodexIntegrationCommand,
+    ) -> CodexIntegrationCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
 }
@@ -1797,6 +1837,34 @@ pub(crate) struct AliasCommandResultWire {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CodexIntegrationProjectionWire {
+    #[serde(rename = "desiredEnabled")]
+    pub(crate) desired_enabled: bool,
+    #[serde(rename = "observedState")]
+    pub(crate) observed_state: String,
+    #[serde(rename = "codexHome")]
+    pub(crate) codex_home: String,
+    #[serde(rename = "configPath")]
+    pub(crate) config_path: String,
+    #[serde(rename = "catalogPath")]
+    pub(crate) catalog_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) endpoint: Option<String>,
+    #[serde(rename = "modelCount", skip_serializing_if = "Option::is_none")]
+    pub(crate) model_count: Option<u64>,
+    pub(crate) warnings: Vec<String>,
+    #[serde(rename = "restartRequired")]
+    pub(crate) restart_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct CodexIntegrationCommandResultWire {
+    pub(crate) state: CodexIntegrationProjectionWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct AliasesProjectionWire {
     pub(crate) revision: u64,
     pub(crate) path: String,
@@ -2175,6 +2243,23 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_alias_command_session(&pipe_name, capability, command).await
+        })
+    }
+    fn codex_integration_command(
+        &self,
+        command: CodexIntegrationCommand,
+    ) -> CodexIntegrationCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_codex_integration_command_session(&pipe_name, capability, command).await
         })
     }
 }
@@ -3452,6 +3537,100 @@ fn decode_catalog_command_result(
         return Err(ConnectionFailure::ProtocolError);
     }
     serde_json::from_value::<CatalogCommandResultWire>(Value::Object(result.clone()))
+        .map_err(|_| ConnectionFailure::ProtocolError)
+}
+
+async fn execute_codex_integration_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: CodexIntegrationCommand,
+) -> Result<CodexIntegrationCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "codex_integration_command",
+                    "requestId": command.request_id(),
+                    "command": command.wire(),
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_codex_integration_command_result(&result, &command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+fn decode_codex_integration_command_result(
+    value: &Value,
+    command: &CodexIntegrationCommand,
+) -> Result<CodexIntegrationCommandResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("codex_integration_command_result")
+        || value.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    let state = result
+        .get("state")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    if !matches!(
+        state.get("observedState").and_then(Value::as_str),
+        Some("native" | "managed" | "drifted" | "conflict" | "unavailable")
+    ) || state
+        .get("codexHome")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+        || state
+            .get("configPath")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || state
+            .get("catalogPath")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || state
+            .get("warnings")
+            .and_then(Value::as_array)
+            .is_none()
+        || state
+            .get("desiredEnabled")
+            .and_then(Value::as_bool)
+            .is_none()
+        || state
+            .get("restartRequired")
+            .and_then(Value::as_bool)
+            .is_none()
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    serde_json::from_value::<CodexIntegrationCommandResultWire>(Value::Object(result.clone()))
         .map_err(|_| ConnectionFailure::ProtocolError)
 }
 
@@ -7356,6 +7535,226 @@ mod ticket14_alias_transport_tests {
                 "errors": []
             }
         })
+    }
+
+    #[tokio::test]
+    async fn codex_integration_query_exchanges_the_versioned_wire_and_decodes_the_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_codex_integration_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CodexIntegrationCommand::Query,
+            )
+            .await
+            .expect("Codex integration query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("codex_integration_command")
+        );
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-codex-integration-query")
+        );
+        assert_eq!(
+            request
+                .get("command")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str),
+            Some("query")
+        );
+        server
+            .send(&json!({
+                "type": "codex_integration_command_result",
+                "requestId": "desktop-codex-integration-query",
+                "result": {
+                    "state": {
+                        "desiredEnabled": false,
+                        "observedState": "native",
+                        "codexHome": "C:\\Users\\user\\.codex",
+                        "configPath": "C:\\Users\\user\\.codex\\config.toml",
+                        "catalogPath": "C:\\Users\\user\\.luckytoken\\integrations\\codex\\model-catalog.json",
+                        "endpoint": "http://127.0.0.1:3000/v1",
+                        "modelCount": 8,
+                        "warnings": [],
+                        "restartRequired": false
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("Codex integration query must complete within the timeout")
+            .expect("Codex integration query task must not panic");
+        assert!(!result.state.desired_enabled);
+        assert_eq!(result.state.observed_state, "native");
+        assert_eq!(result.state.model_count, Some(8));
+    }
+
+    #[tokio::test]
+    async fn codex_integration_enable_exchanges_the_versioned_wire() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_codex_integration_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CodexIntegrationCommand::SetEnabled(true),
+            )
+            .await
+            .expect("Codex integration enable must negotiate and complete")
+        });
+        server.connect().await.expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-codex-integration-set-enabled")
+        );
+        assert_eq!(
+            request.get("command").and_then(|raw| raw.get("command")).and_then(Value::as_str),
+            Some("set_enabled")
+        );
+        assert_eq!(
+            request.get("command").and_then(|raw| raw.get("enabled")).and_then(Value::as_bool),
+            Some(true)
+        );
+        server
+            .send(&json!({
+                "type": "codex_integration_command_result",
+                "requestId": "desktop-codex-integration-set-enabled",
+                "result": {
+                    "state": {
+                        "desiredEnabled": true,
+                        "observedState": "managed",
+                        "codexHome": "C:\\Users\\user\\.codex",
+                        "configPath": "C:\\Users\\user\\.codex\\config.toml",
+                        "catalogPath": "C:\\Users\\user\\.luckytoken\\integrations\\codex\\model-catalog.json",
+                        "endpoint": "http://127.0.0.1:3000/v1",
+                        "modelCount": 8,
+                        "warnings": [],
+                        "restartRequired": true
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("Codex integration enable must complete within the timeout")
+            .expect("Codex integration enable task must not panic");
+        assert!(result.state.desired_enabled);
+        assert_eq!(result.state.observed_state, "managed");
+    }
+
+    #[tokio::test]
+    async fn codex_integration_sync_catalog_exchanges_the_versioned_wire() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_codex_integration_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                CodexIntegrationCommand::SyncCatalog,
+            )
+            .await
+            .expect("Codex catalog sync must negotiate and complete")
+        });
+        server.connect().await.expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(
+            request.get("requestId").and_then(Value::as_str),
+            Some("desktop-codex-integration-sync-catalog")
+        );
+        assert_eq!(
+            request.get("command").and_then(|raw| raw.get("command")).and_then(Value::as_str),
+            Some("sync_catalog")
+        );
+        server
+            .send(&json!({
+                "type": "codex_integration_command_result",
+                "requestId": "desktop-codex-integration-sync-catalog",
+                "result": {
+                    "state": {
+                        "desiredEnabled": true,
+                        "observedState": "managed",
+                        "codexHome": "C:\\Users\\user\\.codex",
+                        "configPath": "C:\\Users\\user\\.codex\\config.toml",
+                        "catalogPath": "C:\\Users\\user\\.luckytoken\\integrations\\codex\\model-catalog.json",
+                        "endpoint": "http://127.0.0.1:3000/v1",
+                        "modelCount": 11,
+                        "warnings": [],
+                        "restartRequired": true
+                    }
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("Codex catalog sync must complete within the timeout")
+            .expect("Codex catalog sync task must not panic");
+        assert_eq!(result.state.model_count, Some(11));
     }
 
     #[tokio::test]

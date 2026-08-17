@@ -373,10 +373,10 @@ export type AliasLayer = "default" | "user";
 
 /** Distinguished alias validation failure category (Ticket 14):
  *  `invalid` is a malformed alias/target, `ambiguous` is a target that
- *  cannot name one canonical model (or an alias colliding with the
- *  canonical Provider/model selector syntax), `unknown` is a well-formed
- *  target absent from the authoritative catalog snapshot, and `duplicate`
- *  is a canonical target that already has an effective alias. */
+ *  cannot name one canonical model, `unknown` is a well-formed target absent
+ *  from the authoritative catalog snapshot, and `duplicate` is a canonical
+ *  target that already has an effective alias. Alias text is opaque and may
+ *  contain `/`; it is never interpreted as canonical identity. */
 export type AliasValidationCode =
   | "invalid"
   | "ambiguous"
@@ -502,6 +502,41 @@ export type AliasCommandHandler = (
   command: AliasCommand,
 ) => Promise<AliasCommandResult>;
 
+/** Optional local Codex configuration integration. Native Codex request
+ * support is a Data Plane capability and is deliberately not controlled by
+ * this desired-state switch. */
+export type CodexIntegrationObservedState =
+  | "native"
+  | "managed"
+  | "drifted"
+  | "conflict"
+  | "unavailable";
+
+export interface CodexIntegrationProjection {
+  readonly desiredEnabled: boolean;
+  readonly observedState: CodexIntegrationObservedState;
+  readonly codexHome: string;
+  readonly configPath: string;
+  readonly catalogPath: string;
+  readonly endpoint?: string;
+  readonly modelCount?: number;
+  readonly warnings: readonly string[];
+  readonly restartRequired: boolean;
+  readonly message?: string;
+}
+
+export type CodexIntegrationCommand =
+  | { readonly command: "query" }
+  | { readonly command: "set_enabled"; readonly enabled: boolean }
+  | { readonly command: "sync_catalog" };
+
+export interface CodexIntegrationCommandResult {
+  readonly state: CodexIntegrationProjection;
+}
+
+export type CodexIntegrationCommandHandler = (
+  command: CodexIntegrationCommand,
+) => Promise<CodexIntegrationCommandResult>;
 
 export type ModelsCommand =
   | { readonly command: "query" }
@@ -1348,6 +1383,9 @@ export interface ControlPlaneClient {
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  executeCodexIntegrationCommand(
+    command: CodexIntegrationCommand,
+  ): Promise<CodexIntegrationCommandResult>;
   /** Ticket 18: bounded Request Ledger query (newest-first, pageable). */
   getRequestLedger(
     query?: RequestLedgerQuery,

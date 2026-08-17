@@ -13,6 +13,8 @@ import {
   type CatalogCommandHandler,
   type CatalogCommandResult,
   type CatalogStatusProjection,
+  type CodexIntegrationCommandHandler,
+  type CodexIntegrationCommandResult,
   type ControlPlaneEndpoint,
   type ModelsCommandHandler,
   type ModelsProjection,
@@ -77,6 +79,7 @@ import {
   decodeApplicationStatus,
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
+  decodeCodexIntegrationCommandResult,
   decodeClientRequest,
   decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
@@ -143,6 +146,10 @@ export interface StartControlPlaneOptions {
    *  versioned alias commands against the live model-aliases.json
    *  authority. */
   readonly aliasCommandHandler?: AliasCommandHandler;
+  /** Optional local Codex config/catalog integration. This controls only
+   *  external Codex artifacts; native Codex request support remains in the
+   *  Data Plane regardless of this handler. */
+  readonly codexIntegrationCommandHandler?: CodexIntegrationCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
@@ -1192,6 +1199,40 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "alias_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "codex_integration_command") {
+          if (options.codexIntegrationCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          let handled: CodexIntegrationCommandResult;
+          try {
+            handled = await options.codexIntegrationCommandHandler(request.command);
+          } catch {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          const result = decodeCodexIntegrationCommandResult(handled);
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "codex_integration_command_result",
             requestId: request.requestId,
             result,
           });

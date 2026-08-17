@@ -76,15 +76,20 @@ describe("alias target validation taxonomy", () => {
     expect(registry.errors[0]?.message).toContain("Provider");
   });
 
-  it("rejects an alias using the canonical provider/model separator as ambiguous", () => {
+  it("accepts aliases containing the provider/model separator as opaque external identities", () => {
     const registry = compute({
-      "openai/gpt-4o": { provider: "openai", model: "gpt-4o" },
+      "openai/gpt-4o-mini": { provider: "openai", model: "gpt-4o-mini" },
     });
     expect(registry.aliases.map((entry) => entry.alias)).toEqual([
+      "openai/gpt-4o-mini",
       "gpt-4o",
       "claude-opus-4",
     ]);
-    expect(registry.errors[0]?.code).toBe("ambiguous");
+    expect(registry.errors).toEqual([]);
+    expect(registry.aliases[0]?.target).toEqual({
+      provider: "openai",
+      model: "gpt-4o-mini",
+    });
   });
 
   it("rejects malformed aliases and targets as invalid", () => {

@@ -10,6 +10,7 @@ import {
   type ClientTokenCommand,
   type ClientTokenDirectoryRejection,
   type ClientTokenScopeRef,
+  type CodexIntegrationProjection,
   type HistoryExportResult,
   type HistoryExportCommand,
   type HistoryDeleteResult,
@@ -32,6 +33,7 @@ import { ModelsFileWorkspace } from "./models-editors.js";
 import { CredentialsPage } from "./credentials-page.js";
 import { RequestsPage } from "./requests-page.js";
 import { AnalyticsPage } from "./analytics-page.js";
+import { CodexIntegrationPanel } from "./codex-integration-panel.js";
 
 import {
   productPages,
@@ -117,6 +119,39 @@ export function App({ shell, retryConnection }: AppProps) {
   const [catalogResult, setCatalogResult] = useState<CatalogCommandResult>();
   const [aliasCommand, setAliasCommand] = useState<AliasCommand>();
   const [aliasResult, setAliasResult] = useState<AliasCommandResult>();
+  const [codexIntegration, setCodexIntegration] =
+    useState<CodexIntegrationProjection>();
+  const [codexIntegrationBusy, setCodexIntegrationBusy] = useState(false);
+  const [codexIntegrationError, setCodexIntegrationError] = useState<string>();
+
+  useEffect(() => {
+    if (
+      snapshot.activePage !== "models-aliases" ||
+      snapshot.connection.kind !== "connected"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setCodexIntegrationBusy(true);
+    void shell.executeCodexIntegrationCommand({ command: "query" }).then(
+      (result) => {
+        if (cancelled) return;
+        setCodexIntegration(result.state);
+        setCodexIntegrationError(undefined);
+        setCodexIntegrationBusy(false);
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        setCodexIntegrationError(
+          error instanceof Error ? error.message : String(error),
+        );
+        setCodexIntegrationBusy(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [shell, snapshot.activePage, snapshot.connection.kind]);
 
   useEffect(() => {
     const unsubscribe = shell.subscribe(setSnapshot);
@@ -199,6 +234,41 @@ export function App({ shell, retryConnection }: AppProps) {
       setAliasResult(result);
     } finally {
       setAliasCommand(undefined);
+    }
+  };
+
+  const setCodexIntegrationEnabled = async (enabled: boolean) => {
+    setCodexIntegrationBusy(true);
+    try {
+      const result = await shell.executeCodexIntegrationCommand({
+        command: "set_enabled",
+        enabled,
+      });
+      setCodexIntegration(result.state);
+      setCodexIntegrationError(undefined);
+    } catch (error) {
+      setCodexIntegrationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setCodexIntegrationBusy(false);
+    }
+  };
+
+  const syncCodexIntegrationCatalog = async () => {
+    setCodexIntegrationBusy(true);
+    try {
+      const result = await shell.executeCodexIntegrationCommand({
+        command: "sync_catalog",
+      });
+      setCodexIntegration(result.state);
+      setCodexIntegrationError(undefined);
+    } catch (error) {
+      setCodexIntegrationError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setCodexIntegrationBusy(false);
     }
   };
 
@@ -416,6 +486,18 @@ export function App({ shell, retryConnection }: AppProps) {
         {(snapshot.activePage === "providers" ||
           snapshot.activePage === "models-aliases") &&
         snapshot.connection.kind === "connected" ? (
+          <>
+            {snapshot.activePage === "models-aliases" ? (
+              <CodexIntegrationPanel
+                busy={codexIntegrationBusy}
+                onSync={() => void syncCodexIntegrationCatalog()}
+                {...(codexIntegration === undefined ? {} : { state: codexIntegration })}
+                onToggle={(enabled) => void setCodexIntegrationEnabled(enabled)}
+                {...(codexIntegrationError === undefined
+                  ? {}
+                  : { error: codexIntegrationError })}
+              />
+            ) : null}
           <ModelsPage
             busy={modelsCommand !== undefined}
             catalogBusy={catalogCommand !== undefined}
@@ -436,6 +518,7 @@ export function App({ shell, retryConnection }: AppProps) {
               ? {}
               : { aliasProjection: snapshot.connection.aliasesProjection })}
           />
+          </>
         ) : null}
         <section className="empty-page">
           <div className="empty-mark" aria-hidden="true" />

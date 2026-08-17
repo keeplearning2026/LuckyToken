@@ -29,6 +29,8 @@ import {
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
+import type { CodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
+import type { CodexNativeModelSource } from "../../src/integrations/codex/native-models.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;
@@ -52,6 +54,10 @@ export interface OpenAIResponsesServingTestOptions {
   /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
    *  uses its no-op authority. */
   deepCapture?: DeepCaptureAuthority;
+  /** Codex-native request test seam. Production composition wires the same
+   *  authority into Client Auth and the native passthrough branch. */
+  codexLocalAuth?: CodexLocalCredentialAuthority;
+  codexNativeModels?: CodexNativeModelSource;
 }
 
 export interface OpenAIResponsesServingTestComposition {
@@ -110,7 +116,9 @@ export async function createOpenAIResponsesServingTestComposition(
 
   const auth = createAuth({
     authorizeToken: async (token) =>
-      token === options.clientApiKey ? {} : undefined,
+      token === options.clientApiKey
+        ? {}
+        : await options.codexLocalAuth?.authorizeToken(token),
     createEffectiveSessionId: createSessionId,
   });
   const sessionState = createResponseSessionState({
@@ -143,6 +151,12 @@ export async function createOpenAIResponsesServingTestComposition(
     ...(options.deepCapture === undefined
       ? {}
       : { deepCapture: options.deepCapture }),
+    ...(options.codexLocalAuth === undefined
+      ? {}
+      : { codexLocalAuth: options.codexLocalAuth }),
+    ...(options.codexNativeModels === undefined
+      ? {}
+      : { codexNativeModels: options.codexNativeModels }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,

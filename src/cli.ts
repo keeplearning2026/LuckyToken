@@ -113,6 +113,12 @@ import { stripJsonComments } from "./providers/models-json-schema.js";
 import { createAliasRegistryAuthority } from "./aliases/authority.js";
 import { createAliasControlPlaneHandler } from "./aliases/control-plane.js";
 import { createOperationalAttentionAuthority } from "./operational-attention/index.js";
+import { resolveCodexHome } from "./integrations/codex/home.js";
+import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
+import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
+import { readCodexNativeCatalogEntries } from "./integrations/codex/native-catalog-source.js";
+import { buildCodexCatalog } from "./integrations/codex/catalog.js";
+import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
 
 const HELP = `LuckyToken
 
@@ -1004,6 +1010,45 @@ async function runServe(
         };
       },
     });
+    const codexLocalAuth = createCodexLocalCredentialAuthority({
+      codexHome: resolveCodexHome(),
+    });
+    const codexNativeModels = createCodexNativeModelSource();
+    const codexDialHost = (host: string): string => {
+      const normalized = host.trim().toLowerCase();
+      if (
+        normalized === "0.0.0.0" ||
+        normalized === "::" ||
+        normalized === "[::]" ||
+        normalized === "localhost"
+      ) {
+        return "127.0.0.1";
+      }
+      if (normalized === "::1" || normalized === "[::1]") return "[::1]";
+      return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+    };
+    const codexIntegrationAuthority = createCodexIntegrationAuthority({
+      codexHome: resolveCodexHome(),
+      stateDirectory: join(dirname(configPath), "integrations", "codex"),
+      endpoint: () => {
+        if (lastPublishedStatus.modelDataPlane !== "running") return undefined;
+        const address = resolveEffectiveSettings(settingsRegistry.query([]));
+        return `http://${codexDialHost(address.host)}:${address.port}/v1`;
+      },
+      localAuthAvailable: () => codexLocalAuth.isAvailable(),
+      buildCatalog: async () => {
+        if (authModels === undefined) {
+          throw new Error("LuckyToken model catalog is unavailable until the Data Plane has started");
+        }
+        await aliasAuthority.query();
+        return buildCodexCatalog({
+          nativeModels: codexNativeModels.models(),
+          nativeCatalogEntries: await readCodexNativeCatalogEntries(resolveCodexHome()),
+          models: authModels,
+          aliases: aliasAuthority.resolver().entries(),
+        });
+      },
+    });
     // Ticket 23: the one versioned export/delete/acknowledge authority over
     // the three persistent stores. Owned roots are the LuckyToken-owned
     // directory trees an export must never write into (config dir, Pi data
@@ -1108,6 +1153,8 @@ async function runServe(
             // resolver snapshots; new requests hot-apply, in-flight
             // requests keep the snapshot they captured at acceptance.
             aliasAuthority,
+            codexLocalAuth,
+            codexNativeModels,
             // A successful Provider login schedules a background refresh
             // for the provider that just logged in (Ticket 11).
             onProviderLogin: (providerId) =>
@@ -1339,6 +1386,15 @@ async function runServe(
       // projection rides on every published snapshot.
       aliasCommandHandler: createAliasControlPlaneHandler(aliasAuthority),
       aliasesProjection: () => aliasAuthority.snapshot(),
+      codexIntegrationCommandHandler: async (command) => {
+        const state =
+          command.command === "query"
+            ? await codexIntegrationAuthority.query()
+            : command.command === "sync_catalog"
+              ? await codexIntegrationAuthority.syncCatalog()
+              : await codexIntegrationAuthority.setEnabled(command.enabled);
+        return { state };
+      },
       applicationCommandHandler: async (command, publishStatus) => {
         switch (command.command) {
           case "attach":

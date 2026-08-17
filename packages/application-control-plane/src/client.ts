@@ -41,6 +41,8 @@ import {
   type AuthInteractionResponse,
   type CatalogCommand,
   type CatalogCommandResult,
+  type CodexIntegrationCommand,
+  type CodexIntegrationCommandResult,
   type ClientTokenCommand,
   type ClientTokenCommandResult,
   type CredentialCommand,
@@ -65,6 +67,7 @@ import {
   decodeAliasCommandResult,
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
+  decodeCodexIntegrationCommandResult,
   decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
   decodeRequestId,
@@ -521,6 +524,22 @@ export async function connectApplicationControlPlane(
       // Strictly validate the state crossing the pipe: the alias registry
       // must never carry malformed or unexpected state.
       const result = decodeAliasCommandResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeCodexIntegrationCommand(
+      command: CodexIntegrationCommand,
+    ): Promise<CodexIntegrationCommandResult> {
+      const response = await request({
+        type: "codex_integration_command",
+        command,
+      });
+      if (response.type !== "codex_integration_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeCodexIntegrationCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

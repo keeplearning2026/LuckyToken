@@ -159,6 +159,77 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
   gap: 14px;
   max-width: 980px;
 }
+.codex-integration-card {
+  display: grid;
+  gap: 14px;
+  max-width: 980px;
+  margin-bottom: 14px;
+  border: 1px solid #dce4e1;
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: #fff;
+}
+.codex-integration-heading h2 { margin: 0; color: #174d42; font-size: 16px; }
+.codex-integration-heading p { margin: 5px 0 0; color: #7a838e; line-height: 1.5; font-size: 13px; }
+.codex-integration-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.codex-integration-status-grid > div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #edf0f2;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: #fbfcfc;
+}
+.codex-integration-status-grid span { color: #7a838e; font-size: 11px; }
+.codex-integration-status-grid strong { color: #25313b; font-size: 13px; }
+.codex-integration-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.codex-integration-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+}
+.codex-integration-toggle span { display: grid; gap: 3px; }
+.codex-integration-toggle strong { color: #25313b; font-size: 13px; }
+.codex-integration-toggle small { color: #7a838e; line-height: 1.45; }
+.codex-integration-message,
+.codex-integration-restart,
+.codex-integration-error {
+  margin: 0;
+  border-radius: 9px;
+  padding: 9px 11px;
+  font-size: 12px;
+}
+.codex-integration-message { color: #625542; background: #fff8ed; }
+.codex-integration-restart { color: #174d42; background: #edf6f3; }
+.codex-integration-error { color: #8a2f27; background: #fff1ef; }
+.codex-integration-warnings {
+  margin: 0;
+  padding: 9px 11px 9px 28px;
+  border-radius: 9px;
+  color: #6b5a48;
+  background: #fffaf2;
+  font-size: 12px;
+}
+.codex-integration-actions { display: flex; justify-content: flex-end; }
+.codex-integration-actions button {
+  border: 1px solid #6f958b;
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: #174d42;
+  background: #fff;
+  cursor: pointer;
+}
+.codex-integration-actions button:disabled { cursor: default; opacity: .45; }
 .models-file-card {
   display: flex;
   align-items: center;

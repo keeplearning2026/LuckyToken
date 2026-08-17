@@ -208,6 +208,9 @@ function makeShell(options: StubOptions = {}) {
         effective: { defaultsVersion: 1, aliases: [], errors: [] },
       },
     }),
+    executeCodexIntegrationCommand: async () => {
+      throw new Error("unused Codex integration command");
+    },
     dispose: async () => undefined,
     getAnalytics: async () => {
       throw new Error("unused analytics");

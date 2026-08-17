@@ -17,6 +17,7 @@ import {
   createOpenAIResponsesHandler,
   type OpenAIResponsesHandlerOptions,
 } from "../../src/protocols/openai-responses/handler.js";
+import { createRecordingRequestLedger } from "../support/recording-request-ledger.js";
 
 /**
  * Ticket 19: native Responses passthrough contract. The classifier, transport,
@@ -186,6 +187,51 @@ describe("19: native Responses passthrough contract", () => {
     } finally {
       restore();
     }
+  });
+
+  it("records Provider-native passthrough usage through the shared Request Ledger contract", async () => {
+    const model = responsesModel();
+    const recorded = createRecordingRequestLedger();
+    const passthroughFetch: FetchFunction = async () =>
+      new Response(
+        JSON.stringify({
+          id: "resp_usage",
+          object: "response",
+          status: "completed",
+          model: "gpt-5",
+          output: [],
+          usage: {
+            input_tokens: 20,
+            input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+            output_tokens: 7,
+            output_tokens_details: { reasoning_tokens: 2 },
+            total_tokens: 27,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    const response = await handleHttpRequest(
+      dependencies(
+        passthroughModels(model),
+        { requestLedger: recorded.ledger },
+        passthroughFetch,
+      ),
+      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(recorded.terminalUsage).toHaveLength(1);
+    expect(recorded.terminalUsage[0]).toMatchObject({
+      api: "openai-responses",
+      completeness: "complete",
+      input: 12,
+      cacheRead: 5,
+      cacheWrite: 3,
+      output: 7,
+      reasoning: 2,
+      normalizedTotal: 27,
+    });
   });
 
   it("passes native handles, hosted tools, background/store and future fields without conversion loss", async () => {

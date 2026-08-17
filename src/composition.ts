@@ -94,6 +94,15 @@ import {
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import type { SettingsRegistry } from "./settings/catalog.js";
+import {
+  createCodexLocalCredentialAuthority,
+  type CodexLocalCredentialAuthority,
+} from "./integrations/codex/local-auth.js";
+import {
+  createCodexNativeModelSource,
+  type CodexNativeModelSource,
+} from "./integrations/codex/native-models.js";
+import { createCodexResponsesCompactHandler } from "./integrations/codex/compact.js";
 
 export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
@@ -180,6 +189,7 @@ async function createCompositionScrubber(owners: {
   readonly clientAuthority: ClientTokenAuthority;
   readonly responsesAuthority?: ClientTokenAuthority;
   readonly credentialAuthority: LiveCredentialAuthority;
+  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
 }): Promise<((value: string) => string) | undefined> {
   const scrubbers: Array<(value: string) => string> = [
     owners.clientAuthority.scrub,
@@ -187,6 +197,9 @@ async function createCompositionScrubber(owners: {
   ];
   if (owners.responsesAuthority !== undefined) {
     scrubbers.push(owners.responsesAuthority.scrub);
+  }
+  if (owners.codexLocalAuth !== undefined) {
+    scrubbers.push(owners.codexLocalAuth.scrub);
   }
   if (scrubbers.length === 0) return undefined;
   return (value: string) => {
@@ -237,6 +250,11 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly modelsStore?: ModelsStore;
   /** See `ConfiguredPiModelsOptions.onProviderLogin` (Ticket 11). */
   readonly onProviderLogin?: (providerId: string) => void;
+  /** Native Codex request seams. Production uses the local file-backed
+   *  authority and Pi builtin model source; tests may inject deterministic
+   *  implementations without changing the generic Auth contract. */
+  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
+  readonly codexNativeModels?: CodexNativeModelSource;
   /**
    * Ticket 15: the Ticket 14 alias authority created by the run/serve
    * composition root (one registry, never duplicated). When provided, the
@@ -471,6 +489,14 @@ export async function createConfiguredLuckyTokenComposition(
   if (responsesAuthority !== undefined) {
     clientAuthorities[openaiResponsesProtocolId] = responsesAuthority;
   }
+  const codexLocalAuth =
+    openaiResponsesConfig === undefined
+      ? undefined
+      : options.codexLocalAuth ?? createCodexLocalCredentialAuthority();
+  const codexNativeModels =
+    openaiResponsesConfig === undefined
+      ? undefined
+      : options.codexNativeModels ?? createCodexNativeModelSource();
   // First enabling creates exactly one protocol-global token when the scope
   // has none — but only for a never-initialized scope: a deliberately
   // deleted token must survive an ordinary restart, so boot-time enabling
@@ -556,6 +582,7 @@ export async function createConfiguredLuckyTokenComposition(
     clientAuthority,
     ...(responsesAuthority === undefined ? {} : { responsesAuthority }),
     credentialAuthority,
+    ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
   });
   const invocationDiagnostics = createInvocationDiagnosticsFactory({
     configuration: config.failureLogging,
@@ -736,7 +763,9 @@ export async function createConfiguredLuckyTokenComposition(
   );
   if (openaiResponsesConfig !== undefined && responsesAuthority !== undefined) {
     const responsesAuth = createAuth({
-      authorizeToken: (token) => responsesAuthority.authorize(token),
+      authorizeToken: async (token) =>
+        responsesAuthority.authorize(token) ??
+        (await codexLocalAuth?.authorizeToken(token)),
       createEffectiveSessionId: createSessionId,
       onAuthorized: (identity) =>
         requestIdentities.observe(openaiResponsesProtocolId, identity),
@@ -768,8 +797,21 @@ export async function createConfiguredLuckyTokenComposition(
       // declaration table; the composition binds it into the neutral
       // execution operation the handler already knows.
       executeOperation: createExecutionOperation(resolveUsageSemantics),
+      ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
+      ...(codexNativeModels === undefined ? {} : { codexNativeModels }),
     });
     clientProtocols.push(responses);
+    if (codexLocalAuth !== undefined && codexNativeModels !== undefined) {
+      clientProtocols.push(
+        createCodexResponsesCompactHandler({
+          codexLocalAuth,
+          codexNativeModels,
+          responsesHandler: responses,
+          fetch: options.fetch,
+          maxRequestBytes: config.limits.maxRequestBytes,
+        }),
+      );
+    }
   }
   const certification = certifyCoreServingComposition({
     clientProtocolIds: Object.keys(config.clientProtocols),
@@ -800,6 +842,11 @@ export async function createConfiguredLuckyTokenComposition(
               id: openaiResponsesProtocolId,
               method: "POST",
               pathname: "/v1/responses",
+            },
+            {
+              id: openaiResponsesProtocolId,
+              method: "POST",
+              pathname: "/v1/responses/compact",
             },
           ],
         });

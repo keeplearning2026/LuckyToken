@@ -24,9 +24,52 @@ const inertHistoryRuntime = {
   executeHistoryDelete: async () => ({ outcome: "failed" as const }),
   confirmHistoryDelete: async () => ({ outcome: "failed" as const }),
   pickHistoryExportDestination: async () => undefined,
+  executeCodexIntegrationCommand: async () => {
+    throw new Error("unused Codex integration command");
+  },
 };
 
 describe("Windows desktop shell public lifecycle seam", () => {
+  it("exposes Codex integration queries through the public shell host", async () => {
+    const commands: unknown[] = [];
+    const connected: ControlPlaneState = {
+      revision: 1,
+      kind: "connected",
+      applicationVersion: "test",
+      contractVersion: 1,
+      sequence: 0,
+      modelDataPlane: "running",
+      provider: "configured",
+    };
+    const runtime = {
+      connectControlPlane: async () => connected,
+      subscribeControlPlane: () => () => undefined,
+      disconnectControlPlane: async () => undefined,
+      executeCodexIntegrationCommand: async (command: unknown) => {
+        commands.push(command);
+        return {
+          state: {
+            desiredEnabled: false,
+            observedState: "native",
+            codexHome: "C:\\Users\\user\\.codex",
+            configPath: "C:\\Users\\user\\.codex\\config.toml",
+            catalogPath: "C:\\Users\\user\\.luckytoken\\integrations\\codex\\model-catalog.json",
+            endpoint: "http://127.0.0.1:3000/v1",
+            modelCount: 8,
+            warnings: [],
+            restartRequired: false,
+          },
+        };
+      },
+    } as unknown as DesktopShellRuntime;
+    const shell = createWindowsShellHost(runtime);
+    await shell.launch();
+
+    const result = await shell.executeCodexIntegrationCommand({ command: "query" });
+
+    expect(commands).toEqual([{ command: "query" }]);
+    expect(result.state.observedState).toBe("native");
+  });
   it("applies a native navigation intent that arrives before the connection opens", async () => {
     const connected: ControlPlaneState = {
       revision: 1,

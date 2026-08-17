@@ -12,8 +12,9 @@ export interface ModelsDiscoveryHandlerOptions {
   /**
    * Ticket 15 alias-only discovery: when wired, `GET /v1/models` lists only
    * currently callable mapped aliases (id = alias, owned_by = real
-   * Provider); the canonical model id never appears. Without it the legacy
-   * provider/model_id listing applies (handler-level test seam).
+   * Provider). Canonical identity is never projected independently; an alias
+   * may intentionally contain provider/model-shaped text. Without it the
+   * legacy provider/model_id listing applies (handler-level test seam).
    */
   readonly aliasSource?: AliasModelSource;
   readonly now?: () => number;
@@ -50,9 +51,9 @@ export function createModelsDiscoveryHandler(
         });
       }
       // Alias-only discovery: every configured alias whose canonical target
-      // is in the current served catalog snapshot, sorted by alias. The
-      // real Provider id is the only canonical fact exposed (owned_by); the
-      // canonical model id never appears.
+      // is in the current served catalog snapshot, sorted by alias. The real
+      // Provider id is exposed as owned_by; canonical model identity is never
+      // projected independently from the configured alias string.
       const snapshot = await options.aliasSource.requestSnapshot();
       const callableTargets = new Set(
         options.models

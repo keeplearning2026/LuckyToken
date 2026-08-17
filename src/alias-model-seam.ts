@@ -19,10 +19,10 @@ import { resolveModel } from "./model-resolution.js";
  * Semantics:
  *
  * - only configured aliases are valid selectors: a selector that the
- *   captured snapshot does not resolve is `unknown` — bare model ids and
- *   canonical `provider/model_id` selectors are rejected even when they
- *   are real and callable (aliases cannot contain "/" by registry
- *   validation, so the two name spaces never collide);
+ *   captured snapshot does not resolve is `unknown`. Alias text is opaque
+ *   and may itself look like `provider/model_id`; such a value is callable
+ *   only when it is explicitly configured as an alias. Bare or canonical-
+ *   looking strings are never resolved implicitly against the Pi catalog;
  * - a configured alias whose canonical target is not in the current served
  *   catalog snapshot is `unavailable` (the Ticket 11 snapshot is the one
  *   callable-catalog authority; the alias registry never invents targets);

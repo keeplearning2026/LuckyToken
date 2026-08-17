@@ -10,14 +10,18 @@ mod shell_bridge;
 mod tray_lifecycle;
 mod tray_surface;
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use backend_launcher::BackendLauncher;
 use backup_wire::{BackupCommand, BackupResultWire};
 use control_plane_v1::{
     decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AnalyticsResultWire,
     AuthCommandResultWire, AutoStartAction, CatalogCommand, CatalogCommandResultWire,
-    ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
+    ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire,
+    CodexIntegrationCommand, CodexIntegrationCommandResultWire, CredentialCommand,
     CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
     HistoryCommand, HistoryCommandResultWire, HistoryDeleteResultWire, HistoryExportResultWire,
     HistoryQueryResultWire, ModelsCommand, NativeControlPlaneConnector, OwnerKind,
@@ -601,6 +605,34 @@ async fn shell_aliases_write(
 }
 
 #[tauri::command]
+async fn shell_codex_integration_query(
+    state: State<'_, ShellBridge>,
+) -> Result<CodexIntegrationCommandResultWire, ()> {
+    state
+        .codex_integration_command(CodexIntegrationCommand::Query)
+        .await
+}
+
+#[tauri::command]
+async fn shell_codex_integration_set_enabled(
+    state: State<'_, ShellBridge>,
+    enabled: bool,
+) -> Result<CodexIntegrationCommandResultWire, ()> {
+    state
+        .codex_integration_command(CodexIntegrationCommand::SetEnabled(enabled))
+        .await
+}
+
+#[tauri::command]
+async fn shell_codex_integration_sync_catalog(
+    state: State<'_, ShellBridge>,
+) -> Result<CodexIntegrationCommandResultWire, ()> {
+    state
+        .codex_integration_command(CodexIntegrationCommand::SyncCatalog)
+        .await
+}
+
+#[tauri::command]
 async fn shell_models_query(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -691,6 +723,21 @@ fn should_drain_backend(snapshot: &ShellStateDto) -> bool {
     }
 }
 
+/// Windows verbatim paths ("\\?\C:\...") break the bundled Node backend's
+/// realpath resolution (Node 24 errors with EISDIR on the drive prefix).
+/// Strip the verbatim prefix so the spawned backend receives a plain path.
+#[cfg(windows)]
+fn normalize_windows_path(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    let plain = value.strip_prefix(r"\\?\").unwrap_or(&value);
+    PathBuf::from(plain)
+}
+
+#[cfg(not(windows))]
+fn normalize_windows_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
 fn main() {
     let app = tauri::Builder::default()
         // Single-instance must be registered first so a second process never
@@ -727,15 +774,81 @@ fn main() {
             let exe_dir = std::env::current_exe()
                 .ok()
                 .and_then(|path| path.parent().map(Path::to_path_buf));
-            let launcher_path = backend_launcher::resolve_launcher_override(
+            // Windows resource_dir returns verbatim paths ("\\?\C:\...");
+            // those break the Node backend's realpath resolution, so the
+            // launcher base is always normalized to the plain exe directory
+            // (identical location for installed layouts).
+            let launcher_base = exe_dir
+                .as_ref()
+                .map(|dir| normalize_windows_path(dir))
+                .or_else(|| resource_dir.as_ref().map(|dir| normalize_windows_path(dir)));
+            // (path, base_dir): base_dir is where the launcher's relative
+            // backend paths are resolved against. Installed layouts place
+            // launcher.json next to the executable, so the relative paths
+            // resolve against that directory. The unpacked source tree keeps
+            // launcher.json inside backend/, so the desktop-shell package root
+            // is the base there.
+            let launcher = backend_launcher::resolve_launcher_override(
                 &std::env::args_os().collect::<Vec<_>>(),
             )
-            .or_else(|| resource_dir.as_ref().map(|dir| dir.join("launcher.json")))
-            .or_else(|| exe_dir.clone().map(|dir| dir.join("launcher.json")));
+            .map(|path| {
+                let base = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .map(|p| normalize_windows_path(&p))
+                    .or_else(|| launcher_base.clone())
+                    .unwrap_or_default();
+                (path, base)
+            })
+            .or_else(|| {
+                resource_dir
+                    .as_ref()
+                    .map(|dir| dir.join("launcher.json"))
+                    .filter(|path| path.is_file())
+                    .map(|path| {
+                        let base = launcher_base.clone().unwrap_or_default();
+                        (path, base)
+                    })
+            })
+            .or_else(|| {
+                exe_dir
+                    .clone()
+                    .map(|dir| dir.join("launcher.json"))
+                    .filter(|path| path.is_file())
+                    .map(|path| {
+                        let base = launcher_base.clone().unwrap_or_default();
+                        (path, base)
+                    })
+            })
+            .or_else(|| {
+                // Unpacked source-tree fallback: in a debug (dev) build the
+                // bundled resources are not copied next to the executable, so
+                // resolve the checked-in backend layout relative to this
+                // crate (src-tauri/../../backend/launcher.json). Release
+                // builds never take this branch because the resource or
+                // exe-dir lookup above already succeeds.
+                #[cfg(debug_assertions)]
+                {
+                    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+                    let package_dir = manifest_dir.parent()?;
+                    let candidate = package_dir.join("backend").join("launcher.json");
+                    if candidate.is_file() {
+                        // The launcher's relative backend paths are anchored at
+                        // the desktop-shell package root.
+                        return Some((candidate, package_dir.to_path_buf()));
+                    }
+                    None
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    None
+                }
+            });
             let home_dir = app.path().home_dir().ok();
-            let backend_launcher = match (launcher_path, home_dir) {
-                (Some(path), Some(home)) => Some(Arc::new(BackendLauncher::from_paths(
+            let backend_launcher = match (launcher, home_dir) {
+                (Some((path, base)), Some(home)) => Some(Arc::new(BackendLauncher::from_paths(
                     Some(path),
+                    base,
                     exe_dir.unwrap_or_default(),
                     home,
                 ))),
@@ -880,6 +993,9 @@ fn main() {
             shell_catalog_refresh,
             shell_aliases_query,
             shell_aliases_write,
+            shell_codex_integration_query,
+            shell_codex_integration_set_enabled,
+            shell_codex_integration_sync_catalog,
         ])
         .build(tauri::generate_context!())
         .expect("LuckyToken desktop runtime failed");
@@ -893,7 +1009,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_authorized_http_url, open_authorized_url, should_drain_backend};
+    use std::path::Path;
+
+    use super::{
+        is_authorized_http_url, normalize_windows_path, open_authorized_url, should_drain_backend,
+    };
     use crate::control_plane_v1::{
         ModelDataPlaneState, OwnerKind, OwnerWire, OwnershipWire, ProviderState, StatusSnapshot,
     };
@@ -914,6 +1034,35 @@ mod tests {
             persistence: None,
             recovery: None,
             attention: None,
+        }
+    }
+
+    #[test]
+    fn normalize_windows_path_strips_verbatim_prefix_and_keeps_plain_paths() {
+        #[cfg(windows)]
+        {
+            // Verbatim paths returned by Tauri's resource_dir break the
+            // bundled Node backend; the launcher base must be plain.
+            assert_eq!(
+                normalize_windows_path(Path::new(r"\\?\C:\Program Files\LuckyToken")),
+                std::path::PathBuf::from(r"C:\Program Files\LuckyToken")
+            );
+            assert_eq!(
+                normalize_windows_path(Path::new(r"\\?\C:\Users\Alice\.luckytoken")),
+                std::path::PathBuf::from(r"C:\Users\Alice\.luckytoken")
+            );
+            // Plain paths pass through unchanged.
+            assert_eq!(
+                normalize_windows_path(Path::new(r"C:\Program Files\LuckyToken")),
+                std::path::PathBuf::from(r"C:\Program Files\LuckyToken")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(
+                normalize_windows_path(Path::new("/opt/luckytoken")),
+                std::path::PathBuf::from("/opt/luckytoken")
+            );
         }
     }
 

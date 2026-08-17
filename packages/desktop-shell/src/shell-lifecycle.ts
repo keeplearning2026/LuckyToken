@@ -10,6 +10,8 @@ import type {
   AuthInteractionResponse,
   CatalogCommand,
   CatalogCommandResult,
+  CodexIntegrationCommand,
+  CodexIntegrationCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
   CredentialCommand,
@@ -78,6 +80,9 @@ export interface DesktopShellRuntime {
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  executeCodexIntegrationCommand(
+    command: CodexIntegrationCommand,
+  ): Promise<CodexIntegrationCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -157,6 +162,9 @@ export interface WindowsShellHost {
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  executeCodexIntegrationCommand(
+    command: CodexIntegrationCommand,
+  ): Promise<CodexIntegrationCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -442,6 +450,12 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.executeAliasCommand(command);
+    },
+    executeCodexIntegrationCommand(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeCodexIntegrationCommand(command);
     },
     pickDirectory() {
       if (current.lifecycle !== "open") {

@@ -11,6 +11,8 @@ import type {
   AuthInteractionResponse,
   CatalogCommand,
   CatalogCommandResult,
+  CodexIntegrationCommand,
+  CodexIntegrationCommandResult,
   ClientTokenCommand,
   ClientTokenCommandResult,
   CredentialCommand,
@@ -40,6 +42,7 @@ import type {
 import {
   decodeAnalyticsResult,
   decodeBackupResult,
+  decodeCodexIntegrationCommandResult,
   decodeHistoryDeleteResult,
   decodeHistoryExportResult,
   decodeHistoryQueryResult,
@@ -108,6 +111,9 @@ export type ShellCommand =
   | "shell_catalog_refresh"
   | "shell_aliases_query"
   | "shell_aliases_write"
+  | "shell_codex_integration_query"
+  | "shell_codex_integration_set_enabled"
+  | "shell_codex_integration_sync_catalog"
   | "shell_request_ledger_query"
   | "shell_request_ledger_subscribe"
   | "shell_request_ledger_unsubscribe"
@@ -175,6 +181,9 @@ export interface TauriDesktopRuntime {
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  executeCodexIntegrationCommand(
+    command: CodexIntegrationCommand,
+  ): Promise<CodexIntegrationCommandResult>;
   executeClientTokenCommand(
     command: ClientTokenCommand,
   ): Promise<ClientTokenCommandResult>;
@@ -1168,6 +1177,21 @@ export function createTauriDesktopRuntime(
       const decoded = decodeAliasCommandResult(raw);
       if (decoded === undefined) {
         throw new Error("LuckyToken returned an invalid alias result");
+      }
+      return decoded;
+    },
+    async executeCodexIntegrationCommand(command) {
+      const raw =
+        command.command === "query"
+          ? await bridge.invoke("shell_codex_integration_query")
+          : command.command === "set_enabled"
+            ? await bridge.invoke("shell_codex_integration_set_enabled", {
+                enabled: command.enabled,
+              })
+            : await bridge.invoke("shell_codex_integration_sync_catalog");
+      const decoded = decodeCodexIntegrationCommandResult(raw);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid Codex integration result");
       }
       return decoded;
     },
