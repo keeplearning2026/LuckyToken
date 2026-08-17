@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 import { HomePage, type ProductPage } from "../home/HomePage.js";
+import { ProvidersPage } from "../providers/ProvidersPage.js";
 
 export interface AppProps {
   readonly api: LuckyTokenDesktopApi;
@@ -61,6 +62,8 @@ export function App({ api }: AppProps) {
         </header>
         {page === "home" ? (
           <HomePage api={api} navigate={setPage} />
+        ) : page === "providers" ? (
+          <ProvidersPage api={api} />
         ) : (
           <Placeholder page={page} />
         )}

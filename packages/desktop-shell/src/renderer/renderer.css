@@ -92,3 +92,37 @@ button { cursor: pointer; }
 .status-dot.starting { background: #b67a20; }
 .status-dot.attention { background: #b4443d; }
 .status-dot.stopped { background: #858a91; }
+
+.page-stack { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+.page-card {
+  background: #fff;
+  border: 1px solid #e0e2e5;
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+}
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.section-heading h2, .provider-card h3 { margin: 5px 0 6px; }
+.section-heading p:not(.eyebrow), .provider-card p { margin: 4px 0; color: #676c73; line-height: 1.45; }
+.section-heading button, .provider-card button, .auth-interaction button {
+  border: 1px solid #2f3439;
+  border-radius: 8px;
+  background: #292d31;
+  color: #fff;
+  padding: 8px 12px;
+}
+button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
+.provider-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.provider-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.provider-title h3 { font-size: 17px; }
+.badge { white-space: nowrap; border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 650; }
+.badge.good { background: #e5f3e9; color: #276b43; }
+.badge.warning { background: #faeee1; color: #945e1f; }
+.button-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.product-notice { max-width: 980px; margin: 0; padding: 10px 13px; border-radius: 9px; background: #eef1f4; color: #4d535a; }
+.auth-interaction { display: grid; gap: 12px; }
+.auth-interaction code { display: block; overflow-wrap: anywhere; padding: 9px; border-radius: 7px; background: #f4f5f6; }
+.auth-interaction form, .auth-interaction label { display: grid; gap: 8px; }
+.auth-interaction input, .auth-interaction select { max-width: 520px; border: 1px solid #cfd2d6; border-radius: 8px; padding: 9px 10px; }
+.device-code { font-size: 24px; letter-spacing: .12em; }
+.error-text { color: #a0443d !important; }
