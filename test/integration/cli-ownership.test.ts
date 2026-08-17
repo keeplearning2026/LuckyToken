@@ -554,6 +554,45 @@ ${exit.stderr}`).toContain("timed out");
     expect(exit.code).toBe(0);
   }, 30_000);
 
+  it("reports desktop ownership when serve starts as the desktop-owned backend", async () => {
+    const { configPath, descriptorPath } = await writeServeState();
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+      "--owner",
+      "desktop",
+    ]);
+    children.push(serve);
+    const serving = captureChild(serve);
+    await waitForDescriptor(descriptorPath, serve);
+
+    const client = await connectToServe(descriptorPath, "desktop-owner");
+    await client.hello(1);
+    await waitForRunning(client);
+    await expect(client.getStatus()).resolves.toMatchObject({
+      modelDataPlane: "running",
+      ownership: { owner: { kind: "desktop" } },
+    });
+
+    const result = await client.executeApplicationCommand({
+      command: "quit",
+      acknowledged: true,
+    });
+    expect(result).toMatchObject({ command: "quit", outcome: "drained" });
+    await client.close();
+
+    await expect
+      .poll(() => serve.exitCode, { timeout: 10_000, interval: 50 })
+      .not.toBeNull();
+    const exit = await serving.result;
+    expect(exit.code).toBe(0);
+    await expect(readFile(descriptorPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  }, 30_000);
+
   it("reads the configured quit drain timeout from registered settings", async () => {
     const registry = createSettingsRegistry({
       async load() {
@@ -573,4 +612,82 @@ ${exit.stderr}`).toContain("timed out");
       applyMode: "hot-apply",
     });
   });
+
+  it("creates the first-run config when the desktop launcher asks, and never overwrites an existing one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-first-run-cli-"));
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    await mkdir(join(stateDirectory, "pi"), { recursive: true });
+    const configPath = join(stateDirectory, "config.json");
+    const descriptorPath = join(stateDirectory, "control-plane.json");
+
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+      "--owner",
+      "desktop",
+      "--desktop-exe",
+      "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      "--create-first-run-config",
+    ]);
+    children.push(serve);
+    const serving = captureChild(serve);
+    await waitForDescriptor(descriptorPath, serve);
+
+    const client = await connectToServe(descriptorPath, "first-run");
+    await client.hello(1);
+    await waitForRunning(client);
+    await expect(client.getStatus()).resolves.toMatchObject({
+      ownership: { owner: { kind: "desktop" } },
+    });
+
+    // The first-run template must be an actual valid config: the serve
+    // started the Data Plane from it.
+    const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
+      readonly schemaVersion?: unknown;
+    };
+    expect(parsed.schemaVersion).toBe("luckytoken-config-v1");
+
+    const result = await client.executeApplicationCommand({
+      command: "quit",
+      acknowledged: true,
+    });
+    expect(result).toMatchObject({ command: "quit", outcome: "drained" });
+    await expect
+      .poll(() => serve.exitCode, { timeout: 10_000, interval: 50 })
+      .not.toBeNull();
+    const exit = await serving.result;
+    expect(exit.code).toBe(0);
+
+    // A second launch with the same flag leaves the user's file untouched.
+    const original = await readFile(configPath, "utf8");
+    const second = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+      "--owner",
+      "desktop",
+      "--desktop-exe",
+      "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      "--create-first-run-config",
+    ]);
+    children.push(second);
+    const secondCapture = captureChild(second);
+    await waitForDescriptor(descriptorPath, second);
+    const secondClient = await connectToServe(descriptorPath, "first-run-2");
+    await secondClient.hello(1);
+    const quitResult = await secondClient.executeApplicationCommand({
+      command: "quit",
+      acknowledged: true,
+    });
+    expect(quitResult).toMatchObject({ command: "quit", outcome: "drained" });
+    await expect
+      .poll(() => second.exitCode, { timeout: 10_000, interval: 50 })
+      .not.toBeNull();
+    await secondCapture.result;
+    expect(await readFile(configPath, "utf8")).toBe(original);
+  }, 45_000);
 });

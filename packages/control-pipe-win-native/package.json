@@ -5,6 +5,11 @@
   "description": "Windows named-pipe byte transport for the LuckyToken control daemon.",
   "main": "index.js",
   "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
   "os": ["win32"],
   "cpu": ["x64"],
   "napi": {

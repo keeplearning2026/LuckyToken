@@ -1209,6 +1209,15 @@ pub(crate) type AuthQueryFuture = Pin<
 >;
 pub(crate) type AuthLoginFuture =
     Pin<Box<dyn Future<Output = Result<AuthLoginStart, ConnectionFailure>> + Send + 'static>>;
+pub(crate) type ApplicationQuitFuture = Pin<
+    Box<dyn Future<Output = Result<ApplicationQuitOutcome, ConnectionFailure>> + Send + 'static>,
+>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApplicationQuitOutcome {
+    Drained,
+    TimedOut,
+}
 
 pub(crate) trait ControlPlaneConnector: Send + Sync {
     fn connect(&self) -> ConnectFuture;
@@ -1231,6 +1240,12 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    /// Ticket 26 owner-aware Quit: an acknowledged quit drains the backend
+    /// through the Control Plane. Only the desktop-owned shell invokes it;
+    /// a headless owner must never be quit by an attached UI.
+    fn application_quit(&self) -> ApplicationQuitFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn client_token_command(&self, _command: ClientTokenCommand) -> ClientTokenCommandFuture {
@@ -1796,6 +1811,7 @@ pub(crate) struct AliasesProjectionWire {
 pub(crate) struct NativeControlPlaneConnector {
     discovery: NativeControlPlaneDiscovery,
     auto_start_consumed: Arc<AtomicBool>,
+    backend_launcher: Option<Arc<crate::backend_launcher::BackendLauncher>>,
 }
 
 impl NativeControlPlaneConnector {
@@ -1803,7 +1819,19 @@ impl NativeControlPlaneConnector {
         Self {
             discovery,
             auto_start_consumed: Arc::new(AtomicBool::new(false)),
+            backend_launcher: None,
         }
+    }
+
+    /// Ticket 26: when no Control Plane exists, the connector may launch
+    /// the bundled desktop-owned backend. The launcher is resolved once at
+    /// shell startup and only consulted when discovery reports Missing.
+    pub(crate) fn with_backend_launcher(
+        mut self,
+        launcher: Arc<crate::backend_launcher::BackendLauncher>,
+    ) -> Self {
+        self.backend_launcher = Some(launcher);
+        self
     }
 }
 
@@ -1811,14 +1839,33 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
     fn connect(&self) -> ConnectFuture {
         let discovery = self.discovery.clone();
         let auto_start_consumed = self.auto_start_consumed.clone();
+        let backend_launcher = self.backend_launcher.clone();
         Box::pin(async move {
-            let authority = discovery
-                .discover()
-                .await
-                .map_err(|failure| match failure {
-                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
-                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
-                })?;
+            let mut discovered = discovery.discover().await;
+            if matches!(discovered.as_ref(), Err(DiscoveryFailure::Missing))
+                && backend_launcher
+                    .as_ref()
+                    .is_some_and(|launcher| launcher.available())
+            {
+                // Desktop-owned first run: launch the bundled backend once,
+                // then give it a bounded window to publish its descriptor.
+                // The backend owns first-run config creation and the actual
+                // Control Plane; the shell only waits.
+                let _ = backend_launcher
+                    .as_ref()
+                    .is_some_and(|launcher| launcher.spawn_once());
+                for _attempt in 0..400 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    discovered = discovery.discover().await;
+                    if !matches!(discovered.as_ref(), Err(DiscoveryFailure::Missing)) {
+                        break;
+                    }
+                }
+            }
+            let authority = discovered.map_err(|failure| match failure {
+                DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+            })?;
             let (pipe_name, capability) = authority.into_parts();
             // The automatic Start is a one-shot native lifecycle gate: the
             // first successful connection sends it exactly once. A failed or
@@ -1921,6 +1968,21 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_auto_start_session(&pipe_name, capability, action).await
+        })
+    }
+
+    fn application_quit(&self) -> ApplicationQuitFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_application_quit_session(&pipe_name, capability).await
         })
     }
 
@@ -2591,6 +2653,68 @@ fn decode_auto_start_result(
         outcome: outcome.unwrap_or_default().to_owned(),
         enabled,
     })
+}
+
+async fn execute_application_quit_session(
+    pipe_name: &str,
+    capability: String,
+) -> Result<ApplicationQuitOutcome, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-quit",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "application_command",
+                    "requestId": "desktop-quit",
+                    "command": {
+                        "command": "quit",
+                        "acknowledged": true,
+                    },
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if result.get("type").and_then(Value::as_str) != Some("application_command_result")
+                || result.get("requestId").and_then(Value::as_str) != Some("desktop-quit")
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let command = result
+                .get("result")
+                .and_then(|raw| raw.get("command"))
+                .and_then(Value::as_str);
+            let outcome = result
+                .get("result")
+                .and_then(|raw| raw.get("outcome"))
+                .and_then(Value::as_str);
+            match (command, outcome) {
+                (Some("quit"), Some("drained")) => Ok(ApplicationQuitOutcome::Drained),
+                (Some("quit"), Some("timed_out")) => Ok(ApplicationQuitOutcome::TimedOut),
+                _ => Err(ConnectionFailure::ProtocolError),
+            }
+        }
+    }
 }
 
 async fn execute_client_token_command_session(
@@ -5151,6 +5275,141 @@ mod tests {
             .expect("auto-start status task must not panic");
         assert_eq!(result.outcome, "ok");
         assert_eq!(result.enabled, Some(true));
+    }
+
+    #[tokio::test]
+    async fn application_quit_exchanges_the_versioned_wire_and_decodes_the_outcome() {
+        for expected in [
+            ApplicationQuitOutcome::Drained,
+            ApplicationQuitOutcome::TimedOut,
+        ] {
+            let pipe_name = test_pipe_name();
+            let server = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&pipe_name)
+                .expect("test server must create its pipe");
+            let session_task = tokio::spawn(async move {
+                execute_application_quit_session(&pipe_name, "desktop-test-capability".to_owned())
+                    .await
+                    .expect("quit must negotiate and complete")
+            });
+            server
+                .connect()
+                .await
+                .expect("test server must accept the client");
+            let mut server = TestPipeServer { server };
+
+            let hello = server.next_frame().await;
+            assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+            assert_eq!(
+                hello.get("contractVersion").and_then(Value::as_u64),
+                Some(CONTROL_PLANE_VERSION)
+            );
+            server
+                .send(&json!({
+                    "type": "hello_result",
+                    "requestId": "desktop-hello",
+                    "result": {
+                        "type": "compatible",
+                        "application": {"id": "luckytoken", "version": "native-test"},
+                        "contractVersion": CONTROL_PLANE_VERSION
+                    }
+                }))
+                .await;
+
+            let request = server.next_frame().await;
+            assert_eq!(
+                request.get("type").and_then(Value::as_str),
+                Some("application_command")
+            );
+            assert_eq!(
+                request.get("requestId").and_then(Value::as_str),
+                Some("desktop-quit")
+            );
+            assert_eq!(
+                request
+                    .get("command")
+                    .and_then(|raw| raw.get("command"))
+                    .and_then(Value::as_str),
+                Some("quit")
+            );
+            assert_eq!(
+                request
+                    .get("command")
+                    .and_then(|raw| raw.get("acknowledged"))
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+            let outcome = match expected {
+                ApplicationQuitOutcome::Drained => "drained",
+                ApplicationQuitOutcome::TimedOut => "timed_out",
+            };
+            server
+                .send(&json!({
+                    "type": "application_command_result",
+                    "requestId": "desktop-quit",
+                    "result": {
+                        "command": "quit",
+                        "outcome": outcome,
+                        "snapshot": {
+                            "sequence": 2,
+                            "modelDataPlane": "stopped",
+                            "provider": "unconfigured"
+                        }
+                    }
+                }))
+                .await;
+
+            let result = timeout(Duration::from_secs(5), session_task)
+                .await
+                .expect("quit must complete within the timeout")
+                .expect("quit task must not panic");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn application_quit_rejects_foreign_frames_as_protocol_errors() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_application_quit_session(&pipe_name, "desktop-test-capability".to_owned()).await
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let _ = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let _ = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "not_an_application_command_result",
+                "requestId": "desktop-quit",
+                "result": {"command": "quit", "outcome": "drained"}
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("quit must complete within the timeout")
+            .expect("quit task must not panic");
+        assert_eq!(result, Err(ConnectionFailure::ProtocolError));
     }
 
     #[tokio::test]

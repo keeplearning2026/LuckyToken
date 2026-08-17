@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend_launcher;
 mod backup_wire;
 mod control_plane_v1;
 mod native_discovery;
@@ -9,8 +10,9 @@ mod shell_bridge;
 mod tray_lifecycle;
 mod tray_surface;
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
+use backend_launcher::BackendLauncher;
 use backup_wire::{BackupCommand, BackupResultWire};
 use control_plane_v1::{
     decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AnalyticsResultWire,
@@ -18,8 +20,8 @@ use control_plane_v1::{
     ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
     CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
     HistoryCommand, HistoryCommandResultWire, HistoryDeleteResultWire, HistoryExportResultWire,
-    HistoryQueryResultWire, ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire,
-    RequestLedgerResultWire, RuntimeCommand, SettingsCommand,
+    HistoryQueryResultWire, ModelsCommand, NativeControlPlaneConnector, OwnerKind,
+    RequestIdentityRecordWire, RequestLedgerResultWire, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use navigation::{
@@ -664,9 +666,29 @@ fn quit_application(app: &tauri::AppHandle, bridge: &ShellBridge) {
     let bridge = bridge.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Ticket 26: a desktop-owned instance drains its backend before the
+        // shell exits. A user-started headless owner (OwnerKind::Cli) is
+        // never quit by an attached UI — the shell simply closes.
+        if should_drain_backend(&bridge.snapshot().await) {
+            let _ = bridge.application_quit().await;
+        }
         bridge.shutdown().await;
         app.exit(0);
     });
+}
+
+/// Ticket 26: whether the tray Quit must drain the backend through the
+/// Control Plane. A desktop-owned instance (ownership None or kind Desktop)
+/// is drained; a user-started headless owner (kind Cli) is never quit by an
+/// attached UI. Non-connected states never drain.
+fn should_drain_backend(snapshot: &ShellStateDto) -> bool {
+    match snapshot {
+        ShellStateDto::Connected { snapshot, .. } => snapshot
+            .ownership
+            .as_ref()
+            .is_none_or(|ownership| ownership.owner.kind == OwnerKind::Desktop),
+        _ => false,
+    }
 }
 
 fn main() {
@@ -697,7 +719,33 @@ fn main() {
                 return Err("LuckyToken desktop requires exactly one main window".into());
             }
             let discovery = NativeControlPlaneDiscovery::from_app(app.handle());
-            let bridge = ShellBridge::new(Arc::new(NativeControlPlaneConnector::new(discovery)));
+            // Installed layout (Ticket 26): launcher.json ships as a bundle
+            // resource next to the desktop executable. Tauri resolves it via
+            // the resource directory; the exe-directory sibling is kept as a
+            // fallback for unpacked layouts.
+            let resource_dir = app.path().resource_dir().ok();
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf));
+            let launcher_path = backend_launcher::resolve_launcher_override(
+                &std::env::args_os().collect::<Vec<_>>(),
+            )
+            .or_else(|| resource_dir.as_ref().map(|dir| dir.join("launcher.json")))
+            .or_else(|| exe_dir.clone().map(|dir| dir.join("launcher.json")));
+            let home_dir = app.path().home_dir().ok();
+            let backend_launcher = match (launcher_path, home_dir) {
+                (Some(path), Some(home)) => Some(Arc::new(BackendLauncher::from_paths(
+                    Some(path),
+                    exe_dir.unwrap_or_default(),
+                    home,
+                ))),
+                _ => None,
+            };
+            let mut connector = NativeControlPlaneConnector::new(discovery);
+            if let Some(launcher) = backend_launcher {
+                connector = connector.with_backend_launcher(launcher);
+            }
+            let bridge = ShellBridge::new(Arc::new(connector));
             app.manage(bridge.clone());
             // Exactly one tray icon is created once at setup with stable menu
             // item ids; repeated Close/Show cycles never rebuild it, so no
@@ -845,7 +893,76 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_authorized_http_url, open_authorized_url};
+    use super::{is_authorized_http_url, open_authorized_url, should_drain_backend};
+    use crate::control_plane_v1::{
+        ModelDataPlaneState, OwnerKind, OwnerWire, OwnershipWire, ProviderState, StatusSnapshot,
+    };
+    use crate::shell_bridge::ShellStateDto;
+
+    fn connected_snapshot(ownership: Option<OwnershipWire>) -> StatusSnapshot {
+        StatusSnapshot {
+            sequence: 2,
+            model_data_plane: ModelDataPlaneState::Running,
+            provider: ProviderState::Configured,
+            data_plane: None,
+            settings: None,
+            confirmation: None,
+            ownership,
+            models: None,
+            aliases: None,
+            credentials: None,
+            persistence: None,
+            recovery: None,
+            attention: None,
+        }
+    }
+
+    #[test]
+    fn quit_drains_only_desktop_owned_or_unowned_connected_state() {
+        let desktop = Some(OwnershipWire {
+            owner: OwnerWire {
+                kind: OwnerKind::Desktop,
+                pid: 123,
+                started_at: "2026-08-17T00:00:00.000Z".to_owned(),
+            },
+        });
+        let cli = Some(OwnershipWire {
+            owner: OwnerWire {
+                kind: OwnerKind::Cli,
+                pid: 456,
+                started_at: "2026-08-17T00:00:00.000Z".to_owned(),
+            },
+        });
+        assert!(should_drain_backend(&ShellStateDto::Connected {
+            revision: 0,
+            application_version: "test".to_owned(),
+            contract_version: 1,
+            snapshot: Box::new(connected_snapshot(desktop.clone())),
+            models: None,
+        }));
+        assert!(should_drain_backend(&ShellStateDto::Connected {
+            revision: 0,
+            application_version: "test".to_owned(),
+            contract_version: 1,
+            snapshot: Box::new(connected_snapshot(None)),
+            models: None,
+        }));
+        assert!(!should_drain_backend(&ShellStateDto::Connected {
+            revision: 0,
+            application_version: "test".to_owned(),
+            contract_version: 1,
+            snapshot: Box::new(connected_snapshot(cli)),
+            models: None,
+        }));
+        assert!(!should_drain_backend(&ShellStateDto::Unavailable {
+            revision: 0,
+            reason: crate::shell_bridge::UnavailableReason::DescriptorMissing,
+        }));
+        assert!(!should_drain_backend(&ShellStateDto::Disconnected {
+            revision: 0,
+            reason: crate::shell_bridge::DisconnectReason::TransportLost,
+        }));
+    }
 
     #[test]
     fn authorized_http_url_allowlist_rejects_non_http_and_tainted_urls() {

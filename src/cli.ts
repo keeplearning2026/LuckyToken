@@ -17,6 +17,8 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
+import { createFirstRunConfig as writeFirstRunConfig } from "./first-run-config.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import {
   ControlPlaneDescriptorOwnedError,
@@ -25,7 +27,7 @@ import {
   resolveControlPlaneDescriptorPath,
 } from "./control-plane-discovery.js";
 import {
-  buildWindowsAutoStartCommand,
+  buildServeAutoStartCommand,
   createUnsupportedAutoStartRegistrar,
   createWindowsAutoStartRegistrar,
   executeAutoStart,
@@ -152,6 +154,7 @@ Commands:
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
+  --owner <kind>   Ownership identity for serve: cli (default) or desktop
   --global         Select the protocol-global client token
   --project <path> Select a project-bound client token
   --token <value>  Use an explicit token for create/rotate
@@ -210,6 +213,9 @@ type ParsedCliArguments =
       readonly command: "serve";
       readonly configPath: string;
       readonly descriptorPath?: string;
+      readonly ownerKind: "cli" | "desktop";
+      readonly desktopExe?: string;
+      readonly createFirstRunConfig: boolean;
     }
   | {
       readonly command: "login" | "logout";
@@ -229,6 +235,9 @@ function parseArguments(
   if (args.includes("--help")) return undefined;
   let configPath: string | undefined;
   let descriptorPath: string | undefined;
+  let ownerKind: "cli" | "desktop" = "cli";
+  let desktopExe: string | undefined;
+  let createFirstRunConfig = false;
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
@@ -255,6 +264,31 @@ function parseArguments(
       index += 1;
       continue;
     }
+    if (argument === "--owner") {
+      const value = args[index + 1];
+      if (value !== "cli" && value !== "desktop") {
+        throw new Error("--owner requires 'cli' or 'desktop'");
+      }
+      ownerKind = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--desktop-exe") {
+      if (desktopExe !== undefined) {
+        throw new Error("--desktop-exe may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--desktop-exe requires a path");
+      }
+      desktopExe = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--create-first-run-config") {
+      createFirstRunConfig = true;
+      continue;
+    }
     if (argument.startsWith("-"))
       throw new Error(`Unknown option: ${argument}`);
     positional.push(argument);
@@ -278,12 +312,19 @@ function parseArguments(
   if (positional.length > expectedPositionals) {
     throw new Error(`Too many arguments for ${command}`);
   }
+  if (command === "serve") {
+    return {
+      command,
+      configPath,
+      ownerKind,
+      createFirstRunConfig,
+      ...(descriptorPath === undefined ? {} : { descriptorPath }),
+      ...(desktopExe === undefined ? {} : { desktopExe }),
+    };
+  }
   return {
     command,
     configPath,
-    ...(command === "serve" && descriptorPath !== undefined
-      ? { descriptorPath }
-      : {}),
     ...(providerId === undefined ? {} : { providerId }),
   };
 }
@@ -544,6 +585,8 @@ async function runRecoveryControlPlane(
   issues: readonly CompatibilityIssue[],
   descriptorOverride?: string,
   backupCommandHandler?: BackupCommandHandler,
+  ownerKind: "cli" | "desktop" = "cli",
+  desktopExe?: string,
 ): Promise<void> {
   const descriptorPath = resolveControlPlaneDescriptorPath({
     homeDirectory: homedir(),
@@ -579,15 +622,13 @@ async function runRecoveryControlPlane(
       process.platform === "win32"
         ? createWindowsAutoStartRegistrar({
             name: "LuckyToken",
-            command: buildWindowsAutoStartCommand(process.execPath, [
-              fileURLToPath(import.meta.url),
-              "serve",
-              "--config",
-              resolve(configPath),
-              ...(descriptorOverride === undefined
-                ? []
-                : ["--descriptor", resolve(descriptorOverride)]),
-            ]),
+            command: buildServeAutoStartCommand({
+              ownerKind,
+              nodeExecutable: process.execPath,
+              cliScript: fileURLToPath(import.meta.url),
+              configPath: resolve(configPath),
+              ...(desktopExe === undefined ? {} : { desktopExe }),
+            }),
           })
         : createUnsupportedAutoStartRegistrar();
     let requestQuit: (() => void) | undefined;
@@ -605,14 +646,14 @@ async function runRecoveryControlPlane(
     });
     controlPlane = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "0.0.0" },
+      application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
       },
       ownership: {
         owner: {
-          kind: "cli",
+          kind: ownerKind,
           pid: process.pid,
           startedAt: new Date().toISOString(),
         },
@@ -655,7 +696,13 @@ async function runRecoveryControlPlane(
 async function runServe(
   configPath: string,
   descriptorOverride?: string,
+  ownerKind: "cli" | "desktop" = "cli",
+  desktopExe?: string,
+  createFirstRunConfig = false,
 ): Promise<void> {
+  if (createFirstRunConfig) {
+    await writeFirstRunConfig(resolve(configPath));
+  }
   let config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
   try {
     config = await loadLuckyTokenCliConfig(configPath);
@@ -664,6 +711,9 @@ async function runServe(
       configPath,
       [configCompatibilityIssue(configPath, error)],
       descriptorOverride,
+      undefined,
+      ownerKind,
+      desktopExe,
     );
     return;
   }
@@ -672,7 +722,7 @@ async function runServe(
     const recoveryBackupAuthority = createConfiguredBackupAuthority({
       configPath,
       config,
-      applicationVersion: "0.0.0",
+      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
       snapshots: recoveryBackupSnapshots(config),
     });
     await runRecoveryControlPlane(
@@ -680,6 +730,8 @@ async function runServe(
       compatibilityIssues,
       descriptorOverride,
       (command, signal) => recoveryBackupAuthority.handle(command, signal),
+      ownerKind,
+      desktopExe,
     );
     return;
   }
@@ -963,7 +1015,7 @@ async function runServe(
         capture: deepCaptureStore as DeepCaptureStore,
       },
       persistence: persistenceAuthority,
-      applicationVersion: "0.0.0",
+      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
       ownedRoots: [
         resolve(dirname(configPath)),
         resolve(config.pi.directory),
@@ -992,7 +1044,7 @@ async function runServe(
     const backupAuthority = createConfiguredBackupAuthority({
       configPath,
       config,
-      applicationVersion: "0.0.0",
+      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
       snapshots: [
         {
           id: "request-ledger",
@@ -1123,15 +1175,13 @@ async function runServe(
       process.platform === "win32"
         ? createWindowsAutoStartRegistrar({
             name: "LuckyToken",
-            command: buildWindowsAutoStartCommand(process.execPath, [
-              fileURLToPath(import.meta.url),
-              "serve",
-              "--config",
-              resolve(configPath),
-              ...(descriptorOverride === undefined
-                ? []
-                : ["--descriptor", resolve(descriptorOverride)]),
-            ]),
+            command: buildServeAutoStartCommand({
+              ownerKind,
+              nodeExecutable: process.execPath,
+              cliScript: fileURLToPath(import.meta.url),
+              configPath: resolve(configPath),
+              ...(desktopExe === undefined ? {} : { desktopExe }),
+            }),
           })
         : createUnsupportedAutoStartRegistrar();
     const publish = (status: ApplicationStatus): Promise<void> => {
@@ -1195,11 +1245,11 @@ async function runServe(
     };
     controlPlane = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "0.0.0" },
+      application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
       initialStatus: supervisor.initialStatus,
       ownership: {
         owner: {
-          kind: "cli",
+          kind: ownerKind,
           pid: process.pid,
           startedAt: new Date().toISOString(),
         },
@@ -2138,7 +2188,13 @@ export async function runLuckyTokenCli(
     return;
   }
   if (parsed.command === "serve") {
-    await runServe(parsed.configPath, parsed.descriptorPath);
+    await runServe(
+      parsed.configPath,
+      parsed.descriptorPath,
+      parsed.ownerKind,
+      parsed.desktopExe,
+      parsed.createFirstRunConfig,
+    );
     return;
   }
   const config = await loadLuckyTokenCliConfig(parsed.configPath);

@@ -550,6 +550,18 @@ impl ShellBridge {
         }
     }
 
+    /// Ticket 26 owner-aware Quit: an acknowledged quit through the Control
+    /// Plane so the desktop-owned backend drains its active set and exits.
+    /// The outcome (drained or timed out) is decided by the backend; the
+    /// thin shell only forwards the intent.
+    pub(crate) async fn application_quit(&self) -> Result<(), ()> {
+        self.connector
+            .application_quit()
+            .await
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
     /// Ticket 16: versioned Client Token commands for the Client Tokens page.
     /// The result is returned to the renderer as-is; list/mutation results
     /// carry masked scopes only and Reveal returns exactly the requested

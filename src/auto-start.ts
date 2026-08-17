@@ -65,6 +65,36 @@ export function buildWindowsAutoStartCommand(
   return [quote(executable), ...args.map(quote)].join(" ");
 }
 
+export interface ServeAutoStartCommandOptions {
+  readonly ownerKind: "cli" | "desktop";
+  readonly nodeExecutable: string;
+  readonly cliScript: string;
+  readonly configPath: string;
+  /** The desktop executable path, known only when a desktop shell launched
+   *  (or will launch) the backend. */
+  readonly desktopExe?: string;
+}
+
+/** The Windows sign-in command for the serve owner. A desktop-owned backend
+ *  registers the desktop executable alone: the desktop shell is the sign-in
+ *  entry point and re-spawns its backend when no instance exists. A cli
+ *  owner (or a desktop owner without a known exe path) registers the node
+ *  CLI serve command directly. */
+export function buildServeAutoStartCommand(
+  options: ServeAutoStartCommandOptions,
+): string {
+  if (options.ownerKind === "desktop" && options.desktopExe !== undefined) {
+    return buildWindowsAutoStartCommand(options.desktopExe, []);
+  }
+  return buildWindowsAutoStartCommand(options.nodeExecutable, [
+    options.cliScript,
+    "serve",
+    "--config",
+    options.configPath,
+    ...(options.ownerKind === "desktop" ? ["--owner", "desktop"] : []),
+  ]);
+}
+
 export interface WindowsAutoStartRegistrarOptions {
   /** Registry value name, e.g. "LuckyToken". */
   readonly name: string;

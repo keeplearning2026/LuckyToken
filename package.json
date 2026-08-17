@@ -1,6 +1,6 @@
 {
   "name": "luckytoken",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -35,6 +35,8 @@
     "build:packages": "npm run build:native-control-pipe && npm run build --workspace @luckytoken/provider-contract && npm run build --workspace @luckytoken/provider-commandcode-private && npm run build --workspace @luckytoken/application-control-plane",
     "build:root": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "build": "npm run build:packages && npm run build:root && npm run build --workspace @luckytoken/desktop-shell",
+    "release:assemble-backend": "node scripts/assemble-release-backend.mjs",
+    "release:verify-layout": "node --test test/certification/release-version-sync.test.mjs test/certification/release-layout.test.mjs",
     "typecheck": "npm run build:packages && npm run typecheck --workspace @luckytoken/provider-contract && npm run typecheck --workspace @luckytoken/provider-commandcode-private && npm run typecheck --workspace @luckytoken/application-control-plane && tsc -p tsconfig.json --noEmit && npm run typecheck --workspace @luckytoken/desktop-shell",
     "lint": "eslint \"src/**/*.ts\" \"packages/*/src/**/*.ts\" \"test/**/*.ts\" \"vitest.config.ts\" && npm run lint --workspace @luckytoken/desktop-shell",
     "pretest": "npm run build:packages",
