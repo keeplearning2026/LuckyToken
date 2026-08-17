@@ -312,6 +312,7 @@ export {
   createLocalIpcAddress,
   type LocalIpcAddressOptions,
 } from "./local-ipc-address.js";
+export { parseControlPlaneDescriptor } from "./descriptor.js";
 
 export { maxControlPlaneFrameBytes } from "./framing.js";
 

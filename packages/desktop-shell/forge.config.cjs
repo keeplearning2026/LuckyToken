@@ -4,6 +4,7 @@ module.exports = {
     asar: true,
     name: "LuckyToken",
     executableName: "LuckyToken",
+    extraResource: ["backend"],
   },
   makers: [
     {

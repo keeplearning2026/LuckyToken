@@ -5,12 +5,19 @@ import {
   createSecureManagementWindowOptions,
   startElectronDesktopLifecycle,
 } from "./electron-app-lifecycle.js";
+import { createElectronBackendSupervisor } from "./electron-backend-supervisor.js";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
+const backendSupervisor = createElectronBackendSupervisor({
+  resourcesPath: process.resourcesPath,
+  desktopExecutable: process.execPath,
+  packaged: app.isPackaged,
+  developmentRoot: process.cwd(),
+});
 
 function rendererUrl(): { readonly kind: "url"; readonly value: string } | { readonly kind: "file"; readonly value: string } {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
@@ -77,7 +84,10 @@ function createTray(actions: { readonly open: () => void; readonly quit: () => v
 
 void startElectronDesktopLifecycle({
   requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
-  whenReady: () => app.whenReady(),
+  whenReady: async () => {
+    await app.whenReady();
+    await backendSupervisor.ensureRunning();
+  },
   onSecondInstance: (listener) => app.on("second-instance", listener),
   quit: () => app.quit(),
   openWindow: openManagementWindow,
@@ -86,3 +96,6 @@ void startElectronDesktopLifecycle({
 
 // Closing the last management window intentionally leaves Electron Main and
 // the tray running. Explicit product Quit is a separate tray action.
+app.on("will-quit", () => {
+  void backendSupervisor.dispose();
+});
