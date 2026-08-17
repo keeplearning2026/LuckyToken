@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import { ActivityPage } from "../activity/ActivityPage.js";
 import { ConnectPage } from "../connect/ConnectPage.js";
 import { HomePage } from "../home/HomePage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
@@ -60,6 +61,8 @@ export function App({ api }: AppProps) {
           <ProvidersPage api={api} />
         ) : page === "connect" ? (
           <ConnectPage api={api} navigate={setPage} />
+        ) : page === "activity" ? (
+          <ActivityPage api={api} />
         ) : (
           <Placeholder page={page} />
         )}
