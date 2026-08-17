@@ -3,6 +3,7 @@ import type {
   AliasFileError,
   AliasStatusProjection,
   AliasValidationErrorProjection,
+  AttentionProjection,
   ApplicationOwnership,
   AuthCommandResult,
   AuthInfoLink,
@@ -40,7 +41,10 @@ import type {
   RecoveryProjection,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
-import { decodeRecoveryProjection } from "@luckytoken/application-control-plane/control-plane";
+import {
+  decodeAttentionProjection,
+  decodeRecoveryProjection,
+} from "@luckytoken/application-control-plane/control-plane";
 
 export interface ConnectedControlPlaneBridgePayload extends Readonly<
   Record<string, unknown>
@@ -79,6 +83,8 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   readonly persistence?: PersistenceProjection;
   /** Ticket 24 exact incompatible-owned-file recovery projection. */
   readonly recovery?: RecoveryProjection;
+  /** Ticket 25 actionable conditions and recent request-failure aggregate. */
+  readonly attention?: AttentionProjection;
 }
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
@@ -1796,7 +1802,19 @@ export function projectControlPlaneState(
       payload.snapshot.recovery === undefined
         ? undefined
         : decodeRecoveryProjection(payload.snapshot.recovery);
+    const attention =
+      payload.snapshot.attention === undefined
+        ? undefined
+        : decodeAttentionProjection(payload.snapshot.attention);
     if (payload.snapshot.recovery !== undefined && recovery === undefined) {
+      return Object.freeze({
+        revision: payload.revision,
+        kind: "error" as const,
+        code: "protocol_error" as const,
+        ...unavailableCopy.protocol_error,
+      });
+    }
+    if (payload.snapshot.attention !== undefined && attention === undefined) {
       return Object.freeze({
         revision: payload.revision,
         kind: "error" as const,
@@ -1864,6 +1882,7 @@ export function projectControlPlaneState(
         : { aliasesProjection }),
       ...(persistence === undefined ? {} : { persistence }),
       ...(recovery === undefined ? {} : { recovery }),
+      ...(attention === undefined ? {} : { attention }),
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),

@@ -3,6 +3,8 @@
 mod backup_wire;
 mod control_plane_v1;
 mod native_discovery;
+mod navigation;
+mod notification;
 mod shell_bridge;
 mod tray_lifecycle;
 mod tray_surface;
@@ -20,6 +22,11 @@ use control_plane_v1::{
     RequestLedgerResultWire, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
+use navigation::{
+    show_and_navigate, show_main_window, NavigationPage, TRAY_DASHBOARD_ID, TRAY_DIAGNOSTICS_ID,
+    TRAY_PROVIDERS_ID, TRAY_REQUESTS_ID,
+};
+use notification::WindowsNotificationSink;
 use shell_bridge::{
     AuthEventEmitter, AutoStartDto, LedgerEventEmitter, ShellBridge, ShellStateDto,
     ShellStateEmitter, TauriAuthEventEmitter, TauriLedgerEventEmitter, TauriMainWindowEmitter,
@@ -653,13 +660,6 @@ fn shell_emitter(app: tauri::AppHandle) -> Arc<dyn ShellStateEmitter> {
     Arc::new(CompositeEmitter { emitters })
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-}
-
 fn quit_application(app: &tauri::AppHandle, bridge: &ShellBridge) {
     let bridge = bridge.clone();
     let app = app.clone();
@@ -715,16 +715,46 @@ fn main() {
             )?;
             let show_item =
                 MenuItem::with_id(app, TRAY_SHOW_ID, "Show LuckyToken", true, None::<&str>)?;
+            let dashboard_item =
+                MenuItem::with_id(app, TRAY_DASHBOARD_ID, "Open Dashboard", true, None::<&str>)?;
+            let providers_item =
+                MenuItem::with_id(app, TRAY_PROVIDERS_ID, "Open Providers", true, None::<&str>)?;
+            let requests_item =
+                MenuItem::with_id(app, TRAY_REQUESTS_ID, "Open Requests", true, None::<&str>)?;
+            let diagnostics_item = MenuItem::with_id(
+                app,
+                TRAY_DIAGNOSTICS_ID,
+                "Open Diagnostics",
+                true,
+                None::<&str>,
+            )?;
             let quit_item =
                 MenuItem::with_id(app, TRAY_QUIT_ID, "Quit LuckyToken", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
-            let tray_menu =
-                Menu::with_items(app, &[&status_item, &separator, &show_item, &quit_item])?;
+            let navigation_separator = PredefinedMenuItem::separator(app)?;
+            let tray_menu = Menu::with_items(
+                app,
+                &[
+                    &status_item,
+                    &separator,
+                    &show_item,
+                    &dashboard_item,
+                    &providers_item,
+                    &requests_item,
+                    &diagnostics_item,
+                    &navigation_separator,
+                    &quit_item,
+                ],
+            )?;
             let mut builder = TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     TRAY_SHOW_ID => show_main_window(app),
+                    TRAY_DASHBOARD_ID => show_and_navigate(app, NavigationPage::Dashboard),
+                    TRAY_PROVIDERS_ID => show_and_navigate(app, NavigationPage::Providers),
+                    TRAY_REQUESTS_ID => show_and_navigate(app, NavigationPage::Requests),
+                    TRAY_DIAGNOSTICS_ID => show_and_navigate(app, NavigationPage::Diagnostics),
                     TRAY_QUIT_ID => {
                         let bridge = app.state::<ShellBridge>().inner().clone();
                         quit_application(app, &bridge);
@@ -735,7 +765,13 @@ fn main() {
                 builder = builder.icon(icon.clone());
             }
             let tray = builder.build(app)?;
-            let tray_emitter = Arc::new(TrayStateEmitter::new(surface.clone(), status_item, tray));
+            let notifications = Arc::new(WindowsNotificationSink::new(app.handle().clone()));
+            let tray_emitter = Arc::new(TrayStateEmitter::new(
+                surface.clone(),
+                status_item,
+                tray,
+                notifications,
+            ));
             app.manage(tray_emitter.clone());
             // One bridge operation serves both surfaces; the automatic Start
             // is the native connector's one-shot gate.

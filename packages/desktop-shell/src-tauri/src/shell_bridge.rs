@@ -1054,6 +1054,7 @@ mod tests {
             credentials: None,
             persistence: None,
             recovery: None,
+            attention: None,
         }
     }
 
@@ -1134,6 +1135,7 @@ mod tests {
                 credentials: None,
                 persistence: None,
                 recovery: None,
+                attention: None,
             }),
             models: None,
         };

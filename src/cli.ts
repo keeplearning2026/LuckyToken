@@ -110,6 +110,7 @@ import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { stripJsonComments } from "./providers/models-json-schema.js";
 import { createAliasRegistryAuthority } from "./aliases/authority.js";
 import { createAliasControlPlaneHandler } from "./aliases/control-plane.js";
+import { createOperationalAttentionAuthority } from "./operational-attention/index.js";
 
 const HELP = `LuckyToken
 
@@ -701,6 +702,8 @@ async function runServe(
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
   let requestLedgerStore: RequestLedgerStore | undefined;
   let deepCaptureStore: DeepCaptureStore | undefined;
+  let attentionLedgerSubscription: { readonly unsubscribe: () => void } | undefined;
+  let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
   // Ticket 23: the last published base status, published again on any
   // persistence transition so the audit-unavailable projection rides on a
   // fresh snapshot. Hoisted above the stores (a boot-time failure may fire
@@ -861,6 +864,22 @@ async function runServe(
     const protocolNames = Object.freeze({
       [anthropicMessagesProtocolId]: "Anthropic Messages",
       [openaiResponsesProtocolId]: "OpenAI Responses",
+    });
+    const operationalAttention = createOperationalAttentionAuthority({
+      now: Date.now,
+      credentials: () => credentialAuthority?.snapshot(),
+      persistence: () => persistenceAuthority.projection(),
+      requestFailureCount: (from, to) => {
+        const result = ownedLedgerStore.analyze({
+          version: 1,
+          command: "summary",
+          from,
+          to,
+        });
+        return result.command === "summary"
+          ? result.totals.failed + result.totals.other
+          : 0;
+      },
     });
     const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
       authorities: () => tokenAuthorities ?? Object.freeze({}),
@@ -1147,6 +1166,12 @@ async function runServe(
       commandQuit.then((outcome) => ({ kind: "command" as const, outcome })),
     ]);
     const cleanup = async (): Promise<void> => {
+      if (attentionRefreshTimer !== undefined) {
+        clearInterval(attentionRefreshTimer);
+        attentionRefreshTimer = undefined;
+      }
+      attentionLedgerSubscription?.unsubscribe();
+      attentionLedgerSubscription = undefined;
       if (supervisor !== undefined) {
         await supervisor
           .execute(
@@ -1201,6 +1226,7 @@ async function runServe(
       backupCommandHandler: (command, signal) =>
         backupAuthority.handle(command, signal),
       persistenceProjection: () => persistenceAuthority.projection(),
+      attentionProjection: (status) => operationalAttention.project(status),
       requestIdentitiesHandler: () =>
         Promise.resolve({
           records: requestIdentities?.list() ?? Object.freeze([]),
@@ -1328,6 +1354,38 @@ async function runServe(
       access: controlPipe.access,
       diagnostics: ownedDiagnosticsStore,
     });
+    // Request failures update only the aggregate tray count; they can never
+    // activate an actionable condition. Completed non-success records cause
+    // one fresh snapshot so the count is visible promptly.
+    attentionLedgerSubscription = ownedLedgerStore.subscribe((event) => {
+      if (
+        event.record.completedAt !== undefined &&
+        event.record.outcome !== "success" &&
+        event.record.outcome !== "running" &&
+        event.record.outcome !== "aborted"
+      ) {
+        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+      }
+    });
+    // Expiration and the one-hour aggregate can change without another
+    // command. A bounded owner-side refresh republishes the current base
+    // status; no request path or renderer owns this policy.
+    let attentionRefreshInFlight = false;
+    attentionRefreshTimer = setInterval(() => {
+      if (attentionRefreshInFlight) return;
+      attentionRefreshInFlight = true;
+      void (async () => {
+        try {
+          await credentialAuthority?.query();
+          await controlPlane?.publishStatus(lastPublishedStatus);
+        } catch {
+          // Refresh faults remain on their existing diagnostics surfaces.
+        } finally {
+          attentionRefreshInFlight = false;
+        }
+      })();
+    }, 60_000);
+    attentionRefreshTimer.unref();
     await supervisor.execute("start", publish);
     const quit = await quitRequested;
     if (quit.kind === "signal") {
@@ -1349,6 +1407,12 @@ async function runServe(
       await commandQuitExited;
     }
   } finally {
+    if (attentionRefreshTimer !== undefined) {
+      clearInterval(attentionRefreshTimer);
+      attentionRefreshTimer = undefined;
+    }
+    attentionLedgerSubscription?.unsubscribe();
+    attentionLedgerSubscription = undefined;
     if (supervisor !== undefined) {
       await supervisor
         .execute(

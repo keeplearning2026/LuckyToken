@@ -111,6 +111,7 @@ import {
   decodeBackupResult,
   decodeRecoveryProjection,
 } from "./wire-backup.js";
+import { decodeAttentionProjection } from "./attention-contract.js";
 import {
   type AuthCommand,
   type AuthCommandResult,
@@ -3124,12 +3125,20 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   if (isRecord(value) && value.recovery !== undefined && recovery === undefined) {
     return undefined;
   }
+  const attention =
+    isRecord(value) && value.attention !== undefined
+      ? decodeAttentionProjection(value.attention)
+      : undefined;
+  if (isRecord(value) && value.attention !== undefined && attention === undefined) {
+    return undefined;
+  }
   return {
     ...safeStatus,
     sequence,
     ...(ownership === undefined ? {} : { ownership }),
     ...(persistence === undefined ? {} : { persistence }),
     ...(recovery === undefined ? {} : { recovery }),
+    ...(attention === undefined ? {} : { attention }),
   };
 }
 

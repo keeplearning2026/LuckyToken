@@ -27,6 +27,41 @@ const inertHistoryRuntime = {
 };
 
 describe("Windows desktop shell public lifecycle seam", () => {
+  it("applies a native navigation intent that arrives before the connection opens", async () => {
+    const connected: ControlPlaneState = {
+      revision: 1,
+      kind: "connected",
+      applicationVersion: "test",
+      contractVersion: 1,
+      sequence: 0,
+      modelDataPlane: "running",
+      provider: "configured",
+    };
+    let navigate: ((page: "requests") => void) | undefined;
+    let finishConnect: ((state: ControlPlaneState) => void) | undefined;
+    const runtime = {
+      connectControlPlane: () =>
+        new Promise<ControlPlaneState>((resolve) => {
+          finishConnect = resolve;
+        }),
+      subscribeControlPlane: () => () => undefined,
+      subscribeNavigation: (listener: (page: "requests") => void) => {
+        navigate = listener;
+        return () => undefined;
+      },
+      disconnectControlPlane: async () => undefined,
+    } as unknown as DesktopShellRuntime;
+    const shell = createWindowsShellHost(runtime);
+    const launched = shell.launch();
+    navigate?.("requests");
+    finishConnect?.(connected);
+    await expect(launched).resolves.toMatchObject({
+      lifecycle: "open",
+      activePage: "requests",
+    });
+    await shell.dispose();
+  });
+
   it("runs Dashboard lifecycle actions through the connected runtime", async () => {
     const commands: string[] = [];
     const connected: ControlPlaneState = {

@@ -481,7 +481,8 @@ function New-StatusSnapshot {
     [Parameter(Mandatory = $true)] [int] $Sequence,
     [Parameter(Mandatory = $true)] [string] $State,
     [switch] $Failed,
-    [switch] $WithSettings
+    [switch] $WithSettings,
+    [object] $Attention
   )
   $dataPlane = @{
     configuredOrigin = "http://127.0.0.1:3000"
@@ -545,6 +546,9 @@ function New-StatusSnapshot {
         value = "secret-token-setting"
       }
     }
+  }
+  if ($null -ne $Attention) {
+    $snapshot.attention = $Attention
   }
   return $snapshot
 }
@@ -897,6 +901,45 @@ try {
   $firstSurvived = -not $first.HasExited
   $windowsAfterSecond = @(Get-ProductWindows -Process $first)
 
+  # --- Ticket 25: actionable attention projection --------------------------
+  # Drive all four fixed categories through the real Named Pipe/native decoder
+  # in one snapshot. The native notification tracker owns coalescing; the smoke
+  # deliberately observes only stable product surfaces (tray + navigation),
+  # never operating-system toast pixels.
+  $actionableAttention = @{
+    conditions = @(
+      @{
+        id = "gateway-start-failed"
+        category = "gateway-start-failed"
+        since = 1700000000001
+        page = "dashboard"
+      },
+      @{
+        id = "port-conflict"
+        category = "port-conflict"
+        since = 1700000000002
+        page = "dashboard"
+      },
+      @{
+        id = "persistence-critical"
+        category = "persistence-critical"
+        since = 1700000000003
+        page = "diagnostics"
+      },
+      @{
+        id = "provider-login-invalid:smoke-provider"
+        category = "provider-login-invalid"
+        since = 1700000000004
+        page = "providers"
+        providerId = "smoke-provider"
+      }
+    )
+    requestFailures = @{
+      count = 3
+      windowMs = 3600000
+    }
+  }
+
   # --- Ticket 04: tray Close/Show/Quit entry points -------------------------
   # Exactly one tray icon must exist before any window interaction.
   $trayWindows = @(Wait-TrayWindowCount -Process $first -Count 1)
@@ -916,8 +959,16 @@ try {
   # The Data Plane remains reachable while hidden: the live subscription pipe
   # is still open and the gateway reports state updates through it.
   Write-StatusEvent -Stream $retryPipe -Snapshot (New-StatusSnapshot -Sequence 11 -State "stopped")
+  $actionableSnapshot = New-StatusSnapshot -Sequence 13 -State "running" -Attention $actionableAttention
+  Write-StatusEvent -Stream $retryPipe -Snapshot $actionableSnapshot
+  # The same active conditions with a newer status sequence must be accepted
+  # without creating another notification episode.
+  Write-StatusEvent -Stream $retryPipe -Snapshot (New-StatusSnapshot -Sequence 14 -State "running" -Attention $actionableAttention)
   Start-Sleep -Milliseconds 200
   $first.Refresh()
+  if ($first.HasExited) {
+    throw "Desktop exited while projecting actionable attention"
+  }
   $dataPlaneReachableWhileHidden = -not $first.HasExited -and -not $retryPipe.CanRead -eq $false
   $hiddenSubscriptionOpen = -not $retryPipe.CanRead -eq $false
 
@@ -932,32 +983,60 @@ try {
   $hiddenAfterSecondClose = @(Get-ProductWindows -Process $first).Count -eq 0
 
   # The tray menu exposes sanitized high-level gateway state: the disabled
-  # status line and the Show/Quit commands, with no credentials or secrets.
+  # status line, navigation, and Show/Quit commands, with no credentials or
+  # secrets. Ordinary failures appear only as the aggregate count.
   # (Opened while hidden; the window must stay hidden while the menu is up.)
   $menuWindow = Open-TrayMenu -Process $first -TrayWindow $trayWindow
   $menuNames = [LuckyTokenProductWindowProbe]::MenuItemNames($menuWindow)
-  if ($menuNames -notcontains "Show LuckyToken" -or $menuNames -notcontains "Quit LuckyToken") {
-    throw "Tray menu must expose Show and Quit. Visible: $($menuNames -join ' | ')"
+  $requiredTrayItems = @(
+    "Show LuckyToken",
+    "Open Dashboard",
+    "Open Providers",
+    "Open Requests",
+    "Open Diagnostics",
+    "Quit LuckyToken"
+  )
+  foreach ($requiredTrayItem in $requiredTrayItems) {
+    if ($menuNames -notcontains $requiredTrayItem) {
+      throw "Tray menu is missing '$requiredTrayItem'. Visible: $($menuNames -join ' | ')"
+    }
   }
   $trayStatusLine = $menuNames | Where-Object { $_ -like "LuckyToken*" } | Select-Object -First 1
   if ($null -eq $trayStatusLine) {
     throw "Tray menu must expose a high-level gateway status line"
+  }
+  if ($trayStatusLine -notmatch "3 recent failures") {
+    throw "Ordinary request failures must appear only as a tray aggregate. Visible: $trayStatusLine"
   }
   $secretFree = -not (($menuNames -join " ") -match "3000|127\.0\.0\.1|capability|desktop-smoke|raw-native-failure-secret")
   if (-not $secretFree) {
     throw "Tray menu leaked a secret or transport detail: $($menuNames -join ' | ')"
   }
 
-  # Tray Show restores and focuses the same existing window; never a second.
-  Invoke-TrayMenuItem -Process $first -MenuWindow $menuWindow -Name "Show LuckyToken"
+  # Tray navigation restores/focuses the same existing window and opens the
+  # requested product context; it never creates a second window.
+  Invoke-TrayMenuItem -Process $first -MenuWindow $menuWindow -Name "Open Requests"
   $shownWindows = @(Wait-ProductWindowCount -Process $first -Count 1)
   if ($shownWindows[0] -ne $windowsAfterSecond[0]) {
-    throw "Tray Show created a different window handle instead of restoring the existing one"
+    throw "Tray navigation created a different window handle instead of restoring the existing one"
+  }
+  Wait-UiText -Process $first -Text "Requests"
+
+  # Recovery clears the actionable conditions and recent-failure aggregate.
+  # Permanent Diagnostics records are a separate authority and are not deleted
+  # by this status transition.
+  $recoveredAttention = @{ conditions = @(); requestFailures = @{ count = 0; windowMs = 3600000 } }
+  Write-StatusEvent -Stream $retryPipe -Snapshot (New-StatusSnapshot -Sequence 15 -State "running" -Attention $recoveredAttention)
+  Start-Sleep -Milliseconds 250
+  $menuWindow = Open-TrayMenu -Process $first -TrayWindow $trayWindow
+  $recoveredMenuNames = [LuckyTokenProductWindowProbe]::MenuItemNames($menuWindow)
+  $recoveredStatusLine = $recoveredMenuNames | Where-Object { $_ -like "LuckyToken*" } | Select-Object -First 1
+  if ($null -eq $recoveredStatusLine -or $recoveredStatusLine -match "recent failure") {
+    throw "Recovered tray state retained the request failure aggregate. Visible: $($recoveredMenuNames -join ' | ')"
   }
 
   # Tray Quit is the distinct explicit quit intent: the process exits, while
   # window Close alone never does.
-  $menuWindow = Open-TrayMenu -Process $first -TrayWindow $trayWindow
   Invoke-TrayMenuItem -Process $first -MenuWindow $menuWindow -Name "Quit LuckyToken"
   $cleanExit = $first.WaitForExit(10000)
 
@@ -991,6 +1070,10 @@ try {
     trayWindowStableAcrossCloseShow = $true
     trayShowRestoredExistingWindow = ([int64]$shownWindows[0] -eq [int64]$windowsAfterSecond[0])
     trayMenuSecretFree = $secretFree
+    actionableAttentionCategories = 4
+    ordinaryFailureAggregate = 3
+    attentionRecoveryCleared = ($recoveredStatusLine -notmatch "recent failure")
+    trayNavigation = "requests"
     quitViaTray = $cleanExit
     cleanExit = $cleanExit
     pipeClosed = $pipeClosed
@@ -1014,6 +1097,7 @@ try {
     -not $hiddenSubscriptionOpen -or
     -not $secretFree -or
     -not $result.trayShowRestoredExistingWindow -or
+    -not $result.attentionRecoveryCleared -or
     -not $cleanExit -or
     -not $pipeClosed
   ) {

@@ -57,6 +57,7 @@ export interface DesktopShellRuntime {
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
   ): () => void;
+  subscribeNavigation?(listener: (page: ProductPageId) => void): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
   /** Ticket 23: acknowledges the audit-unavailable state; returns the fresh
@@ -197,6 +198,8 @@ export function createWindowsShellHost(
   let cleanup: Promise<void> | undefined;
   let disposal: Promise<void> | undefined;
   let stopObserving: (() => void) | undefined;
+  let stopNavigation: (() => void) | undefined;
+  let pendingNavigation: ProductPageId | undefined;
   let disposed = false;
   const subscribers = new Set<(snapshot: DesktopShellSnapshot) => void>();
   let connection: ControlPlaneState = Object.freeze({
@@ -220,6 +223,8 @@ export function createWindowsShellHost(
       const unsubscribe = stopObserving;
       stopObserving = undefined;
       unsubscribe?.();
+      stopNavigation?.();
+      stopNavigation = undefined;
       try {
         await runtime.disconnectControlPlane();
       } finally {
@@ -233,6 +238,14 @@ export function createWindowsShellHost(
     launch() {
       if (disposed) return Promise.resolve(current);
       launch ??= (async () => {
+        stopNavigation = runtime.subscribeNavigation?.((page) => {
+          if (current.lifecycle === "open") {
+            current = Object.freeze({ ...current, activePage: page });
+            emit();
+          } else {
+            pendingNavigation = page;
+          }
+        });
         stopObserving = runtime.subscribeControlPlane((state) => {
           connection = state;
           if (current.lifecycle === "open") {
@@ -252,9 +265,10 @@ export function createWindowsShellHost(
         }
         current = Object.freeze({
           lifecycle: "open" as const,
-          activePage: "dashboard" as const,
+          activePage: pendingNavigation ?? ("dashboard" as const),
           connection,
         });
+        pendingNavigation = undefined;
         emit();
         return current;
       })();

@@ -261,3 +261,57 @@ describe("Audit-unavailable persistence projection (Ticket 23)", () => {
     expect(unknownAuthority.persistence).toBeUndefined();
   });
 });
+
+describe("Operational attention projection (Ticket 25)", () => {
+  it("projects only fixed conditions and the aggregate count", () => {
+    const projected = projectControlPlaneState({
+      revision: 11,
+      connection: "connected",
+      applicationVersion: "test",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 20,
+        modelDataPlane: "running",
+        provider: "configured",
+        attention: {
+          conditions: [
+            {
+              id: "persistence-critical",
+              category: "persistence-critical",
+              since: 100,
+              page: "diagnostics",
+            },
+          ],
+          requestFailures: { count: 4, windowMs: 3_600_000 },
+        },
+      },
+    });
+    expect(projected).toMatchObject({
+      kind: "connected",
+      attention: {
+        conditions: [{ category: "persistence-critical", page: "diagnostics" }],
+        requestFailures: { count: 4, windowMs: 3_600_000 },
+      },
+    });
+  });
+
+  it("turns a secret-bearing attention extension into a protocol error", () => {
+    const projected = projectControlPlaneState({
+      revision: 12,
+      connection: "connected",
+      applicationVersion: "test",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 21,
+        modelDataPlane: "running",
+        provider: "configured",
+        attention: {
+          conditions: [],
+          authorization: "Bearer attention-secret",
+        },
+      },
+    } as unknown as ControlPlaneBridgePayload);
+    expect(projected).toMatchObject({ kind: "error", code: "protocol_error" });
+    expect(JSON.stringify(projected)).not.toContain("attention-secret");
+  });
+});

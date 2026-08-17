@@ -2,11 +2,49 @@ import { describe, expect, it } from "vitest";
 
 import {
   createTauriDesktopRuntime,
+  decodeNavigationPage,
   type NativeTauriBridge,
 } from "../src/tauri-shell-runtime.js";
 import type { ControlPlaneBridgePayload } from "../src/control-plane-projection.js";
 
 describe("Tauri shell runtime public adapter seam", () => {
+  it("strictly decodes and forwards native tray or notification navigation", async () => {
+    expect(decodeNavigationPage({ page: "requests" })).toBe("requests");
+    expect(decodeNavigationPage({ page: "settings-developer-lab" })).toBeUndefined();
+    expect(decodeNavigationPage({ page: "requests", token: "secret" })).toBeUndefined();
+
+    let navigation:
+      | ((event: { readonly payload: unknown }) => void)
+      | undefined;
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      listenNavigation: async (listener) => {
+        navigation = listener;
+        return () => undefined;
+      },
+      invoke: async () => ({
+        revision: 1,
+        connection: "connected",
+        applicationVersion: "test",
+        contractVersion: 1,
+        snapshot: {
+          sequence: 1,
+          modelDataPlane: "running",
+          provider: "configured",
+        },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    const pages: string[] = [];
+    runtime.subscribeNavigation((page) => pages.push(page));
+    await runtime.connectControlPlane();
+    await Promise.resolve();
+    navigation?.({ payload: { page: "diagnostics" } });
+    navigation?.({ payload: { page: "credentials" } });
+    expect(pages).toEqual(["diagnostics"]);
+    await runtime.disconnectControlPlane();
+  });
+
   it("listens before snapshot and ignores a stale snapshot revision", async () => {
     const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
     let listener: ((event: { readonly payload: ControlPlaneBridgePayload }) => void) | undefined;

@@ -13,6 +13,9 @@ pub(crate) struct TrayGatewayState {
     /// Ticket 23: fixed degraded flag projected from the audit-unavailable
     /// status projection; only a fixed label variant may leave this module.
     pub(crate) audit_unavailable: bool,
+    /// Ticket 25: aggregate count only. Request ids, bodies, aliases and
+    /// model/provider identifiers never enter the tray state.
+    pub(crate) recent_request_failures: u64,
 }
 
 impl From<&StatusSnapshot> for TrayGatewayState {
@@ -29,6 +32,11 @@ impl From<&StatusSnapshot> for TrayGatewayState {
                 .as_ref()
                 .map(|data_plane| data_plane.configured_port),
             audit_unavailable: snapshot.persistence.is_some(),
+            recent_request_failures: snapshot
+                .attention
+                .as_ref()
+                .and_then(|attention| attention.request_failures.as_ref())
+                .map_or(0, |aggregate| aggregate.count),
         }
     }
 }
@@ -41,6 +49,7 @@ impl TrayGatewayState {
             configured_origin: None,
             configured_port: None,
             audit_unavailable: false,
+            recent_request_failures: 0,
         }
     }
 }
@@ -67,21 +76,43 @@ fn provider_state_label(state: ProviderState) -> &'static str {
 /// origin and port never appear in tray text, so no secret can leak through
 /// the tray surface.
 pub(crate) fn tray_gateway_label(gateway: &TrayGatewayState) -> String {
+    let failures = if gateway.recent_request_failures == 0 {
+        String::new()
+    } else {
+        format!(
+            " · {} recent failure{}",
+            gateway.recent_request_failures,
+            if gateway.recent_request_failures == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+    };
     format!(
-        "LuckyToken — Gateway {}{}",
+        "LuckyToken — Gateway {}{}{}",
         gateway_state_label(gateway.model_data_plane),
         if gateway.audit_unavailable {
             " (audit unavailable)"
         } else {
             ""
         },
+        failures,
     )
 }
 
 /// Tray tooltip: high-level lifecycle and provider configuration only.
 pub(crate) fn tray_gateway_tooltip(gateway: &TrayGatewayState) -> String {
+    let failures = if gateway.recent_request_failures == 0 {
+        String::new()
+    } else {
+        format!(
+            "; {} recent request failures",
+            gateway.recent_request_failures
+        )
+    };
     format!(
-        "LuckyToken {} (gateway {}{})",
+        "LuckyToken {} (gateway {}{}{})",
         gateway_state_label(gateway.model_data_plane),
         provider_state_label(gateway.provider),
         if gateway.audit_unavailable {
@@ -89,6 +120,7 @@ pub(crate) fn tray_gateway_tooltip(gateway: &TrayGatewayState) -> String {
         } else {
             ""
         },
+        failures,
     )
 }
 
@@ -119,6 +151,7 @@ mod tests {
             credentials: None,
             persistence: None,
             recovery: None,
+            attention: None,
         }
     }
 
@@ -181,5 +214,24 @@ mod tests {
             !tray_gateway_tooltip(&gateway).contains("127.0.0.1"),
             "tray tooltip must not reveal the origin host"
         );
+    }
+
+    #[test]
+    fn tray_label_shows_only_the_recent_failure_count() {
+        let mut snapshot = running_snapshot_with_origin();
+        snapshot.attention = Some(crate::control_plane_v1::AttentionProjectionWire {
+            conditions: vec![],
+            request_failures: Some(crate::control_plane_v1::RecentRequestFailuresWire {
+                count: 3,
+                window_ms: 3_600_000,
+            }),
+        });
+        let gateway = TrayGatewayState::from(&snapshot);
+        assert_eq!(
+            tray_gateway_label(&gateway),
+            "LuckyToken — Gateway running · 3 recent failures"
+        );
+        assert!(!tray_gateway_label(&gateway).contains("request-secret"));
+        assert!(!tray_gateway_tooltip(&gateway).contains("real-model-secret"));
     }
 }

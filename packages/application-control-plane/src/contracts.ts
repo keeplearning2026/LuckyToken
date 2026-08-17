@@ -20,6 +20,7 @@ import type {
 } from "./analytics-contract.js";
 import type { RecoveryProjection } from "./backup-contract.js";
 import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
+import type { AttentionProjection } from "./attention-contract.js";
 
 export const controlPlaneVersion = 1 as const;
 
@@ -75,6 +76,9 @@ export interface StatusSnapshot extends ApplicationStatus {
    * safely interpreted. The local Control Plane remains usable while the
    * unsafe Data Plane stays stopped. */
   readonly recovery?: RecoveryProjection;
+  /** Ticket 25: value-free actionable conditions plus a recent request
+   * failure count. Ordinary request failures never become conditions. */
+  readonly attention?: AttentionProjection;
   /** Owner identity of the one active instance (Ticket 05). */
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
@@ -1120,6 +1124,15 @@ export type {
   PersistenceProjection,
 };
 export { PERSISTENCE_AUTHORITY_IDS } from "./history-contract.js";
+
+export type {
+  AttentionCategory,
+  AttentionCondition,
+  AttentionPage,
+  AttentionProjection,
+  RecentRequestFailures,
+} from "./attention-contract.js";
+export { RECENT_REQUEST_FAILURE_WINDOW_MS } from "./attention-contract.js";
 
 export type {
   BackupCommand,

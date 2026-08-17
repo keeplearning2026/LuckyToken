@@ -17,6 +17,7 @@ const bridge: NativeTauriBridge = {
   // forwards allowlisted records on this channel while a ledger
   // subscription is active; the runtime strictly re-decodes each payload.
   listenLedgerEvent: (listener) => listen("luckytoken://ledger-event", listener),
+  listenNavigation: (listener) => listen("luckytoken://navigate", listener),
 };
 const controlPlane = createTauriDesktopRuntime(bridge);
 const shell = createWindowsShellHost(controlPlane);

@@ -60,7 +60,7 @@ import {
   type ControlPlaneBridgePayload,
   type ControlPlaneState,
 } from "./control-plane-projection.js";
-import type { AutoStartProjection } from "./shell-lifecycle.js";
+import type { AutoStartProjection, ProductPageId } from "./shell-lifecycle.js";
 
 export type ShellCommand =
   | "shell_snapshot"
@@ -135,6 +135,11 @@ export interface NativeTauriBridge {
    *  it. Required for live list/detail updates; the runtime fails the
    *  subscription explicitly when a bridge does not provide it. */
   listenLedgerEvent?(
+    listener: (event: Pick<Event<unknown>, "payload">) => void,
+  ): Promise<() => void>;
+  /** Native tray/toast navigation intent. The runtime strictly decodes the
+   *  page before it reaches shell lifecycle state. */
+  listenNavigation?(
     listener: (event: Pick<Event<unknown>, "payload">) => void,
   ): Promise<() => void>;
 }
@@ -221,6 +226,25 @@ export interface TauriDesktopRuntime {
   subscribeControlPlane(
     listener: (state: ControlPlaneState) => void,
   ): () => void;
+  subscribeNavigation(listener: (page: ProductPageId) => void): () => void;
+}
+
+export function decodeNavigationPage(value: unknown): ProductPageId | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1
+  ) {
+    return undefined;
+  }
+  const page = (value as { readonly page?: unknown }).page;
+  return page === "dashboard" ||
+    page === "providers" ||
+    page === "requests" ||
+    page === "diagnostics"
+    ? page
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -676,6 +700,9 @@ export function createTauriDesktopRuntime(
   let listenTask: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
   const subscribers = new Set<(state: ControlPlaneState) => void>();
+  const navigationSubscribers = new Set<(page: ProductPageId) => void>();
+  let navigationListenTask: Promise<void> | undefined;
+  let navigationUnlisten: (() => void) | undefined;
 
   const accept = (raw: unknown): ControlPlaneState => {
     const payload = decodeBridgePayload(raw) ?? {
@@ -717,6 +744,17 @@ export function createTauriDesktopRuntime(
         unlisten = stop;
       });
     await listenTask;
+  };
+  const ensureNavigationListening = async (): Promise<void> => {
+    if (bridge.listenNavigation === undefined) return;
+    navigationListenTask ??= bridge.listenNavigation((event) => {
+      const page = decodeNavigationPage(event.payload);
+      if (page === undefined) return;
+      for (const subscriber of navigationSubscribers) subscriber(page);
+    }).then((stop) => {
+      navigationUnlisten = stop;
+    });
+    await navigationListenTask;
   };
 
   const invokeState = async (
@@ -1138,11 +1176,19 @@ export function createTauriDesktopRuntime(
       await listenTask;
       unlisten?.();
       unlisten = undefined;
+      await navigationListenTask;
+      navigationUnlisten?.();
+      navigationUnlisten = undefined;
     },
     subscribeControlPlane(listener) {
       subscribers.add(listener);
       if (latest !== undefined) listener(latest);
       return () => subscribers.delete(listener);
+    },
+    subscribeNavigation(listener) {
+      navigationSubscribers.add(listener);
+      void ensureNavigationListening();
+      return () => navigationSubscribers.delete(listener);
     },
   };
 }

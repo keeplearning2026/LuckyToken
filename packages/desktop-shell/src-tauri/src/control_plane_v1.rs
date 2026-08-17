@@ -78,6 +78,113 @@ pub(crate) struct DataPlaneStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum AttentionCategoryWire {
+    GatewayStartFailed,
+    PortConflict,
+    PersistenceCritical,
+    ProviderLoginInvalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AttentionPageWire {
+    Dashboard,
+    Providers,
+    Requests,
+    Diagnostics,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttentionConditionWire {
+    pub(crate) id: String,
+    pub(crate) category: AttentionCategoryWire,
+    pub(crate) since: u64,
+    pub(crate) page: AttentionPageWire,
+    #[serde(rename = "providerId", skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecentRequestFailuresWire {
+    pub(crate) count: u64,
+    #[serde(rename = "windowMs")]
+    pub(crate) window_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttentionProjectionWire {
+    pub(crate) conditions: Vec<AttentionConditionWire>,
+    #[serde(rename = "requestFailures", skip_serializing_if = "Option::is_none")]
+    pub(crate) request_failures: Option<RecentRequestFailuresWire>,
+}
+
+fn valid_provider_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 256
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+impl AttentionConditionWire {
+    fn is_valid(&self) -> bool {
+        match self.category {
+            AttentionCategoryWire::GatewayStartFailed => {
+                self.id == "gateway-start-failed"
+                    && self.page == AttentionPageWire::Dashboard
+                    && self.provider_id.is_none()
+            }
+            AttentionCategoryWire::PortConflict => {
+                self.id == "port-conflict"
+                    && self.page == AttentionPageWire::Dashboard
+                    && self.provider_id.is_none()
+            }
+            AttentionCategoryWire::PersistenceCritical => {
+                self.id == "persistence-critical"
+                    && self.page == AttentionPageWire::Diagnostics
+                    && self.provider_id.is_none()
+            }
+            AttentionCategoryWire::ProviderLoginInvalid => {
+                self.provider_id.as_ref().is_some_and(|provider_id| {
+                    valid_provider_id(provider_id)
+                        && self.id == format!("provider-login-invalid:{provider_id}")
+                }) && self.page == AttentionPageWire::Providers
+            }
+        }
+    }
+}
+
+impl AttentionProjectionWire {
+    fn is_valid(&self) -> bool {
+        if self.conditions.len() > 64
+            || self
+                .conditions
+                .iter()
+                .any(|condition| !condition.is_valid())
+        {
+            return false;
+        }
+        let mut ids = std::collections::HashSet::new();
+        if self
+            .conditions
+            .iter()
+            .any(|condition| !ids.insert(condition.id.as_str()))
+        {
+            return false;
+        }
+        self.request_failures
+            .as_ref()
+            .is_none_or(|aggregate| aggregate.window_ms == 3_600_000)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OwnerKind {
     Cli,
@@ -147,6 +254,8 @@ pub(crate) struct StatusSnapshot {
     pub(crate) persistence: Option<PersistenceProjectionWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) recovery: Option<RecoveryProjectionWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) attention: Option<AttentionProjectionWire>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4201,6 +4310,7 @@ struct StatusSnapshotWire {
     credentials: Option<CredentialProjectionWire>,
     persistence: Option<PersistenceProjectionWire>,
     recovery: Option<RecoveryProjectionWire>,
+    attention: Option<AttentionProjectionWire>,
 }
 
 #[derive(Deserialize)]
@@ -4251,6 +4361,13 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
     {
         return None;
     }
+    if wire
+        .attention
+        .as_ref()
+        .is_some_and(|attention| !attention.is_valid())
+    {
+        return None;
+    }
     Some(StatusSnapshot {
         sequence: wire.sequence,
         model_data_plane: wire.model_data_plane,
@@ -4268,6 +4385,7 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
             projection.audit_unavailable && !projection.authorities.is_empty()
         }),
         recovery: wire.recovery,
+        attention: wire.attention,
     })
 }
 
@@ -5357,6 +5475,54 @@ mod tests {
         );
         assert!(!serialized.to_string().contains("canary-native-secret-999"));
         assert!(!serialized.to_string().contains("fp:deadbeef"));
+    }
+
+    #[test]
+    fn actionable_attention_is_strictly_allowlisted_through_status_snapshots() {
+        let raw = json!({
+            "sequence": 5,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "attention": {
+                "conditions": [
+                    {"id":"gateway-start-failed","category":"gateway-start-failed","since":1,"page":"dashboard"},
+                    {"id":"port-conflict","category":"port-conflict","since":2,"page":"dashboard"},
+                    {"id":"persistence-critical","category":"persistence-critical","since":3,"page":"diagnostics"},
+                    {"id":"provider-login-invalid:provider-a","category":"provider-login-invalid","since":4,"page":"providers","providerId":"provider-a"}
+                ],
+                "requestFailures": {"count": 7, "windowMs": 3_600_000}
+            }
+        });
+        let status = decode_status_snapshot(&raw).expect("attention status must decode");
+        let attention = status.attention.expect("attention must be projected");
+        assert_eq!(attention.conditions.len(), 4);
+        assert_eq!(
+            attention
+                .request_failures
+                .as_ref()
+                .expect("aggregate")
+                .count,
+            7
+        );
+        let serialized = serde_json::to_string(&attention).expect("serialize attention");
+        assert!(!serialized.contains("request-secret"));
+        assert!(!serialized.contains("real-model-secret"));
+
+        assert!(decode_status_snapshot(&json!({
+            "sequence": 5,
+            "modelDataPlane": "running",
+            "provider": "configured",
+            "attention": {
+                "conditions": [{
+                    "id":"port-conflict",
+                    "category":"port-conflict",
+                    "since":2,
+                    "page":"dashboard",
+                    "body":"credential-secret"
+                }]
+            }
+        }))
+        .is_none());
     }
 
     #[test]

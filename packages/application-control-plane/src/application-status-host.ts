@@ -44,6 +44,7 @@ import type {
   BackupCommandHandler,
   RecoveryProjection,
 } from "./backup-contract.js";
+import type { AttentionProjection } from "./attention-contract.js";
 import {
   type ControlPlaneDiagnostics,
   normalizeDiagnosticQuery,
@@ -204,6 +205,10 @@ export interface StartControlPlaneOptions {
   readonly backupCommandHandler?: BackupCommandHandler;
   /** Ticket 24 incompatible-owned-file projection. */
   readonly recoveryProjection?: () => RecoveryProjection | undefined;
+  /** Ticket 25 owner-side actionable condition projection. */
+  readonly attentionProjection?: (
+    status: ApplicationStatus,
+  ) => AttentionProjection | undefined;
 }
 
 interface ConnectionState {
@@ -275,6 +280,7 @@ export async function startApplicationStatusHost(
     const aliasesProjection = options.aliasesProjection?.();
     const persistenceProjection = options.persistenceProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
+    const attentionProjection = options.attentionProjection?.(status);
     return {
       ...status,
       ...(options.ownership === undefined
@@ -304,6 +310,9 @@ export async function startApplicationStatusHost(
       ...(recoveryProjection === undefined
         ? {}
         : { recovery: recoveryProjection }),
+      ...(attentionProjection === undefined
+        ? {}
+        : { attention: attentionProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };

@@ -170,6 +170,16 @@ export {
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
 export type {
+  AttentionCategory,
+  AttentionCondition,
+  AttentionPage,
+  AttentionProjection,
+  RecentRequestFailures,
+} from "./contracts.js";
+export { RECENT_REQUEST_FAILURE_WINDOW_MS } from "./contracts.js";
+export { decodeAttentionProjection } from "./attention-contract.js";
+
+export type {
   BackupCommand,
   BackupCommandHandler,
   BackupCreateCommand,
