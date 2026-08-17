@@ -64,6 +64,7 @@ describe("effective composition in the data plane", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {

@@ -40,6 +40,10 @@ import {
   type HistoryCommandHandler,
   type PersistenceProjection,
 } from "./contracts.js";
+import type {
+  BackupCommandHandler,
+  RecoveryProjection,
+} from "./backup-contract.js";
 import {
   type ControlPlaneDiagnostics,
   normalizeDiagnosticQuery,
@@ -84,6 +88,7 @@ import {
   type ControlPlaneErrorCode,
 } from "./wire.js";
 import { decodeHistoryCommandResult } from "./wire-history.js";
+import { decodeBackupResult } from "./wire-backup.js";
 import type { HistoryCommand, HistoryCommandResult, HistoryRange } from "./history-contract.js";
 
 export interface StartControlPlaneOptions {
@@ -195,6 +200,10 @@ export interface StartControlPlaneOptions {
    *  published snapshot (Ticket 23); present only while at least one
    *  authority is unavailable. */
   readonly persistenceProjection?: () => PersistenceProjection | undefined;
+  /** Ticket 24 backup command authority. */
+  readonly backupCommandHandler?: BackupCommandHandler;
+  /** Ticket 24 incompatible-owned-file projection. */
+  readonly recoveryProjection?: () => RecoveryProjection | undefined;
 }
 
 interface ConnectionState {
@@ -210,6 +219,8 @@ interface ConnectionState {
   /** Aborts in-flight long-running history commands (Ticket 23) when this
    *  connection closes or is torn down. */
   historyAbort: AbortController;
+  /** Aborts an in-flight backup if the requesting connection is lost. */
+  backupAbort: AbortController;
 }
 
 /** One in-flight Provider-auth login flow (Ticket 13). */
@@ -263,6 +274,7 @@ export async function startApplicationStatusHost(
     const catalogProjection = options.catalogProjection?.();
     const aliasesProjection = options.aliasesProjection?.();
     const persistenceProjection = options.persistenceProjection?.();
+    const recoveryProjection = options.recoveryProjection?.();
     return {
       ...status,
       ...(options.ownership === undefined
@@ -289,6 +301,9 @@ export async function startApplicationStatusHost(
       ...(persistenceProjection === undefined
         ? {}
         : { persistence: persistenceProjection }),
+      ...(recoveryProjection === undefined
+        ? {}
+        : { recovery: recoveryProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -886,6 +901,38 @@ export async function startApplicationStatusHost(
               result: decoded.result,
             });
           }
+        } else if (request.type === "backup_command") {
+          if (options.backupCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          let handled;
+          try {
+            handled = await options.backupCommandHandler(
+              request.command,
+              state.backupAbort.signal,
+            );
+          } catch {
+            handled = undefined;
+          }
+          const decoded = decodeBackupResult(handled);
+          if (decoded === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "backup_result",
+            requestId: request.requestId,
+            result: decoded,
+          });
         } else if (request.type === "runtime_command") {
           let execution: RuntimeCommandExecution;
           if (options.runtimeCommandHandler === undefined) {
@@ -1409,6 +1456,7 @@ export async function startApplicationStatusHost(
       // a long export), so it never publishes an artifact its requester can
       // no longer receive.
       state.historyAbort.abort();
+      state.backupAbort.abort();
       if (state.authFlow !== undefined) {
         abortAuthFlow(
           state.authFlow,
@@ -1441,6 +1489,7 @@ export async function startApplicationStatusHost(
         captureSubscribed: false,
         authFlow: undefined,
         historyAbort: new AbortController(),
+        backupAbort: new AbortController(),
       };
       states.add(state);
       const task = serveConnection(state).catch(() => undefined);

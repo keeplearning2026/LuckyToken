@@ -28,6 +28,7 @@ import type {
   HistoryQueryResult,
   HistoryRange,
 } from "./history-contract.js";
+import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
 import {
   assertControlPlaneEndpoint,
   type AliasCommand,
@@ -77,6 +78,7 @@ import {
   decodeHistoryExportResult,
   decodeHistoryQueryResult,
 } from "./wire-history.js";
+import { decodeBackupResult } from "./wire-backup.js";
 
 export interface ControlPlaneClientDependencies {
   readonly createRequestId: () => string;
@@ -639,6 +641,34 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       const result = decodeHistoryAcknowledgeResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeBackup(command: BackupCreateCommand): Promise<BackupResult> {
+      const response = await request({
+        type: "backup_command",
+        command: { command: "create", ...command },
+      });
+      if (response.type !== "backup_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeBackupResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async confirmBackup(actionId: string): Promise<BackupResult> {
+      const response = await request({
+        type: "backup_command",
+        command: { command: "confirm", actionId },
+      });
+      if (response.type !== "backup_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeBackupResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

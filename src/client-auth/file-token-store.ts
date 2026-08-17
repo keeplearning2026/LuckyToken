@@ -15,13 +15,6 @@ import lockfile from "proper-lockfile";
 import type { AuthorizedClient } from "../auth.js";
 
 const SCHEMA_VERSION = "luckytoken-client-auth-v2";
-/**
- * Legacy Ticket 16/baseline shape: read-only acceptance with an explicit
- * migration rule (no persisted revision or deletion marker). Existing valid
- * token data is preserved; the next successful mutation rewrites the file
- * as v2.
- */
-const LEGACY_SCHEMA_VERSION = "luckytoken-client-auth-v1";
 const AUTH_FILE_MODE = 0o600;
 const AUTH_DIRECTORY_MODE = 0o700;
 /** Lock staleness matches the Control Plane descriptor lease pattern. */
@@ -147,18 +140,18 @@ function parseData(content: string): ClientTokenData {
   }
   const value = parsed as Record<string, unknown>;
   const schemaVersion = value.schemaVersion;
-  if (
-    schemaVersion !== SCHEMA_VERSION &&
-    schemaVersion !== LEGACY_SCHEMA_VERSION
-  ) {
+  if (schemaVersion !== SCHEMA_VERSION) {
     throw new Error(
-      `Invalid client token file: schemaVersion must be ${SCHEMA_VERSION} or ${LEGACY_SCHEMA_VERSION}`,
+      `Invalid client token file: schemaVersion must be ${SCHEMA_VERSION}`,
     );
   }
-  const legacy = schemaVersion === LEGACY_SCHEMA_VERSION;
-  const allowed = legacy
-    ? new Set(["schemaVersion", "global", "projects"])
-    : new Set(["schemaVersion", "global", "projects", "revision", "globalDeleted"]);
+  const allowed = new Set([
+    "schemaVersion",
+    "global",
+    "projects",
+    "revision",
+    "globalDeleted",
+  ]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
       throw new Error(`Invalid client token file: unknown field ${key}`);
@@ -187,23 +180,18 @@ function parseData(content: string): ClientTokenData {
     }
     projects[projectDir] = validIdentifier(token, "Project client token");
   }
-  // Legacy v1 files carry neither a revision nor a deletion marker; the
-  // explicit migration rule treats them as initialized (revision 0, never
-  // deleted), preserving their valid token data.
-  const revision = legacy
-    ? 0
-    : typeof value.revision === "number" &&
-        Number.isSafeInteger(value.revision) &&
-        value.revision >= 0
+  const revision =
+    typeof value.revision === "number" &&
+    Number.isSafeInteger(value.revision) &&
+    value.revision >= 0
       ? value.revision
       : (() => {
           throw new Error(
             "Invalid client token file: revision must be a non-negative integer",
           );
         })();
-  const globalDeleted = legacy
-    ? false
-    : typeof value.globalDeleted === "boolean"
+  const globalDeleted =
+    typeof value.globalDeleted === "boolean"
       ? value.globalDeleted
       : (() => {
           throw new Error(

@@ -92,6 +92,7 @@ describe("alias serve wiring", () => {
       await writeFile(
         configPath,
         JSON.stringify({
+          schemaVersion: "luckytoken-config-v1",
           server: { host: "127.0.0.1", port: await reserveFreePort() },
           clientProtocols: {
             "anthropic-messages": {

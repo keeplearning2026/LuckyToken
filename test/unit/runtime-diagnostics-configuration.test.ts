@@ -83,6 +83,7 @@ describe("Runtime Diagnostics configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         pi: { directory: "pi" },
         runtimeDiagnostics: { directory: "custom/diagnostics" },

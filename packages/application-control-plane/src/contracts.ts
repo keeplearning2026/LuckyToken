@@ -18,6 +18,8 @@ import type {
   AnalyticsQuery,
   AnalyticsResult,
 } from "./analytics-contract.js";
+import type { RecoveryProjection } from "./backup-contract.js";
+import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
 
 export const controlPlaneVersion = 1 as const;
 
@@ -69,6 +71,10 @@ export interface StatusSnapshot extends ApplicationStatus {
    *  until acknowledged or demonstrated recovery. Acknowledgment never
    *  claims storage recovered. */
   readonly persistence?: PersistenceProjection;
+  /** Ticket 24: present when one or more LuckyToken-owned files cannot be
+   * safely interpreted. The local Control Plane remains usable while the
+   * unsafe Data Plane stays stopped. */
+  readonly recovery?: RecoveryProjection;
   /** Owner identity of the one active instance (Ticket 05). */
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
@@ -1116,6 +1122,20 @@ export type {
 export { PERSISTENCE_AUTHORITY_IDS } from "./history-contract.js";
 
 export type {
+  BackupCommand,
+  BackupCommandHandler,
+  BackupCreateCommand,
+  BackupFailure,
+  BackupFailureCode,
+  BackupManifestEntrySummary,
+  BackupManifestSummary,
+  BackupMode,
+  BackupResult,
+  CompatibilityIssue,
+  RecoveryProjection,
+} from "./backup-contract.js";
+
+export type {
   CaptureDraft,
   CaptureEvent,
   CaptureEventFact,
@@ -1357,6 +1377,11 @@ export interface ControlPlaneClient {
    *  only silences the urgent presentation; it never claims storage
    *  recovered and never clears an authority that is still failing. */
   acknowledgePersistence(): Promise<HistoryAcknowledgeResult>;
+  /** Ticket 24: create an ordinary backup immediately or request the
+   * explicit full-sensitive confirmation gate. */
+  executeBackup(command: BackupCreateCommand): Promise<BackupResult>;
+  /** Ticket 24: execute the single-use full-sensitive backup gate. */
+  confirmBackup(actionId: string): Promise<BackupResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

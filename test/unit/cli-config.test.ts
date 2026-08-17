@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -26,6 +26,7 @@ describe("LuckyToken CLI configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -75,6 +76,7 @@ describe("LuckyToken CLI configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -103,6 +105,7 @@ describe("LuckyToken CLI configuration", () => {
     await writeFile(
       explicitPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -129,6 +132,7 @@ describe("LuckyToken CLI configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           fixture: { authFile: "fixture.json" },
         },
@@ -153,7 +157,7 @@ describe("LuckyToken CLI configuration", () => {
     const path = join(directory, "config.json");
     await writeFile(
       path,
-      '{"clientProtocols":{"__proto__":{"authFile":"proto.json"}},"pi":{"directory":"pi"}}',
+      '{"schemaVersion":"luckytoken-config-v1","clientProtocols":{"__proto__":{"authFile":"proto.json"}},"pi":{"directory":"pi"}}',
       "utf8",
     );
 
@@ -166,9 +170,26 @@ describe("LuckyToken CLI configuration", () => {
     );
   });
 
+  it("refuses an unversioned legacy config instead of migrating or overwriting it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-legacy-"));
+    directories.push(directory);
+    const path = join(directory, "config.json");
+    const original = JSON.stringify({
+      clientProtocols: { fixture: { authFile: "fixture.json" } },
+      pi: { directory: "pi" },
+    });
+    await writeFile(path, original, "utf8");
+
+    await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow(
+      "schemaVersion is incompatible",
+    );
+    await expect(readFile(path, "utf8")).resolves.toBe(original);
+  });
+
   it.each([
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         pi: { directory: "pi" },
         extra: true,
@@ -176,20 +197,23 @@ describe("LuckyToken CLI configuration", () => {
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 65_536 },
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         pi: { directory: "pi" },
       },
     ],
-    [{ clientProtocols: {}, pi: { directory: "pi" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: {}, pi: { directory: "pi" } }],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "" } },
         pi: { directory: "pi" },
       },
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           fixture: { authFile: "fixture.json", extra: true },
         },
@@ -198,6 +222,7 @@ describe("LuckyToken CLI configuration", () => {
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           first: { authFile: "shared.json" },
           second: { authFile: "./shared.json" },
@@ -207,18 +232,21 @@ describe("LuckyToken CLI configuration", () => {
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         client: { apiKey: "legacy", projectDir: "legacy-project" },
         pi: { directory: "pi" },
       },
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         pi: { directory: "" },
       },
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         providerAdapters: { "commandcode-private": {} },
         pi: { directory: "pi" },
@@ -226,6 +254,7 @@ describe("LuckyToken CLI configuration", () => {
     ],
     [
       {
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: { fixture: { authFile: "fixture.json" } },
         providerPackages: { "../private-provider": {} },
         pi: { directory: "pi" },
@@ -251,6 +280,7 @@ describe("LuckyToken CLI configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           first: { authFile: "first.json" },
           second: { authFile: "second.json" },

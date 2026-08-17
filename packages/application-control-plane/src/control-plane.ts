@@ -170,6 +170,17 @@ export {
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
 export type {
+  BackupCommand,
+  BackupCommandHandler,
+  BackupCreateCommand,
+  BackupFailure,
+  BackupFailureCode,
+  BackupManifestEntrySummary,
+  BackupManifestSummary,
+  BackupMode,
+  BackupResult,
+  CompatibilityIssue,
+  RecoveryProjection,
   HistoryAcknowledgeResult,
   HistoryCommand,
   HistoryCommandHandler,
@@ -204,6 +215,11 @@ export {
   decodeHistoryRange,
   decodePersistenceProjection,
 } from "./wire-history.js";
+export {
+  decodeBackupCommand,
+  decodeBackupResult,
+  decodeRecoveryProjection,
+} from "./wire-backup.js";
 export {
   projectRequestIdentity,
 } from "./contracts.js";

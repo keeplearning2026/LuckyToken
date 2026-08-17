@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -117,6 +117,35 @@ describe("Request Ledger store public seam", () => {
     expect(query.records[0]!.facts).toMatchObject({
       piStopReason: "stop",
     });
+  });
+
+  it("creates a consistent self-contained backup snapshot through the store seam", async () => {
+    const { root, configuration } = await fixture();
+    const store = await factory(configuration).open();
+    stores.push(store);
+    runSuccessRequest(store);
+
+    const bytes = await store.createBackupSnapshot(new AbortController().signal);
+    const snapshotPath = join(root, "snapshot.sqlite3");
+    await writeFile(snapshotPath, bytes);
+    const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
+    try {
+      const count = snapshot.prepare("SELECT COUNT(*) AS count FROM requests").get() as {
+        count: number;
+      };
+      expect(count.count).toBeGreaterThan(0);
+      const version = snapshot
+        .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
+        .get() as { value: number };
+      expect(version.value).toBe(2);
+    } finally {
+      snapshot.close();
+    }
+    expect(
+      (await readdir(configuration.directory)).some((name) =>
+        name.includes(".backup."),
+      ),
+    ).toBe(false);
   });
 
   it("recovers rows left running by a crash into a truthful interrupted outcome, idempotently", async () => {

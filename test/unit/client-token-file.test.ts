@@ -194,43 +194,30 @@ describe("per-Client-Protocol token file", () => {
     await expect(store.snapshot()).resolves.toMatchObject({ revision: 2 });
   });
 
-  it("accepts legacy v1 files and migrates them to v2 on the next mutation", async () => {
+  it("refuses legacy v1 files without rewriting them", async () => {
     const { path, store } = await fixtureStore();
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: "luckytoken-client-auth-v1",
-        global: "canary-legacy-token-1",
-        projects: {},
-      }),
-      "utf8",
-    );
-
-    await expect(store.snapshot()).resolves.toEqual({
+    const original = JSON.stringify({
+      schemaVersion: "luckytoken-client-auth-v1",
       global: "canary-legacy-token-1",
       projects: {},
-      revision: 0,
-      globalDeleted: false,
     });
-    await expect(
-      store.rotate({ type: "global" }, "canary-legacy-rotated-2", 0),
-    ).resolves.toBe("canary-legacy-rotated-2");
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      schemaVersion: "luckytoken-client-auth-v2",
-      global: "canary-legacy-rotated-2",
-      globalDeleted: false,
-      projects: {},
-      revision: 1,
-    });
+    await writeFile(path, original, "utf8");
+
+    await expect(store.snapshot()).rejects.toThrow(
+      "schemaVersion must be luckytoken-client-auth-v2",
+    );
+    await expect(readFile(path, "utf8")).resolves.toBe(original);
   });
 
   it.each([
     [
       "unknown field",
       {
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "luckytoken-client-auth-v2",
         global: "token",
+        globalDeleted: false,
         projects: {},
+        revision: 0,
         extra: true,
       },
       "unknown field",
@@ -238,38 +225,46 @@ describe("per-Client-Protocol token file", () => {
     [
       "relative project directory",
       {
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "luckytoken-client-auth-v2",
         global: null,
+        globalDeleted: false,
         projects: { relative: "token" },
+        revision: 0,
       },
       "must be absolute",
     ],
     [
       "non-normalized absolute project directory",
       {
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "luckytoken-client-auth-v2",
         global: null,
+        globalDeleted: false,
         projects: {
           [`${tmpdir()}${sep}alias${sep}..${sep}project`]: "token",
         },
+        revision: 0,
       },
       "must be normalized",
     ],
     [
       "duplicate token authority",
       {
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "luckytoken-client-auth-v2",
         global: "same-token",
+        globalDeleted: false,
         projects: { [join(tmpdir(), "duplicate")]: "same-token" },
+        revision: 0,
       },
       "belongs to multiple scopes",
     ],
     [
       "empty authority",
       {
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "luckytoken-client-auth-v2",
         global: null,
+        globalDeleted: false,
         projects: {},
+        revision: 0,
       },
       "must contain at least one token",
     ],
@@ -316,14 +311,14 @@ describe("per-Client-Protocol token file", () => {
       "globalDeleted must be false while a global token exists",
     ],
     [
-      "legacy file with v2 fields",
+      "unsupported legacy schema",
       {
         schemaVersion: "luckytoken-client-auth-v1",
         global: "token",
         projects: {},
         revision: 0,
       },
-      "unknown field revision",
+      "schemaVersion must be luckytoken-client-auth-v2",
     ],
   ])("rejects $name before constructing runtime authority", async (_name, data, error) => {
     const { path } = await fixtureStore();

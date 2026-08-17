@@ -118,6 +118,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: {
           host: "127.0.0.1",
           port: options.port ?? (await reserveFreePort()),

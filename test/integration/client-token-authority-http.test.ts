@@ -117,6 +117,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           [ANTHROPIC]: {
@@ -744,6 +745,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           [ANTHROPIC]: { authFile: "client-auth/anthropic-messages.json" },

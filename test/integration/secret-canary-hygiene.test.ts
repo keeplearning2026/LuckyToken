@@ -117,6 +117,7 @@ describe("secret canary hygiene across public surfaces", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {

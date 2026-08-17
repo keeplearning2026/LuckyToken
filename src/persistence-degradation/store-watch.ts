@@ -118,6 +118,9 @@ export function observeDiagnosticsStore(
     countRange(fromMs?: number, toMs?: number): number {
       return store.countRange(fromMs, toMs);
     },
+    createBackupSnapshot(signal: AbortSignal): Promise<Uint8Array> {
+      return store.createBackupSnapshot(signal);
+    },
     schemaVersion: store.schemaVersion,
   });
 }
@@ -236,6 +239,9 @@ export function createUnavailableDiagnosticsStore(
       if (closed) throw new Error("Runtime Diagnostics store is closed");
       return 0;
     },
+    createBackupSnapshot(): Promise<Uint8Array> {
+      return Promise.reject(new Error("Runtime Diagnostics store is unavailable"));
+    },
     schemaVersion: 0,
   });
 }
@@ -303,6 +309,9 @@ export function createUnavailableRequestLedgerStore(
       if (closed) throw new Error("Request Ledger store is closed");
       return 0;
     },
+    createBackupSnapshot(): Promise<Uint8Array> {
+      return Promise.reject(new Error("Request Ledger store is unavailable"));
+    },
     schemaVersion: 0,
   });
 }
@@ -360,6 +369,9 @@ export function createUnavailableDeepCaptureStore(): DeepCaptureStore {
     countRange(): number {
       if (closed) throw new Error("Deep Diagnostics capture store is closed");
       return 0;
+    },
+    createBackupSnapshot(): Promise<Uint8Array> {
+      return Promise.reject(new Error("Deep Diagnostics capture store is unavailable"));
     },
     schemaVersion: 0,
   });

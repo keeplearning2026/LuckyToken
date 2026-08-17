@@ -818,6 +818,7 @@ describe("adapter-owned configuration", () => {
       await writeFile(
         configPath,
         JSON.stringify({
+          schemaVersion: "luckytoken-config-v1",
           clientProtocols: {
             "anthropic-messages": {
               authFile: "auth/anthropic.json",

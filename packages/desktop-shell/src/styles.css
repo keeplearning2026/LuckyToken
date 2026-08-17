@@ -637,3 +637,35 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
   border-color: #d9a7a7;
   background: #fff3f3;
 }
+
+/* Ticket 24: explicit recovery and backup surfaces. */
+.recovery-banner {
+  margin: 0 1.5rem 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #b36b1d;
+  border-radius: 10px;
+  background: #fff7e8;
+  color: #5b3510;
+}
+.recovery-banner p { margin: 0.35rem 0 0.75rem; }
+.recovery-banner ul { margin: 0 0 0.75rem; padding-left: 1.25rem; }
+.recovery-banner li { display: grid; gap: 0.2rem; margin: 0.45rem 0; }
+.recovery-banner code { overflow-wrap: anywhere; }
+
+.backup-management {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid #d8dedb;
+  border-radius: 14px;
+  background: #fff;
+}
+.backup-management p { color: #59645f; }
+.backup-overwrite { display: flex; gap: 8px; align-items: center; }
+.backup-actions { display: flex; gap: 10px; margin-top: 14px; }
+.backup-confirmation {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #b36b1d;
+  border-radius: 10px;
+  background: #fff7e8;
+}

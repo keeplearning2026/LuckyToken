@@ -54,6 +54,8 @@ import {
   createNodePipeTransport,
   startControlPlane,
   type ApplicationStatus,
+  type BackupCommandHandler,
+  type CompatibilityIssue,
   type ControlPlaneClient,
   type ControlPlaneEndpoint,
   type HistoryRange,
@@ -80,6 +82,15 @@ import {
 } from "./deep-diagnostics/index.js";
 import type { DeepCaptureStore } from "./deep-diagnostics/index.js";
 import { createHistoryAuthority } from "./history/index.js";
+import {
+  createConfiguredBackupAuthority,
+  recoveryBackupSnapshots,
+} from "./backup/index.js";
+import {
+  configCompatibilityIssue,
+  inspectOwnedCompatibility,
+  recoveryProjection,
+} from "./owned-storage/index.js";
 import {
   createPersistenceDegradationAuthority,
   createUnavailableDeepCaptureStore,
@@ -118,6 +129,7 @@ Usage:
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken control aliases <query|write> [<revision> <file>] --descriptor <path>
   luckytoken control history <query|export|export-confirm|delete|delete-confirm|acknowledge> ... --descriptor <path>
+  luckytoken control backup <ordinary|full|confirm> ... --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -135,6 +147,7 @@ Commands:
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
   control aliases query|write  Read the authoritative alias registry or replace the user mapping record
   control history query|export|export-confirm|delete|delete-confirm|acknowledge  Export, delete, or acknowledge permanent history state
+  control backup ordinary|full|confirm  Create a redacted or explicitly confirmed full-sensitive backup
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -519,11 +532,156 @@ async function attachToActiveInstance(descriptorPath: string): Promise<void> {
     : new Error("Failed to attach to the active LuckyToken instance");
 }
 
+/**
+ * Ticket 24 recovery-only owner. The descriptor and local Control Plane are
+ * published even when a LuckyToken-owned file is incompatible. It exposes
+ * exact sanitized file/version facts, attach/quit, and auto-start; no model
+ * listener or unsafe store is opened.
+ */
+async function runRecoveryControlPlane(
+  configPath: string,
+  issues: readonly CompatibilityIssue[],
+  descriptorOverride?: string,
+  backupCommandHandler?: BackupCommandHandler,
+): Promise<void> {
+  const descriptorPath = resolveControlPlaneDescriptorPath({
+    homeDirectory: homedir(),
+    ...(descriptorOverride === undefined
+      ? {}
+      : { overridePath: descriptorOverride }),
+  });
+  await mkdir(dirname(descriptorPath), { recursive: true });
+  const endpoint: ControlPlaneEndpoint = Object.freeze({
+    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    capability: randomBytes(32).toString("base64url"),
+  });
+  let descriptor:
+    | Awaited<ReturnType<typeof publishControlPlaneDescriptor>>
+    | undefined;
+  let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
+  try {
+    try {
+      descriptor = await publishControlPlaneDescriptor({
+        path: descriptorPath,
+        endpoint,
+        createTemporaryId: randomUUID,
+      });
+    } catch (error) {
+      if (error instanceof ControlPlaneDescriptorOwnedError) {
+        await attachToActiveInstance(descriptorPath);
+        return;
+      }
+      throw error;
+    }
+    const controlPipe = await createProductionControlPipe();
+    const autoStartRegistrar: AutoStartRegistrar =
+      process.platform === "win32"
+        ? createWindowsAutoStartRegistrar({
+            name: "LuckyToken",
+            command: buildWindowsAutoStartCommand(process.execPath, [
+              fileURLToPath(import.meta.url),
+              "serve",
+              "--config",
+              resolve(configPath),
+              ...(descriptorOverride === undefined
+                ? []
+                : ["--descriptor", resolve(descriptorOverride)]),
+            ]),
+          })
+        : createUnsupportedAutoStartRegistrar();
+    let requestQuit: (() => void) | undefined;
+    const quit = new Promise<void>((resolveQuit) => {
+      requestQuit = resolveQuit;
+    });
+    const signal = new Promise<void>((resolveSignal) => {
+      const finish = () => {
+        process.off("SIGINT", finish);
+        process.off("SIGTERM", finish);
+        resolveSignal();
+      };
+      process.once("SIGINT", finish);
+      process.once("SIGTERM", finish);
+    });
+    controlPlane = await startControlPlane({
+      endpoint,
+      application: { id: "luckytoken", version: "0.0.0" },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      },
+      ownership: {
+        owner: {
+          kind: "cli",
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+        },
+      },
+      recoveryProjection: () => recoveryProjection(issues),
+      ...(backupCommandHandler === undefined ? {} : { backupCommandHandler }),
+      applicationCommandHandler: async (command) => {
+        if (command.command === "attach") return { outcome: "attached" };
+        if (command.command === "quit") return { outcome: "drained" };
+        const execution = await executeAutoStart(
+          autoStartRegistrar,
+          command.action,
+        );
+        return {
+          outcome: execution.outcome,
+          ...(execution.error === undefined ? {} : { error: execution.error }),
+          ...(execution.enabled === undefined
+            ? {}
+            : { autoStart: { enabled: execution.enabled } }),
+        };
+      },
+      onApplicationCommandResultDelivered: (command) => {
+        if (command.command === "quit") requestQuit?.();
+      },
+      pipeServerFactory: controlPipe.pipeServerFactory,
+      access: controlPipe.access,
+    });
+    await Promise.race([signal, quit]);
+  } finally {
+    const results = await Promise.allSettled([
+      descriptor?.close() ?? Promise.resolve(),
+      controlPlane?.close() ?? Promise.resolve(),
+    ]);
+    if (results.some((result) => result.status === "rejected")) {
+      throw new Error("LuckyToken recovery Control Plane cleanup failed");
+    }
+  }
+}
+
 async function runServe(
   configPath: string,
   descriptorOverride?: string,
 ): Promise<void> {
-  const config = await loadLuckyTokenCliConfig(configPath);
+  let config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
+  try {
+    config = await loadLuckyTokenCliConfig(configPath);
+  } catch (error) {
+    await runRecoveryControlPlane(
+      configPath,
+      [configCompatibilityIssue(configPath, error)],
+      descriptorOverride,
+    );
+    return;
+  }
+  const compatibilityIssues = await inspectOwnedCompatibility(config);
+  if (compatibilityIssues.length > 0) {
+    const recoveryBackupAuthority = createConfiguredBackupAuthority({
+      configPath,
+      config,
+      applicationVersion: "0.0.0",
+      snapshots: recoveryBackupSnapshots(config),
+    });
+    await runRecoveryControlPlane(
+      configPath,
+      compatibilityIssues,
+      descriptorOverride,
+      (command, signal) => recoveryBackupAuthority.handle(command, signal),
+    );
+    return;
+  }
   const descriptorPath = resolveControlPlaneDescriptorPath({
     homeDirectory: homedir(),
     ...(descriptorOverride === undefined
@@ -806,6 +964,53 @@ async function runServe(
         persistenceAuthority.reportFailure(authority, fact);
       },
     });
+    // Ticket 24: one backup authority over an explicit LuckyToken-owned
+    // allowlist. Ordinary mode reads only transparent configuration and
+    // recursively redacts it. Full-sensitive mode additionally includes
+    // auth/client-token bytes and store-owned consistent SQLite snapshots
+    // after a single-use confirmation. No external tool default directory
+    // is ever discovered.
+    const backupAuthority = createConfiguredBackupAuthority({
+      configPath,
+      config,
+      applicationVersion: "0.0.0",
+      snapshots: [
+        {
+          id: "request-ledger",
+          contract: "luckytoken-request-ledger-sqlite",
+          version: ownedLedgerStore.schemaVersion,
+          category: "history",
+          sourcePath: join(
+            bindRequestLedgerConfiguration(config.requestLedger).directory,
+            "ledger.sqlite3",
+          ),
+          snapshot: (signal) => ownedLedgerStore.createBackupSnapshot(signal),
+        },
+        {
+          id: "runtime-diagnostics",
+          contract: "luckytoken-runtime-diagnostics-sqlite",
+          version: ownedDiagnosticsStore.schemaVersion,
+          category: "history",
+          sourcePath: join(
+            bindRuntimeDiagnosticsConfiguration(config.runtimeDiagnostics)
+              .directory,
+            "diagnostics.sqlite3",
+          ),
+          snapshot: (signal) => ownedDiagnosticsStore.createBackupSnapshot(signal),
+        },
+        {
+          id: "deep-capture",
+          contract: "luckytoken-deep-capture-sqlite",
+          version: ownedCaptureStore.schemaVersion,
+          category: "capture",
+          sourcePath: join(
+            bindDeepDiagnosticsConfiguration(config.deepDiagnostics).directory,
+            "capture.sqlite3",
+          ),
+          snapshot: (signal) => ownedCaptureStore.createBackupSnapshot(signal),
+        },
+      ],
+    });
     lastPublishedStatus = Object.freeze({
       modelDataPlane: "stopped",
       provider,
@@ -993,6 +1198,8 @@ async function runServe(
       // rides on every published snapshot until acknowledged or recovered.
       historyCommandHandler: (command, signal) =>
         historyAuthority.handle(command, signal),
+      backupCommandHandler: (command, signal) =>
+        backupAuthority.handle(command, signal),
       persistenceProjection: () => persistenceAuthority.projection(),
       requestIdentitiesHandler: () =>
         Promise.resolve({
@@ -1734,6 +1941,73 @@ async function runControlHistoryCommand(args: readonly string[]): Promise<void> 
   }
 }
 
+function parseBackupCommand(args: readonly string[]): {
+  readonly descriptorPath: string;
+  readonly action: "ordinary" | "full" | "confirm";
+  readonly value: string;
+  readonly overwrite: boolean;
+} {
+  let descriptorPath: string | undefined;
+  let overwrite = false;
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--descriptor") {
+      const value = args[index + 1];
+      if (descriptorPath !== undefined || value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires one path");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--overwrite") {
+      overwrite = true;
+      continue;
+    }
+    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
+    positional.push(argument);
+  }
+  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
+  const action = positional[0];
+  const value = positional[1];
+  if (
+    (action !== "ordinary" && action !== "full" && action !== "confirm") ||
+    value === undefined ||
+    positional.length !== 2 ||
+    (action === "confirm" && overwrite)
+  ) {
+    throw new Error(
+      "backup requires ordinary|full <destination> or confirm <actionId>",
+    );
+  }
+  return { descriptorPath, action, value, overwrite };
+}
+
+async function runControlBackupCommand(args: readonly string[]): Promise<void> {
+  const parsed = parseBackupCommand(args);
+  const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    await assertCompatibleControlPlane(client);
+    const result =
+      parsed.action === "confirm"
+        ? await client.confirmBackup(parsed.value)
+        : await client.executeBackup({
+            mode:
+              parsed.action === "ordinary" ? "ordinary" : "full_sensitive",
+            destinationPath: resolve(parsed.value),
+            overwrite: parsed.overwrite,
+          });
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
@@ -1745,6 +2019,10 @@ export async function runLuckyTokenCli(
     }
     if (command === "history") {
       await runControlHistoryCommand(args.slice(2));
+      return;
+    }
+    if (command === "backup") {
+      await runControlBackupCommand(args.slice(2));
       return;
     }
     if (command === "models") {

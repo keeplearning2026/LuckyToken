@@ -3,6 +3,8 @@ import type {
   AliasCommand,
   AliasCommandResult,
   ApplicationOwnership,
+  BackupCreateCommand,
+  BackupResult,
   AuthCommand,
   AuthCommandResult,
   AuthInteractionEvent,
@@ -37,6 +39,7 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 import {
   decodeAnalyticsResult,
+  decodeBackupResult,
   decodeHistoryDeleteResult,
   decodeHistoryExportResult,
   decodeHistoryQueryResult,
@@ -75,6 +78,9 @@ export type ShellCommand =
   | "shell_history_delete"
   | "shell_history_delete_confirm"
   | "shell_pick_history_export_destination"
+  | "shell_backup_create"
+  | "shell_backup_confirm"
+  | "shell_pick_backup_destination"
   | "shell_auto_start_status"
   | "shell_auto_start_enable"
   | "shell_auto_start_disable"
@@ -156,6 +162,9 @@ export interface TauriDesktopRuntime {
   executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
   confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
   pickHistoryExportDestination(): Promise<string | undefined>;
+  executeBackup(command: BackupCreateCommand): Promise<BackupResult>;
+  confirmBackup(actionId: string): Promise<BackupResult>;
+  pickBackupDestination(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
@@ -801,6 +810,32 @@ export function createTauriDesktopRuntime(
       if (raw === null || raw === undefined) return undefined;
       if (typeof raw !== "string" || raw.length === 0) {
         throw new Error("LuckyToken returned an invalid history export path");
+      }
+      return raw;
+    },
+    async executeBackup(command) {
+      const result = decodeBackupResult(
+        await bridge.invoke("shell_backup_create", { command }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid backup result");
+      }
+      return result;
+    },
+    async confirmBackup(actionId) {
+      const result = decodeBackupResult(
+        await bridge.invoke("shell_backup_confirm", { actionId }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid backup result");
+      }
+      return result;
+    },
+    async pickBackupDestination() {
+      const raw = await bridge.invoke("shell_pick_backup_destination");
+      if (raw === null || raw === undefined) return undefined;
+      if (typeof raw !== "string" || raw.length === 0) {
+        throw new Error("LuckyToken returned an invalid backup path");
       }
       return raw;
     },

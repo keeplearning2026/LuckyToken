@@ -4,6 +4,7 @@ import {
   type AliasCommand,
   type AliasCommandResult,
   type AliasStatusProjection,
+  type BackupResult,
   type CatalogCommand,
   type CatalogCommandResult,
   type ClientTokenCommand,
@@ -16,6 +17,7 @@ import {
   type HistoryRange,
   type MaskedClientTokenScope,
   type ModelsCommand,
+  type RecoveryProjection,
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -42,6 +44,34 @@ import {
 export interface AppProps {
   readonly shell: WindowsShellHost;
   readonly retryConnection: () => Promise<ControlPlaneState>;
+}
+
+function RecoveryBanner({
+  recovery,
+}: {
+  readonly recovery: RecoveryProjection;
+}) {
+  return (
+    <section className="recovery-banner" role="alert">
+      <strong>Configuration recovery required</strong>
+      <p>
+        LuckyToken kept the local Control Plane available, but the model
+        gateway is stopped because these owned files are incompatible.
+      </p>
+      <ul>
+        {recovery.issues.map((issue) => (
+          <li key={`${issue.contract}:${issue.path}`}>
+            <code>{issue.path}</code>
+            <span>
+              {issue.contract}: found {String(issue.foundVersion)}, expected{" "}
+              {String(issue.expectedVersion)} — {issue.validationError}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <small>Edit or replace the listed file manually, then restart LuckyToken.</small>
+    </section>
+  );
 }
 
 export function App({ shell, retryConnection }: AppProps) {
@@ -233,6 +263,10 @@ export function App({ shell, retryConnection }: AppProps) {
             }}
           />
         ) : null}
+        {snapshot.connection.kind === "connected" &&
+        snapshot.connection.recovery !== undefined ? (
+          <RecoveryBanner recovery={snapshot.connection.recovery} />
+        ) : null}
         {snapshot.activePage === "dashboard" &&
         snapshot.connection.kind === "connected" ? (
           <section
@@ -327,20 +361,23 @@ export function App({ shell, retryConnection }: AppProps) {
         ) : null}
         {snapshot.activePage === "settings-developer-lab" &&
         snapshot.connection.kind === "connected" ? (
-          <SettingsDeveloperLab
-            busy={settingsCommand !== undefined}
-            confirmation={snapshot.connection.confirmation}
-            settings={snapshot.connection.settings}
-            onConfirm={(actionId) =>
-              void executeSettingsCommand({
-                command: "confirm",
-                actionId,
-              })
-            }
-            onSet={(key, value) =>
-              void executeSettingsCommand({ command: "set", key, value })
-            }
-          />
+          <>
+            <SettingsDeveloperLab
+              busy={settingsCommand !== undefined}
+              confirmation={snapshot.connection.confirmation}
+              settings={snapshot.connection.settings}
+              onConfirm={(actionId) =>
+                void executeSettingsCommand({
+                  command: "confirm",
+                  actionId,
+                })
+              }
+              onSet={(key, value) =>
+                void executeSettingsCommand({ command: "set", key, value })
+              }
+            />
+            <BackupManagement shell={shell} />
+          </>
         ) : null}
         {snapshot.activePage === "dashboard" &&
         snapshot.connection.kind === "connected" ? (
@@ -669,6 +706,98 @@ function HistoryManagementPage({ shell }: { readonly shell: WindowsShellHost }) 
         </p>
       ) : null}
       {failed ? <p role="alert">History is temporarily unavailable.</p> : null}
+    </section>
+  );
+}
+
+function BackupManagement({ shell }: { readonly shell: WindowsShellHost }) {
+  const [busy, setBusy] = useState(false);
+  const [overwrite, setOverwrite] = useState(false);
+  const [result, setResult] = useState<BackupResult>();
+  const [failed, setFailed] = useState(false);
+
+  const create = async (mode: "ordinary" | "full_sensitive") => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      if (
+        shell.pickBackupDestination === undefined ||
+        shell.executeBackup === undefined
+      ) {
+        throw new Error("Backup is unavailable.");
+      }
+      const destinationPath = await shell.pickBackupDestination();
+      if (destinationPath === undefined) return;
+      setResult(
+        await shell.executeBackup({ mode, destinationPath, overwrite }),
+      );
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async (actionId: string) => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      if (shell.confirmBackup === undefined) {
+        throw new Error("Backup is unavailable.");
+      }
+      setResult(await shell.confirmBackup(actionId));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="backup-management" aria-label="Backup">
+      <div>
+        <strong>Backup</strong>
+        <p>
+          Ordinary backups contain redacted transparent configuration only.
+          Full-sensitive backups also contain credentials, Client tokens,
+          permanent history, and Deep Diagnostics capture.
+        </p>
+      </div>
+      <label className="backup-overwrite">
+        <input
+          checked={overwrite}
+          disabled={busy}
+          onChange={(event) => setOverwrite(event.target.checked)}
+          type="checkbox"
+        />
+        Replace an existing destination
+      </label>
+      <div className="backup-actions">
+        <button disabled={busy} onClick={() => void create("ordinary")} type="button">
+          Create ordinary backup
+        </button>
+        <button disabled={busy} onClick={() => void create("full_sensitive")} type="button">
+          Create full-sensitive backup
+        </button>
+      </div>
+      {result?.outcome === "confirmation_required" && result.actionId !== undefined ? (
+        <div className="backup-confirmation" role="alertdialog" aria-label="Full-sensitive backup confirmation">
+          <p>{result.confirmationMessage}</p>
+          <button disabled={busy} onClick={() => void confirm(result.actionId as string)} type="button">
+            Confirm full-sensitive backup
+          </button>
+        </div>
+      ) : null}
+      {result?.outcome === "ok" ? (
+        <p role="status">
+          Backup created: {result.manifest?.entries.length ?? 0} versioned sources,
+          {result.manifest?.sensitive === true ? " full-sensitive" : " ordinary redacted"}.
+        </p>
+      ) : null}
+      {result?.outcome === "failed" ? (
+        <p role="alert">{result.failure?.message ?? "Backup failed."}</p>
+      ) : null}
+      {failed ? <p role="alert">Backup is temporarily unavailable.</p> : null}
     </section>
   );
 }

@@ -841,6 +841,68 @@ describe("Tauri shell runtime auth seam (Ticket 13)", () => {
       { command: "shell_pick_history_export_destination" },
     ]);
   });
+
+  it("routes typed backup operations and the native backup destination picker", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        if (command === "shell_backup_create") {
+          return {
+            outcome: "confirmation_required",
+            actionId: "backup-confirm-1",
+            confirmationMessage: "Confirm full-sensitive backup.",
+          };
+        }
+        if (command === "shell_backup_confirm") {
+          return {
+            outcome: "ok",
+            destinationPath: "C:\\exports\\backup.json",
+            manifest: {
+              format: "luckytoken-backup",
+              formatVersion: 1,
+              createdAt: 1_756_000_000_000,
+              sensitive: true,
+              entries: [
+                { id: "auth", contract: "pi-auth", version: 1, sensitive: true },
+              ],
+            },
+          };
+        }
+        if (command === "shell_pick_backup_destination") {
+          return "C:\\exports\\backup.json";
+        }
+        throw new Error(`Unexpected command ${command}`);
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await runtime.executeBackup({
+      mode: "full_sensitive",
+      destinationPath: "C:\\exports\\backup.json",
+      overwrite: false,
+    });
+    await runtime.confirmBackup("backup-confirm-1");
+    await expect(runtime.pickBackupDestination()).resolves.toBe(
+      "C:\\exports\\backup.json",
+    );
+
+    expect(calls).toEqual([
+      {
+        command: "shell_backup_create",
+        args: {
+          command: {
+            mode: "full_sensitive",
+            destinationPath: "C:\\exports\\backup.json",
+            overwrite: false,
+          },
+        },
+      },
+      { command: "shell_backup_confirm", args: { actionId: "backup-confirm-1" } },
+      { command: "shell_pick_backup_destination" },
+    ]);
+  });
 });
 
 describe("Tauri shell runtime auth conflict seam (Ticket 13 repair)", () => {

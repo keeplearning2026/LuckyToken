@@ -89,6 +89,7 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -427,6 +428,7 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {

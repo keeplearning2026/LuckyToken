@@ -37,8 +37,10 @@ import type {
   ModelsProjection,
   ProviderAuthStatus,
   RegisteredSetting,
+  RecoveryProjection,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
+import { decodeRecoveryProjection } from "@luckytoken/application-control-plane/control-plane";
 
 export interface ConnectedControlPlaneBridgePayload extends Readonly<
   Record<string, unknown>
@@ -75,6 +77,8 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
    *  present while at least one history persistence authority is
    *  unavailable, until acknowledged or demonstrated recovery. */
   readonly persistence?: PersistenceProjection;
+  /** Ticket 24 exact incompatible-owned-file recovery projection. */
+  readonly recovery?: RecoveryProjection;
 }
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
@@ -1788,6 +1792,18 @@ export function projectControlPlaneState(
       payload.snapshot.persistence === undefined
         ? undefined
         : decodePersistenceProjection(payload.snapshot.persistence);
+    const recovery =
+      payload.snapshot.recovery === undefined
+        ? undefined
+        : decodeRecoveryProjection(payload.snapshot.recovery);
+    if (payload.snapshot.recovery !== undefined && recovery === undefined) {
+      return Object.freeze({
+        revision: payload.revision,
+        kind: "error" as const,
+        code: "protocol_error" as const,
+        ...unavailableCopy.protocol_error,
+      });
+    }
     const confirmation = payload.snapshot.confirmation;
     const projectedConfirmation =
       confirmation === undefined ||
@@ -1847,6 +1863,7 @@ export function projectControlPlaneState(
         ? {}
         : { aliasesProjection }),
       ...(persistence === undefined ? {} : { persistence }),
+      ...(recovery === undefined ? {} : { recovery }),
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),

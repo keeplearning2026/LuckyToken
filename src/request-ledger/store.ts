@@ -49,6 +49,7 @@ import { decodeNormalizedTerminalUsage, type NormalizedTerminalUsage } from "@lu
 import type { AnalyticsQuery, AnalyticsQueryResult } from "@luckytoken/application-control-plane/control-plane";
 import { redactDiagnosticText } from "../runtime-diagnostics/redaction.js";
 import { createLedgerAnalyticsAccumulator } from "./analytics.js";
+import { createSqliteBackupSnapshot } from "../owned-storage/sqlite-backup.js";
 
 const SCHEMA_NAME = "luckytoken_request_ledger";
 const SCHEMA_VERSION = 2;
@@ -149,12 +150,9 @@ interface LedgerDraft {
  * Must run before any write (including WAL pragmas) so foreign files are
  * never modified.
  *
- * v1 -> v2 (Ticket 20): adds the `terminal_usage` column carrying the
- * canonical terminal-usage snapshot. The migration is atomic (one
- * transaction), preserves every v1 row (existing rows keep their facts and
- * a NULL snapshot — history stays truthful), and a failure rolls back
- * leaving the v1 file untouched. Unknown/future schema versions are
- * refused without mutation.
+ * Ticket 24: every non-current version is refused without mutation. The
+ * application never auto-migrates, repairs, resets, or overwrites an owned
+ * database whose schema is not exactly the fixed version this build knows.
  */
 function initializeSchema(database: DatabaseSync): void {
   const existing = database
@@ -182,10 +180,6 @@ function initializeSchema(database: DatabaseSync): void {
       throw new Error("request ledger database has no schema version");
     }
     if (versionRow.value === SCHEMA_VERSION) return;
-    if (versionRow.value === 1) {
-      migrateV1ToV2(database);
-      return;
-    }
     throw new Error(
       `request ledger database schema ${versionRow.value} is not supported (supported: ${SCHEMA_VERSION})`,
     );
@@ -223,25 +217,6 @@ function initializeSchema(database: DatabaseSync): void {
     INSERT INTO meta (key, value) VALUES ('schema_name', '${SCHEMA_NAME}');
     INSERT INTO meta (key, value) VALUES ('schema_version', ${SCHEMA_VERSION});
   `);
-}
-
-/**
- * Atomic v1 -> v2 migration: one transaction adds the `terminal_usage`
- * column and bumps the schema version. v1 rows are never rewritten; a
- * failure rolls back to the untouched v1 file.
- */
-function migrateV1ToV2(database: DatabaseSync): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    database.exec("ALTER TABLE requests ADD COLUMN terminal_usage TEXT");
-    database.exec(
-      "UPDATE meta SET value = 2 WHERE key = 'schema_version'",
-    );
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function decodeJson(value: string | null): unknown {
@@ -1224,6 +1199,15 @@ export function createRequestLedgerStoreFactory(
             count: number;
           };
           return Number(row.count);
+        },
+        createBackupSnapshot(signal: AbortSignal): Promise<Uint8Array> {
+          if (closed) throw new Error("Request Ledger store is closed");
+          return createSqliteBackupSnapshot(
+            database,
+            directory,
+            "request-ledger",
+            signal,
+          );
         },
         schemaVersion: SCHEMA_VERSION,
         close(): void {

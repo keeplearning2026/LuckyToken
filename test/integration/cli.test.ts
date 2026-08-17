@@ -273,6 +273,71 @@ describe("LuckyToken CLI", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
   }, 30_000);
 
+  it("creates an ordinary backup through the active Control Plane", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-backup-cli-"));
+    directories.push(directory);
+    const capability = "cli-backup-capability-secret-0123456789012345";
+    const destinationPath = join(directory, "backup.json");
+    const controlPlane = await startControlPlane({
+      endpoint: {
+        pipeName: `\\\\.\\pipe\\luckytoken-cli-backup-${process.pid}`,
+        capability,
+      },
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: { modelDataPlane: "stopped", provider: "configured" },
+      backupCommandHandler: async (command) => {
+        expect(command).toEqual({
+          command: "create",
+          mode: "ordinary",
+          destinationPath,
+          overwrite: false,
+        });
+        return {
+          outcome: "ok",
+          destinationPath,
+          manifest: {
+            format: "luckytoken-backup",
+            formatVersion: 1,
+            createdAt: 1,
+            sensitive: false,
+            entries: [
+              {
+                id: "config",
+                contract: "luckytoken-config",
+                version: "luckytoken-config-v1",
+                sensitive: false,
+              },
+            ],
+          },
+        };
+      },
+      pipeServerFactory: createNodePipeTransport(),
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(descriptorPath, JSON.stringify(controlPlane.endpoint), "utf8");
+    const child = startCli([
+      "control",
+      "backup",
+      "ordinary",
+      destinationPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(child);
+
+    const result = await captureChild(child).result;
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      outcome: "ok",
+      destinationPath,
+      manifest: { sensitive: false },
+    });
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
+  }, 30_000);
+
   it("issues runtime lifecycle commands through the active Control Plane", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "luckytoken-control-command-"),
@@ -595,6 +660,147 @@ describe("LuckyToken CLI", () => {
     expect(result.stderr).toContain("Control Plane descriptor");
   }, 30_000);
 
+  it("keeps a recovery-only Control Plane open for an incompatible owned config", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-recovery-cli-"));
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    await mkdir(stateDirectory, { recursive: true });
+    const configPath = join(stateDirectory, "config.json");
+    const original = JSON.stringify({
+      schemaVersion: "luckytoken-config-v99",
+      credentialCanary: "recovery-config-secret-canary",
+    });
+    await writeFile(configPath, original, "utf8");
+    const descriptorPath = join(stateDirectory, "control-plane.json");
+    const serve = startCli(
+      ["--config", configPath, "--descriptor", descriptorPath],
+      true,
+    );
+    children.push(serve);
+    const serving = captureChild(serve);
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
+              pipeName?: unknown;
+              capability?: unknown;
+            };
+            return typeof parsed.pipeName === "string" && typeof parsed.capability === "string";
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10_000, interval: 50 },
+      )
+      .toBe(true);
+
+    const status = startCli(["control", "status", "--descriptor", descriptorPath]);
+    children.push(status);
+    const statusResult = await captureChild(status).result;
+    expect(statusResult.code).toBe(0);
+    expect(JSON.parse(statusResult.stdout)).toMatchObject({
+      modelDataPlane: "stopped",
+      provider: "unconfigured",
+      recovery: {
+        mode: "incompatible_configuration",
+        issues: [
+          {
+            path: configPath,
+            contract: "luckytoken-config",
+            foundVersion: "luckytoken-config-v99",
+            expectedVersion: "luckytoken-config-v1",
+          },
+        ],
+      },
+    });
+    expect(await readFile(configPath, "utf8")).toBe(original);
+    expect(`${statusResult.stdout}\n${statusResult.stderr}`).not.toContain(
+      "recovery-config-secret-canary",
+    );
+
+    serve.stdin.end("stop\n");
+    const serveResult = await serving.result;
+    expect(serveResult.code).toBe(0);
+    expect(await readFile(configPath, "utf8")).toBe(original);
+  }, 30_000);
+
+  it("keeps ordinary backup available when an unrelated owned store is incompatible", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-recovery-backup-"));
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    await mkdir(join(stateDirectory, "pi"), { recursive: true });
+    const authPath = join(stateDirectory, "client-auth", "anthropic-messages.json");
+    await mkdir(join(stateDirectory, "client-auth"), { recursive: true });
+    await writeFile(
+      authPath,
+      JSON.stringify({
+        schemaVersion: "luckytoken-client-auth-v1",
+        global: "incompatible-token-secret-canary",
+        projects: {},
+      }),
+      "utf8",
+    );
+    const configPath = join(stateDirectory, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
+        server: { host: "127.0.0.1", port: 0 },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const descriptorPath = join(stateDirectory, "control-plane.json");
+    const destinationPath = join(directory, "ordinary-recovery-backup.json");
+    const serve = startCli(
+      ["--config", configPath, "--descriptor", descriptorPath],
+      true,
+    );
+    children.push(serve);
+    const serving = captureChild(serve);
+    await expect
+      .poll(
+        async () => {
+          try {
+            return typeof JSON.parse(await readFile(descriptorPath, "utf8")).pipeName === "string";
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10_000, interval: 50 },
+      )
+      .toBe(true);
+
+    const backup = startCli([
+      "control",
+      "backup",
+      "ordinary",
+      destinationPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(backup);
+    const backupResult = await captureChild(backup).result;
+    expect(backupResult.code).toBe(0);
+    expect(JSON.parse(backupResult.stdout)).toMatchObject({
+      outcome: "ok",
+      manifest: { sensitive: false },
+    });
+    const artifact = await readFile(destinationPath, "utf8");
+    expect(artifact).toContain("luckytoken-config-v1");
+    expect(artifact).not.toContain("incompatible-token-secret-canary");
+
+    serve.stdin.end("stop\n");
+    expect((await serving.result).code).toBe(0);
+  }, 30_000);
+
   it.each([
     {
       label: "no user Provider",
@@ -640,6 +846,7 @@ describe("LuckyToken CLI", () => {
       await writeFile(
         configPath,
         JSON.stringify({
+          schemaVersion: "luckytoken-config-v1",
           server: { host: "127.0.0.1", port: await reserveFreePort() },
           clientProtocols: {
             "anthropic-messages": {
@@ -773,6 +980,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: address.port },
         clientProtocols: {
           "anthropic-messages": {
@@ -959,6 +1167,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",
@@ -1015,6 +1224,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "fixture-client": { authFile: "client-auth/fixture.json" },
         },
@@ -1123,6 +1333,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "anthropic-messages": {
             authFile: "client-auth/anthropic-messages.json",
@@ -1208,6 +1419,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -1453,6 +1665,7 @@ describe("LuckyToken CLI canonical directory scopes (Ticket 17)", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "fixture-client": { authFile: "client-auth/fixture.json" },
         },
@@ -1539,6 +1752,7 @@ describe("LuckyToken CLI canonical directory scopes (Ticket 17)", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "fixture-client": { authFile: "client-auth/fixture.json" },
         },
@@ -1625,6 +1839,7 @@ describe("LuckyToken CLI canonical directory scopes (Ticket 17)", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
           "fixture-client": { authFile: "client-auth/fixture.json" },
         },

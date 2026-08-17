@@ -108,6 +108,9 @@ export interface RuntimeDiagnosticsStore {
   /** Ticket 23: eligible committed-record count for the same half-open
    *  range; matches deleteRange so previews equal actual deletions. */
   readonly countRange: (fromMs?: number, toMs?: number) => number;
+  /** Store-owned consistent SQLite image for an explicitly confirmed
+   * Ticket 24 full-sensitive backup. */
+  readonly createBackupSnapshot: (signal: AbortSignal) => Promise<Uint8Array>;
   /** The versioned schema this store commits (manifest source fact). */
   readonly schemaVersion: number;
 }

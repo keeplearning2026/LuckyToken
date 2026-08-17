@@ -66,6 +66,7 @@ async function serveFixture(options: {
   await writeFile(
     configPath,
     JSON.stringify({
+      schemaVersion: "luckytoken-config-v1",
       server: { host: "127.0.0.1", port: 0 },
       clientProtocols: {
         "anthropic-messages": {
@@ -309,6 +310,7 @@ describe("Persistence failure never changes an otherwise valid model response (T
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": {

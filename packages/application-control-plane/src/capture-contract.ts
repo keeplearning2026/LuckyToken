@@ -201,6 +201,9 @@ export interface DeepCaptureStore extends ControlPlaneCapture {
   /** Ticket 23: eligible committed-row count for the same half-open range;
    *  matches deleteRange so previews equal actual deletions. */
   countRange(fromMs?: number, toMs?: number): number;
+  /** Store-owned consistent SQLite image for an explicitly confirmed
+   * Ticket 24 full-sensitive backup. */
+  createBackupSnapshot(signal: AbortSignal): Promise<Uint8Array>;
   /** The versioned schema this store commits (manifest source fact). */
   readonly schemaVersion: number;
   attachScrub(scrub: (value: string) => string): void;

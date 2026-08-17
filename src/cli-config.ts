@@ -8,6 +8,10 @@ import { parseDeepDiagnosticsConfiguration, type DeepDiagnosticsConfiguration } 
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
+import {
+  LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+  OwnedFileCompatibilityError,
+} from "./owned-storage/compatibility.js";
 
 export interface ClientProtocolCliConfiguration {
   readonly authFile: string;
@@ -16,6 +20,7 @@ export interface ClientProtocolCliConfiguration {
 }
 
 export interface LuckyTokenCliConfig {
+  readonly schemaVersion: typeof LUCKYTOKEN_CONFIG_SCHEMA_VERSION;
   readonly configPath: string;
   readonly server: { readonly host: string; readonly port: number };
   readonly clientProtocols: Readonly<
@@ -121,6 +126,22 @@ export async function loadLuckyTokenCliConfig(
     );
   }
   const root = requireRecord(parsed, "LuckyToken config root");
+  if (root.schemaVersion !== LUCKYTOKEN_CONFIG_SCHEMA_VERSION) {
+    throw new OwnedFileCompatibilityError(
+      Object.freeze({
+        path: configPath,
+        contract: "luckytoken-config",
+        foundVersion:
+          typeof root.schemaVersion === "string" ||
+          typeof root.schemaVersion === "number"
+            ? root.schemaVersion
+            : "missing",
+        expectedVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+        validationError:
+          "LuckyToken config schemaVersion is incompatible with this application build.",
+      }),
+    );
+  }
   if (Object.hasOwn(root, "providerAdapters")) {
     throw new Error(
       "providerAdapters is no longer supported; configure providerPackages",
@@ -128,7 +149,7 @@ export async function loadLuckyTokenCliConfig(
   }
   assertKeys(
     root,
-    ["server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "deepDiagnostics", "pi", "limits"],
+    ["schemaVersion", "server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "deepDiagnostics", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
@@ -241,6 +262,7 @@ export async function loadLuckyTokenCliConfig(
   }
   Object.freeze(resolvedClientProtocols);
   const result: LuckyTokenCliConfig = {
+    schemaVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
     configPath,
     server: Object.freeze({ host, port }),
     clientProtocols: resolvedClientProtocols,

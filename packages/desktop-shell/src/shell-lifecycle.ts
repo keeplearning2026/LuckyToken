@@ -2,6 +2,8 @@ import type { ControlPlaneState } from "./control-plane-projection.js";
 import type {
   AliasCommand,
   AliasCommandResult,
+  BackupCreateCommand,
+  BackupResult,
   AuthCommand,
   AuthCommandResult,
   AuthInteractionEvent,
@@ -67,6 +69,9 @@ export interface DesktopShellRuntime {
   executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
   confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
   pickHistoryExportDestination(): Promise<string | undefined>;
+  executeBackup?(command: BackupCreateCommand): Promise<BackupResult>;
+  confirmBackup?(actionId: string): Promise<BackupResult>;
+  pickBackupDestination?(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
@@ -143,6 +148,9 @@ export interface WindowsShellHost {
   executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
   confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
   pickHistoryExportDestination(): Promise<string | undefined>;
+  executeBackup?(command: BackupCreateCommand): Promise<BackupResult>;
+  confirmBackup?(actionId: string): Promise<BackupResult>;
+  pickBackupDestination?(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
@@ -348,6 +356,30 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.pickHistoryExportDestination();
+    },
+    executeBackup(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeBackup === undefined
+        ? Promise.reject(new Error("Backup is unavailable"))
+        : runtime.executeBackup(command);
+    },
+    confirmBackup(actionId) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.confirmBackup === undefined
+        ? Promise.reject(new Error("Backup is unavailable"))
+        : runtime.confirmBackup(actionId);
+    },
+    pickBackupDestination() {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.pickBackupDestination === undefined
+        ? Promise.reject(new Error("Backup is unavailable"))
+        : runtime.pickBackupDestination();
     },
     getAutoStartStatus() {
       return runtime.getAutoStartStatus();

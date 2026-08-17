@@ -581,6 +581,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   await writeFile(
     configPath,
     JSON.stringify({
+      schemaVersion: "luckytoken-config-v1",
       server: { host: "127.0.0.1", port: 0 },
       clientProtocols: {
         "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },

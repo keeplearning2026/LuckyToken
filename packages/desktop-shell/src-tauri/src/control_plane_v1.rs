@@ -16,6 +16,7 @@ use tokio::{
     sync::{oneshot, Notify},
 };
 
+use crate::backup_wire::{BackupCommand, BackupResultWire, RecoveryProjectionWire};
 use crate::native_discovery::{DiscoveryFailure, NativeControlPlaneDiscovery};
 
 pub(crate) const CONTROL_PLANE_VERSION: u64 = 1;
@@ -144,6 +145,8 @@ pub(crate) struct StatusSnapshot {
     /// unavailable; the tray renders a fixed degraded label from this flag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) persistence: Option<PersistenceProjectionWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recovery: Option<RecoveryProjectionWire>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1034,6 +1037,8 @@ pub(crate) type HistoryAcknowledgeFuture =
 pub(crate) type HistoryCommandFuture = Pin<
     Box<dyn Future<Output = Result<HistoryCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type BackupCommandFuture =
+    Pin<Box<dyn Future<Output = Result<BackupResultWire, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type AutoStartFuture =
     Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
 
@@ -1111,6 +1116,9 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn history_command(&self, _command: HistoryCommand) -> HistoryCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn backup_command(&self, _command: BackupCommand) -> BackupCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
@@ -1777,6 +1785,21 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
         })
     }
 
+    fn backup_command(&self, command: BackupCommand) -> BackupCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_backup_command_session(&pipe_name, capability, command).await
+        })
+    }
+
     fn auto_start(&self, action: AutoStartAction) -> AutoStartFuture {
         let discovery = self.discovery.clone();
         Box::pin(async move {
@@ -2208,6 +2231,60 @@ async fn execute_history_command_session(
                     Ok(HistoryCommandResultWire::Delete(result))
                 }
             }
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// One-shot backup transport. Rust validates and forwards the fixed DTO;
+/// TypeScript owns confirmation, source selection, snapshotting and atomic
+/// publication.
+async fn execute_backup_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: BackupCommand,
+) -> Result<BackupResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(&mut pipe, &command.request())
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            let response = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if response.get("type").and_then(Value::as_str) != Some("backup_result")
+                || response.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let result: BackupResultWire = serde_json::from_value(
+                response
+                    .get("result")
+                    .cloned()
+                    .ok_or(ConnectionFailure::ProtocolError)?,
+            )
+            .map_err(|_| ConnectionFailure::ProtocolError)?;
+            result
+                .is_valid()
+                .then_some(result)
+                .ok_or(ConnectionFailure::ProtocolError)
         }
         Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
     }
@@ -4123,6 +4200,7 @@ struct StatusSnapshotWire {
     aliases: Option<AliasesProjectionWire>,
     credentials: Option<CredentialProjectionWire>,
     persistence: Option<PersistenceProjectionWire>,
+    recovery: Option<RecoveryProjectionWire>,
 }
 
 #[derive(Deserialize)]
@@ -4166,6 +4244,13 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
     if (wire.model_data_plane == ModelDataPlaneState::Failed) != has_failure {
         return None;
     }
+    if wire
+        .recovery
+        .as_ref()
+        .is_some_and(|recovery| !recovery.is_valid())
+    {
+        return None;
+    }
     Some(StatusSnapshot {
         sequence: wire.sequence,
         model_data_plane: wire.model_data_plane,
@@ -4182,6 +4267,7 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
             // Strict: a projection must be an actual audit-unavailable state.
             projection.audit_unavailable && !projection.authorities.is_empty()
         }),
+        recovery: wire.recovery,
     })
 }
 
@@ -4627,6 +4713,83 @@ mod tests {
         assert_eq!(result.counts.request_ledger, 4);
         assert_eq!(result.counts.diagnostics, 3);
         assert_eq!(result.counts.capture, 2);
+        let projected = serde_json::to_value(result).expect("result must serialize");
+        assert!(projected.get("credentialCanary").is_none());
+    }
+
+    #[tokio::test]
+    async fn backup_create_exchanges_the_versioned_wire_and_projects_the_manifest() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_backup_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                BackupCommand::create(json!({
+                    "mode": "ordinary",
+                    "destinationPath": "C:\\exports\\backup.json",
+                    "overwrite": false
+                }))
+                .expect("valid backup command"),
+            )
+            .await
+            .expect("backup must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(request["type"], "backup_command");
+        assert_eq!(request["requestId"], "desktop-backup-create");
+        assert_eq!(request["command"]["command"], "create");
+        assert_eq!(request["command"]["mode"], "ordinary");
+        server
+            .send(&json!({
+                "type": "backup_result",
+                "requestId": "desktop-backup-create",
+                "result": {
+                    "outcome": "ok",
+                    "destinationPath": "C:\\exports\\backup.json",
+                    "manifest": {
+                        "format": "luckytoken-backup",
+                        "formatVersion": 1,
+                        "createdAt": 1_756_000_000_000_u64,
+                        "sensitive": false,
+                        "entries": [{
+                            "id": "config",
+                            "contract": "luckytoken-config",
+                            "version": "luckytoken-config-v1",
+                            "sensitive": false
+                        }]
+                    },
+                    "credentialCanary": "must-not-reach-renderer"
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("backup must complete within the timeout")
+            .expect("backup task must not panic");
+        assert_eq!(result.outcome, "ok");
         let projected = serde_json::to_value(result).expect("result must serialize");
         assert!(projected.get("credentialCanary").is_none());
     }
@@ -5237,6 +5400,41 @@ mod tests {
             "ownership": {
                 "owner": {"kind": "unknown", "pid": 1, "startedAt": "2026-08-15T12:00:00.000Z"}
             }
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn incompatible_configuration_projection_is_allowlisted_exactly() {
+        let raw = json!({
+            "sequence": 1,
+            "modelDataPlane": "stopped",
+            "provider": "unconfigured",
+            "recovery": {
+                "mode": "incompatible_configuration",
+                "issues": [{
+                    "path": "C:\\LuckyToken\\config.json",
+                    "contract": "luckytoken-config",
+                    "foundVersion": "luckytoken-config-v2",
+                    "expectedVersion": "luckytoken-config-v1",
+                    "validationError": "Unsupported schema version.",
+                    "secret": "must-not-reach-renderer"
+                }]
+            }
+        });
+
+        let status = decode_status_snapshot(&raw).expect("decode recovery status");
+        let projected = serde_json::to_value(status).expect("serialize recovery status");
+        assert_eq!(
+            projected["recovery"]["issues"][0]["path"],
+            "C:\\LuckyToken\\config.json"
+        );
+        assert!(!projected.to_string().contains("must-not-reach-renderer"));
+        assert!(decode_status_snapshot(&json!({
+            "sequence": 1,
+            "modelDataPlane": "stopped",
+            "provider": "unconfigured",
+            "recovery": {"mode": "incompatible_configuration", "issues": []}
         }))
         .is_none());
     }

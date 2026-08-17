@@ -51,6 +51,7 @@ import {
   type CaptureTimingEntry,
   type DeepCaptureStore,
 } from "./contract.js";
+import { createSqliteBackupSnapshot } from "../owned-storage/sqlite-backup.js";
 
 const SCHEMA_NAME = "luckytoken_deep_capture";
 const SCHEMA_VERSION = 1;
@@ -951,6 +952,15 @@ export function createDeepCaptureStoreFactory(
             count: number;
           };
           return Number(row.count);
+        },
+        createBackupSnapshot(signal: AbortSignal): Promise<Uint8Array> {
+          if (closed) throw new Error("Deep Diagnostics capture store is closed");
+          return createSqliteBackupSnapshot(
+            database,
+            directory,
+            "deep-capture",
+            signal,
+          );
         },
         schemaVersion: SCHEMA_VERSION,
         close(): void {

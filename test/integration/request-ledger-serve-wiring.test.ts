@@ -82,6 +82,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
@@ -285,6 +286,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },

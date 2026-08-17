@@ -29,6 +29,7 @@ import {
   type RuntimeDiagnosticsQueryResult,
   type RuntimeDiagnosticsStore,
 } from "./contract.js";
+import { createSqliteBackupSnapshot } from "../owned-storage/sqlite-backup.js";
 
 const SCHEMA_NAME = "luckytoken_runtime_diagnostics";
 const SCHEMA_VERSION = 1;
@@ -486,6 +487,15 @@ export function createRuntimeDiagnosticsStoreFactory(
             count: number;
           };
           return Number(row.count);
+        },
+        createBackupSnapshot(signal: AbortSignal): Promise<Uint8Array> {
+          if (closed) throw new Error("Runtime Diagnostics store is closed");
+          return createSqliteBackupSnapshot(
+            database,
+            directory,
+            "runtime-diagnostics",
+            signal,
+          );
         },
         schemaVersion: SCHEMA_VERSION,
         close(): void {

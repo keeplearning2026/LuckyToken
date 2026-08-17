@@ -70,6 +70,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {

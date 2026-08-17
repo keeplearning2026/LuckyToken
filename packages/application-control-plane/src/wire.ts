@@ -105,6 +105,12 @@ import type {
   HistoryDeleteResult,
   HistoryQueryResult,
 } from "./history-contract.js";
+import type { BackupCommand, BackupResult } from "./backup-contract.js";
+import {
+  decodeBackupCommand,
+  decodeBackupResult,
+  decodeRecoveryProjection,
+} from "./wire-backup.js";
 import {
   type AuthCommand,
   type AuthCommandResult,
@@ -195,6 +201,11 @@ export type ClientRequest =
       readonly actionId: string;
     }
   | { readonly type: "history_acknowledge"; readonly requestId: string }
+  | {
+      readonly type: "backup_command";
+      readonly requestId: string;
+      readonly command: BackupCommand;
+    }
   | {
       readonly type: "runtime_command";
       readonly requestId: string;
@@ -311,6 +322,11 @@ export type ServerMessage =
       readonly type: "history_acknowledge_result";
       readonly requestId: string;
       readonly result: HistoryAcknowledgeResult;
+    }
+  | {
+      readonly type: "backup_result";
+      readonly requestId: string;
+      readonly result: BackupResult;
     }
   | {
       readonly type: "settings_command_result";
@@ -2738,6 +2754,16 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       request: { type: "history_acknowledge", requestId },
     };
   }
+  if (value.type === "backup_command") {
+    const command = decodeBackupCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "backup_command", requestId, command },
+    };
+  }
   if (value.type === "runtime_command") {
     if (
       value.command !== "start" &&
@@ -3091,11 +3117,19 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   if (isRecord(value) && value.persistence !== undefined && persistence === undefined) {
     return undefined;
   }
+  const recovery =
+    isRecord(value) && value.recovery !== undefined
+      ? decodeRecoveryProjection(value.recovery)
+      : undefined;
+  if (isRecord(value) && value.recovery !== undefined && recovery === undefined) {
+    return undefined;
+  }
   return {
     ...safeStatus,
     sequence,
     ...(ownership === undefined ? {} : { ownership }),
     ...(persistence === undefined ? {} : { persistence }),
+    ...(recovery === undefined ? {} : { recovery }),
   };
 }
 
@@ -3364,6 +3398,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "history_acknowledge_result", requestId, result };
+  }
+  if (value.type === "backup_result") {
+    const result = decodeBackupResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "backup_result", requestId, result };
   }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);

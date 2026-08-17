@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,19 +13,16 @@ import {
 } from "../../src/request-ledger/index.js";
 import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 
-/**
- * Ticket 20 store seams: the v1 -> v2 schema migration (atomic, preserves
- * v1 rows, refuses unknown/future schemas, history stays truthful) and the
- * restart persistence of terminal-usage snapshots through the public query.
- */
+/** Ticket 24 supersedes the old migration behavior: owned schemas are never
+ * migrated automatically. This file also retains Ticket 20's v2 persistence
+ * coverage for fresh, compatible stores. */
 
 const V1_SCHEMA_VERSION = 1;
 const V2_SCHEMA_VERSION = 2;
 
 /**
- * Independent v1 fixture: the exact Ticket 18 (base commit) schema, built
- * here from the pre-migration definition so the migration is exercised
- * against a genuine v1 file.
+ * Independent v1 fixture: the exact Ticket 18 schema, retained to prove the
+ * current build refuses a genuine old file without touching it.
  */
 const V1_SCHEMA_SQL = `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);
@@ -78,7 +75,7 @@ function v1Snapshot(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
-describe("Request Ledger v1 -> v2 schema migration", () => {
+describe("Request Ledger incompatible-schema refusal", () => {
   const roots: string[] = [];
   const stores: RequestLedgerStore[] = [];
 
@@ -187,88 +184,15 @@ describe("Request Ledger v1 -> v2 schema migration", () => {
     };
   }
 
-  it("migrates a v1 database atomically, preserving every v1 row verbatim", async () => {
+  it("refuses a v1 database without migrating or changing any source bytes", async () => {
     const { configuration, factory } = await fixture();
     const v1 = v1Row(1);
-    await createV1Database(configuration.directory, [v1]);
+    const path = await createV1Database(configuration.directory, [v1]);
+    const before = await readFile(path);
 
-    const store = await factory().open();
-    stores.push(store);
+    await expect(factory().open()).rejects.toThrow(/schema 1 is not supported/);
 
-    const query = store.query(undefined);
-    expect(query.records).toHaveLength(1);
-    // The v1 row survives byte-identical: same lifecycle, same facts, and no
-    // fabricated terminal usage for history it never had.
-    expect(query.records[0]).toMatchObject({
-      requestId: v1.requestId,
-      protocolId: "anthropic-messages",
-      phase: "terminal-preparation",
-      outcome: "success",
-      acceptedAt: 1_700_000_000_000,
-      executionStartedAt: 1_700_000_000_001,
-      terminalAt: 1_700_000_000_002,
-      completedAt: 1_700_000_000_003,
-      clientHttpStatus: 200,
-      externalAlias: "alpha",
-      providerId: "commandcode-private",
-      realModelId: "claude-fixture",
-      clientSessionId: "20000000-0000-4000-8000-000000000031",
-      effectiveSessionId: "30000000-0000-4000-8000-000000000032",
-      projectDir: "C:\\Users\\fixture\\projects\\alpha",
-    });
-    expect(query.records[0]!.facts).toEqual({
-      piStopReason: "stop",
-      notices: [
-        {
-          adapter: "commandcode-private",
-          direction: "request",
-          code: "missing_tool_result_xrepair",
-          jsonPath: "$.messages",
-          action: "xrepair",
-        },
-      ],
-    });
-    expect(query.records[0]!.terminalUsage).toBeUndefined();
-
-    // The migrated file is v2 and accepts new terminal-usage rows.
-    const database = new DatabaseSync(
-      join(configuration.directory, "ledger.sqlite3"),
-    );
-    try {
-      const version = database
-        .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
-        .get() as { value: number };
-      expect(version.value).toBe(V2_SCHEMA_VERSION);
-      const columns = database
-        .prepare("PRAGMA table_info(requests)")
-        .all() as Array<{ name: string }>;
-      expect(columns.some((column) => column.name === "terminal_usage")).toBe(true);
-    } finally {
-      database.close();
-    }
-  });
-
-  it("accepts v1 rows that were interrupted mid-flight and recovers them truthfully", async () => {
-    const { configuration, factory } = await fixture();
-    const running = v1Row(1);
-    running.phase = "execution";
-    running.outcome = "running";
-    running.terminalAt = null;
-    running.completedAt = null;
-    await createV1Database(configuration.directory, [running]);
-
-    const store = await factory().open();
-    stores.push(store);
-
-    const query = store.query(undefined);
-    expect(query.records).toHaveLength(1);
-    // History stays truthful: the v1 row was running when the process died,
-    // so the v2 open recovers it into interrupted (never fabricated).
-    expect(query.records[0]).toMatchObject({
-      phase: "execution",
-      outcome: "interrupted",
-    });
-    expect(query.records[0]!.terminalUsage).toBeUndefined();
+    expect(await readFile(path)).toEqual(before);
   });
 
   it("refuses unknown future schema versions without mutating the file", async () => {

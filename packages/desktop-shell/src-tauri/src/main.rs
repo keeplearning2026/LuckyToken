@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backup_wire;
 mod control_plane_v1;
 mod native_discovery;
 mod shell_bridge;
@@ -8,6 +9,7 @@ mod tray_surface;
 
 use std::sync::Arc;
 
+use backup_wire::{BackupCommand, BackupResultWire};
 use control_plane_v1::{
     decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AnalyticsResultWire,
     AuthCommandResultWire, AutoStartAction, CatalogCommand, CatalogCommandResultWire,
@@ -197,6 +199,24 @@ async fn shell_history_delete_confirm(
 }
 
 #[tauri::command]
+async fn shell_backup_create(
+    state: State<'_, ShellBridge>,
+    command: serde_json::Value,
+) -> Result<BackupResultWire, ()> {
+    let command = BackupCommand::create(command).ok_or(())?;
+    state.backup_command(command).await
+}
+
+#[tauri::command]
+async fn shell_backup_confirm(
+    state: State<'_, ShellBridge>,
+    action_id: String,
+) -> Result<BackupResultWire, ()> {
+    let command = BackupCommand::confirm(action_id).ok_or(())?;
+    state.backup_command(command).await
+}
+
+#[tauri::command]
 async fn shell_client_tokens_list(
     state: State<'_, ShellBridge>,
     protocol_id: String,
@@ -321,6 +341,18 @@ async fn shell_pick_history_export_destination(
         .file()
         .set_file_name("luckytoken-history.json")
         .add_filter("LuckyToken history", &["json"])
+        .blocking_save_file();
+    Ok(picked.map(|path| path.to_string()))
+}
+
+#[tauri::command]
+async fn shell_pick_backup_destination(app: tauri::AppHandle) -> Result<Option<String>, ()> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name("luckytoken-backup.json")
+        .add_filter("LuckyToken backup", &["json"])
         .blocking_save_file();
     Ok(picked.map(|path| path.to_string()))
 }
@@ -729,6 +761,8 @@ fn main() {
             shell_history_export_confirm,
             shell_history_delete,
             shell_history_delete_confirm,
+            shell_backup_create,
+            shell_backup_confirm,
             shell_auto_start_status,
             shell_auto_start_enable,
             shell_auto_start_disable,
@@ -739,6 +773,7 @@ fn main() {
             shell_client_tokens_remove,
             shell_pick_directory,
             shell_pick_history_export_destination,
+            shell_pick_backup_destination,
             shell_request_identities,
             shell_diagnostics_warnings,
             shell_models_query,

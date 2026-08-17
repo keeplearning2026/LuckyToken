@@ -10,6 +10,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::backup_wire::{BackupCommand, BackupResultWire};
 use crate::control_plane_v1::{
     AliasCommand, AliasCommandResultWire, AnalyticsResultWire, AuthCommand, AuthCommandResultWire,
     AuthInteractionResponse, AuthLoginSession, AutoStartAction, CatalogCommand,
@@ -531,6 +532,15 @@ impl ShellBridge {
             .map_err(|_| ())
     }
 
+    /// One-shot backup command transport. The bridge contains no backup
+    /// policy and returns only the connector's validated result.
+    pub(crate) async fn backup_command(
+        &self,
+        command: BackupCommand,
+    ) -> Result<BackupResultWire, ()> {
+        self.connector.backup_command(command).await.map_err(|_| ())
+    }
+
     pub(crate) async fn auto_start(&self, action: AutoStartAction) -> Result<AutoStartDto, ()> {
         match self.connector.auto_start(action).await {
             Ok(result) if result.outcome == "ok" => Ok(AutoStartDto {
@@ -1043,6 +1053,7 @@ mod tests {
             aliases: None,
             credentials: None,
             persistence: None,
+            recovery: None,
         }
     }
 
@@ -1122,6 +1133,7 @@ mod tests {
                 aliases: None,
                 credentials: None,
                 persistence: None,
+                recovery: None,
             }),
             models: None,
         };

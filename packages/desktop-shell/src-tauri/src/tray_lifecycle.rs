@@ -118,6 +118,7 @@ mod tests {
             aliases: None,
             credentials: None,
             persistence: None,
+            recovery: None,
         }
     }
 
