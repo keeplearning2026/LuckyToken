@@ -24,12 +24,18 @@ export function createSecureManagementWindowOptions(
   });
 }
 
+export interface TrayActions {
+  readonly open: () => void;
+  readonly quit: () => void;
+}
+
 export interface ElectronDesktopLifecycleDependencies {
   readonly requestSingleInstanceLock: () => boolean;
   readonly whenReady: () => Promise<void>;
   readonly onSecondInstance: (listener: () => void) => void;
   readonly quit: () => void;
   readonly openWindow: () => void;
+  readonly createTray: (actions: TrayActions) => void;
 }
 
 export async function startElectronDesktopLifecycle(
@@ -42,6 +48,9 @@ export async function startElectronDesktopLifecycle(
 
   dependencies.onSecondInstance(dependencies.openWindow);
   await dependencies.whenReady();
-  dependencies.openWindow();
+  dependencies.createTray({
+    open: dependencies.openWindow,
+    quit: dependencies.quit,
+  });
   return "primary";
 }

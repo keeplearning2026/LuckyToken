@@ -30,6 +30,7 @@ describe("Electron desktop lifecycle seam", () => {
       onSecondInstance,
       quit,
       openWindow,
+      createTray: vi.fn(),
     });
 
     expect(result).toBe("secondary");
@@ -38,10 +39,11 @@ describe("Electron desktop lifecycle seam", () => {
     expect(onSecondInstance).not.toHaveBeenCalled();
   });
 
-  it("opens one primary window after ready and reuses the open operation for second-instance activation", async () => {
+  it("registers second-instance activation without opening the primary window at startup", async () => {
     let secondInstance: (() => void) | undefined;
     const openWindow = vi.fn();
     const quit = vi.fn();
+    const createTray = vi.fn();
 
     const result = await startElectronDesktopLifecycle({
       requestSingleInstanceLock: () => true,
@@ -51,13 +53,15 @@ describe("Electron desktop lifecycle seam", () => {
       },
       quit,
       openWindow,
+      createTray,
     });
 
     expect(result).toBe("primary");
-    expect(openWindow).toHaveBeenCalledTimes(1);
+    expect(createTray).toHaveBeenCalledTimes(1);
+    expect(openWindow).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
 
     secondInstance?.();
-    expect(openWindow).toHaveBeenCalledTimes(2);
+    expect(openWindow).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, Tray } from "electron";
 import { join } from "node:path";
 
 import {
@@ -10,6 +10,7 @@ declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 let mainWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
 
 function rendererUrl(): { readonly kind: "url"; readonly value: string } | { readonly kind: "file"; readonly value: string } {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
@@ -57,14 +58,31 @@ function openManagementWindow(): void {
   }
 }
 
+function createTray(actions: { readonly open: () => void; readonly quit: () => void }): void {
+  if (tray !== undefined) return;
+  const icon = nativeImage.createFromDataURL(
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  );
+  tray = new Tray(icon);
+  tray.setToolTip("LuckyToken");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open LuckyToken", click: actions.open },
+      { type: "separator" },
+      { label: "Quit LuckyToken", click: actions.quit },
+    ]),
+  );
+  tray.on("double-click", actions.open);
+}
+
 void startElectronDesktopLifecycle({
   requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
   whenReady: () => app.whenReady(),
   onSecondInstance: (listener) => app.on("second-instance", listener),
   quit: () => app.quit(),
   openWindow: openManagementWindow,
+  createTray,
 });
 
-app.on("window-all-closed", () => {
-  app.quit();
-});
+// Closing the last management window intentionally leaves Electron Main and
+// the tray running. Explicit product Quit is a separate tray action.

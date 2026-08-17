@@ -4,10 +4,10 @@
 
 **Blocked by:** 08 — Create Electron Main, preload, and packaging skeleton.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Normal desktop startup creates one tray icon and no BrowserWindow or renderer.
-- [ ] Opening LuckyToken from the tray creates exactly one management window; repeated open actions focus the same live window rather than creating duplicates.
-- [ ] Closing the management window destroys it instead of hiding it, while Electron Main and the tray remain alive.
-- [ ] Reopening after close creates a new BrowserWindow/renderer lifecycle rather than reviving retained renderer state.
-- [ ] An explicit product quit remains distinct from closing the management window.
+- [x] Normal desktop startup creates one tray icon and no BrowserWindow or renderer.
+- [x] Opening LuckyToken from the tray creates exactly one management window; repeated open actions focus the same live window rather than creating duplicates.
+- [x] Closing the management window destroys it instead of hiding it, while Electron Main and the tray remain alive.
+- [x] Reopening after close creates a new BrowserWindow/renderer lifecycle rather than reviving retained renderer state.
+- [x] An explicit product quit remains distinct from closing the management window.
