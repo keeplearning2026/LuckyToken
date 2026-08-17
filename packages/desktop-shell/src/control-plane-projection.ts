@@ -71,6 +71,10 @@ export interface ConnectedControlPlaneState extends StatusSnapshot {
   /** Sanitized model-aliases.json projection from the status snapshot
    *  (Ticket 14): revision, file facts, defaults version. */
   readonly aliasesProjection?: AliasStatusProjection;
+  /** Audit-unavailable projection from the status snapshot (Ticket 23):
+   *  present while at least one history persistence authority is
+   *  unavailable, until acknowledged or demonstrated recovery. */
+  readonly persistence?: PersistenceProjection;
 }
 /** Registered settings allowlist projected into renderer state. Only fields
  *  registered in the backend catalog reach the renderer; unregistered keys,
@@ -1055,6 +1059,69 @@ export function decodeAliasStatusProjection(
   });
 }
 
+const PERSISTENCE_AUTHORITY_IDS = Object.freeze([
+  "requestLedger",
+  "diagnostics",
+  "capture",
+] as const);
+
+export type PersistenceAuthorityId =
+  (typeof PERSISTENCE_AUTHORITY_IDS)[number];
+
+export interface PersistenceAuthorityProjection {
+  readonly authority: PersistenceAuthorityId;
+  readonly since: number;
+}
+
+/** Ticket 23: audit-unavailable projection decoded strictly from the status
+ *  snapshot. Acknowledgment only silences the urgent presentation; it never
+ *  claims storage recovered. */
+export interface PersistenceProjection {
+  readonly auditUnavailable: true;
+  readonly acknowledged: boolean;
+  readonly authorities: readonly PersistenceAuthorityProjection[];
+}
+
+export function decodePersistenceProjection(
+  value: unknown,
+): PersistenceProjection | undefined {
+  if (
+    !isRecord(value) ||
+    value.auditUnavailable !== true ||
+    typeof value.acknowledged !== "boolean" ||
+    !Array.isArray(value.authorities) ||
+    value.authorities.length === 0
+  ) {
+    return undefined;
+  }
+  const authorities = value.authorities
+    .map((entry): PersistenceAuthorityProjection | undefined => {
+      if (
+        !isRecord(entry) ||
+        !PERSISTENCE_AUTHORITY_IDS.includes(
+          entry.authority as PersistenceAuthorityId,
+        ) ||
+        !Number.isSafeInteger(entry.since) ||
+        (entry.since as number) < 0
+      ) {
+        return undefined;
+      }
+      return Object.freeze({
+        authority: entry.authority as PersistenceAuthorityId,
+        since: entry.since as number,
+      });
+    })
+    .filter(
+      (entry): entry is PersistenceAuthorityProjection => entry !== undefined,
+    );
+  if (authorities.length !== value.authorities.length) return undefined;
+  return Object.freeze({
+    auditUnavailable: true,
+    acknowledged: value.acknowledged as boolean,
+    authorities: Object.freeze(authorities),
+  });
+}
+
 /** Sanitized models.json projection from the status snapshot: revision,
  *  location, presence, validity and value-free error — never content. */
 export function decodeModelsProjection(
@@ -1717,6 +1784,10 @@ export function projectControlPlaneState(
       payload.snapshot.aliases === undefined
         ? undefined
         : decodeAliasStatusProjection(payload.snapshot.aliases);
+    const persistence =
+      payload.snapshot.persistence === undefined
+        ? undefined
+        : decodePersistenceProjection(payload.snapshot.persistence);
     const confirmation = payload.snapshot.confirmation;
     const projectedConfirmation =
       confirmation === undefined ||
@@ -1775,6 +1846,7 @@ export function projectControlPlaneState(
       ...(aliasesProjection === undefined
         ? {}
         : { aliasesProjection }),
+      ...(persistence === undefined ? {} : { persistence }),
       ...(projectedConfirmation === undefined
         ? {}
         : { confirmation: projectedConfirmation }),

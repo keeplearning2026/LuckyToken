@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use control_plane_v1::{
     decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AnalyticsResultWire,
-    AuthCommandResultWire,
-    AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
-    ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
+    AuthCommandResultWire, AutoStartAction, CatalogCommand, CatalogCommandResultWire,
+    ClientTokenCommand, ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
     CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
-    ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire, RequestLedgerResultWire,
-    RuntimeCommand, SettingsCommand,
+    HistoryCommand, HistoryCommandResultWire, HistoryDeleteResultWire, HistoryExportResultWire,
+    HistoryQueryResultWire, ModelsCommand, NativeControlPlaneConnector, RequestIdentityRecordWire,
+    RequestLedgerResultWire, RuntimeCommand, SettingsCommand,
 };
 use native_discovery::NativeControlPlaneDiscovery;
 use shell_bridge::{
@@ -126,6 +126,74 @@ async fn shell_settings_confirm(
     state: State<'_, ShellBridge>,
 ) -> Result<ShellStateDto, ()> {
     run_settings_command(app, state, SettingsCommand::Confirm).await
+}
+
+#[tauri::command]
+async fn shell_history_acknowledge(
+    app: tauri::AppHandle,
+    state: State<'_, ShellBridge>,
+) -> Result<ShellStateDto, ()> {
+    Ok(state.history_acknowledge(shell_emitter(app)).await)
+}
+
+#[tauri::command]
+async fn shell_history_query(
+    state: State<'_, ShellBridge>,
+    range: Option<serde_json::Value>,
+) -> Result<HistoryQueryResultWire, ()> {
+    let command = HistoryCommand::query(range).ok_or(())?;
+    match state.history_command(command).await? {
+        HistoryCommandResultWire::Query(result) => Ok(result),
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
+async fn shell_history_export(
+    state: State<'_, ShellBridge>,
+    command: serde_json::Value,
+) -> Result<HistoryExportResultWire, ()> {
+    let command = HistoryCommand::export(command).ok_or(())?;
+    match state.history_command(command).await? {
+        HistoryCommandResultWire::Export(result) => Ok(result),
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
+async fn shell_history_export_confirm(
+    state: State<'_, ShellBridge>,
+    action_id: String,
+) -> Result<HistoryExportResultWire, ()> {
+    let command = HistoryCommand::export_confirm(action_id).ok_or(())?;
+    match state.history_command(command).await? {
+        HistoryCommandResultWire::Export(result) => Ok(result),
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
+async fn shell_history_delete(
+    state: State<'_, ShellBridge>,
+    command: serde_json::Value,
+) -> Result<HistoryDeleteResultWire, ()> {
+    let command = HistoryCommand::delete(command).ok_or(())?;
+    match state.history_command(command).await? {
+        HistoryCommandResultWire::Delete(result) => Ok(result),
+        _ => Err(()),
+    }
+}
+
+#[tauri::command]
+async fn shell_history_delete_confirm(
+    state: State<'_, ShellBridge>,
+    action_id: String,
+) -> Result<HistoryDeleteResultWire, ()> {
+    let command = HistoryCommand::delete_confirm(action_id).ok_or(())?;
+    match state.history_command(command).await? {
+        HistoryCommandResultWire::Delete(result) => Ok(result),
+        _ => Err(()),
+    }
 }
 
 #[tauri::command]
@@ -240,6 +308,20 @@ async fn shell_pick_directory(app: tauri::AppHandle) -> Result<Option<String>, (
     // it at the token-authority boundary. Commands run off the main thread,
     // so the blocking dialog is safe here.
     let picked = app.dialog().file().blocking_pick_folder();
+    Ok(picked.map(|path| path.to_string()))
+}
+
+#[tauri::command]
+async fn shell_pick_history_export_destination(
+    app: tauri::AppHandle,
+) -> Result<Option<String>, ()> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name("luckytoken-history.json")
+        .add_filter("LuckyToken history", &["json"])
+        .blocking_save_file();
     Ok(picked.map(|path| path.to_string()))
 }
 
@@ -641,6 +723,12 @@ fn main() {
             shell_settings_query,
             shell_settings_set,
             shell_settings_confirm,
+            shell_history_acknowledge,
+            shell_history_query,
+            shell_history_export,
+            shell_history_export_confirm,
+            shell_history_delete,
+            shell_history_delete_confirm,
             shell_auto_start_status,
             shell_auto_start_enable,
             shell_auto_start_disable,
@@ -650,6 +738,7 @@ fn main() {
             shell_client_tokens_rotate,
             shell_client_tokens_remove,
             shell_pick_directory,
+            shell_pick_history_export_destination,
             shell_request_identities,
             shell_diagnostics_warnings,
             shell_models_query,

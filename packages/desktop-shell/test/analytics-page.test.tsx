@@ -124,6 +124,7 @@ function makeShell(options: {
     subscribe: () => () => undefined,
     executeRuntimeCommand: async (): Promise<DesktopShellSnapshot> => snapshot,
     executeSettingsCommand: async (): Promise<DesktopShellSnapshot> => snapshot,
+    acknowledgePersistence: async (): Promise<DesktopShellSnapshot> => snapshot,
     getAutoStartStatus: async () => ({ enabled: false }),
     setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
     executeClientTokenCommand: async (): Promise<ClientTokenCommandResult> => ({
@@ -177,6 +178,25 @@ function makeShell(options: {
     }> => ({ records: [], hasMore: false }),
     subscribeRequestLedger: async (): Promise<() => Promise<void>> =>
       async () => undefined,
+    queryHistory: async () => ({
+      range: "all",
+      counts: { requestLedger: 0, diagnostics: 0, capture: 0 },
+    }),
+    executeHistoryExport: async () => ({
+      outcome: "failed",
+      failure: { code: "internal", message: "unused" },
+    }),
+    confirmHistoryExport: async () => ({
+      outcome: "failed",
+      failure: { code: "internal", message: "unused" },
+    }),
+    executeHistoryDelete: async () => {
+      throw new Error("unused history delete");
+    },
+    confirmHistoryDelete: async () => {
+      throw new Error("unused history delete confirmation");
+    },
+    pickHistoryExportDestination: async () => undefined,
   };
   return { shell, queries, optionsQueries };
 }

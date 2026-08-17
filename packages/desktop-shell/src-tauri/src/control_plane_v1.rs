@@ -140,6 +140,10 @@ pub(crate) struct StatusSnapshot {
     pub(crate) aliases: Option<AliasesProjectionWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credentials: Option<CredentialProjectionWire>,
+    /// Ticket 23: present while at least one history persistence authority is
+    /// unavailable; the tray renders a fixed degraded label from this flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) persistence: Option<PersistenceProjectionWire>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +174,116 @@ impl SettingsCommand {
             Self::Query => "desktop-settings-query",
             Self::Set => "desktop-settings-set",
             Self::Confirm => "desktop-settings-confirm",
+        }
+    }
+}
+
+/// Ticket 23 History commands. Rust owns only the allowlisted transport
+/// shape; range, confirmation, export and deletion semantics remain in the
+/// TypeScript History Authority.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum HistoryCommand {
+    Query { range: Option<Value> },
+    Export { command: Value },
+    ExportConfirm { action_id: String },
+    Delete { command: Value },
+    DeleteConfirm { action_id: String },
+}
+
+impl HistoryCommand {
+    pub(crate) fn query(range: Option<Value>) -> Option<Self> {
+        let range = match range {
+            Some(raw) => {
+                let decoded: HistoryRangeWire = serde_json::from_value(raw).ok()?;
+                if !decoded.is_valid() {
+                    return None;
+                }
+                Some(serde_json::to_value(decoded).ok()?)
+            }
+            None => None,
+        };
+        Some(Self::Query { range })
+    }
+
+    pub(crate) fn export(command: Value) -> Option<Self> {
+        let decoded: HistoryExportCommandWire = serde_json::from_value(command).ok()?;
+        if !decoded.is_valid() {
+            return None;
+        }
+        Some(Self::Export {
+            command: serde_json::to_value(decoded).ok()?,
+        })
+    }
+
+    pub(crate) fn export_confirm(action_id: String) -> Option<Self> {
+        (!action_id.is_empty()).then_some(Self::ExportConfirm { action_id })
+    }
+
+    pub(crate) fn delete(command: Value) -> Option<Self> {
+        let decoded: HistoryDeleteCommandWire = serde_json::from_value(command).ok()?;
+        if !decoded.range.is_valid() {
+            return None;
+        }
+        Some(Self::Delete {
+            command: serde_json::to_value(decoded).ok()?,
+        })
+    }
+
+    pub(crate) fn delete_confirm(action_id: String) -> Option<Self> {
+        (!action_id.is_empty()).then_some(Self::DeleteConfirm { action_id })
+    }
+
+    fn request_id(&self) -> &'static str {
+        match self {
+            Self::Query { .. } => "desktop-history-query",
+            Self::Export { .. } => "desktop-history-export",
+            Self::ExportConfirm { .. } => "desktop-history-export-confirm",
+            Self::Delete { .. } => "desktop-history-delete",
+            Self::DeleteConfirm { .. } => "desktop-history-delete-confirm",
+        }
+    }
+
+    fn request(&self) -> Value {
+        match self {
+            Self::Query { range } => {
+                let mut request = json!({
+                    "type": "history_query",
+                    "requestId": self.request_id(),
+                });
+                if let Some(range) = range {
+                    request["range"] = range.clone();
+                }
+                request
+            }
+            Self::Export { command } => json!({
+                "type": "history_export_command",
+                "requestId": self.request_id(),
+                "command": command,
+            }),
+            Self::ExportConfirm { action_id } => json!({
+                "type": "history_export_confirm",
+                "requestId": self.request_id(),
+                "actionId": action_id,
+            }),
+            Self::Delete { command } => json!({
+                "type": "history_delete_command",
+                "requestId": self.request_id(),
+                "command": command,
+            }),
+            Self::DeleteConfirm { action_id } => json!({
+                "type": "history_delete_confirm",
+                "requestId": self.request_id(),
+                "actionId": action_id,
+            }),
+        }
+    }
+
+    fn response_type(&self) -> &'static str {
+        match self {
+            Self::Query { .. } => "history_query_result",
+            Self::Export { .. } => "history_export_result",
+            Self::ExportConfirm { .. } => "history_export_result",
+            Self::Delete { .. } | Self::DeleteConfirm { .. } => "history_delete_result",
         }
     }
 }
@@ -593,12 +707,332 @@ pub(crate) struct CatalogCommandResultWire {
     pub(crate) refresh: Option<Value>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HistoryRangeBoundsWire {
+    #[serde(rename = "fromMs", skip_serializing_if = "Option::is_none")]
+    pub(crate) from_ms: Option<u64>,
+    #[serde(rename = "toMs", skip_serializing_if = "Option::is_none")]
+    pub(crate) to_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum HistoryRangeWire {
+    All(String),
+    Bounds(HistoryRangeBoundsWire),
+}
+
+impl HistoryRangeWire {
+    fn is_valid(&self) -> bool {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        match self {
+            Self::All(value) => value == "all",
+            Self::Bounds(bounds) => {
+                (bounds.from_ms.is_some() || bounds.to_ms.is_some())
+                    && bounds.from_ms.is_none_or(|value| value <= MAX_SAFE_INTEGER)
+                    && bounds.to_ms.is_none_or(|value| value <= MAX_SAFE_INTEGER)
+                    && match (bounds.from_ms, bounds.to_ms) {
+                        (Some(from), Some(to)) => from <= to,
+                        _ => true,
+                    }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HistoryExportCommandWire {
+    pub(crate) range: HistoryRangeWire,
+    pub(crate) capture: String,
+    #[serde(rename = "destinationPath")]
+    pub(crate) destination_path: String,
+    pub(crate) overwrite: bool,
+}
+
+impl HistoryExportCommandWire {
+    fn is_valid(&self) -> bool {
+        self.range.is_valid()
+            && matches!(self.capture.as_str(), "excluded" | "included")
+            && !self.destination_path.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HistoryDeleteCommandWire {
+    pub(crate) range: HistoryRangeWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HistoryCountsWire {
+    #[serde(rename = "requestLedger")]
+    pub(crate) request_ledger: u64,
+    pub(crate) diagnostics: u64,
+    pub(crate) capture: u64,
+}
+
+impl HistoryCountsWire {
+    fn is_valid(&self) -> bool {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        self.request_ledger <= MAX_SAFE_INTEGER
+            && self.diagnostics <= MAX_SAFE_INTEGER
+            && self.capture <= MAX_SAFE_INTEGER
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryQueryResultWire {
+    pub(crate) range: HistoryRangeWire,
+    pub(crate) counts: HistoryCountsWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistorySourceSummaryWire {
+    #[serde(rename = "schemaVersion")]
+    pub(crate) schema_version: u64,
+    pub(crate) count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryCaptureSummaryWire {
+    pub(crate) included: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) count: Option<u64>,
+}
+
+impl HistoryCaptureSummaryWire {
+    fn is_valid(&self) -> bool {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        if self.included {
+            self.reason.is_none()
+                && self.schema_version.is_some()
+                && self.count.is_some_and(|count| count <= MAX_SAFE_INTEGER)
+        } else {
+            self.reason.as_deref() == Some("excluded-by-default")
+                && self.schema_version.is_none()
+                && self.count.is_none()
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryManifestSourcesWire {
+    #[serde(rename = "requestLedger")]
+    pub(crate) request_ledger: HistorySourceSummaryWire,
+    pub(crate) diagnostics: HistorySourceSummaryWire,
+    pub(crate) capture: HistoryCaptureSummaryWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryExportManifestWire {
+    #[serde(rename = "manifestVersion")]
+    pub(crate) manifest_version: u64,
+    #[serde(rename = "exportedAt")]
+    pub(crate) exported_at: u64,
+    pub(crate) sensitive: bool,
+    #[serde(rename = "auditUnavailable")]
+    pub(crate) audit_unavailable: bool,
+    pub(crate) sources: HistoryManifestSourcesWire,
+}
+
+impl HistoryExportManifestWire {
+    fn is_valid(&self) -> bool {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        self.manifest_version == 1
+            && self.exported_at <= MAX_SAFE_INTEGER
+            && self.sources.request_ledger.schema_version <= MAX_SAFE_INTEGER
+            && self.sources.request_ledger.count <= MAX_SAFE_INTEGER
+            && self.sources.diagnostics.schema_version <= MAX_SAFE_INTEGER
+            && self.sources.diagnostics.count <= MAX_SAFE_INTEGER
+            && self.sources.capture.is_valid()
+            && self.sensitive == self.sources.capture.included
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryExportFailureWire {
+    pub(crate) code: String,
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryExportResultWire {
+    pub(crate) outcome: String,
+    #[serde(rename = "actionId", skip_serializing_if = "Option::is_none")]
+    pub(crate) action_id: Option<String>,
+    #[serde(
+        rename = "confirmationMessage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) confirmation_message: Option<String>,
+    #[serde(rename = "exportId", skip_serializing_if = "Option::is_none")]
+    pub(crate) export_id: Option<String>,
+    #[serde(rename = "destinationPath", skip_serializing_if = "Option::is_none")]
+    pub(crate) destination_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) manifest: Option<HistoryExportManifestWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failure: Option<HistoryExportFailureWire>,
+}
+
+impl HistoryExportResultWire {
+    fn is_valid(&self) -> bool {
+        let nonempty =
+            |value: &Option<String>| value.as_ref().is_some_and(|value| !value.is_empty());
+        match self.outcome.as_str() {
+            "ok" => {
+                nonempty(&self.export_id)
+                    && nonempty(&self.destination_path)
+                    && self
+                        .manifest
+                        .as_ref()
+                        .is_some_and(HistoryExportManifestWire::is_valid)
+                    && self.action_id.is_none()
+                    && self.confirmation_message.is_none()
+                    && self.failure.is_none()
+            }
+            "confirmation_required" => {
+                nonempty(&self.action_id)
+                    && nonempty(&self.confirmation_message)
+                    && self.export_id.is_none()
+                    && self.destination_path.is_none()
+                    && self.manifest.is_none()
+                    && self.failure.is_none()
+            }
+            "failed" => {
+                self.failure.as_ref().is_some_and(|failure| {
+                    matches!(
+                        failure.code.as_str(),
+                        "invalid_destination"
+                            | "destination_exists"
+                            | "destination_locked"
+                            | "export_too_large"
+                            | "source_unavailable"
+                            | "cancelled"
+                            | "internal"
+                    ) && !failure.message.is_empty()
+                }) && self.action_id.is_none()
+                    && self.confirmation_message.is_none()
+                    && self.export_id.is_none()
+                    && self.destination_path.is_none()
+                    && self.manifest.is_none()
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryDeletePreviewWire {
+    pub(crate) range: HistoryRangeWire,
+    pub(crate) counts: HistoryCountsWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryDeleteFailureWire {
+    pub(crate) authority: String,
+    pub(crate) code: String,
+    pub(crate) deleted: u64,
+}
+
+impl HistoryDeleteFailureWire {
+    fn is_valid(&self) -> bool {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        matches!(
+            self.authority.as_str(),
+            "requestLedger" | "diagnostics" | "capture"
+        ) && matches!(self.code.as_str(), "storage_failure" | "internal")
+            && self.deleted <= MAX_SAFE_INTEGER
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct HistoryDeleteResultWire {
+    pub(crate) outcome: String,
+    #[serde(rename = "actionId", skip_serializing_if = "Option::is_none")]
+    pub(crate) action_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) preview: Option<HistoryDeletePreviewWire>,
+    #[serde(
+        rename = "confirmationMessage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) confirmation_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) deleted: Option<HistoryCountsWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failures: Option<Vec<HistoryDeleteFailureWire>>,
+}
+
+impl HistoryDeleteResultWire {
+    fn is_valid(&self) -> bool {
+        let confirmation_is_valid = self
+            .confirmation_message
+            .as_ref()
+            .is_some_and(|message| !message.is_empty());
+        match self.outcome.as_str() {
+            "confirmation_required" => {
+                self.action_id.as_ref().is_some_and(|id| !id.is_empty())
+                    && confirmation_is_valid
+                    && self.preview.as_ref().is_some_and(|preview| {
+                        preview.range.is_valid() && preview.counts.is_valid()
+                    })
+                    && self.deleted.is_none()
+                    && self.failures.is_none()
+            }
+            "completed" => {
+                self.action_id.is_none()
+                    && self.preview.is_none()
+                    && self.confirmation_message.is_none()
+                    && self
+                        .deleted
+                        .as_ref()
+                        .is_some_and(HistoryCountsWire::is_valid)
+                    && self.failures.is_none()
+            }
+            "partial_failure" | "failed" => {
+                self.action_id.is_none()
+                    && self.preview.is_none()
+                    && self.confirmation_message.is_none()
+                    && self
+                        .deleted
+                        .as_ref()
+                        .is_some_and(HistoryCountsWire::is_valid)
+                    && self.failures.as_ref().is_some_and(|failures| {
+                        !failures.is_empty()
+                            && failures.iter().all(HistoryDeleteFailureWire::is_valid)
+                    })
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryCommandResultWire {
+    Query(HistoryQueryResultWire),
+    Export(HistoryExportResultWire),
+    Delete(HistoryDeleteResultWire),
+}
+
 pub(crate) type ConnectFuture =
     Pin<Box<dyn Future<Output = Result<ConnectResult, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type CommandFuture =
     Pin<Box<dyn Future<Output = Result<StatusSnapshot, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type SettingsCommandFuture = Pin<
     Box<dyn Future<Output = Result<SettingsCommandResultWire, ConnectionFailure>> + Send + 'static>,
+>;
+pub(crate) type HistoryAcknowledgeFuture =
+    Pin<Box<dyn Future<Output = Result<StatusSnapshot, ConnectionFailure>> + Send + 'static>>;
+pub(crate) type HistoryCommandFuture = Pin<
+    Box<dyn Future<Output = Result<HistoryCommandResultWire, ConnectionFailure>> + Send + 'static>,
 >;
 pub(crate) type AutoStartFuture =
     Pin<Box<dyn Future<Output = Result<AutoStartResultWire, ConnectionFailure>> + Send + 'static>>;
@@ -629,9 +1063,8 @@ pub(crate) type RequestIdentitiesFuture = Pin<
 pub(crate) type RequestLedgerQueryFuture = Pin<
     Box<dyn Future<Output = Result<RequestLedgerResultWire, ConnectionFailure>> + Send + 'static>,
 >;
-pub(crate) type AnalyticsQueryFuture = Pin<
-    Box<dyn Future<Output = Result<AnalyticsResultWire, ConnectionFailure>> + Send + 'static>,
->;
+pub(crate) type AnalyticsQueryFuture =
+    Pin<Box<dyn Future<Output = Result<AnalyticsResultWire, ConnectionFailure>> + Send + 'static>>;
 pub(crate) type RequestLedgerSubscribeFuture = Pin<
     Box<
         dyn Future<Output = Result<RequestLedgerSubscribeStart, ConnectionFailure>>
@@ -669,6 +1102,15 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn settings_command(&self, _command: SettingsCommand) -> SettingsCommandFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    /// Ticket 23: acknowledges the audit-unavailable state; returns the
+    /// fresh status snapshot so the renderer's banner reflects the
+    /// acknowledgment immediately. Acknowledgment never claims recovery.
+    fn history_acknowledge(&self) -> HistoryAcknowledgeFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    fn history_command(&self, _command: HistoryCommand) -> HistoryCommandFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     fn auto_start(&self, _action: AutoStartAction) -> AutoStartFuture {
@@ -1070,7 +1512,10 @@ pub(crate) struct AnalyticsResultWire {
     pub(crate) truncated: Option<bool>,
     #[serde(rename = "omittedGroupCount", skip_serializing_if = "Option::is_none")]
     pub(crate) omitted_group_count: Option<u64>,
-    #[serde(rename = "omittedGroupRequests", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "omittedGroupRequests",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) omitted_group_requests: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) buckets: Option<Vec<Value>>,
@@ -1299,6 +1744,36 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_settings_command_session(&pipe_name, capability, command).await
+        })
+    }
+
+    fn history_acknowledge(&self) -> HistoryAcknowledgeFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_history_acknowledge_session(&pipe_name, capability).await
+        })
+    }
+
+    fn history_command(&self, command: HistoryCommand) -> HistoryCommandFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_history_command_session(&pipe_name, capability, command).await
         })
     }
 
@@ -1661,6 +2136,161 @@ async fn execute_settings_command_session(
                 .await
                 .map_err(FrameFailure::connection_failure)?;
             decode_settings_command_result(&result, command)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// One-shot History command transport. It projects the backend response into
+/// an allowlisted DTO before anything is returned to the renderer.
+async fn execute_history_command_session(
+    pipe_name: &str,
+    capability: String,
+    command: HistoryCommand,
+) -> Result<HistoryCommandResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(&mut pipe, &command.request())
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            let response = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if response.get("type").and_then(Value::as_str) != Some(command.response_type())
+                || response.get("requestId").and_then(Value::as_str) != Some(command.request_id())
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let result = response
+                .get("result")
+                .cloned()
+                .ok_or(ConnectionFailure::ProtocolError)?;
+            match command {
+                HistoryCommand::Query { .. } => {
+                    let result: HistoryQueryResultWire = serde_json::from_value(result)
+                        .map_err(|_| ConnectionFailure::ProtocolError)?;
+                    if !result.range.is_valid() || !result.counts.is_valid() {
+                        return Err(ConnectionFailure::ProtocolError);
+                    }
+                    Ok(HistoryCommandResultWire::Query(result))
+                }
+                HistoryCommand::Export { .. } | HistoryCommand::ExportConfirm { .. } => {
+                    let result: HistoryExportResultWire = serde_json::from_value(result)
+                        .map_err(|_| ConnectionFailure::ProtocolError)?;
+                    if !result.is_valid() {
+                        return Err(ConnectionFailure::ProtocolError);
+                    }
+                    Ok(HistoryCommandResultWire::Export(result))
+                }
+                HistoryCommand::Delete { .. } | HistoryCommand::DeleteConfirm { .. } => {
+                    let result: HistoryDeleteResultWire = serde_json::from_value(result)
+                        .map_err(|_| ConnectionFailure::ProtocolError)?;
+                    if !result.is_valid() {
+                        return Err(ConnectionFailure::ProtocolError);
+                    }
+                    Ok(HistoryCommandResultWire::Delete(result))
+                }
+            }
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// Ticket 23: one-shot audit-unavailable acknowledgment. The session sends
+/// the `history_acknowledge` frame, validates the result (the native shell
+/// never interprets business state), then fetches the fresh status snapshot
+/// so the renderer's banner reflects the acknowledgment immediately. The
+/// backend owns every acknowledgment/recovery semantic; Rust only forwards
+/// frames and projects fixed labels.
+async fn execute_history_acknowledge_session(
+    pipe_name: &str,
+    capability: String,
+) -> Result<StatusSnapshot, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "history_acknowledge",
+                    "requestId": "desktop-history-acknowledge",
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if result.get("type").and_then(Value::as_str) != Some("history_acknowledge_result")
+                || result.get("requestId").and_then(Value::as_str)
+                    != Some("desktop-history-acknowledge")
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let outcome = result
+                .get("result")
+                .and_then(Value::as_object)
+                .and_then(|entry| entry.get("outcome"))
+                .and_then(Value::as_str);
+            if !matches!(outcome, Some("ok" | "unchanged")) {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            // Fresh snapshot: the acknowledgment (or the recovery that made
+            // it unchanged) must be reflected in what the renderer shows.
+            write_json_frame(
+                &mut pipe,
+                &json!({
+                    "type": "get_status",
+                    "requestId": "desktop-history-status",
+                }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let status = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            if status.get("type").and_then(Value::as_str) != Some("status_result")
+                || status.get("requestId").and_then(Value::as_str) != Some("desktop-history-status")
+            {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            status
+                .get("snapshot")
+                .and_then(decode_status_snapshot)
+                .ok_or(ConnectionFailure::ProtocolError)
         }
         Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
     }
@@ -3461,6 +4091,22 @@ fn decode_hello(value: &Value) -> Result<Hello, ConnectionFailure> {
     }
 }
 
+/// Ticket 23: audit-unavailable projection (fixed text only; the shell and
+/// tray render fixed labels from these flags, never dynamic content).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct PersistenceAuthorityProjectionWire {
+    pub(crate) authority: String,
+    pub(crate) since: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct PersistenceProjectionWire {
+    #[serde(rename = "auditUnavailable")]
+    pub(crate) audit_unavailable: bool,
+    pub(crate) acknowledged: bool,
+    pub(crate) authorities: Vec<PersistenceAuthorityProjectionWire>,
+}
+
 #[derive(Deserialize)]
 struct StatusSnapshotWire {
     sequence: u64,
@@ -3476,6 +4122,7 @@ struct StatusSnapshotWire {
     models: Option<ModelsProjectionWire>,
     aliases: Option<AliasesProjectionWire>,
     credentials: Option<CredentialProjectionWire>,
+    persistence: Option<PersistenceProjectionWire>,
 }
 
 #[derive(Deserialize)]
@@ -3531,6 +4178,10 @@ fn decode_status_snapshot(value: &Value) -> Option<StatusSnapshot> {
         models: wire.models,
         aliases: wire.aliases,
         credentials: wire.credentials,
+        persistence: wire.persistence.filter(|projection| {
+            // Strict: a projection must be an actual audit-unavailable state.
+            projection.audit_unavailable && !projection.authorities.is_empty()
+        }),
     })
 }
 
@@ -3910,6 +4561,227 @@ mod tests {
                 .map(|setting| setting.key.as_str()),
             Some("protocols.anthropic-messages.enabled")
         );
+    }
+
+    #[tokio::test]
+    async fn history_query_exchanges_the_versioned_wire_and_returns_only_the_allowlisted_result() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_history_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                HistoryCommand::Query {
+                    range: Some(json!({ "fromMs": 1000, "toMs": 2000 })),
+                },
+            )
+            .await
+            .expect("history query must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+
+        let hello = server.next_frame().await;
+        assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(request["type"], "history_query");
+        assert_eq!(request["requestId"], "desktop-history-query");
+        assert_eq!(request["range"]["fromMs"], 1000);
+        server
+            .send(&json!({
+                "type": "history_query_result",
+                "requestId": "desktop-history-query",
+                "result": {
+                    "range": {"fromMs": 1000, "toMs": 2000},
+                    "counts": {"requestLedger": 4, "diagnostics": 3, "capture": 2},
+                    "credentialCanary": "must-not-reach-renderer"
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("history query must complete within the timeout")
+            .expect("history query task must not panic");
+        let HistoryCommandResultWire::Query(result) = result else {
+            panic!("history query must return a query result");
+        };
+        assert_eq!(result.counts.request_ledger, 4);
+        assert_eq!(result.counts.diagnostics, 3);
+        assert_eq!(result.counts.capture, 2);
+        let projected = serde_json::to_value(result).expect("result must serialize");
+        assert!(projected.get("credentialCanary").is_none());
+    }
+
+    #[tokio::test]
+    async fn history_export_projects_a_sensitive_manifest_without_unrelated_fields() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_history_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                HistoryCommand::Export {
+                    command: json!({
+                        "range": "all",
+                        "capture": "included",
+                        "destinationPath": "C:\\exports\\history.json",
+                        "overwrite": false
+                    }),
+                },
+            )
+            .await
+            .expect("history export must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+
+        let request = server.next_frame().await;
+        assert_eq!(request["type"], "history_export_command");
+        assert_eq!(request["requestId"], "desktop-history-export");
+        assert_eq!(request["command"]["capture"], "included");
+        server
+            .send(&json!({
+                "type": "history_export_result",
+                "requestId": "desktop-history-export",
+                "result": {
+                    "outcome": "ok",
+                    "exportId": "export-001",
+                    "destinationPath": "C:\\exports\\history.json",
+                    "manifest": {
+                        "manifestVersion": 1,
+                        "exportedAt": 1_756_000_000_000_u64,
+                        "sensitive": true,
+                        "auditUnavailable": false,
+                        "sources": {
+                            "requestLedger": {"schemaVersion": 2, "count": 4},
+                            "diagnostics": {"schemaVersion": 1, "count": 3},
+                            "capture": {"included": true, "schemaVersion": 1, "count": 2}
+                        }
+                    },
+                    "credentialCanary": "must-not-reach-renderer"
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("history export must complete within the timeout")
+            .expect("history export task must not panic");
+        let HistoryCommandResultWire::Export(result) = result else {
+            panic!("history export must return an export result");
+        };
+        assert_eq!(result.outcome, "ok");
+        assert!(result
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.sensitive));
+        let projected = serde_json::to_value(result).expect("result must serialize");
+        assert!(projected.get("credentialCanary").is_none());
+    }
+
+    #[tokio::test]
+    async fn history_delete_projects_truthful_per_authority_partial_failure() {
+        let pipe_name = test_pipe_name();
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .expect("test server must create its pipe");
+        let session_task = tokio::spawn(async move {
+            execute_history_command_session(
+                &pipe_name,
+                "desktop-test-capability".to_owned(),
+                HistoryCommand::Delete {
+                    command: json!({ "range": "all" }),
+                },
+            )
+            .await
+            .expect("history delete must negotiate and complete")
+        });
+        server
+            .connect()
+            .await
+            .expect("test server must accept the client");
+        let mut server = TestPipeServer { server };
+        let _hello = server.next_frame().await;
+        server
+            .send(&json!({
+                "type": "hello_result",
+                "requestId": "desktop-hello",
+                "result": {
+                    "type": "compatible",
+                    "application": {"id": "luckytoken", "version": "native-test"},
+                    "contractVersion": CONTROL_PLANE_VERSION
+                }
+            }))
+            .await;
+        let request = server.next_frame().await;
+        assert_eq!(request["type"], "history_delete_command");
+        assert_eq!(request["requestId"], "desktop-history-delete");
+        server
+            .send(&json!({
+                "type": "history_delete_result",
+                "requestId": "desktop-history-delete",
+                "result": {
+                    "outcome": "partial_failure",
+                    "deleted": {"requestLedger": 4, "diagnostics": 0, "capture": 2},
+                    "failures": [{
+                        "authority": "diagnostics",
+                        "code": "storage_failure",
+                        "deleted": 0
+                    }],
+                    "credentialCanary": "must-not-reach-renderer"
+                }
+            }))
+            .await;
+
+        let result = timeout(Duration::from_secs(5), session_task)
+            .await
+            .expect("history delete must complete within the timeout")
+            .expect("history delete task must not panic");
+        let HistoryCommandResultWire::Delete(result) = result else {
+            panic!("history delete must return a deletion result");
+        };
+        assert_eq!(result.outcome, "partial_failure");
+        assert_eq!(result.failures.as_ref().map(Vec::len), Some(1));
+        let projected = serde_json::to_value(result).expect("result must serialize");
+        assert!(projected.get("credentialCanary").is_none());
     }
 
     #[tokio::test]
@@ -5760,8 +6632,14 @@ mod ticket17_directory_scope_tests {
         });
         let decoded = decode_analytics_result(&options).expect("valid options must decode");
         assert_eq!(decoded.command, "options");
-        assert_eq!(decoded.providers.as_deref(), Some(&["anthropic".to_owned()][..]));
-        assert_eq!(decoded.models.as_deref(), Some(&["claude-x".to_owned()][..]));
+        assert_eq!(
+            decoded.providers.as_deref(),
+            Some(&["anthropic".to_owned()][..])
+        );
+        assert_eq!(
+            decoded.models.as_deref(),
+            Some(&["claude-x".to_owned()][..])
+        );
         assert!(decoded.totals.is_none());
 
         // Unknown keys anywhere — including any monetary field — reject.
@@ -5790,7 +6668,10 @@ mod ticket17_directory_scope_tests {
         // Malformed sub-shapes reject: missing totals, empty rows, missing
         // options dimensions, oversized options arrays, empty strings.
         let mut no_totals = summary.clone();
-        no_totals["result"].as_object_mut().unwrap().remove("totals");
+        no_totals["result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("totals");
         assert!(decode_analytics_result(&no_totals).is_err());
         let mut empty_rows = summary.clone();
         empty_rows["result"]["rows"] = json!([]);

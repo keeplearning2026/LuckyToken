@@ -19,6 +19,15 @@ import type {
   AnalyticsResult,
 } from "./analytics-contract.js";
 import { decodeAnalyticsResult } from "./wire-analytics.js";
+import type {
+  HistoryAcknowledgeResult,
+  HistoryDeleteCommand,
+  HistoryDeleteResult,
+  HistoryExportCommand,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
+} from "./history-contract.js";
 import {
   assertControlPlaneEndpoint,
   type AliasCommand,
@@ -62,6 +71,12 @@ import {
   type RecordValue,
   type ServerMessage,
 } from "./wire.js";
+import {
+  decodeHistoryAcknowledgeResult,
+  decodeHistoryDeleteResult,
+  decodeHistoryExportResult,
+  decodeHistoryQueryResult,
+} from "./wire-history.js";
 
 export interface ControlPlaneClientDependencies {
   readonly createRequestId: () => string;
@@ -549,6 +564,85 @@ export async function connectApplicationControlPlane(
         subscribed = false;
         captureListener = undefined;
       };
+    },
+    async queryHistory(range?: HistoryRange): Promise<HistoryQueryResult> {
+      const response = await request({
+        type: "history_query",
+        ...(range === undefined ? {} : { range }),
+      });
+      if (response.type !== "history_query_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryQueryResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeHistoryExport(
+      command: HistoryExportCommand,
+    ): Promise<HistoryExportResult> {
+      const response = await request({ type: "history_export_command", command });
+      if (response.type !== "history_export_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryExportResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async confirmHistoryExport(actionId: string): Promise<HistoryExportResult> {
+      const response = await request({
+        type: "history_export_confirm",
+        actionId,
+      });
+      if (response.type !== "history_export_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryExportResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeHistoryDelete(
+      command: HistoryDeleteCommand,
+    ): Promise<HistoryDeleteResult> {
+      const response = await request({ type: "history_delete_command", command });
+      if (response.type !== "history_delete_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryDeleteResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult> {
+      const response = await request({
+        type: "history_delete_confirm",
+        actionId,
+      });
+      if (response.type !== "history_delete_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryDeleteResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async acknowledgePersistence(): Promise<HistoryAcknowledgeResult> {
+      const response = await request({ type: "history_acknowledge" });
+      if (response.type !== "history_acknowledge_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeHistoryAcknowledgeResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
     },
     async subscribeDiagnostics(
       next: (event: RuntimeDiagnosticEvent) => void,

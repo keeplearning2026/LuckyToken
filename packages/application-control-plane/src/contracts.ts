@@ -64,6 +64,11 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
   /** Present only while a non-loopback bind action waits for confirmation. */
   readonly confirmation?: LanConfirmation;
+  /** Present while at least one history persistence authority is unavailable
+   *  (Ticket 23): the audit-unavailable state, visible in every snapshot
+   *  until acknowledged or demonstrated recovery. Acknowledgment never
+   *  claims storage recovered. */
+  readonly persistence?: PersistenceProjection;
   /** Owner identity of the one active instance (Ticket 05). */
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
@@ -1057,6 +1062,59 @@ export {
   type RequestUsageProjection,
 } from "./ledger-projection.js";
 
+import type {
+  HistoryAcknowledgeResult,
+  HistoryCommand,
+  HistoryCommandHandler,
+  HistoryCommandResult,
+  HistoryCounts,
+  HistoryDeleteAuthorityFailure,
+  HistoryDeleteCommand,
+  HistoryDeleteFailureCode,
+  HistoryDeleteOutcome,
+  HistoryDeletePreview,
+  HistoryDeleteResult,
+  HistoryExportCaptureMode,
+  HistoryExportCommand,
+  HistoryExportFailure,
+  HistoryExportFailureCode,
+  HistoryExportManifestSummary,
+  HistoryExportOutcome,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
+  PersistenceAuthorityId,
+  PersistenceAuthorityProjection,
+  PersistenceProjection,
+} from "./history-contract.js";
+
+export type {
+  HistoryAcknowledgeResult,
+  HistoryCommand,
+  HistoryCommandHandler,
+  HistoryCommandResult,
+  HistoryCounts,
+  HistoryDeleteAuthorityFailure,
+  HistoryDeleteCommand,
+  HistoryDeleteFailureCode,
+  HistoryDeleteOutcome,
+  HistoryDeletePreview,
+  HistoryDeleteResult,
+  HistoryExportCaptureMode,
+  HistoryExportCommand,
+  HistoryExportFailure,
+  HistoryExportFailureCode,
+  HistoryExportManifestSummary,
+  HistoryExportOutcome,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
+  PersistenceAuthorityId,
+  PersistenceAuthorityProjection,
+  PersistenceProjection,
+};
+export { PERSISTENCE_AUTHORITY_IDS } from "./history-contract.js";
+
 export type {
   CaptureDraft,
   CaptureEvent,
@@ -1065,6 +1123,8 @@ export type {
   CapturePersistedState,
   CaptureQuery,
   CaptureQueryResult,
+  CaptureRangeQuery,
+  CaptureRangeQueryResult,
   CaptureRecord,
   CaptureState,
   CaptureTimingEntry,
@@ -1277,6 +1337,26 @@ export interface ControlPlaneClient {
   subscribeCapture(
     listener: (event: CaptureEvent) => void,
   ): Promise<() => Promise<void>>;
+  /** Ticket 23: per-authority eligible-record counts over one history range
+   *  (the preview used by export and irreversible deletion gates). */
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
+  /** Ticket 23: start (or gate) one versioned history export. A sensitive
+   *  capture-included export returns confirmation_required; an excluded
+   *  export runs immediately. */
+  executeHistoryExport(
+    command: HistoryExportCommand,
+  ): Promise<HistoryExportResult>;
+  /** Ticket 23: executes the single-use sensitive export confirmation. */
+  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
+  /** Ticket 23: gates an irreversible range/all deletion behind a count
+   *  preview confirmation. */
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
+  /** Ticket 23: executes the single-use irreversible deletion confirmation. */
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
+  /** Ticket 23: acknowledges the audit-unavailable state. Acknowledgment
+   *  only silences the urgent presentation; it never claims storage
+   *  recovered and never clears an authority that is still failing. */
+  acknowledgePersistence(): Promise<HistoryAcknowledgeResult>;
   getDiagnostics(
     query?: RuntimeDiagnosticQuery,
   ): Promise<RuntimeDiagnosticsQueryResult>;

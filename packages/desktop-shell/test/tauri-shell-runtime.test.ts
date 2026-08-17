@@ -760,6 +760,87 @@ describe("Tauri shell runtime auth seam (Ticket 13)", () => {
       { command: "shell_open_url", args: { url: "http://127.0.0.1:3000/callback" } },
     ]);
   });
+
+  it("routes allowlisted history operations and the native save picker", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        if (command === "shell_history_query") {
+          return {
+            range: "all",
+            counts: { requestLedger: 4, diagnostics: 3, capture: 2 },
+          };
+        }
+        if (command === "shell_history_export") {
+          return {
+            outcome: "confirmation_required",
+            actionId: "export-confirm-1",
+            confirmationMessage: "Confirm this sensitive export.",
+          };
+        }
+        if (command === "shell_history_export_confirm") {
+          return { outcome: "failed", failure: { code: "cancelled", message: "Export cancelled" } };
+        }
+        if (command === "shell_history_delete") {
+          return {
+            outcome: "confirmation_required",
+            actionId: "delete-confirm-1",
+            preview: {
+              range: "all",
+              counts: { requestLedger: 4, diagnostics: 3, capture: 2 },
+            },
+            confirmationMessage: "Deleting history is irreversible.",
+          };
+        }
+        if (command === "shell_history_delete_confirm") {
+          return {
+            outcome: "completed",
+            deleted: { requestLedger: 4, diagnostics: 3, capture: 2 },
+          };
+        }
+        if (command === "shell_pick_history_export_destination") {
+          return "C:\\exports\\history.json";
+        }
+        throw new Error(`Unexpected command ${command}`);
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+
+    await runtime.queryHistory("all");
+    await runtime.executeHistoryExport({
+      range: "all",
+      capture: "included",
+      destinationPath: "C:\\exports\\history.json",
+      overwrite: false,
+    });
+    await runtime.confirmHistoryExport("export-confirm-1");
+    await runtime.executeHistoryDelete({ range: "all" });
+    await runtime.confirmHistoryDelete("delete-confirm-1");
+    await expect(runtime.pickHistoryExportDestination()).resolves.toBe(
+      "C:\\exports\\history.json",
+    );
+
+    expect(calls).toEqual([
+      { command: "shell_history_query", args: { range: "all" } },
+      {
+        command: "shell_history_export",
+        args: {
+          command: {
+            range: "all",
+            capture: "included",
+            destinationPath: "C:\\exports\\history.json",
+            overwrite: false,
+          },
+        },
+      },
+      { command: "shell_history_export_confirm", args: { actionId: "export-confirm-1" } },
+      { command: "shell_history_delete", args: { command: { range: "all" } } },
+      { command: "shell_history_delete_confirm", args: { actionId: "delete-confirm-1" } },
+      { command: "shell_pick_history_export_destination" },
+    ]);
+  });
 });
 
 describe("Tauri shell runtime auth conflict seam (Ticket 13 repair)", () => {

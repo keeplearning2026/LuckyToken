@@ -36,6 +36,7 @@ import {
   bindDeepDiagnosticsConfiguration,
   createDeepCaptureAuthority,
   createDeepCaptureStoreFactory,
+  type CaptureWriteFailure,
   type DeepCaptureAuthority,
   type DeepCaptureStore,
 } from "./deep-diagnostics/index.js";
@@ -244,6 +245,17 @@ export interface ConfiguredLuckyTokenCompositionOptions {
    * provider/model selector contract applies (test seam).
    */
   readonly aliasAuthority?: AliasRegistryAuthority;
+  /**
+   * Ticket 23: narrow sanitized capture persistence hooks wired by the
+   * owner to the persistence degradation authority. When the failure hook
+   * is provided, the composition's legacy diagnostics append is replaced by
+   * it (the authority owns the full fallback chain); without it the legacy
+   * sanitized diagnostics Critical is appended (unchanged behavior).
+   */
+  readonly onCapturePersistenceFailure?: (fact: CaptureWriteFailure) => void;
+  readonly onCapturePersistenceRecovery?: (fact: {
+    readonly requestId: string;
+  }) => void;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -628,6 +640,18 @@ export async function createConfiguredLuckyTokenComposition(
       return setting.value === true;
     },
     onWriteFailure: (failure) => {
+      if (options.onCapturePersistenceFailure !== undefined) {
+        // Ticket 23: the owner's degradation authority owns the full
+        // fallback chain (fixed Critical to stderr + bounded memory + the
+        // persistent diagnostics copy); the legacy append below would
+        // duplicate the Critical.
+        try {
+          options.onCapturePersistenceFailure(failure);
+        } catch {
+          // The degradation seam must never affect the request path.
+        }
+        return;
+      }
       try {
         diagnosticsStore.append({
           level: "critical",
@@ -639,6 +663,14 @@ export async function createConfiguredLuckyTokenComposition(
         });
       } catch {
         // The diagnostics seam must never affect the request path.
+      }
+    },
+    onWriteRecovery: (fact) => {
+      if (options.onCapturePersistenceRecovery === undefined) return;
+      try {
+        options.onCapturePersistenceRecovery(fact);
+      } catch {
+        // The degradation seam must never affect the request path.
       }
     },
   });

@@ -8,6 +8,24 @@ import {
   type DesktopShellRuntime,
 } from "../src/shell-lifecycle.js";
 
+const inertHistoryRuntime = {
+  queryHistory: async () => ({
+    range: "all" as const,
+    counts: { requestLedger: 0, diagnostics: 0, capture: 0 },
+  }),
+  executeHistoryExport: async () => ({
+    outcome: "failed" as const,
+    failure: { code: "internal" as const, message: "History export is unavailable" },
+  }),
+  confirmHistoryExport: async () => ({
+    outcome: "failed" as const,
+    failure: { code: "internal" as const, message: "History export is unavailable" },
+  }),
+  executeHistoryDelete: async () => ({ outcome: "failed" as const }),
+  confirmHistoryDelete: async () => ({ outcome: "failed" as const }),
+  pickHistoryExportDestination: async () => undefined,
+};
+
 describe("Windows desktop shell public lifecycle seam", () => {
   it("runs Dashboard lifecycle actions through the connected runtime", async () => {
     const commands: string[] = [];
@@ -21,8 +39,10 @@ describe("Windows desktop shell public lifecycle seam", () => {
       provider: "unconfigured",
     };
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
+      acknowledgePersistence: async () => connected,
       executeClientTokenCommand: async () => ({
         outcome: "ok",
         revision: 1,
@@ -125,8 +145,10 @@ describe("Windows desktop shell public lifecycle seam", () => {
       modelsResult,
     };
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => connected,
       executeSettingsCommand: async () => connected,
+      acknowledgePersistence: async () => connected,
       executeRuntimeCommand: async () => connected,
       executeClientTokenCommand: async () => ({
         outcome: "ok",
@@ -206,6 +228,7 @@ describe("Windows desktop shell public lifecycle seam", () => {
 
   it("launches once on the empty Dashboard", async () => {
     const runtime: DesktopShellRuntime = {
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -217,6 +240,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -296,11 +322,15 @@ describe("Windows desktop shell public lifecycle seam", () => {
     let unsubscribed = 0;
     let disconnected = 0;
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => {
         throw new Error("connection rejected");
       },
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -382,12 +412,16 @@ describe("Windows desktop shell public lifecycle seam", () => {
     let connected = 0;
     let disconnected = 0;
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => {
         connected += 1;
         throw new Error("must not connect after disposal");
       },
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -472,6 +506,7 @@ describe("Windows desktop shell public lifecycle seam", () => {
     let disconnected = 0;
     const disconnectFailure = new Error("disconnect failed");
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -483,6 +518,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -565,6 +603,7 @@ describe("Windows desktop shell public lifecycle seam", () => {
   it("navigates all eight stable pages while unconfigured and disposes cleanly", async () => {
     let controlPlaneDisconnected = 0;
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -576,6 +615,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -675,9 +717,13 @@ describe("Windows desktop shell public lifecycle seam", () => {
       action: "Start LuckyToken, then reconnect.",
     });
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => unavailable(1),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeCredentialCommand: async () => ({
         outcome: "ok",
@@ -776,6 +822,7 @@ describe("Windows desktop shell public lifecycle seam", () => {
   it("passes Windows login auto-start queries and changes to the runtime", async () => {
     const actions: Array<boolean | "query"> = [];
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -787,6 +834,9 @@ describe("Windows desktop shell public lifecycle seam", () => {
       }),
       executeSettingsCommand: async () => {
         throw new Error("unused settings command");
+      },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
       },
       executeRuntimeCommand: async () => {
         throw new Error("unused runtime command");
@@ -863,6 +913,7 @@ describe("WindowsShellHost client token commands", () => {
   it("delegates client token commands and Dashboard warning queries to the runtime", async () => {
     const tokenResults: string[] = [];
     const runtime: DesktopShellRuntime = {
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -937,6 +988,9 @@ describe("WindowsShellHost client token commands", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused");
       },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused");
       },
@@ -980,6 +1034,7 @@ describe("WindowsShellHost client token commands", () => {
 
   it("rejects client token commands while the shell is closed", async () => {
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => {
         throw new Error("unused");
       },
@@ -1001,6 +1056,9 @@ describe("WindowsShellHost client token commands", () => {
         throw new Error("unused models command");
       },
       executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      acknowledgePersistence: async () => {
         throw new Error("unused");
       },
       executeRuntimeCommand: async () => {
@@ -1052,6 +1110,7 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
   it("delegates the native picker and identity ledger to the runtime", async () => {
     const calls: string[] = [];
     const runtime: DesktopShellRuntime = {
+      ...inertHistoryRuntime,
       connectControlPlane: async () => ({
         revision: 1,
         kind: "connected",
@@ -1139,6 +1198,9 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       executeSettingsCommand: async () => {
         throw new Error("unused");
       },
+      acknowledgePersistence: async () => {
+        throw new Error("unused");
+      },
       executeRuntimeCommand: async () => {
         throw new Error("unused");
       },
@@ -1163,6 +1225,7 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
 
   it("rejects picker and ledger queries while the shell is closed", async () => {
     const shell = createWindowsShellHost({
+      ...inertHistoryRuntime,
       connectControlPlane: async () => {
         throw new Error("unused");
       },
@@ -1220,6 +1283,9 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
         throw new Error("unused");
       },
       executeSettingsCommand: async () => {
+        throw new Error("unused");
+      },
+      acknowledgePersistence: async () => {
         throw new Error("unused");
       },
       executeRuntimeCommand: async () => {

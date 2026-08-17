@@ -535,3 +535,105 @@ h1 { margin-bottom: 0; font-size: 28px; letter-spacing: -.03em; }
   display: inline-block; height: 10px; border-radius: 5px;
   background: #6f958b; vertical-align: middle; min-width: 2px;
 }
+
+/* Ticket 23: persistent audit-unavailable banner */
+.audit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 1.5rem 1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--error-border, #7a1f1f);
+  border-radius: 8px;
+  background: var(--error-bg, #2a1212);
+  color: var(--error-text, #ffb4b4);
+}
+.audit-banner.muted {
+  border-color: var(--warning-border, #6b5310);
+  background: var(--warning-bg, #2a2210);
+  color: var(--warning-text, #e6c96a);
+}
+.audit-banner strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+.audit-banner p {
+  margin: 0;
+}
+.audit-banner small {
+  display: block;
+  margin-top: 0.25rem;
+  opacity: 0.85;
+}
+
+.history-management {
+  border: 1px solid #d8dedb;
+  border-radius: 14px;
+  background: #fff;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.history-heading, .history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-range-controls {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) repeat(2, minmax(150px, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 18px;
+}
+
+.history-range-controls label {
+  display: grid;
+  gap: 6px;
+  color: #34423c;
+  font-size: 13px;
+}
+
+.history-range-controls input, .history-range-controls select {
+  min-height: 36px;
+  border: 1px solid #cbd4d0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 10px;
+}
+
+.history-heading p, .history-note {
+  color: #59645f;
+  margin-bottom: 0;
+}
+
+.history-heading span {
+  font-variant-numeric: tabular-nums;
+  color: #34423c;
+}
+
+.history-note {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+.history-actions button.danger, .history-confirmation button.danger {
+  color: #8a2525;
+  border-color: #d9a7a7;
+}
+
+.history-confirmation {
+  border: 1px solid #e0c68f;
+  background: #fff9eb;
+  border-radius: 10px;
+  padding: 14px;
+  margin-top: 16px;
+}
+
+.history-confirmation.danger-zone {
+  border-color: #d9a7a7;
+  background: #fff3f3;
+}

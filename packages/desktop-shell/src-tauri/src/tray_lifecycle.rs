@@ -10,6 +10,9 @@ pub(crate) struct TrayGatewayState {
     pub(crate) provider: ProviderState,
     configured_origin: Option<String>,
     configured_port: Option<u16>,
+    /// Ticket 23: fixed degraded flag projected from the audit-unavailable
+    /// status projection; only a fixed label variant may leave this module.
+    pub(crate) audit_unavailable: bool,
 }
 
 impl From<&StatusSnapshot> for TrayGatewayState {
@@ -25,6 +28,7 @@ impl From<&StatusSnapshot> for TrayGatewayState {
                 .data_plane
                 .as_ref()
                 .map(|data_plane| data_plane.configured_port),
+            audit_unavailable: snapshot.persistence.is_some(),
         }
     }
 }
@@ -36,6 +40,7 @@ impl TrayGatewayState {
             provider: ProviderState::Unconfigured,
             configured_origin: None,
             configured_port: None,
+            audit_unavailable: false,
         }
     }
 }
@@ -57,28 +62,43 @@ fn provider_state_label(state: ProviderState) -> &'static str {
     }
 }
 
-/// Tray status line: high-level lifecycle only. The configured origin and port
-/// never appear in tray text, so no secret can leak through the tray surface.
+/// Tray status line: high-level lifecycle only, plus the fixed degraded
+/// suffix while the audit-unavailable projection is present. The configured
+/// origin and port never appear in tray text, so no secret can leak through
+/// the tray surface.
 pub(crate) fn tray_gateway_label(gateway: &TrayGatewayState) -> String {
     format!(
-        "LuckyToken — Gateway {}",
-        gateway_state_label(gateway.model_data_plane)
+        "LuckyToken — Gateway {}{}",
+        gateway_state_label(gateway.model_data_plane),
+        if gateway.audit_unavailable {
+            " (audit unavailable)"
+        } else {
+            ""
+        },
     )
 }
 
 /// Tray tooltip: high-level lifecycle and provider configuration only.
 pub(crate) fn tray_gateway_tooltip(gateway: &TrayGatewayState) -> String {
     format!(
-        "LuckyToken {} (gateway {})",
+        "LuckyToken {} (gateway {}{})",
         gateway_state_label(gateway.model_data_plane),
         provider_state_label(gateway.provider),
+        if gateway.audit_unavailable {
+            "; audit unavailable"
+        } else {
+            ""
+        },
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane_v1::{DataPlaneStatus, ModelDataPlaneState, ProviderState};
+    use crate::control_plane_v1::{
+        DataPlaneStatus, ModelDataPlaneState, PersistenceAuthorityProjectionWire,
+        PersistenceProjectionWire, ProviderState,
+    };
 
     fn running_snapshot_with_origin() -> StatusSnapshot {
         StatusSnapshot {
@@ -97,6 +117,7 @@ mod tests {
             models: None,
             aliases: None,
             credentials: None,
+            persistence: None,
         }
     }
 
@@ -104,6 +125,40 @@ mod tests {
     fn tray_gateway_label_is_high_level_and_secret_free() {
         let gateway = TrayGatewayState::from(&running_snapshot_with_origin());
         assert_eq!(tray_gateway_label(&gateway), "LuckyToken — Gateway running");
+        assert!(
+            !tray_gateway_label(&gateway).contains("3000"),
+            "tray label must not reveal the origin or port"
+        );
+    }
+
+    #[test]
+    fn tray_gateway_label_shows_the_fixed_audit_unavailable_variant() {
+        let mut snapshot = running_snapshot_with_origin();
+        snapshot.persistence = Some(PersistenceProjectionWire {
+            audit_unavailable: true,
+            acknowledged: false,
+            authorities: vec![PersistenceAuthorityProjectionWire {
+                authority: "requestLedger".to_owned(),
+                since: 1_700_000_000_000,
+            }],
+        });
+        let gateway = TrayGatewayState::from(&snapshot);
+        assert_eq!(
+            tray_gateway_label(&gateway),
+            "LuckyToken — Gateway running (audit unavailable)"
+        );
+        assert_eq!(
+            tray_gateway_tooltip(&gateway),
+            "LuckyToken running (gateway configured; audit unavailable)"
+        );
+        // Acknowledgment silences urgency in the UI but never changes the
+        // tray's fixed degraded variant: the projection is still present.
+        snapshot.persistence.as_mut().unwrap().acknowledged = true;
+        let gateway = TrayGatewayState::from(&snapshot);
+        assert_eq!(
+            tray_gateway_label(&gateway),
+            "LuckyToken — Gateway running (audit unavailable)"
+        );
         assert!(
             !tray_gateway_label(&gateway).contains("3000"),
             "tray label must not reveal the origin or port"

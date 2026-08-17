@@ -78,6 +78,11 @@ export interface RequestLedgerStoreOptions {
    *  request id and a message hash only; never with fault text. Wired by
    *  the composition to the diagnostics Critical surface. */
   readonly onPersistenceFailure?: (fact: LedgerPersistenceFailure) => void;
+  /** Narrow sanitized persistence-recovery seam (Ticket 23): invoked once
+   *  with a request id when the first successful commit after a counted
+   *  fault demonstrates the store is writable again. Never carries fault
+   *  text. */
+  readonly onPersistenceRecovery?: (fact: { readonly requestId: string }) => void;
 }
 
 interface Row {
@@ -407,6 +412,7 @@ export function createRequestLedgerStoreFactory(
   const directory = options.configuration.directory;
   const scrub = options.scrub;
   const onPersistenceFailure = options.onPersistenceFailure;
+  const onPersistenceRecovery = options.onPersistenceRecovery;
 
   return {
     async open(): Promise<RequestLedgerStore> {
@@ -477,6 +483,10 @@ export function createRequestLedgerStoreFactory(
          FROM requests`;
       const eventListeners = new Set<(event: RequestLedgerEvent) => void>();
       let attachedScrub = scrub;
+      /** True after any counted persistence fault; cleared on the first
+       *  successful commit so the recovery seam fires exactly once and only
+       *  after a demonstrated write. */
+      let hadPersistenceFault = false;
 
       /** One full-column UPDATE under BEGIN IMMEDIATE; committed state is
        *  published to subscribers. Fail-open: throws are swallowed, counted
@@ -526,12 +536,24 @@ export function createRequestLedgerStoreFactory(
             ...entry.facts,
             persistenceWarnings: entry.facts.persistenceWarnings + 1,
           });
+          hadPersistenceFault = true;
           try {
             onPersistenceFailure?.({ requestId: entry.requestId, messageHash });
           } catch {
             // The diagnostics seam must never affect the request path.
           }
           return;
+        }
+        // Demonstrated recovery: the first successful commit after a
+        // counted fault reports recovery exactly once. The seam is guarded
+        // so it can never steer the request path.
+        if (hadPersistenceFault) {
+          hadPersistenceFault = false;
+          try {
+            onPersistenceRecovery?.({ requestId: entry.requestId });
+          } catch {
+            // The recovery seam must never affect the request path.
+          }
         }
         if (entry.id !== undefined) {
           const record = rowToRecord({
@@ -572,6 +594,7 @@ export function createRequestLedgerStoreFactory(
           ...entry.facts,
           persistenceWarnings: entry.facts.persistenceWarnings + 1,
         });
+        hadPersistenceFault = true;
         if (entry.faultReported) return;
         entry.faultReported = true;
         try {
@@ -671,6 +694,15 @@ export function createRequestLedgerStoreFactory(
             countEntryFault(entry, error);
           }
           if (entry.id !== undefined) {
+            // A successful begin insert may itself demonstrate recovery.
+            if (hadPersistenceFault) {
+              hadPersistenceFault = false;
+              try {
+                onPersistenceRecovery?.({ requestId: entry.requestId });
+              } catch {
+                // The recovery seam must never affect the request path.
+              }
+            }
             const record = rowToRecord({
               id: entry.id,
               requestId: entry.requestId,
@@ -1119,6 +1151,81 @@ export function createRequestLedgerStoreFactory(
           // enhancement and may be replaced on a Data Plane restart.
           attachedScrub = next;
         },
+        deleteRange(
+          fromMs?: number,
+          toMs?: number,
+        ): { readonly deleted: number } {
+          if (closed) throw new Error("Request Ledger store is closed");
+          if (
+            (fromMs !== undefined &&
+              (!Number.isSafeInteger(fromMs) || fromMs < 0)) ||
+            (toMs !== undefined &&
+              (!Number.isSafeInteger(toMs) || toMs < 0)) ||
+            (fromMs !== undefined &&
+              toMs !== undefined &&
+              fromMs > toMs)
+          ) {
+            throw new Error("ledger history range must be valid (fromMs <= toMs)");
+          }
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("accepted_at >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("accepted_at < ?");
+            params.push(toMs);
+          }
+          // One bounded transaction over the requests table only; `meta`
+          // (schema name/version) is never touched.
+          database.exec("BEGIN IMMEDIATE");
+          try {
+            const sql =
+              conditions.length === 0
+                ? "DELETE FROM requests"
+                : `DELETE FROM requests WHERE ${conditions.join(" AND ")}`;
+            const result = database.prepare(sql).run(...params);
+            database.exec("COMMIT");
+            return Object.freeze({ deleted: Number(result.changes) });
+          } catch (error) {
+            database.exec("ROLLBACK");
+            throw error;
+          }
+        },
+        countRange(fromMs?: number, toMs?: number): number {
+          if (closed) throw new Error("Request Ledger store is closed");
+          if (
+            (fromMs !== undefined &&
+              (!Number.isSafeInteger(fromMs) || fromMs < 0)) ||
+            (toMs !== undefined &&
+              (!Number.isSafeInteger(toMs) || toMs < 0)) ||
+            (fromMs !== undefined &&
+              toMs !== undefined &&
+              fromMs > toMs)
+          ) {
+            throw new Error("ledger history range must be valid (fromMs <= toMs)");
+          }
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("accepted_at >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("accepted_at < ?");
+            params.push(toMs);
+          }
+          const sql =
+            conditions.length === 0
+              ? "SELECT COUNT(*) AS count FROM requests"
+              : `SELECT COUNT(*) AS count FROM requests WHERE ${conditions.join(" AND ")}`;
+          const row = database.prepare(sql).get(...params) as {
+            count: number;
+          };
+          return Number(row.count);
+        },
+        schemaVersion: SCHEMA_VERSION,
         close(): void {
           if (closed) return;
           closed = true;

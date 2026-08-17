@@ -244,14 +244,6 @@ export function createRuntimeDiagnosticsStoreFactory(
         `INSERT INTO diagnostics (level, severity, time, text, request_id, fingerprint, details, errors)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      const selectAfter = database.prepare(
-        `SELECT id, level, time, text, request_id AS requestId, fingerprint, details, errors
-         FROM diagnostics WHERE id > ? ORDER BY id LIMIT ?`,
-      );
-      const selectAfterEligible = database.prepare(
-        `SELECT id, level, time, text, request_id AS requestId, fingerprint, details, errors
-         FROM diagnostics WHERE id > ? AND severity >= ? ORDER BY id LIMIT ?`,
-      );
       const fingerprintKey = loadFingerprintKey(database, createKey);
       const eventListeners = new Set<(event: RuntimeDiagnosticEvent) => void>();
       let attachedScrub: ((value: string) => string) | undefined = scrub;
@@ -260,6 +252,26 @@ export function createRuntimeDiagnosticsStoreFactory(
       // then appends fail closed (they cannot be pattern-safely downgraded
       // for the same raw value).
       let scrubReady = scrub !== undefined;
+
+      /** Ticket 23: shared half-open time-range validation used by
+       *  deleteRange/countRange (eligible ⇔ time >= from && time < to). */
+      const validateRange = (
+        fromMs: number | undefined,
+        toMs: number | undefined,
+      ): void => {
+        if (
+          (fromMs !== undefined &&
+            (!Number.isSafeInteger(fromMs) || fromMs < 0)) ||
+          (toMs !== undefined && (!Number.isSafeInteger(toMs) || toMs < 0)) ||
+          (fromMs !== undefined &&
+            toMs !== undefined &&
+            fromMs > toMs)
+        ) {
+          throw new Error(
+            "diagnostics history range must be valid (fromMs <= toMs)",
+          );
+        }
+      };
       const store: RuntimeDiagnosticsStore = {
         subscribe(
           listener: (event: RuntimeDiagnosticEvent) => void,
@@ -369,24 +381,53 @@ export function createRuntimeDiagnosticsStoreFactory(
             query?.limit === undefined
               ? DEFAULT_QUERY_LIMIT
               : Math.min(Math.max(Number.isSafeInteger(query.limit) ? query.limit : DEFAULT_QUERY_LIMIT, 1), MAX_QUERY_LIMIT);
+          // Bounded dynamic filters (Ticket 23 additive time range): the
+          // prepared-per-call statement mirrors the ledger store's query
+          // pattern; without time filters the SQL is byte-identical to the
+          // historical path.
+          const conditions: string[] = ["id > ?"];
+          const params: Array<number> = [afterId];
           if (query?.minimumLevel !== undefined) {
             // F7: severity-filtered pagination must compute cursor/hasMore
             // over eligible rows only, so an empty page never claims hasMore.
             const minimum = assertRuntimeDiagnosticLevel(query.minimumLevel);
             const severity = RUNTIME_DIAGNOSTIC_SEVERITY[minimum];
-            const rows = selectAfterEligible.all(
-              afterId,
-              severity,
-              limit + 1,
-            ) as unknown as Row[];
-            const hasMore = rows.length > limit;
-            const visible = rows.slice(0, limit);
-            return Object.freeze({
-              records: Object.freeze(visible.map(rowToRecord)),
-              hasMore,
-            });
+            conditions.push("severity >= ?");
+            params.push(severity);
           }
-          const rows = selectAfter.all(afterId, limit + 1) as unknown as Row[];
+          if (query?.from !== undefined) {
+            if (!Number.isSafeInteger(query.from) || query.from < 0) {
+              throw new Error(
+                "diagnostic query from must be a non-negative safe integer",
+              );
+            }
+            conditions.push("time >= ?");
+            params.push(query.from);
+          }
+          if (query?.to !== undefined) {
+            if (!Number.isSafeInteger(query.to) || query.to < 0) {
+              throw new Error(
+                "diagnostic query to must be a non-negative safe integer",
+              );
+            }
+            conditions.push("time <= ?");
+            params.push(query.to);
+          }
+          if (
+            query?.from !== undefined &&
+            query?.to !== undefined &&
+            query.from > query.to
+          ) {
+            throw new Error("diagnostic query from must not exceed to");
+          }
+          const rows = database
+            .prepare(
+              `SELECT id, level, time, text, request_id AS requestId, fingerprint, details, errors
+               FROM diagnostics WHERE ${conditions.join(
+                 " AND ",
+               )} ORDER BY id LIMIT ?`,
+            )
+            .all(...params, limit + 1) as unknown as Row[];
           const hasMore = rows.length > limit;
           const visible = rows.slice(0, limit);
           return Object.freeze({
@@ -394,6 +435,59 @@ export function createRuntimeDiagnosticsStoreFactory(
             hasMore,
           });
         },
+        deleteRange(
+          fromMs?: number,
+          toMs?: number,
+        ): { readonly deleted: number } {
+          if (closed) throw new Error("Runtime Diagnostics store is closed");
+          validateRange(fromMs, toMs);
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("time >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("time < ?");
+            params.push(toMs);
+          }
+          database.exec("BEGIN IMMEDIATE");
+          try {
+            const sql =
+              conditions.length === 0
+                ? "DELETE FROM diagnostics"
+                : `DELETE FROM diagnostics WHERE ${conditions.join(" AND ")}`;
+            const result = database.prepare(sql).run(...params);
+            database.exec("COMMIT");
+            return Object.freeze({ deleted: Number(result.changes) });
+          } catch (error) {
+            database.exec("ROLLBACK");
+            throw error;
+          }
+        },
+        countRange(fromMs?: number, toMs?: number): number {
+          if (closed) throw new Error("Runtime Diagnostics store is closed");
+          validateRange(fromMs, toMs);
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("time >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("time < ?");
+            params.push(toMs);
+          }
+          const sql =
+            conditions.length === 0
+              ? "SELECT COUNT(*) AS count FROM diagnostics"
+              : `SELECT COUNT(*) AS count FROM diagnostics WHERE ${conditions.join(" AND ")}`;
+          const row = database.prepare(sql).get(...params) as {
+            count: number;
+          };
+          return Number(row.count);
+        },
+        schemaVersion: SCHEMA_VERSION,
         close(): void {
           if (closed) return;
           closed = true;

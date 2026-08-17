@@ -8,8 +8,9 @@
  * a request that read `false` never re-reads, and a request that read
  * `true` keeps its `CaptureDecision` until finalize even if the toggle
  * flips while it is in flight. Simultaneous requests are safe because each
- * request owns an immutable decision and the observer holds no shared
- * mutable capture state.
+ * request owns an immutable decision and capture buffer; the authority owns
+ * only one shared persistence-health bit used to report demonstrated
+ * recovery after a prior write failure.
  *
  * The observer is protocol-agnostic: bytes + facts in, no IR types. It
  * collects the request body, the prepared response (status/headers/bytes),
@@ -41,6 +42,13 @@ export interface DeepCaptureAuthorityOptions {
    * of it. Wired by the composition to the diagnostics Critical surface.
    */
   readonly onWriteFailure?: (fact: CaptureWriteFailure) => void;
+  /**
+   * Narrow sanitized write-recovery seam (Ticket 23): invoked once with the
+   * request id when the first successful store commit after a reported
+   * write failure demonstrates the capture store is writable again. Never
+   * carries fault text.
+   */
+  readonly onWriteRecovery?: (fact: { readonly requestId: string }) => void;
 }
 
 export interface DeepCaptureBeginInput {
@@ -108,6 +116,10 @@ export function createDeepCaptureAuthority(
   options: DeepCaptureAuthorityOptions,
 ): DeepCaptureAuthority {
   const now = options.now ?? Date.now;
+  /** Authority-wide persistence health: a failed request cannot later
+   *  succeed itself because every capture entry finalizes once. Therefore
+   *  the first successful commit by any later entry demonstrates recovery. */
+  let hadWriteFailure = false;
 
   const begin = (input: DeepCaptureBeginInput): DeepCaptureEntry => {
     // Immutable acceptance-time snapshot: the enabled decision and its
@@ -135,7 +147,6 @@ export function createDeepCaptureAuthority(
     let sawResponse = false;
     let failure: string | undefined;
     let finalized = false;
-
     const mark = (stage: string): void => {
       if (timing.length >= MAX_TIMING) return;
       let time: number;
@@ -168,6 +179,17 @@ export function createDeepCaptureAuthority(
           complete: sawRequestBody && sawResponse,
         };
         options.store.append(draft);
+        // Demonstrated recovery: a successful commit after a reported write
+        // failure reports recovery exactly once. The seam is guarded so it
+        // can never steer the request path.
+        if (hadWriteFailure) {
+          hadWriteFailure = false;
+          try {
+            options.onWriteRecovery?.({ requestId: input.requestId });
+          } catch {
+            // The recovery seam must never affect the request path.
+          }
+        }
       } catch {
         // First write faulted: retry with the minimal failed-state marker
         // so the failed state stays observable. If that also faults, only
@@ -179,12 +201,21 @@ export function createDeepCaptureAuthority(
             acceptedAt: decision.acceptedAt,
           };
           options.store.appendFailed(marker);
+          if (hadWriteFailure) {
+            hadWriteFailure = false;
+            try {
+              options.onWriteRecovery?.({ requestId: input.requestId });
+            } catch {
+              // The recovery seam must never affect the request path.
+            }
+          }
         } catch (retryError) {
           // The narrow seam carries a fixed structured code and the request
           // id only: raw fault text is never persisted, hashed, or echoed
           // (an unkeyed hash of a low-entropy fault string would be
           // offline-enumerable).
           void retryError;
+          hadWriteFailure = true;
           try {
             options.onWriteFailure?.({
               requestId: input.requestId,

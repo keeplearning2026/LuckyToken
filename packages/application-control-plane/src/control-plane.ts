@@ -78,6 +78,8 @@ export {
   type CapturePersistedState,
   type CaptureQuery,
   type CaptureQueryResult,
+  type CaptureRangeQuery,
+  type CaptureRangeQueryResult,
   type CaptureRecord,
   type CaptureState,
   type CaptureTimingEntry,
@@ -167,7 +169,44 @@ export {
   type RuntimeDiagnosticsStore,
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
-export { projectRequestIdentity } from "./contracts.js";
+export type {
+  HistoryAcknowledgeResult,
+  HistoryCommand,
+  HistoryCommandHandler,
+  HistoryCommandResult,
+  HistoryCounts,
+  HistoryDeleteAuthorityFailure,
+  HistoryDeleteCommand,
+  HistoryDeleteFailureCode,
+  HistoryDeleteOutcome,
+  HistoryDeletePreview,
+  HistoryDeleteResult,
+  HistoryExportCaptureMode,
+  HistoryExportCommand,
+  HistoryExportFailure,
+  HistoryExportFailureCode,
+  HistoryExportManifestSummary,
+  HistoryExportOutcome,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
+  PersistenceAuthorityId,
+  PersistenceAuthorityProjection,
+  PersistenceProjection,
+} from "./contracts.js";
+export { PERSISTENCE_AUTHORITY_IDS } from "./contracts.js";
+export {
+  decodeHistoryDeleteCommand,
+  decodeHistoryDeleteResult,
+  decodeHistoryExportCommand,
+  decodeHistoryExportResult,
+  decodeHistoryQueryResult,
+  decodeHistoryRange,
+  decodePersistenceProjection,
+} from "./wire-history.js";
+export {
+  projectRequestIdentity,
+} from "./contracts.js";
 export {
   averageOutputSpeedUnavailableReason,
   deriveRequestStatus,
@@ -183,6 +222,7 @@ export {
   protocolDisplayName,
 } from "./contracts.js";
 export { decodeRequestLedgerEvent, decodeRequestLedgerQuery, decodeRequestLedgerRecord, decodeRequestLedgerResult } from "./wire-ledger.js";
+export { decodeCaptureEvent, decodeCaptureQuery, decodeCaptureQueryResult, decodeCaptureRecord } from "./wire-capture.js";
 export {
   LEDGER_OUTCOMES,
   LEDGER_PHASES,

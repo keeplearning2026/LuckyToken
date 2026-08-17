@@ -105,6 +105,7 @@ mod tests {
                 models: None,
                 aliases: None,
                 credentials: None,
+                persistence: None,
             }),
             models: None,
         };

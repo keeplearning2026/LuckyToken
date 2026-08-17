@@ -9,6 +9,11 @@ import {
   type ClientTokenCommand,
   type ClientTokenDirectoryRejection,
   type ClientTokenScopeRef,
+  type HistoryExportResult,
+  type HistoryExportCommand,
+  type HistoryDeleteResult,
+  type HistoryQueryResult,
+  type HistoryRange,
   type MaskedClientTokenScope,
   type ModelsCommand,
   type RuntimeCommand,
@@ -218,6 +223,16 @@ export function App({ shell, retryConnection }: AppProps) {
             </button>
           </section>
         ) : null}
+        {snapshot.connection.kind === "connected" &&
+        snapshot.connection.persistence !== undefined ? (
+          <AuditUnavailableBanner
+            acknowledged={snapshot.connection.persistence.acknowledged}
+            onAcknowledge={async () => {
+              await shell.acknowledgePersistence();
+              setSnapshot(shell.snapshot());
+            }}
+          />
+        ) : null}
         {snapshot.activePage === "dashboard" &&
         snapshot.connection.kind === "connected" ? (
           <section
@@ -357,6 +372,10 @@ export function App({ shell, retryConnection }: AppProps) {
         {snapshot.activePage === "analytics" ? (
           <AnalyticsPage shell={shell} />
         ) : null}
+        {snapshot.activePage === "diagnostics" &&
+        snapshot.connection.kind === "connected" ? (
+          <HistoryManagementPage shell={shell} />
+        ) : null}
         {(snapshot.activePage === "providers" ||
           snapshot.activePage === "models-aliases") &&
         snapshot.connection.kind === "connected" ? (
@@ -392,6 +411,265 @@ export function App({ shell, retryConnection }: AppProps) {
         </section>
       </main>
     </div>
+  );
+}
+
+function HistoryManagementPage({ shell }: { readonly shell: WindowsShellHost }) {
+  const [summary, setSummary] = useState<HistoryQueryResult>();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<HistoryExportResult>();
+  const [deleteResult, setDeleteResult] = useState<HistoryDeleteResult>();
+  const [failed, setFailed] = useState(false);
+  const [includeCapture, setIncludeCapture] = useState(false);
+  const [rangeMode, setRangeMode] = useState<"all" | "range">("all");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [activeRange, setActiveRange] = useState<HistoryRange>("all");
+  const [rangeError, setRangeError] = useState(false);
+  const [lastExportCommand, setLastExportCommand] = useState<HistoryExportCommand>();
+
+  const loadHistory = useCallback(async (range: HistoryRange) => {
+    const next = await shell.queryHistory(range);
+    setSummary(next);
+    setFailed(false);
+  }, [shell]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void shell.queryHistory("all").then((next) => {
+      if (!cancelled) {
+        setSummary(next);
+        setFailed(false);
+      }
+    }, () => {
+      if (!cancelled) setFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shell]);
+
+  const exportStructured = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      const destinationPath = await shell.pickHistoryExportDestination();
+      if (destinationPath === undefined) return;
+      const command: HistoryExportCommand = {
+        range: activeRange,
+        capture: includeCapture ? "included" : "excluded",
+        destinationPath,
+        overwrite: false,
+      };
+      setLastExportCommand(command);
+      setResult(await shell.executeHistoryExport(command));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const replaceExistingExport = async () => {
+    if (lastExportCommand === undefined) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      const command = { ...lastExportCommand, overwrite: true } as const;
+      setLastExportCommand(command);
+      setResult(await shell.executeHistoryExport(command));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSensitiveExport = async (actionId: string) => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      setResult(await shell.confirmHistoryExport(actionId));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestDelete = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      setDeleteResult(await shell.executeHistoryDelete({ range: activeRange }));
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmDelete = async (actionId: string) => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      const next = await shell.confirmHistoryDelete(actionId);
+      setDeleteResult(next);
+      await loadHistory(activeRange);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyRange = async () => {
+    let next: HistoryRange = "all";
+    if (rangeMode === "range") {
+      const fromMs = Date.parse(`${fromDate}T00:00:00.000Z`);
+      const endDayMs = Date.parse(`${toDate}T00:00:00.000Z`);
+      if (!Number.isFinite(fromMs) || !Number.isFinite(endDayMs) || fromMs > endDayMs) {
+        setRangeError(true);
+        return;
+      }
+      next = { fromMs, toMs: endDayMs + 86_400_000 };
+    }
+    setRangeError(false);
+    setBusy(true);
+    try {
+      await loadHistory(next);
+      setActiveRange(next);
+      setResult(undefined);
+      setDeleteResult(undefined);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="history-management" aria-label="History management">
+      <div className="history-heading">
+        <div>
+          <strong>Permanent history</strong>
+          <p>Export or deliberately delete Requests and Diagnostics.</p>
+        </div>
+        {summary === undefined ? (
+          <span>Loading history…</span>
+        ) : (
+          <span>
+            {summary.counts.requestLedger} requests · {summary.counts.diagnostics} diagnostics ·{" "}
+            {summary.counts.capture} raw captures
+          </span>
+        )}
+      </div>
+      <div className="history-range-controls">
+        <label>
+          Range
+          <select
+            aria-label="History range"
+            disabled={busy}
+            onChange={(event) => setRangeMode(event.target.value === "range" ? "range" : "all")}
+            value={rangeMode}
+          >
+            <option value="all">All history</option>
+            <option value="range">Calendar date range (UTC)</option>
+          </select>
+        </label>
+        <label>
+          Start
+          <input
+            aria-label="Start date"
+            disabled={busy || rangeMode === "all"}
+            onInput={(event) => setFromDate(event.currentTarget.value)}
+            type="date"
+            value={fromDate}
+          />
+        </label>
+        <label>
+          End (inclusive)
+          <input
+            aria-label="End date"
+            disabled={busy || rangeMode === "all"}
+            onInput={(event) => setToDate(event.currentTarget.value)}
+            type="date"
+            value={toDate}
+          />
+        </label>
+        <button disabled={busy} onClick={() => void applyRange()} type="button">Apply range</button>
+      </div>
+      {rangeError ? <p role="alert">Choose a valid start and end date.</p> : null}
+      <p className="history-note">
+        Raw capture is excluded by default. Including it requires a separate sensitive-data confirmation.
+      </p>
+      <div className="history-actions">
+        <label>
+          <input
+            checked={includeCapture}
+            disabled={busy}
+            onChange={(event) => setIncludeCapture(event.target.checked)}
+            type="checkbox"
+          />{" "}
+          Include raw capture (sensitive)
+        </label>
+        <button disabled={busy} onClick={() => void exportStructured()} type="button">
+          {busy
+            ? "Exporting…"
+            : includeCapture
+              ? "Export history with raw capture"
+              : "Export structured history"}
+        </button>
+        <button className="danger" disabled={busy} onClick={() => void requestDelete()} type="button">
+          Delete history
+        </button>
+      </div>
+      {result?.outcome === "ok" ? (
+        <p role="status">
+          Export completed — {result.manifest?.sensitive === true ? "Sensitive capture included" : "Raw capture excluded"}.
+        </p>
+      ) : null}
+      {result?.outcome === "confirmation_required" && result.actionId !== undefined ? (
+        <div className="history-confirmation" role="alertdialog" aria-label="Sensitive export confirmation">
+          <p>{result.confirmationMessage}</p>
+          <button
+            disabled={busy}
+            onClick={() => void confirmSensitiveExport(result.actionId as string)}
+            type="button"
+          >
+            Confirm sensitive export
+          </button>
+        </div>
+      ) : null}
+      {result?.outcome === "failed" ? <p role="alert">{result.failure?.message}</p> : null}
+      {result?.outcome === "failed" && result.failure?.code === "destination_exists" ? (
+        <button disabled={busy} onClick={() => void replaceExistingExport()} type="button">
+          Replace existing export
+        </button>
+      ) : null}
+      {deleteResult?.outcome === "confirmation_required" && deleteResult.actionId !== undefined ? (
+        <div className="history-confirmation danger-zone" role="alertdialog" aria-label="Irreversible deletion confirmation">
+          <p>{deleteResult.confirmationMessage}</p>
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={() => void confirmDelete(deleteResult.actionId as string)}
+            type="button"
+          >
+            Permanently delete history
+          </button>
+        </div>
+      ) : null}
+      {deleteResult !== undefined && deleteResult.outcome !== "confirmation_required" ? (
+        <p role={deleteResult.outcome === "completed" ? "status" : "alert"}>
+          {deleteResult.outcome === "completed" ? "Deletion completed" : "Deletion did not complete for every history store"}
+          {deleteResult.deleted === undefined
+            ? "."
+            : ` — ${deleteResult.deleted.requestLedger} requests · ${deleteResult.deleted.diagnostics} diagnostics · ${deleteResult.deleted.capture} raw captures.`}
+        </p>
+      ) : null}
+      {failed ? <p role="alert">History is temporarily unavailable.</p> : null}
+    </section>
   );
 }
 
@@ -623,6 +901,50 @@ function ModelsPage({
       {...(catalogResult === undefined ? {} : { catalogResult })}
       {...(catalogStatus === undefined ? {} : { catalogStatus })}
     />
+  );
+}
+
+/** Ticket 23: persistent audit-unavailable banner. While unacknowledged it
+ *  is urgent and carries the Acknowledge action; acknowledgment only
+ *  silences the urgent presentation — the fixed statement that the audit
+ *  guarantee is unavailable remains until demonstrated recovery removes the
+ *  projection entirely. */
+function AuditUnavailableBanner({
+  acknowledged,
+  onAcknowledge,
+}: {
+  readonly acknowledged: boolean;
+  readonly onAcknowledge: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <section
+      className={acknowledged ? "audit-banner muted" : "audit-banner"}
+      aria-live="polite"
+    >
+      <div>
+        <strong>History audit storage is unavailable</strong>
+        <p>
+          Request records, diagnostics, and capture may not be persisted. The
+          audit guarantee is unavailable until storage recovers.
+        </p>
+        {acknowledged ? (
+          <small>Acknowledged — the audit guarantee remains unavailable until recovery.</small>
+        ) : null}
+      </div>
+      {acknowledged ? null : (
+        <button
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void onAcknowledge().finally(() => setBusy(false));
+          }}
+          type="button"
+        >
+          {busy ? "Acknowledging…" : "Acknowledge"}
+        </button>
+      )}
+    </section>
   );
 }
 

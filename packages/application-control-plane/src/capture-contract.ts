@@ -112,6 +112,29 @@ export interface CaptureQuery {
   readonly requestId: string;
 }
 
+/** Ticket 23: bounded oldest-first capture range query with inclusive time
+ *  endpoints over `capturedAt` (matching the ledger/diagnostics query
+ *  convention); used by the history exporter to stream committed capture
+ *  records, never by request-detail lookups. */
+export interface CaptureRangeQuery {
+  /** Strictly greater than this row id; defaults to 0 (earliest record). */
+  readonly afterId?: number;
+  /** Inclusive capturedAt range (epoch-ms). */
+  readonly from?: number;
+  readonly to?: number;
+  /** Maximum records; defaults to 100, capped at 1_000. */
+  readonly limit?: number;
+}
+
+export interface CaptureRangeQueryResult {
+  readonly records: readonly CaptureRecord[];
+  /** True when more eligible committed records exist after the window. */
+  readonly hasMore: boolean;
+  /** Row id of the last returned record (the next paging cursor); present
+   *  when at least one record was returned. */
+  readonly lastRowId?: number;
+}
+
 export interface CaptureQueryResult {
   readonly state: CaptureState;
   /** Present only for committed capture rows (captured/partial/failed). */
@@ -164,6 +187,22 @@ export interface DeepCaptureStore extends ControlPlaneCapture {
   /** Commits the minimal failed-state marker row; the observer retries with
    *  this after a first append fault so the failed state stays observable. */
   appendFailed(draft: CaptureFailureDraft): CaptureRecord;
+  /** Ticket 23: bounded oldest-first committed-capture range query (used
+   *  only by the history export workflow). */
+  queryRange(query: CaptureRangeQuery): CaptureRangeQueryResult;
+  /** Ticket 23: deletes committed capture rows whose `capturedAt` falls in
+   *  the half-open `[fromMs, toMs)` range (both endpoints optional = all) in
+   *  one transaction. Eviction tombstones are retention facts and remain
+   *  (a deleted request stays distinguishable from no-capture). */
+  deleteRange(
+    fromMs?: number,
+    toMs?: number,
+  ): { readonly deleted: number };
+  /** Ticket 23: eligible committed-row count for the same half-open range;
+   *  matches deleteRange so previews equal actual deletions. */
+  countRange(fromMs?: number, toMs?: number): number;
+  /** The versioned schema this store commits (manifest source fact). */
+  readonly schemaVersion: number;
   attachScrub(scrub: (value: string) => string): void;
   close(): void;
 }

@@ -177,6 +177,7 @@ describe("LuckyToken CLI", () => {
     expect(result.stdout).toContain("login");
     expect(result.stdout).toContain("logout");
     expect(result.stdout).toContain("client-token");
+    expect(result.stdout).toContain("control history");
     expect(result.stderr).not.toContain("Error");
   }, 30_000);
 
@@ -220,6 +221,54 @@ describe("LuckyToken CLI", () => {
       sequence: 0,
       modelDataPlane: "running",
       provider: "configured",
+    });
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
+  }, 30_000);
+
+  it("queries permanent history through the active Control Plane", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-history-cli-"));
+    directories.push(directory);
+    const capability = "cli-history-capability-secret-0123456789012345";
+    const controlPlane = await startControlPlane({
+      endpoint: {
+        pipeName: `\\\\.\\pipe\\luckytoken-cli-history-${process.pid}`,
+        capability,
+      },
+      application: { id: "luckytoken", version: "cli-test" },
+      initialStatus: { modelDataPlane: "stopped", provider: "configured" },
+      historyCommandHandler: async (command) => {
+        if (command.command !== "query") {
+          throw new Error("unexpected history command");
+        }
+        return {
+          kind: "query",
+          result: {
+            range: command.range ?? "all",
+            counts: { requestLedger: 7, diagnostics: 5, capture: 2 },
+          },
+        };
+      },
+      pipeServerFactory: createNodePipeTransport(),
+      access: nodePipeFallbackAccess,
+    });
+    controlPlanes.push(controlPlane);
+    const descriptorPath = join(directory, "control-plane.json");
+    await writeFile(descriptorPath, JSON.stringify(controlPlane.endpoint), "utf8");
+    const child = startCli([
+      "control",
+      "history",
+      "query",
+      "--descriptor",
+      descriptorPath,
+    ]);
+    children.push(child);
+
+    const result = await captureChild(child).result;
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      range: "all",
+      counts: { requestLedger: 7, diagnostics: 5, capture: 2 },
     });
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
   }, 30_000);

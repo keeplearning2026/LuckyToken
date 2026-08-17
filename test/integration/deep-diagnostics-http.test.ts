@@ -503,6 +503,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
       initial: { [DEEP_CAPTURE_SETTING]: true },
     });
     await registry.load();
+    const recoveries: string[] = [];
     const capture = createDeepCaptureAuthority({
       store: captureStore,
       now: () => 1_786_400_000_000,
@@ -517,6 +518,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
           details: { code: failure.code },
         });
       },
+      onWriteRecovery: (fact) => recoveries.push(fact.requestId),
     });
     poisonWrites = true;
     const runtime = createCommandCodeTestRuntime({
@@ -552,6 +554,12 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
     expect(serialized).not.toContain("canary-fault-secret-112233");
     expect(serialized).not.toContain("capture write denied");
     expect(serialized).toContain("capture-write-failed");
+
+    poisonWrites = false;
+    const recoveredResponse = await runtime.handle(validRequest());
+    expect(recoveredResponse.status).toBe(200);
+    await recoveredResponse.text();
+    await expect.poll(() => recoveries).toHaveLength(1);
   });
 
   it("records partial captures for a rejected-auth request and an aborted request, and reports them through the Control Plane query", async () => {

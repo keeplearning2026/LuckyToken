@@ -88,6 +88,24 @@ import {
   decodeCaptureQueryResult,
 } from "./wire-capture.js";
 import {
+  decodeHistoryAcknowledgeResult,
+  decodeHistoryDeleteCommand,
+  decodeHistoryDeleteResult,
+  decodeHistoryExportCommand,
+  decodeHistoryExportResult,
+  decodeHistoryQueryResult,
+  decodeHistoryRange,
+  decodePersistenceProjection,
+} from "./wire-history.js";
+import type {
+  HistoryAcknowledgeResult,
+  HistoryDeleteCommand,
+  HistoryExportCommand,
+  HistoryExportResult,
+  HistoryDeleteResult,
+  HistoryQueryResult,
+} from "./history-contract.js";
+import {
   type AuthCommand,
   type AuthCommandResult,
   type AuthInfoLink,
@@ -151,6 +169,32 @@ export type ClientRequest =
     }
   | { readonly type: "capture_subscribe"; readonly requestId: string }
   | { readonly type: "capture_unsubscribe"; readonly requestId: string }
+  | {
+      readonly type: "history_query";
+      readonly requestId: string;
+      readonly range?: unknown;
+    }
+  | {
+      readonly type: "history_export_command";
+      readonly requestId: string;
+      readonly command: HistoryExportCommand;
+    }
+  | {
+      readonly type: "history_export_confirm";
+      readonly requestId: string;
+      readonly actionId: string;
+    }
+  | {
+      readonly type: "history_delete_command";
+      readonly requestId: string;
+      readonly command: HistoryDeleteCommand;
+    }
+  | {
+      readonly type: "history_delete_confirm";
+      readonly requestId: string;
+      readonly actionId: string;
+    }
+  | { readonly type: "history_acknowledge"; readonly requestId: string }
   | {
       readonly type: "runtime_command";
       readonly requestId: string;
@@ -247,6 +291,26 @@ export type ServerMessage =
       readonly type: "capture_result";
       readonly requestId: string;
       readonly result: CaptureQueryResult;
+    }
+  | {
+      readonly type: "history_query_result";
+      readonly requestId: string;
+      readonly result: HistoryQueryResult;
+    }
+  | {
+      readonly type: "history_export_result";
+      readonly requestId: string;
+      readonly result: HistoryExportResult;
+    }
+  | {
+      readonly type: "history_delete_result";
+      readonly requestId: string;
+      readonly result: HistoryDeleteResult;
+    }
+  | {
+      readonly type: "history_acknowledge_result";
+      readonly requestId: string;
+      readonly result: HistoryAcknowledgeResult;
     }
   | {
       readonly type: "settings_command_result";
@@ -2601,6 +2665,79 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
   ) {
     return { type: "valid", request: { type: value.type, requestId } };
   }
+  if (value.type === "history_query") {
+    if (value.range !== undefined) {
+      const range = decodeHistoryRange(value.range);
+      if (range === undefined) {
+        return { type: "invalid", requestId, code: "invalid_request" };
+      }
+      return {
+        type: "valid",
+        request: { type: "history_query", requestId, range },
+      };
+    }
+    return { type: "valid", request: { type: "history_query", requestId } };
+  }
+  if (value.type === "history_export_command") {
+    const command = decodeHistoryExportCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "history_export_command", requestId, command },
+    };
+  }
+  if (value.type === "history_export_confirm") {
+    if (
+      typeof value.actionId !== "string" ||
+      value.actionId.length === 0 ||
+      value.actionId.length > 128
+    ) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "history_export_confirm",
+        requestId,
+        actionId: value.actionId,
+      },
+    };
+  }
+  if (value.type === "history_delete_command") {
+    const command = decodeHistoryDeleteCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "history_delete_command", requestId, command },
+    };
+  }
+  if (value.type === "history_delete_confirm") {
+    if (
+      typeof value.actionId !== "string" ||
+      value.actionId.length === 0 ||
+      value.actionId.length > 128
+    ) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "history_delete_confirm",
+        requestId,
+        actionId: value.actionId,
+      },
+    };
+  }
+  if (value.type === "history_acknowledge") {
+    return {
+      type: "valid",
+      request: { type: "history_acknowledge", requestId },
+    };
+  }
   if (value.type === "runtime_command") {
     if (
       value.command !== "start" &&
@@ -2947,10 +3084,18 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   ) {
     return undefined;
   }
+  const persistence =
+    isRecord(value) && value.persistence !== undefined
+      ? decodePersistenceProjection(value.persistence)
+      : undefined;
+  if (isRecord(value) && value.persistence !== undefined && persistence === undefined) {
+    return undefined;
+  }
   return {
     ...safeStatus,
     sequence,
     ...(ownership === undefined ? {} : { ownership }),
+    ...(persistence === undefined ? {} : { persistence }),
   };
 }
 
@@ -3195,6 +3340,30 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "capture_result", requestId, result };
+  }
+  if (value.type === "history_query_result") {
+    const result = decodeHistoryQueryResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "history_query_result", requestId, result };
+  }
+  if (value.type === "history_export_result") {
+    const result = decodeHistoryExportResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "history_export_result", requestId, result };
+  }
+  if (value.type === "history_delete_result") {
+    const result = decodeHistoryDeleteResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "history_delete_result", requestId, result };
+  }
+  if (value.type === "history_acknowledge_result") {
+    const result = decodeHistoryAcknowledgeResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "history_acknowledge_result", requestId, result };
   }
   if (value.type === "runtime_command_result") {
     const result = decodeRuntimeCommandResult(value.result);

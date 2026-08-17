@@ -15,9 +15,10 @@ use crate::control_plane_v1::{
     AuthInteractionResponse, AuthLoginSession, AutoStartAction, CatalogCommand,
     CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
-    CredentialCommandResultWire, DiagnosticsWarningWire, ModelsCommand, ModelsCommandResultWire,
-    ModelsProjectionWire, RequestIdentityRecordWire, RequestLedgerResultWire, RequestLedgerSession,
-    RuntimeCommand, SessionFailure, SettingsCommand, StatusSnapshot, CONTROL_PLANE_VERSION,
+    CredentialCommandResultWire, DiagnosticsWarningWire, HistoryCommand, HistoryCommandResultWire,
+    ModelsCommand, ModelsCommandResultWire, ModelsProjectionWire, RequestIdentityRecordWire,
+    RequestLedgerResultWire, RequestLedgerSession, RuntimeCommand, SessionFailure, SettingsCommand,
+    StatusSnapshot, CONTROL_PLANE_VERSION,
 };
 
 use serde_json::Value;
@@ -472,6 +473,64 @@ impl ShellBridge {
         }
     }
 
+    /// Ticket 23: acknowledges the audit-unavailable state. The connector
+    /// returns the fresh status snapshot (the backend owns every
+    /// acknowledgment/recovery semantic); the renderer state is replaced so
+    /// the banner reflects the acknowledgment immediately. This is a thin
+    /// projection — no business logic in Rust.
+    pub(crate) async fn history_acknowledge(
+        &self,
+        emitter: Arc<dyn ShellStateEmitter>,
+    ) -> ShellStateDto {
+        let (application_version, _) = match self.snapshot().await {
+            ShellStateDto::Connected {
+                application_version,
+                ..
+            } => (application_version, ()),
+            current => return current,
+        };
+        match self.connector.history_acknowledge().await {
+            Ok(snapshot) => {
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Connected {
+                            revision: 0,
+                            application_version,
+                            contract_version: CONTROL_PLANE_VERSION,
+                            snapshot: Box::new(snapshot),
+                            models: None,
+                        },
+                    )
+                    .await
+            }
+            Err(failure) => {
+                self.renderer_state
+                    .replace(
+                        emitter.as_ref(),
+                        ShellStateDto::Unavailable {
+                            revision: 0,
+                            reason: unavailable_reason(failure),
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+
+    /// One-shot History query/export/delete transport. The TypeScript owner
+    /// decides all domain behavior; this bridge returns only the connector's
+    /// already allowlisted DTO.
+    pub(crate) async fn history_command(
+        &self,
+        command: HistoryCommand,
+    ) -> Result<HistoryCommandResultWire, ()> {
+        self.connector
+            .history_command(command)
+            .await
+            .map_err(|_| ())
+    }
+
     pub(crate) async fn auto_start(&self, action: AutoStartAction) -> Result<AutoStartDto, ()> {
         match self.connector.auto_start(action).await {
             Ok(result) if result.outcome == "ok" => Ok(AutoStartDto {
@@ -652,10 +711,7 @@ impl ShellBridge {
     /// Ticket 21: one-shot versioned analytics query. The query object is
     /// forwarded verbatim; the host normalizes it and the renderer strictly
     /// re-decodes the result — the native shell never interprets aggregates.
-    pub(crate) async fn analytics_query(
-        &self,
-        query: Value,
-    ) -> Result<AnalyticsResultWire, ()> {
+    pub(crate) async fn analytics_query(&self, query: Value) -> Result<AnalyticsResultWire, ()> {
         self.connector.analytics_query(query).await.map_err(|_| ())
     }
 
@@ -848,8 +904,9 @@ mod tests {
     use crate::control_plane_v1::{
         execute_auth_login_session, AuthCommand, AuthLoginFuture, AutoStartFuture,
         AutoStartResultWire, ConnectFuture, ConnectResult, ConnectionFailure,
-        ControlPlaneConnector, ControlPlaneSession, ModelDataPlaneState, ProviderState,
-        SessionFailure, StatusSnapshot,
+        ControlPlaneConnector, ControlPlaneSession, HistoryCommand, HistoryCommandFuture,
+        HistoryCommandResultWire, HistoryCountsWire, HistoryQueryResultWire, HistoryRangeWire,
+        ModelDataPlaneState, ProviderState, SessionFailure, StatusSnapshot,
     };
     use std::pin::Pin;
     use std::{
@@ -985,6 +1042,7 @@ mod tests {
             models: None,
             aliases: None,
             credentials: None,
+            persistence: None,
         }
     }
 
@@ -1063,6 +1121,7 @@ mod tests {
                 models: None,
                 aliases: None,
                 credentials: None,
+                persistence: None,
             }),
             models: None,
         };
@@ -1109,6 +1168,49 @@ mod tests {
 
     struct AutoStartRecordingConnector {
         actions: Arc<std::sync::Mutex<Vec<AutoStartAction>>>,
+    }
+
+    struct HistoryRecordingConnector {
+        commands: Arc<std::sync::Mutex<Vec<HistoryCommand>>>,
+    }
+
+    impl ControlPlaneConnector for HistoryRecordingConnector {
+        fn connect(&self) -> ConnectFuture {
+            Box::pin(async { std::future::pending().await })
+        }
+
+        fn history_command(&self, command: HistoryCommand) -> HistoryCommandFuture {
+            self.commands.lock().unwrap().push(command);
+            Box::pin(async {
+                Ok(HistoryCommandResultWire::Query(HistoryQueryResultWire {
+                    range: HistoryRangeWire::All("all".to_owned()),
+                    counts: HistoryCountsWire {
+                        request_ledger: 7,
+                        diagnostics: 5,
+                        capture: 3,
+                    },
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn history_commands_route_through_the_thin_shell_bridge() {
+        let commands = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let bridge = ShellBridge::new(Arc::new(HistoryRecordingConnector {
+            commands: commands.clone(),
+        }));
+
+        let result = bridge
+            .history_command(HistoryCommand::Query { range: None })
+            .await
+            .expect("history query must return its allowlisted DTO");
+
+        assert!(matches!(result, HistoryCommandResultWire::Query(_)));
+        assert_eq!(
+            commands.lock().unwrap().as_slice(),
+            &[HistoryCommand::Query { range: None }]
+        );
     }
 
     impl ControlPlaneConnector for AutoStartRecordingConnector {

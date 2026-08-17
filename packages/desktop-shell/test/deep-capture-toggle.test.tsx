@@ -118,6 +118,13 @@ function makeShell(onSettings: (command: SettingsCommand) => void): WindowsShell
       for (const subscriber of subscribers) subscriber(snapshot);
       return snapshot;
     },
+    acknowledgePersistence: async () => snapshot,
+    queryHistory: async () => ({ range: "all", counts: { requestLedger: 0, diagnostics: 0, capture: 0 } }),
+    executeHistoryExport: async () => ({ outcome: "failed", failure: { code: "internal", message: "unused" } }),
+    confirmHistoryExport: async () => ({ outcome: "failed", failure: { code: "internal", message: "unused" } }),
+    executeHistoryDelete: async () => ({ outcome: "failed" }),
+    confirmHistoryDelete: async () => ({ outcome: "failed" }),
+    pickHistoryExportDestination: async () => undefined,
     executeClientTokenCommand: async () => ({
       outcome: "ok",
       revision: 1,

@@ -44,6 +44,8 @@ import {
   type CapturePersistedState,
   type CaptureQuery,
   type CaptureQueryResult,
+  type CaptureRangeQuery,
+  type CaptureRangeQueryResult,
   type CaptureRecord,
   type CaptureState,
   type CaptureTimingEntry,
@@ -812,6 +814,145 @@ export function createDeepCaptureStoreFactory(
           }
           return Object.freeze({ state: "no-capture" });
         },
+        queryRange(query: CaptureRangeQuery): CaptureRangeQueryResult {
+          if (closed) throw new Error("Deep Diagnostics capture store is closed");
+          const afterId =
+            query.afterId === undefined || !Number.isSafeInteger(query.afterId) || query.afterId < 0
+              ? 0
+              : query.afterId;
+          const limit = Math.min(
+            Math.max(
+              Number.isSafeInteger(query.limit) && query.limit !== undefined
+                ? query.limit
+                : 100,
+              1,
+            ),
+            1_000,
+          );
+          if (
+            (query.from !== undefined &&
+              (!Number.isSafeInteger(query.from) || query.from < 0)) ||
+            (query.to !== undefined &&
+              (!Number.isSafeInteger(query.to) || query.to < 0)) ||
+            (query.from !== undefined &&
+              query.to !== undefined &&
+              query.from > query.to)
+          ) {
+            throw new Error("capture range query must be valid");
+          }
+          const conditions: string[] = ["id > ?"];
+          const params: Array<number> = [afterId];
+          if (query.from !== undefined) {
+            conditions.push("captured_at >= ?");
+            params.push(query.from);
+          }
+          if (query.to !== undefined) {
+            conditions.push("captured_at <= ?");
+            params.push(query.to);
+          }
+          const rows = database
+            .prepare(
+              `SELECT
+                 id, request_id AS requestId, protocol_id AS protocolId, state,
+                 accepted_at AS acceptedAt, captured_at AS capturedAt,
+                 client_http_status AS clientHttpStatus, failure,
+                 request_body AS requestBody, response_body AS responseBody,
+                 request_headers AS requestHeaders, response_headers AS responseHeaders,
+                 timing
+               FROM captures WHERE ${conditions.join(
+                 " AND ",
+               )} ORDER BY id LIMIT ?`,
+            )
+            .all(...params, limit + 1) as unknown as CaptureRow[];
+          const hasMore = rows.length > limit;
+          const visible = rows.slice(0, limit);
+          return Object.freeze({
+            records: Object.freeze(visible.map(rowToRecord)),
+            hasMore,
+            ...(visible.length === 0
+              ? {}
+              : { lastRowId: (visible[visible.length - 1] as CaptureRow).id }),
+          });
+        },
+        deleteRange(
+          fromMs?: number,
+          toMs?: number,
+        ): { readonly deleted: number } {
+          if (closed) throw new Error("Deep Diagnostics capture store is closed");
+          if (
+            (fromMs !== undefined &&
+              (!Number.isSafeInteger(fromMs) || fromMs < 0)) ||
+            (toMs !== undefined &&
+              (!Number.isSafeInteger(toMs) || toMs < 0)) ||
+            (fromMs !== undefined &&
+              toMs !== undefined &&
+              fromMs > toMs)
+          ) {
+            throw new Error(
+              "capture history range must be valid (fromMs <= toMs)",
+            );
+          }
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("captured_at >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("captured_at < ?");
+            params.push(toMs);
+          }
+          // Capture rows only; eviction tombstones and `meta` stay (a
+          // deleted request must stay distinguishable from no-capture).
+          database.exec("BEGIN IMMEDIATE");
+          try {
+            const sql =
+              conditions.length === 0
+                ? "DELETE FROM captures"
+                : `DELETE FROM captures WHERE ${conditions.join(" AND ")}`;
+            const result = database.prepare(sql).run(...params);
+            database.exec("COMMIT");
+            return Object.freeze({ deleted: Number(result.changes) });
+          } catch (error) {
+            database.exec("ROLLBACK");
+            throw error;
+          }
+        },
+        countRange(fromMs?: number, toMs?: number): number {
+          if (closed) throw new Error("Deep Diagnostics capture store is closed");
+          if (
+            (fromMs !== undefined &&
+              (!Number.isSafeInteger(fromMs) || fromMs < 0)) ||
+            (toMs !== undefined &&
+              (!Number.isSafeInteger(toMs) || toMs < 0)) ||
+            (fromMs !== undefined &&
+              toMs !== undefined &&
+              fromMs > toMs)
+          ) {
+            throw new Error(
+              "capture history range must be valid (fromMs <= toMs)",
+            );
+          }
+          const conditions: string[] = [];
+          const params: Array<number> = [];
+          if (fromMs !== undefined) {
+            conditions.push("captured_at >= ?");
+            params.push(fromMs);
+          }
+          if (toMs !== undefined) {
+            conditions.push("captured_at < ?");
+            params.push(toMs);
+          }
+          const sql =
+            conditions.length === 0
+              ? "SELECT COUNT(*) AS count FROM captures"
+              : `SELECT COUNT(*) AS count FROM captures WHERE ${conditions.join(" AND ")}`;
+          const row = database.prepare(sql).get(...params) as {
+            count: number;
+          };
+          return Number(row.count);
+        },
+        schemaVersion: SCHEMA_VERSION,
         close(): void {
           if (closed) return;
           closed = true;

@@ -57,10 +57,33 @@ export function decodeDiagnosticQuery(
         ? (value.limit as number)
         : undefined;
   if (limit === undefined) return undefined;
+  // Ticket 23: inclusive time-range endpoints; both must be valid when
+  // present and from must not exceed to.
+  const from =
+    value.from === undefined
+      ? undefined
+      : Number.isSafeInteger(value.from) && (value.from as number) >= 0
+        ? (value.from as number)
+        : undefined;
+  const to =
+    value.to === undefined
+      ? undefined
+      : Number.isSafeInteger(value.to) && (value.to as number) >= 0
+        ? (value.to as number)
+        : undefined;
+  if (
+    (value.from !== undefined && from === undefined) ||
+    (value.to !== undefined && to === undefined) ||
+    (from !== undefined && to !== undefined && from > to)
+  ) {
+    return undefined;
+  }
   return {
     ...(minimumLevel === undefined ? {} : { minimumLevel }),
     ...(afterId === 0 ? {} : { afterId }),
     ...(limit === 100 ? {} : { limit }),
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
   };
 }
 

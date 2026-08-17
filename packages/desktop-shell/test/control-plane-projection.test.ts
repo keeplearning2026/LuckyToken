@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { PersistenceProjection } from "@luckytoken/application-control-plane/control-plane";
+
 import {
   projectControlPlaneState,
   type ControlPlaneBridgePayload,
@@ -187,5 +189,75 @@ describe("Control Plane renderer projection public seam", () => {
       },
     });
     expect(JSON.stringify(projected)).not.toContain("raw renderer secret");
+  });
+});
+
+describe("Audit-unavailable persistence projection (Ticket 23)", () => {
+  function connected(persistence: PersistenceProjection | undefined) {
+    return projectControlPlaneState({
+      revision: 1,
+      connection: "connected",
+      applicationVersion: "0.0.0-test",
+      contractVersion: 1,
+      snapshot: {
+        sequence: 1,
+        modelDataPlane: "running",
+        provider: "configured",
+        ...(persistence === undefined ? {} : { persistence }),
+      },
+    });
+  }
+
+  it("projects the audit-unavailable state with authorities until acknowledged or recovered", () => {
+    const projected = connected({
+      auditUnavailable: true,
+      acknowledged: false,
+      authorities: [
+        { authority: "requestLedger", since: 1_700_000_000_000 },
+        { authority: "capture", since: 1_700_000_001_000 },
+      ],
+    });
+    expect(projected.kind).toBe("connected");
+    if (projected.kind !== "connected") return;
+    expect(projected.persistence).toEqual({
+      auditUnavailable: true,
+      acknowledged: false,
+      authorities: [
+        { authority: "requestLedger", since: 1_700_000_000_000 },
+        { authority: "capture", since: 1_700_000_001_000 },
+      ],
+    });
+    // Acknowledged: the projection stays (it never claims recovery).
+    const acknowledged = connected({
+      auditUnavailable: true,
+      acknowledged: true,
+      authorities: [{ authority: "diagnostics", since: 1 }],
+    });
+    if (acknowledged.kind !== "connected") return;
+    expect(acknowledged.persistence?.acknowledged).toBe(true);
+    expect(acknowledged.persistence?.auditUnavailable).toBe(true);
+    // Healthy snapshots carry no projection at all.
+    const healthy = connected(undefined);
+    if (healthy.kind !== "connected") return;
+    expect(healthy.persistence).toBeUndefined();
+  });
+
+  it("drops a malformed persistence projection instead of projecting a lie", () => {
+    // auditUnavailable false with authorities: not a real degraded state.
+    const malformed = connected({
+      auditUnavailable: false,
+      acknowledged: false,
+      authorities: [{ authority: "requestLedger", since: 1 }],
+    } as unknown as PersistenceProjection);
+    if (malformed.kind !== "connected") return;
+    expect(malformed.persistence).toBeUndefined();
+    // Unknown authority ids are rejected.
+    const unknownAuthority = connected({
+      auditUnavailable: true,
+      acknowledged: false,
+      authorities: [{ authority: "backup", since: 1 }],
+    } as unknown as PersistenceProjection);
+    if (unknownAuthority.kind !== "connected") return;
+    expect(unknownAuthority.persistence).toBeUndefined();
   });
 });

@@ -12,6 +12,12 @@ import type {
   ClientTokenCommandResult,
   CredentialCommand,
   CredentialCommandResult,
+  HistoryDeleteCommand,
+  HistoryDeleteResult,
+  HistoryExportCommand,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
   ModelsCommand,
   RequestIdentitiesQueryResult,
   RequestLedgerEvent,
@@ -51,6 +57,16 @@ export interface DesktopShellRuntime {
   ): () => void;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+  /** Ticket 23: acknowledges the audit-unavailable state; returns the fresh
+   *  projected state so the banner updates immediately. Acknowledgment only
+   *  silences the urgent presentation; it never claims storage recovered. */
+  acknowledgePersistence(): Promise<ControlPlaneState>;
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
+  executeHistoryExport(command: HistoryExportCommand): Promise<HistoryExportResult>;
+  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
+  pickHistoryExportDestination(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
@@ -120,6 +136,13 @@ export interface WindowsShellHost {
   executeSettingsCommand(
     command: SettingsCommand,
   ): Promise<DesktopShellSnapshot>;
+  acknowledgePersistence(): Promise<DesktopShellSnapshot>;
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
+  executeHistoryExport(command: HistoryExportCommand): Promise<HistoryExportResult>;
+  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
+  pickHistoryExportDestination(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<DesktopShellSnapshot>;
@@ -274,6 +297,57 @@ export function createWindowsShellHost(
         emit();
       }
       return current;
+    },
+    async acknowledgePersistence() {
+      if (current.lifecycle !== "open") {
+        throw new Error("Desktop shell is not open");
+      }
+      const result = await runtime.acknowledgePersistence();
+      if (
+        current.lifecycle === "open" &&
+        result.revision > current.connection.revision
+      ) {
+        connection = result;
+        current = Object.freeze({ ...current, connection });
+        emit();
+      }
+      return current;
+    },
+    queryHistory(range) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.queryHistory(range);
+    },
+    executeHistoryExport(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeHistoryExport(command);
+    },
+    confirmHistoryExport(actionId) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.confirmHistoryExport(actionId);
+    },
+    executeHistoryDelete(command) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.executeHistoryDelete(command);
+    },
+    confirmHistoryDelete(actionId) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.confirmHistoryDelete(actionId);
+    },
+    pickHistoryExportDestination() {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.pickHistoryExportDestination();
     },
     getAutoStartStatus() {
       return runtime.getAutoStartStatus();

@@ -13,6 +13,12 @@ import type {
   ClientTokenCommandResult,
   CredentialCommand,
   CredentialCommandResult,
+  HistoryDeleteCommand,
+  HistoryDeleteResult,
+  HistoryExportCommand,
+  HistoryExportResult,
+  HistoryQueryResult,
+  HistoryRange,
   MaskedClientTokenScope,
   ModelsCommand,
   RegisteredSetting,
@@ -31,6 +37,9 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 import {
   decodeAnalyticsResult,
+  decodeHistoryDeleteResult,
+  decodeHistoryExportResult,
+  decodeHistoryQueryResult,
   decodeRequestLedgerRecord,
   decodeRequestLedgerResult,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -59,6 +68,13 @@ export type ShellCommand =
   | "shell_settings_query"
   | "shell_settings_set"
   | "shell_settings_confirm"
+  | "shell_history_acknowledge"
+  | "shell_history_query"
+  | "shell_history_export"
+  | "shell_history_export_confirm"
+  | "shell_history_delete"
+  | "shell_history_delete_confirm"
+  | "shell_pick_history_export_destination"
   | "shell_auto_start_status"
   | "shell_auto_start_enable"
   | "shell_auto_start_disable"
@@ -131,6 +147,15 @@ export interface TauriDesktopRuntime {
   retryControlPlane(): Promise<ControlPlaneState>;
   executeRuntimeCommand(command: RuntimeCommand): Promise<ControlPlaneState>;
   executeSettingsCommand(command: SettingsCommand): Promise<ControlPlaneState>;
+  /** Ticket 23: acknowledges the audit-unavailable state through the native
+   *  one-shot history session; returns the fresh projected state. */
+  acknowledgePersistence(): Promise<ControlPlaneState>;
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
+  executeHistoryExport(command: HistoryExportCommand): Promise<HistoryExportResult>;
+  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
+  pickHistoryExportDestination(): Promise<string | undefined>;
   getAutoStartStatus(): Promise<AutoStartProjection>;
   setAutoStartEnabled(enabled: boolean): Promise<AutoStartProjection>;
   executeModelsCommand(command: ModelsCommand): Promise<ControlPlaneState>;
@@ -723,6 +748,62 @@ export function createTauriDesktopRuntime(
             ? "shell_settings_set"
             : "shell_settings_confirm",
       ),
+    acknowledgePersistence: () => invokeState("shell_history_acknowledge"),
+    async queryHistory(range) {
+      const result = decodeHistoryQueryResult(
+        await bridge.invoke("shell_history_query", {
+          ...(range === undefined ? {} : { range }),
+        }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid history result");
+      }
+      return result;
+    },
+    async executeHistoryExport(command) {
+      const result = decodeHistoryExportResult(
+        await bridge.invoke("shell_history_export", { command }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid history export result");
+      }
+      return result;
+    },
+    async confirmHistoryExport(actionId) {
+      const result = decodeHistoryExportResult(
+        await bridge.invoke("shell_history_export_confirm", { actionId }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid history export result");
+      }
+      return result;
+    },
+    async executeHistoryDelete(command) {
+      const result = decodeHistoryDeleteResult(
+        await bridge.invoke("shell_history_delete", { command }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid history deletion result");
+      }
+      return result;
+    },
+    async confirmHistoryDelete(actionId) {
+      const result = decodeHistoryDeleteResult(
+        await bridge.invoke("shell_history_delete_confirm", { actionId }),
+      );
+      if (result === undefined) {
+        throw new Error("LuckyToken returned an invalid history deletion result");
+      }
+      return result;
+    },
+    async pickHistoryExportDestination() {
+      const raw = await bridge.invoke("shell_pick_history_export_destination");
+      if (raw === null || raw === undefined) return undefined;
+      if (typeof raw !== "string" || raw.length === 0) {
+        throw new Error("LuckyToken returned an invalid history export path");
+      }
+      return raw;
+    },
     getAutoStartStatus: () => invokeAutoStart("shell_auto_start_status"),
     setAutoStartEnabled: (enabled) =>
       invokeAutoStart(

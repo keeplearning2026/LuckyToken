@@ -275,6 +275,18 @@ export interface RequestLedgerStore extends RequestLedger {
    *  Complete terminal usage. */
   analyze(query: AnalyticsQuery): AnalyticsQueryResult;
   close(): void;
+  /** Ticket 23: deletes committed ledger rows whose `acceptedAt` falls in
+   *  the half-open `[fromMs, toMs)` range (both endpoints optional = all) in
+   *  one transaction. Never touches `meta` or any other table. */
+  deleteRange(
+    fromMs?: number,
+    toMs?: number,
+  ): { readonly deleted: number };
+  /** Ticket 23: eligible committed-row count for the same half-open range;
+   *  matches deleteRange so previews equal actual deletions. */
+  countRange(fromMs?: number, toMs?: number): number;
+  /** The versioned schema this store commits (manifest source fact). */
+  readonly schemaVersion: number;
 }
 
 export interface RequestLedgerStoreFactory {

@@ -56,6 +56,7 @@ import {
   type ApplicationStatus,
   type ControlPlaneClient,
   type ControlPlaneEndpoint,
+  type HistoryRange,
   type ModelsCommand,
   type RuntimeCommand,
   type SettingsCommand,
@@ -78,6 +79,14 @@ import {
   createDeepCaptureStoreFactory,
 } from "./deep-diagnostics/index.js";
 import type { DeepCaptureStore } from "./deep-diagnostics/index.js";
+import { createHistoryAuthority } from "./history/index.js";
+import {
+  createPersistenceDegradationAuthority,
+  createUnavailableDeepCaptureStore,
+  createUnavailableDiagnosticsStore,
+  createUnavailableRequestLedgerStore,
+  observeDiagnosticsStore,
+} from "./persistence-degradation/index.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
@@ -108,6 +117,7 @@ Usage:
   luckytoken control auth <query|login> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken control aliases <query|write> [<revision> <file>] --descriptor <path>
+  luckytoken control history <query|export|export-confirm|delete|delete-confirm|acknowledge> ... --descriptor <path>
   luckytoken --help
 
 Commands:
@@ -124,6 +134,7 @@ Commands:
   control auth query|login  Run Provider-owned account/subscription or API-key login
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
   control aliases query|write  Read the authoritative alias registry or replace the user mapping record
+  control history query|export|export-confirm|delete|delete-confirm|acknowledge  Export, delete, or acknowledge permanent history state
 
 Options:
   --config <path>  Strict LuckyToken JSON configuration
@@ -166,7 +177,18 @@ control aliases commands:
                             (revision, file facts, effective registry)
   write <rev> <file>        Validate and atomically replace the user mapping
                             record with the file's content (compare-and-swap
-                            on <rev>; the file must be { "aliases": {...} })
+                             on <rev>; the file must be { "aliases": {...} })
+
+control history commands:
+  query [--all|--from <ms>|--to <ms>]
+                            Count eligible request, diagnostic, and capture records
+  export <file> (--all|--from <ms>|--to <ms>) [--include-capture] [--overwrite]
+                            Write one versioned export; capture is excluded by default
+  export-confirm <actionId> Confirm a pending sensitive-capture export
+  delete (--all|--from <ms>|--to <ms>)
+                            Preview an irreversible history deletion
+  delete-confirm <actionId> Confirm a pending irreversible deletion
+  acknowledge               Silence persistence urgency without claiming recovery
 `;
 
 type ParsedCliArguments =
@@ -521,6 +543,14 @@ async function runServe(
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
   let requestLedgerStore: RequestLedgerStore | undefined;
   let deepCaptureStore: DeepCaptureStore | undefined;
+  // Ticket 23: the last published base status, published again on any
+  // persistence transition so the audit-unavailable projection rides on a
+  // fresh snapshot. Hoisted above the stores (a boot-time failure may fire
+  // the transition before the Data Plane's own status exists).
+  let lastPublishedStatus: ApplicationStatus = Object.freeze({
+    modelDataPlane: "stopped",
+    provider: "unconfigured",
+  });
   try {
     try {
       descriptor = await publishControlPlaneDescriptor({
@@ -537,46 +567,87 @@ async function runServe(
       }
       throw error;
     }
-    diagnosticsStore = await createRuntimeDiagnosticsStoreFactory({
-      configuration: bindRuntimeDiagnosticsConfiguration(
-        config.runtimeDiagnostics,
-      ),
-    }).open();
+    // Ticket 23: the persistence degradation authority observes the three
+    // persistent authorities. A store that cannot open at serve startup is
+    // replaced by its fail-open fallback and reported degraded from boot;
+    // serve continues, and the audit-unavailable state rides on every
+    // published snapshot until acknowledged or demonstrated recovery.
+    let diagnosticsOpenFailed = false;
+    try {
+      diagnosticsStore = await createRuntimeDiagnosticsStoreFactory({
+        configuration: bindRuntimeDiagnosticsConfiguration(
+          config.runtimeDiagnostics,
+        ),
+      }).open();
+    } catch {
+      diagnosticsStore = undefined;
+      diagnosticsOpenFailed = true;
+    }
+    const persistenceAuthority = createPersistenceDegradationAuthority({
+      // The real diagnostics store (when open): Critical copies for
+      // ledger/capture failures land there; a diagnostics failure is never
+      // appended to itself (no recursive re-entry into a failed store).
+      ...(diagnosticsStore === undefined ? {} : { diagnosticsStore }),
+      onStateChange: () => {
+        // Republish the full latest base status so the fresh persistence
+        // projection reaches every status subscriber.
+        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+      },
+    });
+    if (diagnosticsOpenFailed) {
+      persistenceAuthority.reportFailure("diagnostics");
+      diagnosticsStore = createUnavailableDiagnosticsStore(persistenceAuthority);
+    } else {
+      diagnosticsStore = observeDiagnosticsStore(
+        diagnosticsStore as RuntimeDiagnosticsStore,
+        persistenceAuthority,
+      );
+    }
     const ownedDiagnosticsStore = diagnosticsStore;
     // Ticket 18: the permanent Request Ledger opens once at serve level and
     // survives Data Plane restarts (recovery on this open is idempotent).
     // The composition attaches the credential-owner scrubber when the Data
     // Plane runs; pattern redaction is the baseline until then. Persistence
-    // faults are reported through the same narrow sanitized diagnostics
-    // seam as the composition-created store: one Critical per request, with
-    // the message hash only — never fault text or credentials.
-    requestLedgerStore = await createRequestLedgerStoreFactory({
-      configuration: bindRequestLedgerConfiguration(config.requestLedger),
-      onPersistenceFailure: (failure) => {
-        try {
-          ownedDiagnosticsStore.append({
-            level: "critical",
-            text: "Request Ledger persistence failure",
+    // faults flow through the degradation authority: one fixed-text
+    // Critical (stderr + bounded memory + the persistent diagnostics copy)
+    // per request, with the message hash only — never fault text or
+    // credentials — and recovery is demonstrated by the first successful
+    // commit after a fault.
+    try {
+      requestLedgerStore = await createRequestLedgerStoreFactory({
+        configuration: bindRequestLedgerConfiguration(config.requestLedger),
+        onPersistenceFailure: (failure) => {
+          persistenceAuthority.reportFailure("requestLedger", {
             ...(failure.requestId.length === 0
               ? {}
               : { requestId: failure.requestId }),
-            details: { messageHash: failure.messageHash },
+            messageHash: failure.messageHash,
           });
-        } catch {
-          // The diagnostics seam must never affect the request path.
-        }
-      },
-    }).open();
+        },
+        onPersistenceRecovery: (fact) => {
+          void fact;
+          persistenceAuthority.reportRecovery("requestLedger");
+        },
+      }).open();
+    } catch {
+      requestLedgerStore = createUnavailableRequestLedgerStore();
+      persistenceAuthority.reportFailure("requestLedger");
+    }
     const ownedLedgerStore = requestLedgerStore;
     // Ticket 22: the bounded capture store opens once at serve level and
     // survives Data Plane restarts; it stays fail-closed (no appends)
     // until the running Data Plane composition attaches the credential-
     // owner scrubber, so raw bodies never reach disk pattern-only.
-    deepCaptureStore = await createDeepCaptureStoreFactory({
-      configuration: bindDeepDiagnosticsConfiguration(
-        config.deepDiagnostics,
-      ),
-    }).open();
+    try {
+      deepCaptureStore = await createDeepCaptureStoreFactory({
+        configuration: bindDeepDiagnosticsConfiguration(
+          config.deepDiagnostics,
+        ),
+      }).open();
+    } catch {
+      deepCaptureStore = createUnavailableDeepCaptureStore();
+      persistenceAuthority.reportFailure("capture");
+    }
     const ownedCaptureStore = deepCaptureStore;
     const controlPipe = await createProductionControlPipe();
     // The canonical LuckyToken-owned models.json: defaults to `models.json`
@@ -704,7 +775,38 @@ async function runServe(
         };
       },
     });
-    let lastPublishedStatus: ApplicationStatus = Object.freeze({
+    // Ticket 23: the one versioned export/delete/acknowledge authority over
+    // the three persistent stores. Owned roots are the LuckyToken-owned
+    // directory trees an export must never write into (config dir, Pi data
+    // dir, models dir, and the three store directories).
+    const historyAuthority = createHistoryAuthority({
+      sources: {
+        ledger: requestLedgerStore as RequestLedgerStore,
+        diagnostics: diagnosticsStore as RuntimeDiagnosticsStore,
+        capture: deepCaptureStore as DeepCaptureStore,
+      },
+      persistence: persistenceAuthority,
+      applicationVersion: "0.0.0",
+      ownedRoots: [
+        resolve(dirname(configPath)),
+        resolve(config.pi.directory),
+        resolve(dirname(config.pi.modelsJson)),
+        resolve(
+          bindRuntimeDiagnosticsConfiguration(config.runtimeDiagnostics)
+            .directory,
+        ),
+        resolve(bindRequestLedgerConfiguration(config.requestLedger).directory),
+        resolve(
+          bindDeepDiagnosticsConfiguration(config.deepDiagnostics).directory,
+        ),
+      ],
+      // A failing source during export/delete becomes visible as degraded
+      // (fixed Critical + projection), never as raw fault text.
+      onSourceFailure: (authority, fact) => {
+        persistenceAuthority.reportFailure(authority, fact);
+      },
+    });
+    lastPublishedStatus = Object.freeze({
       modelDataPlane: "stopped",
       provider,
     });
@@ -734,6 +836,22 @@ async function runServe(
             // for the provider that just logged in (Ticket 11).
             onProviderLogin: (providerId) =>
               catalogController.onProviderLogin(providerId),
+            // Ticket 23: capture write faults flow through the degradation
+            // authority (fixed Critical fallback + state machine); recovery
+            // is demonstrated by the first successful capture commit after
+            // a reported double-write failure.
+            onCapturePersistenceFailure: (failure) => {
+              persistenceAuthority.reportFailure("capture", {
+                ...(failure.requestId.length === 0
+                  ? {}
+                  : { requestId: failure.requestId }),
+                code: failure.code,
+              });
+            },
+            onCapturePersistenceRecovery: (fact) => {
+              void fact;
+              persistenceAuthority.reportRecovery("capture");
+            },
           });
           tokenAuthorities = composition.clientTokenAuthorities;
           credentialAuthority = composition.credentialAuthority;
@@ -870,6 +988,12 @@ async function runServe(
       // Ticket 22: the Control Plane serves bounded capture queries and
       // opt-in typed capture-state events from the serve-level store.
       capture: deepCaptureStore,
+      // Ticket 23: versioned history export/delete/acknowledge commands
+      // against the one history authority; the audit-unavailable projection
+      // rides on every published snapshot until acknowledged or recovered.
+      historyCommandHandler: (command, signal) =>
+        historyAuthority.handle(command, signal),
+      persistenceProjection: () => persistenceAuthority.projection(),
       requestIdentitiesHandler: () =>
         Promise.resolve({
           records: requestIdentities?.list() ?? Object.freeze([]),
@@ -1445,6 +1569,171 @@ async function runControlAliasesCommand(args: readonly string[]): Promise<void> 
   }
 }
 
+function parseHistoryCommand(args: readonly string[]): {
+  readonly descriptorPath: string;
+  readonly action: "query" | "export" | "export-confirm" | "delete" | "delete-confirm" | "acknowledge";
+  readonly range?: HistoryRange;
+  readonly destinationPath?: string;
+  readonly includeCapture?: boolean;
+  readonly overwrite?: boolean;
+  readonly actionId?: string;
+} {
+  let descriptorPath: string | undefined;
+  let rangeFrom: number | undefined;
+  let rangeTo: number | undefined;
+  let all = false;
+  let includeCapture = false;
+  let overwrite = false;
+  const positional: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--descriptor") {
+      if (descriptorPath !== undefined) {
+        throw new Error("--descriptor may be provided once");
+      }
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--descriptor requires a path");
+      }
+      descriptorPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--from" || argument === "--to") {
+      const value = args[index + 1];
+      if (
+        value === undefined ||
+        value.startsWith("-") ||
+        !/^[0-9]+$/u.test(value)
+      ) {
+        throw new Error(`${argument} requires a non-negative epoch-ms integer`);
+      }
+      const parsed = Number.parseInt(value, 10);
+      if (argument === "--from") rangeFrom = parsed;
+      else rangeTo = parsed;
+      index += 1;
+      continue;
+    }
+    if (argument === "--all") {
+      all = true;
+      continue;
+    }
+    if (argument === "--include-capture") {
+      includeCapture = true;
+      continue;
+    }
+    if (argument === "--overwrite") {
+      overwrite = true;
+      continue;
+    }
+    if (argument.startsWith("-"))
+      throw new Error(`Unknown option: ${argument}`);
+    positional.push(argument);
+  }
+  if (descriptorPath === undefined)
+    throw new Error("--descriptor <path> is required");
+  if (rangeFrom !== undefined && rangeTo !== undefined && rangeFrom > rangeTo) {
+    throw new Error("--from must not exceed --to");
+  }
+  const range: HistoryRange =
+    all || (rangeFrom === undefined && rangeTo === undefined)
+      ? "all"
+      : Object.freeze({
+          ...(rangeFrom === undefined ? {} : { fromMs: rangeFrom }),
+          ...(rangeTo === undefined ? {} : { toMs: rangeTo }),
+        });
+  const action = positional[0];
+  if (action === "query") {
+    if (positional.length > 1) throw new Error("history query takes no arguments");
+    return { descriptorPath, action: "query", range };
+  }
+  if (action === "export") {
+    const destinationPath = positional[1];
+    if (
+      destinationPath === undefined ||
+      positional.length > 2 ||
+      !all && rangeFrom === undefined && rangeTo === undefined
+    ) {
+      throw new Error(
+        "history export requires a destination path and an explicit range (--all or --from/--to)",
+      );
+    }
+    return {
+      descriptorPath,
+      action: "export",
+      range,
+      destinationPath: resolve(destinationPath),
+      includeCapture,
+      overwrite,
+    };
+  }
+  if (action === "export-confirm") {
+    const actionId = positional[1];
+    if (actionId === undefined || positional.length > 2) {
+      throw new Error("history export-confirm requires the pending action id");
+    }
+    return { descriptorPath, action: "export-confirm", actionId };
+  }
+  if (action === "delete") {
+    if (positional.length > 1 || (!all && rangeFrom === undefined && rangeTo === undefined)) {
+      throw new Error(
+        "history delete requires an explicit range (--all or --from/--to)",
+      );
+    }
+    return { descriptorPath, action: "delete", range };
+  }
+  if (action === "delete-confirm") {
+    const actionId = positional[1];
+    if (actionId === undefined || positional.length > 2) {
+      throw new Error("history delete-confirm requires the pending action id");
+    }
+    return { descriptorPath, action: "delete-confirm", actionId };
+  }
+  if (action === "acknowledge") {
+    if (positional.length > 1) {
+      throw new Error("history acknowledge takes no arguments");
+    }
+    return { descriptorPath, action: "acknowledge" };
+  }
+  throw new Error(`Unknown history command: ${action ?? ""}`);
+}
+
+async function runControlHistoryCommand(args: readonly string[]): Promise<void> {
+  const parsed = parseHistoryCommand(args);
+  const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    await assertCompatibleControlPlane(client);
+    let result: unknown;
+    if (parsed.action === "query") {
+      result = await client.queryHistory(parsed.range);
+    } else if (parsed.action === "export") {
+      result = await client.executeHistoryExport({
+        range: parsed.range as HistoryRange,
+        capture: parsed.includeCapture === true ? "included" : "excluded",
+        destinationPath: parsed.destinationPath as string,
+        overwrite: parsed.overwrite === true,
+      });
+    } else if (parsed.action === "export-confirm") {
+      result = await client.confirmHistoryExport(parsed.actionId as string);
+    } else if (parsed.action === "delete") {
+      result = await client.executeHistoryDelete({
+        range: parsed.range as HistoryRange,
+      });
+    } else if (parsed.action === "delete-confirm") {
+      result = await client.confirmHistoryDelete(parsed.actionId as string);
+    } else {
+      result = await client.acknowledgePersistence();
+    }
+    stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    await client.close();
+  }
+}
+
 export async function runLuckyTokenCli(
   args: readonly string[],
 ): Promise<void> {
@@ -1452,6 +1741,10 @@ export async function runLuckyTokenCli(
     const command = args[1];
     if (command === "settings") {
       await runControlSettingsCommand(args.slice(2));
+      return;
+    }
+    if (command === "history") {
+      await runControlHistoryCommand(args.slice(2));
       return;
     }
     if (command === "models") {

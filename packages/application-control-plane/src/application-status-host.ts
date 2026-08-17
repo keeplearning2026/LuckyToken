@@ -37,6 +37,8 @@ import {
   type CredentialCommandHandler,
   type CredentialCommandResult,
   type CredentialProjection,
+  type HistoryCommandHandler,
+  type PersistenceProjection,
 } from "./contracts.js";
 import {
   type ControlPlaneDiagnostics,
@@ -81,6 +83,8 @@ import {
   isRecord,
   type ControlPlaneErrorCode,
 } from "./wire.js";
+import { decodeHistoryCommandResult } from "./wire-history.js";
+import type { HistoryCommand, HistoryCommandResult, HistoryRange } from "./history-contract.js";
 
 export interface StartControlPlaneOptions {
   readonly endpoint: ControlPlaneEndpoint;
@@ -178,6 +182,19 @@ export interface StartControlPlaneOptions {
    * handler is served as `unknown_command` (legacy clients are unaffected).
    */
   readonly analyticsHandler?: AnalyticsQueryHandler;
+  /**
+   * Explicit history command handler (Ticket 23): serves the versioned
+   * history query/export/delete/acknowledge commands against the live
+   * authorities. An absent handler is served as `unknown_command` (legacy
+   * clients are unaffected). The per-command signal aborts when the
+   * requesting connection closes, so an in-flight export never publishes
+   * after its client is gone.
+   */
+  readonly historyCommandHandler?: HistoryCommandHandler;
+  /** Live audit-unavailable persistence projection merged into every
+   *  published snapshot (Ticket 23); present only while at least one
+   *  authority is unavailable. */
+  readonly persistenceProjection?: () => PersistenceProjection | undefined;
 }
 
 interface ConnectionState {
@@ -190,6 +207,9 @@ interface ConnectionState {
   /** One in-flight Provider-auth login flow on this connection (Ticket
    *  13); interaction events/prompt responses are routed by its id. */
   authFlow: AuthFlowState | undefined;
+  /** Aborts in-flight long-running history commands (Ticket 23) when this
+   *  connection closes or is torn down. */
+  historyAbort: AbortController;
 }
 
 /** One in-flight Provider-auth login flow (Ticket 13). */
@@ -242,6 +262,7 @@ export async function startApplicationStatusHost(
     const credentialProjection = options.credentialProjection?.();
     const catalogProjection = options.catalogProjection?.();
     const aliasesProjection = options.aliasesProjection?.();
+    const persistenceProjection = options.persistenceProjection?.();
     return {
       ...status,
       ...(options.ownership === undefined
@@ -265,6 +286,9 @@ export async function startApplicationStatusHost(
       ...(aliasesProjection === undefined
         ? {}
         : { aliases: aliasesProjection }),
+      ...(persistenceProjection === undefined
+        ? {}
+        : { persistence: persistenceProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
@@ -774,6 +798,94 @@ export async function startApplicationStatusHost(
             type: "unsubscribed",
             requestId: request.requestId,
           });
+        } else if (
+          request.type === "history_query" ||
+          request.type === "history_export_command" ||
+          request.type === "history_export_confirm" ||
+          request.type === "history_delete_command" ||
+          request.type === "history_delete_confirm" ||
+          request.type === "history_acknowledge"
+        ) {
+          if (options.historyCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          // The strict wire decoder already validated the frame; the decoded
+          // request is reassembled into the versioned HistoryCommand.
+          let command: HistoryCommand;
+          if (request.type === "history_query") {
+            const range = request.range as HistoryRange | undefined;
+            command =
+              range === undefined
+                ? { command: "query" as const }
+                : { command: "query" as const, range };
+          } else if (request.type === "history_export_command") {
+            command = { command: "export" as const, ...request.command };
+          } else if (request.type === "history_export_confirm") {
+            command = {
+              command: "export_confirm" as const,
+              actionId: request.actionId,
+            };
+          } else if (request.type === "history_delete_command") {
+            command = { command: "delete" as const, ...request.command };
+          } else if (request.type === "history_delete_confirm") {
+            command = {
+              command: "delete_confirm" as const,
+              actionId: request.actionId,
+            };
+          } else {
+            command = { command: "acknowledge" as const };
+          }
+          let handled: HistoryCommandResult | undefined;
+          try {
+            handled = await options.historyCommandHandler(
+              command,
+              state.historyAbort.signal,
+            );
+          } catch {
+            handled = undefined;
+          }
+          const decoded =
+            handled === undefined
+              ? undefined
+              : decodeHistoryCommandResult(command.command, handled.result);
+          if (decoded === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          if (decoded.kind === "query") {
+            await writeFrame(state.connection, {
+              type: "history_query_result",
+              requestId: request.requestId,
+              result: decoded.result,
+            });
+          } else if (decoded.kind === "export") {
+            await writeFrame(state.connection, {
+              type: "history_export_result",
+              requestId: request.requestId,
+              result: decoded.result,
+            });
+          } else if (decoded.kind === "delete") {
+            await writeFrame(state.connection, {
+              type: "history_delete_result",
+              requestId: request.requestId,
+              result: decoded.result,
+            });
+          } else {
+            await writeFrame(state.connection, {
+              type: "history_acknowledge_result",
+              requestId: request.requestId,
+              result: decoded.result,
+            });
+          }
         } else if (request.type === "runtime_command") {
           let execution: RuntimeCommandExecution;
           if (options.runtimeCommandHandler === undefined) {
@@ -1293,6 +1405,10 @@ export async function startApplicationStatusHost(
       }
     } finally {
       states.delete(state);
+      // A closed/lost connection aborts any in-flight history command (e.g.
+      // a long export), so it never publishes an artifact its requester can
+      // no longer receive.
+      state.historyAbort.abort();
       if (state.authFlow !== undefined) {
         abortAuthFlow(
           state.authFlow,
@@ -1324,6 +1440,7 @@ export async function startApplicationStatusHost(
         ledgerSubscribed: false,
         captureSubscribed: false,
         authFlow: undefined,
+        historyAbort: new AbortController(),
       };
       states.add(state);
       const task = serveConnection(state).catch(() => undefined);

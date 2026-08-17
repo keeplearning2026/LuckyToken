@@ -62,6 +62,9 @@ export interface RuntimeDiagnosticQuery {
   readonly afterId?: number;
   /** Maximum records; defaults to 100, capped at 1_000. */
   readonly limit?: number;
+  /** Inclusive time range (epoch-ms); both endpoints valid when present. */
+  readonly from?: number;
+  readonly to?: number;
 }
 
 export interface RuntimeDiagnosticsQueryResult {
@@ -94,6 +97,19 @@ export interface RuntimeDiagnosticsStore {
   readonly attachScrub: (scrub: (value: string) => string) => void;
   /** Closes the store; further appends/query fail with a clear error. */
   readonly close: () => void;
+  /** Ticket 23: deletes committed diagnostic records whose `time` falls in
+   *  the half-open `[fromMs, toMs)` range (both endpoints optional = all) in
+   *  one transaction. `meta` (schema name/version/fingerprint key) and all
+   *  other tables are never touched. */
+  readonly deleteRange: (
+    fromMs?: number,
+    toMs?: number,
+  ) => { readonly deleted: number };
+  /** Ticket 23: eligible committed-record count for the same half-open
+   *  range; matches deleteRange so previews equal actual deletions. */
+  readonly countRange: (fromMs?: number, toMs?: number) => number;
+  /** The versioned schema this store commits (manifest source fact). */
+  readonly schemaVersion: number;
 }
 
 export interface RuntimeDiagnosticsStoreFactory {
@@ -157,9 +173,13 @@ export function normalizeDiagnosticQuery(
     value.minimumLevel === undefined
       ? undefined
       : assertRuntimeDiagnosticLevel(value.minimumLevel);
+  // Ticket 23: the wire decoder already validated the inclusive range; the
+  // normalizer forwards it unchanged (store.query validates defensively).
   return {
     ...(minimumLevel === undefined ? {} : { minimumLevel }),
     ...(afterId === 0 ? {} : { afterId }),
     ...(limit === 100 ? {} : { limit }),
+    ...(value.from === undefined ? {} : { from: value.from }),
+    ...(value.to === undefined ? {} : { to: value.to }),
   };
 }

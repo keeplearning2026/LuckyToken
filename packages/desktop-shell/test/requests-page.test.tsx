@@ -157,6 +157,13 @@ function makeShell(options: StubOptions = {}) {
     },
     executeRuntimeCommand: async (): Promise<DesktopShellSnapshot> => snapshot,
     executeSettingsCommand: async (): Promise<DesktopShellSnapshot> => snapshot,
+    acknowledgePersistence: async (): Promise<DesktopShellSnapshot> => snapshot,
+    queryHistory: async () => ({ range: "all", counts: { requestLedger: 0, diagnostics: 0, capture: 0 } }),
+    executeHistoryExport: async () => ({ outcome: "failed", failure: { code: "internal", message: "unused" } }),
+    confirmHistoryExport: async () => ({ outcome: "failed", failure: { code: "internal", message: "unused" } }),
+    executeHistoryDelete: async () => ({ outcome: "failed" }),
+    confirmHistoryDelete: async () => ({ outcome: "failed" }),
+    pickHistoryExportDestination: async () => undefined,
     executeClientTokenCommand: async (): Promise<ClientTokenCommandResult> => ({
       outcome: "ok",
       revision: 1,

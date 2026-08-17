@@ -13,6 +13,8 @@ export {
   type CapturePersistedState,
   type CaptureQuery,
   type CaptureQueryResult,
+  type CaptureRangeQuery,
+  type CaptureRangeQueryResult,
   type CaptureRecord,
   type CaptureState,
   type CaptureTimingEntry,
