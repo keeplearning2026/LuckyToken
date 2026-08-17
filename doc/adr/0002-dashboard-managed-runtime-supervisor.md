@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-15
 - Ticket: Desktop 03
+- Desktop adapter note: Tauri-specific adapter details are superseded by ADR 0004; the Backend Runtime Supervisor and Control Plane lifecycle decisions remain accepted.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR 0003: Tray Close, Show, and Quit lifecycle
 
-- Status: Accepted
+- Status: Superseded by ADR 0004 (`0004-electron-typescript-desktop.md`)
 - Date: 2026-08-15
 - Ticket: Desktop 04
 

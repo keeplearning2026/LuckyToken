@@ -4,6 +4,7 @@
 **对应代码：** `src/` Core 与 `packages/` Provider Package 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
 **源码基线：** commit `41007a5`（2026-08-14，CommandCode Provider Package）<br>
 **架构规范：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)<br>
+**Desktop 目标架构：** [LuckyToken Electron Product Architecture Specification](./Spec/LuckyTokenElectronArchitectureSpec.md)（已接受目标，尚未实现；本文仍描述当前实现）<br>
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
 本文回答六个问题：LuckyToken 最终提供什么功能；一次请求如何完成；系统由哪些

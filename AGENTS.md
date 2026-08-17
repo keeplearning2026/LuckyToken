@@ -56,6 +56,16 @@ Prefer one authoritative representation of a fact at each lifecycle stage. Bound
 
 Keep model-visible semantics separate from credentials, transport details, logging, timing, request IDs, and other infrastructure state.
 
+## Compatibility Policy
+
+Unless the user explicitly requests compatibility, implement only the current contract. Replace obsolete configuration, interfaces, state shapes, and code paths instead of adding migrations, shims, dual readers/writers, deprecated aliases, or fallback branches. Tests specify current behavior, not historical behavior.
+
+## Desktop Product Architecture
+
+For Electron, desktop, tray, preload, renderer, local management transport, or desktop product-boundary work, read `doc/Spec/LuckyTokenElectronArchitectureSpec.md` before designing or changing code.
+
+The fixed dependency direction is `Renderer → typed preload → Electron Main → Application Control Plane → Backend Application → Core`. Core owns model-serving semantics; the Application Control Plane is the only management seam into a running Backend; Electron Main owns desktop lifecycle/OS integration; Renderer owns interaction state, never Backend authority.
+
 ## Protocol Conversion Usability
 
 Protocol conversion should preserve usability while always producing a valid target-protocol result.
