@@ -146,6 +146,44 @@ test("Electron Main target modules do not deep-import Core implementation", asyn
   }
 });
 
+test("the Desktop API contract exposes no generic IPC escape hatch", async () => {
+  const contractPath = path.join(
+    repositoryRoot,
+    "packages",
+    "desktop-shell",
+    "src",
+    "shared",
+    "desktop-api.ts",
+  );
+  const source = await readFile(contractPath, "utf8");
+  assert.ok(!/\binvoke\s*\(/u.test(source), "Desktop API must not expose invoke(channel, payload)");
+  assert.ok(!/\bsend\s*\(/u.test(source), "Desktop API must not expose send(channel, payload)");
+  assert.ok(!/\bchannel\b/u.test(source), "Desktop API must not expose raw channel strings");
+});
+
+test("the Electron desktop build path is independent of Tauri", async () => {
+  const manifest = JSON.parse(
+    await readFile(
+      path.join(repositoryRoot, "packages", "desktop-shell", "package.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(manifest.main, ".vite/build/main.js");
+  for (const script of ["start", "dev", "build", "package", "make"]) {
+    assert.equal(typeof manifest.scripts?.[script], "string", `missing ${script} script`);
+    assert.ok(
+      !manifest.scripts[script].includes("tauri"),
+      `${script} must use the Electron path rather than Tauri`,
+    );
+  }
+  assert.equal(
+    await exists(
+      path.join(repositoryRoot, "packages", "desktop-shell", "forge.config.cjs"),
+    ),
+    true,
+  );
+});
+
 test("migration keeps explicit public-seam behavior suites", async () => {
   const requiredSuites = [
     "test/integration/client-protocol-boundary.test.ts",

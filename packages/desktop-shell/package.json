@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": ".vite/build/main.js",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "build:native": "tauri build",
+    "start": "electron-forge start",
+    "dev": "electron-forge start",
+    "clean:electron": "node -e \"require('node:fs').rmSync('.vite',{recursive:true,force:true})\"",
+    "build": "npm run clean:electron && electron-forge package",
+    "package": "npm run clean:electron && electron-forge package",
+    "make": "npm run clean:electron && electron-forge make",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,mjs}\" \"vite.config.ts\"",
     "test": "vitest run",
     "test:native-smoke": "node test/run-native-smoke.mjs",
@@ -19,10 +23,14 @@
     "react-dom": "19.2.7"
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-vite": "^7.11.2",
     "@tauri-apps/cli": "2.11.4",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
+    "electron": "^43.4.0",
     "jsdom": "^26.1.0",
     "vite": "8.1.5"
   }

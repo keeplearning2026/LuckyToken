@@ -1,6 +1,9 @@
 node_modules/
 dist/
 coverage/
+packages/desktop-shell/.vite/
+packages/desktop-shell/.electron-out/
+packages/desktop-shell/out/
 CommandcodeAPIKey.txt
 .luckytoken/
 **/auth.json
