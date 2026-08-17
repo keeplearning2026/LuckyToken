@@ -68,7 +68,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
   function endpoint(): ControlPlaneEndpoint {
     nextId += 1;
     return {
-      pipeName: `\\\\.\\pipe\\ticket-18-cp-${process.pid}-${nextId}`,
+      address: `\\\\.\\pipe\\ticket-18-cp-${process.pid}-${nextId}`,
       capability: `ticket-18-cp-capability-${String(nextId).padStart(20, "0")}`,
     };
   }

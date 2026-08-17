@@ -96,7 +96,7 @@ describe("History export workflow through the Control Plane (Ticket 23)", () => 
   function endpoint(): ControlPlaneEndpoint {
     nextId += 1;
     return {
-      pipeName: `\\\\.\\pipe\\ticket-23-export-${process.pid}-${nextId}`,
+      address: `\\\\.\\pipe\\ticket-23-export-${process.pid}-${nextId}`,
       capability: `ticket-23-export-capability-${String(nextId).padStart(20, "0")}`,
     };
   }
@@ -821,7 +821,7 @@ describe("History export authority-level fault and budget seams (Ticket 23)", ()
       });
       host = await startControlPlane({
         endpoint: {
-          pipeName: `\\\\.\\pipe\\ticket-23-count-fault-${process.pid}-${++nextId}`,
+          address: `\\\\.\\pipe\\ticket-23-count-fault-${process.pid}-${++nextId}`,
           capability: `ticket-23-count-fault-capability-${String(nextId).padStart(20, "0")}`,
         },
         application: { id: "luckytoken", version: "test" },
@@ -860,7 +860,7 @@ describe("History export authority-level fault and budget seams (Ticket 23)", ()
   it("a host without a history handler answers unknown_command (legacy clients unaffected)", async () => {
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\ticket-23-legacy-${process.pid}`,
+        address: `\\\\.\\pipe\\ticket-23-legacy-${process.pid}`,
         capability: `ticket-23-legacy-capability-${String(1).padStart(20, "0")}`,
       },
       application: { id: "luckytoken", version: "test" },

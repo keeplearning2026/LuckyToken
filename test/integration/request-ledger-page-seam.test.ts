@@ -98,7 +98,7 @@ describe("Request Ledger page seam (Ticket 19)", () => {
   function endpoint(): ControlPlaneEndpoint {
     nextId += 1;
     return {
-      pipeName: `\\\\.\\pipe\\ticket-19-seam-${process.pid}-${nextId}`,
+      address: `\\\\.\\pipe\\ticket-19-seam-${process.pid}-${nextId}`,
       capability: `ticket-19-seam-capability-${String(nextId).padStart(20, "0")}`,
     };
   }

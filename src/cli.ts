@@ -603,7 +603,7 @@ async function runRecoveryControlPlane(
   });
   await mkdir(dirname(descriptorPath), { recursive: true });
   const endpoint: ControlPlaneEndpoint = Object.freeze({
-    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    address: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
     capability: randomBytes(32).toString("base64url"),
   });
   let descriptor:
@@ -750,7 +750,7 @@ async function legacyRunServe(
   });
   await mkdir(dirname(descriptorPath), { recursive: true });
   const endpoint: ControlPlaneEndpoint = Object.freeze({
-    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    address: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
     capability: randomBytes(32).toString("base64url"),
   });
   let descriptor:

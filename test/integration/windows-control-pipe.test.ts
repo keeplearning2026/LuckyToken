@@ -14,7 +14,7 @@ let nextPipe = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextPipe += 1;
   return {
-    pipeName: `\\\\.\\pipe\\luckytoken-native-integration-${process.pid}-${nextPipe}`,
+    address: `\\\\.\\pipe\\luckytoken-native-integration-${process.pid}-${nextPipe}`,
     capability: "native-integration-capability-01234567890123456789",
   };
 }
@@ -66,7 +66,7 @@ describe.skipIf(process.platform !== "win32" || process.arch !== "x64")(
 
       const rawEndpoint = endpoint();
       const rawServer = await selected.pipeServerFactory.listen(
-        rawEndpoint.pipeName,
+        rawEndpoint.address,
       );
       expect(rawServer.securityPolicy()).toEqual({
         ownerSid: selected.access.ownerSid,
@@ -76,7 +76,7 @@ describe.skipIf(process.platform !== "win32" || process.arch !== "x64")(
       });
       const accepting = rawServer.accept();
       const rawClient = await selected.pipeConnector.connect(
-        rawEndpoint.pipeName,
+        rawEndpoint.address,
       );
       const rawConnection = await accepting;
       expect(rawConnection).not.toBeNull();

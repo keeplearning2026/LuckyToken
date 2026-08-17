@@ -124,7 +124,7 @@ describe("Control Plane Client Token commands", () => {
 
   async function startHost(handler: ClientTokenCommandHandler) {
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-client-token-cmd-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-client-token-cmd-${process.pid}-${++nextPipe}`,
       capability: "client-token-command-capability-012345678901",
     };
     const host = await startControlPlane({
@@ -262,7 +262,7 @@ describe("Control Plane Client Token commands", () => {
 
   it("reports unavailable when no Client Token command handler is registered", async () => {
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-client-token-cmd-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-client-token-cmd-${process.pid}-${++nextPipe}`,
       capability: "client-token-command-capability-012345678901",
     };
     const host = await startControlPlane({
@@ -430,7 +430,7 @@ describe("Control Plane directory-scoped Client Token commands (Ticket 17)", () 
 
   async function startHost(handler: ClientTokenCommandHandler) {
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-dir-token-cmd-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-dir-token-cmd-${process.pid}-${++nextPipe}`,
       capability: "client-token-command-capability-012345678901",
     };
     const host = await startControlPlane({

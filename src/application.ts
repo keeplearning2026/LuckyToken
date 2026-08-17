@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   connectControlPlane,
   controlPlaneVersion,
+  createLocalIpcAddress,
   createNodePipeTransport,
   startControlPlane,
   type ApplicationOwnership,
@@ -143,9 +144,13 @@ export interface StartLuckyTokenApplicationOptions {
   readonly events?: LuckyTokenApplicationEvents;
 }
 
-function endpointForCurrentUser(): ControlPlaneEndpoint {
+function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint {
   return Object.freeze({
-    pipeName: `\\\\.\\pipe\\luckytoken-${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    address: createLocalIpcAddress({
+      platform: process.platform,
+      runtimeDirectory,
+      randomId: `${(process.env.USERNAME ?? "current-user").replace(/[^A-Za-z0-9_.-]/gu, "_")}-${randomBytes(24).toString("hex")}`,
+    }),
     capability: randomBytes(32).toString("base64url"),
   });
 }
@@ -263,7 +268,7 @@ async function startRecoveryApplication(options: {
       : { overridePath: options.descriptorOverride }),
   });
   await mkdir(dirname(descriptorPath), { recursive: true });
-  const endpoint = endpointForCurrentUser();
+  const endpoint = endpointForCurrentUser(dirname(descriptorPath));
   let descriptor: Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
 
@@ -357,7 +362,7 @@ async function startNormalApplication(options: {
       : { overridePath: options.descriptorOverride }),
   });
   await mkdir(dirname(descriptorPath), { recursive: true });
-  const endpoint = endpointForCurrentUser();
+  const endpoint = endpointForCurrentUser(dirname(descriptorPath));
 
   let descriptor: Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
   let supervisor: Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>> | undefined;

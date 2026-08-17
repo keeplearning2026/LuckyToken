@@ -201,7 +201,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
       [RESPONSES]: "OpenAI Responses",
     };
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-token-http-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-token-http-${process.pid}-${++nextPipe}`,
       capability: "client-token-http-capability-012345678901234",
     };
     const host = await startControlPlane({
@@ -805,7 +805,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
       [RESPONSES]: "OpenAI Responses",
     };
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-token-restart-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-token-restart-${process.pid}-${++nextPipe}`,
       capability: "client-token-restart-capability-0123456789",
     };
     const host = await startControlPlane({

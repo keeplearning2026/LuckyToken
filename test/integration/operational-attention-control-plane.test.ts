@@ -14,7 +14,7 @@ let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    pipeName: `\\\\.\\pipe\\luckytoken-t25-attention-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\luckytoken-t25-attention-${process.pid}-${nextId}`,
     capability: `ticket-25-attention-capability-${String(nextId).padStart(20, "0")}`,
   };
 }

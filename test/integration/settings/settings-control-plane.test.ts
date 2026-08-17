@@ -123,7 +123,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       },
     });
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-settings-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-settings-${process.pid}-${++nextPipe}`,
       capability: "settings-test-capability-012345678901234567890",
     };
     const host = await startControlPlane({

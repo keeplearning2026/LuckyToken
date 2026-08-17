@@ -73,7 +73,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
   function endpoint(): ControlPlaneEndpoint {
     nextId += 1;
     return {
-      pipeName: `\\\\.\\pipe\\ticket-21-cp-${process.pid}-${nextId}`,
+      address: `\\\\.\\pipe\\ticket-21-cp-${process.pid}-${nextId}`,
       capability: `ticket-21-cp-capability-${String(nextId).padStart(20, "0")}`,
     };
   }

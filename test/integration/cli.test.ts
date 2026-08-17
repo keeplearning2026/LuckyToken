@@ -121,7 +121,7 @@ describe("LuckyToken CLI", () => {
     );
     directories.push(directory);
     const endpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-cli-token-${process.pid}-${++nextClientTokenPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-cli-token-${process.pid}-${++nextClientTokenPipe}`,
       capability: "cli-client-token-capability-01234567890123",
     };
     const controlPlane = await startControlPlane({
@@ -188,7 +188,7 @@ describe("LuckyToken CLI", () => {
     const transport = createNodePipeTransport();
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-cli-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-cli-${process.pid}`,
         capability,
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -231,7 +231,7 @@ describe("LuckyToken CLI", () => {
     const capability = "cli-history-capability-secret-0123456789012345";
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-cli-history-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-cli-history-${process.pid}`,
         capability,
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -280,7 +280,7 @@ describe("LuckyToken CLI", () => {
     const destinationPath = join(directory, "backup.json");
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-cli-backup-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-cli-backup-${process.pid}`,
         capability,
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -352,7 +352,7 @@ describe("LuckyToken CLI", () => {
     });
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-cli-command-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-cli-command-${process.pid}`,
         capability: "cli-command-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -429,7 +429,7 @@ describe("LuckyToken CLI", () => {
     });
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-cli-settings-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-cli-settings-${process.pid}`,
         capability: "cli-settings-capability-0123456789012345678",
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -512,7 +512,7 @@ describe("LuckyToken CLI", () => {
     const transport = createNodePipeTransport();
     const controlPlane = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\\pipe\\\luckytoken-cli-models-${process.pid}`,
+        address: `\\\\.\\\pipe\\\luckytoken-cli-models-${process.pid}`,
         capability: "cli-models-capability-0123456789012345678",
       },
       application: { id: "luckytoken", version: "cli-test" },
@@ -684,10 +684,10 @@ describe("LuckyToken CLI", () => {
         async () => {
           try {
             const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-              pipeName?: unknown;
+              address?: unknown;
               capability?: unknown;
             };
-            return typeof parsed.pipeName === "string" && typeof parsed.capability === "string";
+            return typeof parsed.address === "string" && typeof parsed.capability === "string";
           } catch {
             return false;
           }
@@ -769,7 +769,7 @@ describe("LuckyToken CLI", () => {
       .poll(
         async () => {
           try {
-            return typeof JSON.parse(await readFile(descriptorPath, "utf8")).pipeName === "string";
+            return typeof JSON.parse(await readFile(descriptorPath, "utf8")).address === "string";
           } catch {
             return false;
           }
@@ -877,11 +877,11 @@ describe("LuckyToken CLI", () => {
               const parsed = JSON.parse(
                 await readFile(descriptorPath, "utf8"),
               ) as {
-                pipeName?: unknown;
+                address?: unknown;
                 capability?: unknown;
               };
               return (
-                typeof parsed.pipeName === "string" &&
+                typeof parsed.address === "string" &&
                 typeof parsed.capability === "string"
               );
             } catch {
@@ -1007,9 +1007,9 @@ describe("LuckyToken CLI", () => {
             const parsed = JSON.parse(
               await readFile(descriptorPath, "utf8"),
             ) as {
-              readonly pipeName?: unknown;
+              readonly address?: unknown;
             };
-            return typeof parsed.pipeName === "string";
+            return typeof parsed.address === "string";
           } catch {
             return false;
           }
@@ -1503,7 +1503,7 @@ describe("LuckyToken CLI canonical directory scopes (Ticket 17)", () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-dir-cp-"));
     directories.push(directory);
     const endpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-cli-dir-token-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-cli-dir-token-${process.pid}-${++nextPipe}`,
       capability: "cli-dir-token-capability-012345678901234567",
     };
     const controlPlane = await startControlPlane({

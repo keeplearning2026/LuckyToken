@@ -144,7 +144,7 @@ describe("Provider-owned auth login through the Control Plane", () => {
         mutable.cancelDeferred(model as never, handle, streamOptions),
     } as Models);
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-auth-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-auth-${process.pid}-${++nextPipe}`,
       capability: "auth-test-capability-0123456789012345",
     };
     const host = await startControlPlane({

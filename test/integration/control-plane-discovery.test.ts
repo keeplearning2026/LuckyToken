@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  parseControlPlaneDescriptor,
   publishControlPlaneDescriptor,
   readControlPlaneDescriptor,
   type ControlPlaneDescriptorLease,
@@ -12,6 +13,15 @@ import {
 
 describe("Control Plane discovery ownership", () => {
   const directories: string[] = [];
+
+  it("rejects the removed pipeName descriptor contract", () => {
+    expect(() =>
+      parseControlPlaneDescriptor({
+        pipeName: "\\\\.\\pipe\\removed-contract",
+        capability: "removed-contract-capability-01234567890123456789",
+      }),
+    ).toThrow("Invalid Control Plane descriptor");
+  });
 
   afterEach(async () => {
     await Promise.all(
@@ -26,11 +36,11 @@ describe("Control Plane discovery ownership", () => {
     directories.push(directory);
     const path = join(directory, "control-plane.json");
     const firstEndpoint = {
-      pipeName: "\\\\.\\pipe\\luckytoken-first-owner",
+      address: "\\\\.\\pipe\\luckytoken-first-owner",
       capability: "first-owner-capability-012345678901234567890",
     };
     const secondEndpoint = {
-      pipeName: "\\\\.\\pipe\\luckytoken-second-owner",
+      address: "\\\\.\\pipe\\luckytoken-second-owner",
       capability: "second-owner-capability-01234567890123456789",
     };
     const first = await publishControlPlaneDescriptor({

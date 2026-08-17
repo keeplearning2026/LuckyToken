@@ -307,7 +307,7 @@ describe("secret canary hygiene across public surfaces", () => {
       compose: (providers) => composeEffectiveCatalog(providers),
     });
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-canary-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-canary-${process.pid}-${++nextPipe}`,
       capability: "canary-catalog-capability-0123456789012345678901",
     };
     const host = await startControlPlane({

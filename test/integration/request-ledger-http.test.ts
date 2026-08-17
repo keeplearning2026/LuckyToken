@@ -1016,7 +1016,7 @@ function snapshotResolving(
 
 function endpoint(index: number): ControlPlaneEndpoint {
   return {
-    pipeName: `\\\\.\\pipe\\ticket-18-cp-${process.pid}-${index}`,
+    address: `\\\\.\\pipe\\ticket-18-cp-${process.pid}-${index}`,
     capability: `ticket-18-capability-${String(index).padStart(26, "0")}`,
   };
 }

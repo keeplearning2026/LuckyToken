@@ -108,7 +108,7 @@ export async function connectApplicationControlPlane(
 ): Promise<ControlPlaneClient> {
   assertControlPlaneEndpoint(endpoint);
   const connection = await dependencies.pipeConnector.connect(
-    endpoint.pipeName,
+    endpoint.address,
   );
   const pending = new Map<string, PendingRequest>();
   const pendingAuth = new Map<string, PendingAuthFlow>();

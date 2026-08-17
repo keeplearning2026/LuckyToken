@@ -156,7 +156,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
             >,
           }),
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-ownership-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-ownership-${process.pid}-${++nextPipe}`,
         capability: "ownership-test-capability-012345678901234567",
       },
       application: { id: "luckytoken", version: "test" },

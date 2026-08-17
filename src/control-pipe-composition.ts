@@ -29,26 +29,12 @@ export class UnsupportedControlPipeArchitectureError extends Error {
 }
 
 export async function createProductionControlPipe(
-  facts: ControlPipeHostFacts = {
+  _facts: ControlPipeHostFacts = {
     platform: process.platform,
     architecture: process.arch,
   },
 ): Promise<ProductionControlPipe> {
   const nodeTransport = createNodePipeTransport();
-  if (facts.platform === "win32") {
-    if (facts.architecture !== "x64") {
-      throw new UnsupportedControlPipeArchitectureError(facts.architecture);
-    }
-    const { createWindowsControlPipeHost } = await import(
-      "./windows-control-pipe.js"
-    );
-    const windowsHost = createWindowsControlPipeHost();
-    return Object.freeze({
-      pipeServerFactory: windowsHost.pipeServerFactory,
-      pipeConnector: nodeTransport,
-      access: windowsHost.access,
-    });
-  }
   return Object.freeze({
     pipeServerFactory: nodeTransport,
     pipeConnector: nodeTransport,

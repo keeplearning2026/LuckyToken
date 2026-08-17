@@ -57,7 +57,7 @@ describe("effective catalog through the Control Plane", () => {
         options.compose ?? ((providers) => composeEffectiveCatalog(providers)),
     });
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-catalog-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-catalog-${process.pid}-${++nextPipe}`,
       capability: "catalog-test-capability-0123456789012345678901",
     };
     const host = await startControlPlane({

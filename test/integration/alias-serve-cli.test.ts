@@ -117,11 +117,11 @@ describe("alias serve wiring", () => {
         .poll(async () => {
           try {
             const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-              pipeName?: unknown;
+              address?: unknown;
               capability?: unknown;
             };
             return (
-              typeof parsed.pipeName === "string" &&
+              typeof parsed.address === "string" &&
               typeof parsed.capability === "string"
             );
           } catch {

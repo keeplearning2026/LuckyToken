@@ -13,7 +13,7 @@ let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    pipeName: `\\\\.\\pipe\\luckytoken-t24-backup-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\luckytoken-t24-backup-${process.pid}-${nextId}`,
     capability: `ticket-24-backup-capability-${String(nextId).padStart(20, "0")}`,
   };
 }

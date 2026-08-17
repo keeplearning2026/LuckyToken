@@ -267,7 +267,7 @@ describe("canonical directory Client token scopes over real HTTP", () => {
       [RESPONSES]: "OpenAI Responses",
     };
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-dir-token-http-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-dir-token-http-${process.pid}-${++nextPipe}`,
       capability: "dir-token-http-capability-012345678901234567",
     };
     const host = await startControlPlane({

@@ -268,7 +268,7 @@ export async function startApplicationStatusHost(
   }
 
   const server = await options.pipeServerFactory.listen(
-    options.endpoint.pipeName,
+    options.endpoint.address,
   );
   try {
     assertPipeAccess(server.securityPolicy(), options.access);

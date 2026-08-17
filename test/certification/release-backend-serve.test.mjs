@@ -71,7 +71,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
       try {
         const raw = await readFile(descriptorPath, "utf8");
         const parsed = JSON.parse(raw);
-        if (typeof parsed.pipeName === "string") {
+        if (typeof parsed.address === "string") {
           endpoint = parsed;
           break;
         }

@@ -79,7 +79,7 @@ describe("History deletion through the Control Plane (Ticket 23)", () => {
   function endpoint(): ControlPlaneEndpoint {
     nextId += 1;
     return {
-      pipeName: `\\\\.\\pipe\\ticket-23-delete-${process.pid}-${nextId}`,
+      address: `\\\\.\\pipe\\ticket-23-delete-${process.pid}-${nextId}`,
       capability: `ticket-23-delete-capability-${String(nextId).padStart(20, "0")}`,
     };
   }

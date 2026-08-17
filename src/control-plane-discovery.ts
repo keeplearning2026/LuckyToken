@@ -1,7 +1,10 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import type { ControlPlaneEndpoint } from "@luckytoken/application-control-plane/control-plane";
+import {
+  assertControlPlaneEndpoint,
+  type ControlPlaneEndpoint,
+} from "@luckytoken/application-control-plane/control-plane";
 import lockfile from "proper-lockfile";
 
 // A crashed owner can be replaced after this interval. Ticket 05 may add
@@ -56,18 +59,22 @@ export function parseControlPlaneDescriptor(
 ): ControlPlaneEndpoint {
   if (
     !isRecord(value) ||
-    Object.keys(value).sort().join(",") !== "capability,pipeName" ||
-    typeof value.pipeName !== "string" ||
-    !value.pipeName.startsWith("\\\\.\\pipe\\") ||
-    typeof value.capability !== "string" ||
-    value.capability.length < 32
+    Object.keys(value).sort().join(",") !== "address,capability" ||
+    typeof value.address !== "string" ||
+    typeof value.capability !== "string"
   ) {
     throw new Error("Invalid Control Plane descriptor");
   }
-  return Object.freeze({
-    pipeName: value.pipeName,
+  const endpoint = Object.freeze({
+    address: value.address,
     capability: value.capability,
   });
+  try {
+    assertControlPlaneEndpoint(endpoint);
+  } catch {
+    throw new Error("Invalid Control Plane descriptor");
+  }
+  return endpoint;
 }
 
 export async function readControlPlaneDescriptor(

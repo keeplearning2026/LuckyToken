@@ -18,7 +18,7 @@ let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    pipeName: `\\\\.\\pipe\\ticket-01-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\ticket-01-${process.pid}-${nextId}`,
     capability: "test-capability-012345678901234567890123456789",
   };
 }
@@ -182,7 +182,7 @@ describe("Application Control Plane public seam", () => {
     rawServers.push(rawServer);
     await new Promise<void>((resolve, reject) => {
       rawServer.once("error", reject);
-      rawServer.listen(target.pipeName, resolve);
+      rawServer.listen(target.address, resolve);
     });
     const client = await connectControlPlane(target, clientDependencies);
     const serverSocket = await socketAccepted;
@@ -495,7 +495,7 @@ describe("Application Control Plane public seam", () => {
       },
     });
     servers.push(server);
-    const raw = await transport.connect(target.pipeName);
+    const raw = await transport.connect(target.address);
 
     await raw.write(
       encodeRawFrame({
@@ -662,7 +662,7 @@ describe("Application Control Plane public seam", () => {
     });
     await raw.close();
 
-    const oversized = await transport.connect(target.pipeName);
+    const oversized = await transport.connect(target.address);
     const oversizedHeader = Buffer.alloc(4);
     oversizedHeader.writeUInt32BE(1024 * 1024 + 1);
     await oversized.write(oversizedHeader);
@@ -675,12 +675,12 @@ describe("Application Control Plane public seam", () => {
     await healthy.close();
   });
 
-  it("accepts only a local named-pipe endpoint and refuses false strict access claims", async () => {
+  it("requires a non-empty local transport address and refuses false strict access claims", async () => {
     await expect(
       startControlPlane({
         ...hostDependencies,
         endpoint: {
-          pipeName: "127.0.0.1:48991",
+          address: "",
           capability: "local-only-capability-012345678901234567890",
         },
         application: { id: "luckytoken", version: "test" },
@@ -711,8 +711,8 @@ describe("Application Control Plane public seam", () => {
 
   it("closes Node fallback connections queued before a consumer accepts them", async () => {
     const target = endpoint();
-    const pipeServer = await transport.listen(target.pipeName);
-    const queuedConnection = await transport.connect(target.pipeName);
+    const pipeServer = await transport.listen(target.address);
+    const queuedConnection = await transport.connect(target.address);
     const peerClosed = queuedConnection.read(1);
 
     await pipeServer.close();

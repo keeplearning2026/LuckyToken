@@ -55,7 +55,7 @@ describe("models.json through the Control Plane", () => {
       ...(options.fileSystem === undefined ? {} : { fileSystem: options.fileSystem }),
     });
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-models-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-models-${process.pid}-${++nextPipe}`,
       capability: "models-test-capability-0123456789012345678901",
     };
     const host = await startControlPlane({

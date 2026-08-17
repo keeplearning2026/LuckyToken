@@ -166,7 +166,7 @@ async function createCatalogPlane(options?: {
   });
   const hostRef: { current: RunningControlPlane | undefined } = { current: undefined };
   const endpoint: ControlPlaneEndpoint = {
-    pipeName: `\\\\.\\pipe\\luckytoken-catalog-plane-${process.pid}-${++nextPipe}`,
+    address: `\\\\.\\pipe\\luckytoken-catalog-plane-${process.pid}-${++nextPipe}`,
     capability: "catalog-plane-capability-012345678901234567",
   };
   const host = await startControlPlane({
@@ -349,7 +349,7 @@ describe("catalog commands through the Control Plane", () => {
   it("rejects malformed catalog commands through the wire", async () => {
     const fixture = await createCatalogPlane();
     const transport = createNodePipeTransport();
-    const raw = await transport.connect(fixture.host.endpoint.pipeName);
+    const raw = await transport.connect(fixture.host.endpoint.address);
     await raw.write(
       encodeRawFrame({
         type: "hello",

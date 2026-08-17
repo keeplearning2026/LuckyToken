@@ -1038,7 +1038,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
 
 function endpoint(index: number): ControlPlaneEndpoint {
   return {
-    pipeName: `\\\\.\\pipe\\ticket-22-cp-${process.pid}-${index}`,
+    address: `\\\\.\\pipe\\ticket-22-cp-${process.pid}-${index}`,
     capability: `ticket-22-capability-${String(index).padStart(26, "0")}`,
   };
 }

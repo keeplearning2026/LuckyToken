@@ -86,7 +86,7 @@ describe("credential management through the Control Plane", () => {
         (options.modelsJson ?? {}) as Record<string, { apiKey?: string }>,
     });
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-cred-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-cred-${process.pid}-${++nextPipe}`,
       capability: "credential-test-capability-0123456789012345",
     };
     const host = await startControlPlane({
@@ -383,7 +383,7 @@ describe("credential management through the Control Plane", () => {
     );
     roots.push(directory);
     const endpoint: ControlPlaneEndpoint = {
-      pipeName: `\\\\.\\pipe\\luckytoken-cred-unavail-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\luckytoken-cred-unavail-${process.pid}-${++nextPipe}`,
       capability: "credential-unavailable-capability-0123456789",
     };
     // The authority slot is empty (e.g. before the Data Plane composition

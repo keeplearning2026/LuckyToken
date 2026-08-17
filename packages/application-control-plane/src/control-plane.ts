@@ -1,5 +1,6 @@
 export {
   controlPlaneVersion,
+  assertControlPlaneEndpoint,
   type AliasCanonicalTarget,
   type AliasCommand,
   type AliasCommandHandler,

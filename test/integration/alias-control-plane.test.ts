@@ -86,7 +86,7 @@ async function createAliasPlane(): Promise<AliasPlaneFixture> {
     }),
   });
   const endpoint: ControlPlaneEndpoint = {
-    pipeName: `\\\\.\\pipe\\luckytoken-alias-plane-${process.pid}-${++nextPipe}`,
+    address: `\\\\.\\pipe\\luckytoken-alias-plane-${process.pid}-${++nextPipe}`,
     capability: "alias-plane-capability-01234567890123456",
   };
   const host = await startControlPlane({
@@ -261,7 +261,7 @@ describe("alias commands through the Control Plane", () => {
   it("rejects malformed alias commands through the wire", async () => {
     const fixture = await createAliasPlane();
     const transport = createNodePipeTransport();
-    const raw = await transport.connect(fixture.host.endpoint.pipeName);
+    const raw = await transport.connect(fixture.host.endpoint.address);
     await raw.write(
       encodeRawFrame({
         type: "hello",

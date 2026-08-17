@@ -47,7 +47,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },
@@ -122,7 +122,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },
@@ -179,7 +179,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },
@@ -224,7 +224,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },
@@ -279,7 +279,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },
@@ -350,7 +350,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
       application: { id: "luckytoken", version: "test" },

@@ -41,7 +41,7 @@ let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    pipeName: `\\\\.\\pipe\\ticket-07-cp-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\ticket-07-cp-${process.pid}-${nextId}`,
     capability: "ticket-07-capability-012345678901234567890123456789",
   };
 }

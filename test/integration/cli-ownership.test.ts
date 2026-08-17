@@ -169,9 +169,9 @@ describe("LuckyToken CLI ownership lifecycle", () => {
             const parsed = JSON.parse(
               await readFile(descriptorPath, "utf8"),
             ) as {
-              pipeName?: unknown;
+              address?: unknown;
             };
-            return typeof parsed.pipeName === "string";
+            return typeof parsed.address === "string";
           } catch {
             return false;
           }
@@ -188,7 +188,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
   ) {
     const descriptor = await waitForDescriptor(descriptorPath);
     const endpoint = descriptor as {
-      readonly pipeName: string;
+      readonly address: string;
       readonly capability: string;
     };
     let next = 0;
@@ -430,7 +430,7 @@ ${exit.stderr}`).toContain("timed out");
     const enabled: boolean[] = [];
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\luckytoken-auto-start-${process.pid}`,
+        address: `\\\\.\\pipe\\luckytoken-auto-start-${process.pid}`,
         capability: "auto-start-capability-012345678901234567890123",
       },
       application: { id: "luckytoken", version: "cli-test" },

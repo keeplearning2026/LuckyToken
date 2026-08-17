@@ -355,7 +355,7 @@ describe("Audit-unavailable projection on the Control Plane seam (Ticket 23)", (
     authority.reportFailure("requestLedger");
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\ticket-23-proj-${process.pid}`,
+        address: `\\\\.\\pipe\\ticket-23-proj-${process.pid}`,
         capability: `ticket-23-proj-capability-${String(1).padStart(20, "0")}`,
       },
       application: { id: "luckytoken", version: "test" },
@@ -415,7 +415,7 @@ describe("Audit-unavailable projection on the Control Plane seam (Ticket 23)", (
   it("strict wire decoding rejects a malformed persistence projection", async () => {
     const host = await startControlPlane({
       endpoint: {
-        pipeName: `\\\\.\\pipe\\ticket-23-badproj-${process.pid}`,
+        address: `\\\\.\\pipe\\ticket-23-badproj-${process.pid}`,
         capability: `ticket-23-badproj-capability-${String(1).padStart(20, "0")}`,
       },
       application: { id: "luckytoken", version: "test" },

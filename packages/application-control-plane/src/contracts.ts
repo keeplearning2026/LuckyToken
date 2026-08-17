@@ -1040,7 +1040,7 @@ export function projectRequestIdentity(
 }
 
 export interface ControlPlaneEndpoint {
-  readonly pipeName: string;
+  readonly address: string;
   readonly capability: string;
 }
 
@@ -1449,8 +1449,9 @@ export function assertControlPlaneEndpoint(
   endpoint: ControlPlaneEndpoint,
 ): void {
   if (
-    !endpoint.pipeName.startsWith("\\\\.\\pipe\\") ||
-    endpoint.pipeName.length <= "\\\\.\\pipe\\".length ||
+    endpoint.address.length === 0 ||
+    endpoint.address.length > 1024 ||
+    endpoint.address.includes("\0") ||
     endpoint.capability.length < 32
   ) {
     throw new Error("Invalid local Control Plane endpoint");
