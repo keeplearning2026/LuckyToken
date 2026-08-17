@@ -47,6 +47,7 @@ import {
   InMemoryCredentialStore,
   type AuthInteraction,
   type AuthPrompt,
+  type FetchFunction,
 } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -102,6 +103,8 @@ interface OnlineArguments {
   readonly apiKeyFile: string;
   readonly alias: string | undefined;
   readonly batches: number;
+  /** Optional scenario-id filter for targeted reruns (e.g. `tool_shell`). */
+  readonly onlyScenario: string | undefined;
 }
 
 /**
@@ -151,8 +154,16 @@ function parseArguments(args: readonly string[]): OnlineArguments {
   let apiKeyFile = DEFAULT_API_KEY_FILE;
   let alias: string | undefined;
   let batches = 1;
+  let onlyScenario: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
+    if (argument === "--scenario") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--scenario requires a scenario id");
+      onlyScenario = value;
+      index += 1;
+      continue;
+    }
     if (argument === "--batches") {
       const value = Number(args[index + 1]);
       if (!Number.isSafeInteger(value) || value < 1) {
@@ -201,7 +212,71 @@ function parseArguments(args: readonly string[]): OnlineArguments {
     }
     throw new Error(`Unknown codex online option: ${argument}`);
   }
-  return { providerId, model, apiKeyFile, alias, batches };
+  return { providerId, model, apiKeyFile, alias, batches, onlyScenario };
+}
+
+/**
+ * Outbound dispatch logger: wraps the composition's fetch so every request
+ * LuckyToken sends to the upstream Provider is recorded (URL, request body,
+ * response status, response body) under `artifacts/upstream/`. This is the
+ * only way to see what the Provider actually returned when a scenario fails
+ * with an upstream error (e.g. "CommandCode text block completed empty").
+ *
+ * The upstream response body is read from a clone so the caller still
+ * receives the original streaming body untouched.
+ */
+function createUpstreamLogger(
+  artifactDir: string,
+  upstream: FetchFunction,
+): { readonly fetch: FetchFunction; readonly flush: () => Promise<void> } {
+  let sequence = 0;
+  const pending: Promise<void>[] = [];
+  const upstreamDir = join(artifactDir, "upstream");
+  const fetch: FetchFunction = async (input, init) => {
+    const request =
+      input instanceof Request ? input : new Request(input as RequestInfo, init);
+    const requestBody = await request.clone().text();
+    const startedAt = performance.now();
+    const response = await upstream(request);
+    const responseBody = await response.clone().text();
+    const seq = sequence;
+    sequence += 1;
+    const entry = Object.freeze({
+      seq,
+      method: request.method,
+      url: request.url,
+      status: response.status,
+      statusText: response.statusText,
+      durationMs: Math.round(performance.now() - startedAt),
+      requestHeaders: Object.fromEntries(request.headers.entries()),
+      requestBody,
+      responseBody,
+    });
+    pending.push(
+      mkdir(upstreamDir, { recursive: true })
+        .then(() =>
+          writeFile(
+            join(upstreamDir, `${String(seq).padStart(3, "0")}.json`),
+            `${JSON.stringify(entry, null, 2)}\n`,
+            "utf8",
+          ),
+        )
+        .catch((error: unknown) => {
+          process.stderr.write(
+            `[codex-suite] upstream log write failed: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          );
+        }),
+    );
+    return response;
+  };
+  return Object.freeze({
+    fetch,
+    flush: async () => {
+      await Promise.allSettled(pending);
+    },
+  });
 }
 
 function codexProviderOverrides(
@@ -611,6 +686,7 @@ function assertCodexResult(
   expectedText: string | undefined,
   summary: OnlineSummary,
   requiredItemType?: string,
+  requiredItemTypes?: readonly string[],
   minimumRequiredItems = 1,
   requireFailedCommand = false,
 ): void {
@@ -663,6 +739,20 @@ function assertCodexResult(
         event.payload.item !== null &&
         (event.payload.item as { type?: string }).type === requiredItemType,
     ).length < minimumRequiredItems
+  ) {
+    throw new Error("codex_required_item_missing");
+  }
+  if (
+    requiredItemTypes !== undefined &&
+    !requiredItemTypes.some((type) =>
+      result.events.some(
+        (event) =>
+          event.type === "item.completed" &&
+          typeof event.payload.item === "object" &&
+          event.payload.item !== null &&
+          (event.payload.item as { type?: string }).type === type,
+      ),
+    )
   ) {
     throw new Error("codex_required_item_missing");
   }
@@ -805,9 +895,14 @@ interface Scenario {
   readonly prompt: string;
   readonly expectedText?: string;
   readonly requiredItemType?: string;
+  /** Accept any of these completed item types (e.g. a model may create a
+   *  file with `command_execution` or `file_change`). */
+  readonly requiredItemTypes?: readonly string[];
   readonly minimumRequiredItems?: number;
   readonly requireFailedCommand?: boolean;
   readonly requiredCustomTool?: string;
+  /** After the turn, verify this file exists in the session directory. */
+  readonly expectedFile?: Readonly<{ path: string; content: string }>;
   /** Extra Codex flags for this scenario (e.g. tool usage). */
   readonly extraArgs?: readonly string[];
   /**
@@ -878,8 +973,13 @@ function directedScenarios(): readonly Scenario[] {
         "TOOL_APPLY_PATCH_OK. Then reply with exactly: TOOL_APPLY_PATCH_OK. " +
         "Do not explain.",
       expectedText: "TOOL_APPLY_PATCH_OK",
-      requiredItemType: "file_change",
-      requiredCustomTool: "apply_patch",
+      // The model may create the file with apply_patch (file_change) or by
+      // shell command (command_execution); both prove the tool round-trip.
+      requiredItemTypes: ["file_change", "command_execution"],
+      expectedFile: {
+        path: "codex_cli_probe.txt",
+        content: "TOOL_APPLY_PATCH_OK",
+      },
     }),
     Object.freeze({
       id: "tool_shell_error",
@@ -991,8 +1091,10 @@ function randomScenarios(count: number): readonly Scenario[] {
               ...(index % toolTemplates.length === 0
                 ? { requiredItemType: "command_execution" }
                 : {
-                    requiredItemType: "file_change",
-                    requiredCustomTool: "apply_patch",
+                    // The model may write the file with apply_patch
+                    // (file_change) or a shell command; both prove the
+                    // tool round-trip.
+                    requiredItemTypes: ["file_change", "command_execution"],
                   }),
             }
           : {}),
@@ -1146,7 +1248,8 @@ async function assertCapturedCustomToolRoundTrip(
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
-  const { providerId, model, apiKeyFile, alias, batches } = parseArguments(args);
+  const { providerId, model, apiKeyFile, alias, batches, onlyScenario } =
+    parseArguments(args);
   const selector = alias ?? model;
   const apiKey = (
     await readFile(
@@ -1262,10 +1365,11 @@ export async function runCodexCliOnlineSuite(
       "utf8",
     );
   }
+  const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
   const composition = await createConfiguredLuckyTokenComposition({
     config,
     credentials,
-    fetch: globalThis.fetch,
+    fetch: upstreamLogger.fetch,
     ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
   });
   if (alias !== undefined) {
@@ -1322,7 +1426,14 @@ export async function runCodexCliOnlineSuite(
 
   try {
     const summary = emptySummary();
-    const scenarios = buildPlan(batches);
+    const plan = buildPlan(batches);
+    const scenarios =
+      onlyScenario === undefined
+        ? plan
+        : plan.filter((scenario) => scenario.id === onlyScenario);
+    if (scenarios.length === 0) {
+      throw new Error(`no scenario matches --scenario ${onlyScenario}`);
+    }
     console.error(`[codex-suite] plan built: ${scenarios.length} scenarios`);
     const matrix: Array<{
       id: string;
@@ -1412,6 +1523,7 @@ export async function runCodexCliOnlineSuite(
             scenario.expectedText,
             summary,
             scenario.requiredItemType,
+            scenario.requiredItemTypes,
             scenario.minimumRequiredItems,
             scenario.requireFailedCommand,
           );
@@ -1422,6 +1534,15 @@ export async function runCodexCliOnlineSuite(
             marker,
             scenario.requiredCustomTool,
           );
+        }
+        if (scenario.expectedFile !== undefined) {
+          const actual = await readFile(
+            join(sessionDir, scenario.expectedFile.path),
+            "utf8",
+          );
+          if (actual.trim() !== scenario.expectedFile.content) {
+            throw new Error("codex_expected_file_mismatch");
+          }
         }
         summary.successful += 1;
         const elapsed = performance.now() - startedAt;
@@ -1481,6 +1602,7 @@ export async function runCodexCliOnlineSuite(
       );
     }
   } finally {
+    await upstreamLogger.flush();
     await server.close();
   }
 }

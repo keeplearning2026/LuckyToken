@@ -159,14 +159,6 @@ describe("CommandCode atomic content assembler", () => {
       ],
     ],
     [
-      "empty text",
-      [
-        { type: "text-start", id: "x" },
-        { type: "text-delta", id: "x", text: "   " },
-        { type: "text-end", id: "x" },
-      ],
-    ],
-    [
       "empty reasoning",
       [
         { type: "reasoning-start", id: "x" },
@@ -541,5 +533,49 @@ describe("CommandCode atomic content assembler", () => {
       content: [],
       notices: [],
     });
+  });
+
+  it("omits a whitespace-only text block that precedes a tool call", () => {
+    // Real upstreams (DeepSeek via the CommandCode gateway) emit a blank
+    // text block ("\n\n") immediately before the tool input; that block
+    // carries no information and must not fail the response.
+    const result = assemble([
+      { type: "text-start", id: "lead" },
+      { type: "text-delta", id: "lead", text: "\n\n" },
+      { type: "tool-input-start", id: "tool", toolName: "shell_command" },
+      { type: "tool-input-delta", id: "tool", delta: "{\"command\":\"echo OK\"}" },
+      { type: "text-end", id: "lead" },
+      { type: "tool-input-end", id: "tool" },
+      {
+        type: "tool-call",
+        toolCallId: "tool",
+        toolName: "shell_command",
+        input: { command: "echo OK" },
+      },
+      { type: "finish", finishReason: "tool-calls" },
+    ]);
+
+    expect(result.content).toEqual([
+      {
+        type: "tool_use",
+        id: "tool",
+        toolName: "shell_command",
+        input: { command: "echo OK" },
+      },
+    ]);
+    expect(result.notices).toEqual([
+      { adapter: "commandcode-private", direction: "response", code: "empty_text_block_omitted", action: "ignore" },
+    ]);
+  });
+
+  it("still rejects a whitespace-only reasoning block", () => {
+    expect(() =>
+      assemble([
+        { type: "reasoning-start", id: "r" },
+        { type: "reasoning-delta", id: "r", text: "  " },
+        { type: "reasoning-end", id: "r" },
+        { type: "finish" },
+      ]),
+    ).toThrow(CommandCodeProtocolError);
   });
 });

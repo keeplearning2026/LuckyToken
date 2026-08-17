@@ -180,6 +180,14 @@ interface BaseSlot {
 interface TextSlot extends BaseSlot {
   kind: "text";
   text: string;
+  /**
+   * True when the upstream closed an empty/whitespace-only text block.
+   * Real upstreams (e.g. DeepSeek routed through the CommandCode gateway)
+   * legitimately emit a blank text block before a tool call; such a block
+   * carries no information and is omitted from the result instead of
+   * failing the whole response.
+   */
+  dropped?: boolean;
 }
 
 interface ReasoningSlot extends BaseSlot {
@@ -360,27 +368,32 @@ export class CommandCodeContentAssembler {
       );
     }
 
-    const content = this.slots.map((slot): CommandCodeContentBlock => {
-      if (slot.kind === "text") {
-        return { type: "text", id: slot.id, text: slot.text };
-      }
-      if (slot.kind === "reasoning") {
-        return { type: "reasoning", id: slot.id, text: slot.text };
-      }
-      if (slot.finalInput === undefined) {
-        this.rollback();
-        throw new CommandCodeProtocolError(
-          "INVALID_BLOCK_LIFECYCLE",
-          "CommandCode tool block closed without final input",
-        );
-      }
-      return {
-        type: "tool_use",
-        id: slot.id,
-        toolName: slot.finalToolName as string,
-        input: slot.finalInput,
-      };
-    });
+    const content = this.slots
+      .map((slot): CommandCodeContentBlock | undefined => {
+        if (slot.kind === "text") {
+          if (slot.dropped === true) return undefined;
+          return { type: "text", id: slot.id, text: slot.text };
+        }
+        if (slot.kind === "reasoning") {
+          return { type: "reasoning", id: slot.id, text: slot.text };
+        }
+        if (slot.finalInput === undefined) {
+          this.rollback();
+          throw new CommandCodeProtocolError(
+            "INVALID_BLOCK_LIFECYCLE",
+            "CommandCode tool block closed without final input",
+          );
+        }
+        return {
+          type: "tool_use",
+          id: slot.id,
+          toolName: slot.finalToolName as string,
+          input: slot.finalInput,
+        };
+      })
+      .filter(
+        (block): block is CommandCodeContentBlock => block !== undefined,
+      );
     const result: CommandCodeResult = {
       content,
       finish: this.finishEvent,
@@ -751,6 +764,23 @@ export class CommandCodeContentAssembler {
   ): void {
     const slot = this.requireOpen(map, id, eventType);
     if (slot.text.trim().length === 0) {
+      // A whitespace-only text block before a tool call is legitimate
+      // upstream behavior (models often emit "\n\n" then call a tool).
+      // Omit it from the result; a whitespace-only reasoning block remains
+      // a protocol error (reasoning is never expected to be empty).
+      if (slot.kind === "text") {
+        (slot as TextSlot).dropped = true;
+        slot.state = "closed";
+        this.notices.push(
+          Object.freeze({
+            adapter: COMMANDCODE_PROVIDER_ID,
+            direction: "response",
+            code: "empty_text_block_omitted",
+            action: "ignore",
+          }),
+        );
+        return;
+      }
       this.rollback();
       throw new CommandCodeProtocolError(
         "EMPTY_CONTENT_BLOCK",
