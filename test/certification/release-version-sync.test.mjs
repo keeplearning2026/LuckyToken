@@ -22,7 +22,6 @@ test("release version is single-sourced and every shipped surface agrees", async
     "packages/application-control-plane/package.json",
     "packages/provider-contract/package.json",
     "packages/provider-commandcode-private/package.json",
-    "packages/control-pipe-win-native/package.json",
     "packages/desktop-shell/package.json",
   ]) {
     const manifest = await readJson(path);

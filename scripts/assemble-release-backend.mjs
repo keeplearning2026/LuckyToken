@@ -67,10 +67,6 @@ export async function assembleReleaseBackend({
       directory: "packages/application-control-plane",
       name: "@luckytoken/application-control-plane",
     },
-    {
-      directory: "packages/control-pipe-win-native",
-      name: "@luckytoken/control-pipe-win-native",
-    },
   ];
   const tarballs = [];
   for (const target of packTargets) {
