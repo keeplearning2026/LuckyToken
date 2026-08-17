@@ -4,10 +4,10 @@
 
 **Blocked by:** 11 — Add Main ControlPlaneSession lifecycle.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Renderer-facing control operations reuse Application Control Plane semantic types instead of introducing Electron-specific domain DTOs.
-- [ ] Platform operations such as auto-start, dialogs, and external URL opening are separate from Backend management operations.
-- [ ] The renderer cannot access raw `ipcRenderer`, generic channel invocation, Node built-ins, descriptor address, capability, filesystem handles, or Electron objects.
-- [ ] Main validates IPC sender/context before executing privileged operations.
-- [ ] The complete renderer contract can be replaced by a deterministic fake for feature tests without starting Electron or Backend.
+- [x] Renderer-facing control operations reuse Application Control Plane semantic types instead of introducing Electron-specific domain DTOs.
+- [x] Platform operations such as auto-start, dialogs, and external URL opening are separate from Backend management operations.
+- [x] The renderer cannot access raw `ipcRenderer`, generic channel invocation, Node built-ins, descriptor address, capability, filesystem handles, or Electron objects.
+- [x] Main validates IPC sender/context before executing privileged operations.
+- [x] The complete renderer contract can be replaced by a deterministic fake for feature tests without starting Electron or Backend.

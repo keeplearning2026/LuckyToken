@@ -1,4 +1,13 @@
-import { app, BrowserWindow, Menu, nativeImage, Tray } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  shell,
+  Tray,
+} from "electron";
 import { join } from "node:path";
 
 import {
@@ -10,6 +19,8 @@ import {
   createMainControlPlaneSession,
   type TrayHealth,
 } from "./control-plane-session.js";
+import { registerDesktopIpcHandlers } from "./desktop-ipc.js";
+import { desktopIpcChannels } from "../shared/ipc-channels.js";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -25,6 +36,50 @@ const backendSupervisor = createElectronBackendSupervisor({
   developmentRoot: process.cwd(),
 });
 const controlPlaneSession = createMainControlPlaneSession();
+const desktopIpcBridge = registerDesktopIpcHandlers({
+  registrar: {
+    handle: (channel, handler) => {
+      ipcMain.handle(channel, (event, ...args) =>
+        handler(
+          {
+            senderId: event.sender.id,
+            send: (targetChannel, payload) => event.sender.send(targetChannel, payload),
+          },
+          ...args,
+        ),
+      );
+    },
+    removeHandler: (channel) => ipcMain.removeHandler(channel),
+  },
+  session: controlPlaneSession,
+  platform: {
+    getAutoStart: async () => app.getLoginItemSettings().openAtLogin,
+    setAutoStart: async (enabled) => {
+      app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
+      return app.getLoginItemSettings().openAtLogin;
+    },
+    pickDirectory: async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    },
+    pickSaveFile: async (options) => {
+      const result = await dialog.showSaveDialog({
+        title: options.title,
+        ...(options.defaultPath === undefined
+          ? {}
+          : { defaultPath: options.defaultPath }),
+      });
+      return result.canceled ? undefined : result.filePath;
+    },
+    openExternal: async (url) => {
+      await shell.openExternal(url);
+    },
+    getDesktopVersion: async () => app.getVersion(),
+  },
+  isTrustedSender: (senderId) => mainWindow?.webContents.id === senderId,
+});
 
 function rendererUrl(): { readonly kind: "url"; readonly value: string } | { readonly kind: "file"; readonly value: string } {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
@@ -52,6 +107,7 @@ function openManagementWindow(): void {
     ...createSecureManagementWindowOptions(join(__dirname, "preload.js")),
   });
   mainWindow = window;
+  const senderId = window.webContents.id;
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => {
@@ -62,6 +118,7 @@ function openManagementWindow(): void {
   });
   window.once("closed", () => {
     if (mainWindow === window) mainWindow = undefined;
+    void desktopIpcBridge.releaseSender(senderId);
   });
 
   const target = rendererUrl();
@@ -118,6 +175,9 @@ void startElectronDesktopLifecycle({
     await controlPlaneSession.connect(attachment.endpoint);
     controlPlaneSession.subscribeState((state) => {
       updateTray(controlPlaneSession.trayHealth());
+      if (state.kind === "ready" && mainWindow !== undefined && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(desktopIpcChannels.statusEvent, state.status);
+      }
       if (state.kind !== "unavailable" || reconnectTask !== undefined) return;
       reconnectTask = (async () => {
         for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -143,6 +203,7 @@ void startElectronDesktopLifecycle({
 // the tray running. Explicit product Quit is a separate tray action.
 app.on("will-quit", () => {
   void Promise.allSettled([
+    desktopIpcBridge.dispose(),
     controlPlaneSession.dispose(),
     backendSupervisor.dispose(),
   ]);

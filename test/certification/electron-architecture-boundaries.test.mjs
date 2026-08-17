@@ -159,6 +159,8 @@ test("the Desktop API contract exposes no generic IPC escape hatch", async () =>
   assert.ok(!/\binvoke\s*\(/u.test(source), "Desktop API must not expose invoke(channel, payload)");
   assert.ok(!/\bsend\s*\(/u.test(source), "Desktop API must not expose send(channel, payload)");
   assert.ok(!/\bchannel\b/u.test(source), "Desktop API must not expose raw channel strings");
+  assert.ok(!/\bcapability\b/u.test(source), "Desktop API must not expose Control Plane capability");
+  assert.ok(!/\baddress\b/u.test(source), "Desktop API must not expose local IPC address");
 });
 
 test("the Electron desktop build path is independent of Tauri", async () => {
