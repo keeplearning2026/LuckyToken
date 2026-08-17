@@ -1,5 +1,12 @@
 import type { FetchFunction, Model } from "@earendil-works/pi-ai";
 
+import {
+  parseSseFrames,
+  renderSseFrame,
+  sseFramePayload,
+  type SseFrameLine,
+} from "../sse-lines.js";
+
 export interface PassthroughAnthropicRequestOptions {
   readonly model: Model<string>;
   readonly rawBody: string;
@@ -7,6 +14,15 @@ export interface PassthroughAnthropicRequestOptions {
   readonly signal: AbortSignal;
   readonly fetch: FetchFunction;
   readonly upstreamHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Composed Provider-facing request facts (Ticket 10): the auth result's
+   * merged headers (built-in static model headers, configured provider/
+   * model headers, authHeader Authorization). These are the operator's
+   * authoritative request headers; client-forwarded headers merge below
+   * them and the resolved apiKey always owns `x-api-key`. Null values
+   * (ProviderHeaders) are ignored.
+   */
+  readonly composedHeaders?: Readonly<Record<string, string | null>>;
 }
 
 export interface PassthroughAnthropicResult {
@@ -90,21 +106,48 @@ function filterHeaders(
   return Object.freeze(output);
 }
 
+/** Request fields the transport itself owns: neither composed Provider
+ *  headers nor client headers may override them (mirrors the pinned SDK,
+ *  which sets these after merging default headers). */
+const TRANSPORT_OWNED = new Set(["content-type", "anthropic-version"]);
+
 function buildUpstreamHeaders(
-  apiKey: string,
+  apiKey: string | undefined,
   upstreamHeaders: Readonly<Record<string, string>> | undefined,
+  composedHeaders: Readonly<Record<string, string | null>> | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "x-api-key": apiKey,
     "content-type": "application/json",
     "anthropic-version": "2023-06-01",
   };
+  // Header-only auth (no resolved apiKey) must not fabricate an empty
+  // x-api-key field; a composed x-api-key then carries the credential.
+  const ownsApiKey = apiKey !== undefined && apiKey.length > 0;
+  if (ownsApiKey) {
+    headers["x-api-key"] = apiKey;
+  }
+  // Client-forwarded end-to-end headers (existing strict whitelist).
   if (upstreamHeaders !== undefined) {
     for (const [name, value] of Object.entries(upstreamHeaders)) {
       const lower = name.toLowerCase();
       if (HOP_BY_HOP.has(lower) || FORBIDDEN_RESPONSE_HEADERS.has(lower)) {
         continue;
       }
+      headers[lower] = value;
+    }
+  }
+  // Composed Provider-facing headers are the operator's authority: they
+  // merge above client headers and may carry their own Authorization or
+  // x-api-key (header-only auth). Hop-by-hop and transport-owned fields
+  // stay fixed; a composed x-api-key yields to the transport-generated
+  // credential whenever a resolved apiKey exists (lowercased names, so a
+  // mixed-case composed entry emits exactly one header).
+  if (composedHeaders !== undefined) {
+    for (const [name, value] of Object.entries(composedHeaders)) {
+      const lower = name.toLowerCase();
+      if (HOP_BY_HOP.has(lower) || TRANSPORT_OWNED.has(lower)) continue;
+      if (ownsApiKey && lower === "x-api-key") continue;
+      if (value === undefined || value === null) continue;
       headers[lower] = value;
     }
   }
@@ -169,9 +212,27 @@ export async function passthroughAnthropicRequest(
 ): Promise<PassthroughAnthropicResult> {
   const { model, rawBody, apiKey, signal, fetch: fetchImpl } = options;
   if (apiKey === undefined || apiKey.length === 0) {
-    throw new Error(
-      `No API key configured for passthrough provider: ${model.provider}`,
-    );
+    // Header-owned auth (e.g. ANTHROPIC_AUTH_TOKEN, authHeader) is a valid
+    // Provider-facing credential; mirror the pinned API-layer
+    // assertRequestAuth which accepts authorization/x-api-key/cf-aig-
+    // authorization without an apiKey.
+    const composed = options.composedHeaders ?? {};
+    const hasHeaderAuth = Object.entries(composed).some(([name, value]) => {
+      const lower = name.toLowerCase();
+      return (
+        (lower === "authorization" ||
+          lower === "x-api-key" ||
+          lower === "cf-aig-authorization") &&
+        value !== undefined &&
+        value !== null &&
+        value.trim().length > 0
+      );
+    });
+    if (!hasHeaderAuth) {
+      throw new Error(
+        `No API key configured for passthrough provider: ${model.provider}`,
+      );
+    }
   }
   const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
   const forwardedBody = rewriteModelSelector(rawBody, model.id);
@@ -179,7 +240,7 @@ export async function passthroughAnthropicRequest(
   try {
     upstream = await fetchImpl(endpoint, {
       method: "POST",
-      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders),
+      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders, options.composedHeaders),
       body: forwardedBody,
       signal,
     });
@@ -216,6 +277,185 @@ export function passthroughRequestHeaders(
   request: Request,
 ): Readonly<Record<string, string>> {
   return filterHeaders(request.headers, isSafeForwardedRequestHeader);
+}
+
+/**
+ * Project every externally visible model identity of a buffered upstream
+ * Anthropic response to the requested alias (Ticket 15 native passthrough
+ * symmetry).
+ *
+ * Supported shapes:
+ *
+ * - non-streaming (`application/json`): the top-level `model` field;
+ * - streaming (`text/event-stream`): the nested `message.model` of the
+ *   `message_start` event, plus any event that carries a top-level `model`.
+ *
+ * The response is buffered before projection, so a shape that cannot be
+ * guaranteed symmetric fails with `{ error }` and the caller returns a
+ * legal target-protocol error instead of leaking upstream bytes or the
+ * canonical model id. Non-model-bearing SSE events pass through
+ * byte-identical; rewritten events are re-serialized with only the model
+ * field changed.
+ */
+export function projectAnthropicPassthroughBody(
+  body: Uint8Array,
+  contentType: string,
+  alias: string,
+): { readonly body: Uint8Array<ArrayBuffer> } | { readonly error: string } {
+  const text = new TextDecoder().decode(body);
+  if (contentType.toLowerCase().includes("text/event-stream")) {
+    return projectAnthropicSse(text, alias);
+  }
+  return projectAnthropicJsonObject(text, alias);
+}
+
+/**
+ * Collect every path to a `model` property key in a parsed JSON tree.
+ * Only keys are identity candidates; `model` text inside string values is
+ * semantic content and is never scanned. A depth bound keeps adversarial
+ * nesting bounded; the sentinel path fails every approved-position check.
+ */
+const MAX_MODEL_SCAN_DEPTH = 64;
+const DEPTH_SENTINEL = "<max-depth>";
+
+function collectModelPaths(
+  value: unknown,
+  path: string[] = [],
+  out: string[] = [],
+  depth = 0,
+): string[] {
+  if (depth > MAX_MODEL_SCAN_DEPTH) {
+    out.push(DEPTH_SENTINEL);
+    return out;
+  }
+  if (typeof value !== "object" || value === null) return out;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      collectModelPaths(value[index], [...path, String(index)], out, depth + 1);
+    }
+    return out;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    const next = [...path, key];
+    if (key === "model") out.push(next.join("."));
+    collectModelPaths(entry, next, out, depth + 1);
+  }
+  return out;
+}
+
+function projectAnthropicJsonObject(
+  text: string,
+  alias: string,
+): { readonly body: Uint8Array<ArrayBuffer> } | { readonly error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: "Anthropic passthrough response is not valid JSON" };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { error: "Anthropic passthrough response is not a JSON object" };
+  }
+  const record = parsed as Record<string, unknown>;
+  // The approved response-metadata position is exactly the top-level
+  // `model`. Any other `model` key in the tree (tool inputs, nested
+  // objects) cannot be told apart from semantic content: fail closed
+  // rather than rewrite user/tool payloads or leak identity.
+  const paths = collectModelPaths(parsed);
+  if (paths.length !== 1 || paths[0] !== "model") {
+    return {
+      error: "Anthropic passthrough response carries an ambiguous model position",
+    };
+  }
+  if (typeof record.model !== "string") {
+    return {
+      error: "Anthropic passthrough response carries no model identity",
+    };
+  }
+  record.model = alias;
+  return { body: new TextEncoder().encode(JSON.stringify(record)) };
+}
+
+/**
+ * Rewrite model identity in one parsed Anthropic SSE event payload.
+ *
+ * The only approved position in the Anthropic streaming shape is
+ * `message_start.message.model`. Any other `model` key anywhere in an
+ * event (a simultaneous top-level `model`, a type-less nested
+ * `message.model`, or a model inside any other event) is ambiguous: fail
+ * closed so no structural model identity outside the approved position can
+ * survive. Events without any model key pass through unchanged.
+ */
+function rewriteAnthropicSseEvent(
+  parsed: unknown,
+  alias: string,
+): { readonly json: string } | { readonly unchanged: true } | { readonly error: string } {
+  if (typeof parsed !== "object" || parsed === null) {
+    // Non-object data cannot carry model keys: pass through unchanged.
+    // Array roots fall through to the same structural model-key scan as
+    // objects (an array element may carry a `model` key).
+    return { unchanged: true };
+  }
+  const record = parsed as Record<string, unknown>;
+  const paths = collectModelPaths(parsed);
+  if (record.type === "message_start") {
+    if (paths.length !== 1 || paths[0] !== "message.model") {
+      return {
+        error: "message_start carries an ambiguous model position",
+      };
+    }
+    const message = record.message as Record<string, unknown>;
+    if (typeof message.model !== "string") {
+      return { error: "message_start carries no model identity" };
+    }
+    message.model = alias;
+    return { json: JSON.stringify(record) };
+  }
+  if (paths.length !== 0) {
+    return { error: "Anthropic SSE event carries an unsupported model position" };
+  }
+  return { unchanged: true };
+}
+
+function projectAnthropicSse(
+  text: string,
+  alias: string,
+): { readonly body: Uint8Array<ArrayBuffer> } | { readonly error: string } {
+  const out: string[] = [];
+  for (const frame of parseSseFrames(text)) {
+    const payload = sseFramePayload(frame);
+    if (payload.length === 0) {
+      out.push(renderSseFrame(frame));
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return { error: "Anthropic passthrough SSE event is not valid JSON" };
+    }
+    const rewritten = rewriteAnthropicSseEvent(parsed, alias);
+    if ("error" in rewritten) return { error: rewritten.error };
+    if ("unchanged" in rewritten) {
+      out.push(renderSseFrame(frame));
+      continue;
+    }
+    // Rewritten frames keep their non-data fields and carry the projected
+    // payload as one canonical data line.
+    const fields = frame.lines.filter(
+      (line): line is Extract<SseFrameLine, { kind: "field" }> =>
+        line.kind === "field",
+    );
+    out.push(
+      renderSseFrame({
+        lines: Object.freeze([
+          ...fields,
+          { kind: "data" as const, payload: rewritten.json },
+        ]),
+      }),
+    );
+  }
+  return { body: new TextEncoder().encode(out.join("")) };
 }
 
 /**

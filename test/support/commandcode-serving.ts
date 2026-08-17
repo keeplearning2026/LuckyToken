@@ -7,6 +7,9 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { createAuth } from "../../src/auth.js";
+import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import type { RequestLedger } from "../../src/request-ledger/index.js";
+import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   certifyServingComposition,
@@ -36,6 +39,9 @@ import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
 } from "../../src/runtime.js";
+import { resolveUsageSemantics } from "../../src/providers/usage-declarations.js";
+import { createExecutionOperation } from "../../src/execution.js";
+import type { UsageSemanticsResolver } from "@luckytoken/provider-contract/usage";
 
 export interface CommandCodeServingTestOptions {
   clientApiKey: string;
@@ -58,6 +64,17 @@ export interface CommandCodeServingTestOptions {
   anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
   invocationDiagnostics?: InvocationDiagnosticsFactory;
+  /** Ticket 18 Request Lifecycle Ledger observer; absent means the handler
+   *  uses its no-op observer. */
+  requestLedger?: RequestLedger;
+  /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
+   *  uses its no-op authority. */
+  deepCapture?: DeepCaptureAuthority;
+  /** Ticket 15 alias-only data plane seam (handler-level test stub). */
+  aliasSource?: AliasModelSource;
+  /** Ticket 20 usage-semantics resolver; defaults to the real Provider
+   *  integration declaration table, mirroring the production composition. */
+  resolveUsageSemantics?: UsageSemanticsResolver;
 }
 
 export interface CommandCodeServingTestComposition {
@@ -161,7 +178,7 @@ export function createCommandCodeServingTestComposition(
       if (token !== clientApiKey) return undefined;
       return projectDir === undefined ? {} : { projectDir };
     },
-    createFallbackSessionId: createSessionId,
+    createEffectiveSessionId: createSessionId,
   });
   const anthropic = createAnthropicMessagesHandler({
     models,
@@ -179,6 +196,22 @@ export function createCommandCodeServingTestComposition(
     ...(options.invocationDiagnostics === undefined
       ? {}
       : { invocationDiagnostics: options.invocationDiagnostics }),
+    ...(options.requestLedger === undefined
+      ? {}
+      : { requestLedger: options.requestLedger }),
+    ...(options.deepCapture === undefined
+      ? {}
+      : { deepCapture: options.deepCapture }),
+    ...(options.aliasSource === undefined
+      ? {}
+      : { aliasSource: options.aliasSource }),
+    ...(options.resolveUsageSemantics === undefined
+      ? { executeOperation: createExecutionOperation(resolveUsageSemantics) }
+      : {
+          executeOperation: createExecutionOperation(
+            options.resolveUsageSemantics,
+          ),
+        }),
   });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [anthropic],

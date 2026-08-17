@@ -23,7 +23,7 @@ import { createOpenAIResponsesHandler } from "../../src/protocols/openai-respons
 import type { ResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
 
 const auth: Auth = {
-  resolve: async () => ({ authorized: true, sessionId: "session" }),
+  resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
 };
 
 function model(api: string): Model<string> {

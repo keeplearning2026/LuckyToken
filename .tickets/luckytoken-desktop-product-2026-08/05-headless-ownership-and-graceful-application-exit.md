@@ -8,7 +8,7 @@
 
 **Blocked by:** 03 — Dashboard-managed Runtime Supervisor; 04 — Tray Close, Show, and Quit entry points.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm the Control Plane ownership/lifecycle seam and thi
 
 ## Acceptance criteria
 
-- [ ] Starting a second backend detects and connects to the one active instance rather than binding another Data Plane.
-- [ ] A desktop UI can attach to an instance launched by the headless CLI and accurately reports that ownership.
-- [ ] Closing or detaching a non-owner desktop UI never stops the headless-owned gateway.
-- [ ] Owner Quit stops accepting new requests, waits for active requests to complete, and exits when the active set becomes empty.
-- [ ] After the configured drain timeout, remaining requests are aborted and the owner exits with an observable timeout outcome.
-- [ ] Non-owner Quit behavior is explicit and cannot silently terminate a user-started headless process.
-- [ ] Windows login auto-start can be enabled or disabled and its effective registration status is queryable.
-- [ ] Lifecycle tests cover single-instance discovery, attachment, owner/non-owner Quit, successful drain, timeout abort, and auto-start projection.
+- [x] Starting a second backend detects and connects to the one active instance rather than binding another Data Plane.
+- [x] A desktop UI can attach to an instance launched by the headless CLI and accurately reports that ownership.
+- [x] Closing or detaching a non-owner desktop UI never stops the headless-owned gateway.
+- [x] Owner Quit stops accepting new requests, waits for active requests to complete, and exits when the active set becomes empty.
+- [x] After the configured drain timeout, remaining requests are aborted and the owner exits with an observable timeout outcome.
+- [x] Non-owner Quit behavior is explicit and cannot silently terminate a user-started headless process.
+- [x] Windows login auto-start can be enabled or disabled and its effective registration status is queryable.
+- [x] Lifecycle tests cover single-instance discovery, attachment, owner/non-owner Quit, successful drain, timeout abort, and auto-start projection.

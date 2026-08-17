@@ -8,7 +8,7 @@
 
 **Blocked by:** 10 — Pinned Pi modelOverrides, headers, and authentication compatibility.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm catalog refresh commands, catalog queries, and res
 
 ## Acceptance criteria
 
-- [ ] Startup restores the last valid cached dynamic catalog before network refresh completes.
-- [ ] Successful Provider login schedules a background refresh for the relevant catalog.
-- [ ] Opening Models & Aliases schedules a non-blocking background refresh, and Manual Refresh produces observable per-Provider progress/results.
-- [ ] A fully successful refresh atomically replaces the active catalog for new requests while in-flight requests retain their captured Model snapshot.
-- [ ] A Provider refresh failure preserves usable cached/built-in models from unaffected Providers and records a warning.
-- [ ] Invalid models.json refresh behavior matches pinned Pi: compatible built-ins remain, affected custom Providers disappear, invalid state is not silently repaired, and errors are aggregated visibly.
-- [ ] Catalog queries distinguish known, available, unavailable, cached, refreshing, and failed Provider/model states.
-- [ ] Deterministic tests cover restart restoration, background triggers, manual refresh, partial Provider failure, invalid configuration, and snapshot isolation.
+- [x] Startup restores the last valid cached dynamic catalog before network refresh completes.
+- [x] Successful Provider login schedules a background refresh for the relevant catalog.
+- [x] Opening Models & Aliases schedules a non-blocking background refresh, and Manual Refresh produces observable per-Provider progress/results.
+- [x] A fully successful refresh atomically replaces the active catalog for new requests while in-flight requests retain their captured Model snapshot.
+- [x] A Provider refresh failure preserves usable cached/built-in models from unaffected Providers and records a warning.
+- [x] Invalid models.json refresh behavior matches pinned Pi: compatible built-ins remain, affected custom Providers disappear, invalid state is not silently repaired, and errors are aggregated visibly.
+- [x] Catalog queries distinguish known, available, unavailable, cached, refreshing, and failed Provider/model states.
+- [x] Deterministic tests cover restart restoration, background triggers, manual refresh, partial Provider failure, invalid configuration, and snapshot isolation.

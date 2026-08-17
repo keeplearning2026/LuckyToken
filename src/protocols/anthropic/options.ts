@@ -2,7 +2,9 @@
 // Anthropic keeps this re-export for backward compatibility.
 export {
   composeOptions,
+  identityRequestModelResolver,
   InvocationCompositionFailure,
   type InvocationInfrastructureFacts,
+  type RequestModelResolver,
   type RouterOptionDefaults,
 } from "../options.js";

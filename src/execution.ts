@@ -13,6 +13,11 @@ import {
   type ExecutionFactsSink,
   type UpstreamFailureFact,
 } from "@luckytoken/provider-contract/diagnostics";
+import {
+  normalizeTerminalUsage,
+  type TerminalUsageClass,
+  type UsageSemanticsResolver,
+} from "@luckytoken/provider-contract/usage";
 
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
@@ -42,15 +47,75 @@ export function freezePiInvocation(
   deepFreezeInvocationData(options);
 }
 
+/**
+ * Ticket 20: the neutral Pi execution operation Client Protocol handlers
+ * call. It is the plain `execute` surface without the usage-semantics
+ * resolver parameter: the handler never names or carries any usage-semantics
+ * type — the Provider/composition side binds the resolver into the operation
+ * via `createExecutionOperation` and hands the bound operation to the
+ * handler through its options.
+ */
+export type ExecutionOperation = (
+  models: Models,
+  model: Model<string>,
+  context: Context,
+  options: ModelsSimpleStreamOptions,
+  factsSink?: ExecutionFactsSink,
+) => Promise<AssistantMessage>;
+
+/**
+ * Binds the narrow usage-semantics resolver (Provider integration side) into
+ * a neutral execution operation. `createExecutionOperation()` with no
+ * resolver is the honest default: every api is undeclared and every
+ * terminal-usage snapshot is Partial (`undeclared_semantics`).
+ */
+export function createExecutionOperation(
+  resolveUsageSemantics?: UsageSemanticsResolver,
+): ExecutionOperation {
+  return (models, model, context, options, factsSink) =>
+    execute(
+      models,
+      model,
+      context,
+      options,
+      factsSink,
+      resolveUsageSemantics,
+    );
+}
+
 export async function execute(
   models: Models,
   model: Model<string>,
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
+  /**
+   * Ticket 20: the narrow Provider/composition-side operation that resolves
+   * the declared usage semantics for one Pi api id. Core never imports the
+   * Provider integration directory; the composition root wires this through
+   * the handler seam (same pattern as `resolveRequestModel`). Absent means
+   * every api is undeclared (Partial undeclared_semantics snapshots).
+   */
+  resolveUsageSemantics?: UsageSemanticsResolver,
 ): Promise<AssistantMessage> {
   const signal = options.signal;
   throwIfExecutionAborted(signal);
+  /** Ticket 20: capture the canonical terminal-usage snapshot at the Pi
+   *  terminal, before execute() returns or throws, so the error-terminal
+   *  message is never discarded. Delivered only to an opted-in sink. */
+  const observeTerminal = (
+    terminalClass: TerminalUsageClass,
+    message: AssistantMessage,
+  ): void => {
+    factsSink?.terminalUsage?.(
+      normalizeTerminalUsage(
+        model.api,
+        message.usage,
+        terminalClass,
+        resolveUsageSemantics?.(model.api),
+      ),
+    );
+  };
   let iterator: AsyncIterator<AssistantMessageEvent>;
   try {
     const stream = models.streamSimple(model, context, options);
@@ -93,6 +158,7 @@ export async function execute(
             "Pi aborted terminal carried a non-cancellation failure",
           );
         }
+        observeTerminal("aborted", event.error);
         const failure = diagnosticFailure ?? createCallerCancellationFact();
         throw new ExecutionAbortedError(signal?.reason, failure);
       }
@@ -112,6 +178,7 @@ export async function execute(
           "Pi error terminal carried a caller-cancellation failure",
         );
       }
+      observeTerminal("failed", event.error);
       throw new ExecutionFailure(
         "Pi execution reported an error",
         event.error.errorMessage,
@@ -121,6 +188,7 @@ export async function execute(
     if (event.type === "done") {
       submitExecutionFacts(event.message.diagnostics, factsSink);
       if (event.reason === "deferred") {
+        observeTerminal("unsupported", event.message);
         throw new UnsupportedExecutionOutcomeError(
           "Pi deferred completion is outside LuckyToken Core v1",
         );
@@ -139,6 +207,7 @@ export async function execute(
           "Pi done terminal reason did not match its AssistantMessage",
         );
       }
+      observeTerminal("done", event.message);
       return event.message;
     }
   }

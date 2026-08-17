@@ -1,4 +1,5 @@
 {
+  "schemaVersion": "luckytoken-config-v1",
   "server": {
     "host": "127.0.0.1",
     "port": 3000
@@ -62,6 +63,16 @@
     "retentionDays": 30,
     "maxFiles": 1000,
     "logCancellation": true
+  },
+  "runtimeDiagnostics": {
+    "directory": "state/diagnostics"
+  },
+  "deepDiagnostics": {
+    "directory": "state/deep-diagnostics",
+    "enabled": false,
+    "maxCaptureBytes": 4194304,
+    "retentionAgeMs": 604800000,
+    "maxCaptures": 1000
   },
   "pi": {
     "directory": "pi"

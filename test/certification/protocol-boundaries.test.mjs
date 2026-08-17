@@ -23,6 +23,22 @@ const CLIENT_SHARED_SEAMS = new Set([
   "model-resolution.ts",
   "invocation-diagnostics/index.ts",
   "protocols/options.ts",
+  // Ticket 15 neutral data-plane seams: both Client Protocols resolve
+  // aliases and project passthrough bodies through these narrow shared
+  // modules; neither imports concrete Providers or protocol modules
+  // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
+  "alias-model-seam.ts",
+  "protocols/sse-lines.ts",
+  // Ticket 18 neutral handler seam: both Client Protocols observe the
+  // Request Lifecycle Ledger only through this narrow seam (observer
+  // contract + safe no-op); persistence/configuration/store DTOs stay out
+  // of the protocol boundary.
+  "request-ledger/handler-seam.ts",
+  // Ticket 22 neutral handler seam: both Client Protocols observe the one
+  // global Deep Diagnostics capture decision only through this narrow seam
+  // (authority contract + safe no-op); persistence/configuration/store
+  // DTOs stay out of the protocol boundary.
+  "deep-diagnostics/handler-seam.ts",
 ]);
 
 function slash(value) {

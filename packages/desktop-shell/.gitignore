@@ -1,0 +1,4 @@
+dist/
+backend/
+src-tauri/gen/
+src-tauri/target/

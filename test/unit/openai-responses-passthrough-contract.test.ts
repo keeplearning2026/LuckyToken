@@ -63,7 +63,7 @@ function dependencies(
   passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
   const auth: Auth = {
-    resolve: async () => ({ authorized: true, sessionId: "session" }),
+    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
   };
   const options: OpenAIResponsesHandlerOptions = {
     models,
@@ -665,10 +665,11 @@ describe("19: native Responses passthrough contract", () => {
       expect(response.status).toBeGreaterThanOrEqual(500);
       const body = (await response.json()) as Record<string, unknown>;
       const error = body.error as Record<string, unknown>;
-      expect(error.type).toBeDefined();
-      // The message must reflect the upstream failure, never a generic
-      // "Internal server error" that hides the transport failure.
-      expect(String(error.message)).toContain("fetch failed");
+      expect(error.type).toBe("api_error");
+      // The client sees fixed actionable text; the raw transport cause
+      // (which may name endpoints) never reaches the wire.
+      expect(String(error.message)).toBe("Upstream provider request failed");
+      expect(String(error.message)).not.toContain("fetch failed");
     } finally {
       restore();
     }

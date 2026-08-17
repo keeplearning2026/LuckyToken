@@ -268,4 +268,27 @@ describe("OpenAI Responses SSE rendering", () => {
     expect(text).not.toContain("response.incomplete");
     expect(text).not.toContain("response.failed");
   });
+
+  it("carries the fail-open zero usage in the terminal event while preserving output", () => {
+    // Ticket 20 additive: a Responses response whose usage fell back to the
+    // adapter-contract zeros still streams its successful content and a
+    // schema-valid zero usage in the completed terminal event.
+    const fallback = responseObject();
+    fallback.usage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    };
+    const frames = new TextDecoder()
+      .decode(renderResponsesSse(fallback).body)
+      .split("\n\n")
+      .filter((frame) => frame.length > 0);
+    const terminal = JSON.parse(frames[2]!.replace(/^data: /, ""));
+    expect(terminal.type).toBe("response.completed");
+    expect(terminal.response.usage).toEqual(fallback.usage);
+    const item = JSON.parse(frames[1]!.replace(/^data: /, ""));
+    expect(item.item.content[0].text).toBe("hello");
+  });
 });

@@ -1,0 +1,29 @@
+{
+  "name": "@luckytoken/desktop-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:native": "tauri build",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,mjs}\" \"vite.config.ts\"",
+    "test": "vitest run",
+    "test:native-smoke": "node test/run-native-smoke.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@luckytoken/application-control-plane": "0.1.0",
+    "@tauri-apps/api": "2.11.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "jsdom": "^26.1.0",
+    "vite": "8.1.5"
+  }
+}

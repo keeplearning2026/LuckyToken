@@ -16,7 +16,7 @@ import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 
 /** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
-function stripJsonComments(input: string): string {
+export function stripJsonComments(input: string): string {
   return input
     .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
     .replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));
@@ -132,7 +132,6 @@ const OpenAIResponsesCompatSchema = Type.Object({
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
   supportsStrictMode: Type.Optional(Type.Boolean()),
   supportsOpenAIGrammarTools: Type.Optional(Type.Boolean()),
-  supportsAdditionalTools: Type.Optional(Type.Boolean()),
   supportsToolSearch: Type.Optional(Type.Boolean()),
 });
 
@@ -223,6 +222,37 @@ const ModelsConfigSchema = Type.Object({
   providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 const validateModelsConfig = Compile(ModelsConfigSchema);
+
+/**
+ * Schema-validate an already-parsed models.json document value (Ticket 08).
+ * Errors carry actionable dotted paths (e.g. `providers.ollama.models.0.id`)
+ * and never echo the offending value, so they are safe to surface verbatim
+ * under the credential boundary.
+ */
+export function validateModelsJsonValue(
+  value: unknown,
+):
+  | { readonly valid: true }
+  | {
+      readonly valid: false;
+      readonly errors: ReadonlyArray<{ readonly path: string; readonly message: string }>;
+    } {
+  if (!validateModelsConfig.Check(value)) {
+    const errors = validateModelsConfig
+      .Errors(value)
+      .map((error) => ({
+        path: formatValidationPath(error),
+        message: error.message,
+      }));
+    return errors.length === 0
+      ? {
+          valid: false,
+          errors: [{ path: "root", message: "Unknown schema error" }],
+        }
+      : { valid: false, errors: Object.freeze(errors) };
+  }
+  return { valid: true };
+}
 
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;

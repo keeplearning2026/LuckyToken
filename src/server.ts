@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 
+import { HttpRequestAbortedError } from "./http.js";
 import type { LuckyTokenRuntime } from "./runtime.js";
 
 export interface LuckyTokenHttpServerOptions {
@@ -14,10 +15,34 @@ export interface LuckyTokenHttpServerOptions {
   readonly port?: number;
 }
 
+/** Deterministic time adapter for the quit drain (Ticket 05): production uses
+ *  the real clock; tests control both elapsed time and wake-ups. Sleeps are
+ *  cancellable so an early drain never leaves a timer keeping the process
+ *  alive. */
+export interface DrainClock {
+  now(): number;
+  sleep(ms: number): {
+    readonly promise: Promise<void>;
+    cancel(): void;
+  };
+}
+
+export type DrainOutcome = "drained" | "timed_out";
+
+export interface ServerDrainOptions {
+  /** Deterministic clock/abort adapter; defaults to the real clock. */
+  readonly clock?: DrainClock;
+}
+
 export interface RunningLuckyTokenHttpServer {
   readonly host: string;
   readonly port: number;
   readonly origin: string;
+  /** Graceful quit drain (Ticket 05): stops accepting new requests, waits
+   *  for the active set to empty, then aborts the remaining requests when
+   *  the timeout elapses. Resolves with the typed outcome before the owner
+   *  exits. */
+  drain(timeoutMs: number, options?: ServerDrainOptions): Promise<DrainOutcome>;
   close(): Promise<void>;
 }
 
@@ -121,9 +146,26 @@ export async function startLuckyTokenHttpServer(
           await writeWebResponse(response, result);
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        // A live client (not disconnected, not destroyed) still receives a
+        // truthful 500 when the request was cancelled or the handler failed
+        // unexpectedly. A real accepted request keeps its exact ledger
+        // request id through the transport-synthesized response (Ticket 18
+        // correlation seam on the aborted-error rejection); a disconnected
+        // client cannot receive a response and never gets one.
         if (!controller.signal.aborted && !response.destroyed) {
-          if (!response.headersSent) response.writeHead(500);
+          const requestId =
+            error instanceof HttpRequestAbortedError
+              ? error.requestId
+              : undefined;
+          if (!response.headersSent) {
+            response.writeHead(
+              500,
+              requestId === undefined
+                ? undefined
+                : { "x-luckytoken-request-id": requestId },
+            );
+          }
           response.end();
         }
       })
@@ -144,22 +186,72 @@ export async function startLuckyTokenHttpServer(
   origin = `http://${host}:${port}`;
   let closed = false;
   let closing: Promise<void> | undefined;
+  let draining: Promise<DrainOutcome> | undefined;
+  const shutdownReason = new Error("LuckyToken HTTP server is shutting down");
+  const abortActive = (): void => {
+    for (const active of activeRequests) {
+      if (!active.controller.signal.aborted) {
+        active.controller.abort(shutdownReason);
+      }
+      if (!active.response.destroyed) active.response.destroy(shutdownReason);
+    }
+  };
+  const realClock: DrainClock = {
+    now: Date.now,
+    sleep: (ms) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const promise = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      });
+      return {
+        promise,
+        cancel: () => {
+          if (timer !== undefined) clearTimeout(timer);
+        },
+      };
+    },
+  };
 
   return Object.freeze({
     host,
     port,
     origin,
+    drain(timeoutMs: number, options?: ServerDrainOptions): Promise<DrainOutcome> {
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+        return Promise.reject(
+          new Error("Drain timeout must be a non-negative integer"),
+        );
+      }
+      if (closed) return Promise.resolve("drained");
+      if (draining !== undefined) return draining;
+      if (closing !== undefined) return closing.then(() => "drained");
+      const clock = options?.clock ?? realClock;
+      // close() stops accepting and resolves when every connection ended;
+      // in-flight requests keep running while the active set drains.
+      const serverClosed = closeServer(server);
+      const timeout = clock.sleep(timeoutMs);
+      const timedOut = timeout.promise.then((): DrainOutcome => {
+        abortActive();
+        return "timed_out";
+      });
+      draining = Promise.race([
+        serverClosed.then((): DrainOutcome => "drained"),
+        timedOut,
+      ]).then((outcome) => {
+        // An early drain must not leave the timeout timer pending: it would
+        // keep the owner process alive past the quit.
+        timeout.cancel();
+        closed = true;
+        return outcome;
+      });
+      return draining;
+    },
     close(): Promise<void> {
       if (closed) return Promise.resolve();
       if (closing !== undefined) return closing;
-      const shutdownReason = new Error("LuckyToken HTTP server is shutting down");
+      if (draining !== undefined) return draining.then(() => undefined);
       const serverClosed = closeServer(server);
-      for (const active of activeRequests) {
-        if (!active.controller.signal.aborted) {
-          active.controller.abort(shutdownReason);
-        }
-        if (!active.response.destroyed) active.response.destroy(shutdownReason);
-      }
+      abortActive();
       closing = serverClosed.then(() => {
         closed = true;
       });

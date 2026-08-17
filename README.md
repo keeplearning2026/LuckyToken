@@ -36,7 +36,9 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
 │   ├── anthropic-messages.json         # Anthropic global/project local tokens
 │   └── openai-responses.json           # OpenAI Responses global/project local tokens
 ├── state/
-│   └── openai-responses.json           # durable Responses session history snapshot
+│   ├── openai-responses.json           # durable Responses session history snapshot
+│   ├── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
+│   └── deep-diagnostics/               # bounded Deep Diagnostics capture SQLite/WAL store
 └── pi/
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
@@ -47,6 +49,64 @@ only global/project token scopes and do not identify or inspect another Client
 Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
 runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
 every `auth.json` are ignored by Git.
+
+## Globally Controlled Deep Diagnostics Capture
+
+LuckyToken can deliberately capture raw request/response artifacts for
+future requests while a single global switch is on. The switch is the
+registered hot-apply setting `diagnostics.deepCapture.enabled` (default
+`false`, config default under `deepDiagnostics.enabled`), controllable through
+the Control Plane settings command — the desktop Settings / Developer Lab
+toggle and `control settings set diagnostics.deepCapture.enabled true`.
+
+While enabled, every request accepted by a Client Protocol handler captures
+its original request body, the exact response bytes the client receives
+(including the `x-luckytoken-request-id` correlation header), safe header
+maps, and ordered event timing. The acceptance-time enable snapshot is
+immutable: enabling affects only subsequently accepted requests, and
+disabling never erases already captured data or interrupts an in-flight
+capture. Disabled capture costs nothing on the request path (no body clone
+or read) and capture faults never alter model responses.
+
+Every artifact passes the same Ticket 07 universal redaction choke point as
+Runtime Diagnostics (structural redaction for JSON bodies, the universal
+text/header sanitizers, and the credential-owner known-value scrubber; the
+capture store fails closed until the scrubber is attached). The complete
+persisted record is budgeted in UTF-8 bytes below the Control Plane frame
+ceiling (`maxCaptureBytes` per record, never above it), so every committed
+capture is retrievable through the framed Control Plane query
+(`get_capture`) — raw bodies never reach disk, events, or the wire
+unredacted.
+
+Retention is bounded by configurable age (`retentionAgeMs`, measured from
+the acceptance-time snapshot) and capacity (`maxCaptures`) under
+`deepDiagnostics`; eviction deletes capture rows only, writes a tiny
+tombstone, and never touches the permanent Request Ledger or diagnostics
+records. A request detail can truthfully distinguish `no-capture`,
+`captured`, `partial`, `failed`, and `expired` states. A capture write fault
+never changes a model response; it retries once with a minimal failed-state
+marker and otherwise reports only a sanitized critical diagnostic (request
+id + fixed code).
+
+## Permanent Runtime Diagnostics
+
+LuckyToken keeps a permanent, ordered stream of application-level
+info/warning/error/critical events in a diagnostics-owned versioned
+SQLite/WAL database (`.luckytoken/state/diagnostics/diagnostics.sqlite3` by
+default, configured under `runtimeDiagnostics.directory`). Records are never
+automatically aged out and survive application restarts. An event may carry a
+`requestId` for correlation only; it never becomes part of a Request Ledger.
+
+Every untrusted producer value passes through one recursive credential-
+redaction choke point before it is persisted, queried, or delivered: header
+names/values (Authorization, Proxy-Authorization, x-api-key, Cookie,
+Set-Cookie), Pi credential shapes (api_key/access/refresh), query/form
+credential keys, nested Errors/causes, cycles, accessors/proxies, and
+oversized values. Redacted records may preserve header names, authentication
+scheme/type, and a non-reversible keyed fingerprint, but never the original
+value. The same sanitized committed records are the only ones reachable
+through the Control Plane diagnostics query/typed-event surface (`get
+_diagnostics`, `diagnostics_subscribe`) and any fallback output.
 
 The CommandCode Private Provider is installed as the private workspace package
 `@luckytoken/provider-commandcode-private` and loaded from `node_modules`
@@ -82,8 +142,9 @@ New-Item -ItemType Directory -Force .luckytoken\pi
 Copy-Item luckytoken.config.example.json .luckytoken\config.json
 ```
 
-The `openai-responses` Client Protocol is optional: it is served on
-`POST /v1/responses` only when listed in `clientProtocols`. Its `stateFile`
+The shipped configuration enables both Anthropic Messages and OpenAI Responses
+on one listener. A custom configuration can omit `openai-responses`; when it is
+listed, its `stateFile`
 (default `state/openai-responses.json` relative to the config directory)
 persists the `previous_response_id` conversation history across restarts, so
 Codex clients can continue an incremental session even after LuckyToken
@@ -126,6 +187,36 @@ Start the local listener:
 ```powershell
 npm start -- --config .luckytoken/config.json
 ```
+
+While that background application remains active, inspect or manage the model
+gateway through the same Control Plane used by the desktop Dashboard:
+
+```powershell
+npm start -- control status --descriptor .luckytoken/control-plane.json
+npm start -- control start --descriptor .luckytoken/control-plane.json
+npm start -- control stop --descriptor .luckytoken/control-plane.json
+npm start -- control restart --descriptor .luckytoken/control-plane.json
+npm start -- control settings query --descriptor .luckytoken/control-plane.json
+```
+
+The canonical `models.json` is always LuckyToken-owned: it defaults to
+`models.json` next to the config file, so the desktop layout places it at
+`~/.luckytoken/models.json` — never inside the Pi credential directory
+(`<pi.directory>/models.json`) and never Pi Agent's own data directory
+(`~/.pi/agent/models.json`). An explicit `pi.modelsJson` overrides the
+default. Providers and Models & Aliases pages in the desktop edit the same
+file through the Control Plane, and the CLI exposes the identical commands:
+
+```powershell
+npm start -- control models query --descriptor .luckytoken/control-plane.json
+npm start -- control models write-raw <revision> <content-file> --descriptor .luckytoken/control-plane.json
+npm start -- control models write-structured <revision> <providers-file> --descriptor .luckytoken/control-plane.json
+```
+
+Every write validates the proposed content first, takes the file lock, and
+replaces the file atomically; a write based on a stale revision returns an
+explicit `conflict` and never overwrites newer content. An invalid existing
+file is reported with its exact path and error and is never auto-overwritten.
 
 Startup prints every served route, normally:
 

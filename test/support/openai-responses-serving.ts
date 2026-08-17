@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createAuth } from "../../src/auth.js";
+import type { RequestLedger } from "../../src/request-ledger/index.js";
+import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
@@ -44,6 +46,12 @@ export interface OpenAIResponsesServingTestOptions {
   directory?: string;
   configuration?: OpenAIResponsesConfiguration;
   invocationDiagnostics?: InvocationDiagnosticsFactory;
+  /** Ticket 18 Request Lifecycle Ledger observer; absent means the handler
+   *  uses its no-op observer. */
+  requestLedger?: RequestLedger;
+  /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
+   *  uses its no-op authority. */
+  deepCapture?: DeepCaptureAuthority;
 }
 
 export interface OpenAIResponsesServingTestComposition {
@@ -103,7 +111,7 @@ export async function createOpenAIResponsesServingTestComposition(
   const auth = createAuth({
     authorizeToken: async (token) =>
       token === options.clientApiKey ? {} : undefined,
-    createFallbackSessionId: createSessionId,
+    createEffectiveSessionId: createSessionId,
   });
   const sessionState = createResponseSessionState({
     stateFile,
@@ -129,6 +137,12 @@ export async function createOpenAIResponsesServingTestComposition(
     ...(options.invocationDiagnostics === undefined
       ? {}
       : { invocationDiagnostics: options.invocationDiagnostics }),
+    ...(options.requestLedger === undefined
+      ? {}
+      : { requestLedger: options.requestLedger }),
+    ...(options.deepCapture === undefined
+      ? {}
+      : { deepCapture: options.deepCapture }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,

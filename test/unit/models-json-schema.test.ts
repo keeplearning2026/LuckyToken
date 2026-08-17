@@ -72,6 +72,84 @@ describe("ModelConfig (extracted from Pi coding-agent)", () => {
     expect(config.getError()).toMatch(/Invalid models\.json schema/);
   });
 
+  it("rejects invalid compat/model forms with the exact pinned schema errors", () => {
+    const cases: Array<{ value: unknown; path: string; message: string }> = [
+      {
+        value: { providers: { p: { compat: 42 } } },
+        path: "providers.p.compat",
+        message: "must be object",
+      },
+      {
+        value: { providers: { p: { modelOverrides: { m: "string" } } } },
+        path: "providers.p.modelOverrides.m",
+        message: "must be object",
+      },
+      {
+        value: { providers: { p: { models: [{ id: "m", headers: [1] }] } } },
+        path: "providers.p.models.0.headers",
+        message: "must be object",
+      },
+      {
+        value: { providers: { p: { headers: { "X": 5 } } } },
+        path: "providers.p.headers.X",
+        message: "must be string",
+      },
+      {
+        value: { providers: { p: { apiKey: "" } } },
+        path: "providers.p.apiKey",
+        message: "must not have fewer than 1 characters",
+      },
+      {
+        value: { providers: { p: { models: [{ id: "m", input: ["video"] }] } } },
+        path: "providers.p.models.0.input.0",
+        message: "must be equal to constant",
+      },
+      {
+        value: { providers: { p: { oauth: "device-flow" } } },
+        path: "providers.p.oauth",
+        message: "must be equal to constant",
+      },
+    ];
+    for (const { value, path, message } of cases) {
+      const config = ModelConfig.parse(JSON.stringify(value));
+      const error = config.getError();
+      expect(error).toBeDefined();
+      expect(error).toContain("Invalid models.json schema");
+      expect(error).toContain(`${path}: ${message}`);
+      // Never echoes the offending value.
+      expect(error).not.toContain("device-flow");
+      expect(error).not.toContain("42");
+    }
+  });
+
+  it("accepts the pinned union laxness: nested compat value types and unknown override fields are schema-valid", () => {
+    // Pinned schema semantics (TypeBox unions without strict
+    // additionalProperties): a wrong-typed nested compat value and an
+    // unknown modelOverride field pass schema validation exactly as the
+    // pinned ModelConfig accepts them — composition ignores what it does not
+    // apply. This documents the pinned meaning instead of generalizing
+    // compat into LuckyToken feature flags.
+    const config = ModelConfig.parse(
+      JSON.stringify({
+        providers: {
+          p: {
+            compat: { supportsStrictMode: "yes" },
+            modelOverrides: {
+              m: { api: "openai-completions", baseUrl: "https://ignored.example.com" },
+            },
+          },
+        },
+      }),
+    );
+    expect(config.getError()).toBeUndefined();
+    const provider = config.getProvider("p");
+    expect(provider?.compat).toEqual({ supportsStrictMode: "yes" });
+    expect(provider?.modelOverrides?.m).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://ignored.example.com",
+    });
+  });
+
   it("returns an empty config when the file is absent", async () => {
     const config = await ModelConfig.load(
       "/definitely/not/a/real/path/models.json",

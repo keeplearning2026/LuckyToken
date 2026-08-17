@@ -34,9 +34,15 @@ function commandCodeText(text: string): Response {
 describe("per-Client-Protocol Auth over real HTTP", () => {
   const directories: string[] = [];
   const servers: Array<Awaited<ReturnType<typeof startLuckyTokenHttpServer>>> = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
+    compositions.splice(0).forEach((composition) => {
+      composition.diagnosticsStore.close();
+      composition.requestLedger.close();
+        composition.deepCaptureStore.close();
+    });
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),
@@ -66,6 +72,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -108,6 +115,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
           projectSnapshot: { snapshot: projectSnapshot },
         }),
       });
+      compositions.push(composition);
       const server = await startLuckyTokenHttpServer({
         runtime: composition.runtime,
         host: "127.0.0.1",

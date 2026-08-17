@@ -1283,8 +1283,9 @@ bundle 静态分析）：
 
 ### 6.2.1 用户自定义 Provider — `models.json`（新增）
 
-用户可通过 `pi.modelsJson` 配置（默认 `<pi.directory>/models.json`）注册自定义
-Provider，复用 Pi 内置 api adapter：
+用户可通过 `pi.modelsJson` 配置（默认与 config 同目录的 `models.json`，桌面布局
+即 `~/.luckytoken/models.json`；始终是 LuckyToken 自有数据目录，绝不隐式读写
+Pi Agent 默认数据目录）注册自定义 Provider，复用 Pi 内置 api adapter：
 
 ```json
 {

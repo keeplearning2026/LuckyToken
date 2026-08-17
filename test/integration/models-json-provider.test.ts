@@ -30,8 +30,14 @@ function anthropicJsonResponse(text: string): Response {
 
 describe("models.json custom provider registration", () => {
   const directories: string[] = [];
+  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
 
   afterEach(async () => {
+    compositions.splice(0).forEach((composition) => {
+      composition.diagnosticsStore.close();
+      composition.requestLedger.close();
+        composition.deepCaptureStore.close();
+    });
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),
@@ -89,6 +95,7 @@ describe("models.json custom provider registration", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -107,6 +114,9 @@ describe("models.json custom provider registration", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000260",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
+
+    expect(composition.userConfiguredProviderIds).toEqual(["my-anthropic"]);
 
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {

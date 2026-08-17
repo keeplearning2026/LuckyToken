@@ -2,9 +2,16 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
+import { parseRuntimeDiagnosticsConfiguration, type RuntimeDiagnosticsConfiguration } from "./runtime-diagnostics/configuration.js";
+import { parseRequestLedgerConfiguration, type RequestLedgerConfiguration } from "./request-ledger/configuration.js";
+import { parseDeepDiagnosticsConfiguration, type DeepDiagnosticsConfiguration } from "./deep-diagnostics/configuration.js";
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
+import {
+  LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+  OwnedFileCompatibilityError,
+} from "./owned-storage/compatibility.js";
 
 export interface ClientProtocolCliConfiguration {
   readonly authFile: string;
@@ -13,6 +20,7 @@ export interface ClientProtocolCliConfiguration {
 }
 
 export interface LuckyTokenCliConfig {
+  readonly schemaVersion: typeof LUCKYTOKEN_CONFIG_SCHEMA_VERSION;
   readonly configPath: string;
   readonly server: { readonly host: string; readonly port: number };
   readonly clientProtocols: Readonly<
@@ -23,8 +31,11 @@ export interface LuckyTokenCliConfig {
   >;
   readonly pi: {
     readonly directory: string;
-    /** Optional models.json path; defaults to `<pi.directory>/models.json`. */
-    readonly modelsJson?: string;
+    /** Canonical models.json path; defaults to `models.json` next to the
+     *  config file (LuckyToken's own user data directory — the desktop
+     *  layout's `~/.luckytoken/models.json`). The Pi Agent default data
+     *  directory is never read or written implicitly. */
+    readonly modelsJson: string;
   };
   readonly limits: {
     readonly maxRequestBytes: number;
@@ -32,6 +43,12 @@ export interface LuckyTokenCliConfig {
   };
   readonly providerPackages: Readonly<Record<string, unknown>>;
   readonly failureLogging: FailureLoggingConfiguration;
+  /** Permanent Runtime Diagnostics configuration (Ticket 07). */
+  readonly runtimeDiagnostics: RuntimeDiagnosticsConfiguration;
+  /** Ticket 18 Request Ledger store configuration. */
+  readonly requestLedger: RequestLedgerConfiguration;
+  /** Ticket 22 Deep Diagnostics capture configuration. */
+  readonly deepDiagnostics: DeepDiagnosticsConfiguration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,6 +126,22 @@ export async function loadLuckyTokenCliConfig(
     );
   }
   const root = requireRecord(parsed, "LuckyToken config root");
+  if (root.schemaVersion !== LUCKYTOKEN_CONFIG_SCHEMA_VERSION) {
+    throw new OwnedFileCompatibilityError(
+      Object.freeze({
+        path: configPath,
+        contract: "luckytoken-config",
+        foundVersion:
+          typeof root.schemaVersion === "string" ||
+          typeof root.schemaVersion === "number"
+            ? root.schemaVersion
+            : "missing",
+        expectedVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+        validationError:
+          "LuckyToken config schemaVersion is incompatible with this application build.",
+      }),
+    );
+  }
   if (Object.hasOwn(root, "providerAdapters")) {
     throw new Error(
       "providerAdapters is no longer supported; configure providerPackages",
@@ -116,7 +149,7 @@ export async function loadLuckyTokenCliConfig(
   }
   assertKeys(
     root,
-    ["server", "clientProtocols", "providerPackages", "failureLogging", "pi", "limits"],
+    ["schemaVersion", "server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "deepDiagnostics", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
@@ -229,14 +262,16 @@ export async function loadLuckyTokenCliConfig(
   }
   Object.freeze(resolvedClientProtocols);
   const result: LuckyTokenCliConfig = {
+    schemaVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
     configPath,
     server: Object.freeze({ host, port }),
     clientProtocols: resolvedClientProtocols,
     pi: Object.freeze({
       directory: fromConfigDirectory(piDirectoryValue, directory),
-      ...(modelsJsonValue === undefined
-        ? {}
-        : { modelsJson: fromConfigDirectory(modelsJsonValue, directory) }),
+      modelsJson: fromConfigDirectory(
+        modelsJsonValue ?? "models.json",
+        directory,
+      ),
     }),
     limits: Object.freeze({
       maxRequestBytes: safeInteger(
@@ -256,6 +291,18 @@ export async function loadLuckyTokenCliConfig(
     }),
     providerPackages: resolvedProviderPackages,
     failureLogging: parseFailureLoggingConfiguration(root.failureLogging, directory),
+    runtimeDiagnostics: parseRuntimeDiagnosticsConfiguration(
+      root.runtimeDiagnostics,
+      directory,
+    ),
+    requestLedger: parseRequestLedgerConfiguration(
+      root.requestLedger,
+      directory,
+    ),
+    deepDiagnostics: parseDeepDiagnosticsConfiguration(
+      root.deepDiagnostics,
+      directory,
+    ),
   };
   return Object.freeze(result);
 }

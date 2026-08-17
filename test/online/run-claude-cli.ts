@@ -4,7 +4,11 @@
  * Run from `onlinetest/claude` with `npm test`. The suite self-hosts the
  * current LuckyToken code and generates an isolated project settings file.
  */
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import {
+  InMemoryCredentialStore,
+  type AuthInteraction,
+  type AuthPrompt,
+} from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -13,12 +17,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
+import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import {
+  createConfiguredLuckyTokenComposition,
+  createConfiguredPiModels,
+} from "../../src/composition.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const DEFAULT_PROVIDER_ID = "commandcode-private";
+const DEFAULT_API_KEY_FILE = "CommandcodeAPIKey.txt";
 const REQUEST_TIMEOUT_MS = 240_000;
 const CLAUDE_EXE = join(
   process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"),
@@ -36,6 +47,120 @@ const REPOSITORY_ROOT = resolve(
 );
 const ONLINE_ROOT = join(REPOSITORY_ROOT, "onlinetest", "claude");
 const SETTINGS_PATH = join(ONLINE_ROOT, ".claude", "settings.json");
+
+interface ClaudeOnlineArguments {
+  readonly providerId: string;
+  readonly model: string;
+  readonly apiKeyFile: string;
+  readonly alias: string | undefined;
+  readonly batches: number;
+  readonly requestedScenarios: readonly string[];
+}
+
+/**
+ * Programmatic login interaction for the online suites: the Provider-owned
+ * api-key login flow prompts for the key (secret), and the runner answers
+ * with the key read from the git-ignored key file. This exercises the REAL
+ * `Models.login` path (provider registration -> provider-owned prompt ->
+ * persisted credential) instead of bypassing it by writing the store
+ * directly.
+ */
+function keyFileLoginInteraction(apiKey: string): AuthInteraction {
+  return Object.freeze({
+    prompt: async (prompt: AuthPrompt) => {
+      if (prompt.type !== "secret" && prompt.type !== "text") {
+        throw new Error(
+          `Online login does not support ${prompt.type} prompts`,
+        );
+      }
+      return apiKey;
+    },
+    notify: () => undefined,
+  });
+}
+
+/**
+ * The alias registry target for one online run. The user mapping file
+ * accepts `{ provider, model }` object form (the only form that can name a
+ * model id containing "/", e.g. CommandCode's `deepseek/deepseek-v4-flash`);
+ * the string form rejects model ids with a separator. `model` may be the
+ * full `provider/model` selector (the DEFAULT_MODEL shape) or a bare model
+ * id; either way the provider comes from the explicit `--provider` flag.
+ */
+function aliasTargetFor(
+  providerId: string,
+  model: string,
+): { readonly provider: string; readonly model: string } {
+  const prefix = `${providerId}/`;
+  const modelId = model.startsWith(prefix)
+    ? model.slice(prefix.length)
+    : model;
+  return { provider: providerId, model: modelId };
+}
+
+function parseClaudeArguments(
+  args: readonly string[],
+): ClaudeOnlineArguments {
+  let providerId = DEFAULT_PROVIDER_ID;
+  let model = DEFAULT_MODEL;
+  let apiKeyFile = DEFAULT_API_KEY_FILE;
+  let alias: string | undefined;
+  let batches = 1;
+  const requestedScenarios: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--provider") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--provider requires a non-empty id");
+      providerId = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--model") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--model requires a non-empty id");
+      model = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--api-key-file") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--api-key-file requires a path");
+      apiKeyFile = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--alias") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--alias requires a non-empty name");
+      alias = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--batches") {
+      const value = Number(args[index + 1]);
+      if (!Number.isSafeInteger(value) || value < 1) {
+        throw new Error("--batches must be a positive integer");
+      }
+      batches = value;
+      index += 1;
+      continue;
+    }
+    const positional = Number(argument);
+    if (!Number.isNaN(positional)) {
+      if (!Number.isSafeInteger(positional) || positional < 1) {
+        throw new Error("batches must be a positive integer");
+      }
+      batches = positional;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      throw new Error(`Unknown claude online option: ${argument}`);
+    }
+    requestedScenarios.push(argument);
+  }
+  return { providerId, model, apiKeyFile, alias, batches, requestedScenarios };
+}
 
 interface CapturedRequest {
   readonly marker: string;
@@ -262,7 +387,11 @@ function captureRuntime(
   });
 }
 
-async function writeClaudeSettings(origin: string, token: string): Promise<void> {
+async function writeClaudeSettings(
+  origin: string,
+  token: string,
+  model: string,
+): Promise<void> {
   await mkdir(dirname(SETTINGS_PATH), { recursive: true });
   await writeFile(
     SETTINGS_PATH,
@@ -271,16 +400,16 @@ async function writeClaudeSettings(origin: string, token: string): Promise<void>
         env: {
           ANTHROPIC_BASE_URL: origin,
           ANTHROPIC_AUTH_TOKEN: token,
-          ANTHROPIC_MODEL: DEFAULT_MODEL,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: DEFAULT_MODEL,
-          ANTHROPIC_DEFAULT_SONNET_MODEL: DEFAULT_MODEL,
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: DEFAULT_MODEL,
-          CLAUDE_CODE_SUBAGENT_MODEL: DEFAULT_MODEL,
+          ANTHROPIC_MODEL: model,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+          CLAUDE_CODE_SUBAGENT_MODEL: model,
           DISABLE_AUTOUPDATER: "1",
           DISABLE_TELEMETRY: "1",
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         },
-        model: DEFAULT_MODEL,
+        model,
         permissions: { defaultMode: "bypassPermissions" },
         enabledPlugins: {},
         skipDangerousModePermissionPrompt: true,
@@ -295,6 +424,7 @@ async function writeClaudeSettings(origin: string, token: string): Promise<void>
 async function runClaude(
   prompt: string,
   sessionId: string,
+  model: string,
   cwd: string,
   configDirectory: string,
   signal: AbortSignal,
@@ -308,7 +438,7 @@ async function runClaude(
     "stream-json",
     "--verbose",
     "--model",
-    DEFAULT_MODEL,
+    model,
     ...(mode === "new" ? ["--session-id", sessionId] : ["--resume", sessionId]),
     "--settings",
     SETTINGS_PATH,
@@ -381,6 +511,7 @@ function assertClaudeResult(
   marker: string,
   captures: readonly CapturedRequest[],
   scenario: ClaudeScenario,
+  model: string,
 ): void {
   if (result.exitCode !== 0) {
     throw new Error(`claude_exit_${result.exitCode ?? "null"}: ${result.stderr}`);
@@ -410,7 +541,7 @@ function assertClaudeResult(
     system?: unknown;
     messages?: unknown;
   };
-  if (record.model !== DEFAULT_MODEL) throw new Error("claude_model_mismatch");
+  if (record.model !== model) throw new Error("claude_model_mismatch");
   if (record.stream !== true) throw new Error("claude_not_streaming");
   if (!Array.isArray(record.system) || record.system.length === 0) {
     throw new Error("claude_system_missing");
@@ -548,19 +679,29 @@ function assertClaudeResult(
 }
 
 export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<void> {
-  const batches = args.length === 0 ? 1 : Number(args[0]);
-  if (!Number.isSafeInteger(batches) || batches < 1) {
-    throw new Error("batches must be a positive integer");
-  }
-  const requestedScenarios = new Set(args.slice(1));
+  const {
+    providerId,
+    model,
+    apiKeyFile,
+    alias,
+    batches,
+    requestedScenarios: requestedList,
+  } = parseClaudeArguments(args);
+  const selector = alias ?? model;
+  const requestedScenarios = new Set(requestedList);
   const scenarioPlan = scenarios().filter(
     (scenario) => requestedScenarios.size === 0 || requestedScenarios.has(scenario.id),
   );
   if (scenarioPlan.length === 0) throw new Error("no matching Claude scenarios");
   const apiKey = (
-    await readFile(join(REPOSITORY_ROOT, "CommandcodeAPIKey.txt"), "utf8")
+    await readFile(
+      apiKeyFile.includes("\\") || apiKeyFile.includes("/")
+        ? apiKeyFile
+        : join(REPOSITORY_ROOT, apiKeyFile),
+      "utf8",
+    )
   ).trim();
-  if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
+  if (apiKey.length === 0) throw new Error(`${apiKeyFile} is empty`);
 
   const runId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
   const runRoot = join(ONLINE_ROOT, ".runs", runId);
@@ -581,29 +722,93 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   await writeFile(
     configPath,
     JSON.stringify({
+      schemaVersion: "luckytoken-config-v1",
       server: { host: "127.0.0.1", port: 0 },
       clientProtocols: {
         "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
       },
-      providerPackages: {
-        "@luckytoken/provider-commandcode-private": {},
-      },
+      providerPackages:
+        providerId === "commandcode-private"
+          ? { "@luckytoken/provider-commandcode-private": {} }
+          : {},
       pi: { directory: "pi" },
       limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
     }),
     "utf8",
   );
-  const credentials = new InMemoryCredentialStore();
-  await credentials.modify("commandcode-private", async () => ({
-    type: "api_key",
-    key: apiKey,
-  }));
   const config = await loadLuckyTokenCliConfig(configPath);
+  // Alias-only data plane (Ticket 15): when the run certifies a built-in
+  // Provider (e.g. opencode-go), a curated/user alias must expose it. The
+  // authority is created before the composition and its catalog facts are
+  // wired once the served catalog exists (alias query happens lazily at
+  // request time).
+  let catalogFacts: AliasCatalogFacts = Object.freeze({
+    catalogVersion: 0,
+    knownTargets: Object.freeze(new Set<string>()),
+  });
+  const aliasAuthority =
+    alias === undefined
+      ? undefined
+      : createAliasRegistryAuthority({
+          path: join(stateDirectory, "model-aliases.json"),
+          catalogFacts: () => catalogFacts,
+        });
+  if (alias !== undefined) {
+    await writeFile(
+      join(stateDirectory, "model-aliases.json"),
+      `${JSON.stringify(
+        { aliases: { [alias]: aliasTargetFor(providerId, model) } },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+  // Real login first: the composition's served catalog owns the provider
+  // registration, so login runs through the served Models and persists into
+  // the same store the composition will use for request-time auth.
+  const credentials = new InMemoryCredentialStore();
+  const preLogin = await createConfiguredPiModels({
+    piDirectory: config.pi.directory,
+    ...(config.pi.modelsJson === undefined
+      ? {}
+      : { modelsJsonPath: config.pi.modelsJson }),
+    providerPackages: config.providerPackages,
+    fetch: globalThis.fetch,
+    credentials,
+  });
+  try {
+    await preLogin.models.login(
+      providerId,
+      "api_key",
+      keyFileLoginInteraction(apiKey),
+    );
+  } catch (error) {
+    throw new Error(
+      `Provider login failed for ${providerId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const stored = await credentials.read(providerId);
+  if (stored?.type !== "api_key" || stored.key !== apiKey) {
+    throw new Error(`Provider login did not persist a credential for ${providerId}`);
+  }
   const composition = await createConfiguredLuckyTokenComposition({
     config,
     credentials,
     fetch: globalThis.fetch,
+    ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
   });
+  if (alias !== undefined) {
+    const models = composition.catalog.models.getModels();
+    const knownTargets = new Set<string>();
+    for (const candidate of models) {
+      knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
+    }
+    catalogFacts = Object.freeze({ catalogVersion: 1, knownTargets });
+    await aliasAuthority!.query();
+  }
   const captures: CapturedRequest[] = [];
   let marker = "bootstrap";
   const runtime = captureRuntime(composition.runtime, captures, () => marker);
@@ -613,7 +818,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     port: config.server.port,
   });
   try {
-    await writeClaudeSettings(server.origin, clientToken);
+    await writeClaudeSettings(server.origin, clientToken, selector);
     const matrix: Array<{
       id: string;
       status: "pass" | "fail";
@@ -641,6 +846,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
             const cancelledResult = runClaude(
               scenario.prompt(marker),
               sessionId,
+              selector,
               scenarioWorkspace,
               configDirectory,
               cancellation.signal,
@@ -670,6 +876,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
             const followup = await runClaude(
               `Reply with exactly: ${followupMarker}. Do not use tools.`,
               randomUUID(),
+              selector,
               scenarioWorkspace,
               configDirectory,
               AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -679,6 +886,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
               followupMarker,
               captures.filter((capture) => capture.marker === followupMarker),
               scenario,
+              selector,
             );
             matrix.push({
               id: scenario.id,
@@ -690,6 +898,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
           const result = await runClaude(
             scenario.prompt(marker),
             sessionId,
+            selector,
             scenarioWorkspace,
             configDirectory,
             AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -707,12 +916,14 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
             marker,
             captures.filter((capture) => capture.marker === marker),
             scenario,
+            selector,
           );
           if (scenario.special === "multi_turn") {
             const resumed = await runClaude(
               `Recall the seed from the previous turn and reply with exactly: ${marker}_SEED. ` +
                 "Do not use tools or explain.",
               sessionId,
+              selector,
               scenarioWorkspace,
               configDirectory,
               AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -730,6 +941,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
               `${marker}_SEED`,
               captures.filter((capture) => capture.marker === marker),
               scenario,
+              selector,
             );
             const latestBody = captures
               .filter(

@@ -7,10 +7,16 @@
  * simulated process restart, atomic SSE, tool round-trips, auth isolation,
  * cancellation, and concurrent isolation.
  *
- * Reads `CommandcodeAPIKey.txt` (git-ignored) into memory only.
+ * Reads the API key file (git-ignored) into memory only. Defaults to the
+ * CommandCode provider (`CommandcodeAPIKey.txt`); pass `--provider
+ * opencode-go --api-key-file <path> --model deepseek-v4-flash` to certify
+ * the built-in OpenCode Go provider through the same Responses client
+ * protocol and LuckyToken stack.
  */
 import {
   InMemoryCredentialStore,
+  type AuthInteraction,
+  type AuthPrompt,
   type FetchFunction,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
@@ -20,8 +26,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
+import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import {
+  createConfiguredLuckyTokenComposition,
+  createConfiguredPiModels,
+} from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
@@ -29,6 +40,107 @@ const DEFAULT_CONCURRENCY = 5;
 const SUCCESS_MAX_TOKENS = 512;
 const REQUEST_TIMEOUT_MS = 120_000;
 const SUITE_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_PROVIDER_ID = "commandcode-private";
+const DEFAULT_API_KEY_FILE = "CommandcodeAPIKey.txt";
+
+interface OnlineArguments {
+  readonly providerId: string;
+  readonly model: string;
+  readonly apiKeyFile: string;
+  readonly alias: string | undefined;
+  readonly concurrency: number;
+}
+
+/**
+ * Programmatic login interaction for the online suites: the Provider-owned
+ * api-key login flow prompts for the key (secret), and the runner answers
+ * with the key read from the git-ignored key file. This exercises the REAL
+ * `Models.login` path (provider registration -> provider-owned prompt ->
+ * persisted credential) instead of bypassing it by writing the store
+ * directly.
+ */
+function keyFileLoginInteraction(apiKey: string): AuthInteraction {
+  return Object.freeze({
+    prompt: async (prompt: AuthPrompt) => {
+      if (prompt.type !== "secret" && prompt.type !== "text") {
+        throw new Error(
+          `Online login does not support ${prompt.type} prompts`,
+        );
+      }
+      return apiKey;
+    },
+    notify: () => undefined,
+  });
+}
+
+/**
+ * The alias registry target for one online run. The user mapping file
+ * accepts `{ provider, model }` object form (the only form that can name a
+ * model id containing "/", e.g. CommandCode's `deepseek/deepseek-v4-flash`);
+ * the string form rejects model ids with a separator. `model` may be the
+ * full `provider/model` selector (the DEFAULT_MODEL shape) or a bare model
+ * id; either way the provider comes from the explicit `--provider` flag.
+ */
+function aliasTargetFor(
+  providerId: string,
+  model: string,
+): { readonly provider: string; readonly model: string } {
+  const prefix = `${providerId}/`;
+  const modelId = model.startsWith(prefix)
+    ? model.slice(prefix.length)
+    : model;
+  return { provider: providerId, model: modelId };
+}
+
+function parseArguments(args: readonly string[]): OnlineArguments {
+  let providerId = DEFAULT_PROVIDER_ID;
+  let model = DEFAULT_MODEL;
+  let apiKeyFile = DEFAULT_API_KEY_FILE;
+  let alias: string | undefined;
+  let concurrency = DEFAULT_CONCURRENCY;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--concurrency") {
+      const value = Number(args[index + 1]);
+      if (!Number.isSafeInteger(value) || value < 1 || value > 20) {
+        throw new Error("--concurrency must be an integer from 1 to 20");
+      }
+      concurrency = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--provider") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--provider requires a non-empty id");
+      providerId = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--model") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--model requires a non-empty id");
+      model = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--api-key-file") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--api-key-file requires a path");
+      apiKeyFile = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--alias") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--alias requires a non-empty name");
+      alias = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown online option: ${argument}`);
+  }
+  return { providerId, model, apiKeyFile, alias, concurrency };
+}
 
 interface OnlineSummary {
   attemptedRequests: number;
@@ -286,6 +398,7 @@ function isAbortFailure(error: unknown, reason: unknown): boolean {
 async function runJsonJob(
   origin: string,
   token: string,
+  model: string,
   marker: string,
   totalSignal: AbortSignal,
   summary: OnlineSummary,
@@ -297,7 +410,7 @@ async function runJsonJob(
       origin,
       token,
       {
-        model: DEFAULT_MODEL,
+        model: model,
         input: promptFor(marker),
         max_output_tokens: SUCCESS_MAX_TOKENS,
       },
@@ -323,6 +436,7 @@ async function runJsonJob(
 async function runSseJob(
   origin: string,
   token: string,
+  model: string,
   marker: string,
   totalSignal: AbortSignal,
   summary: OnlineSummary,
@@ -334,7 +448,7 @@ async function runSseJob(
       origin,
       token,
       {
-        model: DEFAULT_MODEL,
+        model: model,
         input: promptFor(marker),
         max_output_tokens: SUCCESS_MAX_TOKENS,
         stream: true,
@@ -367,6 +481,7 @@ async function runCancellationJob(
   cancellationOrigin: string,
   recoveryOrigin: string,
   token: string,
+  model: string,
   marker: string,
   totalSignal: AbortSignal,
   summary: OnlineSummary,
@@ -388,7 +503,7 @@ async function runCancellationJob(
     cancellationOrigin,
     token,
     {
-      model: DEFAULT_MODEL,
+      model: model,
       input: promptFor(`${marker}_CANCEL`),
       max_output_tokens: 4_096,
     },
@@ -425,7 +540,7 @@ async function runCancellationJob(
           recoveryOrigin,
           token,
           {
-            model: DEFAULT_MODEL,
+            model: model,
             input: promptFor(recoveryMarker),
             max_output_tokens: SUCCESS_MAX_TOKENS,
           },
@@ -530,12 +645,10 @@ function createCapturingFetch(base: FetchFunction): {
 export async function runOpenAIResponsesOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
-  const concurrency = args.length === 0 ? DEFAULT_CONCURRENCY : Number(args[0]);
-  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 20) {
-    throw new Error("Responses online concurrency must be an integer from 1 to 20");
-  }
-  const apiKey = (await readFile("CommandcodeAPIKey.txt", "utf8")).trim();
-  if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
+  const { providerId, model, apiKeyFile, alias, concurrency } = parseArguments(args);
+  const selector = alias ?? model;
+  const apiKey = (await readFile(apiKeyFile, "utf8")).trim();
+  if (apiKey.length === 0) throw new Error(`${apiKeyFile} is empty`);
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-online-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
@@ -565,6 +678,7 @@ export async function runOpenAIResponsesOnlineSuite(
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { host: "127.0.0.1", port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -575,9 +689,10 @@ export async function runOpenAIResponsesOnlineSuite(
             stateFile: "state/openai-responses.json",
           },
         },
-        providerPackages: {
-          "@luckytoken/provider-commandcode-private": {},
-        },
+        providerPackages:
+          providerId === "commandcode-private"
+            ? { "@luckytoken/provider-commandcode-private": {} }
+            : {},
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,
@@ -586,18 +701,78 @@ export async function runOpenAIResponsesOnlineSuite(
       }),
       "utf8",
     );
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify(
-      "commandcode-private",
-      async () => ({ type: "api_key", key: apiKey }),
-    );
     const config = await loadLuckyTokenCliConfig(configPath);
     const dispatchObserver = createDispatchObserver(globalThis.fetch);
+    // Real login first: the composition's served catalog owns the provider
+    // registration, so login runs through the served Models and persists into
+    // the same store the composition will use for request-time auth.
+    const credentials = new InMemoryCredentialStore();
+    const preLogin = await createConfiguredPiModels({
+      piDirectory: config.pi.directory,
+      ...(config.pi.modelsJson === undefined
+        ? {}
+        : { modelsJsonPath: config.pi.modelsJson }),
+      providerPackages: config.providerPackages,
+      fetch: globalThis.fetch,
+      credentials,
+    });
+    try {
+      await preLogin.models.login(
+        providerId,
+        "api_key",
+        keyFileLoginInteraction(apiKey),
+      );
+    } catch (error) {
+      throw new Error(
+        `Provider login failed for ${providerId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const stored = await credentials.read(providerId);
+    if (stored?.type !== "api_key" || stored.key !== apiKey) {
+      throw new Error(`Provider login did not persist a credential for ${providerId}`);
+    }
+    // Alias-only data plane (Ticket 15): a built-in Provider target is
+    // selected through its alias; the authority validates against the live
+    // served catalog once the first composition exists.
+    let catalogFacts: AliasCatalogFacts = Object.freeze({
+      catalogVersion: 0,
+      knownTargets: Object.freeze(new Set<string>()),
+    });
+    const aliasAuthority =
+      alias === undefined
+        ? undefined
+        : createAliasRegistryAuthority({
+            path: join(stateDirectory, "model-aliases.json"),
+            catalogFacts: () => catalogFacts,
+          });
+    if (alias !== undefined) {
+      await writeFile(
+        join(stateDirectory, "model-aliases.json"),
+        `${JSON.stringify(
+          { aliases: { [alias]: aliasTargetFor(providerId, model) } },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
     const composition = await createConfiguredLuckyTokenComposition({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
+      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
     });
+    if (alias !== undefined) {
+      const models = composition.catalog.models.getModels();
+      const knownTargets = new Set<string>();
+      for (const candidate of models) {
+        knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
+      }
+      catalogFacts = Object.freeze({ catalogVersion: 1, knownTargets });
+      await aliasAuthority!.query();
+    }
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
       host: config.server.host,
@@ -621,9 +796,9 @@ export async function runOpenAIResponsesOnlineSuite(
       modelsList.object !== "list" ||
       !modelsList.data?.some(
         (entry) =>
-          entry.id === DEFAULT_MODEL &&
+          entry.id === selector &&
           entry.object === "model" &&
-          entry.owned_by === "commandcode-private",
+          entry.owned_by === providerId,
       )
     ) {
       throw new Error("online_models_discovery_missing");
@@ -644,6 +819,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: hangingFetch,
+      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
     });
     const hangingServer = await startLuckyTokenHttpServer({
       runtime: hangingComposition.runtime,
@@ -661,6 +837,7 @@ export async function runOpenAIResponsesOnlineSuite(
           hangingOrigin,
           origin,
           responsesToken,
+          selector,
           job.marker,
           totalSignal,
           summary,
@@ -677,9 +854,9 @@ export async function runOpenAIResponsesOnlineSuite(
       (job) => {
         switch (job.kind) {
           case "json":
-            return runJsonJob(origin, responsesToken, job.marker, totalSignal, summary);
+            return runJsonJob(origin, responsesToken, selector, job.marker, totalSignal, summary);
           case "sse":
-            return runSseJob(origin, responsesToken, job.marker, totalSignal, summary);
+            return runSseJob(origin, responsesToken, selector, job.marker, totalSignal, summary);
           case "cancel-recovery":
             return Promise.resolve();
         }
@@ -693,6 +870,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: capture.fetch,
+      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
     });
     await server.close();
     server = await startLuckyTokenHttpServer({
@@ -709,7 +887,7 @@ export async function runOpenAIResponsesOnlineSuite(
       conformanceOrigin,
       responsesToken,
       {
-        model: DEFAULT_MODEL,
+        model: selector,
         input: promptFor(chainMarker1),
         max_output_tokens: SUCCESS_MAX_TOKENS,
       },
@@ -720,7 +898,7 @@ export async function runOpenAIResponsesOnlineSuite(
       conformanceOrigin,
       responsesToken,
       {
-        model: DEFAULT_MODEL,
+        model: selector,
         input: promptFor(chainMarker2),
         previous_response_id: turn1.id,
         max_output_tokens: SUCCESS_MAX_TOKENS,
@@ -757,7 +935,7 @@ export async function runOpenAIResponsesOnlineSuite(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: DEFAULT_MODEL,
+        model: selector,
         input: "auth isolation probe",
       }),
       signal: requestSignal(totalSignal),
@@ -777,7 +955,7 @@ export async function runOpenAIResponsesOnlineSuite(
         conformanceOrigin,
         responsesToken,
         {
-          model: DEFAULT_MODEL,
+          model: selector,
           input: `Call online_lookup exactly once with value ${toolMarker}_${attempt}. Do not answer in text.`,
           max_output_tokens: SUCCESS_MAX_TOKENS,
           tools: [
@@ -811,7 +989,7 @@ export async function runOpenAIResponsesOnlineSuite(
       conformanceOrigin,
       responsesToken,
       {
-        model: DEFAULT_MODEL,
+        model: selector,
         input: [
           {
             type: "function_call_output",
@@ -848,7 +1026,7 @@ export async function runOpenAIResponsesOnlineSuite(
       conformanceOrigin,
       responsesToken,
       {
-        model: DEFAULT_MODEL,
+        model: selector,
         input: promptFor("LT_RESP_STORE_FALSE"),
         store: false,
         max_output_tokens: SUCCESS_MAX_TOKENS,
@@ -864,7 +1042,7 @@ export async function runOpenAIResponsesOnlineSuite(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: DEFAULT_MODEL,
+        model: selector,
         input: promptFor("LT_RESP_STORE_FALSE_NEXT"),
         previous_response_id: storeFalseTurn.id,
         max_output_tokens: SUCCESS_MAX_TOKENS,
@@ -893,6 +1071,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: dispatchObserver.fetch,
+      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
     });
     server = await startLuckyTokenHttpServer({
       runtime: restartComposition.runtime,
@@ -904,7 +1083,7 @@ export async function runOpenAIResponsesOnlineSuite(
       server.origin,
       responsesToken,
       {
-        model: DEFAULT_MODEL,
+        model: selector,
         input: promptFor(restartMarker),
         previous_response_id: turn1.id,
         max_output_tokens: SUCCESS_MAX_TOKENS,
@@ -918,7 +1097,7 @@ export async function runOpenAIResponsesOnlineSuite(
     summary.successfulRestartRecovery += 1;
 
     const report = {
-      model: DEFAULT_MODEL,
+      model: selector,
       concurrency,
       attemptedRequests: summary.attemptedRequests,
       successfulJson: summary.successfulJson,
@@ -933,7 +1112,14 @@ export async function runOpenAIResponsesOnlineSuite(
     if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
   } finally {
     await server?.close();
-    await rm(directory, { recursive: true, force: true });
+    // A SQLite store may need a moment to release its handle after the
+    // server closes; EBUSY here is a cleanup race, never a protocol failure.
+    await new Promise<void>((resolvePromise) =>
+      setTimeout(resolvePromise, 500),
+    );
+    await rm(directory, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
   }
 }
 
@@ -949,3 +1135,5 @@ if (
     process.exitCode = 1;
   });
 }
+
+

@@ -8,7 +8,7 @@
 
 **Blocked by:** 07 — Permanent Runtime Diagnostics and universal credential redaction; 18 — Request Lifecycle Ledger tracer.
 
-**Status:** ready-for-agent
+**Status:** integrated
 
 ## Implementation method
 

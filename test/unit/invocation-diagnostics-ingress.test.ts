@@ -34,7 +34,7 @@ describe("request-ingress diagnostics lifecycle", () => {
 
   const auth = createAuth({
     authorizeToken: async () => ({}),
-    createFallbackSessionId: () => "00000000-0000-4000-8000-000000000001",
+    createEffectiveSessionId: () => "00000000-0000-4000-8000-000000000001",
   });
   const invalidRequest = () => new Request("https://localhost/v1/test", {
     method: "POST",

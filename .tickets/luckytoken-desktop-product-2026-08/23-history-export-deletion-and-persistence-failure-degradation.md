@@ -8,7 +8,7 @@
 
 **Blocked by:** 19 — Complete Requests page and request-detail contract; 22 — Globally controlled Deep Diagnostics capture.
 
-**Status:** ready-for-agent
+**Status:** completed
 
 ## Implementation method
 
@@ -16,11 +16,11 @@ Use the `$tdd` skill. Confirm export/delete Control Plane commands, history quer
 
 ## Acceptance criteria
 
-- [ ] Users can export permanent structured request history and runtime diagnostics through one versioned export workflow.
-- [ ] The default export excludes raw bodies/event capture and clearly reports that exclusion.
-- [ ] Including raw capture requires a second explicit sensitive-data confirmation and marks the export as containing sensitive capture.
-- [ ] Universal redaction still removes authentication capability values from all export modes.
-- [ ] Users can select a time range or all eligible history for deletion and must confirm that deletion is irreversible.
-- [ ] Deletion does not silently change Provider credentials, Client tokens, models.json, alias configuration, or unrelated application settings.
-- [ ] A Request Ledger, Diagnostics, or capture persistence failure never changes an otherwise valid model response outcome.
-- [ ] Persistence failure writes a sanitized Critical to stderr and bounded memory, is visible persistently in UI/tray until acknowledged/recovered, and explicitly states that an audit guarantee is unavailable.
+- [x] Users can export permanent structured request history and runtime diagnostics through one versioned export workflow.
+- [x] The default export excludes raw bodies/event capture and clearly reports that exclusion.
+- [x] Including raw capture requires a second explicit sensitive-data confirmation and marks the export as containing sensitive capture.
+- [x] Universal redaction still removes authentication capability values from all export modes.
+- [x] Users can select a time range or all eligible history for deletion and must confirm that deletion is irreversible.
+- [x] Deletion does not silently change Provider credentials, Client tokens, models.json, alias configuration, or unrelated application settings.
+- [x] A Request Ledger, Diagnostics, or capture persistence failure never changes an otherwise valid model response outcome.
+- [x] Persistence failure writes a sanitized Critical to stderr and bounded memory, is visible persistently in UI/tray until acknowledged/recovered, and explicitly states that an audit guarantee is unavailable.

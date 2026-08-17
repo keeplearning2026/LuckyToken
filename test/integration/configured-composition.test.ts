@@ -34,12 +34,24 @@ function commandCodeText(text: string): Response {
 
 describe("configured serving composition", () => {
   const directories: string[] = [];
+  const compositions: Array<{
+    diagnosticsStore: { close(): void };
+    requestLedger: { close(): void };
+    deepCaptureStore: { close(): void };
+  }> = [];
 
   afterEach(async () => {
+    compositions
+      .splice(0)
+      .forEach((composition) => {
+        composition.diagnosticsStore.close();
+        composition.requestLedger.close();
+        composition.deepCaptureStore.close();
+      });
     await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
+      directories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
     );
   });
 
@@ -77,6 +89,7 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -100,10 +113,10 @@ describe("configured serving composition", () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       if (String(input).includes("/provider/v1/models")) {
-        return new Response(
-          JSON.stringify({ object: "list", data: [] }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       upstreamRequests.push(new Request(input, init));
       return commandCodeText("configured through Pi");
@@ -126,9 +139,33 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
-    expect(Object.keys(composition).sort()).toEqual(["certification", "runtime"]);
-    expect(Object.keys(composition.runtime).sort()).toEqual(["handle", "routes"]);
+    expect(Object.keys(composition).sort()).toEqual([
+      "catalog",
+      "certification",
+      "clientTokenAuthorities",
+      "credentialAuthority",
+      "deepCapture",
+      "deepCaptureStore",
+      "diagnosticsStore",
+      "requestIdentities",
+      "requestLedger",
+      "runtime",
+      "userConfiguredProviderIds",
+    ]);
+    // Ticket 16: the running Data Plane owns one live global token authority
+    // per configured Client Protocol.
+    expect(Object.keys(composition.clientTokenAuthorities).sort()).toEqual([
+      "anthropic-messages",
+    ]);
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "commandcode-private",
+    ]);
+    expect(Object.keys(composition.runtime).sort()).toEqual([
+      "handle",
+      "routes",
+    ]);
     expect(composition.runtime.routes).toEqual([
       { method: "POST", pathname: "/v1/messages" },
       { method: "GET", pathname: "/v1/models" },
@@ -194,6 +231,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
@@ -221,7 +259,10 @@ describe("configured serving composition", () => {
     const { configPath, clientToken, projectDir } =
       await writeConfiguration("project");
     const projectSnapshot = vi.fn(
-      async (input: { readonly projectDir: string; readonly signal: AbortSignal }) => {
+      async (input: {
+        readonly projectDir: string;
+        readonly signal: AbortSignal;
+      }) => {
         input.signal.throwIfAborted();
         return createEmptyServerConfig();
       },
@@ -242,6 +283,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     expect(composition.certification.schemaVersion).toBe(
       "luckytoken-core-serving-certification-v1",
@@ -296,8 +338,72 @@ describe("configured serving composition", () => {
     );
   });
 
+  it("loads the canonical models.json from the config data directory by default", async () => {
+    const { configPath, piDirectory } = await writeConfiguration();
+    // The canonical default is `models.json` next to the config file
+    // (the desktop layout's `~/.luckytoken/models.json`), not the Pi
+    // credential directory and never Pi Agent's own data directory.
+    await writeFile(
+      join(dirname(configPath), "models.json"),
+      JSON.stringify({
+        providers: {
+          "my-anthropic": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            models: [{ id: "claude-sonnet" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const config = await loadLuckyTokenCliConfig(configPath);
+    expect(config.pi.modelsJson).toBe(join(dirname(configPath), "models.json"));
+    expect(config.pi.modelsJson).not.toBe(join(piDirectory, "models.json"));
+
+    const composition = await createConfiguredLuckyTokenComposition({
+      config,
+      fetch: async () => commandCodeText("unused"),
+    });
+    compositions.push(composition);
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "my-anthropic",
+      "commandcode-private",
+    ]);
+  });
+
+  it("keeps the data plane running when models.json is invalid and reports the skip", async () => {
+    const { configPath } = await writeConfiguration();
+    await writeFile(
+      join(dirname(configPath), "models.json"),
+      '{ "providers": { "broken": { "baseUrl": 42 } } }',
+      "utf8",
+    );
+    const config = await loadLuckyTokenCliConfig(configPath);
+    const invalid: unknown[] = [];
+
+    const composition = await createConfiguredLuckyTokenComposition({
+      config,
+      fetch: async () => commandCodeText("unused"),
+      onInvalidModelsJson: (error) => invalid.push(error),
+    });
+    compositions.push(composition);
+
+    // The invalid file never bricks the gateway: only the packaged provider
+    // is registered and the skip is reported instead of thrown.
+    expect(composition.userConfiguredProviderIds).toEqual([
+      "commandcode-private",
+    ]);
+    expect(invalid).toHaveLength(1);
+    const response = await composition.runtime.handle(
+      new Request("http://luckytoken.test/v1/models"),
+    );
+    expect(response.status).toBe(200);
+  });
+
   it("registers the optional OpenAI Responses protocol with its own auth and state file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-responses-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-composition-responses-"),
+    );
     directories.push(directory);
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -322,6 +428,7 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {
@@ -353,6 +460,7 @@ describe("configured serving composition", () => {
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
     });
+    compositions.push(composition);
 
     // Anthropic token works on the Anthropic route only.
     const anthropic = await composition.runtime.handle(
@@ -433,5 +541,4 @@ describe("configured serving composition", () => {
       "commandcode-private/deepseek/deepseek-v4-flash",
     );
   });
-
 });

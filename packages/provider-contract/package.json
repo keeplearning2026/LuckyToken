@@ -14,6 +14,10 @@
     "./diagnostics": {
       "types": "./dist/diagnostics.d.ts",
       "import": "./dist/diagnostics.js"
+    },
+    "./usage": {
+      "types": "./dist/usage.d.ts",
+      "import": "./dist/usage.js"
     }
   },
   "scripts": {
