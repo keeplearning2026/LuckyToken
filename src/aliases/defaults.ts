@@ -14,7 +14,7 @@ import type { CuratedAliasDefault } from "./domain.js";
  * The version MUST be bumped whenever this list changes, so projections
  * and tests can distinguish defaults generations.
  */
-export const CURATED_ALIAS_DEFAULTS_VERSION = 1;
+export const CURATED_ALIAS_DEFAULTS_VERSION = 2;
 
 export const curatedAliasDefaults: readonly CuratedAliasDefault[] =
   Object.freeze([
@@ -23,4 +23,12 @@ export const curatedAliasDefaults: readonly CuratedAliasDefault[] =
     { alias: "claude-sonnet-4", provider: "anthropic", model: "claude-sonnet-4" },
     { alias: "claude-opus-4", provider: "anthropic", model: "claude-opus-4-8" },
     { alias: "deepseek-chat", provider: "deepseek", model: "deepseek-v4-flash" },
+    // OpenCode Go curated default (Ticket 26 release certification): the
+    // built-in opencode-go Provider is exposed through this alias so the
+    // alias-only data plane (Ticket 15) can serve it to real clients.
+    {
+      alias: "deepseek-v4-flash",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+    },
   ]);

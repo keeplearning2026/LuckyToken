@@ -43,7 +43,11 @@
  * credentials, sessions, skills, and default model settings are not loaded.
  */
 
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import {
+  InMemoryCredentialStore,
+  type AuthInteraction,
+  type AuthPrompt,
+} from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
@@ -52,12 +56,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
+import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import {
+  createConfiguredLuckyTokenComposition,
+  createConfiguredPiModels,
+} from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const DEFAULT_PROVIDER_ID = "commandcode-private";
+const DEFAULT_API_KEY_FILE = "CommandcodeAPIKey.txt";
 // Coverage-first: serial execution so timing noise never masquerades as a
 // protocol-conversion bug. Volume/concurrency is opt-in via the batches arg.
 const DEFAULT_CONCURRENCY = 1;
@@ -85,7 +96,118 @@ const REPOSITORY_ROOT = resolve(
   "..",
 );
 
-function codexProviderOverrides(baseUrl: string): readonly string[] {
+interface OnlineArguments {
+  readonly providerId: string;
+  readonly model: string;
+  readonly apiKeyFile: string;
+  readonly alias: string | undefined;
+  readonly batches: number;
+}
+
+/**
+ * Programmatic login interaction for the online suites: the Provider-owned
+ * api-key login flow prompts for the key (secret), and the runner answers
+ * with the key read from the git-ignored key file. This exercises the REAL
+ * `Models.login` path (provider registration -> provider-owned prompt ->
+ * persisted credential) instead of bypassing it by writing the store
+ * directly.
+ */
+function keyFileLoginInteraction(apiKey: string): AuthInteraction {
+  return Object.freeze({
+    prompt: async (prompt: AuthPrompt) => {
+      if (prompt.type !== "secret" && prompt.type !== "text") {
+        throw new Error(
+          `Online login does not support ${prompt.type} prompts`,
+        );
+      }
+      return apiKey;
+    },
+    notify: () => undefined,
+  });
+}
+
+/**
+ * The alias registry target for one online run. The user mapping file
+ * accepts `{ provider, model }` object form (the only form that can name a
+ * model id containing "/", e.g. CommandCode's `deepseek/deepseek-v4-flash`);
+ * the string form rejects model ids with a separator. `model` may be the
+ * full `provider/model` selector (the DEFAULT_MODEL shape) or a bare model
+ * id; either way the provider comes from the explicit `--provider` flag.
+ */
+function aliasTargetFor(
+  providerId: string,
+  model: string,
+): { readonly provider: string; readonly model: string } {
+  const prefix = `${providerId}/`;
+  const modelId = model.startsWith(prefix)
+    ? model.slice(prefix.length)
+    : model;
+  return { provider: providerId, model: modelId };
+}
+
+function parseArguments(args: readonly string[]): OnlineArguments {
+  let providerId = DEFAULT_PROVIDER_ID;
+  let model = DEFAULT_MODEL;
+  let apiKeyFile = DEFAULT_API_KEY_FILE;
+  let alias: string | undefined;
+  let batches = 1;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--batches") {
+      const value = Number(args[index + 1]);
+      if (!Number.isSafeInteger(value) || value < 1) {
+        throw new Error("--batches must be a positive integer");
+      }
+      batches = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--provider") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--provider requires a non-empty id");
+      providerId = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--model") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--model requires a non-empty id");
+      model = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--api-key-file") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--api-key-file requires a path");
+      apiKeyFile = value;
+      index += 1;
+      continue;
+    }
+    if (argument === "--alias") {
+      const value = args[index + 1]?.trim();
+      if (!value) throw new Error("--alias requires a non-empty name");
+      alias = value;
+      index += 1;
+      continue;
+    }
+    // Backwards-compatible positional batch count (`npm test -- 3`).
+    const positional = Number(argument);
+    if (!Number.isNaN(positional)) {
+      if (!Number.isSafeInteger(positional) || positional < 1) {
+        throw new Error("batches must be a positive integer");
+      }
+      batches = positional;
+      continue;
+    }
+    throw new Error(`Unknown codex online option: ${argument}`);
+  }
+  return { providerId, model, apiKeyFile, alias, batches };
+}
+
+function codexProviderOverrides(
+  baseUrl: string,
+  model: string,
+): readonly string[] {
   const stringOverride = (key: string, value: string): readonly string[] =>
     Object.freeze(["-c", `${key}=${JSON.stringify(value)}`]);
   return Object.freeze([
@@ -99,42 +221,80 @@ function codexProviderOverrides(baseUrl: string): readonly string[] {
       CODEX_PROMPT_ENV_KEY,
     ),
     ...stringOverride("model_provider", CODEX_PROFILE),
-    ...stringOverride("model", DEFAULT_MODEL),
+    ...stringOverride("model", model),
   ]);
 }
 
 async function prepareIsolatedCodexHome(
   directory: string,
   baseUrl: string,
+  model: string,
+  modelsList?: { data?: Array<{ id?: string }> },
 ): Promise<string> {
   const inheritedCodexHome = process.env[CODEX_HOME_ENV_KEY]?.trim();
   const sourceCodexHome =
     inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
       ? inheritedCodexHome
       : join(homedir(), ".codex");
-  const sourceCatalogPath = join(sourceCodexHome, "luckytoken-catalog.json");
-  const sourceCatalog = JSON.parse(
-    await readFile(sourceCatalogPath, "utf8"),
-  ) as unknown;
-  if (
-    typeof sourceCatalog !== "object" ||
-    sourceCatalog === null ||
-    Array.isArray(sourceCatalog) ||
-    !("models" in sourceCatalog) ||
-    !Array.isArray(sourceCatalog.models)
-  ) {
-    throw new Error("codex_model_catalog_invalid");
-  }
-  const modelEntry = sourceCatalog.models.find(
-    (candidate) =>
-      typeof candidate === "object" &&
-      candidate !== null &&
-      !Array.isArray(candidate) &&
-      "slug" in candidate &&
-      candidate.slug === DEFAULT_MODEL,
-  );
-  if (modelEntry === undefined) {
-    throw new Error("codex_model_catalog_missing_target");
+  // Prefer the explicitly generated catalog from the self-hosted endpoint;
+  // fall back to the user's ~/.codex/luckytoken-catalog.json when the model
+  // entry exists there (legacy CommandCode runs).
+  const liveEntry = modelsList?.data?.find((entry) => entry.id === model);
+  let modelEntry: unknown;
+  if (liveEntry !== undefined) {
+    modelEntry = Object.freeze({
+      slug: liveEntry.id,
+      display_name: liveEntry.id,
+      description: `LuckyToken alias ${liveEntry.id}`,
+      base_instructions: "You are a helpful assistant.",
+      supported_reasoning_levels: Object.freeze([
+        Object.freeze({
+          effort: "high",
+          description: "High reasoning effort",
+        }),
+      ]),
+      shell_type: "default",
+      visibility: "list",
+      supported_in_api: true,
+      priority: 100,
+      support_verbosity: false,
+      truncation_policy: Object.freeze({
+        mode: "tokens",
+        limit: 65536,
+      }),
+      supports_parallel_tool_calls: true,
+      context_window: 200000,
+      experimental_supported_tools: Object.freeze([]),
+    });
+  } else {
+    const sourceCodexHome =
+      inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
+        ? inheritedCodexHome
+        : join(homedir(), ".codex");
+    const sourceCatalogPath = join(sourceCodexHome, "luckytoken-catalog.json");
+    const sourceCatalog = JSON.parse(
+      await readFile(sourceCatalogPath, "utf8"),
+    ) as unknown;
+    if (
+      typeof sourceCatalog !== "object" ||
+      sourceCatalog === null ||
+      Array.isArray(sourceCatalog) ||
+      !("models" in sourceCatalog) ||
+      !Array.isArray(sourceCatalog.models)
+    ) {
+      throw new Error("codex_model_catalog_invalid");
+    }
+    modelEntry = sourceCatalog.models.find(
+      (candidate) =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        !Array.isArray(candidate) &&
+        "slug" in candidate &&
+        candidate.slug === model,
+    );
+    if (modelEntry === undefined) {
+      throw new Error("codex_model_catalog_missing_target");
+    }
   }
 
   const codexHome = join(directory, "codex-home");
@@ -163,7 +323,7 @@ async function prepareIsolatedCodexHome(
     join(codexHome, `${CODEX_PROFILE}.config.toml`),
     [
       `model_provider = ${quoted(CODEX_PROFILE)}`,
-      `model = ${quoted(DEFAULT_MODEL)}`,
+      `model = ${quoted(model)}`,
       `model_catalog_json = ${quoted(catalogPath)}`,
       "",
     ].join("\n"),
@@ -276,6 +436,7 @@ async function runCodexExec(
   prompt: string,
   token: string,
   baseUrl: string,
+  model: string,
   cwd: string,
   artifactDir: string,
   marker: string,
@@ -297,7 +458,7 @@ async function runCodexExec(
           "exec",
           "resume",
           "--last",
-          ...codexProviderOverrides(baseUrl),
+          ...codexProviderOverrides(baseUrl, model),
           "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
@@ -309,7 +470,7 @@ async function runCodexExec(
           "-p",
           CODEX_PROFILE,
           "exec",
-          ...codexProviderOverrides(baseUrl),
+          ...codexProviderOverrides(baseUrl, model),
           "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
@@ -989,15 +1150,17 @@ async function assertCapturedCustomToolRoundTrip(
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
-  const batches = args.length > 0 ? Number(args[0]) : 1;
-  if (!Number.isSafeInteger(batches) || batches < 1) {
-    throw new Error("batches must be a positive integer");
-  }
-
+  const { providerId, model, apiKeyFile, alias, batches } = parseArguments(args);
+  const selector = alias ?? model;
   const apiKey = (
-    await readFile(join(REPOSITORY_ROOT, "CommandcodeAPIKey.txt"), "utf8")
+    await readFile(
+      apiKeyFile.includes("\\") || apiKeyFile.includes("/")
+        ? apiKeyFile
+        : join(REPOSITORY_ROOT, apiKeyFile),
+      "utf8",
+    )
   ).trim();
-  if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
+  if (apiKey.length === 0) throw new Error(`${apiKeyFile} is empty`);
   console.error("[codex-suite] apiKey loaded");
 
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
@@ -1039,27 +1202,85 @@ export async function runCodexCliOnlineSuite(
           stateFile: "state/openai-responses.json",
         },
       },
-      providerPackages: {
-        "@luckytoken/provider-commandcode-private": {},
-      },
+      providerPackages:
+        providerId === "commandcode-private"
+          ? { "@luckytoken/provider-commandcode-private": {} }
+          : {},
       pi: { directory: "pi" },
       limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
     }),
     "utf8",
   );
-  const credentials = new InMemoryCredentialStore();
-  await credentials.modify(
-    "commandcode-private",
-    async () => ({ type: "api_key", key: apiKey }),
-  );
-  console.error("[codex-suite] credentials ready");
   const config = await loadLuckyTokenCliConfig(configPath);
   console.error("[codex-suite] config loaded");
+  // Real login first: the composition's served catalog owns the provider
+  // registration, so login runs through the served Models and persists into
+  // the same store the composition will use for request-time auth.
+  const credentials = new InMemoryCredentialStore();
+  const preLogin = await createConfiguredPiModels({
+    piDirectory: config.pi.directory,
+    ...(config.pi.modelsJson === undefined
+      ? {}
+      : { modelsJsonPath: config.pi.modelsJson }),
+    providerPackages: config.providerPackages,
+    fetch: globalThis.fetch,
+    credentials,
+  });
+  try {
+    await preLogin.models.login(
+      providerId,
+      "api_key",
+      keyFileLoginInteraction(apiKey),
+    );
+  } catch (error) {
+    throw new Error(
+      `Provider login failed for ${providerId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const stored = await credentials.read(providerId);
+  if (stored?.type !== "api_key" || stored.key !== apiKey) {
+    throw new Error(`Provider login did not persist a credential for ${providerId}`);
+  }
+  console.error("[codex-suite] credentials ready");
+  let catalogFacts: AliasCatalogFacts = Object.freeze({
+    catalogVersion: 0,
+    knownTargets: Object.freeze(new Set<string>()),
+  });
+  const aliasAuthority =
+    alias === undefined
+      ? undefined
+      : createAliasRegistryAuthority({
+          path: join(stateDirectory, "model-aliases.json"),
+          catalogFacts: () => catalogFacts,
+        });
+  if (alias !== undefined) {
+    await writeFile(
+      join(stateDirectory, "model-aliases.json"),
+      `${JSON.stringify(
+        { aliases: { [alias]: aliasTargetFor(providerId, model) } },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
   const composition = await createConfiguredLuckyTokenComposition({
     config,
     credentials,
     fetch: globalThis.fetch,
+    ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
   });
+  if (alias !== undefined) {
+    const models = composition.catalog.models.getModels();
+    const knownTargets = new Set<string>();
+    for (const candidate of models) {
+      knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
+    }
+    catalogFacts = Object.freeze({ catalogVersion: 1, knownTargets });
+    await aliasAuthority!.query();
+  }
   console.error("[codex-suite] composition ready");
   // Capture every real Codex request for later reuse as golden samples.
   let currentMarker: string | undefined;
@@ -1076,28 +1297,32 @@ export async function runCodexCliOnlineSuite(
   const origin = server.origin;
   // Codex's `base_url` includes the `/v1` prefix (matching config.toml).
   let codexBaseUrl = `${origin}/v1`;
-  const codexHome = await prepareIsolatedCodexHome(directory, codexBaseUrl);
+  // Sanity: the self-hosted endpoint must expose the resolved selector.
+  // The live model list also seeds the isolated Codex catalog, so the
+  // suite never depends on a legacy ~/.codex/luckytoken-catalog.json.
+  const modelsResponse = await fetch(`${codexBaseUrl}/models`, {
+    headers: { authorization: `Bearer ${responsesToken}` },
+    signal: requestSignal(totalSignal),
+  });
+  if (modelsResponse.status !== 200) {
+    throw new Error(`codex_models_status_${modelsResponse.status}`);
+  }
+  const modelsList = (await modelsResponse.json()) as {
+    data?: Array<{ id?: string }>;
+  };
+  if (!modelsList.data?.some((entry) => entry.id === selector)) {
+    throw new Error("codex_models_discovery_missing");
+  }
+  const codexHome = await prepareIsolatedCodexHome(
+    directory,
+    codexBaseUrl,
+    selector,
+    modelsList,
+  );
   const codexEnvironment = Object.freeze({
     [CODEX_HOME_ENV_KEY]: codexHome,
   });
   console.error(`[codex-suite] server listening at ${codexBaseUrl}`);
-
-  // Sanity: the self-hosted endpoint must expose the resolved selector.
-  {
-    const modelsResponse = await fetch(`${codexBaseUrl}/models`, {
-      headers: { authorization: `Bearer ${responsesToken}` },
-      signal: requestSignal(totalSignal),
-    });
-    if (modelsResponse.status !== 200) {
-      throw new Error(`codex_models_status_${modelsResponse.status}`);
-    }
-    const modelsList = (await modelsResponse.json()) as {
-      data?: Array<{ id?: string }>;
-    };
-    if (!modelsList.data?.some((entry) => entry.id === DEFAULT_MODEL)) {
-      throw new Error("codex_models_discovery_missing");
-    }
-  }
 
   try {
     const summary = emptySummary();
@@ -1126,6 +1351,7 @@ export async function runCodexCliOnlineSuite(
             scenario,
             responsesToken,
             codexBaseUrl,
+            selector,
             sessionDir,
             artifactDir,
             marker,
@@ -1137,6 +1363,7 @@ export async function runCodexCliOnlineSuite(
             scenario,
             responsesToken,
             codexBaseUrl,
+            selector,
             sessionDir,
             artifactDir,
             marker,
@@ -1165,6 +1392,7 @@ export async function runCodexCliOnlineSuite(
             scenario,
             responsesToken,
             codexBaseUrl,
+            selector,
             sessionDir,
             artifactDir,
             marker,
@@ -1176,6 +1404,7 @@ export async function runCodexCliOnlineSuite(
             scenario.prompt,
             responsesToken,
             codexBaseUrl,
+            selector,
             sessionDir,
             artifactDir,
             marker,
@@ -1275,6 +1504,7 @@ async function runMultiTurnSession(
   scenario: Scenario,
   token: string,
   baseUrl: string,
+  model: string,
   cwd: string,
   artifactDir: string,
   marker: string,
@@ -1306,6 +1536,7 @@ async function runMultiTurnSession(
       prompt,
       token,
       baseUrl,
+      model,
       cwd,
       artifactDir,
       `${marker}_t${turn}`,
@@ -1347,6 +1578,7 @@ async function runRestartRecoveryScenario(
   scenario: Scenario,
   token: string,
   baseUrl: string,
+  model: string,
   cwd: string,
   artifactDir: string,
   marker: string,
@@ -1359,6 +1591,7 @@ async function runRestartRecoveryScenario(
     scenario.prompt,
     token,
     baseUrl,
+    model,
     cwd,
     artifactDir,
     `${marker}_t1`,
@@ -1375,6 +1608,7 @@ async function runRestartRecoveryScenario(
       "Do not use tools, do not explain.",
     token,
     newBaseUrl,
+    model,
     cwd,
     artifactDir,
     `${marker}_t2`,
@@ -1400,6 +1634,7 @@ async function runCancellationScenario(
   scenario: Scenario,
   token: string,
   baseUrl: string,
+  model: string,
   cwd: string,
   artifactDir: string,
   marker: string,
@@ -1415,7 +1650,7 @@ async function runCancellationScenario(
       "-p",
       CODEX_PROFILE,
       "exec",
-      ...codexProviderOverrides(baseUrl),
+      ...codexProviderOverrides(baseUrl, model),
       "--dangerously-bypass-approvals-and-sandbox",
       "--json",
       "-o",
@@ -1450,6 +1685,7 @@ async function runCancellationScenario(
     "Reply with exactly: CANCEL_FOLLOWUP_OK. Do not use tools, do not explain.",
     token,
     baseUrl,
+    model,
     cwd,
     artifactDir,
     `${marker}_followup`,

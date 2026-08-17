@@ -45,6 +45,7 @@ const knownTargets = new Set([
   "anthropic\u0000claude-opus-4-8",
   "anthropic\u0000claude-sonnet-4",
   "deepseek\u0000deepseek-v4-flash",
+  "opencode-go\u0000deepseek-v4-flash",
 ]);
 
 async function createAliasPlane(): Promise<AliasPlaneFixture> {
@@ -137,7 +138,7 @@ describe("alias commands through the Control Plane", () => {
       revision: 0,
       present: false,
       valid: false,
-      defaultsVersion: 1,
+      defaultsVersion: 2,
       catalogVersion: 5,
     });
     // The effective registry rides on the state: curated defaults first.
@@ -220,7 +221,7 @@ describe("alias commands through the Control Plane", () => {
       revision: 0,
       present: false,
       valid: false,
-      defaultsVersion: 1,
+      defaultsVersion: 2,
     });
     expect("raw" in (status.aliases as AliasStatusProjection)).toBe(false);
     await fixture.client.executeAliasCommand({

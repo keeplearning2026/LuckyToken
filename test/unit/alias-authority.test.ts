@@ -68,6 +68,7 @@ const catalogFacts = {
     ["anthropic", "claude-opus-4-8"],
     ["anthropic", "claude-sonnet-4"],
     ["deepseek", "deepseek-v4-flash"],
+    ["opencode-go", "deepseek-v4-flash"],
   ]),
 };
 
@@ -116,7 +117,7 @@ describe("alias registry authority persistence", () => {
       present: false,
       valid: false,
       raw: "",
-      defaultsVersion: 1,
+      defaultsVersion: 2,
     });
     // The effective registry is the curated defaults layer.
     expect(state.effective?.aliases.map((entry) => entry.alias)).toEqual(
@@ -444,7 +445,7 @@ describe("alias registry snapshots and hot-apply", () => {
       path,
       present: false,
       valid: false,
-      defaultsVersion: 1,
+      defaultsVersion: 2,
     });
     expect("raw" in snapshot).toBe(false);
     expect("aliases" in snapshot).toBe(false);
