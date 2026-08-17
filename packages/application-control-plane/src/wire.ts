@@ -74,6 +74,15 @@ import {
   decodeRequestLedgerResult,
 } from "./wire-ledger.js";
 import {
+  decodeAnalyticsResult,
+} from "./wire-analytics.js";
+import {
+  normalizeAnalyticsQuery,
+  type AnalyticsOptionsResult,
+  type AnalyticsQuery,
+  type AnalyticsResult,
+} from "./analytics-contract.js";
+import {
   decodeCaptureEvent,
   decodeCaptureQuery,
   decodeCaptureQueryResult,
@@ -127,6 +136,11 @@ export type ClientRequest =
       readonly type: "get_request_ledger";
       readonly requestId: string;
       readonly query?: unknown;
+    }
+  | {
+      readonly type: "get_analytics";
+      readonly requestId: string;
+      readonly query: AnalyticsQuery;
     }
   | { readonly type: "ledger_subscribe"; readonly requestId: string }
   | { readonly type: "ledger_unsubscribe"; readonly requestId: string }
@@ -223,6 +237,11 @@ export type ServerMessage =
       readonly type: "request_ledger_result";
       readonly requestId: string;
       readonly result: RequestLedgerQueryResult;
+    }
+  | {
+      readonly type: "analytics_result";
+      readonly requestId: string;
+      readonly result: AnalyticsResult | AnalyticsOptionsResult;
     }
   | {
       readonly type: "capture_result";
@@ -2547,6 +2566,16 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
+  if (value.type === "get_analytics") {
+    const query = normalizeAnalyticsQuery(value.query);
+    if (query === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "get_analytics", requestId, query },
+    };
+  }
   if (
     value.type === "ledger_subscribe" ||
     value.type === "ledger_unsubscribe"
@@ -3154,6 +3183,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "request_ledger_result", requestId, result };
+  }
+  if (value.type === "analytics_result") {
+    const result = decodeAnalyticsResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "analytics_result", requestId, result };
   }
   if (value.type === "capture_result") {
     const result = decodeCaptureQueryResult(value.result);

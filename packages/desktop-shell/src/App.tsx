@@ -24,6 +24,7 @@ import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
 import { ModelsFileWorkspace } from "./models-editors.js";
 import { CredentialsPage } from "./credentials-page.js";
 import { RequestsPage } from "./requests-page.js";
+import { AnalyticsPage } from "./analytics-page.js";
 
 import {
   productPages,
@@ -352,6 +353,9 @@ export function App({ shell, retryConnection }: AppProps) {
             connection={snapshot.connection}
             shell={shell}
           />
+        ) : null}
+        {snapshot.activePage === "analytics" ? (
+          <AnalyticsPage shell={shell} />
         ) : null}
         {(snapshot.activePage === "providers" ||
           snapshot.activePage === "models-aliases") &&

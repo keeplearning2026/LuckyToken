@@ -61,6 +61,8 @@ import {
   decodeCaptureQueryResult,
   decodeCaptureRecord,
 } from "./wire-capture.js";
+import { decodeAnalyticsResult } from "./wire-analytics.js";
+import type { AnalyticsQueryHandler } from "./analytics-contract.js";
 import {
   compatibleHello,
   decodeAliasCommandResult,
@@ -167,6 +169,15 @@ export interface StartControlPlaneOptions {
    * events, and an absent capture store is served as `unknown_command`.
    */
   readonly capture?: ControlPlaneCapture;
+  /**
+   * Explicit Request Analytics ownership (Ticket 21): when present, the
+   * Control Plane serves bounded, versioned analytics aggregates computed
+   * at query time over the Request Ledger. The query is already normalized
+   * by the contract decoder when it reaches the handler; the handler is a
+   * narrow result provider and performs no wire logic. An absent analytics
+   * handler is served as `unknown_command` (legacy clients are unaffected).
+   */
+  readonly analyticsHandler?: AnalyticsQueryHandler;
 }
 
 interface ConnectionState {
@@ -264,6 +275,7 @@ export async function startApplicationStatusHost(
   const diagnostics = options.diagnostics;
   const ledger = options.requestLedger;
   const capture = options.capture;
+  const analyticsHandler = options.analyticsHandler;
   const emitDiagnostics =
     diagnostics === undefined
       ? undefined
@@ -649,6 +661,42 @@ export async function startApplicationStatusHost(
             type: "unsubscribed",
             requestId: request.requestId,
           });
+        } else if (request.type === "get_analytics") {
+          if (analyticsHandler === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            let result;
+            try {
+              result = analyticsHandler(request.query);
+            } catch {
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
+              continue;
+            }
+            // Strict result validation at the wire boundary: a result with
+            // an unknown key (including any monetary field), a broken
+            // aggregation identity, or an unsafe integer is rejected.
+            if (decodeAnalyticsResult(result) === undefined) {
+              await sendError(
+                state.connection,
+                request.requestId,
+                "invalid_request",
+              );
+              continue;
+            }
+            await writeFrame(state.connection, {
+              type: "analytics_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
         } else if (request.type === "get_capture") {
           if (capture === undefined) {
             await sendError(

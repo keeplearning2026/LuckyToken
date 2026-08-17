@@ -46,7 +46,9 @@ import {
   type RequestLedgerStore,
 } from "./contract.js";
 import { decodeNormalizedTerminalUsage, type NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type { AnalyticsQuery, AnalyticsQueryResult } from "@luckytoken/application-control-plane/control-plane";
 import { redactDiagnosticText } from "../runtime-diagnostics/redaction.js";
+import { createLedgerAnalyticsAccumulator } from "./analytics.js";
 
 const SCHEMA_NAME = "luckytoken_request_ledger";
 const SCHEMA_VERSION = 2;
@@ -1039,6 +1041,67 @@ export function createRequestLedgerStoreFactory(
             records: Object.freeze(visible.map(rowToRecord)),
             hasMore,
           });
+        },
+        analyze(query: AnalyticsQuery): AnalyticsQueryResult {
+          if (closed) throw new Error("Request Ledger store is closed");
+          // Light contract guard before the scan (the Control Plane host
+          // already normalized the query; this protects direct callers).
+          const range =
+            query.command === "summary"
+              ? { from: query.from, to: query.to }
+              : {
+                  from: query.from ?? 0,
+                  to: query.to ?? Number.MAX_SAFE_INTEGER,
+                };
+          if (
+            !Number.isSafeInteger(range.from) ||
+            !Number.isSafeInteger(range.to)
+          ) {
+            throw new Error(
+              "analyze range must be non-negative safe integers",
+            );
+          }
+          const accumulator = createLedgerAnalyticsAccumulator(query);
+          const conditions: string[] = [];
+          const params: number[] = [];
+          if (query.command === "summary") {
+            conditions.push("accepted_at >= ?", "accepted_at < ?");
+            params.push(query.from, query.to);
+          } else {
+            if (query.from !== undefined) {
+              conditions.push("accepted_at >= ?");
+              params.push(query.from);
+            }
+            if (query.to !== undefined) {
+              conditions.push("accepted_at < ?");
+              params.push(query.to);
+            }
+          }
+          // Bounded keyset scan: history is streamed in fixed pages and
+          // discarded; only the aggregation state is retained.
+          const pageSize = 1_000;
+          const conditionsWithCursor = [...conditions, "id > ?"];
+          const scan = database.prepare(
+            `${selectBase}${
+              conditionsWithCursor.length === 0
+                ? ""
+                : ` WHERE ${conditionsWithCursor.join(" AND ")}`
+            } ORDER BY id ASC LIMIT ?`,
+          );
+          let lastId = 0;
+          for (;;) {
+            const rows = scan.all(
+              ...params,
+              lastId,
+              pageSize,
+            ) as unknown as Row[];
+            for (const row of rows) accumulator.add(rowToRecord(row));
+            if (rows.length < pageSize) break;
+            const last = rows[rows.length - 1];
+            if (last === undefined) break;
+            lastId = last.id;
+          }
+          return accumulator.finish();
         },
         subscribe(
           listener: (event: RequestLedgerEvent) => void,

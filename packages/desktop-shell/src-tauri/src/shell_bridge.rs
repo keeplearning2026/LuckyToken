@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::control_plane_v1::{
-    AliasCommand, AliasCommandResultWire, AuthCommand, AuthCommandResultWire,
+    AliasCommand, AliasCommandResultWire, AnalyticsResultWire, AuthCommand, AuthCommandResultWire,
     AuthInteractionResponse, AuthLoginSession, AutoStartAction, CatalogCommand,
     CatalogCommandResultWire, ClientTokenCommand, ClientTokenCommandResultWire, ConnectResult,
     ConnectionFailure, ControlPlaneConnector, ControlPlaneSession, CredentialCommand,
@@ -647,6 +647,16 @@ impl ShellBridge {
             .request_ledger_query(query)
             .await
             .map_err(|_| ())
+    }
+
+    /// Ticket 21: one-shot versioned analytics query. The query object is
+    /// forwarded verbatim; the host normalizes it and the renderer strictly
+    /// re-decodes the result — the native shell never interprets aggregates.
+    pub(crate) async fn analytics_query(
+        &self,
+        query: Value,
+    ) -> Result<AnalyticsResultWire, ()> {
+        self.connector.analytics_query(query).await.map_err(|_| ())
     }
 
     /// Ticket 19: long-lived Request Ledger subscription. Any previous

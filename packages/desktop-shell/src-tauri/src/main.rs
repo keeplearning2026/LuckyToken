@@ -9,7 +9,8 @@ mod tray_surface;
 use std::sync::Arc;
 
 use control_plane_v1::{
-    decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AuthCommandResultWire,
+    decode_auth_interaction_response, AliasCommand, AliasCommandResultWire, AnalyticsResultWire,
+    AuthCommandResultWire,
     AutoStartAction, CatalogCommand, CatalogCommandResultWire, ClientTokenCommand,
     ClientTokenCommandResultWire, ClientTokenScopeWire, CredentialCommand,
     CredentialCommandResultWire, CredentialImportSelectionWire, DiagnosticsWarningWire,
@@ -364,6 +365,14 @@ async fn shell_request_ledger_query(
 }
 
 #[tauri::command]
+async fn shell_analytics_query(
+    state: State<'_, ShellBridge>,
+    query: serde_json::Value,
+) -> Result<AnalyticsResultWire, ()> {
+    state.analytics_query(query).await
+}
+
+#[tauri::command]
 async fn shell_request_ledger_subscribe(
     app: tauri::AppHandle,
     state: State<'_, ShellBridge>,
@@ -656,6 +665,7 @@ fn main() {
             shell_auth_respond,
             shell_open_url,
             shell_request_ledger_query,
+            shell_analytics_query,
             shell_request_ledger_subscribe,
             shell_request_ledger_unsubscribe,
             shell_catalog_query,

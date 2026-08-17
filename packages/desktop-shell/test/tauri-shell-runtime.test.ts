@@ -804,3 +804,100 @@ describe("Tauri shell runtime auth conflict seam (Ticket 13 repair)", () => {
     ).rejects.toThrow("The sign-in is no longer waiting for that response.");
   });
 });
+
+describe("Tauri shell runtime analytics seam (Ticket 21)", () => {
+  it("forwards the versioned query to the native command and strict-decodes the result", async () => {
+    const calls: Array<{ readonly command: string; readonly args?: unknown }> = [];
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async (command, args) => {
+        calls.push({ command, ...(args === undefined ? {} : { args }) });
+        return {
+          version: 1,
+          command: "summary",
+          totals: {
+            total: 2,
+            success: 1,
+            failed: 1,
+            aborted: 0,
+            other: 0,
+            pending: 0,
+            successRate: 0.5,
+            failureRate: 0.5,
+            abortRate: 0,
+            participating: 1,
+            totalRequests: 2,
+            excluded: 1,
+            inputTokens: 5,
+            cacheReadTokens: 3,
+            cacheWriteTokens: 2,
+            outputTokens: 2,
+            reasoningTokens: 1,
+            normalizedTokenTotal: 12,
+            cacheHitNumerator: 3,
+            cacheHitDenominator: 10,
+            cacheHitRate: 0.3,
+          },
+        };
+      },
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    const result = await runtime.getAnalytics({
+      version: 1,
+      command: "summary",
+      from: 1_700_000_000_000,
+      to: 1_700_003_600_000,
+    });
+    expect(result.command).toBe("summary");
+    if (result.command !== "summary") return;
+    expect(result.totals.cacheHitRate).toBe(0.3);
+    expect(calls).toEqual([
+      {
+        command: "shell_analytics_query",
+        args: {
+          query: {
+            version: 1,
+            command: "summary",
+            from: 1_700_000_000_000,
+            to: 1_700_003_600_000,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("rejects a native result carrying a monetary key at the runtime boundary", async () => {
+    const bridge: NativeTauriBridge = {
+      listen: async () => () => undefined,
+      invoke: async () => ({
+        version: 1,
+        command: "summary",
+        totals: {
+          total: 0,
+          success: 0,
+          failed: 0,
+          aborted: 0,
+          other: 0,
+          pending: 0,
+          successRate: 0,
+          failureRate: 0,
+          abortRate: 0,
+          participating: 0,
+          totalRequests: 0,
+          excluded: 0,
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          cacheHitNumerator: 0,
+          cacheHitDenominator: 0,
+          cost: 5,
+        },
+      }),
+    };
+    const runtime = createTauriDesktopRuntime(bridge);
+    await expect(
+      runtime.getAnalytics({ version: 1, command: "summary", from: 0, to: 1 }),
+    ).rejects.toThrow("invalid analytics result");
+  });
+});

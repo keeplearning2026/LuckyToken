@@ -13,6 +13,12 @@ import type {
   CaptureQuery,
   CaptureQueryResult,
 } from "./capture-contract.js";
+import type {
+  AnalyticsOptionsResult,
+  AnalyticsQuery,
+  AnalyticsResult,
+} from "./analytics-contract.js";
+import { decodeAnalyticsResult } from "./wire-analytics.js";
 import {
   assertControlPlaneEndpoint,
   type AliasCommand,
@@ -398,6 +404,21 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
+    },
+    async getAnalytics(
+      query: AnalyticsQuery,
+    ): Promise<AnalyticsResult | AnalyticsOptionsResult> {
+      const response = await request({ type: "get_analytics", query });
+      if (response.type !== "analytics_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      // Strict re-decode at the client boundary: an analytics result that
+      // fails the allowlist (including any monetary key) is never trusted.
+      const result = decodeAnalyticsResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
     },
     async getRequestLedger(
       query: RequestLedgerQuery | undefined,

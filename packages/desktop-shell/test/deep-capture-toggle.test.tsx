@@ -147,6 +147,7 @@ function makeShell(onSettings: (command: SettingsCommand) => void): WindowsShell
     // Ticket 19 inert ledger surface: the toggle test never queries or
     // subscribes the Request Ledger (same neutral behavior as the other
     // WindowsShellHost test doubles).
+    getAnalytics: async () => { throw new Error("unused analytics"); },
     getRequestLedger: async () => ({ records: [], hasMore: false }),
     subscribeRequestLedger: async () => async () => undefined,
     executeModelsCommand: async () => snapshot,

@@ -864,6 +864,9 @@ async function runServe(
       // (bounded query + opt-in typed events) from the serve-level store,
       // even while the Data Plane is stopped.
       requestLedger: requestLedgerStore,
+      // Ticket 21: query-time analytics aggregation over the same ledger
+      // store — the host computes nothing itself.
+      analyticsHandler: (query) => ownedLedgerStore.analyze(query),
       // Ticket 22: the Control Plane serves bounded capture queries and
       // opt-in typed capture-state events from the serve-level store.
       capture: deepCaptureStore,

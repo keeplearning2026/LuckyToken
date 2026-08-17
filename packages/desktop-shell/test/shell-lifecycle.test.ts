@@ -80,6 +80,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     });
@@ -180,6 +182,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     });
@@ -270,6 +274,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     };
@@ -353,6 +359,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
@@ -439,6 +447,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
@@ -531,6 +541,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       },
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
@@ -620,6 +632,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       subscribeControlPlane: () => () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       disconnectControlPlane: async () => {
@@ -724,6 +738,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     });
@@ -800,6 +816,8 @@ describe("Windows desktop shell public lifecycle seam", () => {
       queryDiagnosticsWarnings: async () => [],
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       subscribeControlPlane: () => () => undefined,
@@ -926,6 +944,8 @@ describe("WindowsShellHost client token commands", () => {
       disconnectControlPlane: async () => undefined,
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     };
@@ -1012,6 +1032,8 @@ describe("WindowsShellHost client token commands", () => {
       }),
       pickDirectory: async () => undefined,
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
     });
@@ -1068,6 +1090,18 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       getRequestIdentities: async () => {
         calls.push("identities");
         return { records: [] };
+      },
+      getAnalytics: async () => {
+        calls.push("analytics");
+        return {
+          version: 1,
+          command: "options",
+          providers: [],
+          models: [],
+          protocols: [],
+          projects: [],
+          outcomes: [],
+        };
       },
       getRequestLedger: async () => {
         calls.push("ledger");
@@ -1156,6 +1190,8 @@ describe("WindowsShellHost picker and request identities (Ticket 17)", () => {
       setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
       pickDirectory: async () => "C:\\picked\\directory",
       getRequestIdentities: async () => ({ records: [] }),
+      getAnalytics: async () => { throw new Error("unused analytics"); },
+
       getRequestLedger: async () => ({ records: [], hasMore: false }),
       subscribeRequestLedger: async () => async () => undefined,
       executeCatalogCommand: async () => ({

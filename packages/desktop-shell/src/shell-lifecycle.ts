@@ -19,6 +19,9 @@ import type {
   RequestLedgerQueryResult,
   RuntimeCommand,
   SettingsCommand,
+  AnalyticsOptionsResult,
+  AnalyticsQuery,
+  AnalyticsResult,
 } from "@luckytoken/application-control-plane/control-plane";
 import type { DiagnosticsWarning } from "./tauri-shell-runtime.js";
 
@@ -71,6 +74,11 @@ export interface DesktopShellRuntime {
    *  cancel. The backend canonicalizes the path. */
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+
+  /** Ticket 21: bounded versioned analytics query over the Request Ledger. */
+  getAnalytics(
+    query: AnalyticsQuery,
+  ): Promise<AnalyticsResult | AnalyticsOptionsResult>;
 
   /** Bounded newest-first Request Ledger query (Ticket 19). */
   getRequestLedger(
@@ -138,6 +146,9 @@ export interface WindowsShellHost {
 
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+  getAnalytics(
+    query: AnalyticsQuery,
+  ): Promise<AnalyticsResult | AnalyticsOptionsResult>;
   getRequestLedger(
     query: RequestLedgerQuery | undefined,
   ): Promise<RequestLedgerQueryResult>;
@@ -323,6 +334,12 @@ export function createWindowsShellHost(
         return Promise.reject(new Error("Desktop shell is not open"));
       }
       return runtime.getRequestIdentities();
+    },
+    getAnalytics(query) {
+      if (current.lifecycle !== "open") {
+        return Promise.reject(new Error("Desktop shell is not open"));
+      }
+      return runtime.getAnalytics(query);
     },
     getRequestLedger(query) {
       if (current.lifecycle !== "open") {

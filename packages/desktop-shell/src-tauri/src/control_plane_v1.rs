@@ -629,6 +629,9 @@ pub(crate) type RequestIdentitiesFuture = Pin<
 pub(crate) type RequestLedgerQueryFuture = Pin<
     Box<dyn Future<Output = Result<RequestLedgerResultWire, ConnectionFailure>> + Send + 'static>,
 >;
+pub(crate) type AnalyticsQueryFuture = Pin<
+    Box<dyn Future<Output = Result<AnalyticsResultWire, ConnectionFailure>> + Send + 'static>,
+>;
 pub(crate) type RequestLedgerSubscribeFuture = Pin<
     Box<
         dyn Future<Output = Result<RequestLedgerSubscribeStart, ConnectionFailure>>
@@ -696,6 +699,11 @@ pub(crate) trait ControlPlaneConnector: Send + Sync {
     /// One-shot bounded Request Ledger query (Ticket 19): the query object
     /// is forwarded verbatim; the native shell never interprets filters.
     fn request_ledger_query(&self, _query: Option<Value>) -> RequestLedgerQueryFuture {
+        Box::pin(async { Err(ConnectionFailure::ProtocolError) })
+    }
+    /// One-shot versioned analytics query (Ticket 21): the query object is
+    /// forwarded verbatim; the native shell never computes aggregates.
+    fn analytics_query(&self, _query: Value) -> AnalyticsQueryFuture {
         Box::pin(async { Err(ConnectionFailure::ProtocolError) })
     }
     /// Long-lived Request Ledger subscription (Ticket 19): forwards
@@ -1044,6 +1052,40 @@ pub(crate) struct RequestLedgerResultWire {
     pub(crate) has_more: bool,
 }
 
+/// Ticket 21 analytics result relay: the thin native shell validates the
+/// bounded versioned envelope (fixed version, exact command, summary and
+/// options sub-shapes, no unknown/foreign key) and forwards it to the
+/// renderer. Nested aggregate objects ride opaque here — the renderer
+/// strict-decodes their allowlisted keys, so Rust never interprets,
+/// derives, or re-shapes any analytics state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AnalyticsResultWire {
+    pub(crate) version: u64,
+    pub(crate) command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) totals: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rows: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncated: Option<bool>,
+    #[serde(rename = "omittedGroupCount", skip_serializing_if = "Option::is_none")]
+    pub(crate) omitted_group_count: Option<u64>,
+    #[serde(rename = "omittedGroupRequests", skip_serializing_if = "Option::is_none")]
+    pub(crate) omitted_group_requests: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) buckets: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) providers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) models: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) protocols: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) projects: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcomes: Option<Vec<String>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 
 pub(crate) struct AutoStartResultWire {
@@ -1381,6 +1423,21 @@ impl ControlPlaneConnector for NativeControlPlaneConnector {
                 })?;
             let (pipe_name, capability) = authority.into_parts();
             execute_request_ledger_query_session(&pipe_name, capability, query).await
+        })
+    }
+
+    fn analytics_query(&self, query: Value) -> AnalyticsQueryFuture {
+        let discovery = self.discovery.clone();
+        Box::pin(async move {
+            let authority = discovery
+                .discover()
+                .await
+                .map_err(|failure| match failure {
+                    DiscoveryFailure::Missing => ConnectionFailure::DescriptorMissing,
+                    DiscoveryFailure::Invalid => ConnectionFailure::DescriptorInvalid,
+                })?;
+            let (pipe_name, capability) = authority.into_parts();
+            execute_analytics_query_session(&pipe_name, capability, query).await
         })
     }
 
@@ -3080,6 +3137,183 @@ fn decode_request_ledger_record(value: &Value) -> Option<RequestLedgerRecordWire
         facts: facts.cloned(),
         terminal_usage: terminal_usage.cloned(),
     })
+}
+
+/// One-shot versioned analytics query (Ticket 21): negotiate, send
+/// `get_analytics` with the query forwarded verbatim, and strict-decode the
+/// result envelope. The host already normalized the query; the native shell
+/// never interprets aggregates.
+async fn execute_analytics_query_session(
+    pipe_name: &str,
+    capability: String,
+    query: Value,
+) -> Result<AnalyticsResultWire, ConnectionFailure> {
+    let mut pipe = ClientOptions::new()
+        .open(pipe_name)
+        .map_err(|_| ConnectionFailure::PipeUnavailable)?;
+    write_json_frame(
+        &mut pipe,
+        &json!({
+            "type": "hello",
+            "requestId": "desktop-hello",
+            "contractVersion": CONTROL_PLANE_VERSION,
+            "capability": capability,
+        }),
+    )
+    .await
+    .map_err(FrameFailure::connection_failure)?;
+    let hello = read_json_frame(&mut pipe)
+        .await
+        .map_err(FrameFailure::connection_failure)?;
+    match decode_hello(&hello)? {
+        Hello::Compatible { .. } => {
+            write_json_frame(
+                &mut pipe,
+                &json!({ "type": "get_analytics", "requestId": "desktop-analytics", "query": query }),
+            )
+            .await
+            .map_err(FrameFailure::connection_failure)?;
+            let result = read_json_frame(&mut pipe)
+                .await
+                .map_err(FrameFailure::connection_failure)?;
+            decode_analytics_result(&result)
+        }
+        Hello::Incompatible { .. } => Err(ConnectionFailure::ProtocolError),
+    }
+}
+
+/// Strict analytics result decode (Ticket 21): the frame header, the exact
+/// result key set, the fixed version, the command vocabulary, and the
+/// command's required sub-shapes. Unknown keys — including any monetary
+/// field, which has no key in the contract — reject the frame; nested
+/// aggregates ride opaque for the renderer's strict allowlist decoder.
+fn decode_analytics_result(value: &Value) -> Result<AnalyticsResultWire, ConnectionFailure> {
+    if value.get("type").and_then(Value::as_str) != Some("analytics_result")
+        || value.get("requestId").and_then(Value::as_str) != Some("desktop-analytics")
+    {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let result = value
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or(ConnectionFailure::ProtocolError)?;
+    const ALLOWED: &[&str] = &[
+        "version",
+        "command",
+        "totals",
+        "rows",
+        "truncated",
+        "omittedGroupCount",
+        "omittedGroupRequests",
+        "buckets",
+        "providers",
+        "models",
+        "protocols",
+        "projects",
+        "outcomes",
+    ];
+    if result.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let version = result.get("version").and_then(Value::as_u64);
+    if version != Some(1) {
+        return Err(ConnectionFailure::ProtocolError);
+    }
+    let command = result.get("command").and_then(Value::as_str);
+    let Some(command) = command else {
+        return Err(ConnectionFailure::ProtocolError);
+    };
+    if command == "summary" {
+        let totals = result.get("totals").and_then(Value::as_object);
+        if totals.is_none() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let rows = result.get("rows");
+        if let Some(rows) = rows {
+            let rows = rows.as_array().ok_or(ConnectionFailure::ProtocolError)?;
+            if rows.is_empty() || rows.iter().any(|row| !row.is_object()) {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        let buckets = result.get("buckets");
+        if let Some(buckets) = buckets {
+            let buckets = buckets.as_array().ok_or(ConnectionFailure::ProtocolError)?;
+            if buckets.is_empty() || buckets.iter().any(|bucket| !bucket.is_object()) {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+        }
+        let truncated = result.get("truncated").and_then(Value::as_bool);
+        if result.get("truncated").is_some() && truncated.is_none() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let omitted_group_count = result.get("omittedGroupCount").and_then(Value::as_u64);
+        if result.get("omittedGroupCount").is_some() && omitted_group_count.is_none() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        let omitted_group_requests = result.get("omittedGroupRequests").and_then(Value::as_u64);
+        if result.get("omittedGroupRequests").is_some() && omitted_group_requests.is_none() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        return Ok(AnalyticsResultWire {
+            version: 1,
+            command: "summary".to_owned(),
+            totals: result.get("totals").cloned(),
+            rows: result
+                .get("rows")
+                .map(|rows| rows.as_array().cloned().unwrap_or_default()),
+            truncated,
+            omitted_group_count,
+            omitted_group_requests,
+            buckets: result
+                .get("buckets")
+                .map(|buckets| buckets.as_array().cloned().unwrap_or_default()),
+            providers: None,
+            models: None,
+            protocols: None,
+            projects: None,
+            outcomes: None,
+        });
+    }
+    if command == "options" {
+        let bounded = |key: &str| -> Result<Vec<String>, ConnectionFailure> {
+            let values = result
+                .get(key)
+                .and_then(Value::as_array)
+                .ok_or(ConnectionFailure::ProtocolError)?;
+            if values.len() > 64 {
+                return Err(ConnectionFailure::ProtocolError);
+            }
+            let mut output = Vec::with_capacity(values.len());
+            for entry in values {
+                let text = entry.as_str().ok_or(ConnectionFailure::ProtocolError)?;
+                if text.is_empty() || text.len() > 1_024 {
+                    return Err(ConnectionFailure::ProtocolError);
+                }
+                output.push(text.to_owned());
+            }
+            Ok(output)
+        };
+        let truncated = result.get("truncated").and_then(Value::as_bool);
+        if result.get("truncated").is_some() && truncated.is_none() {
+            return Err(ConnectionFailure::ProtocolError);
+        }
+        return Ok(AnalyticsResultWire {
+            version: 1,
+            command: "options".to_owned(),
+            totals: None,
+            rows: None,
+            truncated,
+            omitted_group_count: None,
+            omitted_group_requests: None,
+            buckets: None,
+            providers: Some(bounded("providers")?),
+            models: Some(bounded("models")?),
+            protocols: Some(bounded("protocols")?),
+            projects: Some(bounded("projects")?),
+            outcomes: Some(bounded("outcomes")?),
+        });
+    }
+    Err(ConnectionFailure::ProtocolError)
 }
 
 /// Strict ledger query-result decode: the type/requestId frame header plus
@@ -5481,6 +5715,109 @@ mod ticket17_directory_scope_tests {
             "result": { "records": [] }
         });
         assert!(decode_request_ledger_result(&missing_has_more).is_err());
+    }
+
+    #[test]
+    fn analytics_result_decodes_clean_results_and_rejects_unknown_or_monetary_keys() {
+        let totals = json!({});
+        let summary = json!({
+            "type": "analytics_result",
+            "requestId": "desktop-analytics",
+            "result": {
+                "version": 1,
+                "command": "summary",
+                "totals": totals,
+                "rows": [ { "dimension": "provider", "value": "anthropic", "summary": {} } ],
+                "truncated": true,
+                "omittedGroupCount": 3,
+                "omittedGroupRequests": 12,
+                "buckets": [ { "start": 1700000000000_u64, "end": 1700003600000_u64, "summary": {} } ]
+            }
+        });
+        let decoded = decode_analytics_result(&summary).expect("valid summary must decode");
+        assert_eq!(decoded.version, 1);
+        assert_eq!(decoded.command, "summary");
+        assert!(decoded.totals.is_some());
+        assert_eq!(decoded.rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(decoded.truncated, Some(true));
+        assert_eq!(decoded.omitted_group_count, Some(3));
+        assert_eq!(decoded.omitted_group_requests, Some(12));
+        assert_eq!(decoded.buckets.as_ref().map(Vec::len), Some(1));
+        assert!(decoded.providers.is_none());
+
+        let mut options = json!({
+            "type": "analytics_result",
+            "requestId": "desktop-analytics",
+            "result": {
+                "version": 1,
+                "command": "options",
+                "providers": ["anthropic"],
+                "models": ["claude-x"],
+                "protocols": [],
+                "projects": [],
+                "outcomes": ["success"]
+            }
+        });
+        let decoded = decode_analytics_result(&options).expect("valid options must decode");
+        assert_eq!(decoded.command, "options");
+        assert_eq!(decoded.providers.as_deref(), Some(&["anthropic".to_owned()][..]));
+        assert_eq!(decoded.models.as_deref(), Some(&["claude-x".to_owned()][..]));
+        assert!(decoded.totals.is_none());
+
+        // Unknown keys anywhere — including any monetary field — reject.
+        for key in ["cost", "price", "billing", "amount"] {
+            let mut hostile = summary.clone();
+            hostile["result"][key] = json!(5);
+            assert!(
+                decode_analytics_result(&hostile).is_err(),
+                "frame with {key} must be rejected",
+            );
+        }
+        // Wrong type/requestId/version/command reject.
+        let mut wrong_version = summary.clone();
+        wrong_version["result"]["version"] = json!(2);
+        assert!(decode_analytics_result(&wrong_version).is_err());
+        let mut wrong_command = summary.clone();
+        wrong_command["result"]["command"] = json!("rollup");
+        assert!(decode_analytics_result(&wrong_command).is_err());
+        let mut wrong_type = summary.clone();
+        wrong_type["type"] = json!("request_ledger_result");
+        assert!(decode_analytics_result(&wrong_type).is_err());
+        let mut wrong_id = summary.clone();
+        wrong_id["requestId"] = json!("desktop-request-ledger");
+        assert!(decode_analytics_result(&wrong_id).is_err());
+
+        // Malformed sub-shapes reject: missing totals, empty rows, missing
+        // options dimensions, oversized options arrays, empty strings.
+        let mut no_totals = summary.clone();
+        no_totals["result"].as_object_mut().unwrap().remove("totals");
+        assert!(decode_analytics_result(&no_totals).is_err());
+        let mut empty_rows = summary.clone();
+        empty_rows["result"]["rows"] = json!([]);
+        assert!(decode_analytics_result(&empty_rows).is_err());
+        let mut missing_providers = options.clone();
+        missing_providers["result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("providers");
+        assert!(decode_analytics_result(&missing_providers).is_err());
+        let many = (0..65).map(|i| json!(format!("p{i}"))).collect::<Vec<_>>();
+        options["result"]["providers"] = json!(many);
+        assert!(decode_analytics_result(&options).is_err());
+        let empty_string = json!({
+            "type": "analytics_result",
+            "requestId": "desktop-analytics",
+            "result": {
+                "version": 1,
+                "command": "options",
+                "providers": [""],
+                "models": [],
+                "protocols": [],
+                "projects": [],
+                "outcomes": []
+            }
+        });
+        assert!(decode_analytics_result(&empty_string).is_err());
     }
 }
 

@@ -120,6 +120,7 @@ function makeShell(overrides: {
     setAutoStartEnabled: async (enabled: boolean) => ({ enabled }),
     pickDirectory: overrides.pick ?? (async () => undefined),
     getRequestIdentities: async () => ({ records: [] }),
+    getAnalytics: async () => { throw new Error("unused analytics"); },
     getRequestLedger: async () => ({ records: [], hasMore: false }),
     subscribeRequestLedger: async () => async () => undefined,
     executeModelsCommand: async () => snapshot,

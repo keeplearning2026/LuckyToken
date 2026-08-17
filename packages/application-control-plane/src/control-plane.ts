@@ -201,6 +201,30 @@ export {
   normalizeDiagnosticQuery,
 } from "./diagnostics-contract.js";
 export {
+  ANALYTICS_CONTRACT_VERSION,
+  MAX_ANALYTICS_DAY_SERIES_SPAN_MS,
+  MAX_ANALYTICS_FILTER_VALUES,
+  MAX_ANALYTICS_GROUPS,
+  MAX_ANALYTICS_HOUR_SERIES_SPAN_MS,
+  MAX_ANALYTICS_OPTIONS_VALUES,
+  normalizeAnalyticsQuery,
+  type AnalyticsBucket,
+  type AnalyticsFilter,
+  type AnalyticsGroupBy,
+  type AnalyticsGroupRow,
+  type AnalyticsOptionsResult,
+  type AnalyticsQuery,
+  type AnalyticsQueryHandler,
+  type AnalyticsQueryResult,
+  type AnalyticsResult,
+  type AnalyticsSeriesGranularity,
+  type AnalyticsSummary,
+} from "./analytics-contract.js";
+export {
+  decodeAnalyticsResult,
+  decodeAnalyticsSummary,
+} from "./wire-analytics.js";
+export {
   nodePipeFallbackAccess,
   type PipeAccessRequirement,
   type PipeConnection,

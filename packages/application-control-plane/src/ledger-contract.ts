@@ -13,6 +13,10 @@
  * handler-local entry; the store is the one SQLite/WAL authority.
  */
 import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type {
+  AnalyticsQuery,
+  AnalyticsQueryResult,
+} from "./analytics-contract.js";
 
 export type LedgerPhase =
   | "accepted"
@@ -264,6 +268,12 @@ export interface RequestLedger {
  *  value scrubber from the credential owners before any request can run). */
 export interface RequestLedgerStore extends RequestLedger {
   attachScrub(scrub: (value: string) => string): void;
+  /** Ticket 21: query-time, TypeScript-owned analytics aggregation over
+   *  committed rows in a half-open `acceptedAt` range. Rows are streamed in
+   *  bounded pages; the aggregation itself is pure and TypeScript-owned.
+   *  Summary counts include every matching request; token/cache sums only
+   *  Complete terminal usage. */
+  analyze(query: AnalyticsQuery): AnalyticsQueryResult;
   close(): void;
 }
 

@@ -13,6 +13,11 @@ import type {
   CaptureQuery,
   CaptureQueryResult,
 } from "./capture-contract.js";
+import type {
+  AnalyticsOptionsResult,
+  AnalyticsQuery,
+  AnalyticsResult,
+} from "./analytics-contract.js";
 
 export const controlPlaneVersion = 1 as const;
 
@@ -1254,6 +1259,12 @@ export interface ControlPlaneClient {
   getRequestLedger(
     query?: RequestLedgerQuery,
   ): Promise<RequestLedgerQueryResult>;
+  /** Ticket 21: bounded, versioned analytics aggregation over the Request
+   *  Ledger, computed at query time (summary and options commands). The
+   *  host result is strictly re-decoded at the client boundary. */
+  getAnalytics(
+    query: AnalyticsQuery,
+  ): Promise<AnalyticsResult | AnalyticsOptionsResult>;
   /** Ticket 18: opt-in typed ledger events; never delivered to status or
    *  diagnostics subscribers. */
   subscribeRequestLedger(

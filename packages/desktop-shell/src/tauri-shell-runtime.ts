@@ -24,7 +24,13 @@ import type {
   RuntimeCommand,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  AnalyticsOptionsResult,
+  AnalyticsQuery,
+  AnalyticsResult,
+} from "@luckytoken/application-control-plane/control-plane";
 import {
+  decodeAnalyticsResult,
   decodeRequestLedgerRecord,
   decodeRequestLedgerResult,
 } from "@luckytoken/application-control-plane/control-plane";
@@ -82,7 +88,8 @@ export type ShellCommand =
   | "shell_aliases_write"
   | "shell_request_ledger_query"
   | "shell_request_ledger_subscribe"
-  | "shell_request_ledger_unsubscribe";
+  | "shell_request_ledger_unsubscribe"
+  | "shell_analytics_query";
 
 export interface NativeTauriBridge {
   invoke(command: ShellCommand, args?: unknown): Promise<unknown>;
@@ -157,6 +164,12 @@ export interface TauriDesktopRuntime {
    *  a filesystem authority. */
   pickDirectory(): Promise<string | undefined>;
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
+  /** Ticket 21: bounded versioned analytics query (summary | options) over
+   *  the Request Ledger; the result is strictly re-decoded at this
+   *  boundary and never carries a monetary field. */
+  getAnalytics(
+    query: AnalyticsQuery,
+  ): Promise<AnalyticsResult | AnalyticsOptionsResult>;
   /** Bounded newest-first Request Ledger query (Ticket 19). */
   getRequestLedger(
     query: RequestLedgerQuery | undefined,
@@ -886,6 +899,15 @@ export function createTauriDesktopRuntime(
         throw new Error(
           "LuckyToken returned an invalid request identities result",
         );
+      }
+      return decoded;
+    },
+
+    async getAnalytics(query) {
+      const raw = await bridge.invoke("shell_analytics_query", { query });
+      const decoded = decodeAnalyticsResult(raw);
+      if (decoded === undefined) {
+        throw new Error("LuckyToken returned an invalid analytics result");
       }
       return decoded;
     },

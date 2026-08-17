@@ -202,6 +202,9 @@ function makeShell(options: StubOptions = {}) {
       },
     }),
     dispose: async () => undefined,
+    getAnalytics: async () => {
+      throw new Error("unused analytics");
+    },
     async getRequestLedger(query) {
       queries.push(query ?? {});
       if (
