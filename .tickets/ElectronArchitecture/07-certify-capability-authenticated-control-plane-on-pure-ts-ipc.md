@@ -4,10 +4,10 @@
 
 **Blocked by:** 05 — Cut Control Plane endpoint to address and capability.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] A client must authenticate with the endpoint capability before any status, command, query, or subscription result can be observed.
-- [ ] Invalid or missing capability attempts fail closed and reveal no application state.
-- [ ] Hello ordering, malformed-message rejection, disconnect, reconnect, and request correlation remain deterministic on the new transport.
-- [ ] Status and long-lived subscription lifecycles clean up correctly when either side closes or the transport is lost.
-- [ ] Contract tests remain transport-independent while a focused real-local-IPC suite certifies the production adapter.
+- [x] A client must authenticate with the endpoint capability before any status, command, query, or subscription result can be observed.
+- [x] Invalid or missing capability attempts fail closed and reveal no application state.
+- [x] Hello ordering, malformed-message rejection, disconnect, reconnect, and request correlation remain deterministic on the new transport.
+- [x] Status and long-lived subscription lifecycles clean up correctly when either side closes or the transport is lost.
+- [x] Contract tests remain transport-independent while a focused real-local-IPC suite certifies the production adapter.
