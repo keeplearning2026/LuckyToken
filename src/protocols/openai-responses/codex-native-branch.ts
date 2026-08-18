@@ -1,12 +1,12 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 
 import type { InvocationDiagnostics } from "../../invocation-diagnostics/index.js";
-import type { CodexForwardAuth } from "../../integrations/codex/local-auth.js";
+import type { CodexForwardAuth } from "../../codex-native-seam.js";
 import {
   CodexResponsesPassthroughBodyReadError,
   CodexResponsesPassthroughTransportError,
   passthroughCodexResponses,
-} from "../../integrations/codex/responses-passthrough.js";
+} from "../../codex-responses-passthrough.js";
 import type { RequestLedgerEntry } from "../../request-ledger/handler-seam.js";
 import { renderResponsesError, type PreparedHttpResponse } from "./response.js";
 import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";

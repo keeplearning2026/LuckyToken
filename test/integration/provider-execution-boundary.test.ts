@@ -353,18 +353,18 @@ describe("Provider execution boundary", () => {
         headers: { "x-request-id": "req-second" },
       }),
     ] as const;
-    let call = 0;
     let started = 0;
     let release!: () => void;
     const bothStarted = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const streamSimple = vi.fn(() => {
-      const fact = facts[call++];
-      if (fact === undefined) return errorStream("later unstructured failure");
+    const streamWithFact = (
+      fact: (typeof facts)[number],
+      attempt: number,
+    ): AssistantMessageEventStream => {
       const failed = { ...message("fixture-api"), stopReason: "error" as const };
       failed.errorMessage = "fallback must not replace neutral fact";
-      failed.diagnostics = [createUpstreamFailureDiagnostic(fact, call)];
+      failed.diagnostics = [createUpstreamFailureDiagnostic(fact, attempt)];
       let emitted = false;
       return {
         [Symbol.asyncIterator]: () => ({
@@ -385,19 +385,29 @@ describe("Provider execution boundary", () => {
           },
         }),
       } as AssistantMessageEventStream;
-    });
-    const models = {
+    };
+    const anthropicModels = {
       getModels: () => [selected],
-      streamSimple,
+      streamSimple: vi.fn(() => streamWithFact(facts[0], 1)),
+    } as unknown as Models;
+    let responsesCalls = 0;
+    const responsesModels = {
+      getModels: () => [selected],
+      streamSimple: vi.fn(() => {
+        responsesCalls += 1;
+        return responsesCalls === 1
+          ? streamWithFact(facts[1], 2)
+          : errorStream("later unstructured failure");
+      }),
     } as unknown as Models;
     const anthropic = createAnthropicMessagesHandler({
-      models,
+      models: anthropicModels,
       auth,
       maxRequestBytes: 1024,
       now: () => 1,
     });
     const responses = createOpenAIResponsesHandler({
-      models,
+      models: responsesModels,
       auth,
       stateFile: "unused.json",
       sessionState,

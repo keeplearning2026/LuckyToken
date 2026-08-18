@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ControlPlaneClient } from "@luckytoken/application-control-plane/control-plane";
 
-import { registerDesktopIpcHandlers } from "../src/main/desktop-ipc.js";
+import {
+  registerDesktopIpcHandlers,
+  type DesktopIpcHandler,
+} from "../src/main/desktop-ipc.js";
 import { desktopIpcChannels } from "../src/shared/ipc-channels.js";
 
 function fixture() {
-  const handlers = new Map<string, (...args: any[]) => any>();
+  const handlers = new Map<string, DesktopIpcHandler>();
   const registrar = {
-    handle: vi.fn((channel: string, handler: (...args: any[]) => any) => {
+    handle: vi.fn((channel: string, handler: DesktopIpcHandler) => {
       handlers.set(channel, handler);
     }),
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),

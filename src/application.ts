@@ -270,7 +270,6 @@ async function startRecoveryApplication(options: {
   await mkdir(dirname(descriptorPath), { recursive: true });
   const endpoint = endpointForCurrentUser(dirname(descriptorPath));
   let descriptor: Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
-  let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
 
   try {
     descriptor = await publishControlPlaneDescriptor({
@@ -295,19 +294,9 @@ async function startRecoveryApplication(options: {
   });
   const controlPipe = await createProductionControlPipe();
   const autoStartRegistrar = createAutoStartRegistrar(options);
-  let lifecycle: ControlledLuckyTokenApplication | undefined;
+  const lifecycleHolder: { current?: ControlledLuckyTokenApplication } = {};
 
-  const cleanup = async (): Promise<void> => {
-    const results = await Promise.allSettled([
-      descriptor?.close() ?? Promise.resolve(),
-      controlPlane?.close() ?? Promise.resolve(),
-    ]);
-    if (results.some((result) => result.status === "rejected")) {
-      throw new Error("LuckyToken recovery Control Plane cleanup failed");
-    }
-  };
-
-  controlPlane = await startControlPlane({
+  const controlPlane = await startControlPlane({
     endpoint,
     application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
     initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
@@ -331,18 +320,28 @@ async function startRecoveryApplication(options: {
     onApplicationCommandResultDelivered: (command) => {
       if (command.command !== "quit") return;
       setImmediate(() => {
-        void lifecycle?.finish("drained");
+        void lifecycleHolder.current?.finish("drained");
       });
     },
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
   });
 
-  lifecycle = createLifecycle({
+  const cleanup = async (): Promise<void> => {
+    const results = await Promise.allSettled([
+      descriptor?.close() ?? Promise.resolve(),
+      controlPlane.close(),
+    ]);
+    if (results.some((result) => result.status === "rejected")) {
+      throw new Error("LuckyToken recovery Control Plane cleanup failed");
+    }
+  };
+  const lifecycle = createLifecycle({
     ownership,
     cleanup,
     ...(options.events === undefined ? {} : { events: options.events }),
   });
+  lifecycleHolder.current = lifecycle;
   return { kind: "running", application: lifecycle };
 }
 
@@ -544,18 +543,20 @@ async function startNormalApplication(options: {
       return Number.isSafeInteger(value) && value >= 0 ? value : 5000;
     };
 
-    let aliasAuthority: ReturnType<typeof createAliasRegistryAuthority>;
+    const aliasAuthorityHolder: {
+      current?: ReturnType<typeof createAliasRegistryAuthority>;
+    } = {};
     const catalogController = createCatalogRefreshController({
       store: catalogCacheStore,
       authority: modelsAuthority,
       diagnostics: ownedDiagnosticsStore,
       now: Date.now,
       onSnapshot: () => {
-        aliasAuthority.onCatalogSnapshot();
+        aliasAuthorityHolder.current?.onCatalogSnapshot();
         controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
       },
     });
-    aliasAuthority = createAliasRegistryAuthority({
+    const aliasAuthority = createAliasRegistryAuthority({
       path: join(dirname(config.pi.modelsJson), "model-aliases.json"),
       catalogFacts: () => {
         const snapshot = catalogController.snapshot();
@@ -568,6 +569,7 @@ async function startNormalApplication(options: {
         return { catalogVersion: snapshot.version, knownTargets };
       },
     });
+    aliasAuthorityHolder.current = aliasAuthority;
 
     const codexLocalAuth = createCodexLocalCredentialAuthority({
       codexHome: resolveCodexHome(),

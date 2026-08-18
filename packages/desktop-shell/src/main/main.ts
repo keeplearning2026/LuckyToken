@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import {
   createSecureManagementWindowOptions,
+  quitLuckyTokenProduct,
   startElectronDesktopLifecycle,
 } from "./electron-app-lifecycle.js";
 import { createElectronBackendSupervisor } from "./electron-backend-supervisor.js";
@@ -29,6 +30,7 @@ let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let trayActions: { readonly open: () => void; readonly quit: () => void } | undefined;
 let reconnectTask: Promise<void> | undefined;
+let productQuitTask: Promise<boolean> | undefined;
 const backendSupervisor = createElectronBackendSupervisor({
   resourcesPath: process.resourcesPath,
   desktopExecutable: process.execPath,
@@ -156,6 +158,21 @@ function updateTray(health: TrayHealth): void {
   );
 }
 
+function requestProductQuit(): void {
+  if (productQuitTask !== undefined) return;
+  productQuitTask = quitLuckyTokenProduct({
+    requestBackendQuit: () =>
+      controlPlaneSession.client().executeApplicationCommand({
+        command: "quit",
+        acknowledged: true,
+      }),
+    quitDesktop: () => app.quit(),
+    onFailure: () => updateTray("attention"),
+  }).finally(() => {
+    productQuitTask = undefined;
+  });
+}
+
 function createTray(actions: { readonly open: () => void; readonly quit: () => void }): void {
   if (tray !== undefined) return;
   trayActions = actions;
@@ -195,7 +212,7 @@ void startElectronDesktopLifecycle({
   },
   onSecondInstance: (listener) => app.on("second-instance", listener),
   onWindowAllClosed: (listener) => app.on("window-all-closed", listener),
-  quit: () => app.quit(),
+  quit: requestProductQuit,
   openWindow: openManagementWindow,
   createTray,
 });

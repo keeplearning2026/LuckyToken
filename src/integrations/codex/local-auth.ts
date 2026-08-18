@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { AuthorizedClient, ReadonlyHeaders } from "../../auth.js";
+import type {
+  CodexForwardAuth,
+  CodexLocalCredentialAuthority,
+} from "../../codex-native-seam.js";
 import { resolveCodexHome } from "./home.js";
 
 const readFileAsync = promisify(readFile);
@@ -13,18 +17,6 @@ const MAX_SCRUB_TOKENS = 2;
 interface CodexCredentialSnapshot {
   readonly accessToken: string;
   readonly accountId?: string;
-}
-
-export interface CodexForwardAuth {
-  readonly authorization: string;
-  readonly accountId?: string;
-}
-
-export interface CodexLocalCredentialAuthority {
-  isAvailable(): Promise<boolean>;
-  authorizeToken(token: string): Promise<AuthorizedClient | undefined>;
-  resolveForwardAuth(headers: ReadonlyHeaders): Promise<CodexForwardAuth | undefined>;
-  scrub(value: string): string;
 }
 
 export interface CodexLocalCredentialAuthorityOptions {

@@ -277,9 +277,15 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     await client.executeRuntimeCommand("start");
     const origin = (await client.getStatus()).dataPlane?.configuredOrigin;
     expect(origin).toContain(":3000");
-    await expect(fetch(`${origin}/v1/messages`, { method: "POST" })).resolves.toMatchObject(
-      { status: 200 },
-    );
+    const plaintext = await fetch(`${origin}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(plaintext.status).toBe(401);
+    await expect(plaintext.json()).resolves.toMatchObject({
+      error: { type: "authentication_error" },
+    });
   });
 
   it("never binds to an unconfirmed LAN host even when the gateway restarts", async () => {

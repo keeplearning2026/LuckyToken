@@ -1,13 +1,10 @@
 import type { Model, Provider } from "@earendil-works/pi-ai";
+
+import type { CodexNativeModelSource } from "../../codex-native-seam.js";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 export const codexPiProviderId = "openai-codex";
 export const codexPiApiId = "openai-codex-responses";
-
-export interface CodexNativeModelSource {
-  has(modelId: string): boolean;
-  models(): readonly Model<string>[];
-}
 
 /**
  * Codex-native identity is derived from Pi's bundled ChatGPT/Codex provider,

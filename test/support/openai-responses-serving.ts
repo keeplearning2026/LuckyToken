@@ -29,8 +29,10 @@ import {
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
-import type { CodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
-import type { CodexNativeModelSource } from "../../src/integrations/codex/native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "../../src/codex-native-seam.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;

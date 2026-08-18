@@ -2,8 +2,10 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
-import type { CodexNativeModelSource } from "../../src/integrations/codex/native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "../../src/codex-native-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,

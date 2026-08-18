@@ -81,8 +81,10 @@ import {
   projectResponsesPassthroughBody,
   type PassthroughResponsesResult,
 } from "./passthrough.js";
-import type { CodexLocalCredentialAuthority } from "../../integrations/codex/local-auth.js";
-import type { CodexNativeModelSource } from "../../integrations/codex/native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "../../codex-native-seam.js";
 import { executeCodexNativeBranch } from "./codex-native-branch.js";
 import {
   buildCodexRoutedCompactionRequest,

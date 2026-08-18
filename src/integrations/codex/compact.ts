@@ -10,13 +10,15 @@ import {
   renderResponsesError,
   type PreparedHttpResponse,
 } from "../../protocols/openai-responses/response.js";
-import type { CodexLocalCredentialAuthority } from "./local-auth.js";
-import type { CodexNativeModelSource } from "./native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "../../codex-native-seam.js";
 import {
   CodexResponsesPassthroughBodyReadError,
   CodexResponsesPassthroughTransportError,
   passthroughCodexResponsesCompact,
-} from "./responses-passthrough.js";
+} from "../../codex-responses-passthrough.js";
 
 export const CODEX_COMPACT_PROMPT = `Create a concise handoff summary of the conversation so another model can continue the task. Preserve current progress, key decisions, constraints, important facts, and clear next steps. Do not continue solving the task; summarize the state needed to resume it.`;
 

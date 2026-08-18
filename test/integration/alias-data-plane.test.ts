@@ -9,8 +9,10 @@ import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
-import type { CodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
-import type { CodexNativeModelSource } from "../../src/integrations/codex/native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "../../src/codex-native-seam.js";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { parseModelsJson } from "../../src/providers/models-json.js";

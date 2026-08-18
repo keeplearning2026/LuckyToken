@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RequestLedgerEvent } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -66,7 +67,7 @@ async function click(name: string): Promise<void> {
 
 describe("Activity product slice", () => {
   it("shows bounded request facts and live commits without duplicates", async () => {
-    let live: ((event: any) => void) | undefined;
+    let live: ((event: RequestLedgerEvent) => void) | undefined;
     const getRequestLedger = vi.fn(async () => ({
       records: [record(3), record(2, { outcome: "failed", clientHttpStatus: 502 })],
       hasMore: false,
@@ -128,7 +129,7 @@ describe("Activity product slice", () => {
   });
 
   it("renders Backend-computed analytics without reaggregating request rows", async () => {
-    const getAnalytics = vi.fn(async (query: any) => ({
+    const getAnalytics = vi.fn(async () => ({
       version: 1 as const,
       command: "summary" as const,
       totals: {

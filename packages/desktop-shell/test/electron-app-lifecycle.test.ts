@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createSecureManagementWindowOptions,
+  quitLuckyTokenProduct,
   startElectronDesktopLifecycle,
 } from "../src/main/electron-app-lifecycle.js";
 
@@ -38,6 +39,48 @@ describe("Electron desktop lifecycle seam", () => {
     expect(quit).toHaveBeenCalledTimes(1);
     expect(openWindow).not.toHaveBeenCalled();
     expect(onSecondInstance).not.toHaveBeenCalled();
+  });
+
+  it("quits the desktop only after an acknowledged Backend drain outcome", async () => {
+    const quitDesktop = vi.fn();
+    const onFailure = vi.fn();
+
+    await expect(
+      quitLuckyTokenProduct({
+        requestBackendQuit: async () => ({ outcome: "drained" }),
+        quitDesktop,
+        onFailure,
+      }),
+    ).resolves.toBe(true);
+    expect(quitDesktop).toHaveBeenCalledTimes(1);
+    expect(onFailure).not.toHaveBeenCalled();
+
+    quitDesktop.mockClear();
+    await expect(
+      quitLuckyTokenProduct({
+        requestBackendQuit: async () => ({ outcome: "conflict" }),
+        quitDesktop,
+        onFailure,
+      }),
+    ).resolves.toBe(false);
+    expect(quitDesktop).not.toHaveBeenCalled();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Electron alive when Backend quit is unavailable", async () => {
+    const quitDesktop = vi.fn();
+    const onFailure = vi.fn();
+    await expect(
+      quitLuckyTokenProduct({
+        requestBackendQuit: async () => {
+          throw new Error("Control Plane unavailable");
+        },
+        quitDesktop,
+        onFailure,
+      }),
+    ).resolves.toBe(false);
+    expect(quitDesktop).not.toHaveBeenCalled();
+    expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
   it("registers second-instance activation without opening the primary window at startup", async () => {

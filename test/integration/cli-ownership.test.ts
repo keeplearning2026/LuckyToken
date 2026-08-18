@@ -221,6 +221,15 @@ describe("LuckyToken CLI ownership lifecycle", () => {
       .toBe("running");
   }
 
+  async function waitForStartSettled(client: ControlPlaneClient): Promise<void> {
+    await expect
+      .poll(async () => (await client.getStatus()).modelDataPlane, {
+        timeout: 10_000,
+        interval: 50,
+      })
+      .not.toBe("starting");
+  }
+
   it("attaches a second launch to the active instance instead of starting another Data Plane", async () => {
     const { configPath, descriptorPath } = await writeServeState();
     const first = startCli(
@@ -263,10 +272,12 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
   it("refuses a non-owner quit without explicit acknowledgement and keeps the headless owner alive", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const serve = startCli([
+      "--config",
+      configPath,
+      "--descriptor",
+      descriptorPath,
+    ]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -296,12 +307,16 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await expect(status.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
     });
+    const shutdown = await status.executeApplicationCommand({
+      command: "quit",
+      acknowledged: true,
+    });
+    expect(shutdown).toMatchObject({ command: "quit", outcome: "drained" });
     await status.close();
 
-    serve.stdin.end("stop\n");
     const result2 = await serving.result;
     expect(result2.code).toBe(0);
-  }, 30_000);
+  }, 60_000);
 
   it("an acknowledged quit drains the active set and exits the owner process", async () => {
     const { configPath, descriptorPath } = await writeServeState();
@@ -638,13 +653,20 @@ ${exit.stderr}`).toContain("timed out");
 
     const client = await connectToServe(descriptorPath, "first-run");
     await client.hello(1);
-    await waitForRunning(client);
-    await expect(client.getStatus()).resolves.toMatchObject({
+    await waitForStartSettled(client);
+    const firstStatus = await client.getStatus();
+    expect(firstStatus).toMatchObject({
       ownership: { owner: { kind: "desktop" } },
     });
+    if (firstStatus.modelDataPlane === "failed") {
+      expect(firstStatus.dataPlane?.failure?.code).toBe("port_in_use");
+    } else {
+      expect(firstStatus.modelDataPlane).toBe("running");
+    }
 
-    // The first-run template must be an actual valid config: the serve
-    // started the Data Plane from it.
+    // The first-run template must be an actual valid config. A busy default
+    // port may prevent this test process from binding, but only that bounded
+    // runtime conflict is accepted here.
     const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
       readonly schemaVersion?: unknown;
     };

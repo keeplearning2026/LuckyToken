@@ -29,6 +29,35 @@ export interface TrayActions {
   readonly quit: () => void;
 }
 
+export interface ProductQuitDependencies {
+  readonly requestBackendQuit: () => Promise<{
+    readonly outcome: string;
+  }>;
+  readonly quitDesktop: () => void;
+  readonly onFailure?: () => void;
+}
+
+/**
+ * Explicit product Quit is ownership-aware Backend shutdown followed by
+ * Electron exit. Closing the management window is a different operation.
+ */
+export async function quitLuckyTokenProduct(
+  dependencies: ProductQuitDependencies,
+): Promise<boolean> {
+  try {
+    const result = await dependencies.requestBackendQuit();
+    if (result.outcome !== "drained" && result.outcome !== "timed_out") {
+      dependencies.onFailure?.();
+      return false;
+    }
+    dependencies.quitDesktop();
+    return true;
+  } catch {
+    dependencies.onFailure?.();
+    return false;
+  }
+}
+
 export interface ElectronDesktopLifecycleDependencies {
   readonly requestSingleInstanceLock: () => boolean;
   readonly whenReady: () => Promise<void>;

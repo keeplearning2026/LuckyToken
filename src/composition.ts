@@ -94,14 +94,12 @@ import {
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import type { SettingsRegistry } from "./settings/catalog.js";
-import {
-  createCodexLocalCredentialAuthority,
-  type CodexLocalCredentialAuthority,
-} from "./integrations/codex/local-auth.js";
-import {
-  createCodexNativeModelSource,
-  type CodexNativeModelSource,
-} from "./integrations/codex/native-models.js";
+import type {
+  CodexLocalCredentialAuthority,
+  CodexNativeModelSource,
+} from "./codex-native-seam.js";
+import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
+import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
 import { createCodexResponsesCompactHandler } from "./integrations/codex/compact.js";
 
 export interface ConfiguredPiModelsOptions {

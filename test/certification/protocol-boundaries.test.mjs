@@ -29,6 +29,12 @@ const CLIENT_SHARED_SEAMS = new Set([
   // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
   "alias-model-seam.ts",
   "protocols/sse-lines.ts",
+  // Client-owned Codex native paths cross the Responses/Integration boundary
+  // only through these two neutral seams: capability contracts and bounded
+  // HTTP passthrough. Neither file imports a concrete Client Protocol or
+  // Integration implementation.
+  "codex-native-seam.ts",
+  "codex-responses-passthrough.ts",
   // Ticket 18 neutral handler seam: both Client Protocols observe the
   // Request Lifecycle Ledger only through this narrow seam (observer
   // contract + safe no-op); persistence/configuration/store DTOs stay out
@@ -106,6 +112,7 @@ function assertClosedProtocol(imports, ownRoot, siblingRoot) {
       assert.ok(
         entry.specifier === "@earendil-works/pi-ai" ||
           entry.specifier === "@luckytoken/provider-contract/diagnostics" ||
+          entry.specifier === "@luckytoken/provider-contract/usage" ||
           entry.specifier.startsWith("node:"),
         `${slash(path.relative(repositoryRoot, entry.file))} imports non-Pi package ${entry.specifier}`,
       );

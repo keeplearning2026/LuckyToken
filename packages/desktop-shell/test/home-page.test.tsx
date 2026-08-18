@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeCommandResult } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -53,10 +54,10 @@ describe("Home readiness product slice", () => {
   });
 
   it("starts a stopped gateway through the typed command and waits for authoritative result state", async () => {
-    let resolveStart: ((value: any) => void) | undefined;
+    let resolveStart: ((value: RuntimeCommandResult) => void) | undefined;
     const executeRuntime = vi.fn(
       () =>
-        new Promise<any>((resolve) => {
+        new Promise<RuntimeCommandResult>((resolve) => {
           resolveStart = resolve;
         }),
     );
@@ -80,7 +81,7 @@ describe("Home readiness product slice", () => {
     await act(async () => {
       resolveStart?.({
         command: "start",
-        outcome: "started",
+        outcome: "completed",
         snapshot: {
           sequence: 2,
           modelDataPlane: "running",

@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SettingsCommand } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -123,7 +124,7 @@ describe("Settings product slice", () => {
   });
 
   it("uses registered setting semantics and shows restart-required state", async () => {
-    const executeSettings = vi.fn(async (command: any) =>
+    const executeSettings = vi.fn(async (command: SettingsCommand) =>
       command.command === "query"
         ? settingsResult()
         : { ...settingsResult(4000, 3000), outcome: "applied" as const },
@@ -234,8 +235,34 @@ describe("Settings product slice", () => {
     expect(confirmBackup).toHaveBeenCalledWith("backup-1");
   });
 
+  it("does not let a diagnostics query failure block the independent deep-capture setting", async () => {
+    await render(
+      createFakeDesktopApi({
+        control: {
+          executeSettings: async () => ({
+            outcome: "ok",
+            settings: {
+              ...settingsResult().settings,
+              "diagnostics.deepCapture.enabled": {
+                ...settingsResult().settings["diagnostics.deepCapture.enabled"],
+                value: true,
+              },
+            },
+          }),
+          getDiagnostics: async () => {
+            throw new Error("diagnostics unavailable");
+          },
+        },
+      }),
+    );
+    await click("Advanced");
+
+    expect(container.textContent).toContain("Recent diagnostics are temporarily unavailable.");
+    expect(container.textContent).toContain("Disable deep diagnostics");
+  });
+
   it("keeps deep diagnostics and diagnostic query behind typed Backend capabilities", async () => {
-    const executeSettings = vi.fn(async (command: any) =>
+    const executeSettings = vi.fn(async (command: SettingsCommand) =>
       command.command === "query"
         ? settingsResult()
         : {
