@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { LuckyTokenDesktopApi } from "../shared/desktop-api.js";
 
 declare global {

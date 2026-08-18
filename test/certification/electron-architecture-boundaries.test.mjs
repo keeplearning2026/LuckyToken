@@ -186,6 +186,38 @@ test("the Electron desktop build path is independent of Tauri", async () => {
   );
 });
 
+test("production desktop contains no Tauri, Rust, or legacy shell compatibility path", async () => {
+  const forbiddenPaths = [
+    "packages/desktop-shell/src-tauri",
+    "packages/desktop-shell/src/control-plane-projection.ts",
+    "packages/desktop-shell/src/tauri-shell-runtime.ts",
+    "packages/desktop-shell/src/shell-lifecycle.ts",
+    "packages/desktop-shell/src/App.tsx",
+    "packages/desktop-shell/vite.config.ts",
+  ];
+  for (const relative of forbiddenPaths) {
+    assert.equal(
+      await exists(path.join(repositoryRoot, relative)),
+      false,
+      `${relative} must be removed after Electron cutover`,
+    );
+  }
+
+  const manifest = JSON.parse(
+    await readFile(
+      path.join(repositoryRoot, "packages", "desktop-shell", "package.json"),
+      "utf8",
+    ),
+  );
+  for (const dependencies of [manifest.dependencies ?? {}, manifest.devDependencies ?? {}]) {
+    for (const name of Object.keys(dependencies)) {
+      assert.ok(!name.startsWith("@tauri-apps/"), `desktop dependency ${name} reintroduces Tauri`);
+    }
+  }
+  const lock = await readFile(path.join(repositoryRoot, "package-lock.json"), "utf8");
+  assert.ok(!lock.includes("@tauri-apps/"), "package-lock must not contain Tauri packages");
+});
+
 test("migration keeps explicit public-seam behavior suites", async () => {
   const requiredSuites = [
     "test/integration/client-protocol-boundary.test.ts",

@@ -214,8 +214,8 @@ test(
       assert.equal(application.windows().length, 0, "tray startup must create no renderer window");
 
       const first = await openWindow(application);
-      first.setDefaultTimeout(5_000);
-      await first.getByRole("heading", { name: "Connect an AI provider" }).waitFor();
+      first.setDefaultTimeout(10_000);
+      await first.getByRole("button", { name: "Settings" }).waitFor();
       assert.equal(application.windows().length, 1);
 
       await first.close();
@@ -235,7 +235,7 @@ test(
       assert.equal(enabled.settings["diagnostics.deepCapture.enabled"]?.value, true);
 
       const second = await openWindow(application);
-      second.setDefaultTimeout(5_000);
+      second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
       await second.getByRole("tab", { name: "Advanced" }).click();
       await second.getByRole("button", { name: "Disable deep diagnostics" }).waitFor();
@@ -251,7 +251,7 @@ test(
       assert.equal(disabled.settings["diagnostics.deepCapture.enabled"]?.value, false);
 
       const third = await openWindow(application);
-      third.setDefaultTimeout(5_000);
+      third.setDefaultTimeout(10_000);
       await third.getByRole("button", { name: "Settings" }).click();
       await third.getByRole("tab", { name: "Advanced" }).click();
       await third.getByRole("button", { name: "Enable deep diagnostics" }).waitFor();

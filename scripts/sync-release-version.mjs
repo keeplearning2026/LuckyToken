@@ -36,19 +36,3 @@ for (const path of [
   }
 }
 
-const cargoTomlPath = "packages/desktop-shell/src-tauri/Cargo.toml";
-const cargoToml = await readFile(resolve(repositoryRoot, cargoTomlPath), "utf8");
-const syncedCargoToml = cargoToml.replace(
-  /^version = "[^"]+"$/mu,
-  `version = "${root.version}"`,
-);
-if (syncedCargoToml !== cargoToml) {
-  await writeFile(resolve(repositoryRoot, cargoTomlPath), syncedCargoToml, "utf8");
-}
-
-const tauriConfigPath = "packages/desktop-shell/src-tauri/tauri.conf.json";
-const tauriConfig = await readJson(tauriConfigPath);
-if (tauriConfig.version !== root.version) {
-  tauriConfig.version = root.version;
-  await writeJson(tauriConfigPath, tauriConfig);
-}

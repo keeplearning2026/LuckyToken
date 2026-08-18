@@ -28,16 +28,6 @@ test("release version is single-sourced and every shipped surface agrees", async
     assert.equal(manifest.version, root.version, `${path} must match the root version`);
   }
 
-  const cargoToml = await readFile(
-    resolve(repositoryRoot, "packages/desktop-shell/src-tauri/Cargo.toml"),
-    "utf8",
-  );
-  const cargoVersion = cargoToml.match(/^version = "([^"]+)"/mu)?.[1];
-  assert.equal(cargoVersion, root.version, "Cargo.toml must match the root version");
-
-  const tauriConfig = await readJson("packages/desktop-shell/src-tauri/tauri.conf.json");
-  assert.equal(tauriConfig.version, root.version, "tauri.conf.json must match the root version");
-
   // The Control Plane hello payload must read the same source of truth at
   // runtime instead of re-declaring a second literal.
   const versionModule = await readFile(resolve(repositoryRoot, "src/version.ts"), "utf8");

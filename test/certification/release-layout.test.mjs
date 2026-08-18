@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import test from "node:test";
 
 import {
   launcherConfig,
   parseLauncherJson,
-  releaseNsisHookConfig,
   validateReleaseLayout,
 } from "../../scripts/release-layout.mjs";
 
-const repositoryRoot = resolve(import.meta.dirname, "../..");
-
-test("launcher.json contract is stable and resolvable by the Rust launcher", () => {
+test("launcher.json contract is stable and resolvable by the Electron backend supervisor", () => {
   assert.deepEqual(launcherConfig(), {
     backendNodeExecutable: "backend/node/node.exe",
     backendCliScript: "backend/dist/cli.js",
@@ -81,28 +76,5 @@ test("release layout validation requires the exe sibling contract", () => {
       cliScriptExists: true,
     }),
     [],
-  );
-});
-
-test("release NSIS installer is wired to clear its install-location memory on uninstall", async () => {
-  const hook = releaseNsisHookConfig();
-  const srcTauri = resolve(repositoryRoot, "packages", "desktop-shell", "src-tauri");
-  const releaseConfig = JSON.parse(
-    await readFile(resolve(srcTauri, "tauri.release.conf.json"), "utf8"),
-  );
-  assert.equal(
-    releaseConfig.bundle.windows.nsis.installerHooks,
-    hook.hooksFile,
-    "tauri.release.conf.json must reference the NSIS hooks file",
-  );
-
-  const hooksSource = await readFile(resolve(srcTauri, hook.hooksFile), "utf8");
-  assert.ok(
-    hooksSource.includes(`!macro ${hook.requiredMacro}`),
-    `${hook.hooksFile} must define ${hook.requiredMacro}`,
-  );
-  assert.ok(
-    hooksSource.includes(hook.requiredFragment),
-    `${hook.hooksFile} must unconditionally delete the install-location key`,
   );
 });
