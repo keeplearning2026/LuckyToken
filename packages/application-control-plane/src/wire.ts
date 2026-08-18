@@ -992,6 +992,32 @@ export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
       aliases: Object.freeze({ ...value.aliases }),
     };
   }
+  if (
+    (value.command === "set_for_model" || value.command === "reset_for_model") &&
+    typeof value.providerId === "string" &&
+    value.providerId.length > 0 &&
+    typeof value.modelId === "string" &&
+    value.modelId.length > 0
+  ) {
+    if (value.command === "set_for_model") {
+      if (typeof value.alias !== "string" || value.alias.length === 0) {
+        return undefined;
+      }
+      return {
+        command: "set_for_model",
+        revision: revision as number,
+        providerId: value.providerId,
+        modelId: value.modelId,
+        alias: value.alias,
+      };
+    }
+    return {
+      command: "reset_for_model",
+      revision: revision as number,
+      providerId: value.providerId,
+      modelId: value.modelId,
+    };
+  }
   return undefined;
 }
 
@@ -1064,9 +1090,6 @@ function decodeEffectiveAliasRegistry(
 ): EffectiveAliasRegistryProjection | undefined {
   if (
     !isRecord(value) ||
-    typeof value.defaultsVersion !== "number" ||
-    !Number.isSafeInteger(value.defaultsVersion) ||
-    (value.defaultsVersion as number) < 0 ||
     !Array.isArray(value.aliases) ||
     !Array.isArray(value.errors)
   ) {
@@ -1077,7 +1100,6 @@ function decodeEffectiveAliasRegistry(
   const errors = value.errors.map(decodeAliasValidationError);
   if (errors.some((entry) => entry === undefined)) return undefined;
   return Object.freeze({
-    defaultsVersion: value.defaultsVersion as number,
     aliases: Object.freeze(
       aliases.filter(
         (entry): entry is EffectiveAliasProjection => entry !== undefined,
@@ -1161,9 +1183,6 @@ export function decodeAliasFileState(value: unknown): AliasFileState | undefined
     typeof value.present !== "boolean" ||
     typeof value.valid !== "boolean" ||
     typeof value.raw !== "string" ||
-    typeof value.defaultsVersion !== "number" ||
-    !Number.isSafeInteger(value.defaultsVersion) ||
-    (value.defaultsVersion as number) < 0 ||
     typeof value.catalogVersion !== "number" ||
     !Number.isSafeInteger(value.catalogVersion) ||
     (value.catalogVersion as number) < 0
@@ -1190,7 +1209,6 @@ export function decodeAliasFileState(value: unknown): AliasFileState | undefined
     present: value.present,
     valid: value.valid,
     raw: value.raw,
-    defaultsVersion: value.defaultsVersion as number,
     catalogVersion: value.catalogVersion as number,
     ...(aliases === undefined ? {} : { aliases }),
     ...(effective === undefined ? {} : { effective }),
@@ -1239,10 +1257,7 @@ export function decodeAliasStatusProjection(
     typeof value.path !== "string" ||
     value.path.length === 0 ||
     typeof value.present !== "boolean" ||
-    typeof value.valid !== "boolean" ||
-    typeof value.defaultsVersion !== "number" ||
-    !Number.isSafeInteger(value.defaultsVersion) ||
-    (value.defaultsVersion as number) < 0
+    typeof value.valid !== "boolean"
   ) {
     return undefined;
   }
@@ -1253,7 +1268,6 @@ export function decodeAliasStatusProjection(
     path: value.path,
     present: value.present,
     valid: value.valid,
-    defaultsVersion: value.defaultsVersion as number,
     ...(error === undefined ? {} : { error }),
   });
 }
@@ -2073,6 +2087,9 @@ function decodeAuthProviderOption(value: unknown): AuthProviderOption | undefine
     value.providerId.length === 0 ||
     typeof value.name !== "string" ||
     value.name.length === 0 ||
+    (value.source !== "pi_builtin" &&
+      value.source !== "luckytoken_bundled" &&
+      value.source !== "user") ||
     typeof value.account !== "boolean" ||
     typeof value.subscription !== "boolean" ||
     typeof value.apiKey !== "boolean"
@@ -2097,6 +2114,7 @@ function decodeAuthProviderOption(value: unknown): AuthProviderOption | undefine
   return Object.freeze({
     providerId: value.providerId,
     name: value.name,
+    source: value.source as AuthProviderOption["source"],
     account: value.account,
     subscription: value.subscription,
     ...(value.accountLabel === undefined

@@ -858,4 +858,63 @@ describe("catalog refresh controller", () => {
     wrapped.capture();
     expect(wrapped.getModel("dynamic-a", "m2")).toBeDefined();
   });
+
+  it("Ticket 13: a login-triggered refresh publishes generation N+1 without mutating facts a request already captured at generation N", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    let releaseFetch: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const dynamic = createControlledProvider("dynamic-a", {
+      baseline: [dynamicModelFact("dynamic-a", "gen-n-model", "https://n.example/v1")],
+      fetch: async () => {
+        await gate;
+        return [dynamicModelFact("dynamic-a", "gen-n1-model", "https://n1.example/v1")];
+      },
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamic.provider],
+    });
+    await controller.bind(handle);
+
+    // Request A captures its Model object from generation N.
+    const capturedA = handle.models.getModel("dynamic-a", "gen-n-model");
+    expect(capturedA?.baseUrl).toBe("https://n.example/v1");
+
+    // Successful login schedules the Backend-owned background refresh
+    // (generation N+1). The fetch is gated so the publication is
+    // explicitly controlled — no scheduler luck.
+    controller.onProviderLogin("dynamic-a");
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(dynamic.fetches.length).toBe(1);
+    });
+    // The provisional snapshot is published while the refresh is in flight.
+    expect(
+      controller
+        .snapshot()
+        .providers.find((p) => p.providerId === "dynamic-a")?.state,
+    ).toBe("refreshing");
+    // Request A's captured object is not mutated by the provisional swap.
+    expect(handle.models.getModel("dynamic-a", "gen-n-model")?.baseUrl).toBe(
+      "https://n.example/v1",
+    );
+
+    // Release the network phase: generation N+1 is published atomically.
+    releaseFetch?.();
+    await vi.waitFor(() => {
+      expect(
+        controller
+          .snapshot()
+          .providers.find((p) => p.providerId === "dynamic-a")?.state,
+      ).toBe("succeeded");
+    });
+    // Request B accepted after publication uses generation N+1 facts.
+    expect(handle.models.getModel("dynamic-a", "gen-n1-model")).toBeDefined();
+    // Request A keeps its captured generation-N facts.
+    expect(capturedA?.baseUrl).toBe("https://n.example/v1");
+  });
 });

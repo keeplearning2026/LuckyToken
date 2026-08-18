@@ -1,4 +1,3 @@
-import type { Models } from "@earendil-works/pi-ai";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -75,6 +74,8 @@ import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.
 import { createCatalogCacheStore } from "./providers/catalog-cache.js";
 import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
+import { createProviderRuntime, type ProviderRuntime } from "./providers/runtime.js";
+import { providerReadiness } from "./providers/readiness.js";
 import {
   bindRequestLedgerConfiguration,
   createRequestLedgerStoreFactory,
@@ -465,14 +466,7 @@ async function startNormalApplication(options: {
     const catalogCacheStore = createCatalogCacheStore({
       path: join(config.pi.directory, "models-catalog-cache.json"),
     });
-    const modelsState = await modelsAuthority.query();
-    const provider: ApplicationStatus["provider"] =
-      Object.keys(config.providerPackages).length > 0 ||
-      (modelsState.present &&
-        modelsState.valid &&
-        Object.keys(modelsState.providers ?? {}).length > 0)
-        ? "configured"
-        : "unconfigured";
+    await modelsAuthority.query();
     const settingsRegistry = createSettingsRegistry(
       createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
       {
@@ -488,8 +482,16 @@ async function startNormalApplication(options: {
     let tokenAuthorities:
       | Readonly<Record<string, LiveClientTokenAuthority>>
       | undefined;
+    // Assigned once after the Catalog controller exists (below); the
+    // Control Plane handlers close over the binding, so they must be
+    // declared before their creation site.
+    // These bindings are assigned once after the Catalog controller exists
+    // (below); the Control Plane handlers close over them, so they must be
+    // declared before their creation site and cannot be const.
+    // eslint-disable-next-line prefer-const
     let credentialAuthority: LiveCredentialAuthority | undefined;
-    let authModels: Models | undefined;
+    // eslint-disable-next-line prefer-const
+    let providerRuntime: ProviderRuntime | undefined;
     let requestIdentities:
       | Awaited<
           ReturnType<typeof createConfiguredLuckyTokenComposition>
@@ -524,9 +526,13 @@ async function startNormalApplication(options: {
     const credentialCommandHandler = createCredentialControlPlaneHandler({
       authority: () => credentialAuthority,
     });
+    // Provider Activation (Spec v1.0 §10.2): the Auth handler is wired to
+    // the Backend-lifetime Provider Runtime — never to optional slots
+    // populated by Data Plane startup.
     const authCommandHandler = createAuthLoginControlPlaneHandler({
-      models: () => authModels,
-      authority: () => credentialAuthority,
+      models: () => providerRuntime?.models,
+      authority: () => providerRuntime?.credentialAuthority,
+      providerSource: (providerId) => providerRuntime?.providerSource(providerId) ?? "user",
     });
     const settingsCommandHandler = createProtocolEnablementSettingsHandler({
       settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
@@ -552,21 +558,74 @@ async function startNormalApplication(options: {
       diagnostics: ownedDiagnosticsStore,
       now: Date.now,
       onSnapshot: () => {
+        // Provider Activation (Spec v1.0 §14): the coarse Provider
+        // readiness is a pure derivation of the authoritative Catalog
+        // snapshot — at least one model must be currently available. It
+        // is recomputed and republished on every catalog publication.
+        const snapshot = catalogController.snapshot();
+        const nextProvider = providerReadiness(snapshot);
+        if (lastPublishedStatus.provider !== nextProvider) {
+          lastPublishedStatus = Object.freeze({
+            ...lastPublishedStatus,
+            provider: nextProvider,
+          });
+        }
         aliasAuthorityHolder.current?.onCatalogSnapshot();
         controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
       },
     });
+    // Provider Activation (Spec v1.0 §6, §11.2): the Backend-lifetime
+    // Provider Runtime is created BEFORE the Data Plane Supervisor and
+    // before the Control Plane starts. Provider discovery, credentials,
+    // login and the authoritative Catalog live for the whole Backend
+    // lifetime; Data Plane stop/start/restart never recreates them.
+    providerRuntime = await createProviderRuntime({
+      piDirectory: config.pi.directory,
+      modelsJsonPath: config.pi.modelsJson,
+      userProviderPackages: config.providerPackages,
+      fetch: globalThis.fetch,
+      modelsStore: catalogCacheStore,
+      onInvalidModelsJson: (error) => {
+        ownedDiagnosticsStore.append({
+          level: "warning",
+          text: "models.json is not loadable; Provider composition keeps compatible built-in Providers until the file is fixed.",
+          details: Object.freeze({
+            kind:
+              typeof error === "object" && error !== null && "kind" in error
+                ? String((error as { readonly kind?: unknown }).kind)
+                : "load",
+          }),
+        });
+      },
+      onProviderLogin: (providerId) =>
+        catalogController.onProviderLogin(providerId),
+    });
+    // The Catalog refresh controller binds to the Provider Runtime BEFORE
+    // Data Plane startup and stays bound for the Backend lifetime (Spec
+    // §11.2): stopping the Data Plane never aborts the Catalog.
+    await catalogController.bind(providerRuntime.catalog);
+    credentialAuthority = providerRuntime.credentialAuthority;
     const aliasAuthority = createAliasRegistryAuthority({
       path: join(dirname(config.pi.modelsJson), "model-aliases.json"),
       catalogFacts: () => {
         const snapshot = catalogController.snapshot();
         const knownTargets = new Set<string>();
+        const targets: { readonly provider: string; readonly model: string }[] =
+          [];
         for (const catalogProvider of snapshot.providers) {
           for (const model of catalogProvider.models) {
             knownTargets.add(`${catalogProvider.providerId}\u0000${model.id}`);
+            targets.push({
+              provider: catalogProvider.providerId,
+              model: model.id,
+            });
           }
         }
-        return { catalogVersion: snapshot.version, knownTargets };
+        return {
+          catalogVersion: snapshot.version,
+          targets: Object.freeze(targets),
+          knownTargets,
+        };
       },
     });
     aliasAuthorityHolder.current = aliasAuthority;
@@ -598,16 +657,17 @@ async function startNormalApplication(options: {
       },
       localAuthAvailable: () => codexLocalAuth.isAvailable(),
       buildCatalog: async () => {
-        if (authModels === undefined) {
+        const models = providerRuntime?.models;
+        if (models === undefined) {
           throw new Error(
-            "LuckyToken model catalog is unavailable until the Data Plane has started",
+            "LuckyToken model catalog is unavailable",
           );
         }
         await aliasAuthority.query();
         return buildCodexCatalog({
           nativeModels: codexNativeModels.models(),
           nativeCatalogEntries: await readCodexNativeCatalogEntries(resolveCodexHome()),
-          models: authModels,
+          models,
           aliases: aliasAuthority.resolver().entries(),
         });
       },
@@ -676,11 +736,17 @@ async function startNormalApplication(options: {
       ],
     });
 
-    lastPublishedStatus = Object.freeze({ modelDataPlane: "stopped", provider });
+    // The provider readiness already reflects the bound Catalog snapshot
+    // (updated by onSnapshot); the supervisor starts with the current
+    // coarse status and a stopped Data Plane.
+    lastPublishedStatus = Object.freeze({
+      modelDataPlane: "stopped",
+      provider: lastPublishedStatus.provider,
+    });
     supervisor = createDataPlaneRuntimeSupervisor({
       host: config.server.host,
       port: config.server.port,
-      provider,
+      readProvider: () => lastPublishedStatus.provider,
       resolveAddress: () => resolveEffectiveSettings(settingsRegistry.query([])),
       startListener: async (address) => {
         const shutdownController = new AbortController();
@@ -693,12 +759,10 @@ async function startNormalApplication(options: {
             requestLedgerStore: ownedLedgerStore,
             deepCaptureStore: ownedCaptureStore,
             settingsRegistry,
-            modelsStore: catalogCacheStore,
+            providerRuntime,
             aliasAuthority,
             codexLocalAuth,
             codexNativeModels,
-            onProviderLogin: (providerId) =>
-              catalogController.onProviderLogin(providerId),
             onCapturePersistenceFailure: (failure) => {
               persistenceAuthority.reportFailure("capture", {
                 ...(failure.requestId.length === 0
@@ -712,10 +776,7 @@ async function startNormalApplication(options: {
             },
           });
           tokenAuthorities = composition.clientTokenAuthorities;
-          credentialAuthority = composition.credentialAuthority;
-          authModels = composition.catalog.models;
           requestIdentities = composition.requestIdentities;
-          await catalogController.bind(composition.catalog, shutdownController.signal);
           const server = await startLuckyTokenHttpServer({
             runtime: composition.runtime,
             host: address.host,
@@ -793,7 +854,28 @@ async function startNormalApplication(options: {
       application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
       initialStatus: supervisor.initialStatus,
       ownership,
-      runtimeCommandHandler: supervisor.execute,
+      // Provider Activation (Spec v1.0 §14.3): runtime transitions must
+      // also update the application's lastPublishedStatus, because the
+      // coarse Provider readiness published by Catalog snapshot changes
+      // must never resurrect a stale Gateway state. The Control Plane
+      // host passes its own client-publishing publisher; forward to it
+      // while keeping the application's authoritative copy in sync.
+      runtimeCommandHandler: (command, publishStatus) => {
+        const active = supervisor;
+        if (active === undefined) {
+          return Promise.resolve({
+            outcome: "conflict" as const,
+            conflict: {
+              code: "runtime_unavailable" as const,
+              message: "Runtime lifecycle is not available yet.",
+            },
+          });
+        }
+        return active.execute(command, (status) => {
+          publish(status);
+          return publishStatus(status);
+        });
+      },
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
       clientTokenCommandHandler,

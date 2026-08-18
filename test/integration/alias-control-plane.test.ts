@@ -16,7 +16,10 @@ import {
 
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createAliasControlPlaneHandler } from "../../src/aliases/control-plane.js";
-import { curatedAliasDefaults } from "../../src/aliases/defaults.js";
+import {
+  generatedDefaultAlias,
+  type AliasCatalogTarget,
+} from "../../src/aliases/domain.js";
 
 /**
  * Ticket 14 Control Plane seam: versioned alias commands and the sanitized
@@ -38,15 +41,21 @@ const fixtures: AliasPlaneFixture[] = [];
 let nextPipe = 0;
 let nextRequest = 0;
 
-const knownTargets = new Set([
-  "openai\u0000gpt-4o",
-  "openai\u0000gpt-4o-mini",
-  "openai\u0000gpt-4.1",
-  "anthropic\u0000claude-opus-4-8",
-  "anthropic\u0000claude-sonnet-4",
-  "deepseek\u0000deepseek-v4-flash",
-  "opencode-go\u0000deepseek-v4-flash",
+const catalogTargets: readonly AliasCatalogTarget[] = Object.freeze([
+  { provider: "openai", model: "gpt-4o" },
+  { provider: "openai", model: "gpt-4o-mini" },
+  { provider: "openai", model: "gpt-4.1" },
+  { provider: "anthropic", model: "claude-opus-4-8" },
+  { provider: "anthropic", model: "claude-sonnet-4" },
+  { provider: "deepseek", model: "deepseek-v4-flash" },
+  { provider: "opencode-go", model: "deepseek-v4-flash" },
 ]);
+
+const knownTargets = new Set(
+  catalogTargets.map(
+    (target) => `${target.provider}\u0000${target.model}`,
+  ),
+);
 
 async function createAliasPlane(): Promise<AliasPlaneFixture> {
   const root = await mkdtemp(join(tmpdir(), "luckytoken-alias-plane-"));
@@ -82,6 +91,7 @@ async function createAliasPlane(): Promise<AliasPlaneFixture> {
     lock: { acquire: async () => async () => undefined },
     catalogFacts: () => ({
       catalogVersion: 5,
+      targets: catalogTargets,
       knownTargets,
     }),
   });
@@ -138,12 +148,12 @@ describe("alias commands through the Control Plane", () => {
       revision: 0,
       present: false,
       valid: false,
-      defaultsVersion: 2,
       catalogVersion: 5,
     });
-    // The effective registry rides on the state: curated defaults first.
-    expect(result.state.effective?.aliases.map((entry) => entry.alias)).toEqual(
-      curatedAliasDefaults.map((entry) => entry.alias),
+    // The effective registry rides on the state: generated defaults for
+    // every catalog target.
+    expect(result.state.effective?.aliases.map((entry) => entry.alias).sort()).toEqual(
+      catalogTargets.map((target) => generatedDefaultAlias(target)).sort(),
     );
     expect(
       result.state.effective?.aliases.every((entry) => entry.layer === "default"),
@@ -221,7 +231,6 @@ describe("alias commands through the Control Plane", () => {
       revision: 0,
       present: false,
       valid: false,
-      defaultsVersion: 2,
     });
     expect("raw" in (status.aliases as AliasStatusProjection)).toBe(false);
     await fixture.client.executeAliasCommand({
@@ -233,6 +242,48 @@ describe("alias commands through the Control Plane", () => {
     expect(after.aliases?.revision).toBe(1);
     expect(after.aliases?.present).toBe(true);
     expect(after.aliases?.valid).toBe(true);
+  });
+
+  it("set_for_model and reset_for_model round-trip through the typed wire", async () => {
+    const fixture = await createAliasPlane();
+    const set = await fixture.client.executeAliasCommand({
+      command: "set_for_model",
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    expect(set.outcome).toBe("ok");
+    expect(set.state.revision).toBe(1);
+    const byAlias = new Map(
+      set.state.effective?.aliases.map((entry) => [entry.alias, entry]),
+    );
+    expect(byAlias.get("sonnet")?.layer).toBe("user");
+    expect(byAlias.get("anthropic/claude-sonnet-4")).toBeUndefined();
+
+    const reset = await fixture.client.executeAliasCommand({
+      command: "reset_for_model",
+      revision: 1,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+    });
+    expect(reset.outcome).toBe("ok");
+    const afterReset = new Map(
+      reset.state.effective?.aliases.map((entry) => [entry.alias, entry]),
+    );
+    expect(afterReset.get("anthropic/claude-sonnet-4")?.layer).toBe("default");
+    expect(afterReset.get("sonnet")).toBeUndefined();
+
+    // An unknown target fails closed with a validation error.
+    const unknown = await fixture.client.executeAliasCommand({
+      command: "set_for_model",
+      revision: 2,
+      providerId: "anthropic",
+      modelId: "not-a-model",
+      alias: "ghost",
+    });
+    expect(unknown.outcome).toBe("invalid");
+    expect(unknown.error?.entries?.[0]?.code).toBe("unknown");
   });
 
   it("publishes a status event when a write changes the authoritative revision", async () => {

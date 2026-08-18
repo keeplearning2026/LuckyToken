@@ -1007,7 +1007,6 @@ function snapshotResolving(
     version: 1,
     catalogVersion: 1,
     fileRevision: 1,
-    defaultsVersion: 1,
     resolve: (alias: string) => mappings[alias],
     entries: () =>
       Object.entries(mappings).map(([alias, target]) => ({ alias, target })),

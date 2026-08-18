@@ -7,16 +7,20 @@ import type {
   AliasFileError,
   AliasFileState,
   AliasStatusProjection,
+  AliasValidationErrorProjection,
   EffectiveAliasRegistryProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 import lockfile from "proper-lockfile";
 
 import { stripJsonComments } from "../providers/models-json-schema.js";
-import { curatedAliasDefaults, CURATED_ALIAS_DEFAULTS_VERSION } from "./defaults.js";
 import {
+  aliasKeyError,
+  canonicalTargetKey,
   computeConfiguredAliasMappings,
   computeEffectiveAliasRegistry,
-  type CuratedAliasDefault,
+  generatedDefaultAlias,
+  parseAliasTarget,
+  type AliasCatalogTarget,
 } from "./domain.js";
 
 /**
@@ -34,10 +38,10 @@ import {
  * replaces the active registry.
  *
  * Effective registry: computed deterministically from the parsed user
- * mappings over the curated defaults, validated against the authoritative
- * Ticket 11 catalog snapshot facts injected by the composition. A broken
- * file contributes no user mappings (never a guessed repair) and defaults
- * remain effective.
+ * overrides over the Catalog-derived generated `provider/model` defaults,
+ * validated against the authoritative Ticket 11 catalog snapshot facts
+ * injected by the composition. A broken file contributes no user mappings
+ * (never a guessed repair) and generated defaults remain effective.
  *
  * Snapshots / hot-apply: the authority captures a frozen resolver snapshot
  * whenever the effective registry or its facts change (successful write,
@@ -105,16 +109,14 @@ function createNodeLock(): AliasRegistryLock {
 /** Authoritative Ticket 11 catalog snapshot facts for alias validation. */
 export interface AliasCatalogFacts {
   readonly catalogVersion: number;
+  /** Canonical targets present in the active snapshot (Spec §11.5). */
+  readonly targets: readonly AliasCatalogTarget[];
   /** Canonical `provider\u0000model` keys present in the active snapshot. */
   readonly knownTargets: ReadonlySet<string>;
 }
 
 export interface AliasRegistryAuthorityOptions {
   readonly path: string;
-  /** Curated defaults lower layer; defaults to the shipped set. */
-  readonly defaults?: readonly CuratedAliasDefault[];
-  /** Defaults generation; defaults to the shipped version. */
-  readonly defaultsVersion?: number;
   /** Live authoritative Ticket 11 catalog snapshot facts. */
   readonly catalogFacts: () => AliasCatalogFacts;
   readonly fileSystem?: AliasRegistryFileSystem;
@@ -130,8 +132,6 @@ export interface AliasResolverSnapshot {
   readonly catalogVersion: number;
   /** File revision the captured user mappings came from. */
   readonly fileRevision: number;
-  /** Curated defaults generation in effect. */
-  readonly defaultsVersion: number;
   /** Resolve one configured alias to its canonical target, or undefined.
    *  The mapping is catalog-independent: a configured alias whose target
    *  left the active catalog still resolves here, and the data plane
@@ -152,6 +152,21 @@ export interface AliasRegistryAuthority {
   write(input: {
     readonly revision: number;
     readonly aliases: Readonly<Record<string, unknown>>;
+  }): Promise<AliasCommandResult>;
+  /** Target-scoped override (Spec v1.0 §15.5): replaces the one user
+   *  override for a canonical Catalog target. */
+  setForModel(input: {
+    readonly revision: number;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly alias: string;
+  }): Promise<AliasCommandResult>;
+  /** Target-scoped reset (Spec v1.0 §15.5): removes the user override so
+   *  the generated `provider/model` default becomes effective again. */
+  resetForModel(input: {
+    readonly revision: number;
+    readonly providerId: string;
+    readonly modelId: string;
   }): Promise<AliasCommandResult>;
   /** Sanitized projection for status snapshots (never refreshes). */
   snapshot(): AliasStatusProjection;
@@ -214,8 +229,6 @@ export function createAliasRegistryAuthority(
   const path = options.path;
   const fileSystem = options.fileSystem ?? nodeFileSystem;
   const lock = options.lock ?? createNodeLock();
-  const defaults = options.defaults ?? curatedAliasDefaults;
-  const defaultsVersion = options.defaultsVersion ?? CURATED_ALIAS_DEFAULTS_VERSION;
   const catalogFacts = options.catalogFacts;
   let current: AliasFileState = Object.freeze({
     revision: 0,
@@ -223,7 +236,6 @@ export function createAliasRegistryAuthority(
     present: false,
     valid: false,
     raw: "",
-    defaultsVersion,
     catalogVersion: 0,
   });
   // On-disk facts the served state was derived from; used to detect external
@@ -237,14 +249,12 @@ export function createAliasRegistryAuthority(
   let capturedFacts = {
     catalogVersion: -1,
     fileRevision: -1,
-    defaultsVersion: -1,
     registry: undefined as EffectiveAliasRegistryProjection | undefined,
   };
   let resolver: AliasResolverSnapshot = Object.freeze({
     version: 0,
     catalogVersion: 0,
     fileRevision: 0,
-    defaultsVersion,
     resolve: () => undefined,
     entries: () => Object.freeze([]),
   });
@@ -255,8 +265,7 @@ export function createAliasRegistryAuthority(
   ): EffectiveAliasRegistryProjection =>
     computeEffectiveAliasRegistry({
       userAliases,
-      defaults,
-      defaultsVersion,
+      catalogTargets: facts.targets,
       catalogVersion: facts.catalogVersion,
       knownTargets: facts.knownTargets,
     });
@@ -274,7 +283,6 @@ export function createAliasRegistryAuthority(
     const changed =
       capturedFacts.catalogVersion !== facts.catalogVersion ||
       capturedFacts.fileRevision !== state.revision ||
-      capturedFacts.defaultsVersion !== state.defaultsVersion ||
       capturedFacts.registry === undefined ||
       JSON.stringify(capturedFacts.registry) !== JSON.stringify(registry);
     if (!changed) return;
@@ -287,7 +295,7 @@ export function createAliasRegistryAuthority(
         state.present && state.valid && state.aliases !== undefined
           ? state.aliases
           : {},
-      defaults,
+      catalogTargets: facts.targets,
     });
     const frozenTargets = new Map<
       string,
@@ -308,14 +316,12 @@ export function createAliasRegistryAuthority(
     capturedFacts = {
       catalogVersion: facts.catalogVersion,
       fileRevision: state.revision,
-      defaultsVersion: state.defaultsVersion,
       registry,
     };
     resolver = Object.freeze({
       version: capturedVersion,
       catalogVersion: facts.catalogVersion,
       fileRevision: state.revision,
-      defaultsVersion: state.defaultsVersion,
       resolve: (alias: string) => frozenTargets.get(alias),
       entries: () => entries,
     });
@@ -334,7 +340,6 @@ export function createAliasRegistryAuthority(
       present,
       valid: false,
       raw,
-      defaultsVersion,
       catalogVersion: facts.catalogVersion,
     };
     if (!present) {
@@ -532,7 +537,6 @@ export function createAliasRegistryAuthority(
       present: true,
       valid: true,
       raw: nextRaw,
-      defaultsVersion,
       catalogVersion: facts.catalogVersion,
       aliases: Object.freeze(aliases),
       effective: effectiveFor(aliases, facts),
@@ -541,6 +545,40 @@ export function createAliasRegistryAuthority(
     recapture(current);
     return Object.freeze({ outcome: "ok" as const, state: next });
   };
+
+  /** Errors owned by explicit USER entries of a proposal (invalid,
+   *  ambiguous, unknown, or duplicate against another user entry or a
+   *  generated default). Errors that only demote a generated default (the
+   *  user takes its canonical target) are legitimate: user mappings always
+   *  win. */
+  const proposalUserErrors = (
+    aliases: Readonly<Record<string, unknown>>,
+    facts: AliasCatalogFacts,
+  ): AliasValidationErrorProjection[] =>
+    effectiveFor(aliases, facts).errors.filter((entry) =>
+      Object.hasOwn(aliases, entry.alias),
+    );
+
+  const validationFailure = (
+    errors: readonly AliasValidationErrorProjection[],
+  ): AliasCommandResult =>
+    Object.freeze({
+      outcome: "invalid" as const,
+      state: current,
+      error: {
+        kind: "validation" as const,
+        message: `The alias proposal was rejected: ${errors.length} entry${
+          errors.length === 1 ? "" : "ies"
+        } cannot map to a canonical target.`,
+        entries: Object.freeze([...errors]),
+      },
+    });
+
+  /** All user-aliases entries currently in the valid file (or {}). */
+  const currentUserAliases = (): Readonly<Record<string, unknown>> =>
+    current.present && current.valid && current.aliases !== undefined
+      ? current.aliases
+      : {};
 
   return Object.freeze({
     async query(): Promise<AliasFileState> {
@@ -555,26 +593,9 @@ export function createAliasRegistryAuthority(
         return Object.freeze({ outcome: "conflict", state: current });
       }
       const facts = catalogFacts();
-      const registry = effectiveFor(input.aliases, facts);
-      // A proposal is rejected when a USER-owned entry fails validation
-      // (invalid, ambiguous, unknown, or duplicate against another user
-      // entry). Errors that only demote a curated default (the user takes
-      // its canonical target) are legitimate: user mappings always win.
-      const userErrors = registry.errors.filter((entry) =>
-        Object.hasOwn(input.aliases, entry.alias),
-      );
+      const userErrors = proposalUserErrors(input.aliases, facts);
       if (userErrors.length > 0) {
-        return Object.freeze({
-          outcome: "invalid",
-          state: current,
-          error: {
-            kind: "validation" as const,
-            message: `The alias proposal was rejected: ${userErrors.length} entry${
-              userErrors.length === 1 ? "" : "ies"
-            } cannot map to a canonical target.`,
-            entries: Object.freeze([...userErrors]),
-          },
-        });
+        return validationFailure(userErrors);
       }
       const nextRaw = serialized(input.aliases);
       if (current.present && nextRaw === current.raw) {
@@ -583,15 +604,124 @@ export function createAliasRegistryAuthority(
       }
       return commit(current, nextRaw, Object.freeze({ ...input.aliases }));
     },
+    async setForModel(input: {
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly alias: string;
+    }): Promise<AliasCommandResult> {
+      await refresh();
+      if (input.revision !== current.revision) {
+        return Object.freeze({ outcome: "conflict", state: current });
+      }
+      const facts = catalogFacts();
+      const target = Object.freeze({
+        provider: input.providerId,
+        model: input.modelId,
+      });
+      const targetKey = canonicalTargetKey(target);
+      if (!facts.knownTargets.has(targetKey)) {
+        return Object.freeze({
+          outcome: "invalid",
+          state: current,
+          error: {
+            kind: "validation" as const,
+            message: `The model is not in the active catalog: ${input.providerId}/${input.modelId}.`,
+            entries: Object.freeze([
+              {
+                alias: input.alias,
+                code: "unknown" as const,
+                message: `Target "${input.providerId}/${input.modelId}" is not in the active catalog.`,
+              },
+            ]),
+          },
+        });
+      }
+      const keyError = aliasKeyError(input.alias);
+      if (keyError !== undefined) {
+        return validationFailure([
+          { alias: input.alias, ...keyError },
+        ]);
+      }
+      // A custom alias must not collide with another target's effective
+      // default or custom alias (Spec §11.6): the generated default of a
+      // DIFFERENT target cannot be claimed by this override.
+      for (const other of facts.targets) {
+        if (canonicalTargetKey(other) === targetKey) continue;
+        if (generatedDefaultAlias(other) === input.alias) {
+          return validationFailure([
+            {
+              alias: input.alias,
+              code: "duplicate" as const,
+              message: `Alias "${input.alias}" is the generated default of another model and cannot be reused.`,
+            },
+          ]);
+        }
+      }
+      const nextAliases = { ...currentUserAliases() };
+      // Replace the one override for this target: remove any prior entry
+      // that mapped this canonical target (regardless of its alias key).
+      for (const [alias, ref] of Object.entries(nextAliases)) {
+        const parsed = parseAliasTarget(ref);
+        if (
+          "target" in parsed &&
+          canonicalTargetKey(parsed.target) === targetKey
+        ) {
+          delete nextAliases[alias];
+        }
+      }
+      nextAliases[input.alias] = target;
+      const userErrors = proposalUserErrors(nextAliases, facts);
+      if (userErrors.length > 0) {
+        return validationFailure(userErrors);
+      }
+      const nextRaw = serialized(nextAliases);
+      if (current.present && nextRaw === current.raw) {
+        // The override is unchanged (e.g. reset/re-set of the same value).
+        return Object.freeze({ outcome: "ok", state: current });
+      }
+      return commit(current, nextRaw, Object.freeze(nextAliases));
+    },
+    async resetForModel(input: {
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+    }): Promise<AliasCommandResult> {
+      await refresh();
+      if (input.revision !== current.revision) {
+        return Object.freeze({ outcome: "conflict", state: current });
+      }
+      const targetKey = canonicalTargetKey({
+        provider: input.providerId,
+        model: input.modelId,
+      });
+      const nextAliases = { ...currentUserAliases() };
+      let removed = false;
+      for (const [alias, ref] of Object.entries(nextAliases)) {
+        const parsed = parseAliasTarget(ref);
+        if (
+          "target" in parsed &&
+          canonicalTargetKey(parsed.target) === targetKey
+        ) {
+          delete nextAliases[alias];
+          removed = true;
+        }
+      }
+      if (!removed) {
+        // No override exists: the generated default is already effective;
+        // a reset is a no-op (no file change, no revision bump).
+        return Object.freeze({ outcome: "ok", state: current });
+      }
+      const nextRaw = serialized(nextAliases);
+      return commit(current, nextRaw, Object.freeze(nextAliases));
+    },
     snapshot(): AliasStatusProjection {
-      const { revision, path: filePath, present, valid, error, defaultsVersion: version } =
-        current;
+      const { revision, path: filePath, present, valid, error } = current;
       return Object.freeze({
         revision,
         path: filePath,
         present,
         valid,
-        defaultsVersion: version,
         ...(error === undefined ? {} : { error }),
       });
     },

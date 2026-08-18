@@ -158,4 +158,40 @@ describe("Home readiness product slice", () => {
     );
     expect(container.textContent).toContain("LuckyToken is unavailable");
   });
+
+  it("keeps Provider readiness visible while the Gateway is stopped (Ticket 06)", async () => {
+    await render(
+      createFakeDesktopApi({
+        control: {
+          getStatus: async () => ({
+            sequence: 1,
+            modelDataPlane: "stopped",
+            provider: "configured",
+          }),
+        },
+      }),
+    );
+
+    // A stopped Gateway does not erase an otherwise connected
+    // Provider/model capability: the coarse readiness stays configured and
+    // the page shows the Gateway action, not "Connect an AI provider".
+    expect(container.textContent).toContain("Gateway is stopped");
+    expect(container.textContent).not.toContain("Connect an AI provider");
+  });
+
+  it("shows unconfigured readiness even when Gateway configuration exists (Ticket 06)", async () => {
+    await render(
+      createFakeDesktopApi({
+        control: {
+          getStatus: async () => ({
+            sequence: 1,
+            modelDataPlane: "running",
+            provider: "unconfigured",
+          }),
+        },
+      }),
+    );
+
+    expect(container.textContent).toContain("Connect an AI provider");
+  });
 });

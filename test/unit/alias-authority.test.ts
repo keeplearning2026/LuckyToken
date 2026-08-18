@@ -11,14 +11,16 @@ import {
   type AliasRegistryAuthority,
   type AliasRegistryFileSystem,
 } from "../../src/aliases/authority.js";
-import { curatedAliasDefaults } from "../../src/aliases/defaults.js";
+import {
+  generatedDefaultAlias,
+  type AliasCatalogTarget,
+} from "../../src/aliases/domain.js";
 
 /**
- * Ticket 14 authority seam: the single locked, revision-checked, atomic
- * persistence/hot-apply owner of the model-aliases.json user mappings. All
- * tests use an in-memory file system and a no-op lock (the locking
- * semantics are injected and exercised through the CAS + atomic-replace
- * contract); catalog facts are deterministic fixtures.
+ * Provider Activation Spec §23.4: the single locked, revision-checked,
+ * atomic persistence/hot-apply owner of the model-aliases.json user
+ * overrides. Generated `provider/model` defaults are the lower layer and
+ * never persist. All tests use an in-memory file system and a no-op lock.
  */
 
 function memoryFileSystem(initial?: Record<string, string>): {
@@ -55,21 +57,26 @@ function memoryFileSystem(initial?: Record<string, string>): {
 
 const path = "C:\\app\\model-aliases.json";
 
+const catalogTargets: readonly AliasCatalogTarget[] = Object.freeze([
+  { provider: "openai", model: "gpt-4o" },
+  { provider: "openai", model: "gpt-4o-mini" },
+  { provider: "openai", model: "gpt-4.1" },
+  { provider: "anthropic", model: "claude-opus-4-8" },
+  { provider: "anthropic", model: "claude-sonnet-4" },
+  { provider: "deepseek", model: "deepseek-v4-flash" },
+  { provider: "opencode-go", model: "deepseek-v4-flash" },
+]);
+
 function knownTargets(entries: readonly [string, string][]): ReadonlySet<string> {
   return new Set(entries.map(([provider, model]) => `${provider}\u0000${model}`));
 }
 
-const catalogFacts = {
+const catalogFacts: AliasCatalogFacts = {
   catalogVersion: 11,
-  knownTargets: knownTargets([
-    ["openai", "gpt-4o"],
-    ["openai", "gpt-4o-mini"],
-    ["openai", "gpt-4.1"],
-    ["anthropic", "claude-opus-4-8"],
-    ["anthropic", "claude-sonnet-4"],
-    ["deepseek", "deepseek-v4-flash"],
-    ["opencode-go", "deepseek-v4-flash"],
-  ]),
+  targets: catalogTargets,
+  knownTargets: knownTargets(
+    catalogTargets.map((target) => [target.provider, target.model] as const),
+  ),
 };
 
 function createAuthority(options?: {
@@ -78,14 +85,14 @@ function createAuthority(options?: {
   readonly catalogVersion?: number;
   readonly catalog?: AliasCatalogFacts;
 }): { readonly authority: AliasRegistryAuthority; readonly setCatalog: (facts: AliasCatalogFacts) => void } {
-  const memory = options?.fileSystem === undefined ? undefined : options.fileSystem;
   const fs =
-    memory ??
+    options?.fileSystem ??
     (options?.files === undefined
       ? memoryFileSystem().fileSystem
       : memoryFileSystem(options.files).fileSystem);
   let facts: AliasCatalogFacts = options?.catalog ?? {
     catalogVersion: options?.catalogVersion ?? catalogFacts.catalogVersion,
+    targets: catalogTargets,
     knownTargets: catalogFacts.knownTargets,
   };
   const authority = createAliasRegistryAuthority({
@@ -108,7 +115,7 @@ const userRecord = {
 };
 
 describe("alias registry authority persistence", () => {
-  it("serves an absent file as the defaults-only registry at revision 0", async () => {
+  it("serves an absent file as the generated-defaults-only registry at revision 0", async () => {
     const { authority } = createAuthority();
     const state = await authority.query();
     expect(state).toMatchObject({
@@ -117,18 +124,19 @@ describe("alias registry authority persistence", () => {
       present: false,
       valid: false,
       raw: "",
-      defaultsVersion: 2,
     });
-    // The effective registry is the curated defaults layer.
-    expect(state.effective?.aliases.map((entry) => entry.alias)).toEqual(
-      curatedAliasDefaults.map((entry) => entry.alias),
+    // Every catalog target receives its generated default; nothing is
+    // persisted (the file stays absent).
+    expect(state.effective?.aliases.map((entry) => entry.alias).sort()).toEqual(
+      catalogTargets.map((target) => generatedDefaultAlias(target)).sort(),
     );
-    expect(state.effective?.aliases.every((entry) => entry.layer === "default")).toBe(
-      true,
-    );
+    expect(
+      state.effective?.aliases.every((entry) => entry.layer === "default"),
+    ).toBe(true);
+    expect(state.effective?.errors).toEqual([]);
   });
 
-  it("writes a valid user mapping atomically with a revision bump", async () => {
+  it("writes a valid user override atomically with a revision bump", async () => {
     const { authority } = createAuthority();
     await authority.query();
     const result = await authority.write({
@@ -144,7 +152,9 @@ describe("alias registry authority persistence", () => {
       result.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
     expect(byAlias.get("my-gpt")?.layer).toBe("user");
-    expect(byAlias.get("gpt-4o")?.layer).toBe("default");
+    expect(byAlias.get("openai/gpt-4o")?.layer).toBe("default");
+    // The user override suppresses the target's generated default.
+    expect(byAlias.get("openai/gpt-4o-mini")).toBeUndefined();
   });
 
   it("rejects a stale revision with a conflict and never touches the file", async () => {
@@ -160,7 +170,6 @@ describe("alias registry authority persistence", () => {
     });
     expect(result.outcome).toBe("conflict");
     expect(result.state.revision).toBe(0);
-    // The on-disk bytes are untouched.
     expect(files.get(path)).toBe(`${JSON.stringify({ aliases: userRecord }, null, 2)}\n`);
   });
 
@@ -177,13 +186,9 @@ describe("alias registry authority persistence", () => {
       },
     });
     expect(result.outcome).toBe("invalid");
-    // The rejection names exactly the failing USER entries (a demoted
-    // curated default or a default that is unknown in the catalog is a
-    // registry fact, not a proposal failure).
     const entries = result.error?.entries ?? [];
     expect(entries.map((entry) => entry.code)).toEqual(["ambiguous", "unknown"]);
     expect(entries.map((entry) => entry.alias)).toEqual(["broken", "ghost"]);
-    // The active registry was not replaced.
     const after = await authority.query();
     expect(after.revision).toBe(active.revision);
     expect(after.aliases).toEqual(active.aliases);
@@ -208,7 +213,6 @@ describe("alias registry authority persistence", () => {
     const { fileSystem, files } = memoryFileSystem();
     const { authority } = createAuthority({ fileSystem });
     await authority.query();
-    // The user edits the transparent file by hand.
     files.set(
       path,
       `${JSON.stringify({ aliases: { "manual": "anthropic/claude-sonnet-4" } }, null, 2)}\n`,
@@ -221,7 +225,7 @@ describe("alias registry authority persistence", () => {
     );
   });
 
-  it("keeps defaults effective when a manually edited file is broken, with a value-free error", async () => {
+  it("keeps generated defaults effective when a manually edited file is broken, with a value-free error", async () => {
     const { fileSystem, files } = memoryFileSystem();
     const { authority } = createAuthority({ fileSystem });
     await authority.query();
@@ -229,10 +233,9 @@ describe("alias registry authority persistence", () => {
     const state = await authority.query();
     expect(state.valid).toBe(false);
     expect(state.error?.kind).toBe("parse");
-    // Defaults still apply; no user mapping is guessed.
-    expect(state.effective?.aliases.every((entry) => entry.layer === "default")).toBe(
-      true,
-    );
+    expect(
+      state.effective?.aliases.every((entry) => entry.layer === "default"),
+    ).toBe(true);
   });
 
   it("reports storage failures without modifying the file", async () => {
@@ -274,7 +277,6 @@ describe("alias registry authority persistence", () => {
     });
     await authority.query();
     await authority.write({ revision: 0, aliases: userRecord });
-    // Every mutation takes the file lock before the atomic replace.
     expect(acquired).toBe(1);
   });
 });
@@ -285,7 +287,7 @@ describe("alias registry snapshots and hot-apply", () => {
     await authority.query();
     const first = authority.resolver();
     expect(first.version).toBeGreaterThanOrEqual(1);
-    expect(first.resolve("gpt-4o")).toEqual({
+    expect(first.resolve("openai/gpt-4o")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o",
     });
@@ -293,7 +295,6 @@ describe("alias registry snapshots and hot-apply", () => {
       revision: 0,
       aliases: { "gpt-4o": { provider: "openai", model: "gpt-4.1" } },
     });
-    // New requests capture the hot-applied registry.
     const second = authority.resolver();
     expect(second.fileRevision).toBe(1);
     expect(second.resolve("gpt-4o")).toEqual({
@@ -301,7 +302,7 @@ describe("alias registry snapshots and hot-apply", () => {
       modelId: "gpt-4.1",
     });
     // In-flight work keeps the captured snapshot: it never remaps.
-    expect(first.resolve("gpt-4o")).toEqual({
+    expect(first.resolve("openai/gpt-4o")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o",
     });
@@ -315,17 +316,19 @@ describe("alias registry snapshots and hot-apply", () => {
       aliases: { "my-gpt": { provider: "openai", model: "gpt-4o-mini" } },
     });
     expect(authority.resolver().catalogVersion).toBe(11);
-    // A catalog swap moves to a new snapshot version; the composition hook
-    // hot-applies for new request snapshots.
+    const nextTargets: readonly AliasCatalogTarget[] = [
+      { provider: "openai", model: "gpt-4o" },
+      { provider: "openai", model: "gpt-4o-mini" },
+      { provider: "openai", model: "gpt-4.1" },
+      { provider: "anthropic", model: "claude-opus-4-8" },
+      { provider: "anthropic", model: "claude-sonnet-4" },
+    ];
     setCatalog({
       catalogVersion: 12,
-      knownTargets: knownTargets([
-        ["openai", "gpt-4o"],
-        ["openai", "gpt-4o-mini"],
-        ["openai", "gpt-4.1"],
-        ["anthropic", "claude-opus-4-8"],
-        ["anthropic", "claude-sonnet-4"],
-      ]),
+      targets: nextTargets,
+      knownTargets: knownTargets(
+        nextTargets.map((target) => [target.provider, target.model] as const),
+      ),
     });
     authority.onCatalogSnapshot();
     const after = authority.resolver();
@@ -336,7 +339,7 @@ describe("alias registry snapshots and hot-apply", () => {
     });
   });
 
-  it("keeps a configured mapping resolvable after a catalog swap removes its target (Ticket 15 unavailable taxonomy)", async () => {
+  it("keeps a configured mapping resolvable after a catalog swap removes its target (unavailable taxonomy)", async () => {
     const { authority, setCatalog } = createAuthority();
     await authority.query();
     await authority.write({
@@ -347,28 +350,31 @@ describe("alias registry snapshots and hot-apply", () => {
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
-    // A catalog swap drops the mapped target: the control-plane effective
-    // registry reports the validation error, but the data plane resolver
-    // keeps the configured mapping so requests can render the distinct
-    // model_unavailable result against the live catalog.
+    const nextTargets: readonly AliasCatalogTarget[] = [
+      { provider: "openai", model: "gpt-4o" },
+      { provider: "openai", model: "gpt-4.1" },
+    ];
     setCatalog({
       catalogVersion: 12,
-      knownTargets: knownTargets([
-        ["openai", "gpt-4o"],
-        ["openai", "gpt-4.1"],
-      ]),
+      targets: nextTargets,
+      knownTargets: knownTargets(
+        nextTargets.map((target) => [target.provider, target.model] as const),
+      ),
     });
     authority.onCatalogSnapshot();
     const after = authority.resolver();
     expect(after.catalogVersion).toBe(12);
+    // The user override stays resolvable (model_unavailable is decided
+    // against the live catalog), and its generated default disappears.
     expect(after.resolve("my-gpt")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
+    expect(after.resolve("openai/gpt-4o-mini")).toBeUndefined();
     expect(after.entries().map((entry) => entry.alias)).toContain("my-gpt");
   });
 
-  it("enumerates configured mappings through entries() including catalog-absent targets", async () => {
+  it("enumerates configured mappings through entries() including generated defaults", async () => {
     const { fileSystem } = memoryFileSystem({
       [path]: `${JSON.stringify(
         {
@@ -386,8 +392,6 @@ describe("alias registry snapshots and hot-apply", () => {
     const { authority } = createAuthority({ fileSystem });
     await authority.query();
     const entries = authority.resolver().entries();
-    // Valid user mappings are enumerated (including a slash-bearing model
-    // id); malformed targets and duplicate claims never enter the map.
     expect(entries).toContainEqual({
       alias: "good",
       target: { providerId: "openai", modelId: "gpt-4o" },
@@ -396,6 +400,11 @@ describe("alias registry snapshots and hot-apply", () => {
       alias: "slash-id",
       target: { providerId: "deepseek", modelId: "deepseek-v4-flash" },
     });
+    // Generated defaults for unclaimed targets are served too.
+    expect(entries.map((entry) => entry.alias)).toContain("openai/gpt-4.1");
+    expect(entries.map((entry) => entry.alias)).toContain(
+      "anthropic/claude-opus-4-8",
+    );
     expect(entries.map((entry) => entry.alias)).not.toContain("broken");
     expect(entries.map((entry) => entry.alias)).not.toContain("duplicate");
     expect(authority.resolver().resolve("broken")).toBeUndefined();
@@ -409,23 +418,21 @@ describe("alias registry snapshots and hot-apply", () => {
       revision: 0,
       aliases: { "sonnet": { provider: "anthropic", model: "claude-sonnet-5" } },
     });
-    // Unknown in the current snapshot: the write was rejected, the entry
-    // never became effective, and the resolver never serves it.
     expect(authority.resolver().resolve("sonnet")).toBeUndefined();
-    // A catalog refresh that serves the model does NOT resurrect a
-    // rejected mapping: the file never changed (the write was rejected).
+    const nextTargets: readonly AliasCatalogTarget[] = [
+      { provider: "openai", model: "gpt-4o" },
+      { provider: "anthropic", model: "claude-sonnet-4" },
+      { provider: "anthropic", model: "claude-sonnet-5" },
+    ];
     setCatalog({
       catalogVersion: 12,
-      knownTargets: knownTargets([
-        ["openai", "gpt-4o"],
-        ["anthropic", "claude-sonnet-4"],
-        ["anthropic", "claude-sonnet-5"],
-      ]),
+      targets: nextTargets,
+      knownTargets: knownTargets(
+        nextTargets.map((target) => [target.provider, target.model] as const),
+      ),
     });
     authority.onCatalogSnapshot();
     expect(authority.resolver().resolve("sonnet")).toBeUndefined();
-    // After the proposal is submitted again against the new snapshot, the
-    // mapping becomes effective for new request snapshots.
     await authority.write({
       revision: 0,
       aliases: { "sonnet": { provider: "anthropic", model: "claude-sonnet-5" } },
@@ -445,7 +452,6 @@ describe("alias registry snapshots and hot-apply", () => {
       path,
       present: false,
       valid: false,
-      defaultsVersion: 2,
     });
     expect("raw" in snapshot).toBe(false);
     expect("aliases" in snapshot).toBe(false);
@@ -470,20 +476,129 @@ describe("alias registry snapshots and hot-apply", () => {
   });
 });
 
-describe("curated defaults hygiene", () => {
-  it("defaults are well-formed, unique and collision-free", () => {
-    const aliases = new Set<string>();
-    const targets = new Set<string>();
-    for (const entry of curatedAliasDefaults) {
-      expect(entry.alias.length).toBeGreaterThan(0);
-      expect(entry.alias.trim()).toBe(entry.alias);
-      expect(entry.provider.length).toBeGreaterThan(0);
-      expect(entry.model.length).toBeGreaterThan(0);
-      expect(aliases.has(entry.alias)).toBe(false);
-      expect(targets.has(`${entry.provider}\u0000${entry.model}`)).toBe(false);
-      aliases.add(entry.alias);
-      targets.add(`${entry.provider}\u0000${entry.model}`);
-    }
+describe("target-scoped alias mutations (Spec §15.5)", () => {
+  it("setForModel replaces the generated default for one target", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    expect(result.outcome).toBe("ok");
+    const byAlias = new Map(
+      result.state.effective?.aliases.map((entry) => [entry.alias, entry]),
+    );
+    expect(byAlias.get("sonnet")).toEqual({
+      alias: "sonnet",
+      target: { provider: "anthropic", model: "claude-sonnet-4" },
+      layer: "user",
+    });
+    expect(byAlias.get("anthropic/claude-sonnet-4")).toBeUndefined();
+    // The file stores ONLY the override.
+    expect(result.state.aliases).toEqual({
+      sonnet: { provider: "anthropic", model: "claude-sonnet-4" },
+    });
+  });
+
+  it("setForModel replaces an existing override for the same target", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    const result = await authority.setForModel({
+      revision: 1,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "claude-fast",
+    });
+    expect(result.outcome).toBe("ok");
+    expect(result.state.aliases).toEqual({
+      "claude-fast": { provider: "anthropic", model: "claude-sonnet-4" },
+    });
+    expect(
+      result.state.effective?.aliases.some((entry) => entry.alias === "sonnet"),
+    ).toBe(false);
+  });
+
+  it("setForModel fails closed for an unknown target and a stale revision", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const unknown = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-does-not-exist",
+      alias: "ghost",
+    });
+    expect(unknown.outcome).toBe("invalid");
+    expect(unknown.error?.entries?.[0]?.code).toBe("unknown");
+
+    const stale = await authority.setForModel({
+      revision: 99,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    expect(stale.outcome).toBe("conflict");
+  });
+
+  it("setForModel rejects a collision with another target's generated default", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "openai/gpt-4o-mini",
+    });
+    expect(result.outcome).toBe("invalid");
+    expect(result.error?.entries?.[0]?.code).toBe("duplicate");
+    // The previous effective registry stays active.
+    expect(
+      authority.resolver().resolve("openai/gpt-4o-mini"),
+    ).toEqual({ providerId: "openai", modelId: "gpt-4o-mini" });
+    expect(authority.resolver().resolve("anthropic/claude-sonnet-4")).toEqual({
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+    });
+  });
+
+  it("resetForModel restores the generated default and writes nothing when absent", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    const reset = await authority.resetForModel({
+      revision: 1,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+    });
+    expect(reset.outcome).toBe("ok");
+    // The file is emptied (only the override was removed) and the
+    // generated default is effective again.
+    expect(reset.state.aliases).toEqual({});
+    expect(
+      reset.state.effective?.aliases.some(
+        (entry) => entry.alias === "anthropic/claude-sonnet-4",
+      ),
+    ).toBe(true);
+    // Resetting a target without an override is a no-op.
+    const noop = await authority.resetForModel({
+      revision: 2,
+      providerId: "openai",
+      modelId: "gpt-4o",
+    });
+    expect(noop.outcome).toBe("ok");
+    expect(noop.state.revision).toBe(2);
   });
 });
 

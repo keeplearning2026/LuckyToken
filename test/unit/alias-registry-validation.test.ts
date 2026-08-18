@@ -2,51 +2,62 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeEffectiveAliasRegistry,
+  generatedDefaultAlias,
   parseAliasTarget,
+  type AliasCatalogTarget,
 } from "../../src/aliases/domain.js";
 
 /**
- * Ticket 14 domain seam: target validation taxonomy. Every failure category
- * — invalid, ambiguous, unknown, duplicate — is distinguished so the Models
- * & Aliases surface can show precise, value-safe errors, and no rejected
- * entry ever becomes an effective alias.
+ * Provider Activation Spec §23.4: alias target validation taxonomy over
+ * Catalog-derived generated defaults. Every failure category — invalid,
+ * ambiguous, unknown, duplicate — is distinguished so the Providers
+ * surface can show precise, value-safe errors, and no rejected entry ever
+ * becomes an effective alias.
  */
 
 const catalogVersion = 3;
 
-const knownTargets = new Set([
-  "openai\u0000gpt-4o",
-  "openai\u0000gpt-4o-mini",
-  "anthropic\u0000claude-opus-4-8",
-  "anthropic\u0000claude-sonnet-4",
+const catalogTargets: readonly AliasCatalogTarget[] = Object.freeze([
+  { provider: "openai", model: "gpt-4o" },
+  { provider: "openai", model: "gpt-4o-mini" },
+  { provider: "anthropic", model: "claude-opus-4-8" },
+  { provider: "anthropic", model: "claude-sonnet-4" },
 ]);
 
-const defaults = [
-  { alias: "gpt-4o", provider: "openai", model: "gpt-4o" },
-  { alias: "claude-opus-4", provider: "anthropic", model: "claude-opus-4-8" },
-];
+const knownTargets = new Set(
+  catalogTargets.map(
+    (target) => `${target.provider}\u0000${target.model}`,
+  ),
+);
 
 function compute(userAliases: Record<string, unknown>) {
   return computeEffectiveAliasRegistry({
     userAliases,
-    defaults,
-    defaultsVersion: 1,
+    catalogTargets,
     catalogVersion,
     knownTargets,
   });
 }
 
-describe("alias target validation taxonomy", () => {
+/** Every catalog target's generated default alias, sorted. */
+function expectedDefaults(...overrides: readonly string[]): string[] {
+  const suppressed = new Set(overrides);
+  return catalogTargets
+    .map((target) => generatedDefaultAlias(target))
+    .filter((alias) => !suppressed.has(alias))
+    .sort();
+}
+
+describe("alias target validation taxonomy over generated defaults", () => {
   it("rejects an unknown Provider/model target with a distinguished unknown error", () => {
     const registry = compute({
       "my-model": { provider: "openai", model: "gpt-5-not-real" },
     });
-    // The rejected entry never becomes effective; untouched curated
-    // defaults stay.
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "gpt-4o",
-      "claude-opus-4",
-    ]);
+    // The rejected entry never becomes effective; every untouched catalog
+    // target keeps its generated default.
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      expectedDefaults(),
+    );
     expect(registry.errors).toHaveLength(1);
     expect(registry.errors[0]).toMatchObject({
       alias: "my-model",
@@ -66,13 +77,10 @@ describe("alias target validation taxonomy", () => {
     const registry = compute({
       "my-model": "gpt-4o",
     });
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "gpt-4o",
-      "claude-opus-4",
-    ]);
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      expectedDefaults(),
+    );
     expect(registry.errors[0]?.code).toBe("ambiguous");
-    // Even though exactly one provider serves gpt-4o in this catalog, the
-    // target does not name one canonical model.
     expect(registry.errors[0]?.message).toContain("Provider");
   });
 
@@ -80,15 +88,21 @@ describe("alias target validation taxonomy", () => {
     const registry = compute({
       "openai/gpt-4o-mini": { provider: "openai", model: "gpt-4o-mini" },
     });
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "openai/gpt-4o-mini",
-      "gpt-4o",
-      "claude-opus-4",
-    ]);
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      [
+        ...expectedDefaults().filter(
+          (alias) => alias !== "openai/gpt-4o-mini",
+        ),
+        "openai/gpt-4o-mini",
+      ].sort(),
+    );
     expect(registry.errors).toEqual([]);
-    expect(registry.aliases[0]?.target).toEqual({
-      provider: "openai",
-      model: "gpt-4o-mini",
+    expect(
+      registry.aliases.find((entry) => entry.alias === "openai/gpt-4o-mini"),
+    ).toMatchObject({
+      alias: "openai/gpt-4o-mini",
+      target: { provider: "openai", model: "gpt-4o-mini" },
+      layer: "user",
     });
   });
 
@@ -100,10 +114,9 @@ describe("alias target validation taxonomy", () => {
       "not-an-object": 42,
       "missing-model": { provider: "openai" },
     });
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "gpt-4o",
-      "claude-opus-4",
-    ]);
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      expectedDefaults(),
+    );
     expect(registry.errors.map((entry) => entry.code)).toEqual([
       "invalid",
       "invalid",
@@ -118,58 +131,51 @@ describe("alias target validation taxonomy", () => {
       "first": { provider: "openai", model: "gpt-4o" },
       "second": "openai/gpt-4o",
     });
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "first",
-      "claude-opus-4",
-    ]);
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      [...expectedDefaults("openai/gpt-4o"), "first"].sort(),
+    );
     expect(registry.errors[0]).toMatchObject({
       alias: "second",
       code: "duplicate",
     });
   });
 
-  it("lets a user alias take a canonical target over a curated default", () => {
+  it("lets a user alias take a canonical target over its generated default without a duplicate error", () => {
     const registry = compute({
       "my-opus": { provider: "anthropic", model: "claude-opus-4-8" },
     });
-    // User mappings always win: the explicit alias claims the canonical
-    // target and the curated default is demoted with a duplicate error
-    // (never two effective aliases for one target).
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual([
-      "my-opus",
-      "gpt-4o",
-    ]);
-    expect(registry.errors[0]).toMatchObject({
-      alias: "claude-opus-4",
-      code: "duplicate",
-    });
+    // The user mapping claims the target; the generated default is
+    // suppressed (the normal override path, never a duplicate error).
+    expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
+      [...expectedDefaults("anthropic/claude-opus-4-8"), "my-opus"].sort(),
+    );
+    expect(registry.errors).toEqual([]);
     expect(
       registry.aliases.find((entry) => entry.alias === "my-opus")?.target,
     ).toEqual({ provider: "anthropic", model: "claude-opus-4-8" });
-  });
-
-  it("rejects a default whose target is unknown in the current catalog", () => {
-    const registry = computeEffectiveAliasRegistry({
-      userAliases: {},
-      defaults: [
-        { alias: "gpt-4o", provider: "openai", model: "gpt-4o" },
-        // This default's target left the active catalog.
-        { alias: "old-default", provider: "openai", model: "gpt-3.5-turbo" },
-      ],
-      defaultsVersion: 1,
-      catalogVersion,
-      knownTargets,
-    });
-    expect(registry.aliases.map((entry) => entry.alias)).toEqual(["gpt-4o"]);
-    expect(registry.errors).toEqual([
-      expect.objectContaining({ alias: "old-default", code: "unknown" }),
-    ]);
+    expect(
+      registry.aliases.find((entry) => entry.alias === "my-opus")?.layer,
+    ).toBe("user");
   });
 
   it("accepts string and object targets with identical canonical identity", () => {
     const asString = compute({ "a": "openai/gpt-4o-mini" });
     const asObject = compute({ "a": { provider: "openai", model: "gpt-4o-mini" } });
     expect(asString.aliases).toEqual(asObject.aliases);
+  });
+
+  it("parseAliasTarget accepts model ids containing slashes", () => {
+    expect(parseAliasTarget("openai/gpt-4o")).toEqual({
+      target: { provider: "openai", model: "gpt-4o" },
+    });
+    // A model id with an internal slash is valid canonical identity
+    // (e.g. commandcode-private/deepseek/deepseek-v4-flash).
+    expect(parseAliasTarget("commandcode-private/deepseek/deepseek-v4-flash")).toEqual({
+      target: {
+        provider: "commandcode-private",
+        model: "deepseek/deepseek-v4-flash",
+      },
+    });
   });
 
   it("parseAliasTarget rejects structurally broken targets", () => {
@@ -183,12 +189,6 @@ describe("alias target validation taxonomy", () => {
     });
     expect(parseAliasTarget({ provider: "openai", model: "" })).toMatchObject({
       error: { code: "invalid" },
-    });
-    expect(parseAliasTarget("openai/gpt-4o/extra")).toMatchObject({
-      error: { code: "invalid" },
-    });
-    expect(parseAliasTarget("openai/gpt-4o")).toEqual({
-      target: { provider: "openai", model: "gpt-4o" },
     });
   });
 

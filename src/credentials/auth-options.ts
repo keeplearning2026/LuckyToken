@@ -4,6 +4,7 @@ import type {
   AuthOptionsProjection,
   AuthProviderOption,
   ProviderAuthStatus,
+  ProviderSource,
 } from "@luckytoken/application-control-plane/control-plane";
 
 /**
@@ -20,12 +21,14 @@ import type {
 export function projectAuthProviderOption(
   provider: Provider,
   status: ProviderAuthStatus,
+  source: ProviderSource,
 ): AuthProviderOption {
   const oauth = provider.auth.oauth;
   const apiKey = provider.auth.apiKey;
   return Object.freeze({
     providerId: provider.id,
     name: provider.name,
+    source,
     account: oauth !== undefined,
     subscription: oauth?.isSubscription === true,
     ...(oauth === undefined || (oauth.loginLabel === undefined && oauth.name === undefined)
@@ -41,6 +44,7 @@ export function projectAuthProviderOption(
 export function projectAuthOptions(
   providers: readonly Provider[],
   statuses: readonly ProviderAuthStatus[],
+  sourceFor: (providerId: string) => ProviderSource,
 ): AuthOptionsProjection {
   const byId = new Map(statuses.map((row) => [row.providerId, row]));
   return Object.freeze({
@@ -58,7 +62,7 @@ export function projectAuthOptions(
             unavailable: true,
             effectiveSource: "none",
           } as ProviderAuthStatus);
-        return projectAuthProviderOption(provider, status);
+        return projectAuthProviderOption(provider, status, sourceFor(provider.id));
       }),
     ),
   });

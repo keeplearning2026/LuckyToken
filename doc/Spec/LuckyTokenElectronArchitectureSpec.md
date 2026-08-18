@@ -6,6 +6,7 @@
 **Related specifications:**
 
 - [LuckyToken Core Architecture Specification](./LuckyTokenCoreSpec.md)
+- [LuckyToken Provider Activation Specification](./LuckyTokenProviderActivationSpec.md)
 - [LuckyToken implementation architecture map](../LuckyTokenArchitecture.md)
 - [ADR 0004 — TypeScript-only Electron desktop](../adr/0004-electron-typescript-desktop.md)
 - [Repository architecture rules](../../AGENTS.md)

@@ -1,32 +1,39 @@
 /**
- * Ticket 14 alias registry domain — the pure, deterministic overlay of the
- * two layers:
+ * Alias registry domain (Provider Activation Spec v1.0 §5.7/§5.8/§11.5) —
+ * the pure, deterministic overlay of two layers:
  *
- * - curated defaults (lower layer): static, versioned, shipped by
- *   LuckyToken; an untouched default follows the current defaults version,
- *   so a default upgrade can change it;
- * - explicit user mappings (authority layer): the manually editable
- *   `model-aliases.json`; a user mapping always wins and is never silently
- *   replaced by a default upgrade.
+ * - generated defaults (lower layer): every canonical target in the
+ *   authoritative Catalog derives its default alias deterministically as
+ *   `${providerId}/${modelId}`. Generated defaults are a pure function of
+ *   the Catalog and are never persisted to `model-aliases.json`. A model
+ *   whose id contains `/` keeps the full text
+ *   (`commandcode-private/deepseek/deepseek-v4-flash`).
+ * - explicit user overrides (authority layer): the manually editable
+ *   `model-aliases.json`; a valid user override claims its canonical
+ *   target and suppresses that target's generated default. Removing the
+ *   override restores the generated default automatically.
  *
  * Invariants (acceptance criteria):
  *
+ * - every Catalog model has exactly one effective alias (the generated
+ *   `provider/model` until a user override replaces it);
  * - one external alias maps to exactly one canonical (providerId, modelId);
  * - at most one effective alias per canonical target: a proposal that would
  *   produce a duplicate canonical target is rejected with a `duplicate`
  *   error instead of guessing which alias wins;
- * - validation against the authoritative Ticket 11 catalog snapshot
- *   distinguishes `invalid` (malformed alias/target), `ambiguous` (a target
- *   that cannot name one canonical model), `unknown` (well-formed but absent
- *   from the active catalog) and `duplicate` (canonical target already
- *   mapped) — without ever replacing the active registry. Alias text is an
- *   opaque external identity and may contain `/`; canonical identity is
- *   determined only by the explicit mapped target.
+ * - validation against the authoritative Catalog snapshot distinguishes
+ *   `invalid` (malformed alias/target), `ambiguous` (a target that cannot
+ *   name one canonical model), `unknown` (well-formed but absent from the
+ *   active Catalog) and `duplicate` (canonical target already mapped) —
+ *   without ever replacing the active registry. Alias text is an opaque
+ *   external identity and may contain `/`; canonical identity is
+ *   determined only by the explicit mapped target. The generated alias
+ *   string is never parsed to reconstruct canonical identity.
  *
- * All inputs are injected (catalog snapshot facts, defaults, defaults
- * version) so tests are deterministic; this module never touches the
- * filesystem, the clock, or the wire. The projection shapes are the one
- * authoritative Control Plane contract.
+ * All inputs are injected (Catalog snapshot facts) so tests are
+ * deterministic; this module never touches the filesystem, the clock, or
+ * the wire. The projection shapes are the one authoritative Control Plane
+ * contract.
  */
 
 import type {
@@ -36,9 +43,8 @@ import type {
   EffectiveAliasRegistryProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 
-/** One curated default alias mapping (the lower layer). */
-export interface CuratedAliasDefault {
-  readonly alias: string;
+/** One canonical Catalog target (the authoritative model set). */
+export interface AliasCatalogTarget {
   readonly provider: string;
   readonly model: string;
 }
@@ -57,21 +63,34 @@ export function canonicalTargetKey(target: AliasCanonicalTarget): string {
 }
 
 /**
+ * The deterministic generated default alias for one canonical Catalog
+ * target: exactly `provider/model`. A model id that itself contains `/`
+ * is preserved verbatim — the alias string is opaque and never parsed to
+ * reconstruct canonical identity (Spec §11.5).
+ */
+export function generatedDefaultAlias(target: AliasCatalogTarget): string {
+  return `${target.provider}/${target.model}`;
+}
+
+/**
  * Compute the catalog-independent configured alias mappings: every alias
  * key that owns a parseable, non-duplicate canonical target, whether or
- * not that target is currently in the active catalog.
+ * not that target is currently in the active Catalog. Generated defaults
+ * for current Catalog targets are included (they are part of the
+ * configured mappings for the data plane); a generated default for a
+ * target claimed by a user override is suppressed.
  *
  * The effective registry (control plane) keeps catalog-membership
  * validation and reports out-of-catalog targets as `unknown` errors; the
  * data plane needs the mapping to survive a catalog swap so it can render
  * `model_unavailable` for a configured alias whose target left the active
- * catalog (Ticket 15). Rejected proposals never enter the file, so a
- * mapping this function serves always came from the transparent user file
- * or the curated defaults — never from a guessed repair.
+ * Catalog. Rejected proposals never enter the file, so a mapping this
+ * function serves always came from the transparent user file or the
+ * generated defaults — never from a guessed repair.
  */
 export function computeConfiguredAliasMappings(input: {
   readonly userAliases: Readonly<Record<string, unknown>>;
-  readonly defaults: readonly CuratedAliasDefault[];
+  readonly catalogTargets: readonly AliasCatalogTarget[];
 }): ReadonlyMap<string, AliasCanonicalTarget> {
   const byAlias = new Map<string, AliasCanonicalTarget>();
   const claimedTargets = new Set<string>();
@@ -87,16 +106,34 @@ export function computeConfiguredAliasMappings(input: {
     claimedTargets.add(key);
   };
   for (const [alias, ref] of Object.entries(input.userAliases)) {
+    const keyError = aliasKeyError(alias);
+    if (keyError !== undefined) continue;
+    const parsed = parseAliasTarget(ref);
+    if ("error" in parsed) continue;
+    // A custom alias colliding with another target's generated default is
+    // not a configured mapping (the proposal is rejected upstream).
+    let collision = false;
+    for (const other of input.catalogTargets) {
+      if (canonicalTargetKey(other) === canonicalTargetKey(parsed.target)) {
+        continue;
+      }
+      if (generatedDefaultAlias(other) === alias) {
+        collision = true;
+        break;
+      }
+    }
+    if (collision) continue;
     claim(alias, ref);
   }
-  for (const curated of input.defaults) {
+  for (const target of input.catalogTargets) {
+    const alias = generatedDefaultAlias(target);
     // The user owns the alias key even when their mapping is broken: the
-    // curated default must never silently replace it.
-    if (userAliasKeys.has(curated.alias)) continue;
-    claim(curated.alias, {
-      provider: curated.provider,
-      model: curated.model,
-    });
+    // generated default must never silently replace it. A target already
+    // claimed by a user override suppresses its generated default.
+    if (claimedTargets.has(canonicalTargetKey(target))) continue;
+    if (userAliasKeys.has(alias)) continue;
+    if (claimedTargets.has(canonicalTargetKey(target))) continue;
+    claim(alias, { provider: target.provider, model: target.model });
   }
   return byAlias;
 }
@@ -120,8 +157,7 @@ export function parseAliasTarget(
       provider.trim() !== provider ||
       model.trim() !== model ||
       provider.length === 0 ||
-      model.length === 0 ||
-      model.includes(CANONICAL_SEPARATOR)
+      model.length === 0
     ) {
       return {
         error: {
@@ -161,7 +197,7 @@ export function parseAliasTarget(
   };
 }
 
-function aliasKeyError(alias: string): Omit<AliasValidationErrorProjection, "alias"> | undefined {
+export function aliasKeyError(alias: string): Omit<AliasValidationErrorProjection, "alias"> | undefined {
   if (alias.length === 0) {
     return { code: "invalid", message: "An alias must not be empty." };
   }
@@ -224,17 +260,17 @@ function evaluateEntry(
 
 /**
  * Compute the one authoritative effective registry from the user file
- * (authority layer) over the curated defaults (lower layer). User aliases
- * are evaluated first and claim their canonical targets; a user alias that
- * fails validation still owns its alias key, so no default can silently
- * replace a broken user mapping. Defaults then fill untouched aliases and
- * are validated against the same catalog facts; a default that collides or
- * is unknown is reported, never guessed.
+ * (authority layer) over the Catalog-derived generated defaults (lower
+ * layer). User aliases are evaluated first and claim their canonical
+ * targets; a user alias that fails validation still owns its alias key,
+ * so no generated default can silently replace a broken user mapping.
+ * Generated defaults then fill every unclaimed Catalog target and are
+ * validated against the same catalog facts; a generated default that
+ * collides or is unknown is reported, never guessed.
  */
 export function computeEffectiveAliasRegistry(input: {
   readonly userAliases: Readonly<Record<string, unknown>>;
-  readonly defaults: readonly CuratedAliasDefault[];
-  readonly defaultsVersion: number;
+  readonly catalogTargets: readonly AliasCatalogTarget[];
   readonly catalogVersion: number;
   readonly knownTargets: ReadonlySet<string>;
 }): EffectiveAliasRegistryProjection {
@@ -248,16 +284,38 @@ export function computeEffectiveAliasRegistry(input: {
       errors.push(outcome.error);
       continue;
     }
+    // A custom alias must not claim another target's generated default
+    // (Spec §11.6): a custom alias equal to the generated default of a
+    // DIFFERENT catalog target is rejected as a collision. A custom alias
+    // that happens to equal its own target's generated default is a
+    // legitimate (explicit) override.
+    for (const other of input.catalogTargets) {
+      if (canonicalTargetKey(other) === canonicalTargetKey(outcome.target)) {
+        continue;
+      }
+      if (generatedDefaultAlias(other) === alias) {
+        errors.push({
+          alias,
+          code: "duplicate",
+          message: `Alias "${alias}" collides with the generated default alias of another model and cannot be reused.`,
+        });
+        break;
+      }
+    }
+    if (errors.some((entry) => entry.alias === alias)) continue;
     aliases.push({ alias, target: outcome.target, layer: "user" });
     claimedTargets.add(canonicalTargetKey(outcome.target));
   }
-  for (const curated of input.defaults) {
-    // The user owns the alias key even when their mapping is broken: the
-    // curated default must never silently replace it.
-    if (userAliasKeys.has(curated.alias)) continue;
+  for (const target of input.catalogTargets) {
+    const alias = generatedDefaultAlias(target);
+    // A user alias that claims this target (or owns this alias key, even
+    // when broken) suppresses the generated default: the normal override
+    // path is not a duplicate error.
+    if (claimedTargets.has(canonicalTargetKey(target))) continue;
+    if (userAliasKeys.has(alias)) continue;
     const outcome = evaluateEntry(
-      curated.alias,
-      { provider: curated.provider, model: curated.model },
+      alias,
+      { provider: target.provider, model: target.model },
       claimedTargets,
       input.knownTargets,
     );
@@ -266,14 +324,13 @@ export function computeEffectiveAliasRegistry(input: {
       continue;
     }
     aliases.push({
-      alias: curated.alias,
+      alias,
       target: outcome.target,
       layer: "default",
     });
     claimedTargets.add(canonicalTargetKey(outcome.target));
   }
   return Object.freeze({
-    defaultsVersion: input.defaultsVersion,
     aliases: Object.freeze(aliases),
     errors: Object.freeze(errors),
   });

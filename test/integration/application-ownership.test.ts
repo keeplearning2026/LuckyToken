@@ -264,7 +264,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
@@ -346,7 +346,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
@@ -513,7 +513,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);

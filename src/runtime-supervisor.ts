@@ -37,7 +37,11 @@ export interface DataPlaneAddress {
 export interface DataPlaneRuntimeSupervisorOptions {
   readonly host: string;
   readonly port: number;
-  readonly provider: ApplicationStatus["provider"];
+  /** Live Provider readiness source (Provider Activation Spec v1.0 §14):
+   *  every runtime transition publishes the CURRENT Catalog-derived
+   *  readiness, so a Gateway stop/start never resurrects or erases an
+   *  otherwise connected Provider/model capability. */
+  readonly readProvider: () => ApplicationStatus["provider"];
   /** Resolves the effective bind address at each start/restart. When omitted,
    *  the fixed configured host and port are used (Ticket 03 semantics). The
    *  resolution is authoritative: there is no random or default fallback. */
@@ -82,7 +86,7 @@ export function createDataPlaneRuntimeSupervisor(
   ): ApplicationStatus =>
     Object.freeze({
       modelDataPlane,
-      provider: options.provider,
+      provider: options.readProvider(),
       dataPlane: {
         ...configured(configuredAddress()),
         ...(failure === undefined

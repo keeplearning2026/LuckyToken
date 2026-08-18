@@ -165,7 +165,6 @@ describe("alias serve wiring", () => {
           path: string;
           present: boolean;
           valid: boolean;
-          defaultsVersion: number;
           effective?: { aliases: readonly unknown[] };
         };
       };
@@ -173,7 +172,6 @@ describe("alias serve wiring", () => {
       expect(queried.state.revision).toBe(0);
       expect(queried.state.present).toBe(false);
       expect(queried.state.path).toBe(join(root, "model-aliases.json"));
-      expect(queried.state.defaultsVersion).toBe(2);
       expect((queried.state.effective?.aliases.length ?? 0)).toBeGreaterThan(0);
 
       // Write a valid user mapping (compare-and-swap on revision 0).

@@ -595,6 +595,17 @@ test(
         assert.equal(status?.unavailable, false);
       });
 
+      // Provider Activation (Spec v1.0 §14): the coarse Provider readiness
+      // is derived from Catalog model availability, which the Backend
+      // republishes after the login-triggered refresh. Connect requires a
+      // usable Provider, so wait for the authoritative convergence.
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const status = await client.getStatus();
+        if (status.provider === "configured") break;
+        await delay(50);
+      }
+      assert.equal((await client.getStatus()).provider, "configured");
+
       await page.getByRole("button", { name: "Connect" }).click();
       await page.getByRole("button", { name: "Configure Codex" }).click();
       await page.getByRole("heading", { name: "Codex is ready" }).waitFor();

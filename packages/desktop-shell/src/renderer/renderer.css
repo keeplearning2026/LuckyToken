@@ -176,3 +176,17 @@ button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
 .auth-interaction input, .auth-interaction select { max-width: 520px; border: 1px solid #cfd2d6; border-radius: 8px; padding: 9px 10px; }
 .device-code { font-size: 24px; letter-spacing: .12em; }
 .error-text { color: #a0443d !important; }
+.provider-source { color: #747981 !important; font-size: 12px; }
+.provider-search { display: block; max-width: 420px; }
+.provider-search input { width: 100%; border: 1px solid #cfd2d6; border-radius: 8px; padding: 9px 12px; }
+.provider-group { display: grid; gap: 10px; }
+.provider-group-title { margin: 4px 0 0; font-size: 15px; color: #555b62; }
+.provider-model-list { list-style: none; display: grid; gap: 8px; margin: 10px 0 0; padding: 0; }
+.provider-model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid #eceef0; }
+.provider-model-row .model-alias { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.alias-editor { display: grid; gap: 10px; max-width: 520px; }
+.alias-editor form, .alias-editor label { display: grid; gap: 8px; }
+.alias-editor input { max-width: 420px; border: 1px solid #cfd2d6; border-radius: 8px; padding: 9px 10px; }
+.alias-editor-model { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #44494f !important; }
+.alias-editor-current code { overflow-wrap: anywhere; color: #44494f; }

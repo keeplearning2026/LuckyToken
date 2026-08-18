@@ -347,7 +347,7 @@ describe("LuckyToken CLI", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48766,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => ({ close: async () => undefined }),
     });
     const controlPlane = await startControlPlane({
@@ -807,13 +807,6 @@ describe("LuckyToken CLI", () => {
       providerPackages: undefined,
       expectedProvider: "unconfigured" as const,
     },
-    {
-      label: "a configured Provider Package",
-      providerPackages: {
-        "@luckytoken/provider-commandcode-private": {},
-      },
-      expectedProvider: "configured" as const,
-    },
   ])(
     "atomically owns discovery and reports $label as $expectedProvider",
     async ({ providerPackages, expectedProvider }) => {
@@ -949,6 +942,75 @@ describe("LuckyToken CLI", () => {
     },
     30_000,
   );
+
+  it("rejects explicit configuration of the bundled CommandCode Provider Package", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-control-bundled-reject-"),
+    );
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    await mkdir(piDirectory, { recursive: true });
+    const authPath = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await createFileClientTokenStore({ path: authPath }).create(
+      { type: "global" },
+      "serve-test-token",
+    );
+    const configPath = join(stateDirectory, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
+        server: { host: "127.0.0.1", port: await reserveFreePort() },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        providerPackages: {
+          "@luckytoken/provider-commandcode-private": {},
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+    const descriptorPath = join(stateDirectory, "control-plane.json");
+    const serve = startCli(
+      ["--config", configPath, "--descriptor", descriptorPath],
+      true,
+    );
+    children.push(serve);
+    const serveCapture = captureChild(serve);
+    // The bundled package is a reserved product identity: explicit user
+    // configuration is rejected under the current contract instead of
+    // being silently ignored or migrated.
+    const serveResult = await Promise.race([
+      serveCapture.result,
+      new Promise<ChildResult>((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              code: null,
+              stdout: serveCapture.stdout(),
+              stderr: serveCapture.stderr(),
+            }),
+          5_000,
+        ),
+      ),
+    ]);
+    if (serveResult.code === 0) {
+      throw new Error(
+        `serve unexpectedly succeeded\nstdout:\n${serveResult.stdout}\nstderr:\n${serveResult.stderr}`,
+      );
+    }
+    expect(`${serveResult.stdout}\n${serveResult.stderr}`).toContain(
+      "bundled product Provider",
+    );
+  });
 
   it("keeps the Control Plane available when the fixed Data Plane port is occupied", async () => {
     const blocker = createServer();

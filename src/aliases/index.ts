@@ -9,13 +9,11 @@ export {
 } from "./authority.js";
 export { createAliasControlPlaneHandler } from "./control-plane.js";
 export {
-  CURATED_ALIAS_DEFAULTS_VERSION,
-  curatedAliasDefaults,
-} from "./defaults.js";
-export {
+  aliasKeyError,
   canonicalTargetKey,
   computeEffectiveAliasRegistry,
+  generatedDefaultAlias,
   MAX_ALIAS_LENGTH,
   parseAliasTarget,
-  type CuratedAliasDefault,
+  type AliasCatalogTarget,
 } from "./domain.js";

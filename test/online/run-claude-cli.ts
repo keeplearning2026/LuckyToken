@@ -744,6 +744,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   // request time).
   let catalogFacts: AliasCatalogFacts = Object.freeze({
     catalogVersion: 0,
+    targets: Object.freeze([]),
     knownTargets: Object.freeze(new Set<string>()),
   });
   const aliasAuthority =
@@ -806,7 +807,19 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     for (const candidate of models) {
       knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
     }
-    catalogFacts = Object.freeze({ catalogVersion: 1, knownTargets });
+    catalogFacts = Object.freeze({
+      catalogVersion: 1,
+      targets: Object.freeze(
+        [...knownTargets].map((key) => {
+          const separator = key.indexOf("\u0000");
+          return {
+            provider: key.slice(0, separator),
+            model: key.slice(separator + 1),
+          };
+        }),
+      ),
+      knownTargets,
+    });
     await aliasAuthority!.query();
   }
   const captures: CapturedRequest[] = [];

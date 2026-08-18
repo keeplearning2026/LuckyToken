@@ -15,7 +15,7 @@
     "test": "vitest run --config vitest.config.mjs",
     "test:e2e": "npm run build && node --test test/electron-window-lifecycle.e2e.test.mjs",
     "test:product-e2e": "npm run build && node --test test/product-golden-journey.e2e.test.mjs",
-    "test:product-e2e:run": "node --test test/product-golden-journey.e2e.test.mjs",
+    "test:product-e2e:run": "node --test --test-concurrency=1 test/product-golden-journey.e2e.test.mjs test/provider-activation-journey.e2e.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

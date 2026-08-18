@@ -20,6 +20,21 @@ export function createAliasControlPlaneHandler(
     if (command.command === "query") {
       return { outcome: "ok", state: await authority.query() };
     }
+    if (command.command === "set_for_model") {
+      return authority.setForModel({
+        revision: command.revision,
+        providerId: command.providerId,
+        modelId: command.modelId,
+        alias: command.alias,
+      });
+    }
+    if (command.command === "reset_for_model") {
+      return authority.resetForModel({
+        revision: command.revision,
+        providerId: command.providerId,
+        modelId: command.modelId,
+      });
+    }
     return authority.write({
       revision: command.revision,
       aliases: command.aliases,

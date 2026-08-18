@@ -738,6 +738,7 @@ export async function runOpenAIResponsesOnlineSuite(
     // served catalog once the first composition exists.
     let catalogFacts: AliasCatalogFacts = Object.freeze({
       catalogVersion: 0,
+      targets: Object.freeze([]),
       knownTargets: Object.freeze(new Set<string>()),
     });
     const aliasAuthority =
@@ -770,7 +771,19 @@ export async function runOpenAIResponsesOnlineSuite(
       for (const candidate of models) {
         knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
       }
-      catalogFacts = Object.freeze({ catalogVersion: 1, knownTargets });
+      catalogFacts = Object.freeze({
+        catalogVersion: 1,
+        targets: Object.freeze(
+          [...knownTargets].map((key) => {
+            const separator = key.indexOf("\u0000");
+            return {
+              provider: key.slice(0, separator),
+              model: key.slice(separator + 1),
+            };
+          }),
+        ),
+        knownTargets,
+      });
       await aliasAuthority!.query();
     }
     server = await startLuckyTokenHttpServer({

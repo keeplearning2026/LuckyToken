@@ -77,6 +77,7 @@ import {
   createRequestCompositionModels,
   resolveRequestModel,
 } from "./providers/request-composition.js";
+import type { ProviderRuntime } from "./providers/runtime.js";
 import { resolveUsageSemantics } from "./providers/usage-declarations.js";
 import { createExecutionOperation } from "./execution.js";
 import {
@@ -272,6 +273,15 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly onCapturePersistenceRecovery?: (fact: {
     readonly requestId: string;
   }) => void;
+  /**
+   * Provider Activation (Spec v1.0): the Backend-lifetime Provider Runtime
+   * created before the Data Plane. When provided, the Data Plane consumes
+   * its one Pi Models, credential authority, catalog handle and external
+   * Provider ids instead of creating a second Provider composition. When
+   * absent (legacy test seam), the composition creates its own Provider
+   * composition as before.
+   */
+  readonly providerRuntime?: ProviderRuntime;
 }
 
 export interface ConfiguredLuckyTokenComposition {
@@ -513,65 +523,87 @@ export async function createConfiguredLuckyTokenComposition(
       enabledSetting === undefined ? true : enabledSetting.value !== false;
     if (enabled) await authority.ensureGlobal({ freshOnly: true });
   }
-  const {
-    models,
-    externalProviderIds,
-    userConfiguredProviderIds,
-    modelsJson,
-    catalog,
-  } = await createConfiguredPiModels({
-    piDirectory: config.pi.directory,
-    modelsJsonPath: config.pi.modelsJson,
-    ...(options.credentials === undefined
-      ? {}
-      : { credentials: options.credentials }),
-    fetch: options.fetch,
-    providerPackages: config.providerPackages,
-    ...(options.importModule === undefined
-      ? {}
-      : { importModule: options.importModule }),
-    ...(options.onInvalidModelsJson === undefined
-      ? {}
-      : { onInvalidModelsJson: options.onInvalidModelsJson }),
-    ...(options.configValueAdapters === undefined
-      ? {}
-      : { configValueAdapters: options.configValueAdapters }),
-    ...(options.authContext === undefined
-      ? {}
-      : { authContext: options.authContext }),
-    ...(options.modelsStore === undefined
-      ? {}
-      : { modelsStore: options.modelsStore }),
-    ...(options.onProviderLogin === undefined
-      ? {}
-      : { onProviderLogin: options.onProviderLogin }),
-    createUuid: createSessionId,
-    now,
-  });
-  // Ticket 12: the running Data Plane's Credential Authority owns the one
-  // Pi-compatible auth.json. It shares the composition's resolver and auth
-  // context, so its status facts and the request path can never diverge.
-  // The models.json facts follow the live composed config: Ticket 11
-  // catalog refresh recomposes with a new config, so the authority reads
-  // through a slot the wrapped recompose keeps current.
-  const { configValues, authContext } = createCompositionConfigValueContext(
-    options.configValueAdapters,
-    options.authContext,
-  );
-  const credentialStore =
-    options.credentials ??
-    createFileCredentialStore(join(config.pi.directory, "auth.json"));
-  let composedModelsJson: ModelsJsonConfig | undefined = modelsJson;
-  const credentialAuthority = await createLiveCredentialAuthority({
-    store: credentialStore,
-    path: join(config.pi.directory, "auth.json"),
-    configValues,
-    authContext,
-    providers: () => models.getProviders(),
-    modelsJsonProviders: () =>
-      composedModelsJson?.providers ?? Object.freeze({}),
-    now,
-  });
+  // Provider Activation (Spec v1.0 §13): the Data Plane consumes the
+  // Backend-lifetime Provider Runtime's one Pi Models / credential
+  // authority / catalog handle when injected. The legacy internal
+  // composition path remains only for direct CLI/test composition.
+  const providerRuntime = options.providerRuntime;
+  let models: Models;
+  let externalProviderIds: readonly string[];
+  let userConfiguredProviderIds: readonly string[];
+  let modelsJson: Awaited<ReturnType<typeof createConfiguredPiModels>>["modelsJson"];
+  let catalog: ConfiguredLuckyTokenComposition["catalog"];
+  let credentialAuthority: LiveCredentialAuthority;
+  let composedModelsJson: ModelsJsonConfig | undefined;
+
+  if (providerRuntime !== undefined) {
+    models = providerRuntime.models;
+    externalProviderIds = providerRuntime.externalProviderIds;
+    userConfiguredProviderIds = providerRuntime.externalProviderIds;
+    modelsJson = undefined;
+    catalog = providerRuntime.catalog;
+    credentialAuthority = providerRuntime.credentialAuthority;
+    composedModelsJson = undefined;
+  } else {
+    const composed = await createConfiguredPiModels({
+      piDirectory: config.pi.directory,
+      modelsJsonPath: config.pi.modelsJson,
+      ...(options.credentials === undefined
+        ? {}
+        : { credentials: options.credentials }),
+      fetch: options.fetch,
+      providerPackages: config.providerPackages,
+      ...(options.importModule === undefined
+        ? {}
+        : { importModule: options.importModule }),
+      ...(options.onInvalidModelsJson === undefined
+        ? {}
+        : { onInvalidModelsJson: options.onInvalidModelsJson }),
+      ...(options.configValueAdapters === undefined
+        ? {}
+        : { configValueAdapters: options.configValueAdapters }),
+      ...(options.authContext === undefined
+        ? {}
+        : { authContext: options.authContext }),
+      ...(options.modelsStore === undefined
+        ? {}
+        : { modelsStore: options.modelsStore }),
+      ...(options.onProviderLogin === undefined
+        ? {}
+        : { onProviderLogin: options.onProviderLogin }),
+      createUuid: createSessionId,
+      now,
+    });
+    models = composed.models;
+    externalProviderIds = composed.externalProviderIds;
+    userConfiguredProviderIds = composed.userConfiguredProviderIds;
+    modelsJson = composed.modelsJson;
+    catalog = composed.catalog;
+    // Ticket 12: the running Data Plane's Credential Authority owns the
+    // one Pi-compatible auth.json. It shares the composition's resolver
+    // and auth context, so its status facts and the request path can never
+    // diverge. The models.json facts follow the live composed config:
+    // catalog refresh recomposes with a new config, so the authority reads
+    // through a slot the wrapped recompose keeps current.
+    const { configValues, authContext } = createCompositionConfigValueContext(
+      options.configValueAdapters,
+      options.authContext,
+    );
+    const credentialStore =
+      options.credentials ??
+      createFileCredentialStore(join(config.pi.directory, "auth.json"));
+    composedModelsJson = modelsJson;
+    credentialAuthority = await createLiveCredentialAuthority({
+      store: credentialStore,
+      path: join(config.pi.directory, "auth.json"),
+      configValues,
+      authContext,
+      providers: () => models.getProviders(),
+      modelsJsonProviders: () =>
+        composedModelsJson?.providers ?? Object.freeze({}),
+      now,
+    });
+  }
   // F4: build the narrow known-value scrubber from every credential owner.
   // Each authority exposes only a scrub operation; no raw-secret arrays flow
   // through unrelated modules. The Credential Authority scrubs its owned

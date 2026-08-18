@@ -23,7 +23,7 @@ describe("Data Plane supervisor quit lifecycle", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48780,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => listener,
     });
     const published: ApplicationStatus[] = [];
@@ -52,7 +52,7 @@ describe("Data Plane supervisor quit lifecycle", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48781,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => ({
         close: async () => undefined,
         drain: async () => {
@@ -83,7 +83,7 @@ describe("Data Plane supervisor quit lifecycle", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48782,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => ({
         close: async () => {
           closed += 1;
@@ -114,7 +114,7 @@ describe("Data Plane supervisor quit lifecycle", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48783,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => ({
         close: async () => {
           closed += 1;

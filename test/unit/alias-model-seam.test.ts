@@ -36,7 +36,6 @@ function snapshot(
     version: 1,
     catalogVersion: 1,
     fileRevision: 0,
-    defaultsVersion: 1,
     resolve: (alias: string) => frozen.get(alias),
     entries: () => entries,
   });

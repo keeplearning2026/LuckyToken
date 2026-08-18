@@ -236,6 +236,20 @@ function commandCodeTargets(): Set<string> {
   return targets;
 }
 
+function targetsFromKeys(
+  keys: ReadonlySet<string>,
+): readonly { readonly provider: string; readonly model: string }[] {
+  return Object.freeze(
+    [...keys].map((key) => {
+      const separator = key.indexOf("\u0000");
+      return {
+        provider: key.slice(0, separator),
+        model: key.slice(separator + 1),
+      };
+    }),
+  );
+}
+
 async function createAliasDataPlaneFixture(
   initialAliases: Readonly<Record<string, unknown>>,
   options: {
@@ -324,10 +338,11 @@ async function createAliasDataPlaneFixture(
   );
   const authority = createAliasRegistryAuthority({
     path: aliasFile,
-    // Deterministic fixture: no curated defaults, only the explicit file.
-    defaults: [],
-    defaultsVersion: 0,
-    catalogFacts: () => facts,
+    catalogFacts: () => ({
+      catalogVersion: facts.catalogVersion,
+      targets: targetsFromKeys(facts.knownTargets),
+      knownTargets: facts.knownTargets,
+    }),
   });
 
   const upstreamCalls: UpstreamCall[] = [];
@@ -1034,21 +1049,116 @@ describe("alias-only model data plane", () => {
       data: Array<{ id: string; object: string; created: number; owned_by: string }>;
     };
     expect(list.object).toBe("list");
-    expect(list.data).toEqual([
-      { id: "commandcode-private/gpt-5.6-luna", object: "model", created: NOW / 1000, owned_by: "commandcode-private" },
-      { id: "flash", object: "model", created: NOW / 1000, owned_by: "commandcode-private" },
-      { id: "gpt", object: "model", created: NOW / 1000, owned_by: "my-openai" },
-      { id: "sonnet", object: "model", created: NOW / 1000, owned_by: "my-anthropic" },
-    ]);
+    const ids = list.data.map((entry) => entry.id);
+    // User overrides are listed.
+    expect(ids).toContain("flash");
+    expect(ids).toContain("gpt");
+    expect(ids).toContain("sonnet");
+    // The explicit alias that happens to look canonical is listed.
+    expect(ids).toContain("commandcode-private/gpt-5.6-luna");
+    // Every callable model's generated default is listed — except targets
+    // claimed by a user override ("gpt" and "sonnet"), whose generated
+    // default is suppressed (one effective alias per target).
+    expect(ids).not.toContain("my-openai/gpt-4o");
+    expect(ids).not.toContain("my-anthropic/claude-sonnet");
+    expect(ids).toContain("gpt");
+    expect(ids).toContain("sonnet");
+    // The "flash" override claims commandcode-private/deepseek/deepseek-v4-flash.
+    expect(ids).toContain("flash");
+    expect(ids).not.toContain("commandcode-private/deepseek/deepseek-v4-flash");
+    for (const model of COMMANDCODE_MODELS) {
+      // The "flash" override claims deepseek/deepseek-v4-flash; all other
+      // CommandCode models keep their generated defaults.
+      if (model.id === "deepseek/deepseek-v4-flash") continue;
+      expect(ids).toContain(`commandcode-private/${model.id}`);
+    }
+    // Every listed alias maps to exactly one real Provider.
+    for (const entry of list.data) {
+      expect(entry.owned_by.length).toBeGreaterThan(0);
+    }
     const serialized = JSON.stringify(list);
     // "ghost" is configured but its target is not callable: hidden.
     expect(serialized).not.toContain("ghost");
-    // Unmapped canonical identities never appear. A configured alias may
-    // intentionally contain provider/model-shaped text, including a model id.
-    expect(serialized).not.toContain("claude-sonnet");
-    expect(serialized).not.toContain("gpt-4o");
-    expect(serialized).not.toContain("deepseek-v4-flash");
+    // A model id that is not in the catalog never appears (claude-opus is
+    // only reachable through the hidden "ghost" alias).
     expect(serialized).not.toContain("claude-opus");
+    expect(serialized).not.toContain('"id":"claude-opus"');
+  });
+
+  it("A7: reset_for_model restores the generated default consistently across discovery and request selection", async () => {
+    const fixture = await createAliasDataPlaneFixture({
+      // User override claims the anthropic target.
+      sonnet: "my-anthropic/claude-sonnet",
+    });
+
+    // Before reset: discovery exposes only the custom alias.
+    let list = (await (
+      await fixture.runtime.handle(
+        new Request("http://luckytoken.test/v1/models", { method: "GET" }),
+      )
+    ).json()) as { data: Array<{ id: string }> };
+    const idsBefore = new Set(list.data.map((entry) => entry.id));
+    expect(idsBefore.has("sonnet")).toBe(true);
+    expect(idsBefore.has("my-anthropic/claude-sonnet")).toBe(false);
+
+    // Request selection uses the custom alias.
+    const pending = fixture.runtime.handle(
+      anthropicRequest(
+        {
+          model: "sonnet",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        },
+        fixture.clientToken,
+      ),
+    );
+    const call = await fixture.nextUpstreamCall();
+    expect(JSON.parse(call.body)).toMatchObject({ model: "claude-sonnet" });
+    call.respond(anthropicJson("reset round-trip", "claude-sonnet"));
+    const response = await pending;
+    expect(response.status).toBe(200);
+
+    // Reset the override: the generated default becomes effective again.
+    const reset = await fixture.authority.resetForModel({
+      revision: 0,
+      providerId: "my-anthropic",
+      modelId: "claude-sonnet",
+    });
+    expect(reset.outcome).toBe("ok");
+
+    // Discovery now exposes the generated default, not the removed alias.
+    list = (await (
+      await fixture.runtime.handle(
+        new Request("http://luckytoken.test/v1/models", { method: "GET" }),
+      )
+    ).json()) as { data: Array<{ id: string }> };
+    const idsAfter = new Set(list.data.map((entry) => entry.id));
+    expect(idsAfter.has("my-anthropic/claude-sonnet")).toBe(true);
+    expect(idsAfter.has("sonnet")).toBe(false);
+
+    // Request selection resolves the generated default alias to the same
+    // canonical target (the alias string is never parsed; the resolver
+    // carries the explicit target).
+    const pendingDefault = fixture.runtime.handle(
+      anthropicRequest(
+        {
+          model: "my-anthropic/claude-sonnet",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
+        },
+        fixture.clientToken,
+      ),
+    );
+    const defaultCall = await fixture.nextUpstreamCall();
+    expect(JSON.parse(defaultCall.body)).toMatchObject({
+      model: "claude-sonnet",
+    });
+    defaultCall.respond(anthropicJson("default after reset", "claude-sonnet"));
+    const defaultResponse = await pendingDefault;
+    expect(defaultResponse.status).toBe(200);
+    await expect(defaultResponse.json()).resolves.toMatchObject({
+      model: "my-anthropic/claude-sonnet",
+    });
   });
 
   it("hot alias replacement applies to new requests only while the in-flight request keeps its captured alias and canonical target", async () => {

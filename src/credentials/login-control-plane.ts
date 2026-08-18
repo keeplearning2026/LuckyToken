@@ -5,6 +5,7 @@ import type {
   AuthInteractionChannel,
   AuthInteractionEvent,
   CredentialProjection,
+  ProviderSource,
 } from "@luckytoken/application-control-plane/control-plane";
 import type {
   AuthEvent,
@@ -35,6 +36,8 @@ export function createAuthLoginControlPlaneHandler(options: {
   readonly models: () => Models | undefined;
   /** The single serialized Credential Authority (Ticket 12). */
   readonly authority: () => LiveCredentialAuthority | undefined;
+  /** Provider product source classification (Spec v1.0 §9). */
+  readonly providerSource?: (providerId: string) => ProviderSource;
 }): AuthCommandHandler {
   // Per-Provider in-flight guard: a second login for the same Provider is
   // refused instead of racing the Provider-owned flow.
@@ -55,7 +58,11 @@ export function createAuthLoginControlPlaneHandler(options: {
       return Object.freeze({
         outcome: "ok",
         state,
-        options: projectAuthOptions(models.getProviders(), state.providers),
+        options: projectAuthOptions(
+          models.getProviders(),
+          state.providers,
+          options.providerSource ?? (() => "user" as ProviderSource),
+        ),
       });
     }
     // login

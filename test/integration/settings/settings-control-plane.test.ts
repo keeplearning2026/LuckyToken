@@ -103,7 +103,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 3000,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       resolveAddress: () => {
         const address = registry.query(["server.bindHost", "server.port"]);
         return {

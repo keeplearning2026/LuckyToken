@@ -364,10 +364,10 @@ export type CatalogCommandHandler = (
 ) => Promise<CatalogCommandResult>;
 
 /**
- * Source layer of an effective alias: `default` is a curated built-in
- * mapping (the lower layer), `user` is an explicit mapping from the
- * manually editable LuckyToken-owned model-aliases.json (the authority
- * layer, always winning).
+ * Source layer of an effective alias: `default` is the Catalog-derived
+ * generated `provider/model` alias (the lower layer), `user` is an
+ * explicit override from the manually editable LuckyToken-owned
+ * model-aliases.json (the authority layer, always winning).
  */
 export type AliasLayer = "default" | "user";
 
@@ -404,13 +404,13 @@ export interface AliasValidationErrorProjection {
 }
 
 /**
- * The authoritative effective alias registry (Ticket 14): curated defaults
- * as the lower layer, explicit user mappings as the authority layer, and
- * every rejected entry distinguished by failure category. Never carries
+ * The authoritative effective alias registry (Provider Activation Spec
+ * v1.0 §5.7/§11.5): generated `provider/model` defaults as the lower
+ * layer, explicit user overrides as the authority layer, and every
+ * rejected entry distinguished by failure category. Never carries
  * credentials or file content.
  */
 export interface EffectiveAliasRegistryProjection {
-  readonly defaultsVersion: number;
   readonly aliases: readonly EffectiveAliasProjection[];
   readonly errors: readonly AliasValidationErrorProjection[];
 }
@@ -448,7 +448,6 @@ export interface AliasFileState {
   readonly present: boolean;
   readonly valid: boolean;
   readonly raw: string;
-  readonly defaultsVersion: number;
   readonly catalogVersion: number;
   readonly aliases?: Readonly<Record<string, unknown>>;
   readonly effective?: EffectiveAliasRegistryProjection;
@@ -463,16 +462,17 @@ export interface AliasStatusProjection {
   readonly path: string;
   readonly present: boolean;
   readonly valid: boolean;
-  readonly defaultsVersion: number;
   readonly error?: AliasFileError;
 }
 
 /**
- * Versioned alias registry commands (Ticket 14): query the one
- * authoritative model-aliases.json state and the merged effective registry,
- * or replace the user mapping record with compare-and-swap on the revision
- * the client was served. A rejected proposal (invalid, ambiguous, unknown
- * or duplicate target) never replaces the active registry.
+ * Versioned alias registry commands (Ticket 14 + Provider Activation Spec
+ * v1.0 §15.5): query the one authoritative model-aliases.json state and
+ * the merged effective registry, replace the whole user mapping record
+ * (advanced/manual), or mutate one canonical model target with a
+ * target-scoped set/reset. All mutations are compare-and-swap on the
+ * revision the client was served. A rejected proposal (invalid, ambiguous,
+ * unknown or duplicate target) never replaces the active registry.
  */
 export type AliasCommand =
   | { readonly command: "query" }
@@ -480,6 +480,19 @@ export type AliasCommand =
       readonly command: "write";
       readonly revision: number;
       readonly aliases: Readonly<Record<string, unknown>>;
+    }
+  | {
+      readonly command: "set_for_model";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly alias: string;
+    }
+  | {
+      readonly command: "reset_for_model";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
     };
 
 export type AliasCommandOutcome =
@@ -718,9 +731,21 @@ export interface CredentialCommandResult {
 
 /** One Provider's interactive login options, projected from Provider
  *  metadata only (never renderer labels). */
+/** Provider product origin (Provider Activation Spec v1.0 §9): where a
+ *  Provider identity came from. Pi built-ins are the pinned Pi catalog;
+ *  `luckytoken_bundled` is a LuckyToken product-bundled Provider (e.g.
+ *  CommandCode Private); `user` is a custom models.json Provider or an
+ *  external user Provider Package. */
+export type ProviderSource =
+  | "pi_builtin"
+  | "luckytoken_bundled"
+  | "user";
+
 export interface AuthProviderOption {
   readonly providerId: string;
   readonly name: string;
+  /** Product origin of the Provider identity (Spec v1.0 §9). */
+  readonly source: ProviderSource;
   /** The Provider declares an account/OAuth login. */
   readonly account: boolean;
   /** True only when Provider metadata (`oauth.isSubscription`) marks the

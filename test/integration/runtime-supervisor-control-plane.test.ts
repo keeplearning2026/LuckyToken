@@ -38,7 +38,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48765,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         starts += 1;
         return listener;
@@ -107,7 +107,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48767,
-      provider: "configured",
+      readProvider: () => "configured",
       startListener: async () => {
         await startGate;
         activeListeners += 1;
@@ -165,7 +165,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48768,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         const id = ++listenerId;
         lifecycle.push(`start-${id}`);
@@ -216,7 +216,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48769,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         throw Object.assign(new Error(rawSecret), { code: "EADDRINUSE" });
       },
@@ -266,7 +266,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 48770,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         starts += 1;
         return {
@@ -340,7 +340,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
-      provider: "unconfigured",
+      readProvider: () => "unconfigured",
       startListener: async () => {
         activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
