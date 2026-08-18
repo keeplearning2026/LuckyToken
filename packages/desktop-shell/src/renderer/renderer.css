@@ -151,6 +151,23 @@ button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
 .metric-grid div { display: grid; gap: 5px; padding: 14px; border: 1px solid #e4e6e8; border-radius: 10px; background: #fafafa; }
 .metric-grid strong { font-size: 18px; }
 .metric-grid span, .muted-copy { color: #737880; font-size: 13px; }
+.settings-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings-tabs button { border: 1px solid #d8dade; border-radius: 8px; background: #fff; color: #646970; padding: 8px 12px; }
+.settings-tabs button.active { background: #292d31; border-color: #292d31; color: #fff; }
+.settings-section { display: grid; gap: 16px; }
+.settings-section h3 { margin: 5px 0 6px; font-size: 18px; }
+.settings-copy p:not(.eyebrow) { margin: 4px 0; color: #676c73; line-height: 1.5; }
+.settings-section > button, .confirmation-panel button { width: fit-content; border: 1px solid #2f3439; border-radius: 8px; background: #292d31; color: #fff; padding: 8px 12px; }
+.settings-section textarea { width: 100%; resize: vertical; border: 1px solid #cfd2d6; border-radius: 8px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+.field-row { display: grid; gap: 6px; max-width: 320px; color: #62676e; }
+.field-row input { border: 1px solid #cfd2d6; border-radius: 8px; padding: 9px 10px; }
+.setting-state { margin: 0; color: #3f7455; font-size: 13px; }
+.warning-text { color: #986824; }
+.danger-button { background: #9d3f39 !important; border-color: #9d3f39 !important; }
+.confirmation-panel { display: grid; gap: 10px; padding: 14px; border: 1px solid #ecc7c4; border-radius: 9px; background: #fff7f6; }
+.confirmation-panel p { margin: 0; color: #7d3c37; }
+.diagnostic-list { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
+.diagnostic-list li { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid #eceef0; }
 .button-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
 .product-notice { max-width: 980px; margin: 0; padding: 10px 13px; border-radius: 9px; background: #eef1f4; color: #4d535a; }
 .auth-interaction { display: grid; gap: 12px; }

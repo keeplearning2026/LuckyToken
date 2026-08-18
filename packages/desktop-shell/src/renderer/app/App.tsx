@@ -5,6 +5,7 @@ import { ActivityPage } from "../activity/ActivityPage.js";
 import { ConnectPage } from "../connect/ConnectPage.js";
 import { HomePage } from "../home/HomePage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
+import { SettingsPage } from "../settings/SettingsPage.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
 
 export interface AppProps {
@@ -63,6 +64,8 @@ export function App({ api }: AppProps) {
           <ConnectPage api={api} navigate={setPage} />
         ) : page === "activity" ? (
           <ActivityPage api={api} />
+        ) : page === "settings" ? (
+          <SettingsPage api={api} />
         ) : (
           <Placeholder page={page} />
         )}
