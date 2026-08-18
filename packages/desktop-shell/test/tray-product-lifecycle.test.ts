@@ -20,6 +20,7 @@ describe("tray-only Electron product lifecycle", () => {
       onSecondInstance: (listener) => {
         secondInstance = listener;
       },
+      onWindowAllClosed: vi.fn(),
       quit,
       openWindow,
       createTray,
@@ -47,6 +48,7 @@ describe("tray-only Electron product lifecycle", () => {
       requestSingleInstanceLock: () => false,
       whenReady: async () => undefined,
       onSecondInstance: vi.fn(),
+      onWindowAllClosed: vi.fn(),
       quit,
       openWindow,
       createTray,

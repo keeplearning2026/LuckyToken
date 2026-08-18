@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -29,6 +31,24 @@ async function exists(path) {
   }
 }
 
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("failed to allocate release certification port");
+  }
+  const port = address.port;
+  await new Promise((resolvePromise, reject) => {
+    server.close((error) => (error === undefined ? resolvePromise() : reject(error)));
+  });
+  return port;
+}
+
 test("the assembled release backend serves as a desktop-owned instance from the installed layout", async () => {
   const nodeExe = join(backendRoot, "node", "node.exe");
   const cliScript = join(backendRoot, "dist", "cli.js");
@@ -44,6 +64,51 @@ test("the assembled release backend serves as a desktop-owned instance from the 
   await mkdir(join(userRoot, ".luckytoken", "pi"), { recursive: true });
   const configPath = join(userRoot, ".luckytoken", "config.json");
   const descriptorPath = join(directory, "control-plane.json");
+  const port = await freePort();
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        schemaVersion: "luckytoken-config-v1",
+        server: { host: "127.0.0.1", port },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+            conversion: {
+              request: {
+                unknownContent: "error",
+                unresolvedToolCall: "xrepair",
+                localCacheControl: "ignore",
+              },
+              response: { unknownPiContent: "error" },
+            },
+          },
+        },
+        providerPackages: {},
+        failureLogging: {
+          directory: "logs/failed-requests",
+          detail: "safe",
+          maxFileBytes: 1048576,
+          retentionDays: 30,
+          maxFiles: 1000,
+          logCancellation: true,
+        },
+        runtimeDiagnostics: { directory: "state/diagnostics" },
+        deepDiagnostics: {
+          directory: "state/deep-diagnostics",
+          enabled: false,
+          maxCaptureBytes: 4194304,
+          retentionAgeMs: 604800000,
+          maxCaptures: 1000,
+        },
+        pi: { directory: "pi" },
+        limits: { maxRequestBytes: 1048576, requestTimeoutMs: 120000 },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   try {
     const serve = execFileAsync(
       nodeExe,
@@ -56,7 +121,6 @@ test("the assembled release backend serves as a desktop-owned instance from the 
         descriptorPath,
         "--owner",
         "desktop",
-        "--create-first-run-config",
       ],
       {
         cwd: backendRoot,
@@ -82,19 +146,16 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     }
     assert.ok(endpoint !== undefined, "serve must publish its descriptor");
 
-    // The first-run template was created by the TypeScript side, and the
-    // Data Plane is reachable from the installed layout.
-    assert.equal(
-      JSON.parse(await readFile(configPath, "utf8")).schemaVersion,
-      "luckytoken-config-v1",
-    );
+    const installedConfig = JSON.parse(await readFile(configPath, "utf8"));
+    assert.equal(installedConfig.schemaVersion, "luckytoken-config-v1");
+    assert.equal(installedConfig.server.port, port);
 
     let client;
     let lastError;
     for (let attempt = 0; attempt < 200; attempt += 1) {
       try {
         client = await connectControlPlane(endpoint, {
-          createRequestId: () => `release-serve-${attempt}`,
+          createRequestId: randomUUID,
           pipeConnector: createNodePipeTransport(),
         });
         break;

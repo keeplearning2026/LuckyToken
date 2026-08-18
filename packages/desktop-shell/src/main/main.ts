@@ -194,6 +194,7 @@ void startElectronDesktopLifecycle({
     });
   },
   onSecondInstance: (listener) => app.on("second-instance", listener),
+  onWindowAllClosed: (listener) => app.on("window-all-closed", listener),
   quit: () => app.quit(),
   openWindow: openManagementWindow,
   createTray,

@@ -2,7 +2,6 @@
   "name": "@luckytoken/desktop-shell",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "electron-forge start",
@@ -14,6 +13,7 @@
     "make": "npm run assemble:backend && npm run clean:electron && electron-forge make",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,mjs}\" \"vite.config.ts\"",
     "test": "vitest run",
+    "test:e2e": "npm run build && node --test test/electron-window-lifecycle.e2e.test.mjs",
     "test:native-smoke": "node test/run-native-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
@@ -33,6 +33,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "electron": "^43.4.0",
     "jsdom": "^26.1.0",
+    "playwright": "^1.62.1",
     "vite": "8.1.5"
   }
 }

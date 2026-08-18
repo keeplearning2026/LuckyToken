@@ -33,6 +33,7 @@ export interface ElectronDesktopLifecycleDependencies {
   readonly requestSingleInstanceLock: () => boolean;
   readonly whenReady: () => Promise<void>;
   readonly onSecondInstance: (listener: () => void) => void;
+  readonly onWindowAllClosed: (listener: () => void) => void;
   readonly quit: () => void;
   readonly openWindow: () => void;
   readonly createTray: (actions: TrayActions) => void;
@@ -47,6 +48,7 @@ export async function startElectronDesktopLifecycle(
   }
 
   dependencies.onSecondInstance(dependencies.openWindow);
+  dependencies.onWindowAllClosed(() => undefined);
   await dependencies.whenReady();
   dependencies.createTray({
     open: dependencies.openWindow,

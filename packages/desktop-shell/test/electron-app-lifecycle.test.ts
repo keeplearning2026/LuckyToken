@@ -28,6 +28,7 @@ describe("Electron desktop lifecycle seam", () => {
       requestSingleInstanceLock: () => false,
       whenReady: async () => undefined,
       onSecondInstance,
+      onWindowAllClosed: vi.fn(),
       quit,
       openWindow,
       createTray: vi.fn(),
@@ -44,12 +45,16 @@ describe("Electron desktop lifecycle seam", () => {
     const openWindow = vi.fn();
     const quit = vi.fn();
     const createTray = vi.fn();
+    let windowAllClosed: (() => void) | undefined;
 
     const result = await startElectronDesktopLifecycle({
       requestSingleInstanceLock: () => true,
       whenReady: async () => undefined,
       onSecondInstance: (listener) => {
         secondInstance = listener;
+      },
+      onWindowAllClosed: (listener) => {
+        windowAllClosed = listener;
       },
       quit,
       openWindow,
@@ -63,5 +68,7 @@ describe("Electron desktop lifecycle seam", () => {
 
     secondInstance?.();
     expect(openWindow).toHaveBeenCalledTimes(1);
+    windowAllClosed?.();
+    expect(quit).not.toHaveBeenCalled();
   });
 });
