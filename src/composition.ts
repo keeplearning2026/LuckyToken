@@ -208,7 +208,7 @@ async function createCompositionScrubber(owners: {
   };
 }
 
-export interface ConfiguredLuckyTokenCompositionOptions {
+export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly config: LuckyTokenCliConfig;
   readonly credentials?: CredentialStore;
   readonly fetch: FetchFunction;
@@ -284,7 +284,7 @@ export interface ConfiguredLuckyTokenCompositionOptions {
   readonly providerRuntime?: ProviderRuntime;
 }
 
-export interface ConfiguredLuckyTokenComposition {
+export interface ConfiguredLuckyTokenDataPlane {
   readonly runtime: LuckyTokenRuntime;
   readonly certification: CoreServingCertificationManifest;
   /** User-configured models.json and external Provider Package registrations. */
@@ -390,6 +390,10 @@ export async function createConfiguredPiModels(
     mutableModels,
     modelsJson,
     { configValues },
+    // Provider Activation (Spec v1.0 §12.1 mirror): the facade observes the
+    // current models.json generation so recompose keeps request-level auth/
+    // header composition coherent with the served catalog.
+    { readConfig: () => currentModelsJson },
   );
   // Ticket 11 login seam: a successful Provider login through the served
   // Models schedules a background refresh for the relevant Provider.
@@ -419,14 +423,21 @@ export async function createConfiguredPiModels(
   let currentModelsJsonProviderIds: ReadonlySet<string> = new Set(
     modelsJsonProviderIds,
   );
+  let currentModelsJson: ModelsJsonConfig | undefined = modelsJson;
   const recompose = (next: ModelsJsonConfig | undefined): void => {
-    currentModelsJsonProviderIds = new Set(
-      applyLuckyTokenProviderComposition(mutableModels, {
+    // Mirror of the Provider Runtime recompose (Spec v1.0 §12.1): commit
+    // the new generation only after the composition succeeded, so a failed
+    // recompose never leaves a mixed generation.
+    const nextUserProviderIds = applyLuckyTokenProviderComposition(
+      mutableModels,
+      {
         ...(next === undefined ? {} : { modelsJson: next }),
         configValues,
         previousUserProviderIds: currentModelsJsonProviderIds,
-      }),
+      },
     );
+    currentModelsJson = next;
+    currentModelsJsonProviderIds = new Set(nextUserProviderIds);
   };
   return Object.freeze({
     models: served,
@@ -444,9 +455,9 @@ export async function createConfiguredPiModels(
   });
 }
 
-export async function createConfiguredLuckyTokenComposition(
-  options: ConfiguredLuckyTokenCompositionOptions,
-): Promise<ConfiguredLuckyTokenComposition> {
+export async function createConfiguredLuckyTokenDataPlane(
+  options: ConfiguredLuckyTokenDataPlaneOptions,
+): Promise<ConfiguredLuckyTokenDataPlane> {
   const config = options.config;
   const uninstalledProtocol = Object.keys(config.clientProtocols).find(
     (protocolId) =>
@@ -532,7 +543,7 @@ export async function createConfiguredLuckyTokenComposition(
   let externalProviderIds: readonly string[];
   let userConfiguredProviderIds: readonly string[];
   let modelsJson: Awaited<ReturnType<typeof createConfiguredPiModels>>["modelsJson"];
-  let catalog: ConfiguredLuckyTokenComposition["catalog"];
+  let catalog: ConfiguredLuckyTokenDataPlane["catalog"];
   let credentialAuthority: LiveCredentialAuthority;
   let composedModelsJson: ModelsJsonConfig | undefined;
 

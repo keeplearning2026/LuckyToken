@@ -34,7 +34,7 @@ import {
 } from "./client-auth/control-plane.js";
 import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "./composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "./composition.js";
 import {
   ControlPlaneDescriptorOwnedError,
   publishControlPlaneDescriptor,
@@ -466,7 +466,6 @@ async function startNormalApplication(options: {
     const catalogCacheStore = createCatalogCacheStore({
       path: join(config.pi.directory, "models-catalog-cache.json"),
     });
-    await modelsAuthority.query();
     const settingsRegistry = createSettingsRegistry(
       createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
       {
@@ -482,9 +481,6 @@ async function startNormalApplication(options: {
     let tokenAuthorities:
       | Readonly<Record<string, LiveClientTokenAuthority>>
       | undefined;
-    // Assigned once after the Catalog controller exists (below); the
-    // Control Plane handlers close over the binding, so they must be
-    // declared before their creation site.
     // These bindings are assigned once after the Catalog controller exists
     // (below); the Control Plane handlers close over them, so they must be
     // declared before their creation site and cannot be const.
@@ -494,7 +490,7 @@ async function startNormalApplication(options: {
     let providerRuntime: ProviderRuntime | undefined;
     let requestIdentities:
       | Awaited<
-          ReturnType<typeof createConfiguredLuckyTokenComposition>
+          ReturnType<typeof createConfiguredLuckyTokenDataPlane>
         >["requestIdentities"]
       | undefined;
 
@@ -532,7 +528,8 @@ async function startNormalApplication(options: {
     const authCommandHandler = createAuthLoginControlPlaneHandler({
       models: () => providerRuntime?.models,
       authority: () => providerRuntime?.credentialAuthority,
-      providerSource: (providerId) => providerRuntime?.providerSource(providerId) ?? "user",
+      providerSource: (providerId) =>
+        providerRuntime?.providerSource(providerId) ?? "user",
     });
     const settingsCommandHandler = createProtocolEnablementSettingsHandler({
       settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
@@ -751,7 +748,7 @@ async function startNormalApplication(options: {
       startListener: async (address) => {
         const shutdownController = new AbortController();
         try {
-          const composition = await createConfiguredLuckyTokenComposition({
+          const composition = await createConfiguredLuckyTokenDataPlane({
             config,
             fetch: globalThis.fetch,
             shutdownSignal: shutdownController.signal,
@@ -857,10 +854,12 @@ async function startNormalApplication(options: {
       // Provider Activation (Spec v1.0 §14.3): runtime transitions must
       // also update the application's lastPublishedStatus, because the
       // coarse Provider readiness published by Catalog snapshot changes
-      // must never resurrect a stale Gateway state. The Control Plane
-      // host passes its own client-publishing publisher; forward to it
-      // while keeping the application's authoritative copy in sync.
-      runtimeCommandHandler: (command, publishStatus) => {
+      // must never resurrect a stale Gateway state. `publish` both keeps
+      // the application's authoritative copy in sync and publishes to the
+      // Control Plane host (whose publisher parameter is the same host
+      // publishStatus), so a transition publishes exactly once.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      runtimeCommandHandler: (command, _publishStatus) => {
         const active = supervisor;
         if (active === undefined) {
           return Promise.resolve({
@@ -872,8 +871,7 @@ async function startNormalApplication(options: {
           });
         }
         return active.execute(command, (status) => {
-          publish(status);
-          return publishStatus(status);
+          return publish(status);
         });
       },
       settingsCommandHandler,

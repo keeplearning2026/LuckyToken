@@ -21,7 +21,7 @@ import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
-  createConfiguredLuckyTokenComposition,
+  createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
 } from "../../src/composition.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
@@ -795,7 +795,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   if (stored?.type !== "api_key" || stored.key !== apiKey) {
     throw new Error(`Provider login did not persist a credential for ${providerId}`);
   }
-  const composition = await createConfiguredLuckyTokenComposition({
+  const composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     fetch: globalThis.fetch,

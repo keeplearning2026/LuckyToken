@@ -27,7 +27,7 @@ import {
 
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
 import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
 import {
@@ -133,7 +133,7 @@ describe("secret canary hygiene across public surfaces", () => {
       }),
       "utf8",
     );
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch: options.fetch ?? (async () => new Response()),
       credentials: new InMemoryCredentialStore(),

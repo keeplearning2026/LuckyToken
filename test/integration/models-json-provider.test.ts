@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 
 function anthropicJsonResponse(text: string): Response {
   return new Response(
@@ -107,7 +107,7 @@ describe("models.json custom provider registration", () => {
       "utf8",
     );
 
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch,
       createMessageId: () => "msg_models_json",

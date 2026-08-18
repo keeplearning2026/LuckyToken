@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import {
   createRuntimeDiagnosticsStoreFactory,
   parseRuntimeDiagnosticsConfiguration,
@@ -156,7 +156,7 @@ async function serveFixture(options: {
     type: "api_key",
     key: "provider-secret",
   }));
-  const composition = await createConfiguredLuckyTokenComposition({
+  const composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     createMessageId: () => "msg_fixture",
@@ -351,7 +351,7 @@ describe("Persistence failure never changes an otherwise valid model response (T
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       createMessageId: () => "msg_fixture",

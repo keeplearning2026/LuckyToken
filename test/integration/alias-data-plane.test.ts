@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import type {
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
@@ -193,10 +193,10 @@ interface UpstreamCall {
 
 interface AliasDataPlaneFixture {
   readonly runtime: Awaited<
-    ReturnType<typeof createConfiguredLuckyTokenComposition>
+    ReturnType<typeof createConfiguredLuckyTokenDataPlane>
   >["runtime"];
   readonly composition: Awaited<
-    ReturnType<typeof createConfiguredLuckyTokenComposition>
+    ReturnType<typeof createConfiguredLuckyTokenDataPlane>
   >;
   readonly authority: ReturnType<typeof createAliasRegistryAuthority>;
   readonly aliasFile: string;
@@ -393,7 +393,7 @@ async function createAliasDataPlaneFixture(
     key: "provider-secret",
   }));
 
-  const composition = await createConfiguredLuckyTokenComposition({
+  const composition = await createConfiguredLuckyTokenDataPlane({
     config: await loadLuckyTokenCliConfig(configPath),
     credentials,
     fetch,

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 
 /**
  * Ticket 12 secret hygiene: credential values that enter the authority
@@ -85,7 +85,7 @@ describe("credential canary hygiene across public surfaces", () => {
       }),
       "utf8",
     );
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch: async () => new Response(),
       configValueAdapters: {

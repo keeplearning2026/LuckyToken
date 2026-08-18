@@ -27,7 +27,7 @@ import {
 } from "../../src/client-auth/control-plane.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import {
   COMMANDCODE_PROVIDER_PACKAGE,
@@ -249,7 +249,7 @@ describe("canonical directory Client token scopes over real HTTP", () => {
       return commandCodeText("authorized");
     };
     const buildComposition = () =>
-      createConfiguredLuckyTokenComposition({
+      createConfiguredLuckyTokenDataPlane({
         config,
         credentials,
         fetch: fetchImpl,

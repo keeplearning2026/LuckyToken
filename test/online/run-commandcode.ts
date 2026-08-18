@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import {
   createCapturingCommandCodeFetch,
@@ -450,7 +450,7 @@ export async function runCommandCodeOnlineSuite(
     );
     const config = await loadLuckyTokenCliConfig(configPath);
     const dispatchObserver = createDispatchObserver(globalThis.fetch);
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
@@ -482,7 +482,7 @@ export async function runCommandCodeOnlineSuite(
     server = undefined;
 
     const capture = createCapturingCommandCodeFetch(globalThis.fetch);
-    const conformanceComposition = await createConfiguredLuckyTokenComposition({
+    const conformanceComposition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,

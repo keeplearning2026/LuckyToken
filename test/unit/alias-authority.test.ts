@@ -526,6 +526,54 @@ describe("target-scoped alias mutations (Spec §15.5)", () => {
     ).toBe(false);
   });
 
+  it("setForModel with an alias equal to the generated default never persists a redundant override (Spec §5.8)", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "anthropic/claude-sonnet-4",
+    });
+    expect(result.outcome).toBe("ok");
+    // The generated default stays derived: no user override is written.
+    expect(result.state.aliases).toBeUndefined();
+    expect(
+      result.state.effective?.aliases.some(
+        (entry) =>
+          entry.alias === "anthropic/claude-sonnet-4" &&
+          entry.layer === "default",
+      ),
+    ).toBe(true);
+  });
+
+  it("setForModel with the default alias removes an existing override for that target", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "sonnet",
+    });
+    const result = await authority.setForModel({
+      revision: 1,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      alias: "anthropic/claude-sonnet-4",
+    });
+    expect(result.outcome).toBe("ok");
+    // The override is removed; the generated default is effective again.
+    expect(result.state.aliases).toEqual({});
+    expect(
+      result.state.effective?.aliases.some(
+        (entry) =>
+          entry.alias === "anthropic/claude-sonnet-4" &&
+          entry.layer === "default",
+      ),
+    ).toBe(true);
+  });
+
   it("setForModel fails closed for an unknown target and a stale revision", async () => {
     const { authority } = createAuthority();
     await authority.query();

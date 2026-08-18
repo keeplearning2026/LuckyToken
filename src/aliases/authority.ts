@@ -643,6 +643,30 @@ export function createAliasRegistryAuthority(
           { alias: input.alias, ...keyError },
         ]);
       }
+      // Provider Activation (Spec v1.0 §5.8): the generated default is
+      // derived state and is never persisted. Setting a custom alias equal
+      // to the target's generated default is a no-op override — it removes
+      // any existing user override so the derived default stays derived.
+      if (generatedDefaultAlias(target) === input.alias) {
+        const existing = { ...currentUserAliases() };
+        let removed = false;
+        for (const [alias, ref] of Object.entries(existing)) {
+          const parsed = parseAliasTarget(ref);
+          if (
+            "target" in parsed &&
+            canonicalTargetKey(parsed.target) === targetKey
+          ) {
+            delete existing[alias];
+            removed = true;
+          }
+        }
+        if (!removed) {
+          // No override exists: the generated default is already effective.
+          return Object.freeze({ outcome: "ok", state: current });
+        }
+        const nextRaw = serialized(existing);
+        return commit(current, nextRaw, Object.freeze(existing));
+      }
       // A custom alias must not collide with another target's effective
       // default or custom alias (Spec §11.6): the generated default of a
       // DIFFERENT target cannot be claimed by this override.

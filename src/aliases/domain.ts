@@ -132,7 +132,6 @@ export function computeConfiguredAliasMappings(input: {
     // claimed by a user override suppresses its generated default.
     if (claimedTargets.has(canonicalTargetKey(target))) continue;
     if (userAliasKeys.has(alias)) continue;
-    if (claimedTargets.has(canonicalTargetKey(target))) continue;
     claim(alias, { provider: target.provider, model: target.model });
   }
   return byAlias;

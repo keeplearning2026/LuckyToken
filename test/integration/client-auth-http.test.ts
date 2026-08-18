@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import {
   COMMANDCODE_PROVIDER_PACKAGE,
@@ -107,7 +107,7 @@ describe("per-Client-Protocol Auth over real HTTP", () => {
     );
     const config = await loadLuckyTokenCliConfig(configPath);
     const start = async () => {
-      const composition = await createConfiguredLuckyTokenComposition({
+      const composition = await createConfiguredLuckyTokenDataPlane({
         config,
         credentials,
         fetch: async () => commandCodeText("authorized"),

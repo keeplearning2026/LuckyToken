@@ -247,6 +247,11 @@ export async function createProviderRuntime(
     mutableModels,
     modelsJson,
     { configValues },
+    // Provider Activation (Spec v1.0 §12.1): the request composition
+    // facade must observe the CURRENT models.json generation, not the
+    // initial one — recompose updates the same variable the facade reads,
+    // so per-request auth/header composition and the catalog never diverge.
+    { readConfig: () => currentModelsJson },
   );
 
   // Ticket 11 login seam: a successful Provider login through the served
@@ -291,14 +296,23 @@ export async function createProviderRuntime(
   });
 
   const recompose = (next: ModelsJsonConfig | undefined): void => {
-    currentModelsJson = next;
-    currentModelsJsonProviderIds = new Set(
-      applyLuckyTokenProviderComposition(mutableModels, {
+    // Provider Activation (Spec v1.0 §12.1/§19.4): one logical operation.
+    // The composition is applied FIRST — it can fail (e.g. a reserved
+    // bundled Provider ID) — and only a successful composition commits the
+    // new generation to the request-config reader and source metadata.
+    // A failed recompose never produces a mixed generation where the
+    // request config reader already points at N+1 while the composition
+    // and catalog are still generation N.
+    const nextUserProviderIds = applyLuckyTokenProviderComposition(
+      mutableModels,
+      {
         ...(next === undefined ? {} : { modelsJson: next }),
         configValues,
         previousUserProviderIds: currentModelsJsonProviderIds,
-      }),
+      },
     );
+    currentModelsJson = next;
+    currentModelsJsonProviderIds = new Set(nextUserProviderIds);
   };
 
   // Source classification is deterministic (Spec §9.3): bundled IDs win,

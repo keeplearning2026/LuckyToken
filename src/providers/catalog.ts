@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
+import { bundledProviderIds } from "./bundled.js";
 import type { ConfigValueResolver } from "./config-value.js";
 import {
   composeConfiguredProvider,
@@ -164,6 +165,18 @@ export function applyLuckyTokenProviderComposition(
   },
 ): readonly string[] {
   const adapters = Object.freeze({ configValues: dependencies.configValues });
+  // Provider Activation (Spec v1.0 §8.4, §12.2): a user models.json
+  // Provider claiming a reserved bundled Provider ID is invalid under the
+  // current contract — bundled identity is product-owned and cannot be
+  // replaced by models.json. Fail with a clear configuration error; never
+  // resolve the collision by precedence or silent override.
+  for (const providerId of Object.keys(dependencies.modelsJson?.providers ?? {})) {
+    if (bundledProviderIds.has(providerId)) {
+      throw new Error(
+        `models.json Provider "${providerId}" is a LuckyToken bundled product Provider and cannot be overridden by models.json. Remove it from the configuration.`,
+      );
+    }
+  }
   const newUserProviderIds = new Set(
     Object.keys(dependencies.modelsJson?.providers ?? {}),
   );

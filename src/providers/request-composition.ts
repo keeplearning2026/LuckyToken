@@ -419,10 +419,13 @@ export function createRequestCompositionModels(
   models: Models,
   config: ModelsJsonConfig | undefined,
   adapters: RequestCompositionAdapters,
+  options: { readonly readConfig?: () => ModelsJsonConfig | undefined } = {},
 ): Models {
   const providerConfig = (
     providerId: string,
-  ): ModelsJsonProviderConfig | undefined => config?.providers[providerId];
+  ): ModelsJsonProviderConfig | undefined =>
+    (options.readConfig === undefined ? config : options.readConfig())
+      ?.providers[providerId];
 
   const getAuth = (
     providerOrModel: string | Model<Api>,

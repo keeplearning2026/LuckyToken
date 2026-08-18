@@ -30,7 +30,7 @@ import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
-  createConfiguredLuckyTokenComposition,
+  createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
 } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
@@ -759,7 +759,7 @@ export async function runOpenAIResponsesOnlineSuite(
         "utf8",
       );
     }
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
@@ -828,7 +828,7 @@ export async function runOpenAIResponsesOnlineSuite(
     };
     // Cancellation needs a hanging upstream so the abort lands mid-flight.
     const hangingFetch = createHangingFetch(globalThis.fetch, 60_000);
-    const hangingComposition = await createConfiguredLuckyTokenComposition({
+    const hangingComposition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: hangingFetch,
@@ -879,7 +879,7 @@ export async function runOpenAIResponsesOnlineSuite(
 
     // ---- Conformance: capture upstream requests ----
     const capture = createCapturingFetch(globalThis.fetch);
-    const conformanceComposition = await createConfiguredLuckyTokenComposition({
+    const conformanceComposition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,
@@ -1080,7 +1080,7 @@ export async function runOpenAIResponsesOnlineSuite(
     // state file, and reference turn1's response id.
     await server.close();
     server = undefined;
-    const restartComposition = await createConfiguredLuckyTokenComposition({
+    const restartComposition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,

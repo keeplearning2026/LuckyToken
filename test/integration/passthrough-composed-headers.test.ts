@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
 /**
@@ -47,7 +47,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     readonly clientToken: string;
     readonly responsesToken: string;
     readonly runtime: Awaited<
-      ReturnType<typeof createConfiguredLuckyTokenComposition>
+      ReturnType<typeof createConfiguredLuckyTokenDataPlane>
     >["runtime"];
   }> {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-passthrough-"));
@@ -93,7 +93,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
       { type: "global" },
       "responses-token",
     );
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch,
       credentials: new InMemoryCredentialStore(),

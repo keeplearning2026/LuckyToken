@@ -61,7 +61,7 @@ import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
-  createConfiguredLuckyTokenComposition,
+  createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
 } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
@@ -1367,7 +1367,7 @@ export async function runCodexCliOnlineSuite(
     );
   }
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
-  const composition = await createConfiguredLuckyTokenComposition({
+  const composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     fetch: upstreamLogger.fetch,

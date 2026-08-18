@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import {
   createRequestLedgerStoreFactory,
   parseRequestLedgerConfiguration,
@@ -182,7 +182,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: (async () => commandCodeText("serve-wired answer")) as FetchFunction,
@@ -318,7 +318,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: (async () => commandCodeText("composed answer")) as FetchFunction,

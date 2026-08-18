@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 /**
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
   );
   const config = await loadLuckyTokenCliConfig(configPath);
   const capturing = createCapturingFetch(globalThis.fetch);
-  const composition = await createConfiguredLuckyTokenComposition({
+  const composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     fetch: capturing.fetch,

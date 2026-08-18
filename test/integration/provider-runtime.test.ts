@@ -179,6 +179,35 @@ describe("Provider Runtime composition", () => {
     expect(bundledProviderIds.has("commandcode-private")).toBe(true);
   });
 
+  it("P4b: rejects a user models.json Provider claiming the reserved bundled Provider ID", async () => {
+    const { modelsJsonPath } = await fixture();
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "commandcode-private": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            models: [{ id: "shadowed-model" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await expect(
+      createProviderRuntime({
+        piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
+        modelsJsonPath,
+        userProviderPackages: {},
+        fetch: vi.fn(async () => new Response()),
+        credentials: new InMemoryCredentialStore(),
+        importModule: commandCodeProviderImportModule(),
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000006",
+      }),
+    ).rejects.toThrow(/bundled product Provider/);
+  });
+
   it("Ticket 13: models.json recompose updates source metadata coherently before the next capture", async () => {
     const { modelsJsonPath } = await fixture();
     await writeFile(
@@ -234,5 +263,182 @@ describe("Provider Runtime composition", () => {
     expect(runtime.providerSource("second-custom")).toBe("user");
     // The captured snapshot serves the new composition.
     expect(runtime.catalog.models.getModels("second-custom").length).toBe(1);
+  });
+
+  it("Ticket 13b: recompose keeps an in-flight auth resolution at generation N while later resolutions use generation N+1", async () => {
+    const { modelsJsonPath } = await fixture();
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "keyed-custom": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "initial-key",
+            models: [{ id: "model-1" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const runtime = await createProviderRuntime({
+      piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
+      modelsJsonPath,
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      credentials: new InMemoryCredentialStore(),
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000007",
+    });
+    const model = runtime.models.getModel("keyed-custom", "model-1");
+    expect(model).toBeDefined();
+
+    // Request A resolves its auth at generation N (the pinned per-request
+    // auth resolution reads models.json facts at resolve time).
+    const requestA = await runtime.models.getAuth(model!);
+    expect(requestA?.auth.apiKey).toBe("initial-key");
+
+    // A models.json swap changes the configured key; recompose is one
+    // logical operation that also updates the request-composition reader.
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "keyed-custom": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "rotated-key",
+            models: [{ id: "model-1" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const next = await import("../../src/providers/models-json.js").then(
+      (module) => module.loadModelsJson(modelsJsonPath),
+    );
+    runtime.catalog.recompose(next);
+    runtime.catalog.capture();
+
+    // Request A keeps the generation-N facts it already resolved — an
+    // in-flight invocation is never remapped by a later recompose.
+    expect(requestA?.auth.apiKey).toBe("initial-key");
+
+    // A later resolution (Request B) uses generation N+1 facts.
+    const requestB = await runtime.models.getAuth(model!);
+    expect(requestB?.auth.apiKey).toBe("rotated-key");
+  });
+
+  it("Ticket 13c: removing models.json clears the configured auth instead of resurrecting the initial config (Spec §12.1)", async () => {
+    const { modelsJsonPath } = await fixture();
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "keyed-custom": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "initial-key",
+            models: [{ id: "model-1" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const runtime = await createProviderRuntime({
+      piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
+      modelsJsonPath,
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      credentials: new InMemoryCredentialStore(),
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000008",
+    });
+    const model = runtime.models.getModel("keyed-custom", "model-1");
+    expect(model).toBeDefined();
+    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+      "initial-key",
+    );
+
+    // The file is removed: the current generation has no models.json.
+    await rm(modelsJsonPath, { force: true });
+    const next = await import("../../src/providers/models-json.js").then(
+      (module) => module.loadModelsJson(modelsJsonPath),
+    );
+    expect(next).toBeUndefined();
+    runtime.catalog.recompose(next);
+    runtime.catalog.capture();
+
+    // The configured key must NOT resurrect: the reader distinguishes
+    // "no reader" from "reader says no config".
+    const authAfter = await runtime.models.getAuth(model!);
+    expect(authAfter?.auth.apiKey).toBeUndefined();
+  });
+
+  it("Ticket 13d: a failed recompose never commits a mixed generation (Spec §19.4)", async () => {
+    const { modelsJsonPath } = await fixture();
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "keyed-custom": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "generation-n-key",
+            models: [{ id: "model-1" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const runtime = await createProviderRuntime({
+      piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
+      modelsJsonPath,
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      credentials: new InMemoryCredentialStore(),
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000009",
+    });
+    const model = runtime.models.getModel("keyed-custom", "model-1");
+    expect(model).toBeDefined();
+    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+      "generation-n-key",
+    );
+
+    // The next generation claims the reserved bundled Provider ID: the
+    // composition must fail WITHOUT committing the new config to the
+    // request reader.
+    await writeFile(
+      modelsJsonPath,
+      JSON.stringify({
+        providers: {
+          "commandcode-private": {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "shadow-key",
+            models: [{ id: "shadowed" }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const next = await import("../../src/providers/models-json.js").then(
+      (module) => module.loadModelsJson(modelsJsonPath),
+    );
+    expect(() => runtime.catalog.recompose(next)).toThrow(
+      /bundled product Provider/,
+    );
+
+    // Generation N remains fully authoritative: composition, source
+    // metadata and the request reader are all still N.
+    expect(runtime.models.getProvider("keyed-custom")).toBeDefined();
+    expect(runtime.providerSource("keyed-custom")).toBe("user");
+    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+      "generation-n-key",
+    );
   });
 });

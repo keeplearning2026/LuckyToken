@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     );
     const capture = createCapturingFetch(globalThis.fetch);
     const config = await loadLuckyTokenCliConfig(configPath);
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,

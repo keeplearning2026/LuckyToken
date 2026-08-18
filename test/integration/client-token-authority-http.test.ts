@@ -21,7 +21,7 @@ import {
 } from "../../src/client-auth/control-plane.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import {
   COMMANDCODE_PROVIDER_PACKAGE,
@@ -184,7 +184,7 @@ describe("live protocol-global Client Token Authority over real HTTP", () => {
     await registry.load();
     const fetchImpl: FetchFunction = async () => commandCodeText("authorized");
     const buildComposition = () =>
-      createConfiguredLuckyTokenComposition({
+      createConfiguredLuckyTokenDataPlane({
         config,
         credentials,
         fetch: fetchImpl,
@@ -786,7 +786,7 @@ describe("repair findings 1-2: persisted authority state across restarts", () =>
     await registry.load();
     const fetchImpl: FetchFunction = async () => commandCodeText("authorized");
     const buildComposition = () =>
-      createConfiguredLuckyTokenComposition({
+      createConfiguredLuckyTokenDataPlane({
         config,
         credentials,
         fetch: fetchImpl,

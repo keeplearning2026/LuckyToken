@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 
 /**
  * Ticket 09 data plane seam: the runtime registers the same effective
@@ -102,7 +102,7 @@ describe("effective composition in the data plane", () => {
     fetch: FetchFunction,
     options?: { readonly credentials?: InMemoryCredentialStore },
   ) {
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(fixture.configPath),
       fetch,
       ...(options?.credentials === undefined

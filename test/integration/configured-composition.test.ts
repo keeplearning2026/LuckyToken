@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { createConfiguredLuckyTokenComposition } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import {
   COMMANDCODE_PROVIDER_PACKAGE,
@@ -128,7 +128,7 @@ describe("configured serving composition", () => {
       key: "provider-secret",
     }));
     const config = await loadLuckyTokenCliConfig(configPath);
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch,
@@ -220,7 +220,7 @@ describe("configured serving composition", () => {
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch,
@@ -272,7 +272,7 @@ describe("configured serving composition", () => {
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch: async () => commandCodeText("project authorized"),
@@ -329,7 +329,7 @@ describe("configured serving composition", () => {
     };
 
     await expect(
-      createConfiguredLuckyTokenComposition({
+      createConfiguredLuckyTokenDataPlane({
         config,
         fetch: async () => commandCodeText("unused"),
       }),
@@ -360,7 +360,7 @@ describe("configured serving composition", () => {
     expect(config.pi.modelsJson).toBe(join(dirname(configPath), "models.json"));
     expect(config.pi.modelsJson).not.toBe(join(piDirectory, "models.json"));
 
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       fetch: async () => commandCodeText("unused"),
     });
@@ -381,7 +381,7 @@ describe("configured serving composition", () => {
     const config = await loadLuckyTokenCliConfig(configPath);
     const invalid: unknown[] = [];
 
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       fetch: async () => commandCodeText("unused"),
       onInvalidModelsJson: (error) => invalid.push(error),
@@ -449,7 +449,7 @@ describe("configured serving composition", () => {
       type: "api_key",
       key: "provider-secret",
     }));
-    const composition = await createConfiguredLuckyTokenComposition({
+    const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       credentials,
       fetch: async () => commandCodeText("responses served"),
