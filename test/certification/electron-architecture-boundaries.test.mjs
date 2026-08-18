@@ -218,6 +218,28 @@ test("production desktop contains no Tauri, Rust, or legacy shell compatibility 
   assert.ok(!lock.includes("@tauri-apps/"), "package-lock must not contain Tauri packages");
 });
 
+test("distribution certification is blocked by the Electron product golden journey", async () => {
+  const rootManifest = JSON.parse(
+    await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  );
+  const desktopManifest = JSON.parse(
+    await readFile(
+      path.join(repositoryRoot, "packages", "desktop-shell", "package.json"),
+      "utf8",
+    ),
+  );
+  assert.match(
+    rootManifest.scripts["test:distribution"] ?? "",
+    /test:product-e2e:run/u,
+    "distribution certification must execute the product golden journey",
+  );
+  assert.match(
+    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    /product-golden-journey\.e2e\.test\.mjs/u,
+    "desktop must expose the release-blocking golden-journey runner",
+  );
+});
+
 test("migration keeps explicit public-seam behavior suites", async () => {
   const requiredSuites = [
     "test/integration/client-protocol-boundary.test.ts",

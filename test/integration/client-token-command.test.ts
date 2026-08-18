@@ -63,9 +63,20 @@ function stubTokenCommandHandler(): StubTokenCommandHandler {
           }
         : { outcome: "ok", revision, token: globalToken };
     }
-    if (
-      command.command !== "rotate" && command.command !== "remove"
-    ) {
+    if (command.command === "create") {
+      if (command.scope.type !== "global") throw new Error("unexpected project create");
+      if (globalToken !== undefined) {
+        return {
+          outcome: "already_exists",
+          revision,
+          error: "Client token scope already has a token",
+        };
+      }
+      globalToken = command.token ?? `lt_generated_${revision + 1}`;
+      revision += 1;
+      return { outcome: "ok", revision, scopes: scopes() };
+    }
+    if (command.command !== "rotate" && command.command !== "remove") {
       throw new Error("unreachable");
     }
     if (command.expectedRevision !== revision) {
@@ -143,6 +154,23 @@ describe("Control Plane Client Token commands", () => {
     await client.hello(1);
     return { host, client };
   }
+
+  it("round-trips a protocol-global create through the versioned wire", async () => {
+    const handler = stubTokenCommandHandler();
+    const { host, client } = await startHost(handler);
+
+    const created = await client.executeClientTokenCommand({
+      command: "create",
+      protocolId: "anthropic-messages",
+      scope: { type: "global" },
+    });
+    expect(created).toMatchObject({ outcome: "ok", revision: 1 });
+    expect(created.scopes).toContainEqual(
+      expect.objectContaining({ type: "global" }),
+    );
+    await client.close();
+    await host.close();
+  });
 
   it("round-trips masked list and explicit reveal through the versioned wire", async () => {
     const handler = stubTokenCommandHandler();

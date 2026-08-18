@@ -1,65 +1,41 @@
 # LuckyToken 0.1.0 — Release Notes (Windows-first)
 
-Status: **release candidate certification** (Ticket 26). No partial release is
-published; every item below is the recorded release evidence.
+Status: **Electron product release-candidate certification**.
 
 ## Product shape
 
-- Windows-first Tauri 2 desktop shell (React 19 / Vite / TypeScript) + the
-  independent Node LuckyToken core that owns Pi AI IR, protocol conversion,
-  providers, aliases, Client tokens, observability, and backup.
-- One active current-user Control Plane (versioned wire, Named Pipe with a
-  strict current-user ACL). The desktop attaches to a headless owner and can
-  launch its own desktop-owned backend from the installed layout.
-- Transparent `%USERPROFILE%\.luckytoken\` user root: `models.json`,
-  `auth.json`, `model-aliases.json`, Client tokens, and app data.
+- TypeScript/Node LuckyToken Backend owns Pi AI IR, protocol conversion, Provider execution, aliases, Client Tokens, observability, persistence, and backup/history authorities.
+- TypeScript Electron desktop owns only tray/window lifecycle, Backend supervision, OS integration, and a typed preload security seam.
+- React renderer is created only when the management UI is open. Closing the management window destroys the BrowserWindow/renderer; the Backend and Electron tray remain running.
+- The Application Control Plane is the only management seam into a running Backend. Its local endpoint is `{ address, capability }` and production transport is pure Node `node:net` IPC.
+- The production tree contains no Tauri, Rust, Cargo, or native Control Pipe implementation.
 
-## Bundled tickets (all complete)
+## Product experience
 
-01–26 of `.tickets/luckytoken-desktop-product-2026-08/` are implemented and
-verified: versioned Control Plane, desktop shell and Dashboard, runtime
-supervisor, tray lifecycle, headless ownership and graceful exit, settings,
-permanent diagnostics with credential redaction, models.json management,
-pinned Pi provider composition, catalog cache/refresh/isolation, credential
-management, Provider-owned authentication projection, alias registry,
-alias-only data plane, Client Token Authority and directory scopes, Request
-Ledger, Requests page, terminal usage normalization, Analytics, Deep
-Diagnostics, history export/delete/degradation, safe backup and
-incompatible-config refusal, actionable notifications/tray aggregate state,
-and complete Windows release certification.
+The management UI is organized around user tasks rather than internal subsystems:
 
-## Certified evidence (Ticket 26)
+- **Home** — current readiness and the next actionable step.
+- **Providers** — Provider authentication and model availability.
+- **Connect** — supported coding-client integration, starting with Codex.
+- **Activity** — recent Request Ledger records and Backend-computed analytics.
+- **Settings** — General, Network, Routing, Data, and Advanced configuration.
 
-- **Version single-source**: root `package.json` drives every shipped
-  surface (workspaces, Cargo, tauri.conf); `scripts/sync-release-version.mjs`
-  and `test/certification/release-version-sync.test.mjs` enforce it; the
-  Control Plane `hello` reports the installed version.
-- **Desktop-owned backend**: `packages/desktop-shell/src-tauri/backend_launcher.rs`
-  resolves `launcher.json`, and the connector spawns the backend exactly once
-  when no Control Plane exists; Rust tests cover parsing, argv contract, and
-  spawn gating. Owner-aware tray Quit drains the backend through an
-  acknowledged `application_command quit`; a headless owner is never quit by
-  an attached UI.
-- **Installed layout**: `scripts/assemble-release-backend.mjs` assembles the
-  portable Node runtime, core `dist`, production `node_modules`, and
-  `launcher.json` into `packages/desktop-shell/backend`;
-  `test/certification/release-backend-serve.test.mjs` boots the assembled
-  layout as a desktop-owned instance (first-run config, Data Plane on the
-  fixed port, acknowledged quit drain).
-- **NSIS per-user installer**: `tauri.release.conf.json` enables NSIS
-  currentUser packaging with the backend as bundled resources.
-- **Machine-scoped evidence** (`scripts/windows-release-certification.ps1`):
-  clean-install first run, installed layout, fixed-port behavior, sign-in
-  auto-start, second-user pipe blocking, LAN isolation, and uninstall data
-  preservation are executed on a clean Windows VM and recorded as sanitized
-  JSON evidence.
+## Certified evidence
 
-## Known limitations
+- **Backend Application seam**: normal serving, recovery-only startup, second-instance attach, ownership-aware quit, and cleanup are covered through one application lifecycle authority rather than CLI-owned composition.
+- **Pure TypeScript Control Plane**: capability authentication, malformed-message rejection, request correlation, disconnect/reconnect, and subscription cleanup are certified over real local IPC. The old `pipeName` contract and native Windows pipe implementation are removed.
+- **Electron security boundary**: renderer Node integration is disabled, context isolation and sandboxing are enabled, navigation/new-window creation are restricted, and preload exposes only the typed `LuckyTokenDesktopApi`; no generic `ipcRenderer` escape hatch exists.
+- **Tray-only lifecycle**: packaged Electron starts with zero BrowserWindows. Opening creates one renderer; closing destroys it. `window-all-closed` is explicitly retained by the tray application, and repeated reopen cycles construct fresh renderer state from Backend authority.
+- **Packaged Backend**: Electron packages `resources/backend/node/node.exe`, compiled Backend `dist`, production dependencies, and `launcher.json`. Electron attaches to an existing headless Backend rather than creating a second owner.
+- **First-successful-request golden journey**: deterministic release certification uses a local Anthropic-compatible upstream with no external credentials. A real packaged Electron UI stores an Anthropic API key through the Provider login flow, configures Codex, then a real OpenAI Responses client request travels through LuckyToken Client Protocol conversion, Pi IR, the Anthropic Provider, the local upstream, and back to the client. The successful request is visible in Activity and Analytics.
+- **Background operation**: after the UI is closed and the renderer exits, a second real model request succeeds through the same Backend. Reopening the UI reconstructs Activity from the authoritative Request Ledger.
+- **Resource evidence**: product certification records process count, working/private memory, idle CPU, and UI cold-open time for Backend-only, tray-only, and UI-open states. The evidence is emitted to the ignored `.electron-out/product-certification-resource.json` artifact so retained renderers are detectable without coupling release correctness to one fixed memory threshold.
+- **Architecture guards**: certification fails if Core imports Electron/Control Plane, renderer imports Node/Electron/Control Plane internals, generic desktop IPC appears, or Tauri/Rust/legacy shell paths are reintroduced.
 
-- The NSIS installer is unsigned; Windows SmartScreen may warn. Signing is
-  required before external distribution and is tracked as a known
-  limitation, never silently bypassed.
-- Real account/subscription and API-key certification runs require explicit
-  user authorization of credentials and network access; the offline
-  deterministic suite is the default and the online evidence is recorded
-  with Provider/version provenance when authorized.
+## Online Provider verification
+
+The default release certification is deterministic and offline with respect to third-party AI services. Real CommandCode/Anthropic/OpenAI account or API-key verification remains a separate, explicitly authorized online run with Provider/version provenance. The offline golden journey must not be interpreted as evidence that a third-party production account is currently reachable.
+
+## Packaging limitation
+
+The current Electron release path is packaged and exercised as a real Windows executable through Electron Forge. External distribution still requires the final installer/signing policy to be selected and certified; code signing is not silently bypassed.

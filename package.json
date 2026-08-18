@@ -45,7 +45,7 @@
     "test:online-codex": "npm run build:packages && npm --prefix onlinetest/codex_cli test --",
     "test:online-claude": "npm run build:packages && npm --prefix onlinetest/claude test --",
     "test:certification": "node --test test/certification/*.test.mjs",
-    "test:distribution": "npm run build && node --test test/distribution/*.test.mjs",
+    "test:distribution": "npm run build && node --test test/distribution/*.test.mjs && npm run test:product-e2e:run --workspace @luckytoken/desktop-shell",
     "test:unit": "vitest run test/unit --passWithNoTests",
     "test:integration": "vitest run test/integration"
   },
