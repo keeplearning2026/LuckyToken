@@ -91,6 +91,38 @@ describe("Codex catalog projection", () => {
     });
   });
 
+  it("exposes slash-containing canonical models through their single-slash LuckyToken alias", () => {
+    const routed = model({
+      provider: "commandcode-private",
+      id: "deepseek/deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      reasoning: true,
+      contextWindow: 1_000_000,
+    });
+    const result = buildCodexCatalog({
+      nativeModels: [],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "commandcode-private/deepseek-deepseek-v4-flash",
+          target: {
+            providerId: "commandcode-private",
+            modelId: "deepseek/deepseek-v4-flash",
+          },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(result.content) as { models: Array<Record<string, unknown>> };
+    expect(parsed.models).toContainEqual(
+      expect.objectContaining({
+        slug: "commandcode-private/deepseek-deepseek-v4-flash",
+        display_name: "DeepSeek V4 Flash",
+        context_window: 1_000_000,
+      }),
+    );
+  });
+
   it("preserves Codex-native metadata while forcing the native row onto LuckyToken's HTTP transport", () => {
     const native = model({
       provider: "openai-codex",

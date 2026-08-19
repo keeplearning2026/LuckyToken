@@ -332,7 +332,7 @@ No Pi success event is emitted until:
 - a valid final finish exists;
 - all modeled slots are closed;
 - pause policy is resolved;
-- content and usage validation succeed.
+- model-visible content/tool/finish validation succeeds. Usage validation is fail-open and cannot by itself block commit.
 
 After commit, replay a normal Pi event stream from the immutable result.
 
@@ -362,17 +362,17 @@ Pi required `timestamp` remains the request/response-lifetime timestamp chosen b
 
 ### 10.5 Usage
 
-Preserve and validate all target-backed token facts:
+Preserve only directly evidenced CommandCode token facts at the Pi boundary:
 
-- input tokens;
-- output tokens;
-- cached input/read tokens;
-- cache-write tokens where present;
-- reasoning tokens;
+- Pi `input` comes from `inputTokenDetails.noCacheTokens`;
+- Pi `cacheRead` comes from `inputTokenDetails.cacheReadTokens`;
+- Pi `output` comes from `outputTokens`;
+- cache-write tokens are preserved only when explicitly reported and partition-consistent;
+- reasoning tokens are preserved when their known aliases agree and reasoning≤output;
 - one-hour cache tokens only where the CommandCode wire provides an authoritative retention split;
-- total tokens and known aliases.
+- `inputTokens`, `totalTokens`, and aliases are consistency evidence, not alternate sources for reconstructing missing components.
 
-The final finish total usage is authoritative. Direct total/alias fields are consumed and cross-checked rather than ignored; derived totals are used only where source fields are absent. Require non-negative finite integers and enforce target invariants such as reasoning≤output and consistent totals.
+The final finish total usage is authoritative as the Usage evidence object, but a missing `noCacheTokens`/`cacheReadTokens`/`outputTokens`, an inconsistent partition, or an inconsistent total makes Usage unavailable rather than making the model response invalid. Do not reconstruct Pi Input with `inputTokens - cacheRead - cacheWrite`. After content/tool/finish commit, Usage failure must emit a bounded response conversion warning and use zero-usage absence encoding while preserving the successful model content.
 
 The currently evidenced CommandCode schema exposes `cacheWriteTokens` but no one-hour retention split. Therefore Pi `cacheWrite1h` is omitted. Treating all cache writes as one-hour writes would invent a provider fact.
 
@@ -386,9 +386,9 @@ At EOF, after valid finish and closed modeled slots, exact `rawFinishReason="pau
 
 ### 11.1 `stop` (default)
 
-- do not rollback staged content or usage merely because of pause_turn;
-- run all normal content/usage semantic validation;
-- commit response identity, content, usage, rawStopReason, and a pause diagnostic;
+- do not rollback staged content merely because of pause_turn;
+- run normal content semantic validation and fail-open Usage validation;
+- commit response identity, content, available/degraded usage, rawStopReason, and diagnostics;
 - normalize stop reason with §10.4: length remains length; otherwise ToolCall content→toolUse, else stop.
 
 Clients will see their ordinary completed/end-turn representation. `rawStopReason` remains Pi-internal. This is a deliberate availability degradation and does not claim CommandCode pause content is logically final.

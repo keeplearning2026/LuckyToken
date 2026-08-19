@@ -2680,7 +2680,11 @@ Normalized missing field 使用 `0`；raw object 中的 missing 仍应保持 mis
 
 `systemPromptTokens` 位于 finish 顶层，不在 `totalUsage` 内。
 
-进入 Pi boundary 时，`cachedInputTokens` 与 `inputTokenDetails.cacheReadTokens`、顶层 `reasoningTokens` 与 `outputTokenDetails.reasoningTokens` 分别是已知 aliases：任一可单独供值，同时存在必须相等。显式 `noCacheTokens` 与 `inputTokens` 同时存在时，必须满足 `inputTokens = noCache + cacheRead + cacheWrite`；source `totalTokens` 同样必须与全部 Pi token components 一致。所有分量与派生和都必须是 non-negative safe integer。当前 schema 没有 one-hour cache retention split，因此 Pi `cacheWrite1h` 保持 absent，不能从普通 `cacheWriteTokens` 猜测。
+进入 Pi boundary 时，可信的产品 Usage 只接受真实线上已证明的直接字段：Pi `input = inputTokenDetails.noCacheTokens`、Pi `cacheRead = inputTokenDetails.cacheReadTokens`、Pi `output = outputTokens`。`inputTokens` 只作为一致性证据，不再用于 `inputTokens - cacheRead - cacheWrite` 形式的 Input 推导。`cacheWriteTokens` 仅在显式存在时保留；缺失时只有 `inputTokens = noCache + cacheRead` 能证明其为 0。`cachedInputTokens` 与 `inputTokenDetails.cacheReadTokens`、顶层 `reasoningTokens` 与 `outputTokenDetails.reasoningTokens` 同时存在时必须相等；source `totalTokens` 同样必须与全部 Pi token components 一致。所有分量与派生和都必须是 non-negative safe integer。
+
+该规则由 `.online-artifacts/commandcode-conformance-samples.json` 的 2026-08-14 `commandcode-private/deepseek/deepseek-v4-flash` 真实 capture 支持：17 个 final `finish.totalUsage` 样本均直接报告 `noCacheTokens` 与 `cacheReadTokens`，并满足 `inputTokens = noCacheTokens + cacheReadTokens`；该 capture 未出现 `cacheWriteTokens`，因此不能用它证明 cache-write 的缺失以外语义。
+
+Usage 是 accounting/observability，不是 model-visible semantic content。Final content/tool/finish 已成功 commit 时，Usage 字段 missing、非法或 partition/total 不一致不得把整个 response 转成失败；Provider 应保留模型内容，使用 Pi zero-usage absence encoding，并发出 bounded `usage_unavailable_degraded` response warning。当前 schema 没有 one-hour cache retention split，因此 Pi `cacheWrite1h` 保持 absent，不能从普通 `cacheWriteTokens` 猜测。
 
 同一个 HTTP response 多次出现 `finish` 时，最后一个 finish event 完整决定 final metadata。最后一个 event 缺少 `totalUsage` 时 `rawUsage` 为 `undefined`、normalized usage 为四个零；缺少 `systemPromptTokens` 时 extracted value 为 `undefined`。
 

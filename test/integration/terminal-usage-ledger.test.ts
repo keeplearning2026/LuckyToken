@@ -467,7 +467,12 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
         JSON.stringify({
           type: "finish",
           finishReason: "stop",
-          totalUsage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+          totalUsage: {
+            inputTokens: 3,
+            inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: 0 },
+            outputTokens: 4,
+            totalTokens: 7,
+          },
         }),
         "",
       ]);
@@ -506,7 +511,11 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
             inputTokens: 12,
             outputTokens: 2,
             totalTokens: 14,
-            inputTokenDetails: { cacheReadTokens: 4, cacheWriteTokens: 3 },
+            inputTokenDetails: {
+              noCacheTokens: 5,
+              cacheReadTokens: 4,
+              cacheWriteTokens: 3,
+            },
           },
         }),
         "",
@@ -541,6 +550,7 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
           finishReason: "stop",
           totalUsage: {
             inputTokens: 4,
+            inputTokenDetails: { noCacheTokens: 4, cacheReadTokens: 0 },
             outputTokens: 6,
             totalTokens: 10,
             outputTokenDetails: { reasoningTokens: 3 },
@@ -564,6 +574,54 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
         reasoning: 3,
         normalizedTotal: 10,
         cacheHitRate: 0,
+      });
+    });
+
+    it("keeps Anthropic conversion successful and records a warning when CommandCode usage is inconsistent", async () => {
+      const { store, runtime } = await commandCodeFixture([
+        JSON.stringify({ type: "text-start", id: "0" }),
+        JSON.stringify({ type: "text-delta", id: "0", text: "Hello." }),
+        JSON.stringify({ type: "text-end", id: "0" }),
+        JSON.stringify({
+          type: "finish",
+          finishReason: "stop",
+          totalUsage: {
+            inputTokens: 10,
+            inputTokenDetails: { noCacheTokens: 5, cacheReadTokens: 8 },
+            outputTokens: 2,
+            totalTokens: 12,
+          },
+        }),
+        "",
+      ]);
+
+      const response = await runtime.handle(commandCodeRequest());
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        content?: Array<{ type?: string; text?: string }>;
+      };
+      expect(body.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "Hello." }),
+        ]),
+      );
+      const record = records(store).find((entry) => entry.outcome === "success");
+      expect(record).toBeDefined();
+      expect(record?.facts?.notices).toContainEqual({
+        adapter: "commandcode-private",
+        direction: "response",
+        code: "usage_unavailable_degraded",
+        jsonPath: "$.finish.totalUsage",
+        action: "degrade",
+      });
+      expect(record?.terminalUsage).toMatchObject({
+        completeness: "partial",
+        reason: "usage_absent",
+        input: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 0,
       });
     });
 

@@ -1,27 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { startElectronDesktopLifecycle } from "../src/main/electron-app-lifecycle.js";
+import {
+  startElectronDesktopLifecycle,
+  type DesktopInstanceActivation,
+} from "../src/main/electron-app-lifecycle.js";
+
+function activation(
+  buildId: string,
+  attempt: DesktopInstanceActivation["attempt"] = "initial",
+): DesktopInstanceActivation {
+  return {
+    contract: "luckytoken-desktop-instance-v1",
+    buildId,
+    attempt,
+  };
+}
 
 describe("tray-only Electron product lifecycle", () => {
   it("starts one tray with no management window and opens only on demand", async () => {
     let trayOpen: (() => void) | undefined;
     let trayQuit: (() => void) | undefined;
-    let secondInstance: (() => void) | undefined;
+    let secondInstance: ((value: unknown) => void) | undefined;
     const openWindow = vi.fn();
-    const quit = vi.fn();
+    const quitProduct = vi.fn();
+    const exitDesktop = vi.fn();
     const createTray = vi.fn((actions: { open: () => void; quit: () => void }) => {
       trayOpen = actions.open;
       trayQuit = actions.quit;
     });
 
     const result = await startElectronDesktopLifecycle({
+      buildId: "build-a",
       requestSingleInstanceLock: () => true,
+      releaseSingleInstanceLock: vi.fn(),
+      waitForPrimaryHandoff: async () => undefined,
       whenReady: async () => undefined,
       onSecondInstance: (listener) => {
         secondInstance = listener;
       },
       onWindowAllClosed: vi.fn(),
-      quit,
+      exitDesktop,
+      quitProduct,
       openWindow,
       createTray,
     });
@@ -32,30 +51,40 @@ describe("tray-only Electron product lifecycle", () => {
 
     trayOpen?.();
     trayOpen?.();
-    secondInstance?.();
+    secondInstance?.(activation("build-a"));
     expect(openWindow).toHaveBeenCalledTimes(3);
 
     trayQuit?.();
-    expect(quit).toHaveBeenCalledTimes(1);
+    expect(quitProduct).toHaveBeenCalledTimes(1);
+    expect(exitDesktop).not.toHaveBeenCalled();
   });
 
-  it("never creates tray or window for a secondary process", async () => {
-    const quit = vi.fn();
+  it("never creates tray or window for a secondary process and never asks Backend to quit", async () => {
+    const exitDesktop = vi.fn();
+    const quitProduct = vi.fn();
     const openWindow = vi.fn();
     const createTray = vi.fn();
+    const requestSingleInstanceLock = vi
+      .fn<(value: DesktopInstanceActivation) => boolean>()
+      .mockReturnValue(false);
 
     const result = await startElectronDesktopLifecycle({
-      requestSingleInstanceLock: () => false,
+      buildId: "build-a",
+      requestSingleInstanceLock,
+      releaseSingleInstanceLock: vi.fn(),
+      waitForPrimaryHandoff: async () => undefined,
       whenReady: async () => undefined,
       onSecondInstance: vi.fn(),
       onWindowAllClosed: vi.fn(),
-      quit,
+      exitDesktop,
+      quitProduct,
       openWindow,
       createTray,
     });
 
     expect(result).toBe("secondary");
-    expect(quit).toHaveBeenCalledTimes(1);
+    expect(exitDesktop).toHaveBeenCalledTimes(1);
+    expect(quitProduct).not.toHaveBeenCalled();
     expect(createTray).not.toHaveBeenCalled();
     expect(openWindow).not.toHaveBeenCalled();
   });

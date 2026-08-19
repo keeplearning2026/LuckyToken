@@ -78,9 +78,10 @@ it("converts and replays a committed mixed CommandCode response in order", async
           rawFinishReason: "raw-tool-reason",
           totalUsage: {
             inputTokens: 5,
-            inputTokenDetails: { cacheReadTokens: 2 },
+            inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: 2 },
             outputTokens: 4,
             outputTokenDetails: { reasoningTokens: 1 },
+            totalTokens: 9,
           },
           systemPromptTokens: 2,
         }),
@@ -142,6 +143,65 @@ it("converts and replays a committed mixed CommandCode response in order", async
   });
 });
 
+it("keeps committed model content successful when terminal usage is inconsistent", async () => {
+  const model = lifecycleModel();
+  const provider = createCommandCodePrivateProvider({
+    apiKey: "key",
+    fetch: async () =>
+      jsonl([
+        { type: "text-start", id: "t" },
+        { type: "text-delta", id: "t", text: "answer" },
+        { type: "text-end", id: "t" },
+        {
+          type: "finish",
+          finishReason: "stop",
+          totalUsage: {
+            inputTokens: 10,
+            inputTokenDetails: { noCacheTokens: 5, cacheReadTokens: 8 },
+            outputTokens: 2,
+            totalTokens: 12,
+          },
+        },
+      ]),
+    model,
+    now: () => 10,
+    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
+  });
+
+  const result = await provider
+    .streamSimple(model, lifecycleContext, {
+      maxTokens: 20,
+      sessionId: "00000000-0000-4000-8000-000000000119",
+    })
+    .result();
+
+  expect(result).toMatchObject({
+    stopReason: "stop",
+    content: [{ type: "text", text: "answer" }],
+    usage: {
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 0,
+      totalTokens: 0,
+    },
+  });
+  expect(findUpstreamFailureFact(result.diagnostics)).toBeUndefined();
+  expect(
+    result.diagnostics
+      ?.filter(
+        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+      )
+      .map((diagnostic) => diagnostic.details?.notice),
+  ).toContainEqual({
+    adapter: "commandcode-private",
+    direction: "response",
+    code: "usage_unavailable_degraded",
+    jsonPath: "$.finish.totalUsage",
+    action: "degrade",
+  });
+});
+
 it("carries Provider-local missing-result notices on the Pi terminal", async () => {
   const model: Model<typeof commandCodePrivateApiId> = {
     id: "model",
@@ -184,7 +244,12 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
       JSON.stringify({
         type: "finish",
         finishReason: "stop",
-        totalUsage: { inputTokens: 0, outputTokens: 0 },
+        totalUsage: {
+          inputTokens: 0,
+          inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 0 },
+          outputTokens: 0,
+          totalTokens: 0,
+        },
       }),
     );
   };
@@ -269,7 +334,12 @@ it("applies unknown-ignore and pause-stop policies through the Provider seam", a
           type: "finish",
           finishReason: "tool-calls",
           rawFinishReason: "pause_turn",
-          totalUsage: { inputTokens: 1, outputTokens: 1 },
+          totalUsage: {
+            inputTokens: 1,
+            inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0 },
+            outputTokens: 1,
+            totalTokens: 2,
+          },
         },
       ]),
     model,

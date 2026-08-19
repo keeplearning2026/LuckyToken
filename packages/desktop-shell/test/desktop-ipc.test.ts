@@ -42,6 +42,7 @@ function fixture() {
     pickDirectory: vi.fn(async () => "C:/project"),
     pickSaveFile: vi.fn(async () => "C:/export.zip"),
     openExternal: vi.fn(async () => undefined),
+    writeClipboardText: vi.fn(async () => undefined),
     getDesktopVersion: vi.fn(async () => "1.0.0"),
   };
   const bridge = registerDesktopIpcHandlers({
@@ -107,5 +108,10 @@ describe("typed Electron desktop IPC", () => {
       handlers.get(desktopIpcChannels.openExternal)?.(event(7), "file:///C:/secret"),
     ).rejects.toThrow("Refusing to open a non-http(s) URL");
     expect(platform.openExternal).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(desktopIpcChannels.clipboardWrite)?.(event(7), "lt_token"),
+    ).resolves.toBeUndefined();
+    expect(platform.writeClipboardText).toHaveBeenCalledWith("lt_token");
   });
 });

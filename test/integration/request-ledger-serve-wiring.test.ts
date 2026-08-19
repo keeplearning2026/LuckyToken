@@ -42,7 +42,12 @@ function commandCodeText(text: string): Response {
       JSON.stringify({
         type: "finish",
         finishReason: "stop",
-        totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        totalUsage: {
+          inputTokens: 1,
+          inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0 },
+          outputTokens: 1,
+          totalTokens: 2,
+        },
       }),
       "",
     ].join("\n"),

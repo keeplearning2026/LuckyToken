@@ -295,16 +295,17 @@ export const USAGE_SEMANTICS_DECLARATIONS: ReadonlyMap<
     declaration({
       api: "commandcode-private",
       evidence: COMMANDCODE_USAGE_EVIDENCE,
-      // The provider's own strict commit validation proves the partition:
-      // input = noCacheTokens (with inputTokens == noCache + cacheRead +
-      // cacheWrite checked) or input = inputTokens - cacheRead - cacheWrite;
-      // reasoning <= output; computedTotal must equal the wire total.
+      // Online CommandCode evidence proves the direct product components:
+      // input = noCacheTokens, cacheRead = cacheReadTokens, output =
+      // outputTokens. inputTokens is consistency evidence only; it must equal
+      // noCache + cacheRead + explicit/derived-zero cacheWrite. Missing or
+      // inconsistent usage degrades instead of failing model semantics.
       inputIncludesCache: true,
       components: {
-        input: derived,
-        cacheRead: derived,
+        input: reported,
+        cacheRead: reported,
         cacheWrite: derived,
-        output: derived,
+        output: reported,
       },
       reasoning: "reported",
       totalTokens: "wire-or-derived",

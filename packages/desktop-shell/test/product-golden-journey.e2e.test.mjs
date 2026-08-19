@@ -31,7 +31,7 @@ const desktopRoot = resolve(import.meta.dirname, "..");
 const TEST_PROVIDER_KEY = "deterministic-product-provider-key";
 const TEST_CODEX_TOKEN = "deterministic-product-codex-token";
 const TEST_MODEL = "claude-opus-4-7";
-const TEST_ALIAS = "product-anthropic";
+const TEST_ALIAS = "anthropic/product-anthropic";
 
 const delay = (milliseconds) =>
   new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
@@ -528,6 +528,7 @@ test(
     ]);
     const environment = {
       ...process.env,
+      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       APPDATA: appData,
@@ -583,11 +584,13 @@ test(
         .filter({ has: page.getByRole("heading", { name: "Anthropic", exact: true }) });
       await anthropicCard.waitFor();
       await anthropicCard.getByRole("button", { name: /api key/i }).click();
-      const secretInput = page.locator('.auth-interaction input[type="password"]');
+      const anthropicLogin = page.getByRole("dialog", { name: "Anthropic sign in" });
+      const secretInput = anthropicLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill(TEST_PROVIDER_KEY);
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page.getByRole("status").filter({ hasText: /Anthropic connected/i }).waitFor();
+      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
+      await anthropicLogin.getByText("Connected", { exact: true }).waitFor();
+      await anthropicLogin.getByRole("button", { name: "Close", exact: true }).click();
       await assert.doesNotReject(async () => {
         const auth = await client.executeAuthCommand({ command: "query" });
         const status = auth.state.providers.find((provider) => provider.providerId === "anthropic");
@@ -597,8 +600,8 @@ test(
 
       // Provider Activation (Spec v1.0 §14): the coarse Provider readiness
       // is derived from Catalog model availability, which the Backend
-      // republishes after the login-triggered refresh. Connect requires a
-      // usable Provider, so wait for the authoritative convergence.
+      // republishes after the login-triggered refresh. Wait for that
+      // authoritative convergence before sending the first model request.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const status = await client.getStatus();
         if (status.provider === "configured") break;
@@ -606,12 +609,11 @@ test(
       }
       assert.equal((await client.getStatus()).provider, "configured");
 
-      await page.getByRole("button", { name: "Connect" }).click();
-      await page.getByRole("button", { name: "Configure Codex" }).click();
-      await page.getByRole("heading", { name: "Codex is ready" }).waitFor();
-      const codexConfig = await readFile(join(fixture.codexHome, "config.toml"), "utf8");
-      assert.match(codexConfig, /openai_base_url/u);
-      assert.match(codexConfig, /model_catalog_json/u);
+      // The current desktop product has only the three color-bar surfaces:
+      // Overview / Providers / Settings. Exercise the blue Settings route
+      // before returning to Overview for request/analytics verification.
+      await page.getByRole("button", { name: "Settings" }).click();
+      await page.getByRole("heading", { name: "Settings", exact: true, level: 1 }).waitFor();
 
       const clientToken = await revealResponsesClientToken(client);
       const firstRequestId = await sendResponsesRequest(
@@ -621,15 +623,17 @@ test(
       );
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
 
-      await page.getByRole("button", { name: "Activity" }).click();
+      await page.getByRole("button", { name: "Overview" }).click();
       const firstRow = page.locator(`[data-request-id="${firstRequestId}"]`);
       await firstRow.waitFor();
       await assert.doesNotReject(async () => {
-        assert.match((await firstRow.textContent()) ?? "", /success/u);
-        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_MODEL, "u"));
+        assert.match((await firstRow.textContent()) ?? "", /Success/u);
+        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_ALIAS, "u"));
       });
-      await page.getByRole("button", { name: "Analytics" }).click();
-      await page.getByText(/100\.0% success/u).waitFor();
+      await page
+        .locator(".overview-stat-card", { hasText: "Success" })
+        .getByText("100.0%", { exact: true })
+        .waitFor();
 
       await page.close();
       page = undefined;
@@ -643,10 +647,10 @@ test(
 
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
-      await page.getByRole("button", { name: "Activity" }).click();
+      await page.getByRole("button", { name: "Overview" }).click();
       const secondRow = page.locator(`[data-request-id="${secondRequestId}"]`);
       await secondRow.waitFor();
-      assert.match((await secondRow.textContent()) ?? "", /success/u);
+      assert.match((await secondRow.textContent()) ?? "", /Success/u);
       await page.close();
       page = undefined;
       await waitForNoWindows(application);

@@ -16,10 +16,7 @@ import {
 
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { createAliasControlPlaneHandler } from "../../src/aliases/control-plane.js";
-import {
-  generatedDefaultAlias,
-  type AliasCatalogTarget,
-} from "../../src/aliases/domain.js";
+import type { AliasCatalogTarget } from "../../src/aliases/domain.js";
 
 /**
  * Ticket 14 Control Plane seam: versioned alias commands and the sanitized
@@ -153,7 +150,15 @@ describe("alias commands through the Control Plane", () => {
     // The effective registry rides on the state: generated defaults for
     // every catalog target.
     expect(result.state.effective?.aliases.map((entry) => entry.alias).sort()).toEqual(
-      catalogTargets.map((target) => generatedDefaultAlias(target)).sort(),
+      [
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-sonnet-4",
+        "deepseek/deepseek-v4-flash",
+        "opencode-go/deepseek-v4-flash",
+      ].sort(),
     );
     expect(
       result.state.effective?.aliases.every((entry) => entry.layer === "default"),
@@ -166,16 +171,18 @@ describe("alias commands through the Control Plane", () => {
     const write = await fixture.client.executeAliasCommand({
       command: "write",
       revision: 0,
-      aliases: { "my-gpt": { provider: "openai", model: "gpt-4o-mini" } },
+      aliases: {
+        "openai/my-gpt": { provider: "openai", model: "gpt-4o-mini" },
+      },
     });
     expect(write.outcome).toBe("ok");
     expect(write.state.revision).toBe(1);
     const byAlias = new Map(
       write.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("my-gpt")?.layer).toBe("user");
+    expect(byAlias.get("openai/my-gpt")?.layer).toBe("user");
     // The captured resolver hot-applies for new request snapshots.
-    expect(fixture.authority.resolver().resolve("my-gpt")).toEqual({
+    expect(fixture.authority.resolver().resolve("openai/my-gpt")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
@@ -183,7 +190,7 @@ describe("alias commands through the Control Plane", () => {
     const conflict = await fixture.client.executeAliasCommand({
       command: "write",
       revision: 0,
-      aliases: { "other": "openai/gpt-4o" },
+      aliases: { "openai/other": "openai/gpt-4o" },
     });
     expect(conflict.outcome).toBe("conflict");
     expect(conflict.state.revision).toBe(1);
@@ -194,17 +201,19 @@ describe("alias commands through the Control Plane", () => {
     await fixture.client.executeAliasCommand({
       command: "write",
       revision: 0,
-      aliases: { "keep": { provider: "openai", model: "gpt-4o-mini" } },
+      aliases: {
+        "openai/keep": { provider: "openai", model: "gpt-4o-mini" },
+      },
     });
     const before = await fixture.client.executeAliasCommand({ command: "query" });
     const rejected = await fixture.client.executeAliasCommand({
       command: "write",
       revision: 1,
       aliases: {
-        "keep": { provider: "openai", model: "gpt-4o-mini" },
-        "bare": "gpt-4o",
-        "ghost": { provider: "openai", model: "missing" },
-        "dup": "openai/gpt-4o-mini",
+        "openai/keep": { provider: "openai", model: "gpt-4o-mini" },
+        "openai/bare": "gpt-4o",
+        "openai/ghost": { provider: "openai", model: "missing" },
+        "openai/dup": "openai/gpt-4o-mini",
         "": { provider: "openai", model: "gpt-4o" },
       },
     });
@@ -216,7 +225,12 @@ describe("alias commands through the Control Plane", () => {
       "duplicate",
       "invalid",
     ]);
-    expect(entries.map((entry) => entry.alias)).toEqual(["bare", "ghost", "dup", ""]);
+    expect(entries.map((entry) => entry.alias)).toEqual([
+      "openai/bare",
+      "openai/ghost",
+      "openai/dup",
+      "",
+    ]);
     // The active registry was not replaced.
     const after = await fixture.client.executeAliasCommand({ command: "query" });
     expect(after.state.revision).toBe(before.state.revision);
@@ -236,7 +250,7 @@ describe("alias commands through the Control Plane", () => {
     await fixture.client.executeAliasCommand({
       command: "write",
       revision: 0,
-      aliases: { "a": "openai/gpt-4o" },
+      aliases: { "openai/a": "openai/gpt-4o" },
     });
     const after = await fixture.client.getStatus();
     expect(after.aliases?.revision).toBe(1);
@@ -244,43 +258,42 @@ describe("alias commands through the Control Plane", () => {
     expect(after.aliases?.valid).toBe(true);
   });
 
-  it("set_for_model and reset_for_model round-trip through the typed wire", async () => {
+  it("rename_model and restore_model_name round-trip through the typed wire", async () => {
     const fixture = await createAliasPlane();
-    const set = await fixture.client.executeAliasCommand({
-      command: "set_for_model",
+    const renamed = await fixture.client.executeAliasCommand({
+      command: "rename_model",
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
-    expect(set.outcome).toBe("ok");
-    expect(set.state.revision).toBe(1);
+    expect(renamed.outcome).toBe("ok");
+    expect(renamed.state.revision).toBe(1);
     const byAlias = new Map(
-      set.state.effective?.aliases.map((entry) => [entry.alias, entry]),
+      renamed.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("sonnet")?.layer).toBe("user");
+    expect(byAlias.get("anthropic/sonnet")?.layer).toBe("user");
     expect(byAlias.get("anthropic/claude-sonnet-4")).toBeUndefined();
 
-    const reset = await fixture.client.executeAliasCommand({
-      command: "reset_for_model",
+    const restored = await fixture.client.executeAliasCommand({
+      command: "restore_model_name",
       revision: 1,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
     });
-    expect(reset.outcome).toBe("ok");
-    const afterReset = new Map(
-      reset.state.effective?.aliases.map((entry) => [entry.alias, entry]),
+    expect(restored.outcome).toBe("ok");
+    const afterRestore = new Map(
+      restored.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(afterReset.get("anthropic/claude-sonnet-4")?.layer).toBe("default");
-    expect(afterReset.get("sonnet")).toBeUndefined();
+    expect(afterRestore.get("anthropic/claude-sonnet-4")?.layer).toBe("default");
+    expect(afterRestore.get("anthropic/sonnet")).toBeUndefined();
 
-    // An unknown target fails closed with a validation error.
     const unknown = await fixture.client.executeAliasCommand({
-      command: "set_for_model",
+      command: "rename_model",
       revision: 2,
       providerId: "anthropic",
       modelId: "not-a-model",
-      alias: "ghost",
+      modelName: "ghost",
     });
     expect(unknown.outcome).toBe("invalid");
     expect(unknown.error?.entries?.[0]?.code).toBe("unknown");
@@ -303,7 +316,7 @@ describe("alias commands through the Control Plane", () => {
     await fixture.client.executeAliasCommand({
       command: "write",
       revision: 0,
-      aliases: { "a": "openai/gpt-4o" },
+      aliases: { "openai/a": "openai/gpt-4o" },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(events.some((event) => event.aliases?.revision === 1)).toBe(true);

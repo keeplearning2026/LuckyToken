@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SettingsCommand } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  ClientTokenCommand,
+  SettingsCommand,
+} from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -36,7 +39,11 @@ async function click(name: string): Promise<void> {
 
 async function render(api: ReturnType<typeof createFakeDesktopApi>): Promise<void> {
   await act(async () => root.render(<App api={api} />));
-  await click("Settings");
+  await act(async () => {
+    const button = container.querySelector('button[aria-label="Settings"]');
+    if (!(button instanceof HTMLButtonElement)) throw new Error("Settings color bar missing");
+    button.click();
+  });
 }
 
 function setInputValue(input: HTMLInputElement, value: string): void {
@@ -110,6 +117,86 @@ const modelsState = (revision: number) => ({
 });
 
 describe("Settings product slice", () => {
+  it("shows protocol global tokens, copies them through Main, and rotates with the served revision", async () => {
+    let anthropicToken = "lt_anthropic_global_token";
+    let anthropicRevision = 4;
+    const executeClientToken = vi.fn(async (command: ClientTokenCommand) => {
+      if (command.protocolId === "anthropic-messages") {
+        if (command.command === "list") {
+          return {
+            outcome: "ok" as const,
+            revision: anthropicRevision,
+            scopes: [{ type: "global" as const, maskedToken: "lt_anthr…oken" }],
+          };
+        }
+        if (command.command === "reveal") {
+          return {
+            outcome: "ok" as const,
+            revision: anthropicRevision,
+            token: anthropicToken,
+          };
+        }
+        if (command.command === "rotate") {
+          expect(command.expectedRevision).toBe(4);
+          anthropicRevision = 5;
+          anthropicToken = "lt_rotated_anthropic_token";
+          return {
+            outcome: "ok" as const,
+            revision: anthropicRevision,
+            scopes: [{ type: "global" as const, maskedToken: "lt_rotat…oken" }],
+          };
+        }
+      }
+      return {
+        outcome: "ok" as const,
+        revision: 2,
+        scopes: [{ type: "global" as const, maskedToken: "lt_opena…oken" }],
+        ...(command.command === "reveal" ? { token: "lt_openai_global_token" } : {}),
+      };
+    });
+    const writeClipboardText = vi.fn(async () => undefined);
+    await render(
+      createFakeDesktopApi({
+        control: { executeClientToken },
+        platform: {
+          getAutoStart: async () => false,
+          writeClipboardText,
+        },
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const anthropicRow = [...container.querySelectorAll(".client-token-row")].find(
+      (row) => row.textContent?.includes("Anthropic Messages"),
+    );
+    expect(anthropicRow?.textContent).toContain("lt_anthropic_global_token");
+    const copy = [...(anthropicRow?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Copy",
+    );
+    if (!(copy instanceof HTMLButtonElement)) throw new Error("Copy token missing");
+    await act(async () => copy.click());
+    expect(writeClipboardText).toHaveBeenCalledWith("lt_anthropic_global_token");
+
+    const rotate = [...(anthropicRow?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Rotate",
+    );
+    if (!(rotate instanceof HTMLButtonElement)) throw new Error("Rotate token missing");
+    await act(async () => {
+      rotate.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(executeClientToken).toHaveBeenCalledWith({
+      command: "rotate",
+      protocolId: "anthropic-messages",
+      expectedRevision: 4,
+    });
+    expect(anthropicRow?.textContent).toContain("lt_rotated_anthropic_token");
+  });
+
   it("keeps desktop auto-start in the platform namespace", async () => {
     const setAutoStart = vi.fn(async () => true);
     await render(

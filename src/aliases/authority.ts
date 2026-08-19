@@ -18,7 +18,6 @@ import {
   canonicalTargetKey,
   computeConfiguredAliasMappings,
   computeEffectiveAliasRegistry,
-  generatedDefaultAlias,
   parseAliasTarget,
   type AliasCatalogTarget,
 } from "./domain.js";
@@ -38,7 +37,7 @@ import {
  * replaces the active registry.
  *
  * Effective registry: computed deterministically from the parsed user
- * overrides over the Catalog-derived generated `provider/model` defaults,
+ * overrides over the Catalog-derived generated `${providerId}/${modelName}` defaults,
  * validated against the authoritative Ticket 11 catalog snapshot facts
  * injected by the composition. A broken file contributes no user mappings
  * (never a guessed repair) and generated defaults remain effective.
@@ -159,10 +158,11 @@ export interface AliasRegistryAuthority {
     readonly revision: number;
     readonly providerId: string;
     readonly modelId: string;
-    readonly alias: string;
+    /** User-facing name suffix; the authority owns `${providerId}/`. */
+    readonly modelName: string;
   }): Promise<AliasCommandResult>;
   /** Target-scoped reset (Spec v1.0 §15.5): removes the user override so
-   *  the generated `provider/model` default becomes effective again. */
+   *  the Catalog-derived default Model name and alias become effective again. */
   resetForModel(input: {
     readonly revision: number;
     readonly providerId: string;
@@ -608,7 +608,7 @@ export function createAliasRegistryAuthority(
       readonly revision: number;
       readonly providerId: string;
       readonly modelId: string;
-      readonly alias: string;
+      readonly modelName: string;
     }): Promise<AliasCommandResult> {
       await refresh();
       if (input.revision !== current.revision) {
@@ -619,7 +619,39 @@ export function createAliasRegistryAuthority(
         provider: input.providerId,
         model: input.modelId,
       });
+      if (
+        input.modelName.length === 0 ||
+        input.modelName.trim() !== input.modelName ||
+        input.modelName.includes("/")
+      ) {
+        const invalidAlias = `${input.providerId}/${input.modelName}`;
+        return validationFailure([
+          {
+            alias: invalidAlias,
+            code: "invalid" as const,
+            message:
+              "Model name must be non-empty, must not contain '/', and must not have surrounding whitespace.",
+          },
+        ]);
+      }
+      const alias = `${input.providerId}/${input.modelName}`;
       const targetKey = canonicalTargetKey(target);
+      const currentAliasRef = currentUserAliases()[alias];
+      if (currentAliasRef !== undefined) {
+        const existing = parseAliasTarget(currentAliasRef);
+        if (
+          "target" in existing &&
+          canonicalTargetKey(existing.target) !== targetKey
+        ) {
+          return validationFailure([
+            {
+              alias,
+              code: "duplicate" as const,
+              message: `Model name "${input.modelName}" is already used by another model in provider "${input.providerId}".`,
+            },
+          ]);
+        }
+      }
       if (!facts.knownTargets.has(targetKey)) {
         return Object.freeze({
           outcome: "invalid",
@@ -629,7 +661,7 @@ export function createAliasRegistryAuthority(
             message: `The model is not in the active catalog: ${input.providerId}/${input.modelId}.`,
             entries: Object.freeze([
               {
-                alias: input.alias,
+                alias,
                 code: "unknown" as const,
                 message: `Target "${input.providerId}/${input.modelId}" is not in the active catalog.`,
               },
@@ -637,64 +669,46 @@ export function createAliasRegistryAuthority(
           },
         });
       }
-      const keyError = aliasKeyError(input.alias);
+      const keyError = aliasKeyError(alias);
       if (keyError !== undefined) {
-        return validationFailure([
-          { alias: input.alias, ...keyError },
-        ]);
+        return validationFailure([{ alias, ...keyError }]);
       }
-      // Provider Activation (Spec v1.0 §5.8): the generated default is
-      // derived state and is never persisted. Setting a custom alias equal
-      // to the target's generated default is a no-op override — it removes
-      // any existing user override so the derived default stays derived.
-      if (generatedDefaultAlias(target) === input.alias) {
-        const existing = { ...currentUserAliases() };
-        let removed = false;
-        for (const [alias, ref] of Object.entries(existing)) {
-          const parsed = parseAliasTarget(ref);
-          if (
-            "target" in parsed &&
-            canonicalTargetKey(parsed.target) === targetKey
-          ) {
-            delete existing[alias];
-            removed = true;
-          }
-        }
-        if (!removed) {
-          // No override exists: the generated default is already effective.
-          return Object.freeze({ outcome: "ok", state: current });
-        }
-        const nextRaw = serialized(existing);
-        return commit(current, nextRaw, Object.freeze(existing));
-      }
-      // A custom alias must not collide with another target's effective
-      // default or custom alias (Spec §11.6): the generated default of a
-      // DIFFERENT target cannot be claimed by this override.
-      for (const other of facts.targets) {
-        if (canonicalTargetKey(other) === targetKey) continue;
-        if (generatedDefaultAlias(other) === input.alias) {
-          return validationFailure([
-            {
-              alias: input.alias,
-              code: "duplicate" as const,
-              message: `Alias "${input.alias}" is the generated default of another model and cannot be reused.`,
-            },
-          ]);
-        }
-      }
+      // Evaluate the target's derived default as if this target had no user
+      // override, while every OTHER user-owned model name remains reserved.
+      // This keeps Restore semantics aligned with the effective registry and
+      // lets a new custom name reserve a catalog default, which is then
+      // deterministically renumbered for the other model.
       const nextAliases = { ...currentUserAliases() };
-      // Replace the one override for this target: remove any prior entry
-      // that mapped this canonical target (regardless of its alias key).
-      for (const [alias, ref] of Object.entries(nextAliases)) {
+      let removedTargetOverride = false;
+      for (const [existingAlias, ref] of Object.entries(nextAliases)) {
         const parsed = parseAliasTarget(ref);
         if (
           "target" in parsed &&
           canonicalTargetKey(parsed.target) === targetKey
         ) {
-          delete nextAliases[alias];
+          delete nextAliases[existingAlias];
+          removedTargetOverride = true;
         }
       }
-      nextAliases[input.alias] = target;
+      const withoutTargetOverride = computeEffectiveAliasRegistry({
+        userAliases: nextAliases,
+        catalogTargets: facts.targets,
+        catalogVersion: facts.catalogVersion,
+        knownTargets: facts.knownTargets,
+      });
+      const derivedDefaultAlias = withoutTargetOverride.aliases.find(
+        (entry) =>
+          entry.layer === "default" &&
+          canonicalTargetKey(entry.target) === targetKey,
+      )?.alias;
+      if (derivedDefaultAlias === alias) {
+        if (!removedTargetOverride) {
+          return Object.freeze({ outcome: "ok", state: current });
+        }
+        const nextRaw = serialized(nextAliases);
+        return commit(current, nextRaw, Object.freeze(nextAliases));
+      }
+      nextAliases[alias] = target;
       const userErrors = proposalUserErrors(nextAliases, facts);
       if (userErrors.length > 0) {
         return validationFailure(userErrors);

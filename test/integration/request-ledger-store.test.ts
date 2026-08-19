@@ -231,6 +231,10 @@ describe("Request Ledger store public seam", () => {
       const entry = store.begin(
         index % 2 === 0 ? "openai-responses" : "anthropic-messages",
       );
+      entry.authorized({
+        effectiveSessionId,
+        ...(index % 2 === 0 ? {} : { clientSessionId }),
+      });
       if (index % 3 === 0) {
         entry.modelResolved({
           externalAlias: `alias-${index}`,
@@ -277,6 +281,10 @@ describe("Request Ledger store public seam", () => {
     expect(modelB.hasMore).toBe(true);
     const protocol = store.query({ protocolId: "anthropic-messages" });
     expect(protocol.records.map((record) => record.id)).toEqual([
+      11, 9, 7, 5, 3, 1,
+    ]);
+    const session = store.query({ clientSessionId });
+    expect(session.records.map((record) => record.id)).toEqual([
       11, 9, 7, 5, 3, 1,
     ]);
     const range = store.query({ from: 1_700_000_000_000, to: 1_700_000_000_000 });

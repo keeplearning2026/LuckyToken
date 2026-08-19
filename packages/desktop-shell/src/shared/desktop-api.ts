@@ -39,6 +39,24 @@ import type {
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
 
+export type {
+  AnalyticsFilter,
+  AnalyticsOptionsResult,
+  AnalyticsSummary,
+  PrimaryStatus,
+  RequestLedgerQuery,
+  RequestLedgerRecord,
+  RuntimeCommand,
+  StatusSnapshot,
+} from "@luckytoken/application-control-plane/control-plane";
+export {
+  formatPercent,
+  formatTimestamp,
+  formatTokenCount,
+  formatTokensPerSecond,
+  projectRequestLedger,
+} from "@luckytoken/application-control-plane/ledger-projection";
+
 export interface DesktopControlPlaneApi {
   getStatus(): Promise<StatusSnapshot>;
   onStatus(listener: (status: StatusSnapshot) => void): () => void;
@@ -87,6 +105,7 @@ export interface DesktopPlatformApi {
   pickDirectory(): Promise<string | undefined>;
   pickSaveFile(options: SaveFileOptions): Promise<string | undefined>;
   openExternal(url: string): Promise<void>;
+  writeClipboardText(value: string): Promise<void>;
   getDesktopVersion(): Promise<string>;
 }
 

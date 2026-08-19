@@ -6,7 +6,10 @@
   "files": [
     "dist"
   ],
-  "exports": { "./control-plane": { "types": "./dist/control-plane.d.ts", "import": "./dist/control-plane.js" } },
+  "exports": {
+    "./control-plane": { "types": "./dist/control-plane.d.ts", "import": "./dist/control-plane.js" },
+    "./ledger-projection": { "types": "./dist/ledger-projection.d.ts", "import": "./dist/ledger-projection.js" }
+  },
   "dependencies": {
     "@luckytoken/provider-contract": "0.1.0"
   },

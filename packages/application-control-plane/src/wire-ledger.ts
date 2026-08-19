@@ -35,6 +35,7 @@ const LEDGER_QUERY_KEYS: ReadonlySet<string> = new Set([
   "providerId",
   "realModelId",
   "projectDir",
+  "clientSessionId",
   "outcome",
   "from",
   "to",
@@ -501,11 +502,16 @@ export function decodeRequestLedgerQuery(
     value.projectDir === undefined
       ? undefined
       : boundedText(value.projectDir, 1_024);
+  const clientSessionId =
+    value.clientSessionId === undefined
+      ? undefined
+      : boundedText(value.clientSessionId, 1_024);
   if (
     (value.protocolId !== undefined && protocolId === undefined) ||
     (value.providerId !== undefined && providerId === undefined) ||
     (value.realModelId !== undefined && realModelId === undefined) ||
-    (value.projectDir !== undefined && projectDir === undefined)
+    (value.projectDir !== undefined && projectDir === undefined) ||
+    (value.clientSessionId !== undefined && clientSessionId === undefined)
   ) {
     return undefined;
   }
@@ -537,6 +543,7 @@ export function decodeRequestLedgerQuery(
     ...(providerId === undefined ? {} : { providerId }),
     ...(realModelId === undefined ? {} : { realModelId }),
     ...(projectDir === undefined ? {} : { projectDir }),
+    ...(clientSessionId === undefined ? {} : { clientSessionId }),
     ...(outcome === undefined ? {} : { outcome }),
     ...(from === undefined ? {} : { from }),
     ...(to === undefined ? {} : { to }),

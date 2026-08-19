@@ -3,11 +3,11 @@
  * the pure, deterministic overlay of two layers:
  *
  * - generated defaults (lower layer): every canonical target in the
- *   authoritative Catalog derives its default alias deterministically as
- *   `${providerId}/${modelId}`. Generated defaults are a pure function of
- *   the Catalog and are never persisted to `model-aliases.json`. A model
- *   whose id contains `/` keeps the full text
- *   (`commandcode-private/deepseek/deepseek-v4-flash`).
+ *   authoritative Catalog derives a slash-free default model name from its
+ *   canonical model id, then namespaces it as `${providerId}/${modelName}`.
+ *   Valid user-owned Model names reserve Provider-local external names, so
+ *   generated defaults deterministically route around those reservations;
+ *   generated defaults are never persisted to `model-aliases.json`.
  * - explicit user overrides (authority layer): the manually editable
  *   `model-aliases.json`; a valid user override claims its canonical
  *   target and suppresses that target's generated default. Removing the
@@ -16,7 +16,9 @@
  * Invariants (acceptance criteria):
  *
  * - every Catalog model has exactly one effective alias (the generated
- *   `provider/model` until a user override replaces it);
+ *   `${providerId}/${defaultModelName}` until a user override replaces it);
+ * - every valid user override remains in the canonical target Provider's
+ *   namespace: `${providerId}/${modelName}`;
  * - one external alias maps to exactly one canonical (providerId, modelId);
  * - at most one effective alias per canonical target: a proposal that would
  *   produce a duplicate canonical target is rejected with a `duplicate`
@@ -25,10 +27,9 @@
  *   `invalid` (malformed alias/target), `ambiguous` (a target that cannot
  *   name one canonical model), `unknown` (well-formed but absent from the
  *   active Catalog) and `duplicate` (canonical target already mapped) —
- *   without ever replacing the active registry. Alias text is an opaque
- *   external identity and may contain `/`; canonical identity is
- *   determined only by the explicit mapped target. The generated alias
- *   string is never parsed to reconstruct canonical identity.
+ *   without ever replacing the active registry. Canonical identity is still
+ *   determined only by the explicit target; alias strings are never parsed
+ *   to reconstruct routing identity.
  *
  * All inputs are injected (Catalog snapshot facts) so tests are
  * deterministic; this module never touches the filesystem, the clock, or
@@ -62,14 +63,126 @@ export function canonicalTargetKey(target: AliasCanonicalTarget): string {
   return `${target.provider}\u0000${target.model}`;
 }
 
+/** Default external model-name seed for one canonical Provider model id. */
+export function normalizeModelName(modelId: string): string {
+  return modelId.replaceAll("/", "-");
+}
+
+export interface DefaultModelNameAllocation {
+  get(target: AliasCatalogTarget): string | undefined;
+}
+
+export interface DefaultModelNameAllocationOptions {
+  readonly reservedModelNames?: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
 /**
- * The deterministic generated default alias for one canonical Catalog
- * target: exactly `provider/model`. A model id that itself contains `/`
- * is preserved verbatim — the alias string is opaque and never parsed to
- * reconstruct canonical identity (Spec §11.5).
+ * Allocate the final default external model name for every canonical Catalog
+ * target. Allocation is Provider-scoped and independent of Catalog input order.
+ * Names are fitted to the 128-character alias bound after the Provider prefix;
+ * valid user names may reserve slots. A model whose canonical id already equals
+ * an available normalized name owns that natural name; other collisions receive
+ * the first available `-N` suffix without taking a natural or user-owned name.
  */
-export function generatedDefaultAlias(target: AliasCatalogTarget): string {
-  return `${target.provider}/${target.model}`;
+export function deriveDefaultModelNames(
+  catalogTargets: readonly AliasCatalogTarget[],
+  options: DefaultModelNameAllocationOptions = {},
+): DefaultModelNameAllocation {
+  const byProvider = new Map<string, AliasCatalogTarget[]>();
+  for (const target of catalogTargets) {
+    const group = byProvider.get(target.provider) ?? [];
+    group.push(target);
+    byProvider.set(target.provider, group);
+  }
+
+  const names = new Map<string, string>();
+  for (const [provider, providerTargets] of byProvider) {
+    const maxModelNameLength = MAX_ALIAS_LENGTH - provider.length - 1;
+    const fit = (value: string): string =>
+      value.length <= maxModelNameLength
+        ? value
+        : value.slice(0, maxModelNameLength);
+    const numbered = (base: string, suffix: number): string => {
+      const marker = `-${suffix}`;
+      return `${base.slice(0, Math.max(0, maxModelNameLength - marker.length))}${marker}`;
+    };
+    const groups = new Map<string, AliasCatalogTarget[]>();
+    for (const target of providerTargets) {
+      const base = fit(normalizeModelName(target.model));
+      const group = groups.get(base) ?? [];
+      group.push(target);
+      groups.set(base, group);
+    }
+
+    const reservedByUser = new Set(options.reservedModelNames?.get(provider) ?? []);
+    const reservedNaturalNames = new Set([...groups.keys(), ...reservedByUser]);
+    const usedNames = new Set<string>(reservedByUser);
+    const owners = new Map<string, AliasCatalogTarget>();
+    for (const base of [...groups.keys()].sort()) {
+      if (reservedByUser.has(base)) continue;
+      const candidates = [...(groups.get(base) ?? [])].sort((a, b) =>
+        a.model < b.model ? -1 : a.model > b.model ? 1 : 0,
+      );
+      const owner = candidates.find((target) => target.model === base) ?? candidates[0];
+      if (owner === undefined) continue;
+      owners.set(base, owner);
+      usedNames.add(base);
+      names.set(canonicalTargetKey(owner), base);
+    }
+
+    for (const base of [...groups.keys()].sort()) {
+      const owner = owners.get(base);
+      const candidates = [...(groups.get(base) ?? [])].sort((a, b) =>
+        a.model < b.model ? -1 : a.model > b.model ? 1 : 0,
+      );
+      for (const target of candidates) {
+        if (target === owner) continue;
+        let suffix = 2;
+        let modelName = numbered(base, suffix);
+        while (reservedNaturalNames.has(modelName) || usedNames.has(modelName)) {
+          suffix += 1;
+          modelName = numbered(base, suffix);
+        }
+        usedNames.add(modelName);
+        names.set(canonicalTargetKey(target), modelName);
+      }
+    }
+  }
+  return Object.freeze({
+    get: (target: AliasCatalogTarget) => names.get(canonicalTargetKey(target)),
+  });
+}
+
+/** Final generated aliases derived from the allocated default model names. */
+export function deriveDefaultAliases(
+  catalogTargets: readonly AliasCatalogTarget[],
+  options: DefaultModelNameAllocationOptions = {},
+): ReadonlyMap<string, string> {
+  const modelNames = deriveDefaultModelNames(catalogTargets, options);
+  const aliases = new Map<string, string>();
+  for (const target of catalogTargets) {
+    const modelName = modelNames.get(target);
+    if (modelName === undefined) continue;
+    aliases.set(canonicalTargetKey(target), `${target.provider}/${modelName}`);
+  }
+  return aliases;
+}
+
+function reservedModelNamesFromUserAliases(
+  userAliases: Readonly<Record<string, unknown>>,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const reserved = new Map<string, Set<string>>();
+  for (const [alias, ref] of Object.entries(userAliases)) {
+    if (aliasKeyError(alias) !== undefined) continue;
+    const parsed = parseAliasTarget(ref);
+    if ("error" in parsed) continue;
+    if (aliasNamespaceError(alias, parsed.target) !== undefined) continue;
+    const prefix = `${parsed.target.provider}/`;
+    const names = reserved.get(parsed.target.provider) ?? new Set<string>();
+    names.add(alias.slice(prefix.length));
+    reserved.set(parsed.target.provider, names);
+  }
+  return reserved;
 }
 
 /**
@@ -95,6 +208,9 @@ export function computeConfiguredAliasMappings(input: {
   const byAlias = new Map<string, AliasCanonicalTarget>();
   const claimedTargets = new Set<string>();
   const userAliasKeys = new Set(Object.keys(input.userAliases));
+  const defaultAliases = deriveDefaultAliases(input.catalogTargets, {
+    reservedModelNames: reservedModelNamesFromUserAliases(input.userAliases),
+  });
   const claim = (alias: string, ref: unknown): void => {
     const keyError = aliasKeyError(alias);
     if (keyError !== undefined) return;
@@ -110,6 +226,7 @@ export function computeConfiguredAliasMappings(input: {
     if (keyError !== undefined) continue;
     const parsed = parseAliasTarget(ref);
     if ("error" in parsed) continue;
+    if (aliasNamespaceError(alias, parsed.target) !== undefined) continue;
     // A custom alias colliding with another target's generated default is
     // not a configured mapping (the proposal is rejected upstream).
     let collision = false;
@@ -117,7 +234,7 @@ export function computeConfiguredAliasMappings(input: {
       if (canonicalTargetKey(other) === canonicalTargetKey(parsed.target)) {
         continue;
       }
-      if (generatedDefaultAlias(other) === alias) {
+      if (defaultAliases.get(canonicalTargetKey(other)) === alias) {
         collision = true;
         break;
       }
@@ -126,7 +243,8 @@ export function computeConfiguredAliasMappings(input: {
     claim(alias, ref);
   }
   for (const target of input.catalogTargets) {
-    const alias = generatedDefaultAlias(target);
+    const alias = defaultAliases.get(canonicalTargetKey(target));
+    if (alias === undefined) continue;
     // The user owns the alias key even when their mapping is broken: the
     // generated default must never silently replace it. A target already
     // claimed by a user override suppresses its generated default.
@@ -215,6 +333,21 @@ export function aliasKeyError(alias: string): Omit<AliasValidationErrorProjectio
   return undefined;
 }
 
+function aliasNamespaceError(
+  alias: string,
+  target: AliasCanonicalTarget,
+): Omit<AliasValidationErrorProjection, "alias"> | undefined {
+  const prefix = `${target.provider}/`;
+  const modelName = alias.startsWith(prefix) ? alias.slice(prefix.length) : "";
+  if (modelName.length === 0 || modelName.includes("/")) {
+    return {
+      code: "invalid",
+      message: `Alias "${alias}" is not valid for Provider "${target.provider}": it must be "${target.provider}/<model-name>" and model-name must not contain '/'.`,
+    };
+  }
+  return undefined;
+}
+
 type EntryOutcome =
   | { readonly kind: "effective"; readonly target: AliasCanonicalTarget }
   | { readonly kind: "error"; readonly error: AliasValidationErrorProjection };
@@ -232,6 +365,10 @@ function evaluateEntry(
   const parsed = parseAliasTarget(ref);
   if ("error" in parsed) {
     return { kind: "error", error: { alias, ...parsed.error } };
+  }
+  const namespaceError = aliasNamespaceError(alias, parsed.target);
+  if (namespaceError !== undefined) {
+    return { kind: "error", error: { alias, ...namespaceError } };
   }
   const key = canonicalTargetKey(parsed.target);
   if (claimedTargets.has(key)) {
@@ -277,6 +414,9 @@ export function computeEffectiveAliasRegistry(input: {
   const errors: AliasValidationErrorProjection[] = [];
   const claimedTargets = new Set<string>();
   const userAliasKeys = new Set(Object.keys(input.userAliases));
+  const defaultAliases = deriveDefaultAliases(input.catalogTargets, {
+    reservedModelNames: reservedModelNamesFromUserAliases(input.userAliases),
+  });
   for (const [alias, ref] of Object.entries(input.userAliases)) {
     const outcome = evaluateEntry(alias, ref, claimedTargets, input.knownTargets);
     if (outcome.kind === "error") {
@@ -292,7 +432,7 @@ export function computeEffectiveAliasRegistry(input: {
       if (canonicalTargetKey(other) === canonicalTargetKey(outcome.target)) {
         continue;
       }
-      if (generatedDefaultAlias(other) === alias) {
+      if (defaultAliases.get(canonicalTargetKey(other)) === alias) {
         errors.push({
           alias,
           code: "duplicate",
@@ -306,7 +446,8 @@ export function computeEffectiveAliasRegistry(input: {
     claimedTargets.add(canonicalTargetKey(outcome.target));
   }
   for (const target of input.catalogTargets) {
-    const alias = generatedDefaultAlias(target);
+    const alias = defaultAliases.get(canonicalTargetKey(target));
+    if (alias === undefined) continue;
     // A user alias that claims this target (or owns this alias key, even
     // when broken) suppresses the generated default: the normal override
     // path is not a duplicate error.

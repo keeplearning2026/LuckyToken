@@ -53,6 +53,7 @@ describe("normalizeAnalyticsQuery (Ticket 21 contract)", () => {
       filters: {
         providers: ["anthropic"],
         protocols: ["anthropic-messages"],
+        sessions: ["20000000-0000-4000-8000-000000000041"],
         outcomes: ["success", "failed"],
       },
       groupBy: "provider",
@@ -66,6 +67,7 @@ describe("normalizeAnalyticsQuery (Ticket 21 contract)", () => {
       filters: {
         providers: ["anthropic"],
         protocols: ["anthropic-messages"],
+        sessions: ["20000000-0000-4000-8000-000000000041"],
         outcomes: ["success", "failed"],
       },
       groupBy: "provider",
@@ -261,6 +263,7 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
       projects: [],
+      sessions: [],
       outcomes: ["success"],
     });
     expect(decoded).toEqual({
@@ -270,6 +273,7 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
       projects: [],
+      sessions: [],
       outcomes: ["success"],
     });
   });
@@ -299,6 +303,7 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
           models: [],
           protocols: [],
           projects: [],
+          sessions: [],
           outcomes: [],
           [key]: 5,
         }),
@@ -463,6 +468,7 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
         models: [],
         protocols: [],
         projects: [],
+        sessions: [],
         outcomes: [],
         truncated: "yes",
       }),
@@ -475,6 +481,7 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
         models: [],
         protocols: [],
         projects: [],
+        sessions: [],
         outcomes: [],
       }),
     ).toBeUndefined();
@@ -486,8 +493,24 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
         models: [],
         protocols: [],
         projects: [],
+        sessions: [],
         outcomes: [],
       }),
+    ).toBeUndefined();
+  });
+
+  it("decodes a non-negative finite token speed without requiring a safe integer", () => {
+    expect(
+      decodeAnalyticsSummary({ ...summaryTotals(), outputTokensPerSecond: 28.5 }),
+    ).toMatchObject({ outputTokensPerSecond: 28.5 });
+    expect(
+      decodeAnalyticsSummary({ ...summaryTotals(), outputTokensPerSecond: -0.1 }),
+    ).toBeUndefined();
+    expect(
+      decodeAnalyticsSummary({ ...summaryTotals(), outputTokensPerSecond: Number.POSITIVE_INFINITY }),
+    ).toBeUndefined();
+    expect(
+      decodeAnalyticsSummary({ ...summaryTotals(), outputTokensPerSecond: Number.NaN }),
     ).toBeUndefined();
   });
 

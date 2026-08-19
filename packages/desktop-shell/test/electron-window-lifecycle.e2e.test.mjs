@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { _electron as electron } from "playwright";
@@ -162,6 +162,40 @@ async function waitForRunning(client) {
   throw new Error(`Data Plane did not reach running state: ${status?.modelDataPlane ?? "unknown"}`);
 }
 
+async function waitForBackendReplacement(
+  descriptorPath,
+  previousPid,
+  expectedBuildId,
+) {
+  let lastError;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    let candidate;
+    try {
+      const endpoint = parseControlPlaneDescriptor(
+        JSON.parse(await readFile(descriptorPath, "utf8")),
+      );
+      candidate = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      const hello = await candidate.hello(controlPlaneVersion);
+      assert.equal(hello.type, "compatible");
+      const status = await candidate.getStatus();
+      if (
+        status.ownership?.owner.pid !== previousPid &&
+        hello.application.buildId === expectedBuildId
+      ) {
+        return { client: candidate, hello, status };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await candidate?.close().catch(() => undefined);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
+  throw lastError ?? new Error("current bundled Backend did not replace the stale desktop Backend");
+}
+
 async function openWindow(application) {
   await application.evaluate(({ app }) => {
     app.emit("second-instance", {}, [], "");
@@ -180,6 +214,34 @@ async function waitForNoWindows(application) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
   }
   throw new Error("management window did not close");
+}
+
+async function waitForProcessExit(child, message) {
+  if (child.exitCode !== null) return;
+  await Promise.race([
+    new Promise((resolvePromise) => child.once("exit", resolvePromise)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(message)), 5_000),
+    ),
+  ]);
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPidExit(pid, message, timeoutMs = 5_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!processExists(pid)) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  throw new Error(message);
 }
 
 test(
@@ -201,6 +263,7 @@ test(
         executablePath,
         env: {
           ...process.env,
+          LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
           USERPROFILE: home,
           HOME: home,
           APPDATA: appData,
@@ -238,6 +301,14 @@ test(
       second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
       await second.getByRole("tab", { name: "Advanced" }).click();
+      const rendererSetting = await second.evaluate(async () => {
+        const result = await window.luckytoken.control.executeSettings({
+          command: "query",
+          keys: ["diagnostics.deepCapture.enabled"],
+        });
+        return result.settings["diagnostics.deepCapture.enabled"]?.value;
+      });
+      assert.equal(rendererSetting, true, "reopened renderer must read the enabled setting through preload");
       await second.getByRole("button", { name: "Disable deep diagnostics" }).waitFor();
       assert.equal(application.windows().length, 1);
 
@@ -284,6 +355,366 @@ test(
         if (process.exitCode === null) process.kill();
       }
       await rm(home, { recursive: true, force: true }).catch(() => undefined);
+    }
+  },
+);
+
+test(
+  "a desktop-owned Backend retires after its Electron owner is forcibly terminated",
+  { skip: process.platform !== "win32", timeout: 90_000 },
+  async () => {
+    const executablePath = await latestPackagedExecutable();
+    const home = await mkdtemp(join(tmpdir(), "luckytoken-electron-owner-lease-"));
+    const port = await freePort();
+    const descriptorPath = await writeConfig(home, port);
+    const appData = join(home, "AppData", "Roaming");
+    const localAppData = join(home, "AppData", "Local");
+    await Promise.all([mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true })]);
+
+    let application;
+    let client;
+    let backendPid;
+    let electronMainPid;
+    try {
+      application = await electron.launch({
+        executablePath,
+        env: {
+          ...process.env,
+          LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+          USERPROFILE: home,
+          HOME: home,
+          APPDATA: appData,
+          LOCALAPPDATA: localAppData,
+        },
+      });
+      const endpoint = await waitForEndpoint(descriptorPath);
+      client = await connect(endpoint);
+      const status = await client.getStatus();
+      assert.equal(status.ownership?.owner.kind, "desktop");
+      backendPid = status.ownership?.owner.pid;
+      assert.ok(backendPid, "desktop-owned Backend must publish its owner PID");
+      assert.equal(application.windows().length, 0, "tray-first startup must not require a renderer");
+      electronMainPid = await application.evaluate(() => process.pid);
+      assert.ok(processExists(electronMainPid), "Electron Main PID must exist before forced termination");
+
+      process.kill(electronMainPid);
+      await waitForPidExit(
+        electronMainPid,
+        "Electron Main did not exit after the forced termination",
+        5_000,
+      );
+
+      await Promise.race([
+        client.disconnected,
+        (async () => {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 17_000));
+          const probe = await client.executeApplicationCommand({
+            command: "desktop_owner",
+            action: "claim",
+            leaseId: "packaged-e2e-diagnostic-claim",
+          });
+          throw new Error(
+            `desktop-owned Backend remained connected after lease expiry; lease probe outcome=${probe.outcome}`,
+          );
+        })(),
+      ]);
+      await waitForPidExit(
+        backendPid,
+        "desktop-owned Backend process remained alive after owner lease expiry",
+        5_000,
+      );
+      await client.close().catch(() => undefined);
+      client = undefined;
+      await application.close().catch(() => undefined);
+      application = undefined;
+    } finally {
+      if (client !== undefined) {
+        await Promise.race([
+          client
+            .executeApplicationCommand({ command: "quit", acknowledged: true })
+            .catch(() => undefined),
+          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+        await client.close().catch(() => undefined);
+      }
+      if (application !== undefined) {
+        if (electronMainPid !== undefined && processExists(electronMainPid)) {
+          process.kill(electronMainPid);
+        }
+        await application.close().catch(() => undefined);
+      }
+      if (backendPid !== undefined && processExists(backendPid)) {
+        // Cleanup only: the assertion above proves the product behavior.
+        // If it failed, a direct Control Plane quit was already attempted.
+        await waitForPidExit(backendPid, "Backend cleanup did not finish", 5_000).catch(() => undefined);
+      }
+      await rm(home, { recursive: true, force: true }).catch(() => undefined);
+    }
+  },
+);
+
+test(
+  "a repository packaged build is never blocked by a product-domain legacy shell",
+  { skip: process.platform !== "win32", timeout: 90_000 },
+  async () => {
+    const repositoryExecutable = await latestPackagedExecutable();
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-instance-domain-"));
+    const installedDirectory = join(root, "installed", "LuckyToken-win32-x64");
+    await cp(dirname(repositoryExecutable), installedDirectory, { recursive: true });
+    const legacyExecutable = join(installedDirectory, "LuckyToken.exe");
+    const legacyBuildId = "0".repeat(64);
+    await writeFile(
+      join(installedDirectory, "resources", "backend", "build-id.txt"),
+      `${legacyBuildId}\n`,
+      "utf8",
+    );
+    const expectedBuildId = (
+      await readFile(
+        join(dirname(repositoryExecutable), "resources", "backend", "build-id.txt"),
+        "utf8",
+      )
+    ).trim();
+    assert.match(expectedBuildId, /^[a-f0-9]{64}$/u);
+    assert.notEqual(expectedBuildId, legacyBuildId);
+    const home = join(root, "home");
+    const port = await freePort();
+    const descriptorPath = await writeConfig(home, port);
+    const appData = join(home, "AppData", "Roaming");
+    const localAppData = join(home, "AppData", "Local");
+    await Promise.all([mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true })]);
+    const environment = {
+      ...process.env,
+      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      USERPROFILE: home,
+      HOME: home,
+      APPDATA: appData,
+      LOCALAPPDATA: localAppData,
+    };
+
+    let legacy;
+    let legacyProcess;
+    let current;
+    let currentProcess;
+    let client;
+    try {
+      legacy = await electron.launch({
+        executablePath: legacyExecutable,
+        env: environment,
+      });
+      legacyProcess = legacy.process();
+      const endpoint = await waitForEndpoint(descriptorPath);
+      client = await connect(endpoint);
+      const legacyHello = await client.hello(controlPlaneVersion);
+      assert.equal(legacyHello.type, "compatible");
+      assert.equal(legacyHello.application.buildId, legacyBuildId);
+      const before = await waitForRunning(client);
+      const backendPid = before.ownership?.owner.pid;
+      assert.ok(backendPid);
+
+      current = await electron.launch({
+        executablePath: repositoryExecutable,
+        env: environment,
+      });
+      currentProcess = current.process();
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+
+      assert.equal(
+        legacyProcess.exitCode,
+        null,
+        "legacy product-domain shell may remain alive during the one-time transition",
+      );
+      assert.equal(
+        currentProcess.exitCode,
+        null,
+        "repository build must not be rejected by a legacy product-domain lock",
+      );
+      const legacyUserData = await legacy.evaluate(({ app }) => app.getPath("userData"));
+      const currentUserData = await current.evaluate(({ app }) => app.getPath("userData"));
+      assert.notEqual(currentUserData, legacyUserData);
+      assert.match(
+        currentUserData.replaceAll("\\", "/"),
+        /@luckytoken\/desktop-shell-builds\/[a-f0-9]{32}$/u,
+      );
+
+      await Promise.race([
+        client.disconnected,
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("legacy desktop Backend remained connected")),
+            10_000,
+          ),
+        ),
+      ]);
+      await client.close().catch(() => undefined);
+      client = undefined;
+
+      const replacement = await waitForBackendReplacement(
+        descriptorPath,
+        backendPid,
+        expectedBuildId,
+      );
+      client = replacement.client;
+      const after = await waitForRunning(client);
+      assert.notEqual(
+        after.ownership?.owner.pid,
+        backendPid,
+        "repository build must replace a stale desktop-owned Backend build",
+      );
+      assert.equal(replacement.hello.application.buildId, expectedBuildId);
+
+      const page = await openWindow(current);
+      page.setDefaultTimeout(10_000);
+      await page.getByRole("button", { name: "Overview" }).waitFor();
+      await page.getByText("Router running", { exact: true }).waitFor();
+      await page.close();
+      await waitForNoWindows(current);
+
+      const quit = await client.executeApplicationCommand({
+        command: "quit",
+        acknowledged: true,
+      });
+      assert.ok(quit.outcome === "drained" || quit.outcome === "timed_out");
+      await client.close();
+      client = undefined;
+    } finally {
+      if (client !== undefined) {
+        await Promise.race([
+          client
+            .executeApplicationCommand({ command: "quit", acknowledged: true })
+            .catch(() => undefined),
+          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+        await client.close().catch(() => undefined);
+      }
+      for (const [application, child] of [
+        [current, currentProcess],
+        [legacy, legacyProcess],
+      ]) {
+        if (application === undefined || child === undefined || child.exitCode !== null) {
+          continue;
+        }
+        await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
+        await Promise.race([
+          new Promise((resolvePromise) => child.once("exit", resolvePromise)),
+          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+        if (child.exitCode === null) child.kill();
+      }
+      await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  },
+);
+
+test(
+  "a newly launched packaged shell path replaces a stale primary without restarting the Backend",
+  { skip: process.platform !== "win32", timeout: 90_000 },
+  async () => {
+    const sourceExecutable = await latestPackagedExecutable();
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-handoff-"));
+    const primaryDirectory = join(root, "primary");
+    const replacementDirectory = join(root, "replacement");
+    await Promise.all([
+      cp(dirname(sourceExecutable), primaryDirectory, { recursive: true }),
+      cp(dirname(sourceExecutable), replacementDirectory, { recursive: true }),
+    ]);
+    const primaryExecutable = join(primaryDirectory, "LuckyToken.exe");
+    const replacementExecutable = join(replacementDirectory, "LuckyToken.exe");
+    const home = join(root, "home");
+    const port = await freePort();
+    const descriptorPath = await writeConfig(home, port);
+    const appData = join(home, "AppData", "Roaming");
+    const localAppData = join(home, "AppData", "Local");
+    await Promise.all([mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true })]);
+    const environment = {
+      ...process.env,
+      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      USERPROFILE: home,
+      HOME: home,
+      APPDATA: appData,
+      LOCALAPPDATA: localAppData,
+    };
+
+    let primary;
+    let primaryProcess;
+    let replacement;
+    let replacementProcess;
+    let client;
+    try {
+      primary = await electron.launch({
+        executablePath: primaryExecutable,
+        env: environment,
+      });
+      primaryProcess = primary.process();
+      const endpoint = await waitForEndpoint(descriptorPath);
+      client = await connect(endpoint);
+      const before = await waitForRunning(client);
+      const backendPid = before.ownership?.owner.pid;
+      assert.ok(backendPid, "desktop-owned Backend must expose its owner pid");
+      assert.equal(primary.windows().length, 0);
+
+      replacement = await electron.launch({
+        executablePath: replacementExecutable,
+        env: environment,
+      });
+      replacementProcess = replacement.process();
+
+      await waitForProcessExit(
+        primaryProcess,
+        "stale Electron shell did not exit during build handoff",
+      );
+      assert.equal(
+        replacementProcess.exitCode,
+        null,
+        "replacement Electron shell must remain alive",
+      );
+
+      const after = await client.getStatus();
+      assert.equal(
+        after.ownership?.owner.pid,
+        backendPid,
+        "desktop shell handoff must preserve the authoritative Backend process",
+      );
+      assert.equal(after.modelDataPlane, "running");
+
+      const page = await openWindow(replacement);
+      page.setDefaultTimeout(10_000);
+      await page.getByRole("button", { name: "Overview" }).waitFor();
+      assert.equal(replacement.windows().length, 1);
+      await page.close();
+      await waitForNoWindows(replacement);
+
+      const quit = await client.executeApplicationCommand({
+        command: "quit",
+        acknowledged: true,
+      });
+      assert.ok(quit.outcome === "drained" || quit.outcome === "timed_out");
+      await client.close();
+      client = undefined;
+    } finally {
+      if (client !== undefined) {
+        await Promise.race([
+          client
+            .executeApplicationCommand({ command: "quit", acknowledged: true })
+            .catch(() => undefined),
+          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+        await client.close().catch(() => undefined);
+      }
+      for (const [application, child] of [
+        [replacement, replacementProcess],
+        [primary, primaryProcess],
+      ]) {
+        if (application === undefined || child === undefined || child.exitCode !== null) {
+          continue;
+        }
+        await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
+        await Promise.race([
+          new Promise((resolvePromise) => child.once("exit", resolvePromise)),
+          new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+        ]);
+        if (child.exitCode === null) child.kill();
+      }
+      await rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
   },
 );

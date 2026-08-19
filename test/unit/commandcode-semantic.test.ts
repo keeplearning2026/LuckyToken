@@ -31,6 +31,24 @@ function model(): Model<string> {
   };
 }
 
+function trustedUsage(
+  input: number,
+  output: number,
+  cacheRead = 0,
+  cacheWrite = 0,
+): Record<string, unknown> {
+  return {
+    inputTokens: input + cacheRead + cacheWrite,
+    inputTokenDetails: {
+      noCacheTokens: input,
+      cacheReadTokens: cacheRead,
+      ...(cacheWrite === 0 ? {} : { cacheWriteTokens: cacheWrite }),
+    },
+    outputTokens: output,
+    totalTokens: input + cacheRead + cacheWrite + output,
+  };
+}
+
 function result(
   rawUsage: Record<string, unknown> | undefined,
   overrides: Partial<CommandCodeResult> = {},
@@ -54,23 +72,31 @@ describe("committed CommandCode to Pi semantics", () => {
   it.each([
     {
       name: "uncached input only",
-      raw: { inputTokens: 10, outputTokens: 2 },
+      raw: {
+        inputTokens: 10,
+        inputTokenDetails: { noCacheTokens: 10, cacheReadTokens: 0 },
+        outputTokens: 2,
+      },
       expected: { input: 10, cacheRead: 0, cacheWrite: 0, output: 2 },
     },
     {
       name: "cache read",
       raw: {
         inputTokens: 10,
-        inputTokenDetails: { cacheReadTokens: 3 },
+        inputTokenDetails: { noCacheTokens: 7, cacheReadTokens: 3 },
         outputTokens: 2,
       },
       expected: { input: 7, cacheRead: 3, cacheWrite: 0, output: 2 },
     },
     {
-      name: "cache write",
+      name: "explicit cache write",
       raw: {
         inputTokens: 10,
-        inputTokenDetails: { cacheWriteTokens: 2 },
+        inputTokenDetails: {
+          noCacheTokens: 8,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 2,
+        },
         outputTokens: 2,
       },
       expected: { input: 8, cacheRead: 0, cacheWrite: 2, output: 2 },
@@ -79,7 +105,11 @@ describe("committed CommandCode to Pi semantics", () => {
       name: "read and write",
       raw: {
         inputTokens: 10,
-        inputTokenDetails: { cacheReadTokens: 3, cacheWriteTokens: 2 },
+        inputTokenDetails: {
+          noCacheTokens: 5,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+        },
         outputTokens: 2,
       },
       expected: { input: 5, cacheRead: 3, cacheWrite: 2, output: 2 },
@@ -179,6 +209,7 @@ describe("committed CommandCode to Pi semantics", () => {
     const message = convertCommittedCommandCodeResult(
       result({
         inputTokens: 4,
+        inputTokenDetails: { noCacheTokens: 4, cacheReadTokens: 0 },
         outputTokens: 6,
         outputTokenDetails: { reasoningTokens: 3 },
         totalTokens: 10,
@@ -239,12 +270,15 @@ describe("committed CommandCode to Pi semantics", () => {
         outputTokens: 1,
       },
     },
-  ])("uses zero failure accounting for $name", ({ raw }) => {
+  ])("degrades invalid usage for $name without failing model semantics", ({ raw }) => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
-    const message = convertCommittedCommandCodeResult(result(raw), authority);
+    const message = convertCommittedCommandCodeResult(
+      result(raw, { content: [{ type: "text", id: "t", text: "ok" }] }),
+      authority,
+    );
     expect(message).toMatchObject({
-      content: [],
-      stopReason: "error",
+      content: [{ type: "text", text: "ok" }],
+      stopReason: "stop",
       usage: {
         input: 0,
         output: 0,
@@ -253,11 +287,16 @@ describe("committed CommandCode to Pi semantics", () => {
         totalTokens: 0,
       },
     });
-    expect(findUpstreamFailureFact(message.diagnostics)).toMatchObject({
-      kind: "conversion",
-      providerCode: "INVALID_COMMITTED_RESULT",
-      retryable: false,
-    });
+    expect(findUpstreamFailureFact(message.diagnostics)).toBeUndefined();
+    expect(
+      message.diagnostics?.some(
+        (diagnostic) =>
+          diagnostic.type === "luckytoken.conversion_notice.v1" &&
+          diagnostic.details?.notice &&
+          (diagnostic.details.notice as { code?: unknown }).code ===
+            "usage_unavailable_degraded",
+      ),
+    ).toBe(true);
   });
 
   it("cross-checks raw inputTokens when an explicit noCache partition is present", () => {
@@ -288,7 +327,7 @@ describe("committed CommandCode to Pi semantics", () => {
     const message = convertCommittedCommandCodeResult(
       result({
         inputTokens: 1,
-        inputTokenDetails: { cacheReadTokens: 1 },
+        inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 1 },
         cachedInputTokens: 1,
         outputTokens: 2,
         outputTokenDetails: { reasoningTokens: 1, textTokens: 1 },
@@ -307,25 +346,30 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(message.usage.cacheWrite1h).toBeUndefined();
   });
 
-  it("uses known top-level aliases when nested details are absent", () => {
+  it("does not infer trusted input/cache fields from aliases when direct usage fields are absent", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
-      result({
-        inputTokens: 4,
-        cachedInputTokens: 1,
-        outputTokens: 3,
-        reasoningTokens: 2,
-        totalTokens: 7,
-      }),
+      result(
+        {
+          inputTokens: 4,
+          cachedInputTokens: 1,
+          outputTokens: 3,
+          reasoningTokens: 2,
+          totalTokens: 7,
+        },
+        { content: [{ type: "text", id: "t", text: "ok" }] },
+      ),
       authority,
     );
 
+    expect(message.stopReason).toBe("stop");
+    expect(message.content).toEqual([{ type: "text", text: "ok" }]);
     expect(message.usage).toMatchObject({
-      input: 3,
-      cacheRead: 1,
-      output: 3,
-      reasoning: 2,
-      totalTokens: 7,
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 0,
+      totalTokens: 0,
     });
   });
 
@@ -356,18 +400,27 @@ describe("committed CommandCode to Pi semantics", () => {
         outputTokenDetails: { textTokens: 2, reasoningTokens: 1 },
       },
     },
-  ])("rejects $name", ({ raw }) => {
+  ])("degrades $name without failing the response", ({ raw }) => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
-    const message = convertCommittedCommandCodeResult(result(raw), authority);
-    expect(message.stopReason).toBe("error");
-    expect(findUpstreamFailureFact(message.diagnostics)?.kind).toBe("conversion");
+    const message = convertCommittedCommandCodeResult(
+      result(raw, { content: [{ type: "text", id: "t", text: "ok" }] }),
+      authority,
+    );
+    expect(message.stopReason).toBe("stop");
+    expect(message.content).toEqual([{ type: "text", text: "ok" }]);
+    expect(findUpstreamFailureFact(message.diagnostics)).toBeUndefined();
+    expect(message.usage.totalTokens).toBe(0);
   });
 
   it("preserves ordered content and finish diagnostics without signatures", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result(
-        { inputTokens: 1, outputTokens: 2 },
+        {
+          inputTokens: 1,
+          inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0 },
+          outputTokens: 2,
+        },
         {
           content: [
             { type: "text", id: "t", text: "text" },
@@ -488,7 +541,7 @@ describe("committed CommandCode to Pi semantics", () => {
       const authority = captureCommandCodeResponseAuthority(model(), () => 10);
       const message = convertCommittedCommandCodeResult(
         result(
-          { inputTokens: 4, outputTokens: 2 },
+          trustedUsage(4, 2),
           {
             content: [
               { type: "text", id: "discarded", text: "partial" },
@@ -517,7 +570,7 @@ describe("committed CommandCode to Pi semantics", () => {
     const validInput = { nested: [1, true, null, { text: "exact" }] };
     const valid = convertCommittedCommandCodeResult(
       result(
-        { inputTokens: 1, outputTokens: 1 },
+        trustedUsage(1, 1),
         {
           content: [
             {
@@ -554,7 +607,7 @@ describe("committed CommandCode to Pi semantics", () => {
     ]) {
       const failed = convertCommittedCommandCodeResult(
         result(
-          { inputTokens: 4, outputTokens: 2 },
+          trustedUsage(4, 2),
           {
             content: [
               {
@@ -660,7 +713,7 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(Object.isFrozen(message.diagnostics?.[0])).toBe(true);
   });
 
-  it("deep-freezes conversion errors and preserves neutral failure beside notices", () => {
+  it("deep-freezes usage degradation notices without manufacturing a neutral failure", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const notice = Object.freeze({
       adapter: "commandcode-private",
@@ -669,13 +722,16 @@ describe("committed CommandCode to Pi semantics", () => {
       action: "degrade" as const,
     });
     const message = convertCommittedCommandCodeResult(
-      result({ inputTokens: 1, outputTokens: 1, totalTokens: 999 }),
+      result(
+        { inputTokens: 1, outputTokens: 1, totalTokens: 999 },
+        { content: [{ type: "text", id: "t", text: "ok" }] },
+      ),
       authority,
       [notice],
     );
 
-    expect(message.stopReason).toBe("error");
-    expect(findUpstreamFailureFact(message.diagnostics)?.kind).toBe("conversion");
+    expect(message.stopReason).toBe("stop");
+    expect(findUpstreamFailureFact(message.diagnostics)).toBeUndefined();
     expect(
       message.diagnostics?.some(
         (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
@@ -708,11 +764,7 @@ describe("committed CommandCode to Pi semantics", () => {
     selected.cost.tiers?.splice(0);
 
     const message = convertCommittedCommandCodeResult(
-      result({
-        inputTokens: 3,
-        inputTokenDetails: { cacheReadTokens: 1 },
-        outputTokens: 1,
-      }),
+      result(trustedUsage(2, 1, 1)),
       authority,
     );
     expect(message.usage.cost).toMatchObject({

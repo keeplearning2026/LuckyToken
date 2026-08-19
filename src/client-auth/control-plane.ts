@@ -31,8 +31,9 @@ import {
  */
 
 export interface ClientTokenControlPlaneHandlerOptions {
-  /** Protocol id → live authority; read at command time so the handler
-   *  always targets the authorities of the currently running Data Plane. */
+  /** Protocol id → Backend-lifetime live authority; read at command time so
+   *  Settings/CLI token management remains available while the HTTP Gateway
+   *  is stopped. */
   readonly authorities: () => Readonly<Record<string, LiveClientTokenAuthority>>;
   /** Protocol id → display name used in sanitized warning texts. */
   readonly protocolNames?: Readonly<Record<string, string>>;
@@ -169,8 +170,8 @@ export function createClientTokenControlPlaneHandler(
 
 export interface ProtocolEnablementSettingsHandlerOptions {
   readonly settingsHandler: SettingsCommandHandler;
-  /** Protocol id → live authority; a disabled protocol's authority may be
-   *  absent while the Data Plane is stopped (boot-time enabling covers it). */
+  /** Protocol id → Backend-lifetime live authority. Enabling a protocol can
+   *  therefore create its global token even while the HTTP Gateway is stopped. */
   readonly authorities: () => Readonly<Record<string, LiveClientTokenAuthority>>;
   readonly protocolNames?: Readonly<Record<string, string>>;
   /** Optional diagnostics store: a failed enable-time token creation emits a

@@ -37,6 +37,7 @@ type InvokeResults = {
   [desktopIpcChannels.pickDirectory]: ReturnType<DesktopPlatformApi["pickDirectory"]>;
   [desktopIpcChannels.pickSaveFile]: ReturnType<DesktopPlatformApi["pickSaveFile"]>;
   [desktopIpcChannels.openExternal]: ReturnType<DesktopPlatformApi["openExternal"]>;
+  [desktopIpcChannels.clipboardWrite]: ReturnType<DesktopPlatformApi["writeClipboardText"]>;
   [desktopIpcChannels.desktopVersion]: ReturnType<DesktopPlatformApi["getDesktopVersion"]>;
 };
 
@@ -112,6 +113,7 @@ const platform: DesktopPlatformApi = {
   pickDirectory: () => invoke(desktopIpcChannels.pickDirectory),
   pickSaveFile: (options) => invoke(desktopIpcChannels.pickSaveFile, options),
   openExternal: (url) => invoke(desktopIpcChannels.openExternal, url),
+  writeClipboardText: (value) => invoke(desktopIpcChannels.clipboardWrite, value),
   getDesktopVersion: () => invoke(desktopIpcChannels.desktopVersion),
 };
 

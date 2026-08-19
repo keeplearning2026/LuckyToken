@@ -27,9 +27,9 @@ import {
  * Provider Activation Spec §23.7 — packaged Electron activation journey
  * (Ticket 14). A fresh packaged LuckyToken completes the real activation
  * flow end to end: discover Providers, authenticate while the Gateway is
- * stopped, edit a model alias from the model row, start serving, make a
- * deterministic request through the custom alias, and observe it in
- * Activity. The deterministic path never requires an external account or
+ * stopped, rename a model from the Provider-scoped Models card, start
+ * serving, make a deterministic request through that model name, and
+ * observe it in Overview. The deterministic path never requires an external account or
  * network credential: the local Anthropic-compatible upstream serves the
  * real request, and CommandCode API-key login only stores the typed secret.
  */
@@ -38,9 +38,10 @@ const desktopRoot = resolve(import.meta.dirname, "..");
 
 const TEST_PROVIDER_KEY = "deterministic-activation-provider-key";
 const TEST_MODEL = "claude-opus-4-7";
-const CUSTOM_ALIAS = "activation-anthropic";
-const COMMANDCODE_DEFAULT_ALIAS = "commandcode-private/deepseek/deepseek-v4-flash";
-const COMMANDCODE_CUSTOM_ALIAS = "cc-flash";
+const CUSTOM_MODEL_NAME = "activation-anthropic";
+const CUSTOM_ALIAS = `anthropic/${CUSTOM_MODEL_NAME}`;
+const COMMANDCODE_CUSTOM_MODEL_NAME = "cc-flash";
+const COMMANDCODE_CUSTOM_ALIAS = `commandcode-private/${COMMANDCODE_CUSTOM_MODEL_NAME}`;
 
 const delay = (milliseconds) =>
   new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
@@ -365,6 +366,7 @@ test(
     ]);
     const environment = {
       ...process.env,
+      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       APPDATA: appData,
@@ -413,16 +415,17 @@ test(
       assert.equal(catalogWhileStopped.outcome, "ok");
 
       // 3. Complete a CommandCode API-key login while the Gateway is
-      // stopped, through the real Electron Main/preload/Control Plane path.
-      await commandCodeCard.getByRole("button", { name: /api key/i }).click();
-      const secretInput = page.locator('.auth-interaction input[type="password"]');
+      // stopped. API-key entry is scoped to a modal card.
+      await commandCodeCard.getByRole("button", { name: "API key" }).click();
+      const commandCodeLogin = page.getByRole("dialog", {
+        name: "CommandCode Private sign in",
+      });
+      const secretInput = commandCodeLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill("sk-activation-commandcode-key");
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page
-        .getByRole("status")
-        .filter({ hasText: /CommandCode Private connected/i })
-        .waitFor();
+      await commandCodeLogin.getByRole("button", { name: "Continue" }).click();
+      await commandCodeLogin.getByText("Connected", { exact: true }).waitFor();
+      await commandCodeLogin.getByRole("button", { name: "Close", exact: true }).click();
       await assert.doesNotReject(async () => {
         const auth = await client.executeAuthCommand({ command: "query" });
         const status = auth.state.providers.find(
@@ -433,50 +436,74 @@ test(
       });
       assert.equal((await client.getStatus()).modelDataPlane, "stopped");
 
-      // 4. The model row shows the generated providerId/modelId default
-      // alias before any user alias configuration.
-      const knownModels = page.locator(".provider-model-list");
-      await knownModels.waitFor();
-      const modelRow = knownModels
+      // 4. Models are opened from the Provider card; the user sees model
+      // names, never the Alias implementation concept.
+      await commandCodeCard.getByRole("button", { name: /^Models/u }).click();
+      const commandCodeModels = page.getByRole("dialog", {
+        name: "CommandCode Private models",
+      });
+      await commandCodeModels.waitFor();
+      assert.equal(await commandCodeModels.getByText(/alias/iu).count(), 0);
+      const modelRow = commandCodeModels
         .locator("li.provider-model-row")
-        .filter({ hasText: COMMANDCODE_DEFAULT_ALIAS });
+        .filter({ hasText: "deepseek/deepseek-v4-flash" });
       await modelRow.waitFor();
 
-      // 5. Use the model-row Add alias action to save a custom alias; the
-      // editor exposes no Provider selector or raw file mechanics.
-      await modelRow.getByRole("button", { name: /add alias/i }).click();
-      const aliasInput = page.locator('.alias-editor input[type="text"]');
-      await aliasInput.waitFor();
-      assert.equal(await page.locator(".alias-editor select").count(), 0);
+      // 5. Rename edits only the model-name suffix. The Provider namespace
+      // is fixed in the UI and is constructed again by Backend policy.
+      await modelRow.getByRole("button", { name: /rename/i }).click();
+      const modelNameEditor = modelRow.locator(".model-name-editor");
+      await modelNameEditor.waitFor();
+      assert.equal(
+        await modelNameEditor.locator(".model-name-prefix").textContent(),
+        "commandcode-private/",
+      );
       assert.equal(await page.getByText("model-aliases.json").count(), 0);
-      await aliasInput.fill(COMMANDCODE_CUSTOM_ALIAS);
-      await page.getByRole("button", { name: "Save", exact: true }).click();
-      const updatedRow = knownModels
+      const modelNameInput = modelNameEditor.locator('input[type="text"]');
+      assert.equal(await modelNameInput.inputValue(), "deepseek-deepseek-v4-flash");
+      await modelNameInput.fill(COMMANDCODE_CUSTOM_MODEL_NAME);
+      await modelNameEditor.getByRole("button", { name: "Save" }).click();
+      await commandCodeModels
         .locator("li.provider-model-row")
-        .filter({ hasText: COMMANDCODE_CUSTOM_ALIAS });
-      await updatedRow.waitFor();
+        .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
+        .waitFor();
+      await commandCodeModels.getByRole("button", { name: "Close models" }).click();
 
-      // 6. Close and reopen the management UI: alias state comes from the
-      // Backend, not renderer persistence.
+      // 6. Close and reopen the management UI: model-name state comes from
+      // Backend authority, not renderer persistence.
       await page.close();
       page = undefined;
       await waitForNoWindows(application);
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Providers" }).click();
+      const reopenedCommandCodeCard = page
+        .locator("article.provider-card")
+        .filter({
+          has: page.getByRole("heading", {
+            name: "CommandCode Private",
+            exact: true,
+          }),
+        });
+      await reopenedCommandCodeCard.getByRole("button", { name: /^Models/u }).click();
+      const reopenedCommandCodeModels = page.getByRole("dialog", {
+        name: "CommandCode Private models",
+      });
+      await reopenedCommandCodeModels
+        .locator("li.provider-model-row")
+        .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
+        .waitFor();
+      await reopenedCommandCodeModels
+        .getByRole("button", { name: "Close models" })
+        .click();
+
       const reopenedAnthropicCard = page
         .locator("article.provider-card")
         .filter({ has: page.getByRole("heading", { name: "Anthropic", exact: true }) });
       await reopenedAnthropicCard.waitFor();
-      const reopenedKnownModels = page.locator(".provider-model-list");
-      await reopenedKnownModels.waitFor();
-      await reopenedKnownModels
-        .locator("li.provider-model-row")
-        .filter({ hasText: COMMANDCODE_CUSTOM_ALIAS })
-        .waitFor();
 
-      // 7. The user alias file stores only the override; the generated
-      // default for the same target is suppressed.
+      // 7. The internal alias file stores the Provider-namespaced model name;
+      // the user never needed to construct that string.
       const aliasFile = JSON.parse(
         await readFile(join(fixture.stateRoot, "model-aliases.json"), "utf8"),
       );
@@ -485,47 +512,52 @@ test(
         model: "deepseek/deepseek-v4-flash",
       });
 
-      // 8. Start the Data Plane without restarting the Backend; then log in
-      // to the deterministic Anthropic provider and give its model a custom
-      // alias through the same model-row action.
+      // 8. Start the Data Plane, log in to the deterministic Anthropic
+      // Provider, and rename its model through the same Models card.
       const started = await client.executeRuntimeCommand("start");
       assert.equal(started.outcome, "completed");
-      await reopenedAnthropicCard.getByRole("button", { name: /api key/i }).click();
-      const anthropicSecret = page.locator('.auth-interaction input[type="password"]');
+      await reopenedAnthropicCard.getByRole("button", { name: "API key" }).click();
+      const anthropicLogin = page.getByRole("dialog", {
+        name: "Anthropic sign in",
+      });
+      const anthropicSecret = anthropicLogin.locator('input[type="password"]');
       await anthropicSecret.waitFor();
       await anthropicSecret.fill(TEST_PROVIDER_KEY);
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page
-        .getByRole("status")
-        .filter({ hasText: /Anthropic connected/i })
-        .waitFor();
-      const anthropicRow = page
-        .locator(".provider-model-list li.provider-model-row")
-        .filter({ hasText: `anthropic/${TEST_MODEL}` });
-      await anthropicRow.waitFor();
-      await anthropicRow.getByRole("button", { name: /add alias/i }).click();
-      const anthropicAliasInput = page.locator('.alias-editor input[type="text"]');
-      await anthropicAliasInput.fill(CUSTOM_ALIAS);
-      await page.getByRole("button", { name: "Save", exact: true }).click();
-      await page
-        .locator(".provider-model-list li.provider-model-row")
-        .filter({ hasText: CUSTOM_ALIAS })
-        .waitFor();
+      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
+      await anthropicLogin.getByText("Connected", { exact: true }).waitFor();
+      await anthropicLogin.getByRole("button", { name: "Close", exact: true }).click();
 
-      // 9. Send a real deterministic request using the custom alias through
-      // the production protocol/Provider execution path.
+      await reopenedAnthropicCard.getByRole("button", { name: /^Models/u }).click();
+      const anthropicModels = page.getByRole("dialog", { name: "Anthropic models" });
+      const anthropicRow = anthropicModels
+        .locator("li.provider-model-row")
+        .filter({ hasText: TEST_MODEL });
+      await anthropicRow.waitFor();
+      await anthropicRow.getByRole("button", { name: /rename/i }).click();
+      const anthropicModelNameInput = anthropicRow.locator(".model-name-editor input");
+      await anthropicModelNameInput.fill(CUSTOM_MODEL_NAME);
+      await anthropicRow.getByRole("button", { name: "Save" }).click();
+      await anthropicModels
+        .locator("li.provider-model-row")
+        .filter({ hasText: CUSTOM_MODEL_NAME })
+        .waitFor();
+      await anthropicModels.getByRole("button", { name: "Close models" }).click();
+
+      // 9. The request uses the internal Provider-namespaced model identity.
       const clientToken = await revealAnthropicClientToken(client);
       const origin = started.snapshot.dataPlane?.configuredOrigin;
       assert.ok(origin);
       const requestId = await sendAnthropicRequest(origin, clientToken, CUSTOM_ALIAS);
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
 
-      // 10. Activity shows the successful request through the real ledger
-      // projection.
-      await page.getByRole("button", { name: "Activity" }).click();
+      // 10. Overview shows the successful request through the real ledger
+      // projection, using the client-visible external alias as the Model.
+      await page.getByRole("button", { name: "Overview" }).click();
       const row = page.locator(`[data-request-id="${requestId}"]`);
       await row.waitFor();
-      assert.match((await row.textContent()) ?? "", /success/u);
+      const rowText = (await row.textContent()) ?? "";
+      assert.match(rowText, /Success/u);
+      assert.match(rowText, new RegExp(CUSTOM_ALIAS, "u"));
 
       const quit = await client.executeApplicationCommand({
         command: "quit",

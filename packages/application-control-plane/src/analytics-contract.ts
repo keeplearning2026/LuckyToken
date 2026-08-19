@@ -64,6 +64,8 @@ export interface AnalyticsFilter {
   readonly protocols?: readonly string[];
   /** Canonical project directories (ledger `projectDir` snapshots). */
   readonly projects?: readonly string[];
+  /** Client-supplied session ids (ledger `clientSessionId` snapshots). */
+  readonly sessions?: readonly string[];
   /** Ledger outcome strings. */
   readonly outcomes?: readonly string[];
 }
@@ -121,6 +123,9 @@ export interface AnalyticsSummary {
   readonly cacheReadTokens: number;
   readonly cacheWriteTokens: number;
   readonly outputTokens: number;
+  /** Σoutput / Σ(execution duration) × 1000 over Complete usage snapshots
+   * with executionStartedAt/terminalAt and a positive duration. */
+  readonly outputTokensPerSecond?: number;
   /** Σ reasoning over participating snapshots that reported it; present
    *  only when at least one did. A subset of output; never added to any
    *  total. */
@@ -130,7 +135,8 @@ export interface AnalyticsSummary {
   readonly normalizedTokenTotal?: number;
   /** Σ cacheRead over participating snapshots (aggregate numerator). */
   readonly cacheHitNumerator: number;
-  /** Σ (input+cacheRead+cacheWrite) over participating snapshots. */
+  /** Σ (input+cacheRead) over participating snapshots. Cache writes are
+   *  excluded from the product read-hit denominator. */
   readonly cacheHitDenominator: number;
   /** numerator / denominator; present only when participating > 0 and the
    *  denominator > 0 — never 0 when undefined (Ticket 20 rule). */
@@ -178,6 +184,7 @@ export interface AnalyticsOptionsResult {
   readonly models: readonly string[];
   readonly protocols: readonly string[];
   readonly projects: readonly string[];
+  readonly sessions: readonly string[];
   readonly outcomes: readonly string[];
   /** True when any dimension was capped at MAX_ANALYTICS_OPTIONS_VALUES. */
   readonly truncated?: boolean;
@@ -212,6 +219,7 @@ const FILTER_KEYS: ReadonlySet<string> = new Set([
   "models",
   "protocols",
   "projects",
+  "sessions",
   "outcomes",
 ]);
 
@@ -267,6 +275,8 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
       : decodeFilterArray(value.protocols);
   const projects =
     value.projects === undefined ? undefined : decodeFilterArray(value.projects);
+  const sessions =
+    value.sessions === undefined ? undefined : decodeFilterArray(value.sessions);
   const outcomes =
     value.outcomes === undefined ? undefined : decodeFilterArray(value.outcomes);
   if (
@@ -274,6 +284,7 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     (value.models !== undefined && models === undefined) ||
     (value.protocols !== undefined && protocols === undefined) ||
     (value.projects !== undefined && projects === undefined) ||
+    (value.sessions !== undefined && sessions === undefined) ||
     (value.outcomes !== undefined && outcomes === undefined)
   ) {
     return undefined;
@@ -283,6 +294,7 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     ...(models === undefined ? {} : { models }),
     ...(protocols === undefined ? {} : { protocols }),
     ...(projects === undefined ? {} : { projects }),
+    ...(sessions === undefined ? {} : { sessions }),
     ...(outcomes === undefined ? {} : { outcomes }),
   });
 }

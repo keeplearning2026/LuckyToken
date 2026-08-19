@@ -166,6 +166,7 @@ export interface RequestLedgerQuery {
   readonly providerId?: string;
   readonly realModelId?: string;
   readonly projectDir?: string;
+  readonly clientSessionId?: string;
   readonly outcome?: LedgerOutcome;
   /** Inclusive acceptedAt range (epoch-ms). */
   readonly from?: number;

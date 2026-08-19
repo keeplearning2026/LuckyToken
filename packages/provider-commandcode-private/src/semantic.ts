@@ -152,70 +152,60 @@ function convertUsage(
   authority: CommandCodeResponseAuthority,
 ): Usage {
   const raw = result.rawUsage;
-  const rawInputDetails = raw?.inputTokenDetails;
-  if (rawInputDetails !== undefined && !isRecord(rawInputDetails)) {
-    throw new Error("inputTokenDetails must be an object when present");
+  if (raw === undefined) return zeroUsage();
+
+  const rawInputDetails = raw.inputTokenDetails;
+  if (!isRecord(rawInputDetails)) {
+    throw new Error("inputTokenDetails must be an object");
   }
-  const inputDetails = isRecord(rawInputDetails) ? rawInputDetails : undefined;
-  const rawOutputDetails = raw?.outputTokenDetails;
+  const rawOutputDetails = raw.outputTokenDetails;
   if (rawOutputDetails !== undefined && !isRecord(rawOutputDetails)) {
     throw new Error("outputTokenDetails must be an object when present");
   }
   const outputDetails = isRecord(rawOutputDetails) ? rawOutputDetails : undefined;
 
-  const normalizedInput = requireCount(result.usage.inputTokens, "inputTokens");
-  const normalizedOutput = requireCount(result.usage.outputTokens, "outputTokens");
-  const normalizedCacheRead = requireCount(
-    result.usage.cacheReadTokens,
-    "cacheReadTokens",
-  );
-  const normalizedCacheWrite = requireCount(
-    result.usage.cacheWriteTokens,
-    "cacheWriteTokens",
-  );
-  const nestedCacheRead = optionalCount(inputDetails, "cacheReadTokens");
-  const aliasedCacheRead = optionalCount(raw, "cachedInputTokens");
-  requireSameCount(
-    nestedCacheRead,
-    aliasedCacheRead,
-    "cacheReadTokens and cachedInputTokens",
-  );
-  const cacheRead = nestedCacheRead ?? aliasedCacheRead ?? normalizedCacheRead;
-  const cacheWrite =
-    optionalCount(inputDetails, "cacheWriteTokens") ?? normalizedCacheWrite;
+  // Online CommandCode evidence for deepseek-v4-flash consistently exposes
+  // these direct fields. They are the only authoritative sources for the
+  // product-facing Input / Cache read / Output components. Never reconstruct
+  // Input by subtracting cache fields from inputTokens.
+  const input = optionalCount(rawInputDetails, "noCacheTokens");
+  const cacheRead = optionalCount(rawInputDetails, "cacheReadTokens");
+  const output = optionalCount(raw, "outputTokens");
+  if (input === undefined) throw new Error("noCacheTokens is required for trusted usage");
+  if (cacheRead === undefined) throw new Error("cacheReadTokens is required for trusted usage");
+  if (output === undefined) throw new Error("outputTokens is required for trusted usage");
+
+  // Cache write is preserved only when explicitly present. When absent, a
+  // reported inputTokens partition must prove that the missing component is
+  // exactly zero; otherwise usage is not trustworthy enough to publish.
+  const explicitCacheWrite = optionalCount(rawInputDetails, "cacheWriteTokens");
   const rawInput = optionalCount(raw, "inputTokens");
-  const noCache = optionalCount(inputDetails, "noCacheTokens");
-  let input: number;
-  if (noCache !== undefined) {
-    input = noCache;
+  const cacheWrite = explicitCacheWrite ?? 0;
+  if (rawInput !== undefined) {
     const partitionedInput = safeTokenSum(
       "CommandCode input token partition",
       input,
       cacheRead,
       cacheWrite,
     );
-    if (
-      rawInput !== undefined &&
-      rawInput !== partitionedInput
-    ) {
+    if (rawInput !== partitionedInput) {
       throw new Error(
         "inputTokens must equal noCacheTokens plus cache read and cache write",
       );
     }
-  } else {
-    const totalInput = rawInput ?? normalizedInput;
-    const cachedInput = safeTokenSum(
-      "CommandCode cached input tokens",
-      cacheRead,
-      cacheWrite,
+  } else if (explicitCacheWrite === undefined) {
+    throw new Error(
+      "inputTokens is required to prove an absent cacheWriteTokens component",
     );
-    if (totalInput < cachedInput) {
-      throw new Error("CommandCode cached input exceeds total input");
-    }
-    input = totalInput - cachedInput;
   }
 
-  const output = optionalCount(raw, "outputTokens") ?? normalizedOutput;
+  const aliasedCacheRead = optionalCount(raw, "cachedInputTokens");
+  requireSameCount(
+    cacheRead,
+    aliasedCacheRead,
+    "cacheReadTokens and cachedInputTokens",
+  );
+
   const nestedReasoning = optionalCount(outputDetails, "reasoningTokens");
   const aliasedReasoning = optionalCount(raw, "reasoningTokens");
   requireSameCount(
@@ -223,11 +213,9 @@ function convertUsage(
     aliasedReasoning,
     "outputTokenDetails.reasoningTokens and reasoningTokens",
   );
-  const reasoning = nestedReasoning ?? aliasedReasoning;
-  if (reasoning !== undefined) {
-    if (reasoning > output) {
-      throw new Error("CommandCode reasoning tokens exceed output tokens");
-    }
+  const reasoning = nestedReasoning;
+  if (reasoning !== undefined && reasoning > output) {
+    throw new Error("CommandCode reasoning tokens exceed output tokens");
   }
   const text = optionalCount(outputDetails, "textTokens");
   if (text !== undefined && text > output) {
@@ -366,6 +354,16 @@ function mismatchNotice(): ConversionNotice {
   });
 }
 
+function usageUnavailableNotice(): ConversionNotice {
+  return Object.freeze({
+    adapter: COMMANDCODE_PROVIDER_ID,
+    direction: "response",
+    code: "usage_unavailable_degraded",
+    jsonPath: "$.finish.totalUsage",
+    action: "degrade",
+  });
+}
+
 export function createCommandCodeFailureMessage(
   authority: CommandCodeResponseAuthority,
   error: unknown,
@@ -400,15 +398,15 @@ export function convertCommittedCommandCodeResult(
     return createCommandCodeFailureMessage(authority, conversionFailure(error));
   }
 
-  let trustworthyUsage: Usage;
+  let trustworthyUsage = zeroUsage();
+  let usageNotices: readonly ConversionNotice[] = [];
   try {
     trustworthyUsage = convertUsage(result, authority);
-  } catch (error) {
-    const failed = createCommandCodeFailureMessage(
-      authority,
-      conversionFailure(error),
-    );
-    return addDiagnostics(failed, result, notices);
+  } catch {
+    // Usage is accounting/observability, never model-visible semantics.
+    // Malformed or inconsistent usage degrades to Pi's absence encoding and
+    // a bounded warning; content/tool/finish conversion continues normally.
+    usageNotices = [usageUnavailableNotice()];
   }
 
   let content: Array<TextContent | ThinkingContent | ToolCall>;
@@ -420,14 +418,16 @@ export function convertCommittedCommandCodeResult(
       conversionFailure(error),
       trustworthyUsage,
     );
-    return addDiagnostics(failed, result, notices);
+    return addDiagnostics(failed, result, notices, usageNotices);
   }
 
   const committedStopReason = stopReason(result, content);
   const contentHasTool = content.some((block) => block.type === "toolCall");
   const wireClaimsTool = result.finish.finishReason === "tool-calls";
-  const semanticNotices =
-    contentHasTool === wireClaimsTool ? [] : [mismatchNotice()];
+  const semanticNotices = [
+    ...usageNotices,
+    ...(contentHasTool === wireClaimsTool ? [] : [mismatchNotice()]),
+  ];
 
   const message: AssistantMessage = {
     ...baseMessage(authority, trustworthyUsage),

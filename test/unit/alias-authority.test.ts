@@ -11,10 +11,7 @@ import {
   type AliasRegistryAuthority,
   type AliasRegistryFileSystem,
 } from "../../src/aliases/authority.js";
-import {
-  generatedDefaultAlias,
-  type AliasCatalogTarget,
-} from "../../src/aliases/domain.js";
+import type { AliasCatalogTarget } from "../../src/aliases/domain.js";
 
 /**
  * Provider Activation Spec §23.4: the single locked, revision-checked,
@@ -111,7 +108,7 @@ function createAuthority(options?: {
 
 /** The aliases record as it is serialized on disk by the authority. */
 const userRecord = {
-  "my-gpt": { provider: "openai", model: "gpt-4o-mini" },
+  "openai/my-gpt": { provider: "openai", model: "gpt-4o-mini" },
 };
 
 describe("alias registry authority persistence", () => {
@@ -128,7 +125,15 @@ describe("alias registry authority persistence", () => {
     // Every catalog target receives its generated default; nothing is
     // persisted (the file stays absent).
     expect(state.effective?.aliases.map((entry) => entry.alias).sort()).toEqual(
-      catalogTargets.map((target) => generatedDefaultAlias(target)).sort(),
+      [
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-sonnet-4",
+        "deepseek/deepseek-v4-flash",
+        "opencode-go/deepseek-v4-flash",
+      ].sort(),
     );
     expect(
       state.effective?.aliases.every((entry) => entry.layer === "default"),
@@ -151,10 +156,30 @@ describe("alias registry authority persistence", () => {
     const byAlias = new Map(
       result.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("my-gpt")?.layer).toBe("user");
+    expect(byAlias.get("openai/my-gpt")?.layer).toBe("user");
     expect(byAlias.get("openai/gpt-4o")?.layer).toBe("default");
     // The user override suppresses the target's generated default.
     expect(byAlias.get("openai/gpt-4o-mini")).toBeUndefined();
+  });
+
+  it("rejects a raw user override outside the target Provider namespace and keeps the generated default", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const result = await authority.write({
+      revision: 0,
+      aliases: {
+        fast: { provider: "openai", model: "gpt-4o" },
+      },
+    });
+    expect(result.outcome).toBe("invalid");
+    expect(result.error?.entries).toEqual([
+      expect.objectContaining({ alias: "fast", code: "invalid" }),
+    ]);
+    expect(authority.resolver().resolve("fast")).toBeUndefined();
+    expect(authority.resolver().resolve("openai/gpt-4o")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o",
+    });
   });
 
   it("rejects a stale revision with a conflict and never touches the file", async () => {
@@ -166,7 +191,7 @@ describe("alias registry authority persistence", () => {
     expect(state.revision).toBe(0);
     const result = await authority.write({
       revision: 99,
-      aliases: { "another": "openai/gpt-4o" },
+      aliases: { "openai/another": "openai/gpt-4o" },
     });
     expect(result.outcome).toBe("conflict");
     expect(result.state.revision).toBe(0);
@@ -181,14 +206,17 @@ describe("alias registry authority persistence", () => {
       revision: 1,
       aliases: {
         ...userRecord,
-        "broken": "gpt-4o", // ambiguous: no Provider named
-        "ghost": { provider: "openai", model: "does-not-exist" },
+        "openai/broken": "gpt-4o", // ambiguous target: no Provider named
+        "openai/ghost": { provider: "openai", model: "does-not-exist" },
       },
     });
     expect(result.outcome).toBe("invalid");
     const entries = result.error?.entries ?? [];
     expect(entries.map((entry) => entry.code)).toEqual(["ambiguous", "unknown"]);
-    expect(entries.map((entry) => entry.alias)).toEqual(["broken", "ghost"]);
+    expect(entries.map((entry) => entry.alias)).toEqual([
+      "openai/broken",
+      "openai/ghost",
+    ]);
     const after = await authority.query();
     expect(after.revision).toBe(active.revision);
     expect(after.aliases).toEqual(active.aliases);
@@ -200,12 +228,12 @@ describe("alias registry authority persistence", () => {
     await authority.query();
     const result = await authority.write({
       revision: 0,
-      aliases: { "ok": { provider: "openai" } },
+      aliases: { "openai/ok": { provider: "openai" } },
     });
     expect(result.outcome).toBe("invalid");
     expect(result.error?.kind).toBe("validation");
     expect(result.error?.entries).toEqual([
-      expect.objectContaining({ alias: "ok", code: "invalid" }),
+      expect.objectContaining({ alias: "openai/ok", code: "invalid" }),
     ]);
   });
 
@@ -215,14 +243,18 @@ describe("alias registry authority persistence", () => {
     await authority.query();
     files.set(
       path,
-      `${JSON.stringify({ aliases: { "manual": "anthropic/claude-sonnet-4" } }, null, 2)}\n`,
+      `${JSON.stringify({ aliases: { "anthropic/manual": "anthropic/claude-sonnet-4" } }, null, 2)}\n`,
     );
     const state = await authority.query();
     expect(state.revision).toBe(1);
-    expect(state.aliases).toEqual({ manual: "anthropic/claude-sonnet-4" });
-    expect(state.effective?.aliases.some((entry) => entry.alias === "manual")).toBe(
-      true,
-    );
+    expect(state.aliases).toEqual({
+      "anthropic/manual": "anthropic/claude-sonnet-4",
+    });
+    expect(
+      state.effective?.aliases.some(
+        (entry) => entry.alias === "anthropic/manual",
+      ),
+    ).toBe(true);
   });
 
   it("keeps generated defaults effective when a manually edited file is broken, with a value-free error", async () => {
@@ -293,11 +325,13 @@ describe("alias registry snapshots and hot-apply", () => {
     });
     await authority.write({
       revision: 0,
-      aliases: { "gpt-4o": { provider: "openai", model: "gpt-4.1" } },
+      aliases: {
+        "openai/routed": { provider: "openai", model: "gpt-4.1" },
+      },
     });
     const second = authority.resolver();
     expect(second.fileRevision).toBe(1);
-    expect(second.resolve("gpt-4o")).toEqual({
+    expect(second.resolve("openai/routed")).toEqual({
       providerId: "openai",
       modelId: "gpt-4.1",
     });
@@ -313,7 +347,9 @@ describe("alias registry snapshots and hot-apply", () => {
     await authority.query();
     await authority.write({
       revision: 0,
-      aliases: { "my-gpt": { provider: "openai", model: "gpt-4o-mini" } },
+      aliases: {
+        "openai/my-gpt": { provider: "openai", model: "gpt-4o-mini" },
+      },
     });
     expect(authority.resolver().catalogVersion).toBe(11);
     const nextTargets: readonly AliasCatalogTarget[] = [
@@ -333,10 +369,56 @@ describe("alias registry snapshots and hot-apply", () => {
     authority.onCatalogSnapshot();
     const after = authority.resolver();
     expect(after.catalogVersion).toBe(12);
-    expect(after.resolve("my-gpt")).toEqual({
+    expect(after.resolve("openai/my-gpt")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
+  });
+
+  it("preserves a user model name when catalog growth introduces a colliding default", async () => {
+    const initialTargets: readonly AliasCatalogTarget[] = Object.freeze([
+      { provider: "p", model: "a/c" },
+    ]);
+    const { authority, setCatalog } = createAuthority({
+      catalog: {
+        catalogVersion: 1,
+        targets: initialTargets,
+        knownTargets: knownTargets(initialTargets.map((target) => [target.provider, target.model])),
+      },
+    });
+    await authority.query();
+    const renamed = await authority.setForModel({
+      revision: 0,
+      providerId: "p",
+      modelId: "a/c",
+      modelName: "a-b",
+    });
+    expect(renamed.outcome).toBe("ok");
+    expect(authority.resolver().resolve("p/a-b")).toEqual({
+      providerId: "p",
+      modelId: "a/c",
+    });
+
+    const grownTargets: readonly AliasCatalogTarget[] = Object.freeze([
+      { provider: "p", model: "a/c" },
+      { provider: "p", model: "a/b" },
+    ]);
+    setCatalog({
+      catalogVersion: 2,
+      targets: grownTargets,
+      knownTargets: knownTargets(grownTargets.map((target) => [target.provider, target.model])),
+    });
+    authority.onCatalogSnapshot();
+
+    expect(authority.resolver().resolve("p/a-b")).toEqual({
+      providerId: "p",
+      modelId: "a/c",
+    });
+    expect(authority.resolver().resolve("p/a-b-2")).toEqual({
+      providerId: "p",
+      modelId: "a/b",
+    });
+    expect(authority.resolver().entries()).toHaveLength(2);
   });
 
   it("keeps a configured mapping resolvable after a catalog swap removes its target (unavailable taxonomy)", async () => {
@@ -344,9 +426,11 @@ describe("alias registry snapshots and hot-apply", () => {
     await authority.query();
     await authority.write({
       revision: 0,
-      aliases: { "my-gpt": { provider: "openai", model: "gpt-4o-mini" } },
+      aliases: {
+        "openai/my-gpt": { provider: "openai", model: "gpt-4o-mini" },
+      },
     });
-    expect(authority.resolver().resolve("my-gpt")).toEqual({
+    expect(authority.resolver().resolve("openai/my-gpt")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
@@ -366,12 +450,14 @@ describe("alias registry snapshots and hot-apply", () => {
     expect(after.catalogVersion).toBe(12);
     // The user override stays resolvable (model_unavailable is decided
     // against the live catalog), and its generated default disappears.
-    expect(after.resolve("my-gpt")).toEqual({
+    expect(after.resolve("openai/my-gpt")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o-mini",
     });
     expect(after.resolve("openai/gpt-4o-mini")).toBeUndefined();
-    expect(after.entries().map((entry) => entry.alias)).toContain("my-gpt");
+    expect(after.entries().map((entry) => entry.alias)).toContain(
+      "openai/my-gpt",
+    );
   });
 
   it("enumerates configured mappings through entries() including generated defaults", async () => {
@@ -379,10 +465,13 @@ describe("alias registry snapshots and hot-apply", () => {
       [path]: `${JSON.stringify(
         {
           aliases: {
-            "good": { provider: "openai", model: "gpt-4o" },
-            "slash-id": { provider: "deepseek", model: "deepseek-v4-flash" },
-            "broken": "no-slash-target",
-            "duplicate": "openai/gpt-4o",
+            "openai/good": { provider: "openai", model: "gpt-4o" },
+            "deepseek/slash-id": {
+              provider: "deepseek",
+              model: "deepseek-v4-flash",
+            },
+            "openai/broken": "no-slash-target",
+            "openai/duplicate": "openai/gpt-4o",
           },
         },
         null,
@@ -393,11 +482,11 @@ describe("alias registry snapshots and hot-apply", () => {
     await authority.query();
     const entries = authority.resolver().entries();
     expect(entries).toContainEqual({
-      alias: "good",
+      alias: "openai/good",
       target: { providerId: "openai", modelId: "gpt-4o" },
     });
     expect(entries).toContainEqual({
-      alias: "slash-id",
+      alias: "deepseek/slash-id",
       target: { providerId: "deepseek", modelId: "deepseek-v4-flash" },
     });
     // Generated defaults for unclaimed targets are served too.
@@ -405,10 +494,12 @@ describe("alias registry snapshots and hot-apply", () => {
     expect(entries.map((entry) => entry.alias)).toContain(
       "anthropic/claude-opus-4-8",
     );
-    expect(entries.map((entry) => entry.alias)).not.toContain("broken");
-    expect(entries.map((entry) => entry.alias)).not.toContain("duplicate");
-    expect(authority.resolver().resolve("broken")).toBeUndefined();
-    expect(authority.resolver().resolve("duplicate")).toBeUndefined();
+    expect(entries.map((entry) => entry.alias)).not.toContain("openai/broken");
+    expect(entries.map((entry) => entry.alias)).not.toContain(
+      "openai/duplicate",
+    );
+    expect(authority.resolver().resolve("openai/broken")).toBeUndefined();
+    expect(authority.resolver().resolve("openai/duplicate")).toBeUndefined();
   });
 
   it("an unknown target never resolves until a valid mapping is persisted", async () => {
@@ -416,9 +507,14 @@ describe("alias registry snapshots and hot-apply", () => {
     await authority.query();
     await authority.write({
       revision: 0,
-      aliases: { "sonnet": { provider: "anthropic", model: "claude-sonnet-5" } },
+      aliases: {
+        "anthropic/sonnet": {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+        },
+      },
     });
-    expect(authority.resolver().resolve("sonnet")).toBeUndefined();
+    expect(authority.resolver().resolve("anthropic/sonnet")).toBeUndefined();
     const nextTargets: readonly AliasCatalogTarget[] = [
       { provider: "openai", model: "gpt-4o" },
       { provider: "anthropic", model: "claude-sonnet-4" },
@@ -432,12 +528,17 @@ describe("alias registry snapshots and hot-apply", () => {
       ),
     });
     authority.onCatalogSnapshot();
-    expect(authority.resolver().resolve("sonnet")).toBeUndefined();
+    expect(authority.resolver().resolve("anthropic/sonnet")).toBeUndefined();
     await authority.write({
       revision: 0,
-      aliases: { "sonnet": { provider: "anthropic", model: "claude-sonnet-5" } },
+      aliases: {
+        "anthropic/sonnet": {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+        },
+      },
     });
-    expect(authority.resolver().resolve("sonnet")).toEqual({
+    expect(authority.resolver().resolve("anthropic/sonnet")).toEqual({
       providerId: "anthropic",
       modelId: "claude-sonnet-5",
     });
@@ -463,80 +564,100 @@ describe("alias registry snapshots and hot-apply", () => {
     const { authority } = createAuthority({ fileSystem });
     await authority.query();
     const before = authority.resolver();
-    expect(before.resolve("external")).toBeUndefined();
+    expect(before.resolve("openai/external")).toBeUndefined();
     files.set(
       path,
-      `${JSON.stringify({ aliases: { "external": "openai/gpt-4o" } }, null, 2)}\n`,
+      `${JSON.stringify({ aliases: { "openai/external": "openai/gpt-4o" } }, null, 2)}\n`,
     );
     await authority.query();
-    expect(authority.resolver().resolve("external")).toEqual({
+    expect(authority.resolver().resolve("openai/external")).toEqual({
       providerId: "openai",
       modelId: "gpt-4o",
     });
   });
 });
 
-describe("target-scoped alias mutations (Spec §15.5)", () => {
-  it("setForModel replaces the generated default for one target", async () => {
+describe("target-scoped model-name mutations", () => {
+  it("setForModel namespaces the user model name under the Provider", async () => {
     const { authority } = createAuthority();
     await authority.query();
     const result = await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
     expect(result.outcome).toBe("ok");
     const byAlias = new Map(
       result.state.effective?.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("sonnet")).toEqual({
-      alias: "sonnet",
+    expect(byAlias.get("anthropic/sonnet")).toEqual({
+      alias: "anthropic/sonnet",
       target: { provider: "anthropic", model: "claude-sonnet-4" },
       layer: "user",
     });
     expect(byAlias.get("anthropic/claude-sonnet-4")).toBeUndefined();
-    // The file stores ONLY the override.
     expect(result.state.aliases).toEqual({
-      sonnet: { provider: "anthropic", model: "claude-sonnet-4" },
+      "anthropic/sonnet": { provider: "anthropic", model: "claude-sonnet-4" },
     });
   });
 
-  it("setForModel replaces an existing override for the same target", async () => {
+  it("rejects model names containing '/' because the Provider separator is the only alias slash", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      modelName: "team/sonnet",
+    });
+    expect(result.outcome).toBe("invalid");
+    expect(result.error?.entries?.[0]).toMatchObject({
+      alias: "anthropic/team/sonnet",
+      code: "invalid",
+    });
+    expect(result.state.aliases).toBeUndefined();
+  });
+
+  it("setForModel replaces an existing model name for the same target", async () => {
     const { authority } = createAuthority();
     await authority.query();
     await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
     const result = await authority.setForModel({
       revision: 1,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "claude-fast",
+      modelName: "claude-fast",
     });
     expect(result.outcome).toBe("ok");
     expect(result.state.aliases).toEqual({
-      "claude-fast": { provider: "anthropic", model: "claude-sonnet-4" },
+      "anthropic/claude-fast": {
+        provider: "anthropic",
+        model: "claude-sonnet-4",
+      },
     });
     expect(
-      result.state.effective?.aliases.some((entry) => entry.alias === "sonnet"),
+      result.state.effective?.aliases.some(
+        (entry) => entry.alias === "anthropic/sonnet",
+      ),
     ).toBe(false);
   });
 
-  it("setForModel with an alias equal to the generated default never persists a redundant override (Spec §5.8)", async () => {
+  it("using the canonical model id restores the generated default without persisting an override", async () => {
     const { authority } = createAuthority();
     await authority.query();
     const result = await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "anthropic/claude-sonnet-4",
+      modelName: "claude-sonnet-4",
     });
     expect(result.outcome).toBe("ok");
-    // The generated default stays derived: no user override is written.
     expect(result.state.aliases).toBeUndefined();
     expect(
       result.state.effective?.aliases.some(
@@ -547,41 +668,70 @@ describe("target-scoped alias mutations (Spec §15.5)", () => {
     ).toBe(true);
   });
 
-  it("setForModel with the default alias removes an existing override for that target", async () => {
+  it("treats a collision-numbered default model name as derived state rather than persisting it", async () => {
+    const collisionTargets: readonly AliasCatalogTarget[] = Object.freeze([
+      { provider: "p", model: "a/b" },
+      { provider: "p", model: "a-b" },
+      { provider: "p", model: "a-b-2" },
+    ]);
+    const { authority } = createAuthority({
+      catalog: {
+        catalogVersion: 1,
+        targets: collisionTargets,
+        knownTargets: knownTargets(collisionTargets.map((target) => [target.provider, target.model])),
+      },
+    });
+    await authority.query();
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "p",
+      modelId: "a/b",
+      modelName: "a-b-3",
+    });
+    expect(result.outcome).toBe("ok");
+    expect(result.state.aliases).toBeUndefined();
+    expect(result.state.effective?.aliases).toContainEqual({
+      alias: "p/a-b-3",
+      target: { provider: "p", model: "a/b" },
+      layer: "default",
+    });
+  });
+
+  it("using the canonical model id removes an existing override", async () => {
     const { authority } = createAuthority();
     await authority.query();
     await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
     const result = await authority.setForModel({
       revision: 1,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "anthropic/claude-sonnet-4",
+      modelName: "claude-sonnet-4",
     });
     expect(result.outcome).toBe("ok");
-    // The override is removed; the generated default is effective again.
     expect(result.state.aliases).toEqual({});
-    expect(
-      result.state.effective?.aliases.some(
-        (entry) =>
-          entry.alias === "anthropic/claude-sonnet-4" &&
-          entry.layer === "default",
-      ),
-    ).toBe(true);
   });
 
-  it("setForModel fails closed for an unknown target and a stale revision", async () => {
+  it("rejects invalid model names, unknown targets, and stale revisions", async () => {
     const { authority } = createAuthority();
     await authority.query();
+    const invalid = await authority.setForModel({
+      revision: 0,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4",
+      modelName: " /bad ",
+    });
+    expect(invalid.outcome).toBe("invalid");
+
     const unknown = await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-does-not-exist",
-      alias: "ghost",
+      modelName: "ghost",
     });
     expect(unknown.outcome).toBe("invalid");
     expect(unknown.error?.entries?.[0]?.code).toBe("unknown");
@@ -590,29 +740,96 @@ describe("target-scoped alias mutations (Spec §15.5)", () => {
       revision: 99,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
     expect(stale.outcome).toBe("conflict");
   });
 
-  it("setForModel rejects a collision with another target's generated default", async () => {
+  it("keeps model names in Provider namespaces so names can repeat across Providers", async () => {
     const { authority } = createAuthority();
     await authority.query();
-    const result = await authority.setForModel({
+    const anthropic = await authority.setForModel({
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "openai/gpt-4o-mini",
+      modelName: "fast",
     });
-    expect(result.outcome).toBe("invalid");
-    expect(result.error?.entries?.[0]?.code).toBe("duplicate");
-    // The previous effective registry stays active.
-    expect(
-      authority.resolver().resolve("openai/gpt-4o-mini"),
-    ).toEqual({ providerId: "openai", modelId: "gpt-4o-mini" });
-    expect(authority.resolver().resolve("anthropic/claude-sonnet-4")).toEqual({
+    expect(anthropic.outcome).toBe("ok");
+    const openai = await authority.setForModel({
+      revision: 1,
+      providerId: "openai",
+      modelId: "gpt-4o",
+      modelName: "fast",
+    });
+    expect(openai.outcome).toBe("ok");
+    expect(authority.resolver().resolve("anthropic/fast")).toEqual({
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
+    });
+    expect(authority.resolver().resolve("openai/fast")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o",
+    });
+  });
+
+  it("allows a custom model name to reserve another model's generated default and renumbers that default", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+
+    const result = await authority.setForModel({
+      revision: 0,
+      providerId: "openai",
+      modelId: "gpt-4.1",
+      modelName: "gpt-4o-mini",
+    });
+
+    expect(result.outcome).toBe("ok");
+    expect(result.state.aliases).toEqual({
+      "openai/gpt-4o-mini": { provider: "openai", model: "gpt-4.1" },
+    });
+    expect(authority.resolver().resolve("openai/gpt-4o-mini")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4.1",
+    });
+    expect(authority.resolver().resolve("openai/gpt-4o-mini-2")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o-mini",
+    });
+  });
+
+  it("rejects renaming a model to another model's existing custom name in the same Provider", async () => {
+    const { authority } = createAuthority();
+    await authority.query();
+    const first = await authority.setForModel({
+      revision: 0,
+      providerId: "openai",
+      modelId: "gpt-4o",
+      modelName: "fast",
+    });
+    expect(first.outcome).toBe("ok");
+
+    const second = await authority.setForModel({
+      revision: 1,
+      providerId: "openai",
+      modelId: "gpt-4o-mini",
+      modelName: "fast",
+    });
+
+    expect(second.outcome).toBe("invalid");
+    expect(second.error?.entries).toEqual([
+      expect.objectContaining({ alias: "openai/fast", code: "duplicate" }),
+    ]);
+    expect(second.state.revision).toBe(1);
+    expect(second.state.aliases).toEqual({
+      "openai/fast": { provider: "openai", model: "gpt-4o" },
+    });
+    expect(authority.resolver().resolve("openai/fast")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o",
+    });
+    expect(authority.resolver().resolve("openai/gpt-4o-mini")).toEqual({
+      providerId: "openai",
+      modelId: "gpt-4o-mini",
     });
   });
 
@@ -623,7 +840,7 @@ describe("target-scoped alias mutations (Spec §15.5)", () => {
       revision: 0,
       providerId: "anthropic",
       modelId: "claude-sonnet-4",
-      alias: "sonnet",
+      modelName: "sonnet",
     });
     const reset = await authority.resetForModel({
       revision: 1,
@@ -631,15 +848,12 @@ describe("target-scoped alias mutations (Spec §15.5)", () => {
       modelId: "claude-sonnet-4",
     });
     expect(reset.outcome).toBe("ok");
-    // The file is emptied (only the override was removed) and the
-    // generated default is effective again.
     expect(reset.state.aliases).toEqual({});
     expect(
       reset.state.effective?.aliases.some(
         (entry) => entry.alias === "anthropic/claude-sonnet-4",
       ),
     ).toBe(true);
-    // Resetting a target without an override is a no-op.
     const noop = await authority.resetForModel({
       revision: 2,
       providerId: "openai",

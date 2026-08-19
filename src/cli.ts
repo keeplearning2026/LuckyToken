@@ -452,12 +452,22 @@ async function runLogout(
   stdout.write(`Stored credential removed for ${provider.name}.\n`);
 }
 
+function backendBuildIdFromEnvironment(): string | undefined {
+  const value = process.env.LUCKYTOKEN_BACKEND_BUILD_ID;
+  if (value === undefined) return undefined;
+  if (!/^[a-f0-9]{64}$/u.test(value)) {
+    throw new Error("LUCKYTOKEN_BACKEND_BUILD_ID is invalid");
+  }
+  return value;
+}
+
 async function runServe(
   configPath: string,
   descriptorOverride?: string,
   ownerKind: "cli" | "desktop" = "cli",
   desktopExe?: string,
   createFirstRunConfig = false,
+  buildId?: string,
 ): Promise<void> {
   const started = await startLuckyTokenApplication({
     configPath,
@@ -466,6 +476,7 @@ async function runServe(
       : { descriptorOverride }),
     ownerKind,
     ...(desktopExe === undefined ? {} : { desktopExe }),
+    ...(buildId === undefined ? {} : { buildId }),
     createFirstRunConfig,
     events: {
       onRoute: (route) => {
@@ -1236,6 +1247,7 @@ export async function runLuckyTokenCli(
       parsed.ownerKind,
       parsed.desktopExe,
       parsed.createFirstRunConfig,
+      backendBuildIdFromEnvironment(),
     );
     return;
   }

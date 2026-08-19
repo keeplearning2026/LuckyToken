@@ -9,8 +9,8 @@
 - [ ] Launch the actually packaged Electron product in isolated fresh user state and assert the Providers page contains CommandCode Private plus the authoritative Pi built-in Provider coverage.
 - [ ] Stop or deterministically fail the Data Plane and prove Provider discovery, Auth query, Catalog query, and the visible Providers product surface remain usable.
 - [ ] Complete a deterministic Provider-owned login interaction through the real Electron Main/preload/Control Plane/Backend path while the Data Plane is stopped; the test must not require an external account or network credential.
-- [ ] Expand a real model row and observe its generated `providerId/modelId` effective alias before any user alias configuration.
-- [ ] Use the model-row Add alias action to save a custom alias and verify the authoritative UI state changes without exposing target/file internals.
+- [ ] Expand a real model row and observe its generated `${providerId}/${defaultModelName}` identity before any user rename configuration.
+- [ ] Use the model-row Rename action to save a custom slash-free Model name and verify the authoritative UI state changes without exposing Alias/target/file internals.
 - [ ] Start the Data Plane without restarting the Backend and send a real deterministic request using the custom alias through the production protocol/Provider execution path.
 - [ ] Open Activity and verify the successful request appears through the real ledger projection.
 - [ ] Close/reopen the management UI during the journey where useful and prove Provider credential, Catalog, and alias state come from the Backend rather than renderer persistence.

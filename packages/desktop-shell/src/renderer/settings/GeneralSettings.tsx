@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import { ClientAccessSettings } from "./ClientAccessSettings.js";
 
 export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [enabled, setEnabled] = useState<boolean>();
@@ -38,25 +39,28 @@ export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi })
   };
 
   return (
-    <section className="settings-section page-card">
-      <div>
-        <p className="eyebrow">DESKTOP</p>
-        <h3>General</h3>
-        <p>
-          {unavailable
-            ? "Auto-start is unavailable on this desktop."
-            : enabled
-              ? "Starts at sign-in"
-              : "Does not start at sign-in"}
-        </p>
-      </div>
-      <button
-        type="button"
-        disabled={enabled === undefined || busy || unavailable}
-        onClick={() => void toggle()}
-      >
-        {busy ? "Updating…" : enabled ? "Disable auto-start" : "Enable auto-start"}
-      </button>
-    </section>
+    <>
+      <section className="settings-section page-card">
+        <div>
+          <p className="eyebrow">DESKTOP</p>
+          <h3>General</h3>
+          <p>
+            {unavailable
+              ? "Auto-start is unavailable on this desktop."
+              : enabled
+                ? "Starts at sign-in"
+                : "Does not start at sign-in"}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={enabled === undefined || busy || unavailable}
+          onClick={() => void toggle()}
+        >
+          {busy ? "Updating…" : enabled ? "Disable auto-start" : "Enable auto-start"}
+        </button>
+      </section>
+      <ClientAccessSettings api={api} />
+    </>
   );
 }

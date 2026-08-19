@@ -31,5 +31,6 @@ export const desktopIpcChannels = Object.freeze({
   pickDirectory: "luckytoken:platform:pick-directory",
   pickSaveFile: "luckytoken:platform:pick-save-file",
   openExternal: "luckytoken:platform:open-external",
+  clipboardWrite: "luckytoken:platform:clipboard:write",
   desktopVersion: "luckytoken:platform:version",
 });

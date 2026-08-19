@@ -208,6 +208,70 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     await client.close();
   });
 
+  it("round-trips desktop owner lease commands and rejects a stale lease through the typed wire", async () => {
+    let activeLease: string | undefined;
+    const host = await startOwnedHost({
+      applicationCommandHandler: async (command: unknown) => {
+        const value = command as {
+          readonly command: "desktop_owner";
+          readonly action: "claim" | "renew";
+          readonly leaseId: string;
+        };
+        if (value.action === "claim") {
+          activeLease = value.leaseId;
+          return { outcome: "lease_claimed" };
+        }
+        return activeLease === value.leaseId
+          ? { outcome: "lease_renewed" }
+          : {
+              outcome: "conflict",
+              conflict: {
+                code: "desktop_owner_lease_mismatch",
+                message: "The desktop ownership lease belongs to a newer LuckyToken shell.",
+              },
+            };
+      },
+    });
+    const client = await connectControlPlane(host.endpoint, clientDependencies);
+    await client.hello(1);
+
+    await expect(
+      client.executeApplicationCommand({
+        command: "desktop_owner",
+        action: "claim",
+        leaseId: "shell-a",
+      }),
+    ).resolves.toMatchObject({
+      command: "desktop_owner",
+      outcome: "lease_claimed",
+    });
+    await expect(
+      client.executeApplicationCommand({
+        command: "desktop_owner",
+        action: "claim",
+        leaseId: "shell-b",
+      }),
+    ).resolves.toMatchObject({ outcome: "lease_claimed" });
+    await expect(
+      client.executeApplicationCommand({
+        command: "desktop_owner",
+        action: "renew",
+        leaseId: "shell-a",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "conflict",
+      conflict: { code: "desktop_owner_lease_mismatch" },
+    });
+    await expect(
+      client.executeApplicationCommand({
+        command: "desktop_owner",
+        action: "renew",
+        leaseId: "shell-b",
+      }),
+    ).resolves.toMatchObject({ outcome: "lease_renewed" });
+    await client.close();
+  });
+
   it("refuses a non-owner quit without explicit acknowledgement and keeps serving", async () => {
     let handlerCalls = 0;
     const host = await startOwnedHost({

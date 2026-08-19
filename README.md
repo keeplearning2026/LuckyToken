@@ -179,8 +179,9 @@ npm start -- login commandcode-private --config .luckytoken/config.json
 ```
 
 The key is saved to `.luckytoken/pi/auth.json`. No `models.json` configuration
-is required — the packaged model is selected as
-`commandcode-private/deepseek/deepseek-v4-flash`.
+is required. The canonical Provider model remains `deepseek/deepseek-v4-flash`,
+while LuckyToken exposes its default external Model name as
+`commandcode-private/deepseek-deepseek-v4-flash`.
 
 Start the local listener:
 
@@ -271,7 +272,7 @@ Three files under `~/.codex/`:
 
    ```toml
    model_provider = "luckytoken"
-   model = "commandcode-private/deepseek/deepseek-v4-flash"
+   model = "commandcode-private/deepseek-deepseek-v4-flash"
    model_catalog_json = "C:\\Users\\huich\\.codex\\luckytoken-catalog.json"
    ```
 
@@ -301,7 +302,7 @@ codex exec -p luckytoken "your prompt"
 ```
 
 The session header shows `provider: luckytoken` and
-`model: commandcode-private/deepseek/deepseek-v4-flash` when the profile is
+`model: commandcode-private/deepseek-deepseek-v4-flash` when the profile is
 active. Plain `codex` (no `-p`) keeps using the default provider.
 
 ### How it works
@@ -352,8 +353,10 @@ propagation.
 npm run test:online
 ```
 
-The default model is `commandcode-private/deepseek/deepseek-v4-flash`. Override
-only the model id explicitly when needed:
+The online harness defaults to the internal canonical selector
+`commandcode-private/deepseek/deepseek-v4-flash`; this harness exercises a
+direct composition test seam rather than the product's alias-only client
+identity. Override only the model id explicitly when needed:
 
 ```powershell
 npm run test:online -- --model provider/model-id

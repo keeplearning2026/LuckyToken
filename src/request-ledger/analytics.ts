@@ -54,6 +54,8 @@ interface Accumulator {
   cacheRead: number;
   cacheWrite: number;
   output: number;
+  speedOutput: number;
+  executionDurationMs: number;
   reasoning: number;
   reasoningReported: boolean;
   normalizedTotal: number;
@@ -72,6 +74,8 @@ function emptyAccumulator(): Accumulator {
     cacheRead: 0,
     cacheWrite: 0,
     output: 0,
+    speedOutput: 0,
+    executionDurationMs: 0,
     reasoning: 0,
     reasoningReported: false,
     normalizedTotal: 0,
@@ -106,6 +110,16 @@ function accumulate(acc: Accumulator, record: RequestLedgerRecord): void {
   acc.cacheWrite += usage.cacheWrite;
   acc.output += usage.output;
   acc.normalizedTotal += usage.normalizedTotal ?? 0;
+  if (
+    record.executionStartedAt !== undefined &&
+    record.terminalAt !== undefined
+  ) {
+    const durationMs = record.terminalAt - record.executionStartedAt;
+    if (durationMs > 0) {
+      acc.speedOutput += usage.output;
+      acc.executionDurationMs += durationMs;
+    }
+  }
   if (usage.reasoning !== undefined) {
     acc.reasoning += usage.reasoning;
     acc.reasoningReported = true;
@@ -117,7 +131,10 @@ function accumulate(acc: Accumulator, record: RequestLedgerRecord): void {
  *  raw 0..1 quotient with an explicit zero-below-total rule. */
 function toSummary(acc: Accumulator): AnalyticsSummary {
   const total = acc.total;
-  const denominator = acc.input + acc.cacheRead + acc.cacheWrite;
+  // Product cache Hit is read hits divided by the input that could have
+  // been served from cache. Cache writes are activity, not read-hit
+  // opportunities, so they never enter this denominator.
+  const denominator = acc.input + acc.cacheRead;
   const participating = acc.participating;
   return Object.freeze({
     total,
@@ -136,6 +153,12 @@ function toSummary(acc: Accumulator): AnalyticsSummary {
     cacheReadTokens: acc.cacheRead,
     cacheWriteTokens: acc.cacheWrite,
     outputTokens: acc.output,
+    ...(acc.executionDurationMs > 0
+      ? {
+          outputTokensPerSecond:
+            (acc.speedOutput / acc.executionDurationMs) * 1000,
+        }
+      : {}),
     ...(participating > 0 && acc.reasoningReported
       ? { reasoningTokens: acc.reasoning }
       : {}),
@@ -198,6 +221,13 @@ function matchesFilters(
     filters.projects !== undefined &&
     (record.projectDir === undefined ||
       !filters.projects.includes(record.projectDir))
+  ) {
+    return false;
+  }
+  if (
+    filters.sessions !== undefined &&
+    (record.clientSessionId === undefined ||
+      !filters.sessions.includes(record.clientSessionId))
   ) {
     return false;
   }
@@ -352,6 +382,7 @@ interface OptionsState {
   models: Set<string>;
   protocols: Set<string>;
   projects: Set<string>;
+  sessions: Set<string>;
   outcomes: Set<string>;
 }
 
@@ -364,6 +395,7 @@ function createOptionsState(
     models: new Set(),
     protocols: new Set(),
     projects: new Set(),
+    sessions: new Set(),
     outcomes: new Set(),
   };
 }
@@ -376,6 +408,7 @@ function addToOptionsState(state: OptionsState, record: RequestLedgerRecord): vo
   if (record.realModelId !== undefined) state.models.add(record.realModelId);
   state.protocols.add(record.protocolId);
   if (record.projectDir !== undefined) state.projects.add(record.projectDir);
+  if (record.clientSessionId !== undefined) state.sessions.add(record.clientSessionId);
   state.outcomes.add(record.outcome);
 }
 
@@ -387,12 +420,14 @@ function finishOptionsState(state: OptionsState): AnalyticsOptionsResult {
   const models = sorted(state.models);
   const protocols = sorted(state.protocols);
   const projects = sorted(state.projects);
+  const sessions = sorted(state.sessions);
   const outcomes = sorted(state.outcomes);
   const truncated =
     state.providers.size > cap ||
     state.models.size > cap ||
     state.protocols.size > cap ||
     state.projects.size > cap ||
+    state.sessions.size > cap ||
     state.outcomes.size > cap;
   return Object.freeze({
     version: 1 as const,
@@ -401,6 +436,7 @@ function finishOptionsState(state: OptionsState): AnalyticsOptionsResult {
     models: Object.freeze(models.slice(0, cap)),
     protocols: Object.freeze(protocols.slice(0, cap)),
     projects: Object.freeze(projects.slice(0, cap)),
+    sessions: Object.freeze(sessions.slice(0, cap)),
     outcomes: Object.freeze(outcomes.slice(0, cap)),
     ...(truncated ? { truncated: true } : {}),
   });

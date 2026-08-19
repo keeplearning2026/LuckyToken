@@ -45,6 +45,7 @@ export function createFakeDesktopApi(options: {
     pickDirectory: unavailable,
     pickSaveFile: unavailable,
     openExternal: unavailable,
+    writeClipboardText: unavailable,
     getDesktopVersion: unavailable,
     ...options.platform,
   };

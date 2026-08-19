@@ -30,6 +30,8 @@ import {
 
 const T0 = 1_700_000_000_000;
 const HOUR = 3_600_000;
+const SESSION_ALPHA = "20000000-0000-4000-8000-000000000041";
+const SESSION_BETA = "20000000-0000-4000-8000-000000000042";
 
 let requestIdCounter = 0;
 function requestId(): string {
@@ -103,6 +105,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     let entry = store.begin("anthropic-messages");
     entry.authorized({
       effectiveSessionId: "30000000-0000-4000-8000-000000000032",
+      clientSessionId: SESSION_ALPHA,
       projectDir: "C:\\canonical\\alpha",
     });
     entry.modelResolved({
@@ -110,7 +113,9 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       providerId: "anthropic",
       realModelId: "claude-x",
     });
+    clock = T0 + 10 * HOUR + 1_000;
     entry.executing();
+    clock = T0 + 10 * HOUR + 3_000;
     entry.terminal("success");
     entry.terminalUsage(
       completeUsage(5, 3, 2, 2), // normalizedTotal 12, cacheHitRate 0.3
@@ -121,6 +126,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     entry = store.begin("anthropic-messages");
     entry.authorized({
       effectiveSessionId: "30000000-0000-4000-8000-000000000032",
+      clientSessionId: SESSION_BETA,
       projectDir: "C:\\canonical\\alpha",
     });
     entry.modelResolved({
@@ -128,7 +134,9 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       providerId: "anthropic",
       realModelId: "claude-x",
     });
+    clock = T0 + 11 * HOUR + 1_000;
     entry.executing();
+    clock = T0 + 11 * HOUR + 2_000;
     entry.terminal("failed");
     entry.terminalUsage(
       Object.freeze({
@@ -182,11 +190,12 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       cacheReadTokens: 3,
       cacheWriteTokens: 2,
       outputTokens: 2,
+      outputTokensPerSecond: 1,
       normalizedTokenTotal: 12,
       cacheHitNumerator: 3,
-      cacheHitDenominator: 10,
+      cacheHitDenominator: 8,
     });
-    expect(result.totals.cacheHitRate).toBeCloseTo(0.3, 12);
+    expect(result.totals.cacheHitRate).toBeCloseTo(3 / 8, 12);
     // Counts include the Partial row; token sums do not.
     expect(result.totals.total).toBe(2);
 
@@ -235,7 +244,45 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
       projects: ["C:\\canonical\\alpha"],
+      sessions: [SESSION_ALPHA, SESSION_BETA],
       outcomes: ["failed", "success"],
+    });
+    await client.close();
+  });
+
+  it("filters summary analytics by client session snapshot", async () => {
+    const { store } = await analyticsFixture();
+    const transport = createNodePipeTransport();
+    const host = await startControlPlane({
+      endpoint: endpoint(),
+      application: { id: "luckytoken", version: "test" },
+      initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
+      pipeServerFactory: transport,
+      access: nodePipeFallbackAccess,
+      analyticsHandler: (query) => store.analyze(query),
+    });
+    hosts.push(host);
+    const client = await connectControlPlane(host.endpoint, {
+      createRequestId: () => `cp-analytics-session-${++nextId}`,
+      pipeConnector: transport,
+    });
+    await client.hello(1);
+
+    const result = await client.getAnalytics({
+      version: 1,
+      command: "summary",
+      from: T0 + 10 * HOUR,
+      to: T0 + 12 * HOUR,
+      filters: { sessions: [SESSION_ALPHA] },
+    });
+    expect(result.command).toBe("summary");
+    if (result.command !== "summary") return;
+    expect(result.totals).toMatchObject({
+      total: 1,
+      success: 1,
+      failed: 0,
+      outputTokens: 2,
+      outputTokensPerSecond: 1,
     });
     await client.close();
   });

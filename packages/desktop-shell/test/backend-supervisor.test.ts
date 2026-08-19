@@ -23,6 +23,7 @@ describe("BackendSupervisor", () => {
     ).toEqual({
       executable: expect.stringMatching(/resources[\\/]backend[\\/]node[\\/]node\.exe$/u),
       cliScript: expect.stringMatching(/resources[\\/]backend[\\/]dist[\\/]cli\.js$/u),
+      buildIdPath: expect.stringMatching(/resources[\\/]backend[\\/]build-id\.txt$/u),
       configPath: expect.stringMatching(/Users[\\/]tester[\\/]\.luckytoken[\\/]config\.json$/u),
       descriptorPath: expect.stringMatching(/Users[\\/]tester[\\/]\.luckytoken[\\/]control-plane\.json$/u),
     });

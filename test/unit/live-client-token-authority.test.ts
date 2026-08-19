@@ -407,19 +407,34 @@ describe("live authority persisted state across restarts (repair findings 1-2)",
     expect(restarted.authorize("canary-rev-token-3")).toEqual({});
   });
 
-  it("refuses a legacy v1 token file without mutating it", async () => {
+  it("starts from empty state on legacy v1 and generates a fresh v2 authority without reusing the old token", async () => {
     const { path, store } = await fixtureStore();
-    const original = JSON.stringify({
-      schemaVersion: "luckytoken-client-auth-v1",
-      global: "canary-v1-token-1",
-      projects: {},
-    });
-    await writeFile(path, original, "utf8");
-
-    await expect(createLiveClientTokenAuthority({ store })).rejects.toThrow(
-      "schemaVersion must be luckytoken-client-auth-v2",
+    const legacyToken = "canary-v1-token-1";
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: "luckytoken-client-auth-v1",
+        global: legacyToken,
+        projects: {},
+      }),
+      "utf8",
     );
-    await expect(readFile(path, "utf8")).resolves.toBe(original);
+
+    const live = await createLiveClientTokenAuthority({
+      store,
+      generateToken: () => "canary-fresh-v2-token",
+    });
+    expect(live.revision).toBe(0);
+    expect(live.authorize(legacyToken)).toBeUndefined();
+    await expect(live.ensureGlobal({ freshOnly: true })).resolves.toBe(true);
+    expect(live.authorize("canary-fresh-v2-token")).toEqual({});
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      schemaVersion: "luckytoken-client-auth-v2",
+      global: "canary-fresh-v2-token",
+      projects: {},
+      revision: 1,
+      globalDeleted: false,
+    });
   });
 
   it("conflicts when the authoritative file advanced behind the authority mirror and then converges", async () => {

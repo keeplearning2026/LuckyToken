@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 
@@ -99,6 +99,73 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string }
 }
 
 describe("Backend Application public lifecycle seam", () => {
+  it("rebuilds legacy v1 client auth as fresh v2 and keeps global-token management available while the Router is stopped", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const authPath = join(dirname(configPath), "client-auth", "anthropic-messages.json");
+    const legacyToken = "legacy-v1-token-canary";
+    await mkdir(dirname(authPath), { recursive: true });
+    await writeFile(
+      authPath,
+      JSON.stringify({
+        schemaVersion: "luckytoken-client-auth-v1",
+        global: legacyToken,
+        projects: {},
+      }),
+      "utf8",
+    );
+
+    const started = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(started.kind).toBe("running");
+    if (started.kind !== "running") return;
+    applications.push(started.application);
+
+    const endpoint = await readControlPlaneDescriptor(descriptorPath);
+    const client = await connectControlPlane(endpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await client.hello(controlPlaneVersion);
+      const stopped = await client.executeRuntimeCommand("stop");
+      expect(stopped.snapshot.modelDataPlane).toBe("stopped");
+
+      const listed = await client.executeClientTokenCommand({
+        command: "list",
+        protocolId: "anthropic-messages",
+      });
+      expect(listed.outcome).toBe("ok");
+      expect(listed.scopes?.some((scope) => scope.type === "global")).toBe(true);
+      const revealed = await client.executeClientTokenCommand({
+        command: "reveal",
+        protocolId: "anthropic-messages",
+      });
+      expect(revealed.outcome).toBe("ok");
+      expect(revealed.token).toBeDefined();
+      expect(revealed.token).not.toBe(legacyToken);
+
+      const onDisk = JSON.parse(await readFile(authPath, "utf8")) as {
+        schemaVersion: string;
+        global: string;
+        revision: number;
+        globalDeleted: boolean;
+        projects: Record<string, string>;
+      };
+      expect(onDisk).toEqual({
+        schemaVersion: "luckytoken-client-auth-v2",
+        global: revealed.token,
+        projects: {},
+        revision: 1,
+        globalDeleted: false,
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("starts normal serving, exposes the Control Plane, and closes idempotently", async () => {
     const { configPath, descriptorPath } = await fixture();
 
@@ -132,6 +199,40 @@ describe("Backend Application public lifecycle seam", () => {
     await expect(started.application.exited).resolves.toMatchObject({
       reason: "closed",
     });
+  });
+
+  it("does not let a desktop lease take ownership of a CLI-owned Backend", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const started = await startLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(started.kind).toBe("running");
+    if (started.kind !== "running") return;
+    applications.push(started.application);
+
+    const endpoint = await readControlPlaneDescriptor(descriptorPath);
+    const client = await connectControlPlane(endpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await client.hello(controlPlaneVersion);
+      await expect(
+        client.executeApplicationCommand({
+          command: "desktop_owner",
+          action: "claim",
+          leaseId: "desktop-must-not-own-cli",
+        }),
+      ).resolves.toMatchObject({
+        command: "desktop_owner",
+        outcome: "unsupported",
+        snapshot: { ownership: { owner: { kind: "cli" } } },
+      });
+    } finally {
+      await client.close();
+    }
   });
 
   it("starts incompatible configuration in recovery-only mode", async () => {

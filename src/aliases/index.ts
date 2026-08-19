@@ -12,8 +12,11 @@ export {
   aliasKeyError,
   canonicalTargetKey,
   computeEffectiveAliasRegistry,
-  generatedDefaultAlias,
+  deriveDefaultAliases,
+  deriveDefaultModelNames,
   MAX_ALIAS_LENGTH,
+  normalizeModelName,
   parseAliasTarget,
   type AliasCatalogTarget,
+  type DefaultModelNameAllocation,
 } from "./domain.js";

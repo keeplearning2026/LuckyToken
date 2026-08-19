@@ -32,7 +32,11 @@ import {
   createClientTokenControlPlaneHandler,
   createProtocolEnablementSettingsHandler,
 } from "./client-auth/control-plane.js";
-import type { LiveClientTokenAuthority } from "./client-auth/live-authority.js";
+import { createFileClientTokenStore } from "./client-auth/file-token-store.js";
+import {
+  createLiveClientTokenAuthority,
+  type LiveClientTokenAuthority,
+} from "./client-auth/live-authority.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import { createConfiguredLuckyTokenDataPlane } from "./composition.js";
 import {
@@ -50,6 +54,11 @@ import {
   createDeepCaptureStoreFactory,
   type DeepCaptureStore,
 } from "./deep-diagnostics/index.js";
+import {
+  createDesktopOwnerLeaseAuthority,
+  executeDesktopOwnerLeaseCommand,
+  type DesktopOwnerLeaseAuthority,
+} from "./desktop-owner-lease.js";
 import { createFirstRunConfig } from "./first-run-config.js";
 import { createHistoryAuthority } from "./history/index.js";
 import { createAliasControlPlaneHandler } from "./aliases/control-plane.js";
@@ -103,6 +112,9 @@ import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
 export type ApplicationOwnerKind = "cli" | "desktop";
 export type ApplicationExitReason = "closed" | "drained" | "timed_out";
 
+const DESKTOP_OWNER_LEASE_TTL_MS = 15_000;
+const DESKTOP_OWNER_LEASE_CHECK_INTERVAL_MS = 1_000;
+
 export interface ApplicationExit {
   readonly reason: ApplicationExitReason;
 }
@@ -141,6 +153,7 @@ export interface StartLuckyTokenApplicationOptions {
   readonly descriptorOverride?: string;
   readonly ownerKind?: ApplicationOwnerKind;
   readonly desktopExe?: string;
+  readonly buildId?: string;
   readonly createFirstRunConfig?: boolean;
   readonly events?: LuckyTokenApplicationEvents;
 }
@@ -260,6 +273,7 @@ async function startRecoveryApplication(options: {
   readonly backupCommandHandler?: BackupCommandHandler;
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
+  readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
 }): Promise<StartLuckyTokenApplicationResult> {
   const descriptorPath = resolveControlPlaneDescriptorPath({
@@ -296,10 +310,26 @@ async function startRecoveryApplication(options: {
   const controlPipe = await createProductionControlPipe();
   const autoStartRegistrar = createAutoStartRegistrar(options);
   const lifecycleHolder: { current?: ControlledLuckyTokenApplication } = {};
+  let desktopOwnerLeaseTimer: ReturnType<typeof setInterval> | undefined;
+  const desktopOwnerLease =
+    options.ownerKind === "desktop"
+      ? createDesktopOwnerLeaseAuthority({
+          ttlMs: DESKTOP_OWNER_LEASE_TTL_MS,
+          now: Date.now,
+          requireInitialClaim: true,
+          onExpired: async () => {
+            await lifecycleHolder.current?.finish("drained");
+          },
+        })
+      : undefined;
 
   const controlPlane = await startControlPlane({
     endpoint,
-    application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
+    application: {
+      id: "luckytoken",
+      version: LUCKYTOKEN_RELEASE_VERSION,
+      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+    },
     initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
     ownership,
     recoveryProjection: () => recoveryProjection(options.issues),
@@ -308,6 +338,9 @@ async function startRecoveryApplication(options: {
       : { backupCommandHandler: options.backupCommandHandler }),
     applicationCommandHandler: async (command) => {
       if (command.command === "attach") return { outcome: "attached" };
+      if (command.command === "desktop_owner") {
+        return executeDesktopOwnerLeaseCommand(desktopOwnerLease, command);
+      }
       if (command.command === "quit") return { outcome: "drained" };
       const execution = await executeAutoStart(autoStartRegistrar, command.action);
       return {
@@ -329,6 +362,10 @@ async function startRecoveryApplication(options: {
   });
 
   const cleanup = async (): Promise<void> => {
+    if (desktopOwnerLeaseTimer !== undefined) {
+      clearInterval(desktopOwnerLeaseTimer);
+      desktopOwnerLeaseTimer = undefined;
+    }
     const results = await Promise.allSettled([
       descriptor?.close() ?? Promise.resolve(),
       controlPlane.close(),
@@ -343,6 +380,20 @@ async function startRecoveryApplication(options: {
     ...(options.events === undefined ? {} : { events: options.events }),
   });
   lifecycleHolder.current = lifecycle;
+  if (desktopOwnerLease !== undefined) {
+    let checkingLease = false;
+    desktopOwnerLeaseTimer = setInterval(() => {
+      if (checkingLease) return;
+      checkingLease = true;
+      void desktopOwnerLease
+        .expireIfNeeded()
+        .catch(() => undefined)
+        .finally(() => {
+          checkingLease = false;
+        });
+    }, DESKTOP_OWNER_LEASE_CHECK_INTERVAL_MS);
+    desktopOwnerLeaseTimer.unref();
+  }
   return { kind: "running", application: lifecycle };
 }
 
@@ -352,6 +403,7 @@ async function startNormalApplication(options: {
   readonly descriptorOverride?: string;
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
+  readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
 }): Promise<StartLuckyTokenApplicationResult> {
   const { config } = options;
@@ -374,6 +426,8 @@ async function startNormalApplication(options: {
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledLuckyTokenApplication | undefined;
+  let desktopOwnerLease: DesktopOwnerLeaseAuthority | undefined;
+  let desktopOwnerLeaseTimer: ReturnType<typeof setInterval> | undefined;
   let lastPublishedStatus: ApplicationStatus = Object.freeze({
     modelDataPlane: "stopped",
     provider: "unconfigured",
@@ -478,9 +532,23 @@ async function startNormalApplication(options: {
     );
     await settingsRegistry.load();
 
-    let tokenAuthorities:
-      | Readonly<Record<string, LiveClientTokenAuthority>>
-      | undefined;
+    // Client Token authorities live for the whole Backend lifetime, not the
+    // HTTP Gateway lifetime. This keeps Settings reveal/rotate available
+    // while the Router is stopped and lets disposable legacy v1 auth files
+    // be replaced with fresh v2 state before requests can be accepted.
+    const tokenAuthorities: Record<string, LiveClientTokenAuthority> = {};
+    for (const [protocolId, protocol] of Object.entries(config.clientProtocols)) {
+      const authority = await createLiveClientTokenAuthority({
+        store: createFileClientTokenStore({ path: protocol.authFile }),
+      });
+      tokenAuthorities[protocolId] = authority;
+      const enabledSetting = settingsRegistry.query([
+        `protocols.${protocolId}.enabled`,
+      ])[`protocols.${protocolId}.enabled`];
+      const enabled =
+        enabledSetting === undefined ? true : enabledSetting.value !== false;
+      if (enabled) await authority.ensureGlobal({ freshOnly: true });
+    }
     // These bindings are assigned once after the Catalog controller exists
     // (below); the Control Plane handlers close over them, so they must be
     // declared before their creation site and cannot be const.
@@ -515,7 +583,7 @@ async function startNormalApplication(options: {
       },
     });
     const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
-      authorities: () => tokenAuthorities ?? Object.freeze({}),
+      authorities: () => tokenAuthorities,
       protocolNames,
       diagnostics: ownedDiagnosticsStore,
     });
@@ -533,7 +601,7 @@ async function startNormalApplication(options: {
     });
     const settingsCommandHandler = createProtocolEnablementSettingsHandler({
       settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
-      authorities: () => tokenAuthorities ?? Object.freeze({}),
+      authorities: () => tokenAuthorities,
       protocolNames,
       diagnostics: ownedDiagnosticsStore,
     });
@@ -756,6 +824,7 @@ async function startNormalApplication(options: {
             requestLedgerStore: ownedLedgerStore,
             deepCaptureStore: ownedCaptureStore,
             settingsRegistry,
+            clientTokenAuthorities: tokenAuthorities,
             providerRuntime,
             aliasAuthority,
             codexLocalAuth,
@@ -772,7 +841,6 @@ async function startNormalApplication(options: {
               persistenceAuthority.reportRecovery("capture");
             },
           });
-          tokenAuthorities = composition.clientTokenAuthorities;
           requestIdentities = composition.requestIdentities;
           const server = await startLuckyTokenHttpServer({
             runtime: composition.runtime,
@@ -815,11 +883,30 @@ async function startNormalApplication(options: {
         : plane.publishStatus(status);
     };
 
+    if (options.ownerKind === "desktop") {
+      desktopOwnerLease = createDesktopOwnerLeaseAuthority({
+        ttlMs: DESKTOP_OWNER_LEASE_TTL_MS,
+        now: Date.now,
+        requireInitialClaim: true,
+        onExpired: async () => {
+          const outcome = await supervisor?.quit({
+            timeoutMs: drainTimeoutMs(),
+            publishStatus: publish,
+          });
+          await lifecycle?.finish(outcome ?? "timed_out");
+        },
+      });
+    }
+
     const cleanup = async (): Promise<void> => {
       cleanupPromise ??= (async () => {
         if (attentionRefreshTimer !== undefined) {
           clearInterval(attentionRefreshTimer);
           attentionRefreshTimer = undefined;
+        }
+        if (desktopOwnerLeaseTimer !== undefined) {
+          clearInterval(desktopOwnerLeaseTimer);
+          desktopOwnerLeaseTimer = undefined;
         }
         attentionLedgerSubscription?.unsubscribe();
         attentionLedgerSubscription = undefined;
@@ -848,7 +935,11 @@ async function startNormalApplication(options: {
 
     controlPlane = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: LUCKYTOKEN_RELEASE_VERSION },
+      application: {
+        id: "luckytoken",
+        version: LUCKYTOKEN_RELEASE_VERSION,
+        ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+      },
       initialStatus: supervisor.initialStatus,
       ownership,
       // Provider Activation (Spec v1.0 §14.3): runtime transitions must
@@ -951,6 +1042,8 @@ async function startNormalApplication(options: {
         switch (command.command) {
           case "attach":
             return { outcome: "attached" };
+          case "desktop_owner":
+            return executeDesktopOwnerLeaseCommand(desktopOwnerLease, command);
           case "auto_start": {
             const execution = await executeAutoStart(autoStartRegistrar, command.action);
             return {
@@ -1025,6 +1118,20 @@ async function startNormalApplication(options: {
         })) ?? "timed_out",
       ...(options.events === undefined ? {} : { events: options.events }),
     });
+    if (desktopOwnerLease !== undefined) {
+      let checkingLease = false;
+      desktopOwnerLeaseTimer = setInterval(() => {
+        if (checkingLease) return;
+        checkingLease = true;
+        void desktopOwnerLease
+          ?.expireIfNeeded()
+          .catch(() => undefined)
+          .finally(() => {
+            checkingLease = false;
+          });
+      }, DESKTOP_OWNER_LEASE_CHECK_INTERVAL_MS);
+      desktopOwnerLeaseTimer.unref();
+    }
     return { kind: "running", application: lifecycle };
   } catch (error) {
     await Promise.allSettled([
@@ -1059,6 +1166,7 @@ export async function startLuckyTokenApplication(
         : { descriptorOverride: options.descriptorOverride }),
       ownerKind,
       ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ...(options.events === undefined ? {} : { events: options.events }),
     });
   }
@@ -1081,6 +1189,7 @@ export async function startLuckyTokenApplication(
         recoveryBackupAuthority.handle(command, signal),
       ownerKind,
       ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ...(options.events === undefined ? {} : { events: options.events }),
     });
   }
@@ -1093,6 +1202,7 @@ export async function startLuckyTokenApplication(
       : { descriptorOverride: options.descriptorOverride }),
     ownerKind,
     ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+    ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
     ...(options.events === undefined ? {} : { events: options.events }),
   });
 }

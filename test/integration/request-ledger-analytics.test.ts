@@ -269,12 +269,13 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(totals.outputTokens).toBe(2 + 3 + 3); // 8
     expect(totals.reasoningTokens).toBe(1 + 0 + 1); // 2 (output subset)
     expect(totals.normalizedTokenTotal).toBe(12 + 7 + 13); // 32
-    // Aggregate cache quotient ΣcacheRead/Σ(input+cacheRead+cacheWrite).
+    // Product Hit is the aggregate read-hit quotient:
+    // ΣcacheRead / Σ(input + cacheRead). Cache writes do not enter it.
     expect(totals.cacheHitNumerator).toBe(7);
-    expect(totals.cacheHitDenominator).toBe(13 + 7 + 4); // 24
-    expect(totals.cacheHitRate).toBeCloseTo(7 / 24, 12);
-    // Never an average of per-request rates: (0.3 + 0 + 0.4)/3 ≈ 0.2333.
-    expect(totals.cacheHitRate).not.toBeCloseTo((0.3 + 0 + 0.4) / 3, 2);
+    expect(totals.cacheHitDenominator).toBe(13 + 7); // 20
+    expect(totals.cacheHitRate).toBeCloseTo(7 / 20, 12);
+    // Never an average of per-request Hit percentages.
+    expect(totals.cacheHitRate).not.toBeCloseTo((3 / 8 + 0 + 4 / 8) / 3, 2);
     // No rows/buckets requested.
     expect(result.rows).toBeUndefined();
     expect(result.buckets).toBeUndefined();
@@ -346,8 +347,8 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(anthropic.summary.reasoningTokens).toBe(1);
     expect(anthropic.summary.normalizedTokenTotal).toBe(12);
     expect(anthropic.summary.cacheHitNumerator).toBe(3);
-    expect(anthropic.summary.cacheHitDenominator).toBe(10);
-    expect(anthropic.summary.cacheHitRate).toBeCloseTo(0.3, 12);
+    expect(anthropic.summary.cacheHitDenominator).toBe(8);
+    expect(anthropic.summary.cacheHitRate).toBeCloseTo(3 / 8, 12);
     // openai: r4 + r5.
     const openai = rows[1];
     if (openai === undefined) throw new Error("fixture misuse: missing openai row");
@@ -358,7 +359,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(openai.summary.cacheReadTokens).toBe(4);
     expect(openai.summary.cacheWriteTokens).toBe(2);
     expect(openai.summary.outputTokens).toBe(3);
-    expect(openai.summary.cacheHitRate).toBeCloseTo(0.4, 12);
+    expect(openai.summary.cacheHitRate).toBeCloseTo(4 / 8, 12);
     // commandcode-private: r3 (one request — sorts after the 2-request
     // null group under totalRequests DESC).
     const commandcode = rows[3];
@@ -524,7 +525,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(byProvider.total).toBe(2);
     expect(byProvider.participating).toBe(1);
     expect(byProvider.inputTokens).toBe(5);
-    expect(byProvider.cacheHitRate).toBeCloseTo(0.3, 12);
+    expect(byProvider.cacheHitRate).toBeCloseTo(3 / 8, 12);
     const byProtocol = summary(store, {
       version: 1,
       command: "summary",

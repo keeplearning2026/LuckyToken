@@ -1,12 +1,11 @@
-export type ProductPage = "home" | "providers" | "connect" | "activity" | "settings";
+export type ProductPage = "overview" | "providers" | "settings";
 
 export const productPages: ReadonlyArray<Readonly<{
   id: ProductPage;
   label: string;
+  tone: "red" | "yellow" | "blue";
 }>> = Object.freeze([
-  { id: "home", label: "Home" },
-  { id: "providers", label: "Providers" },
-  { id: "connect", label: "Connect" },
-  { id: "activity", label: "Activity" },
-  { id: "settings", label: "Settings" },
+  { id: "overview", label: "Overview", tone: "red" },
+  { id: "providers", label: "Providers", tone: "yellow" },
+  { id: "settings", label: "Settings", tone: "blue" },
 ]);

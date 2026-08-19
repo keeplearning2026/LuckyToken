@@ -647,19 +647,22 @@ interface FileClientTokenStore {
 }
 ```
 
-第一条接口给 composition/runtime 使用，只暴露 immutable lookup closure；第二条给
-administrative CLI 使用，只暴露 scope mutation，不暴露 runtime authority。这避免
-composition 拿到不需要的 mutation capability，也避免 CLI 持有 serving snapshot。
+Live authority 由 Backend lifetime owner 创建并通过 composition 绑定给具体 Client
+Protocol；Settings/CLI 通过 typed Control Plane 管理 scope mutation，Renderer 不读取
+文件。Data Plane stop/start/restart 复用同一个 authority，因此 reveal/rotate 与请求
+授权始终指向同一份实时状态。
 
 持久文件严格为：
 
 ```json
 {
-  "schemaVersion": "luckytoken-client-auth-v1",
+  "schemaVersion": "luckytoken-client-auth-v2",
   "global": null,
   "projects": {
     "D:\\absolute\\normalized\\project": "project-token"
-  }
+  },
+  "revision": 0,
+  "globalDeleted": false
 }
 ```
 
@@ -668,18 +671,20 @@ composition 拿到不需要的 mutation capability，也避免 CLI 持有 servin
 | 文件 owner | Client Auth file capability |
 | 文件选择者 | composition root 用 config 中的 protocol ID 把某个文件绑定到某个 handler |
 | 文件内没有什么 | protocol ID、Anthropic/OpenAI 字段、Pi state、Provider credential |
-| runtime representation | frozen token → `AuthorizedClient` lookup；文件 JSON 和 path 不传播 |
-| administrative representation | global/project `ClientTokenScope`；`list()` 不返回 token value |
+| runtime representation | Backend-lifetime live token → `AuthorizedClient` lookup；文件 JSON 和 path 不传播 |
+| administrative representation | global/project `ClientTokenScope`；`list()` 只返回 masked metadata，`reveal()` 是显式 secret operation |
 | token 规则 | 非空、无 whitespace、同一文件内不得绑定多个 scope；自动 token 为 256-bit random base64url |
 | project 规则 | key 必须是已经 normalized 的绝对路径 |
 | 权限 | 创建目录请求 0700、文件请求 0600（最终效果受 OS 能力影响） |
 
-缺失、坏 JSON、未知字段、错误 schema、空 authority、重复 token、relative/aliased
-project path 都在 authority 建立前 fail closed。启动时只加载一次；CLI 后续修改文件
-不会改变已经运行的 snapshot，重启才生效。
+缺失文件会在 protocol 启用时生成当前 v2 global token。废弃的
+`luckytoken-client-auth-v1` 不迁移、不复用旧 token，而是视为未初始化并由当前
+authority 原子生成新的 v2 文件/token。坏 JSON、未知未来 schema、未知字段、重复
+token、relative/aliased project path 仍 fail closed。
 
-本 capability 明确按非并发管理操作设计；它没有 watcher 或 client-token lock
-manager。不同 Client Protocol 文件不跨读、不跨查 token。
+Mutation 使用 file revision CAS + lock + atomic replace 并 hot-apply 到 live authority；
+request path 本身不读文件。不同 Client Protocol 文件不跨读、不跨查 token。正常
+用户通过 Settings 查看/复制/rotate global token，不需要管理这些文件。
 
 ## 4.3 Client token CLI capability — `src/client-auth/cli.ts`
 

@@ -178,7 +178,7 @@ describe("alias serve wiring", () => {
       const aliasesFile = join(root, "aliases-proposal.json");
       await writeFile(
         aliasesFile,
-        `${JSON.stringify({ aliases: { "my-model": { provider: "openai", model: "gpt-4o" } } }, null, 2)}\n`,
+        `${JSON.stringify({ aliases: { "openai/my-model": { provider: "openai", model: "gpt-4o" } } }, null, 2)}\n`,
         "utf8",
       );
       const write = startCli([
@@ -207,14 +207,14 @@ describe("alias serve wiring", () => {
         aliases: Record<string, unknown>;
       };
       expect(onDisk.aliases).toEqual({
-        "my-model": { provider: "openai", model: "gpt-4o" },
+        "openai/my-model": { provider: "openai", model: "gpt-4o" },
       });
 
       // A rejected proposal (unknown target) never replaces the registry.
       const rejectedFile = join(root, "aliases-rejected.json");
       await writeFile(
         rejectedFile,
-        `${JSON.stringify({ aliases: { "ghost": { provider: "openai", model: "missing" } } })}\n`,
+        `${JSON.stringify({ aliases: { "openai/ghost": { provider: "openai", model: "missing" } } })}\n`,
         "utf8",
       );
       const rejected = startCli([
@@ -237,7 +237,7 @@ describe("alias serve wiring", () => {
       expect(rejectedOutcome.outcome).toBe("invalid");
       expect(rejectedOutcome.error?.kind).toBe("validation");
       expect(rejectedOutcome.error?.entries).toEqual([
-        expect.objectContaining({ alias: "ghost", code: "unknown" }),
+        expect.objectContaining({ alias: "openai/ghost", code: "unknown" }),
       ]);
       expect(rejectedOutcome.state.revision).toBe(1);
 
@@ -262,7 +262,7 @@ describe("alias serve wiring", () => {
       const commentedFile = join(root, "aliases-commented.json");
       await writeFile(
         commentedFile,
-        `{\n  // user note kept in the proposal\n  \"aliases\": {\n    \"commented\": { \"provider\": \"openai\", \"model\": \"gpt-4o\" },\n  },\n}\n`,
+        `{\n  // user note kept in the proposal\n  \"aliases\": {\n    \"openai/commented\": { \"provider\": \"openai\", \"model\": \"gpt-4o\" },\n  },\n}\n`,
         "utf8",
       );
       const commented = startCli([
@@ -361,7 +361,7 @@ describe("alias serve wiring", () => {
       // A write replaces the user record as a whole: the malformed attempts
       // must not have wiped or altered the last successful mapping.
       expect(afterMalformedQuery.state.aliases).toEqual({
-        commented: { provider: "openai", model: "gpt-4o" },
+        "openai/commented": { provider: "openai", model: "gpt-4o" },
       });
 
       // The sanitized projection rides on status snapshots.

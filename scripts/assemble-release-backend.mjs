@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -82,6 +83,20 @@ export async function assembleReleaseBackend({
       path: join(destination, "tarballs", reports[0].filename),
     });
   }
+  const backendBuildHash = createHash("sha256");
+  for (const tarball of [...tarballs].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    backendBuildHash.update(tarball.name);
+    backendBuildHash.update(await readFile(tarball.path));
+  }
+  backendBuildHash.update(await readFile(join(repositoryRoot, "package-lock.json")));
+  await writeFile(
+    join(destination, "build-id.txt"),
+    `${backendBuildHash.digest("hex")}\n`,
+    "utf8",
+  );
+
   const dependencies = Object.fromEntries(
     tarballs.map((tarball) => [tarball.name, `file:${tarball.path}`]),
   );

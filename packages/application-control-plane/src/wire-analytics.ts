@@ -32,6 +32,7 @@ const RESULT_KEYS: ReadonlySet<string> = new Set([
   "models",
   "protocols",
   "projects",
+  "sessions",
   "outcomes",
 ]);
 
@@ -52,6 +53,7 @@ const SUMMARY_KEYS: ReadonlySet<string> = new Set([
   "cacheReadTokens",
   "cacheWriteTokens",
   "outputTokens",
+  "outputTokensPerSecond",
   "reasoningTokens",
   "normalizedTokenTotal",
   "cacheHitNumerator",
@@ -69,6 +71,10 @@ const GROUP_BY_VALUES: readonly AnalyticsGroupBy[] = Object.freeze([
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isRate(value: unknown): value is number {
@@ -117,6 +123,7 @@ export function decodeAnalyticsSummary(
     cacheReadTokens,
     cacheWriteTokens,
     outputTokens,
+    outputTokensPerSecond,
     reasoningTokens,
     normalizedTokenTotal,
     cacheHitNumerator,
@@ -150,6 +157,8 @@ export function decodeAnalyticsSummary(
       !isNonNegativeSafeInteger(reasoningTokens)) ||
     (normalizedTokenTotal !== undefined &&
       !isNonNegativeSafeInteger(normalizedTokenTotal)) ||
+    (outputTokensPerSecond !== undefined &&
+      !isNonNegativeFiniteNumber(outputTokensPerSecond)) ||
     (cacheHitRate !== undefined && !isRate(cacheHitRate))
   ) {
     return undefined;
@@ -190,6 +199,7 @@ export function decodeAnalyticsSummary(
       cacheReadTokens !== 0 ||
       cacheWriteTokens !== 0 ||
       outputTokens !== 0 ||
+      outputTokensPerSecond !== undefined ||
       reasoningTokens !== undefined ||
       normalizedTokenTotal !== undefined
     ) {
@@ -224,6 +234,9 @@ export function decodeAnalyticsSummary(
     cacheReadTokens: cacheReadTokens as number,
     cacheWriteTokens: cacheWriteTokens as number,
     outputTokens: outputTokens as number,
+    ...(outputTokensPerSecond === undefined
+      ? {}
+      : { outputTokensPerSecond }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     ...(normalizedTokenTotal === undefined
       ? {}
@@ -361,12 +374,14 @@ export function decodeAnalyticsResult(
     const models = decodeStringArray(value.models);
     const protocols = decodeStringArray(value.protocols);
     const projects = decodeStringArray(value.projects);
+    const sessions = decodeStringArray(value.sessions);
     const outcomes = decodeStringArray(value.outcomes);
     if (
       providers === undefined ||
       models === undefined ||
       protocols === undefined ||
       projects === undefined ||
+      sessions === undefined ||
       outcomes === undefined ||
       (value.truncated !== undefined && typeof value.truncated !== "boolean")
     ) {
@@ -379,6 +394,7 @@ export function decodeAnalyticsResult(
       models,
       protocols,
       projects,
+      sessions,
       outcomes,
       ...(value.truncated === undefined ? {} : { truncated: value.truncated }),
     });

@@ -43,6 +43,7 @@ export interface DesktopPlatformOperations {
   pickDirectory(): Promise<string | undefined>;
   pickSaveFile(options: SaveFileOptions): Promise<string | undefined>;
   openExternal(url: string): Promise<void>;
+  writeClipboardText(value: string): Promise<void>;
   getDesktopVersion(): Promise<string>;
 }
 
@@ -181,6 +182,11 @@ export function registerDesktopIpcHandlers(options: {
       throw new Error("Refusing to open a non-http(s) URL");
     }
     await platform.openExternal(url);
+  });
+  register(desktopIpcChannels.clipboardWrite, async (_event, ...args) => {
+    const value = first<unknown>(args);
+    if (typeof value !== "string") throw new Error("Invalid clipboard value");
+    await platform.writeClipboardText(value);
   });
   register(desktopIpcChannels.desktopVersion, () => platform.getDesktopVersion());
 

@@ -6,7 +6,9 @@ import {
   deriveRequestStatus,
   formatCacheHitRate,
   formatDuration,
+  formatPercent,
   formatTimestamp,
+  formatTokenCount,
   formatTokensPerSecond,
   ledgerPhaseLabel,
   projectAverageOutputTokensPerSecond,
@@ -185,6 +187,13 @@ describe("formatDuration", () => {
   });
 });
 
+describe("shared analytics display formatters", () => {
+  it("formats token counts and raw rates for renderer reuse", () => {
+    expect(formatTokenCount(1_200)).toBe("1,200");
+    expect(formatPercent(0.75)).toBe("75.0%");
+  });
+});
+
 describe("formatTokensPerSecond", () => {
   it("renders a validated zero honestly and rounds the rest", () => {
     expect(formatTokensPerSecond(0)).toBe("0 tokens/s");
@@ -255,8 +264,10 @@ describe("projectRequestUsage display contract", () => {
     });
     expect(projection.completeness).toBe("Unavailable");
     expect(projection.reason).toBe("usage_absent");
-    expect(projection.input).toBe("0");
-    expect(projection.cacheRead).toBe("0");
+    expect(projection.input).toBe("-");
+    expect(projection.cacheRead).toBe("-");
+    expect(projection.cacheWrite).toBe("-");
+    expect(projection.output).toBe("-");
     expect(projection.normalizedTotal).toBeUndefined();
     expect(projection.cacheHitRate).toBeUndefined();
   });
@@ -271,12 +282,14 @@ describe("projectRequestUsage display contract", () => {
     expect(projection.output).toBe("100");
     expect(projection.reasoning).toBe("10");
     expect(projection.normalizedTotal).toBe("110");
-    expect(projection.cacheHitRate).toBe("30.0%");
+    // Product Hit is cacheRead / (input + cacheRead), independent of
+    // cacheWrite and of the persisted legacy normalized rate.
+    expect(projection.cacheHitRate).toBe("37.5%");
   });
 
   it("renders a validated zero cache-hit rate honestly", () => {
     const projection = projectRequestUsage(
-      completeUsage({ cacheRead: 0, cacheHitRate: 0 }),
+      completeUsage({ input: 5, cacheRead: 0, cacheWrite: 2, cacheHitRate: 0 }),
     );
     expect(projection.cacheHitRate).toBe("0.0%");
   });
@@ -474,6 +487,7 @@ describe("projectRequestLedger list projection", () => {
     expect(projection.completedAt).toBe(1_700_000_003_010);
     expect(projection.clientSessionId).toBe(clientSessionId);
     expect(projection.projectDir).toBe("C:\\Users\\fixture\\projects\\alpha");
+    expect(projection.duration).toBe("2.0 s");
     expect(projection.speed).toBe("50.0 tokens/s");
     expect(projection.attemptCount).toBe(2);
     expect(projection.noticeCount).toBe(1);
@@ -498,6 +512,7 @@ describe("projectRequestLedger list projection", () => {
     expect(projection.providerId).toBe("-");
     expect(projection.realModelId).toBe("-");
     expect(projection.completedAt).toBeUndefined();
+    expect(projection.duration).toBe("2.0 s");
     expect(projection.speed).toBe("-");
     // The effective identity has no field in the list projection.
     expect("effectiveSessionId" in projection).toBe(false);
@@ -509,6 +524,7 @@ describe("projectRequestLedger list projection", () => {
     );
     expect(projection.status).toBe("Running");
     expect(projection.phaseLabel).toBe("Executing");
+    expect(projection.duration).toBe("-");
     expect(projection.speed).toBe("-");
   });
 });

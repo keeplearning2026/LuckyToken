@@ -6,27 +6,48 @@ type AuthResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeAut
 type ProviderOption = NonNullable<AuthResult["options"]>["providers"][number];
 type AuthListener = NonNullable<Parameters<LuckyTokenDesktopApi["control"]["executeAuth"]>[1]>;
 type AuthEvent = Parameters<AuthListener>[0];
+type ExternalAuthEvent = Extract<
+  AuthEvent,
+  { readonly type: "auth_url" | "device_code" }
+>;
+type InlineAuthEvent = Exclude<AuthEvent, ExternalAuthEvent>;
 type CatalogResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeCatalog"]>>;
 type ProviderSource = ProviderOption["source"];
+type AuthType = "oauth" | "api_key";
 
-/** Presentation-only source labels (Provider Activation Spec v1.0 §16.4):
- *  package names and internal composition details are never exposed. */
 const SOURCE_LABELS: Readonly<Record<ProviderSource, string>> = Object.freeze({
   pi_builtin: "Built in",
   luckytoken_bundled: "LuckyToken",
   user: "Custom",
 });
 
-/** A model row merged from the authoritative Catalog facts and the current
- *  effective Alias registry (Ticket 11). The canonical target is carried
- *  explicitly from Catalog projection; it is never reparsed from the alias
- *  string. */
 export interface ProviderModelRow {
   readonly providerId: string;
   readonly modelId: string;
   readonly availability: "available" | "unavailable" | "unknown";
-  readonly alias: string;
-  readonly aliasLayer: "default" | "user";
+  readonly modelName?: string;
+  readonly nameLayer?: "default" | "user";
+}
+
+interface AuthModalState {
+  readonly providerId: string;
+  readonly authType: AuthType;
+}
+
+interface AuthOutcome {
+  readonly kind: "success" | "cancelled" | "failed";
+  readonly message: string;
+}
+
+function modelNameFromInternalAlias(
+  providerId: string,
+  internalAlias: string | undefined,
+): string | undefined {
+  if (internalAlias === undefined) return undefined;
+  const prefix = `${providerId}/`;
+  return internalAlias.startsWith(prefix)
+    ? internalAlias.slice(prefix.length)
+    : undefined;
 }
 
 export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
@@ -40,18 +61,46 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [catalogError, setCatalogError] = useState(false);
   const [search, setSearch] = useState("");
   const [busyProvider, setBusyProvider] = useState<string>();
-  const [interaction, setInteraction] = useState<AuthEvent>();
+  const [authModal, setAuthModal] = useState<AuthModalState>();
+  const [authOutcome, setAuthOutcome] = useState<AuthOutcome>();
+  const [externalInteraction, setExternalInteraction] = useState<ExternalAuthEvent>();
+  const [interaction, setInteraction] = useState<InlineAuthEvent>();
   const [promptValue, setPromptValue] = useState("");
   const [notice, setNotice] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
+  const [modelsProviderId, setModelsProviderId] = useState<string>();
   const [editingRow, setEditingRow] = useState<ProviderModelRow>();
-  const [aliasValue, setAliasValue] = useState("");
-  const [aliasBusy, setAliasBusy] = useState(false);
-  const [aliasError, setAliasError] = useState<string>();
+  const [modelNameValue, setModelNameValue] = useState("");
+  const [modelNameBusy, setModelNameBusy] = useState(false);
+  const [modelNameError, setModelNameError] = useState<string>();
+  const seenCatalogVersion = useRef(-1);
 
-  // Initial query: Auth and Catalog are queried independently (Spec
-  // §16.2). An Auth query failure renders an explicit management error
-  // state, never an empty Provider list.
+  const queryPageFacts = (): void => {
+    setLoading(true);
+    setAuthError(false);
+    setCatalogError(false);
+    void api.control
+      .executeAuth({ command: "query" })
+      .then((auth) => {
+        setProviders(auth.options?.providers ?? []);
+        setAuthError(auth.outcome !== "ok");
+      })
+      .catch(() => setAuthError(true));
+    void api.control
+      .executeCatalog({ command: "query" })
+      .then((nextCatalog) => {
+        seenCatalogVersion.current = nextCatalog.snapshot.version;
+        setCatalog(nextCatalog);
+        setCatalogError(nextCatalog.outcome !== "ok");
+      })
+      .catch(() => setCatalogError(true));
+    void api.control.executeAliases({ command: "query" }).then(
+      (nextAliases) => setAliases(nextAliases),
+      () => undefined,
+    );
+    void Promise.resolve().then(() => setLoading(false));
+  };
+
   useEffect(() => {
     let active = true;
     void api.control
@@ -62,8 +111,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         setAuthError(auth.outcome !== "ok");
       })
       .catch(() => {
-        if (!active) return;
-        setAuthError(true);
+        if (active) setAuthError(true);
       });
     void api.control
       .executeCatalog({ command: "query" })
@@ -74,29 +122,22 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         setCatalogError(nextCatalog.outcome !== "ok");
       })
       .catch(() => {
-        if (!active) return;
-        setCatalogError(true);
+        if (active) setCatalogError(true);
       });
-    void Promise.resolve().then(() => {
-      if (active) setLoading(false);
-    });
-    // Alias facts are presentation-only for model rows; a failure here
-    // never blocks the Provider activation surface (Spec §16.2).
     void api.control.executeAliases({ command: "query" }).then(
       (nextAliases) => {
         if (active) setAliases(nextAliases);
       },
       () => undefined,
     );
+    void Promise.resolve().then(() => {
+      if (active) setLoading(false);
+    });
     return () => {
       active = false;
     };
   }, [api]);
 
-  // The page reacts to authoritative status/catalog generation changes by
-  // re-querying; it never invents a polling authority (Spec §16.8). The
-  // Backend drives convergence through catalog version publication.
-  const seenCatalogVersion = useRef(-1);
   useEffect(() => {
     let active = true;
     const stop = api.control.onStatus((status) => {
@@ -115,8 +156,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           setCatalogError(nextCatalog.outcome !== "ok");
         },
         () => {
-          if (!active) return;
-          setCatalogError(true);
+          if (active) setCatalogError(true);
         },
       );
       void api.control.executeAliases({ command: "query" }).then(
@@ -157,20 +197,23 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     return map;
   }, [aliases]);
 
-  /** Model rows merged from Catalog facts + effective Alias registry. */
-  const modelRows: ProviderModelRow[] = useMemo(() => {
+  const modelRows = useMemo(() => {
     const rows: ProviderModelRow[] = [];
     for (const provider of catalog?.snapshot.providers ?? []) {
       for (const model of provider.models) {
-        const alias = aliasByTarget.get(
+        const current = aliasByTarget.get(
           `${provider.providerId}\u0000${model.id}`,
+        );
+        const modelName = modelNameFromInternalAlias(
+          provider.providerId,
+          current?.alias,
         );
         rows.push({
           providerId: provider.providerId,
           modelId: model.id,
           availability: model.availability,
-          alias: alias?.alias ?? `${provider.providerId}/${model.id}`,
-          aliasLayer: alias?.layer ?? "default",
+          ...(modelName === undefined ? {} : { modelName }),
+          ...(current === undefined ? {} : { nameLayer: current.layer }),
         });
       }
     }
@@ -189,34 +232,71 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     );
   };
 
-  const login = async (
-    provider: ProviderOption,
-    authType: "oauth" | "api_key",
-  ): Promise<void> => {
-    setBusyProvider(provider.providerId);
+  const clearAuthInteraction = (): void => {
+    setExternalInteraction(undefined);
     setInteraction(undefined);
     setPromptValue("");
+  };
+
+  const login = async (
+    provider: ProviderOption,
+    authType: AuthType,
+  ): Promise<void> => {
+    setBusyProvider(provider.providerId);
+    setAuthModal({ providerId: provider.providerId, authType });
+    setAuthOutcome(undefined);
+    clearAuthInteraction();
     setNotice(undefined);
     try {
       const result = await api.control.executeAuth(
         { command: "login", providerId: provider.providerId, authType },
         (event) => {
+          if (event.type === "auth_url") {
+            setExternalInteraction(event);
+            void api.platform.openExternal(event.url);
+            return;
+          }
+          if (event.type === "device_code") {
+            setExternalInteraction(event);
+            void api.platform.openExternal(event.verificationUri);
+            return;
+          }
           setInteraction(event);
           if (event.type === "prompt") setPromptValue("");
         },
       );
       applyAuthState(result);
       if (result.outcome === "ok") {
-        setNotice(`${provider.name} connected.`);
-        setInteraction(undefined);
+        setAuthOutcome({
+          kind: "success",
+          message: `${provider.name} connected.`,
+        });
       } else if (result.outcome === "cancelled") {
-        setNotice("Sign-in cancelled.");
+        setAuthOutcome({ kind: "cancelled", message: "Sign-in cancelled." });
       } else {
-        setNotice(result.error ?? "Provider sign-in failed. Try again.");
+        setAuthOutcome({
+          kind: "failed",
+          message: result.error ?? "Provider sign-in failed. Try again.",
+        });
       }
+    } catch {
+      setAuthOutcome({
+        kind: "failed",
+        message: "Provider sign-in failed. Try again.",
+      });
     } finally {
+      clearAuthInteraction();
       setBusyProvider(undefined);
     }
+  };
+
+  const cancelAuth = (): void => {
+    if (busyProvider !== undefined) {
+      void api.control.respondAuth({ type: "cancel" });
+    }
+    setAuthModal(undefined);
+    setAuthOutcome(undefined);
+    clearAuthInteraction();
   };
 
   const refresh = async (): Promise<void> => {
@@ -239,8 +319,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           : failed
               .map(
                 (provider) =>
-                  provider.error ??
-                  `${provider.providerId} refresh failed`,
+                  provider.error ?? `${provider.providerId} refresh failed`,
               )
               .join(" · "),
       );
@@ -258,73 +337,37 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     });
   };
 
-  const openAliasEditor = (row: ProviderModelRow): void => {
-    setAliasError(undefined);
-    // The editor asks only for the friendly alias value; the canonical
-    // target is already determined by the model row (Spec §16.10).
-    setAliasValue(row.aliasLayer === "default" ? "" : row.alias);
+  const openModelEditor = (row: ProviderModelRow): void => {
+    if (row.modelName === undefined) return;
+    setModelNameError(undefined);
+    setModelNameValue(row.modelName);
     setEditingRow(row);
   };
 
-  const saveAlias = async (): Promise<void> => {
+  const saveModelName = async (): Promise<void> => {
     const row = editingRow;
     if (row === undefined) return;
-    const trimmed = aliasValue.trim();
-    if (trimmed.length === 0) {
-      setAliasError("Enter a friendly alias for this model.");
+    const trimmed = modelNameValue.trim();
+    if (trimmed.length === 0 || trimmed.includes("/")) {
+      setModelNameError("Model name must not contain '/'.");
       return;
     }
-    setAliasBusy(true);
-    setAliasError(undefined);
+    setModelNameBusy(true);
+    setModelNameError(undefined);
     try {
       const revision = aliases?.state.revision ?? 0;
       const result = await api.control.executeAliases({
-        command: "set_for_model",
+        command: "rename_model",
         revision,
         providerId: row.providerId,
         modelId: row.modelId,
-        alias: trimmed,
+        modelName: trimmed,
       });
       if (result.outcome !== "ok") {
-        const message =
+        setModelNameError(
           result.outcome === "conflict"
-            ? "The alias registry changed. Refresh and try again."
-            : (result.error?.message ?? "The alias could not be saved.");
-        setAliasError(message);
-        // Refresh the authoritative state so the UI never shows a locally
-        // invented alias.
-        const next = await api.control
-          .executeAliases({ command: "query" })
-          .catch(() => undefined);
-        if (next !== undefined) setAliases(next);
-        return;
-      }
-      setAliases(result);
-      setEditingRow(undefined);
-      setNotice(`Alias saved for ${row.modelId}.`);
-    } catch {
-      setAliasError("The alias could not be saved. Try again.");
-    } finally {
-      setAliasBusy(false);
-    }
-  };
-
-  const resetAlias = async (row: ProviderModelRow): Promise<void> => {
-    setAliasBusy(true);
-    setAliasError(undefined);
-    try {
-      const revision = aliases?.state.revision ?? 0;
-      const result = await api.control.executeAliases({
-        command: "reset_for_model",
-        revision,
-        providerId: row.providerId,
-        modelId: row.modelId,
-      });
-      if (result.outcome !== "ok") {
-        setAliasError(
-          result.outcome === "conflict"
-            ? "The alias registry changed. Refresh and try again."
-            : (result.error?.message ?? "The alias could not be reset."),
+            ? "Model names changed. Refresh and try again."
+            : (result.error?.message ?? "The model name could not be saved."),
         );
         const next = await api.control
           .executeAliases({ command: "query" })
@@ -334,11 +377,40 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       }
       setAliases(result);
       setEditingRow(undefined);
-      setNotice(`Default alias restored for ${row.modelId}.`);
+      setNotice(`Model name saved for ${row.modelId}.`);
     } catch {
-      setAliasError("The alias could not be reset. Try again.");
+      setModelNameError("The model name could not be saved. Try again.");
     } finally {
-      setAliasBusy(false);
+      setModelNameBusy(false);
+    }
+  };
+
+  const restoreModelName = async (row: ProviderModelRow): Promise<void> => {
+    setModelNameBusy(true);
+    setModelNameError(undefined);
+    try {
+      const revision = aliases?.state.revision ?? 0;
+      const result = await api.control.executeAliases({
+        command: "restore_model_name",
+        revision,
+        providerId: row.providerId,
+        modelId: row.modelId,
+      });
+      if (result.outcome !== "ok") {
+        setModelNameError(
+          result.outcome === "conflict"
+            ? "Model names changed. Refresh and try again."
+            : (result.error?.message ?? "The default model name could not be restored."),
+        );
+        return;
+      }
+      setAliases(result);
+      setEditingRow(undefined);
+      setNotice(`Default model name restored for ${row.modelId}.`);
+    } catch {
+      setModelNameError("The default model name could not be restored. Try again.");
+    } finally {
+      setModelNameBusy(false);
     }
   };
 
@@ -363,45 +435,48 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const available = visible.filter(
     (provider) => provider.status.unavailable || provider.status.expired,
   );
-  const visibleProviderIds = new Set(visible.map((provider) => provider.providerId));
-  const visibleModelRows = modelRows.filter((row) =>
-    visibleProviderIds.has(row.providerId),
-  );
 
-  const renderCard = (provider: ProviderOption): React.ReactElement => {
+  const selectedModelsProvider =
+    modelsProviderId === undefined
+      ? undefined
+      : providers.find((provider) => provider.providerId === modelsProviderId);
+  const selectedModelRows =
+    modelsProviderId === undefined
+      ? []
+      : modelRows.filter((row) => row.providerId === modelsProviderId);
+  const authProvider =
+    authModal === undefined
+      ? undefined
+      : providers.find((provider) => provider.providerId === authModal.providerId);
+
+  const renderProviderCard = (provider: ProviderOption): React.ReactElement => {
     const availability = catalogByProvider.get(provider.providerId);
     const availableModels =
       availability?.models.filter(
         (model) => model.availability === "available",
       ).length ?? 0;
     const knownModels = availability?.models.length ?? 0;
-    const connected = !provider.status.unavailable && !provider.status.expired;
+    const isConnected = !provider.status.unavailable && !provider.status.expired;
     const catalogFailed = availability?.state === "failed";
     return (
       <article className="page-card provider-card" key={provider.providerId}>
         <div className="provider-title">
           <div>
             <h3>{provider.name}</h3>
-            <p className="provider-source">
-              {SOURCE_LABELS[provider.source]}
-            </p>
+            <p className="provider-source">{SOURCE_LABELS[provider.source]}</p>
           </div>
-          <span
-            className={`badge ${connected ? "good" : "warning"}`}
-          >
+          <span className={`badge ${isConnected ? "good" : "warning"}`}>
             {provider.status.expired
               ? "Reconnect required"
-              : connected
+              : isConnected
                 ? "Connected"
-                : "Available"}
+                : "Not connected"}
           </span>
         </div>
         <p>
           {knownModels === 0
-            ? "Model facts unavailable"
-            : `${availableModels} of ${knownModels} model${
-                knownModels === 1 ? "" : "s"
-              } available`}
+            ? "Models unavailable"
+            : `${availableModels} of ${knownModels} model${knownModels === 1 ? "" : "s"} available`}
         </p>
         {catalogFailed ? (
           <p className="error-text">
@@ -409,25 +484,35 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           </p>
         ) : null}
         <div className="button-row">
-          {provider.account ? (
+          {provider.apiKey ? (
             <button
               type="button"
               disabled={busyProvider !== undefined}
-              onClick={() => void login(provider, "oauth")}
+              onClick={() => void login(provider, "api_key")}
             >
-              {provider.accountLabel ?? "Use account"}
+              API key
             </button>
           ) : null}
-          {provider.apiKey ? (
+          {provider.account ? (
             <button
               type="button"
               className="secondary"
               disabled={busyProvider !== undefined}
-              onClick={() => void login(provider, "api_key")}
+              onClick={() => void login(provider, "oauth")}
             >
-              {provider.apiKeyLabel ?? "Use API key"}
+              Auth
             </button>
           ) : null}
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setEditingRow(undefined);
+              setModelsProviderId(provider.providerId);
+            }}
+          >
+            Models{knownModels === 0 ? "" : ` ${knownModels}`}
+          </button>
           {catalogFailed ? (
             <button
               type="button"
@@ -443,102 +528,28 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     );
   };
 
-  const renderModelRow = (row: ProviderModelRow): React.ReactElement => (
-    <li className="provider-model-row" key={`${row.providerId}\u0000${row.modelId}`}>
-      <span className="model-alias">{row.alias}</span>
-      <span
-        className={`badge ${
-          row.availability === "available" ? "good" : "neutral"
-        }`}
-      >
-        {row.availability}
-      </span>
-      <button
-        type="button"
-        className="secondary"
-        onClick={() => openAliasEditor(row)}
-        aria-label={
-          row.aliasLayer === "default"
-            ? `Add alias for ${row.alias}`
-            : `Edit alias for ${row.alias}`
-        }
-      >
-        {row.aliasLayer === "default" ? "+ alias" : "edit alias"}
-      </button>
-      {row.aliasLayer === "user" ? (
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => void resetAlias(row)}
-          aria-label={`Use default for ${row.alias}`}
-        >
-          Use default
-        </button>
-      ) : null}
-    </li>
-  );
-
   return (
     <section className="page-stack">
       <div className="page-card section-heading">
         <div>
           <p className="eyebrow">AI SERVICES</p>
           <h2>Providers</h2>
-          <p>Connect the services LuckyToken can use. Credentials stay in the Backend.</p>
+          <p>Find a provider, connect it, and manage the model names you use.</p>
         </div>
-        <button
-          type="button"
-          disabled={refreshing}
-          onClick={() => void refresh()}
-        >
+        <button type="button" disabled={refreshing} onClick={() => void refresh()}>
           {refreshing ? "Refreshing…" : "Refresh models"}
         </button>
       </div>
 
       {notice === undefined ? null : (
-        <p className="product-notice" role="status">
-          {notice}
-        </p>
+        <p className="product-notice" role="status">{notice}</p>
       )}
 
       {authError ? (
         <section className="page-card" role="alert">
           <h3>Provider state is temporarily unavailable</h3>
-          <p>
-            LuckyToken could not reach the Backend Provider management
-            surface. Check the Backend and try again.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setLoading(true);
-              setAuthError(false);
-              setCatalogError(false);
-              setNotice(undefined);
-              void api.control
-                .executeAuth({ command: "query" })
-                .then((auth) => {
-                  setProviders(auth.options?.providers ?? []);
-                  setAuthError(auth.outcome !== "ok");
-                })
-                .catch(() => setAuthError(true));
-              void api.control
-                .executeCatalog({ command: "query" })
-                .then((nextCatalog) => {
-                  seenCatalogVersion.current = nextCatalog.snapshot.version;
-                  setCatalog(nextCatalog);
-                  setCatalogError(nextCatalog.outcome !== "ok");
-                })
-                .catch(() => setCatalogError(true));
-              void api.control.executeAliases({ command: "query" }).then(
-                (nextAliases) => setAliases(nextAliases),
-                () => undefined,
-              );
-              void Promise.resolve().then(() => setLoading(false));
-            }}
-          >
-            Retry
-          </button>
+          <p>LuckyToken could not reach Provider management.</p>
+          <button type="button" onClick={queryPageFacts}>Retry</button>
         </section>
       ) : (
         <>
@@ -555,190 +566,18 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           {catalogError ? (
             <section className="page-card" role="alert">
               <h3>Model catalog unavailable</h3>
-              <p>
-                Provider authentication facts are shown, but model facts
-                could not be loaded from the Backend.
-              </p>
-              <button
-                type="button"
-                disabled={refreshing}
-                onClick={() => void refresh()}
-              >
+              <p>Authentication is available, but model facts could not be loaded.</p>
+              <button type="button" disabled={refreshing} onClick={() => void refresh()}>
                 Retry models
               </button>
             </section>
           ) : null}
 
-          {interaction === undefined ? null : (
-            <div className="page-card auth-interaction" aria-live="polite">
-              {interaction.type === "progress" ? (
-                <p>{interaction.message}</p>
-              ) : null}
-              {interaction.type === "info" ? (
-                <p>{interaction.message}</p>
-              ) : null}
-              {interaction.type === "auth_url" ? (
-                <>
-                  <p>
-                    {interaction.instructions ??
-                      "Continue sign-in in your browser."}
-                  </p>
-                  <code>{interaction.url}</code>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void api.platform.openExternal(interaction.url)
-                    }
-                  >
-                    Open browser
-                  </button>
-                </>
-              ) : null}
-              {interaction.type === "device_code" ? (
-                <>
-                  <p>Enter this code to continue:</p>
-                  <strong className="device-code">
-                    {interaction.userCode}
-                  </strong>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void api.platform.openExternal(
-                        interaction.verificationUri,
-                      )
-                    }
-                  >
-                    Open verification page
-                  </button>
-                </>
-              ) : null}
-              {interaction.type === "prompt" ? (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void submitPrompt();
-                  }}
-                >
-                  <label>
-                    <span>{interaction.message}</span>
-                    {interaction.kind === "select" ? (
-                      <select
-                        value={promptValue}
-                        onChange={(event) =>
-                          setPromptValue(event.currentTarget.value)
-                        }
-                      >
-                        <option value="">Choose…</option>
-                        {interaction.options?.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type={
-                          interaction.kind === "secret" ? "password" : "text"
-                        }
-                        placeholder={interaction.placeholder}
-                        value={promptValue}
-                        onChange={(event) =>
-                          setPromptValue(event.currentTarget.value)
-                        }
-                      />
-                    )}
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={promptValue.length === 0}
-                  >
-                    Continue
-                  </button>
-                </form>
-              ) : null}
-              {busyProvider === undefined ? null : (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() =>
-                    void api.control.respondAuth({ type: "cancel" })
-                  }
-                >
-                  Cancel sign-in
-                </button>
-              )}
-            </div>
-          )}
-
-          {editingRow === undefined ? null : (
-            <div
-              className="page-card alias-editor"
-              role="dialog"
-              aria-label="Edit model alias"
-            >
-              <h3>
-                {editingRow.aliasLayer === "default" ? "Add alias" : "Edit alias"}
-              </h3>
-              <p className="alias-editor-model">{editingRow.modelId}</p>
-              <p className="alias-editor-current">
-                Current alias: <code>{editingRow.alias}</code>
-              </p>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void saveAlias();
-                }}
-              >
-                <label>
-                  <span>Custom alias</span>
-                  <input
-                    type="text"
-                    value={aliasValue}
-                    placeholder={editingRow.alias}
-                    onChange={(event) => setAliasValue(event.currentTarget.value)}
-                    autoFocus
-                  />
-                </label>
-                {aliasError === undefined ? null : (
-                  <p className="error-text" role="alert">
-                    {aliasError}
-                  </p>
-                )}
-                <div className="button-row">
-                  <button
-                    type="submit"
-                    disabled={aliasBusy || aliasValue.trim().length === 0}
-                  >
-                    {aliasBusy ? "Saving…" : "Save"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={aliasBusy}
-                    onClick={() => setEditingRow(undefined)}
-                  >
-                    Cancel
-                  </button>
-                  {editingRow.aliasLayer === "user" ? (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={aliasBusy}
-                      onClick={() => void resetAlias(editingRow)}
-                    >
-                      Use default
-                    </button>
-                  ) : null}
-                </div>
-              </form>
-            </div>
-          )}
-
           {connected.length === 0 ? null : (
             <section className="provider-group">
               <h3 className="provider-group-title">Connected</h3>
               <div className="provider-grid">
-                {connected.map((provider) => renderCard(provider))}
+                {connected.map((provider) => renderProviderCard(provider))}
               </div>
             </section>
           )}
@@ -747,20 +586,245 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <section className="provider-group">
               <h3 className="provider-group-title">Available</h3>
               <div className="provider-grid">
-                {available.map((provider) => renderCard(provider))}
+                {available.map((provider) => renderProviderCard(provider))}
               </div>
             </section>
           )}
-
-          {visibleModelRows.length === 0 ? null : (
-            <section className="page-card">
-              <h3>Known models</h3>
-              <ul className="provider-model-list">
-                {visibleModelRows.map((row) => renderModelRow(row))}
-              </ul>
-            </section>
-          )}
         </>
+      )}
+
+      {authModal === undefined || authProvider === undefined ? null : (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="page-card task-modal auth-interaction"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${authProvider.name} sign in`}
+          >
+            <div className="task-modal-header">
+              <div>
+                <p className="eyebrow">{authModal.authType === "api_key" ? "API KEY" : "AUTH"}</p>
+                <h3>{authProvider.name}</h3>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close sign in"
+                onClick={cancelAuth}
+              >
+                ×
+              </button>
+            </div>
+
+            {authOutcome !== undefined ? (
+              <div className={`auth-outcome ${authOutcome.kind}`}>
+                <strong>{authOutcome.kind === "success" ? "Connected" : authOutcome.kind === "cancelled" ? "Cancelled" : "Could not connect"}</strong>
+                <p>{authOutcome.message}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthModal(undefined);
+                    setAuthOutcome(undefined);
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <>
+                {authModal.authType === "oauth" && externalInteraction === undefined && interaction === undefined ? (
+                  <p>Opening your browser…</p>
+                ) : null}
+
+                {externalInteraction?.type === "auth_url" ? (
+                  <div className="auth-browser-status">
+                    <strong>Continue in your browser</strong>
+                    <p>{externalInteraction.instructions ?? "Complete sign-in in your browser."}</p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void api.platform.openExternal(externalInteraction.url)}
+                    >
+                      Open browser again
+                    </button>
+                  </div>
+                ) : null}
+
+                {externalInteraction?.type === "device_code" ? (
+                  <div className="auth-browser-status">
+                    <strong>Enter this code in your browser</strong>
+                    <div className="device-code">{externalInteraction.userCode}</div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void api.platform.openExternal(externalInteraction.verificationUri)}
+                    >
+                      Open browser again
+                    </button>
+                  </div>
+                ) : null}
+
+                {interaction?.type === "progress" || interaction?.type === "info" ? (
+                  <p>{interaction.message}</p>
+                ) : null}
+
+                {interaction?.type === "prompt" ? (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void submitPrompt();
+                    }}
+                  >
+                    <label>
+                      <span>{interaction.message}</span>
+                      {interaction.kind === "select" ? (
+                        <select
+                          value={promptValue}
+                          onChange={(event) => setPromptValue(event.currentTarget.value)}
+                        >
+                          <option value="">Choose…</option>
+                          {interaction.options?.map((option) => (
+                            <option key={option.id} value={option.id}>{option.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type={interaction.kind === "secret" ? "password" : "text"}
+                          placeholder={interaction.placeholder}
+                          value={promptValue}
+                          onChange={(event) => setPromptValue(event.currentTarget.value)}
+                          autoFocus
+                        />
+                      )}
+                    </label>
+                    <button type="submit" disabled={promptValue.length === 0}>Continue</button>
+                  </form>
+                ) : null}
+
+                {busyProvider === undefined ? null : (
+                  <button type="button" className="secondary" onClick={cancelAuth}>
+                    Cancel
+                  </button>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {modelsProviderId === undefined || selectedModelsProvider === undefined ? null : (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="page-card task-modal models-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedModelsProvider.name} models`}
+          >
+            <div className="task-modal-header">
+              <div>
+                <p className="eyebrow">MODELS</p>
+                <h3>{selectedModelsProvider.name}</h3>
+                <p>{selectedModelRows.length} model{selectedModelRows.length === 1 ? "" : "s"}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close models"
+                onClick={() => {
+                  setEditingRow(undefined);
+                  setModelsProviderId(undefined);
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="models-modal-body">
+              {selectedModelRows.length === 0 ? (
+                <p>No models are currently available for this provider.</p>
+              ) : (
+                <ul className="provider-model-list">
+                  {selectedModelRows.map((row) => {
+                  const editing =
+                    editingRow?.providerId === row.providerId &&
+                    editingRow.modelId === row.modelId;
+                  return (
+                    <li className="provider-model-row" key={`${row.providerId}\u0000${row.modelId}`}>
+                      <div className="provider-model-copy">
+                        <strong>{row.modelName ?? "Model name unavailable"}</strong>
+                        {row.modelName === row.modelId ? null : (
+                          <span className="canonical-model-id">Original model: {row.modelId}</span>
+                        )}
+                      </div>
+                      <span className={`badge ${row.availability === "available" ? "good" : "neutral"}`}>
+                        {row.availability}
+                      </span>
+                      {editing ? (
+                        <form
+                          className="model-name-editor"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void saveModelName();
+                          }}
+                        >
+                          <label>
+                            <span>Model name</span>
+                            <div className="model-name-input">
+                              <span className="model-name-prefix">{row.providerId}/</span>
+                              <input
+                                type="text"
+                                value={modelNameValue}
+                                onChange={(event) => setModelNameValue(event.currentTarget.value)}
+                                autoFocus
+                              />
+                            </div>
+                          </label>
+                          {modelNameError === undefined ? null : (
+                            <p className="error-text" role="alert">{modelNameError}</p>
+                          )}
+                          <div className="button-row compact">
+                            <button type="submit" disabled={modelNameBusy || modelNameValue.trim().length === 0}>
+                              {modelNameBusy ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={modelNameBusy}
+                              onClick={() => setEditingRow(undefined)}
+                            >
+                              Cancel
+                            </button>
+                            {row.nameLayer === "user" ? (
+                              <button
+                                type="button"
+                                className="secondary"
+                                disabled={modelNameBusy}
+                                onClick={() => void restoreModelName(row)}
+                              >
+                                Restore default
+                              </button>
+                            ) : null}
+                          </div>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary"
+                          aria-label={`Rename ${row.modelName ?? row.modelId}`}
+                          disabled={row.modelName === undefined}
+                          onClick={() => openModelEditor(row)}
+                        >
+                          Rename
+                        </button>
+                      )}
+                    </li>
+                  );
+                  })}
+                </ul>
+              )}
+            </div>
+          </section>
+        </div>
       )}
     </section>
   );

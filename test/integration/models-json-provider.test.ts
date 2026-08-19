@@ -45,6 +45,74 @@ describe("models.json custom provider registration", () => {
     );
   });
 
+  it.each([
+    "bad/provider",
+    "p".repeat(65),
+  ])("rejects an unrepresentable custom Provider namespace: %s", async (providerId) => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "luckytoken-models-json-provider-id-"),
+    );
+    directories.push(directory);
+    const stateDirectory = join(directory, ".luckytoken");
+    const piDirectory = join(stateDirectory, "pi");
+    await mkdir(piDirectory, { recursive: true });
+    const clientAuthPath = join(
+      stateDirectory,
+      "client-auth",
+      "anthropic-messages.json",
+    );
+    await createFileClientTokenStore({ path: clientAuthPath }).create(
+      { type: "global" },
+      "client-token",
+    );
+    await writeFile(
+      join(piDirectory, "models.json"),
+      JSON.stringify({
+        providers: {
+          [providerId]: {
+            baseUrl: "https://gateway.example.com",
+            api: "anthropic-messages",
+            apiKey: "gateway-key",
+            models: [{ id: "model-a", contextWindow: 200000, maxTokens: 64000 }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const configPath = join(stateDirectory, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
+        server: { port: 0 },
+        clientProtocols: {
+          "anthropic-messages": {
+            authFile: "client-auth/anthropic-messages.json",
+          },
+        },
+        pi: { directory: "pi", modelsJson: "pi/models.json" },
+      }),
+      "utf8",
+    );
+
+    let rejected: unknown;
+    try {
+      const composition = await createConfiguredLuckyTokenDataPlane({
+        config: await loadLuckyTokenCliConfig(configPath),
+        fetch: async () =>
+          new Response(JSON.stringify({ object: "list", data: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      compositions.push(composition);
+    } catch (error) {
+      rejected = error;
+    }
+    expect(rejected).toBeInstanceOf(Error);
+    expect((rejected as Error).message).toMatch(/Provider ID.*safe|safe Provider ID/u);
+  });
+
   it("registers a custom anthropic provider and serves it through the route", async () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {

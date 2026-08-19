@@ -273,6 +273,10 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly onCapturePersistenceRecovery?: (fact: {
     readonly requestId: string;
   }) => void;
+  /** Backend-lifetime Client Token authorities. When provided, the Data
+   * Plane reuses them instead of opening protocol auth files itself, so
+   * Settings can reveal/rotate tokens while the HTTP Gateway is stopped. */
+  readonly clientTokenAuthorities?: Readonly<Record<string, LiveClientTokenAuthority>>;
   /**
    * Provider Activation (Spec v1.0): the Backend-lifetime Provider Runtime
    * created before the Data Plane. When provided, the Data Plane consumes
@@ -481,14 +485,19 @@ export async function createConfiguredLuckyTokenDataPlane(
     );
   }
   // Ticket 16: live per-protocol authorities own the one active global
-  // token. They replace the restart-only static authority: every mutation
-  // hot-applies to authorization, list results stay masked, and the narrow
-  // known-value scrub follows the live token state.
-  const clientAuthorities: Record<string, LiveClientTokenAuthority> = {};
-  const clientAuthority = await createLiveClientTokenAuthority({
-    store: createFileClientTokenStore({ path: anthropicConfig.authFile }),
-  });
-  clientAuthorities[anthropicMessagesProtocolId] = clientAuthority;
+  // token. Production injects Backend-lifetime authorities so token
+  // management remains available while the HTTP Gateway is stopped. Direct
+  // composition tests may omit them and keep the self-contained seam.
+  const clientAuthorities: Record<string, LiveClientTokenAuthority> =
+    options.clientTokenAuthorities === undefined
+      ? {}
+      : { ...options.clientTokenAuthorities };
+  if (options.clientTokenAuthorities === undefined) {
+    clientAuthorities[anthropicMessagesProtocolId] =
+      await createLiveClientTokenAuthority({
+        store: createFileClientTokenStore({ path: anthropicConfig.authFile }),
+      });
+  }
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const openaiResponsesConfig = Object.hasOwn(
@@ -497,16 +506,25 @@ export async function createConfiguredLuckyTokenDataPlane(
   )
     ? config.clientProtocols[openaiResponsesProtocolId]
     : undefined;
+  if (
+    options.clientTokenAuthorities === undefined &&
+    openaiResponsesConfig !== undefined
+  ) {
+    clientAuthorities[openaiResponsesProtocolId] =
+      await createLiveClientTokenAuthority({
+        store: createFileClientTokenStore({ path: openaiResponsesConfig.authFile }),
+      });
+  }
+  const clientAuthority = clientAuthorities[anthropicMessagesProtocolId];
+  if (clientAuthority === undefined) {
+    throw new Error(`Client Token Authority is unavailable: ${anthropicMessagesProtocolId}`);
+  }
   const responsesAuthority =
     openaiResponsesConfig === undefined
       ? undefined
-      : await createLiveClientTokenAuthority({
-          store: createFileClientTokenStore({
-            path: openaiResponsesConfig.authFile,
-          }),
-        });
-  if (responsesAuthority !== undefined) {
-    clientAuthorities[openaiResponsesProtocolId] = responsesAuthority;
+      : clientAuthorities[openaiResponsesProtocolId];
+  if (openaiResponsesConfig !== undefined && responsesAuthority === undefined) {
+    throw new Error(`Client Token Authority is unavailable: ${openaiResponsesProtocolId}`);
   }
   const codexLocalAuth =
     openaiResponsesConfig === undefined

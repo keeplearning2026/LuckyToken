@@ -465,16 +465,21 @@ function responsesRequest(
   });
 }
 
+const FLASH_ALIAS = "commandcode-private/flash";
+const SONNET_ALIAS = "my-anthropic/sonnet";
+const GPT_ALIAS = "my-openai/gpt";
+const GHOST_ALIAS = "my-anthropic/ghost";
+
 const INITIAL_ALIASES = Object.freeze({
   // Object-form target: the canonical model id itself contains a slash.
-  flash: {
+  [FLASH_ALIAS]: {
     provider: "commandcode-private",
     model: "deepseek/deepseek-v4-flash",
   },
   "commandcode-private/gpt-5.6-luna": "commandcode-private/gpt-5.6-luna",
-  sonnet: "my-anthropic/claude-sonnet",
-  gpt: "my-openai/gpt-4o",
-  ghost: "my-anthropic/claude-opus",
+  [SONNET_ALIAS]: "my-anthropic/claude-sonnet",
+  [GPT_ALIAS]: "my-openai/gpt-4o",
+  [GHOST_ALIAS]: "my-anthropic/claude-opus",
 });
 
 describe("alias-only model data plane", () => {
@@ -575,7 +580,7 @@ describe("alias-only model data plane", () => {
     const pending = fixture.runtime.handle(
       responsesRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           stream: true,
           input: [
             {
@@ -637,7 +642,7 @@ describe("alias-only model data plane", () => {
     const pending = fixture.runtime.handle(
       responsesRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           stream: true,
           input: [
             { type: "message", role: "user", content: "history" },
@@ -688,7 +693,7 @@ describe("alias-only model data plane", () => {
     const pending = fixture.runtime.handle(
       responsesRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           input: [
             {
               type: "compaction",
@@ -726,7 +731,7 @@ describe("alias-only model data plane", () => {
     const pending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -739,7 +744,7 @@ describe("alias-only model data plane", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      model: "flash",
+      model: FLASH_ALIAS,
       content: [{ type: "text", text: "converted through Pi" }],
     });
     // Provider-observed canonical target: the upstream sees the captured
@@ -870,7 +875,7 @@ describe("alias-only model data plane", () => {
     const anthropic = await fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "ghost",
+          model: GHOST_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -887,7 +892,7 @@ describe("alias-only model data plane", () => {
     expect(JSON.stringify(anthropicBody)).not.toContain("claude-opus");
 
     const responses = await fixture.runtime.handle(
-      responsesRequest({ model: "ghost", input: "hi" }, fixture.responsesToken),
+      responsesRequest({ model: GHOST_ALIAS, input: "hi" }, fixture.responsesToken),
     );
     expect(responses.status).toBe(503);
     const responsesBody = (await responses.json()) as {
@@ -906,7 +911,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -924,12 +929,12 @@ describe("alias-only model data plane", () => {
       model: string;
       content: Array<{ type: string; text: string }>;
     };
-    expect(anthropicBody.model).toBe("sonnet");
+    expect(anthropicBody.model).toBe(SONNET_ALIAS);
     expect(JSON.stringify(anthropicBody)).not.toContain("claude-sonnet");
 
     // OpenAI Responses native passthrough.
     const responsesPending = fixture.runtime.handle(
-      responsesRequest({ model: "gpt", input: "hello" }, fixture.responsesToken),
+      responsesRequest({ model: GPT_ALIAS, input: "hello" }, fixture.responsesToken),
     );
     const responsesCall = await fixture.nextUpstreamCall();
     expect(JSON.parse(responsesCall.body)).toMatchObject({ model: "gpt-4o" });
@@ -939,7 +944,7 @@ describe("alias-only model data plane", () => {
     const responsesBody = (await responsesResponse.json()) as {
       model: string;
     };
-    expect(responsesBody.model).toBe("gpt");
+    expect(responsesBody.model).toBe(GPT_ALIAS);
     expect(JSON.stringify(responsesBody)).not.toContain("gpt-4o");
   });
 
@@ -948,7 +953,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           stream: true,
           messages: [{ role: "user", content: "hello" }],
@@ -966,14 +971,14 @@ describe("alias-only model data plane", () => {
     const anthropicResponse = await anthropicPending;
     expect(anthropicResponse.status).toBe(200);
     const anthropicText = await anthropicResponse.text();
-    expect(anthropicText).toContain('"model":"sonnet"');
+    expect(anthropicText).toContain(`"model":"${SONNET_ALIAS}"`);
     expect(anthropicText).toContain('"text":"hello"');
     expect(anthropicText).toContain('"type":"message_stop"');
     expect(anthropicText).not.toContain("claude-sonnet");
 
     const responsesPending = fixture.runtime.handle(
       responsesRequest(
-        { model: "gpt", input: "hello", stream: true },
+        { model: GPT_ALIAS, input: "hello", stream: true },
         fixture.responsesToken,
       ),
     );
@@ -987,7 +992,7 @@ describe("alias-only model data plane", () => {
     const responsesResponse = await responsesPending;
     expect(responsesResponse.status).toBe(200);
     const responsesText = await responsesResponse.text();
-    expect(responsesText).toContain('"model":"gpt"');
+    expect(responsesText).toContain(`"model":"${GPT_ALIAS}"`);
     expect(responsesText).toContain('"delta":"hello"');
     expect(responsesText).toContain("event: response.completed");
     expect(responsesText).not.toContain("gpt-4o");
@@ -998,7 +1003,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1019,7 +1024,7 @@ describe("alias-only model data plane", () => {
     expect(anthropicBody).not.toContain("claude-sonnet");
 
     const responsesPending = fixture.runtime.handle(
-      responsesRequest({ model: "gpt", input: "hello" }, fixture.responsesToken),
+      responsesRequest({ model: GPT_ALIAS, input: "hello" }, fixture.responsesToken),
     );
     const responsesCall = await fixture.nextUpstreamCall();
     responsesCall.respond(
@@ -1050,27 +1055,27 @@ describe("alias-only model data plane", () => {
     };
     expect(list.object).toBe("list");
     const ids = list.data.map((entry) => entry.id);
-    // User overrides are listed.
-    expect(ids).toContain("flash");
-    expect(ids).toContain("gpt");
-    expect(ids).toContain("sonnet");
+    // User model-name overrides are listed under their Provider namespaces.
+    expect(ids).toContain(FLASH_ALIAS);
+    expect(ids).toContain(GPT_ALIAS);
+    expect(ids).toContain(SONNET_ALIAS);
     // The explicit alias that happens to look canonical is listed.
     expect(ids).toContain("commandcode-private/gpt-5.6-luna");
     // Every callable model's generated default is listed — except targets
-    // claimed by a user override ("gpt" and "sonnet"), whose generated
-    // default is suppressed (one effective alias per target).
+    // claimed by a user override, whose generated default is suppressed
+    // (one effective model identity per target).
     expect(ids).not.toContain("my-openai/gpt-4o");
     expect(ids).not.toContain("my-anthropic/claude-sonnet");
-    expect(ids).toContain("gpt");
-    expect(ids).toContain("sonnet");
-    // The "flash" override claims commandcode-private/deepseek/deepseek-v4-flash.
-    expect(ids).toContain("flash");
+    expect(ids).toContain(GPT_ALIAS);
+    expect(ids).toContain(SONNET_ALIAS);
+    expect(ids).toContain(FLASH_ALIAS);
     expect(ids).not.toContain("commandcode-private/deepseek/deepseek-v4-flash");
-    for (const model of COMMANDCODE_MODELS) {
-      // The "flash" override claims deepseek/deepseek-v4-flash; all other
-      // CommandCode models keep their generated defaults.
-      if (model.id === "deepseek/deepseek-v4-flash") continue;
-      expect(ids).toContain(`commandcode-private/${model.id}`);
+    const commandCodeIds = ids.filter((id) => id.startsWith("commandcode-private/"));
+    expect(commandCodeIds).toHaveLength(COMMANDCODE_MODELS.length);
+    expect(commandCodeIds).toContain("commandcode-private/meta-muse-spark-1.2");
+    expect(commandCodeIds).toContain("commandcode-private/Qwen-Qwen3.8-Max");
+    for (const id of commandCodeIds) {
+      expect(id.split("/")).toHaveLength(2);
     }
     // Every listed alias maps to exactly one real Provider.
     for (const entry of list.data) {
@@ -1085,10 +1090,10 @@ describe("alias-only model data plane", () => {
     expect(serialized).not.toContain('"id":"claude-opus"');
   });
 
-  it("A7: reset_for_model restores the generated default consistently across discovery and request selection", async () => {
+  it("A7: restoring the model name restores the generated default consistently across discovery and request selection", async () => {
     const fixture = await createAliasDataPlaneFixture({
-      // User override claims the anthropic target.
-      sonnet: "my-anthropic/claude-sonnet",
+      // User override claims the anthropic target in its Provider namespace.
+      [SONNET_ALIAS]: "my-anthropic/claude-sonnet",
     });
 
     // Before reset: discovery exposes only the custom alias.
@@ -1098,14 +1103,14 @@ describe("alias-only model data plane", () => {
       )
     ).json()) as { data: Array<{ id: string }> };
     const idsBefore = new Set(list.data.map((entry) => entry.id));
-    expect(idsBefore.has("sonnet")).toBe(true);
+    expect(idsBefore.has(SONNET_ALIAS)).toBe(true);
     expect(idsBefore.has("my-anthropic/claude-sonnet")).toBe(false);
 
     // Request selection uses the custom alias.
     const pending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1134,7 +1139,7 @@ describe("alias-only model data plane", () => {
     ).json()) as { data: Array<{ id: string }> };
     const idsAfter = new Set(list.data.map((entry) => entry.id));
     expect(idsAfter.has("my-anthropic/claude-sonnet")).toBe(true);
-    expect(idsAfter.has("sonnet")).toBe(false);
+    expect(idsAfter.has(SONNET_ALIAS)).toBe(false);
 
     // Request selection resolves the generated default alias to the same
     // canonical target (the alias string is never parsed; the resolver
@@ -1166,7 +1171,7 @@ describe("alias-only model data plane", () => {
     const pendingFirst = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1183,7 +1188,7 @@ describe("alias-only model data plane", () => {
         {
           aliases: {
             ...INITIAL_ALIASES,
-            flash: "commandcode-private/gpt-5.6-luna",
+            [FLASH_ALIAS]: "commandcode-private/gpt-5.6-luna",
           },
         },
         null,
@@ -1195,7 +1200,7 @@ describe("alias-only model data plane", () => {
     const pendingSecond = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "flash",
+          model: FLASH_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1218,11 +1223,11 @@ describe("alias-only model data plane", () => {
       params: { model: "deepseek/deepseek-v4-flash" },
     });
     await expect(firstResponse.json()).resolves.toMatchObject({
-      model: "flash",
+      model: FLASH_ALIAS,
       content: [{ type: "text", text: "first" }],
     });
     await expect(secondResponse.json()).resolves.toMatchObject({
-      model: "flash",
+      model: FLASH_ALIAS,
       content: [{ type: "text", text: "second" }],
     });
   });
@@ -1232,7 +1237,7 @@ describe("alias-only model data plane", () => {
     const pendingFirst = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1281,7 +1286,7 @@ describe("alias-only model data plane", () => {
     const secondResponse = await fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1299,7 +1304,7 @@ describe("alias-only model data plane", () => {
     const firstResponse = await pendingFirst;
     expect(firstResponse.status).toBe(200);
     await expect(firstResponse.json()).resolves.toMatchObject({
-      model: "sonnet",
+      model: SONNET_ALIAS,
     });
     expect(JSON.parse(firstCall.body)).toMatchObject({ model: "claude-sonnet" });
   });
@@ -1309,7 +1314,7 @@ describe("alias-only model data plane", () => {
     const pending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1348,7 +1353,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1387,7 +1392,7 @@ describe("alias-only model data plane", () => {
 
     // Responses streaming: a nested model inside an output item object.
     const responsesPending = fixture.runtime.handle(
-      responsesRequest({ model: "gpt", input: "hello" }, fixture.responsesToken),
+      responsesRequest({ model: GPT_ALIAS, input: "hello" }, fixture.responsesToken),
     );
     const responsesCall = await fixture.nextUpstreamCall();
     responsesCall.respond(
@@ -1414,7 +1419,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           stream: true,
           messages: [{ role: "user", content: "hello" }],
@@ -1443,14 +1448,14 @@ describe("alias-only model data plane", () => {
     const anthropicResponse = await anthropicPending;
     expect(anthropicResponse.status).toBe(200);
     const anthropicText = await anthropicResponse.text();
-    expect(anthropicText).toContain('"model":"sonnet"');
+    expect(anthropicText).toContain(`"model":"${SONNET_ALIAS}"`);
     expect(anthropicText).toContain('"type":"message_stop"');
     expect(anthropicText).not.toContain("claude-sonnet");
 
     // Responses: CR-only stream.
     const responsesPending = fixture.runtime.handle(
       responsesRequest(
-        { model: "gpt", input: "hello", stream: true },
+        { model: GPT_ALIAS, input: "hello", stream: true },
         fixture.responsesToken,
       ),
     );
@@ -1496,7 +1501,7 @@ describe("alias-only model data plane", () => {
     const responsesResponse = await responsesPending;
     expect(responsesResponse.status).toBe(200);
     const responsesText = await responsesResponse.text();
-    expect(responsesText.match(/"model":"gpt"/gu)).toHaveLength(2);
+    expect(responsesText.match(new RegExp(`"model":"${GPT_ALIAS}"`, "gu"))).toHaveLength(2);
     expect(responsesText).not.toContain("gpt-4o");
   });
 
@@ -1507,7 +1512,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           stream: true,
           messages: [{ role: "user", content: "hello" }],
@@ -1541,7 +1546,7 @@ describe("alias-only model data plane", () => {
     // key after a valid full-response event.
     const responsesPending = fixture.runtime.handle(
       responsesRequest(
-        { model: "gpt", input: "hello", stream: true },
+        { model: GPT_ALIAS, input: "hello", stream: true },
         fixture.responsesToken,
       ),
     );
@@ -1596,7 +1601,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1635,7 +1640,7 @@ describe("alias-only model data plane", () => {
 
     // Responses: upstream 500 error body names the canonical model.
     const responsesPending = fixture.runtime.handle(
-      responsesRequest({ model: "gpt", input: "hello" }, fixture.responsesToken),
+      responsesRequest({ model: GPT_ALIAS, input: "hello" }, fixture.responsesToken),
     );
     const responsesCall = await fixture.nextUpstreamCall();
     responsesCall.respond(
@@ -1661,7 +1666,7 @@ describe("alias-only model data plane", () => {
     const anthropicPending = fixture.runtime.handle(
       anthropicRequest(
         {
-          model: "sonnet",
+          model: SONNET_ALIAS,
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         },
@@ -1686,7 +1691,7 @@ describe("alias-only model data plane", () => {
     });
 
     const responsesPending = fixture.runtime.handle(
-      responsesRequest({ model: "gpt", input: "hello" }, fixture.responsesToken),
+      responsesRequest({ model: GPT_ALIAS, input: "hello" }, fixture.responsesToken),
     );
     const responsesCall = await fixture.nextUpstreamCall();
     responsesCall.fail(

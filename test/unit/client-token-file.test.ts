@@ -194,19 +194,35 @@ describe("per-Client-Protocol token file", () => {
     await expect(store.snapshot()).resolves.toMatchObject({ revision: 2 });
   });
 
-  it("refuses legacy v1 files without rewriting them", async () => {
+  it("treats legacy v1 as uninitialized and atomically replaces it with a fresh v2 token", async () => {
     const { path, store } = await fixtureStore();
-    const original = JSON.stringify({
-      schemaVersion: "luckytoken-client-auth-v1",
-      global: "canary-legacy-token-1",
-      projects: {},
-    });
-    await writeFile(path, original, "utf8");
-
-    await expect(store.snapshot()).rejects.toThrow(
-      "schemaVersion must be luckytoken-client-auth-v2",
+    const legacyToken = "canary-legacy-token-1";
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: "luckytoken-client-auth-v1",
+        global: legacyToken,
+        projects: {},
+      }),
+      "utf8",
     );
-    await expect(readFile(path, "utf8")).resolves.toBe(original);
+
+    await expect(store.snapshot()).resolves.toEqual({
+      global: null,
+      projects: {},
+      revision: 0,
+      globalDeleted: false,
+    });
+    const replacement = await store.create({ type: "global" }, "fresh-v2-token", 0);
+    expect(replacement).toBe("fresh-v2-token");
+    expect(replacement).not.toBe(legacyToken);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      schemaVersion: "luckytoken-client-auth-v2",
+      global: "fresh-v2-token",
+      projects: {},
+      revision: 1,
+      globalDeleted: false,
+    });
   });
 
   it.each([

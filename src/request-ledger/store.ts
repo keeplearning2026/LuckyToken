@@ -1012,6 +1012,12 @@ export function createRequestLedgerStoreFactory(
               safeText(query.projectDir, 1_024, attachedScrub),
             );
           }
+          if (query?.clientSessionId !== undefined) {
+            conditions.push("client_session_id = ?");
+            params.push(
+              safeText(query.clientSessionId, 1_024, attachedScrub),
+            );
+          }
           if (query?.outcome !== undefined) {
             conditions.push("outcome = ?");
             params.push(assertLedgerOutcome(query.outcome));

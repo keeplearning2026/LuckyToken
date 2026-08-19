@@ -17,7 +17,12 @@ describe("minimal Anthropic text route", () => {
           JSON.stringify({
             type: "finish",
             finishReason: "stop",
-            totalUsage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+            totalUsage: {
+              inputTokens: 3,
+              inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: 0 },
+              outputTokens: 4,
+              totalTokens: 7,
+            },
           }),
           "",
         ].join("\n"),

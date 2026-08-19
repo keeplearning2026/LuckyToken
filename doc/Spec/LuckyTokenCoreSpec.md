@@ -4036,21 +4036,24 @@ other Router-owned access policy
 ```
 
 当 deployment 选择 current file-backed Auth capability 时，每个 configured
-Client Protocol handler 绑定一个独立 authority snapshot；其 Auth-owned token
-file 只保存 optional global token 与 `projectDir → token` bindings，不重复保存
-protocol marker。Global/project 分类只在 file-backed authority 内存在：
+Client Protocol 拥有一个独立的 Backend-lifetime live authority；其 Auth-owned
+token file 只保存 optional global token 与 `projectDir → token` bindings，不重复
+保存 protocol marker。Global/project 分类只在 file-backed authority 内存在：
 
 ```text
-Auth-owned token file
-→ startup immutable authority snapshot
-→ composition binds the snapshot to one handler
+Auth-owned token file (current schema: luckytoken-client-auth-v2)
+→ Backend-lifetime live authority
+→ Data Plane binds the authority to one handler
 → generic Auth.authorizeToken(token)
 → AuthorizedClient { projectDir? }
 ```
 
-Token mutation 是显式、非并发 CLI 管理操作。正在运行的 handler 不 watch 或
-重读文件；create/rotate/remove 后必须重启进程才能建立新的 Auth snapshot。
-因此 request path 没有 filesystem I/O，也不引入 token file lock manager。
+Token mutation 通过 typed Control Plane/CLI authority 进行 CAS + atomic replace，
+并 hot-apply 到运行中的 handler；request path 本身仍没有 filesystem I/O。正常
+产品 UI 在 Settings 中 reveal/copy/rotate 当前 global token，用户不需要编辑
+Auth-owned 文件。`luckytoken-client-auth-v1` 是废弃的 disposable client-access
+state：当前 build 不迁移、不复用旧 token；启动时将其视为未初始化并生成新的
+v2 authority/token。未知未来 schema 或损坏文件仍 fail closed。
 
 Generic Core 冻结的是 per-handler authority isolation、窄 Auth contract 与上述
 information lifecycle；exact JSON fields、CLI spelling 与 filesystem mutation

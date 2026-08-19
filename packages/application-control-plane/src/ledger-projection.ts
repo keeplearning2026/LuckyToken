@@ -124,6 +124,16 @@ export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
+/** Deterministic token count formatting shared by desktop projections. */
+export function formatTokenCount(tokens: number): string {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(tokens);
+}
+
+/** Deterministic raw 0..1 rate formatting shared by desktop projections. */
+export function formatPercent(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
 /** A validated speed renders honestly, including a zero numerator. */
 export function formatTokensPerSecond(tokensPerSecond: number): string {
   if (tokensPerSecond === 0) return "0 tokens/s";
@@ -137,7 +147,7 @@ export function formatTokensPerSecond(tokensPerSecond: number): string {
  * rate formats here, an absent/unvalidated one renders `-`.
  */
 export function formatCacheHitRate(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
+  return formatPercent(rate);
 }
 
 /** Display projection of the authoritative terminal usage snapshot. */
@@ -156,9 +166,9 @@ export interface RequestUsageProjection {
   readonly reasoning?: string;
   /** Only present when the normalizer validated them (Complete). */
   readonly normalizedTotal?: string;
-  /** Formatted percentage (e.g. "30.0%") only when the normalizer
-   *  validated a rate; absent/unvalidated render `-`. Partial usage never
-   *  infers a hit from cacheRead alone. */
+  /** Product `Hit`: cacheRead / (input + cacheRead), formatted as a
+   *  percentage. It is re-derived from Complete component facts and does
+   *  not reuse the persisted canonical cacheHitRate field. */
   readonly cacheHitRate?: string;
 }
 
@@ -188,24 +198,27 @@ export function projectRequestUsage(
       output: "-",
     });
   }
+  const componentsUnavailable =
+    usage.completeness === "unavailable" || usage.reason === "usage_absent";
+  const hitDenominator = usage.input + usage.cacheRead;
   return Object.freeze({
     present: true,
     completeness:
       usage.completeness === "complete" ? "Complete" : usage.completeness === "partial" ? "Partial" : "Unavailable",
     ...(usage.reason === undefined ? {} : { reason: usage.reason }),
-    input: String(usage.input),
-    cacheRead: String(usage.cacheRead),
-    cacheWrite: String(usage.cacheWrite),
-    output: String(usage.output),
-    ...(usage.reasoning === undefined
-      ? {}
-      : { reasoning: String(usage.reasoning) }),
+    input: componentsUnavailable ? "-" : String(usage.input),
+    cacheRead: componentsUnavailable ? "-" : String(usage.cacheRead),
+    cacheWrite: componentsUnavailable ? "-" : String(usage.cacheWrite),
+    output: componentsUnavailable ? "-" : String(usage.output),
+    ...(!componentsUnavailable && usage.reasoning !== undefined
+      ? { reasoning: String(usage.reasoning) }
+      : {}),
     ...(usage.normalizedTotal === undefined
       ? {}
       : { normalizedTotal: String(usage.normalizedTotal) }),
-    ...(usage.cacheHitRate === undefined
-      ? {}
-      : { cacheHitRate: formatCacheHitRate(usage.cacheHitRate) }),
+    ...(usage.completeness === "complete" && hitDenominator > 0
+      ? { cacheHitRate: formatCacheHitRate(usage.cacheRead / hitDenominator) }
+      : {}),
   });
 }
 
@@ -286,6 +299,7 @@ export interface RequestLedgerListProjection {
   readonly completedAt?: number;
   readonly clientSessionId: string;
   readonly projectDir: string;
+  readonly duration: string;
   readonly speed: string;
   readonly speedUnavailableReason?: string;
   readonly usage: RequestUsageProjection;
@@ -321,6 +335,12 @@ export function projectRequestLedger(
       : { completedAt: record.completedAt }),
     clientSessionId: record.clientSessionId ?? "-",
     projectDir: record.projectDir ?? "-",
+    duration:
+      record.executionStartedAt !== undefined &&
+      record.terminalAt !== undefined &&
+      record.terminalAt >= record.executionStartedAt
+        ? formatDuration(record.terminalAt - record.executionStartedAt)
+        : "-",
     speed: speed === undefined ? "-" : formatTokensPerSecond(speed),
     ...(speedUnavailableReason === undefined
       ? {}

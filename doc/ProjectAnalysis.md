@@ -166,7 +166,7 @@ flowchart LR
 | 文件 | 职责 |
 | --- | --- |
 | `src/auth.ts` | 通用 `createAuth`：解析一个 Bearer / x-api-key 凭证，调用注入的 `authorizeToken`，产出 `{ sessionId, projectDir? }`；协议无关，每个 handler 一个实例 |
-| `src/client-auth/file-token-store.ts` | 客户端 token 文件存储（`luckytoken-client-auth-v1`），global + projects 作用域，0600/0700 权限 |
+| `src/client-auth/file-token-store.ts` | 客户端 token 文件存储（current `luckytoken-client-auth-v2`），global + projects 作用域、revision CAS、0600/0700 权限；legacy v1 不迁移，启动时重建 fresh v2 |
 | `src/client-auth/cli.ts` | `client-token` 子命令 CLI |
 
 **信息生命周期**：认证后，raw 凭证 / token 作用域 / 文件路径即终结；只有

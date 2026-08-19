@@ -8,6 +8,8 @@ import {
 } from "@luckytoken/provider-contract/package";
 import { isBuiltin } from "node:module";
 
+import { isSafeProviderId } from "./provider-id.js";
+
 export type ImportProviderModule = (specifier: string) => Promise<unknown>;
 
 export interface LoadProviderPackagesOptions {
@@ -24,7 +26,6 @@ export interface LoadedProviderPackages {
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
 const SCOPED_PACKAGE_NAME =
   /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u;
-const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 export function assertProviderPackageSpecifier(specifier: string): void {
   if (
@@ -49,8 +50,10 @@ function assertProvider(value: unknown, path: string): asserts value is Provider
   if (!isRecord(value)) {
     throw new TypeError(`${path}.createProvider() must return a Pi Provider`);
   }
-  if (typeof value.id !== "string" || !PROVIDER_ID.test(value.id)) {
-    throw new TypeError(`${path}.createProvider().id must be a safe Provider ID`);
+  if (typeof value.id !== "string" || !isSafeProviderId(value.id)) {
+    throw new TypeError(
+      `${path}.createProvider().id must be a safe Provider ID of 1-64 characters`,
+    );
   }
   if (typeof value.name !== "string" || value.name.length === 0) {
     throw new TypeError(`${path}.createProvider().name must be non-empty`);

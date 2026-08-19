@@ -1,8 +1,8 @@
 # 12 — Use the effective alias everywhere clients discover and select models
 
-**What to build:** LuckyToken exposes one consistent client-visible model identity across discovery and request paths: the generated `providerId/modelId` alias when untouched, or the user's custom alias after override.
+**What to build:** LuckyToken exposes one consistent client-visible model identity across discovery and request paths: the generated `${providerId}/${defaultModelName}` alias when untouched, or the user's custom Model name after override.
 
-**Blocked by:** 07 — Give every Catalog model an automatic `providerId/modelId` alias; 08 — Add model-scoped alias override and reset operations.
+**Blocked by:** 07 — Give every Catalog model an automatic Provider-scoped default Model name; 08 — Add model-scoped alias override and reset operations.
 
 **Status:** ready-for-agent
 
@@ -12,5 +12,5 @@
 - [ ] After a custom override, client discovery and request selection expose/use only the custom alias for that target; the generated default is no longer simultaneously accepted as an effective alias.
 - [ ] Resetting the override restores the generated default consistently across `/v1/models`, Codex catalog generation, and request selection.
 - [ ] Canonical Provider/model identity remains an internal routing fact; no new client-facing target-selection contract is introduced merely because generated defaults contain Provider/model text.
-- [ ] Model IDs containing `/` work end-to-end without string-splitting assumptions.
+- [ ] Canonical model IDs containing `/` work end-to-end through slash-free external Model names without string-splitting assumptions.
 - [ ] Existing `model_unavailable`, alias conflict, request snapshot, and in-flight resolution semantics remain fail-closed and deterministic.

@@ -27,6 +27,35 @@ describe("Provider Package loader", () => {
     );
   });
 
+  it("rejects a Provider Package whose Provider ID exceeds the external namespace limit", async () => {
+    const models = createModels();
+    const longProviderId = "p".repeat(65);
+
+    await expect(
+      loadProviderPackages({
+        models,
+        providerPackages: Object.freeze({ "@fixture/long-provider-id": {} }),
+        host: {
+          fetch: async () => new Response(null, { status: 500 }),
+          now: () => 1,
+          createUuid: () => "00000000-0000-4000-8000-000000000009",
+        },
+        importModule: async () => ({
+          providerPackage: {
+            contractVersion: 1 as const,
+            createProvider: async (
+              input: Parameters<typeof commandCodeProviderPackage.createProvider>[0],
+            ) => ({
+              ...commandCodeProviderPackage.createProvider(input),
+              id: longProviderId,
+            }),
+          },
+        }),
+      }),
+    ).rejects.toThrow("safe Provider ID");
+    expect(models.getProvider(longProviderId)).toBeUndefined();
+  });
+
   it("does not partially register when a staged Provider ID conflicts", async () => {
     const models = createModels();
 

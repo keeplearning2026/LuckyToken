@@ -234,10 +234,104 @@ test("distribution certification is blocked by the Electron product golden journ
     "distribution certification must execute the product golden journey",
   );
   assert.match(
+    rootManifest.scripts["test:distribution"] ?? "",
+    /npm test --workspace @luckytoken\/desktop-shell/u,
+    "distribution certification must execute desktop lifecycle/unit regression tests",
+  );
+  assert.match(
     desktopManifest.scripts["test:product-e2e:run"] ?? "",
     /product-golden-journey\.e2e\.test\.mjs/u,
     "desktop must expose the release-blocking golden-journey runner",
   );
+  assert.match(
+    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    /electron-window-lifecycle\.e2e\.test\.mjs/u,
+    "desktop release tests must prove single-instance shell handoff and renderer lifecycle",
+  );
+});
+
+test("desktop release blocks orphaned desktop-owned Backends with a logical owner lease", async () => {
+  const backendLease = await readFile(
+    path.join(repositoryRoot, "src", "desktop-owner-lease.ts"),
+    "utf8",
+  );
+  const mainLease = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "src",
+      "main",
+      "desktop-owner-lease.ts",
+    ),
+    "utf8",
+  );
+  const lifecycle = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "src",
+      "main",
+      "electron-app-lifecycle.ts",
+    ),
+    "utf8",
+  );
+  const main = await readFile(
+    path.join(repositoryRoot, "packages", "desktop-shell", "src", "main", "main.ts"),
+    "utf8",
+  );
+  const lifecycleE2e = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "test",
+      "electron-window-lifecycle.e2e.test.mjs",
+    ),
+    "utf8",
+  );
+
+  assert.match(backendLease, /requireInitialClaim/u, "desktop-owned Backend must retire if no shell ever claims it");
+  assert.match(backendLease, /leaseId/u, "Backend liveness must use a logical lease instead of a parent PID");
+  assert.match(mainLease, /command: "desktop_owner"/u, "Electron Main must claim and renew the typed owner lease");
+  assert.match(lifecycle, /ownerKind === "cli"/u, "Tray Quit must detach locally from a CLI-owned Backend");
+  assert.match(main, /desktopOwnerLease\.bind/u, "Main must bind the lease after Control Plane connect/reconnect");
+  assert.match(lifecycleE2e, /forcibly terminated/u, "packaged lifecycle E2E must exercise abnormal Electron owner death");
+  assert.match(lifecycleE2e, /Backend process remained alive after owner lease expiry/u, "packaged E2E must prove the Backend PID exits after lease expiry");
+});
+
+test("desktop release carries an exact Backend build identity and replacement seam", async () => {
+  const assembly = await readFile(
+    path.join(repositoryRoot, "scripts", "assemble-release-backend.mjs"),
+    "utf8",
+  );
+  const supervisor = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "src",
+      "main",
+      "electron-backend-supervisor.ts",
+    ),
+    "utf8",
+  );
+  const lifecycleE2e = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "test",
+      "electron-window-lifecycle.e2e.test.mjs",
+    ),
+    "utf8",
+  );
+
+  assert.match(assembly, /build-id\.txt/u, "release assembly must emit the Backend build identity");
+  assert.match(supervisor, /hello\.application\.buildId/u, "desktop must compare the running Backend build identity");
+  assert.match(supervisor, /owner\.kind === "desktop"/u, "only desktop-owned stale Backends may be replaced automatically");
+  assert.match(lifecycleE2e, /repository build must replace a stale desktop-owned Backend build/u, "packaged E2E must prove stale Backend replacement");
 });
 
 test("migration keeps explicit public-seam behavior suites", async () => {

@@ -10,6 +10,7 @@ import {
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { bundledProviderIds } from "./bundled.js";
+import { isSafeProviderId } from "./provider-id.js";
 import type { ConfigValueResolver } from "./config-value.js";
 import {
   composeConfiguredProvider,
@@ -171,6 +172,11 @@ export function applyLuckyTokenProviderComposition(
   // replaced by models.json. Fail with a clear configuration error; never
   // resolve the collision by precedence or silent override.
   for (const providerId of Object.keys(dependencies.modelsJson?.providers ?? {})) {
+    if (!isSafeProviderId(providerId)) {
+      throw new Error(
+        `models.json Provider ID must be a safe Provider namespace of 1-64 characters ([A-Za-z0-9][A-Za-z0-9._-]{0,63}): ${providerId}`,
+      );
+    }
     if (bundledProviderIds.has(providerId)) {
       throw new Error(
         `models.json Provider "${providerId}" is a LuckyToken bundled product Provider and cannot be overridden by models.json. Remove it from the configuration.`,

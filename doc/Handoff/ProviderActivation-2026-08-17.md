@@ -40,9 +40,9 @@
 - wire 严格校验 source(缺失/未知 fail-closed)。
 - 测试:`test/unit/auth-source-wire.test.ts` CP1;provider-activation-lifecycle B1 加 CP2(pi_builtin IDs 精确等于 `builtinProviders()`)。
 
-### Ticket 07 — Catalog-derived 默认 alias ✅
-- [`src/aliases/domain.ts`](../../src/aliases/domain.ts) 重写:`computeEffectiveAliasRegistry` 接收 `catalogTargets`,生成 `provider/model` 默认;`computeConfiguredAliasMappings` 同步。
-- `generatedDefaultAlias()`:model id 含 `/` 保留全文本。
+### Ticket 07 — Catalog-derived 默认 Model name / alias ✅
+- [`src/aliases/domain.ts`](../../src/aliases/domain.ts) 重写:`computeEffectiveAliasRegistry` 接收 `catalogTargets`;`computeConfiguredAliasMappings` 同步。
+- `normalizeModelName()` 将 canonical model id 内的 `/` 归一为 `-`;`deriveDefaultModelNames()` 在同一 Provider 内做确定性冲突编号;alias 固定为 `${providerId}/${modelName}`。
 - **删除** [`src/aliases/defaults.ts`](../../src/aliases/defaults.ts)(curatedAliasDefaults / CURATED_ALIAS_DEFAULTS_VERSION)。
 - `AliasCatalogFacts` 增加 `targets`;`src/application.ts` catalogFacts 提供 targets。
 - 语义修正(重要):

@@ -993,26 +993,27 @@ export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
     };
   }
   if (
-    (value.command === "set_for_model" || value.command === "reset_for_model") &&
+    (value.command === "rename_model" ||
+      value.command === "restore_model_name") &&
     typeof value.providerId === "string" &&
     value.providerId.length > 0 &&
     typeof value.modelId === "string" &&
     value.modelId.length > 0
   ) {
-    if (value.command === "set_for_model") {
-      if (typeof value.alias !== "string" || value.alias.length === 0) {
+    if (value.command === "rename_model") {
+      if (typeof value.modelName !== "string" || value.modelName.length === 0) {
         return undefined;
       }
       return {
-        command: "set_for_model",
+        command: "rename_model",
         revision: revision as number,
         providerId: value.providerId,
         modelId: value.modelId,
-        alias: value.alias,
+        modelName: value.modelName,
       };
     }
     return {
-      command: "reset_for_model",
+      command: "restore_model_name",
       revision: revision as number,
       providerId: value.providerId,
       modelId: value.modelId,
@@ -3066,13 +3067,19 @@ export function decodeHello(value: unknown): HelloResult | undefined {
     value.contractVersion === controlPlaneVersion &&
     isRecord(value.application) &&
     value.application.id === "luckytoken" &&
-    typeof value.application.version === "string"
+    typeof value.application.version === "string" &&
+    (value.application.buildId === undefined ||
+      (typeof value.application.buildId === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.application.buildId)))
   ) {
     return {
       type: "compatible",
       application: {
         id: "luckytoken",
         version: value.application.version,
+        ...(value.application.buildId === undefined
+          ? {}
+          : { buildId: value.application.buildId }),
       },
       contractVersion: controlPlaneVersion,
     };
@@ -3113,6 +3120,20 @@ function decodeApplicationCommand(
       ? { command: "quit", acknowledged: value.acknowledged }
       : undefined;
   }
+  if (value.command === "desktop_owner") {
+    return (value.action === "claim" || value.action === "renew") &&
+      typeof value.leaseId === "string" &&
+      value.leaseId.length > 0 &&
+      value.leaseId.length <= 128 &&
+      value.leaseId.trim() === value.leaseId &&
+      !/\s/u.test(value.leaseId)
+      ? {
+          command: "desktop_owner",
+          action: value.action,
+          leaseId: value.leaseId,
+        }
+      : undefined;
+  }
   if (value.command === "auto_start") {
     return value.action === "status" ||
       value.action === "enable" ||
@@ -3128,13 +3149,18 @@ const applicationCommandConflictMessages: Readonly<
 > = {
   quit_requires_explicit_confirmation:
     "Quitting would stop the LuckyToken gateway that another process started. Acknowledge the quit explicitly to continue.",
+  desktop_owner_lease_mismatch:
+    "The desktop ownership lease belongs to a newer LuckyToken shell.",
 };
 
 function decodeApplicationCommandConflict(
   value: unknown,
 ): ApplicationCommandConflict | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.code === "quit_requires_explicit_confirmation") {
+  if (
+    value.code === "quit_requires_explicit_confirmation" ||
+    value.code === "desktop_owner_lease_mismatch"
+  ) {
     return {
       code: value.code,
       message: applicationCommandConflictMessages[value.code],
@@ -3157,6 +3183,8 @@ export function decodeApplicationCommandExecution(
   if (
     !isRecord(value) ||
     (value.outcome !== "attached" &&
+      value.outcome !== "lease_claimed" &&
+      value.outcome !== "lease_renewed" &&
       value.outcome !== "drained" &&
       value.outcome !== "timed_out" &&
       value.outcome !== "conflict" &&
@@ -3197,6 +3225,7 @@ function decodeApplicationCommandResult(
   if (
     !isRecord(value) ||
     (value.command !== "attach" &&
+      value.command !== "desktop_owner" &&
       value.command !== "quit" &&
       value.command !== "auto_start")
   ) {

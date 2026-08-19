@@ -938,7 +938,28 @@ BrowserWindow exists?
              renderer subscribes to updates
 ```
 
-## 11.3 Close UI
+## 11.3 Tray-first lightweight runtime
+
+LuckyToken Desktop is tray-first by default. Electron Main, the Tray, and the
+Backend are the long-lived desktop product; the BrowserWindow is only an on-demand
+management surface.
+
+Normal startup therefore permits zero renderer windows:
+
+```text
+LuckyToken.exe
+    ↓
+Electron Main + Tray + Backend
+    ↓
+0 BrowserWindow
+```
+
+Opening the management UI creates a BrowserWindow. Closing it destroys that
+BrowserWindow and returns to the tray-only steady state without restarting the
+Backend. There is no separate "lightweight mode" setting: this is the default
+Desktop lifecycle.
+
+## 11.4 Close UI
 
 Window close means:
 
@@ -958,7 +979,7 @@ Backend + Electron Main + Tray remain
 
 No authoritative application state may require the renderer to survive this operation.
 
-## 11.4 Reopen UI
+## 11.5 Reopen UI
 
 A new renderer does not restore stale application snapshots from the old renderer.
 
@@ -966,20 +987,166 @@ It queries current Control Plane state and reconstructs presentation state.
 
 Only explicitly product-owned UI preferences may be persisted by the renderer/desktop settings capability.
 
-## 11.5 Quit
+## 11.6 Desktop instance domains
 
-Explicit product quit goes through ownership-aware Control Plane shutdown.
+Installed/release LuckyToken and repository-generated `.electron-out` builds are
+not the same desktop instance domain.
+
+The installed product uses the stable default Electron `userData` / single-instance
+domain. A repository `.electron-out` build must derive an isolated Electron
+`userData`/`sessionData` directory from its exact shell build identity before the
+Electron `ready` event. This isolation is shell-only: authoritative LuckyToken
+configuration, credentials, ledger, Control Plane descriptor, and other Backend
+state remain under the product-owned `~/.luckytoken` paths.
+
+Therefore an arbitrary old installed/test shell that does not understand the
+current handoff protocol can never prevent a newly built `.electron-out` shell
+from starting. Both shells may exist during that one-time legacy transition, but
+there is still only one authoritative Backend at a time. If the running
+desktop-owned Backend belongs to a different packaged build, the repository shell
+replaces that Backend through the ownership-aware Control Plane flow described
+below rather than continuing to run stale Backend code or spawning a competing
+authority.
+
+## 11.7 Single-instance shell handoff
+
+Desktop single-instance ownership belongs to the Electron shell, not to the Backend.
+A second launch carries an opaque build identity derived by Electron Main from the
+current shell build. The identity must change when the packaged shell changes even
+if the package version string or install location is reused.
+
+Two cases are distinct:
+
+```text
+same shell build starts again
+    ↓
+existing Electron Main keeps the lock
+    ↓
+show/focus existing management window
+    ↓
+secondary Electron process exits locally
+```
+
+```text
+different shell build starts
+    ↓
+existing Electron Main releases only the desktop single-instance lock
+    ↓
+existing Electron Main exits locally (no Control Plane quit)
+    ↓
+new shell acquires the lock on its handoff retry
+    ↓
+new shell attaches to the already-running Backend
+```
+
+A secondary Electron process that cannot acquire the lock must never route its
+exit through product Quit. It has not established Backend authority and must call
+the local Electron exit path directly. Conversely, the tray `Quit LuckyToken`
+action must remain the ownership-aware product quit path below.
+
+Shell handoff must not terminate, restart, or mutate the Backend merely because a
+new desktop build was launched. This keeps Backend ownership stable while ensuring
+a stale tray shell cannot continue presenting an older renderer after a newer
+LuckyToken desktop build is explicitly started.
+
+## 11.8 Electron Main owns login-item migration
+
+Windows login-item registration is desktop/OS integration and remains entirely in
+Electron Main. It is not a Backend or Application Control Plane responsibility.
+
+Repository `.electron-out` builds are disposable and must never own Windows
+Auto-start. On startup they remove stale per-user LuckyToken login items whose
+executable path is inside `.electron-out`, while leaving any installed-product or
+machine-scoped login item untouched. The Settings Auto-start operation in a
+repository build reports disabled and must not register the disposable executable.
+
+Installed/release builds use a stable LuckyToken login-item identity. On startup,
+Main examines the existing per-user LuckyToken launch items. If an older executable
+path is registered, Main removes the stale entry and migrates the registration to
+`process.execPath`, preserving Windows Startup Approval (`enabled`/disabled) state.
+The same cleanup occurs when the user explicitly changes Auto-start, preventing
+multiple stale LuckyToken startup entries from accumulating.
+
+This policy prevents an old test/install executable from being resurrected at the
+next Windows sign-in and keeps OS path/version facts out of Backend state.
+
+## 11.9 Desktop bundle identity and stale Backend replacement
+
+Every assembled desktop Backend carries an opaque build identity derived from the
+exact packaged Backend artifacts. Electron Main reads the expected identity from
+its own `resources/backend` and the desktop-owned Backend publishes the same
+identity only through the Control Plane hello/application identity. The identity
+is management metadata; it is not Renderer status and contains no filesystem path
+or credential material.
+
+On desktop startup:
+
+```text
+Control Plane endpoint exists
+    ↓
+hello application buildId == current resources/backend buildId?
+    ├─ yes → attach normally
+    └─ no  → inspect ownership
+             ├─ owner = desktop → acknowledged graceful quit of stale Backend
+             │                   → wait for descriptor/Control Plane release
+             │                   → start current bundled Backend
+             └─ owner = cli     → preserve headless authority and attach
+```
+
+A desktop shell must not silently keep using a stale desktop-owned Backend merely
+because its Control Plane contract version is still wire-compatible. Conversely,
+a desktop shell must not steal authority from an explicitly CLI-owned Backend.
+
+`npm run dev` / desktop start paths must assemble the current Backend before
+Electron starts. A stale `packages/desktop-shell/backend` directory is never an
+acceptable development runtime source.
+
+## 11.10 Desktop owner lease and orphan prevention
+
+A desktop-owned Backend must never rely on OS parent/child process semantics for
+liveness. The bundled Backend is deliberately detached so a shell-build handoff can
+replace Electron without restarting the authoritative Backend.
+
+Instead, Electron Main owns a random logical `leaseId` and claims it through the
+Application Control Plane after connecting to a desktop-owned Backend. Main renews
+that same lease periodically. Backend lease policy is Backend-lifetime and uses a
+bounded TTL.
+
+```text
+Desktop-owned Backend starts
+    ↓
+initial claim grace period
+    ↓
+Electron Main claims leaseId A
+    ↓
+periodic renew(A)
+```
+
+A newer shell may atomically claim leaseId B. After that point `renew(A)` conflicts
+and the stale shell can never reclaim ownership merely by sending another renew.
+This is what lets normal single-instance/build handoff preserve the Backend PID.
+
+If no initial claim arrives before the grace deadline, or the active lease stops
+renewing (Electron crash, forced process termination, failed shell handoff), the
+Backend invokes the same graceful Data Plane quit/drain path as explicit product
+Quit and then closes the application lifecycle. It must not use an OS-level process
+kill as the normal retirement mechanism.
+
+CLI-owned Backends do not create or accept a desktop owner lease. Their lifecycle
+remains independent of Electron.
+
+## 11.11 Quit
+
+Explicit tray product quit is ownership-aware.
 
 Electron must not terminate a Backend process directly merely because it has a child-process handle.
 
-Conceptually:
+For a desktop-owned Backend:
 
 ```text
 Quit LuckyToken
     ↓
 Application Control Plane quit request
-    ↓
-Backend ownership policy
     ↓
 graceful Data Plane drain
     ↓
@@ -988,7 +1155,22 @@ Backend closes authorities/descriptor
 Electron Main exits
 ```
 
-If Electron is attached to a Backend owned by another headless invocation, the existing ownership contract determines whether application quit is allowed. Desktop process exit/detach remains separate from Backend ownership.
+For a CLI-owned Backend:
+
+```text
+Quit LuckyToken tray action
+    ↓
+Electron shell exits locally
+    ↓
+CLI-owned Backend remains under its legitimate headless owner
+```
+
+If Backend ownership is unavailable/unknown, Electron fails safe and stays alive
+instead of disappearing while a possibly desktop-owned Backend remains unmanaged.
+
+Release certification must exercise the packaged abnormal-exit path: forcibly
+terminate Electron Main while a desktop-owned Backend is running and prove that the
+lease expires, the Control Plane closes, and the desktop-owned Backend PID exits.
 
 ---
 

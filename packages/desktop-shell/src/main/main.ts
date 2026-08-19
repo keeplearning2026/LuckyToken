@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -8,19 +9,30 @@ import {
   shell,
   Tray,
 } from "electron";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   createSecureManagementWindowOptions,
+  desktopInstanceUserDataPath,
   quitLuckyTokenProduct,
   startElectronDesktopLifecycle,
 } from "./electron-app-lifecycle.js";
 import { createElectronBackendSupervisor } from "./electron-backend-supervisor.js";
+import { createDesktopOwnerLeaseClient } from "./desktop-owner-lease.js";
 import {
   createMainControlPlaneSession,
   type TrayHealth,
 } from "./control-plane-session.js";
 import { registerDesktopIpcHandlers } from "./desktop-ipc.js";
+import {
+  cleanupRepositoryBuildLoginItems,
+  effectiveDesktopAutoStart,
+  reconcileInstalledLoginItem,
+  setInstalledDesktopAutoStart,
+  type DesktopLoginItemPlatform,
+} from "./login-item.js";
 import { desktopIpcChannels } from "../shared/ipc-channels.js";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -38,6 +50,90 @@ const backendSupervisor = createElectronBackendSupervisor({
   developmentRoot: process.cwd(),
 });
 const controlPlaneSession = createMainControlPlaneSession();
+const desktopOwnerLease = createDesktopOwnerLeaseClient({
+  leaseId: randomUUID(),
+  renewIntervalMs: 5_000,
+  execute: (command) => controlPlaneSession.client().executeApplicationCommand(command),
+  onFailure: () => updateTray("attention"),
+});
+
+/**
+ * Stable identity of the exact desktop shell build. Packaged builds hash the
+ * privileged Main/preload bundles plus the renderer entrypoint, so rebuilding
+ * UI code under the same package version is still a different shell. Dev
+ * launches intentionally use a per-process identity so a fresh dev run takes
+ * over from a stale dev shell.
+ */
+function desktopBuildId(): string {
+  const hash = createHash("sha256")
+    .update(app.getVersion())
+    .update(process.platform === "win32" ? process.execPath.toLowerCase() : process.execPath);
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
+    return hash
+      .update("development")
+      .update(String(process.pid))
+      .update(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+      .digest("hex");
+  }
+  hash.update(readFileSync(__filename));
+  hash.update(readFileSync(join(__dirname, "preload.js")));
+  hash.update(
+    readFileSync(
+      join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
+    ),
+  );
+  return hash.digest("hex");
+}
+
+const currentDesktopBuildId = desktopBuildId();
+const isolatedUserDataPath = desktopInstanceUserDataPath({
+  executablePath: process.execPath,
+  appDataPath: app.getPath("appData"),
+  buildId: currentDesktopBuildId,
+});
+if (isolatedUserDataPath !== undefined) {
+  mkdirSync(isolatedUserDataPath, { recursive: true });
+  app.setPath("userData", isolatedUserDataPath);
+  app.setPath("sessionData", isolatedUserDataPath);
+}
+const repositoryBuild = isolatedUserDataPath !== undefined;
+const loginItemMutationEnabled =
+  process.env.LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION !== "1";
+const loginItemPlatform: DesktopLoginItemPlatform = {
+  get(options) {
+    const settings = app.getLoginItemSettings(
+      options?.path === undefined
+        ? undefined
+        : { path: options.path, args: [...(options.args ?? [])] },
+    );
+    return {
+      openAtLogin: settings.openAtLogin,
+      ...(settings.executableWillLaunchAtLogin === undefined
+        ? {}
+        : { executableWillLaunchAtLogin: settings.executableWillLaunchAtLogin }),
+      ...(settings.launchItems === undefined
+        ? {}
+        : {
+            launchItems: settings.launchItems.map((item) => ({
+              name: item.name,
+              path: item.path,
+              args: Object.freeze([...item.args]),
+              scope: item.scope,
+              enabled: item.enabled,
+            })),
+          }),
+    };
+  },
+  set(settings) {
+    app.setLoginItemSettings({
+      openAtLogin: settings.openAtLogin,
+      ...(settings.path === undefined ? {} : { path: settings.path }),
+      ...(settings.args === undefined ? {} : { args: [...settings.args] }),
+      ...(settings.enabled === undefined ? {} : { enabled: settings.enabled }),
+      ...(settings.name === undefined ? {} : { name: settings.name }),
+    });
+  },
+};
 const desktopIpcBridge = registerDesktopIpcHandlers({
   registrar: {
     handle: (channel, handler) => {
@@ -55,10 +151,28 @@ const desktopIpcBridge = registerDesktopIpcHandlers({
   },
   session: controlPlaneSession,
   platform: {
-    getAutoStart: async () => app.getLoginItemSettings().openAtLogin,
+    getAutoStart: async () => {
+      if (process.platform !== "win32") {
+        return app.getLoginItemSettings().openAtLogin;
+      }
+      if (!loginItemMutationEnabled || repositoryBuild) return false;
+      return effectiveDesktopAutoStart(loginItemPlatform, process.execPath);
+    },
     setAutoStart: async (enabled) => {
-      app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
-      return app.getLoginItemSettings().openAtLogin;
+      if (process.platform !== "win32") {
+        app.setLoginItemSettings({ openAtLogin: enabled });
+        return app.getLoginItemSettings().openAtLogin;
+      }
+      if (!loginItemMutationEnabled) return false;
+      if (repositoryBuild) {
+        cleanupRepositoryBuildLoginItems(loginItemPlatform);
+        return false;
+      }
+      return setInstalledDesktopAutoStart(
+        loginItemPlatform,
+        process.execPath,
+        enabled,
+      );
     },
     pickDirectory: async () => {
       const result = await dialog.showOpenDialog({
@@ -77,6 +191,9 @@ const desktopIpcBridge = registerDesktopIpcHandlers({
     },
     openExternal: async (url) => {
       await shell.openExternal(url);
+    },
+    writeClipboardText: async (value) => {
+      clipboard.writeText(value);
     },
     getDesktopVersion: async () => app.getVersion(),
   },
@@ -161,6 +278,10 @@ function updateTray(health: TrayHealth): void {
 function requestProductQuit(): void {
   if (productQuitTask !== undefined) return;
   productQuitTask = quitLuckyTokenProduct({
+    backendOwnerKind: () => {
+      const state = controlPlaneSession.state();
+      return state.kind === "ready" ? state.status.ownership?.owner.kind : undefined;
+    },
     requestBackendQuit: () =>
       controlPlaneSession.client().executeApplicationCommand({
         command: "quit",
@@ -171,6 +292,20 @@ function requestProductQuit(): void {
   }).finally(() => {
     productQuitTask = undefined;
   });
+}
+
+function reconcileDesktopLoginItem(): void {
+  if (process.platform !== "win32" || !loginItemMutationEnabled) return;
+  try {
+    if (repositoryBuild) {
+      cleanupRepositoryBuildLoginItems(loginItemPlatform);
+    } else {
+      reconcileInstalledLoginItem(loginItemPlatform, process.execPath);
+    }
+  } catch {
+    // Login-item maintenance is OS integration only; inability to reconcile
+    // it must never make the Backend or management UI unavailable.
+  }
 }
 
 function createTray(actions: { readonly open: () => void; readonly quit: () => void }): void {
@@ -185,11 +320,18 @@ function createTray(actions: { readonly open: () => void; readonly quit: () => v
 }
 
 void startElectronDesktopLifecycle({
-  requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
+  buildId: currentDesktopBuildId,
+  requestSingleInstanceLock: (activation) =>
+    app.requestSingleInstanceLock(activation),
+  releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
+  waitForPrimaryHandoff: () =>
+    new Promise<void>((resolve) => setTimeout(resolve, 200)),
   whenReady: async () => {
     await app.whenReady();
+    reconcileDesktopLoginItem();
     const attachment = await backendSupervisor.ensureRunning();
-    await controlPlaneSession.connect(attachment.endpoint);
+    const initialStatus = await controlPlaneSession.connect(attachment.endpoint);
+    await desktopOwnerLease.bind(initialStatus.ownership);
     controlPlaneSession.subscribeState((state) => {
       updateTray(controlPlaneSession.trayHealth());
       if (state.kind === "ready" && mainWindow !== undefined && !mainWindow.isDestroyed()) {
@@ -199,7 +341,8 @@ void startElectronDesktopLifecycle({
       reconnectTask = (async () => {
         for (let attempt = 0; attempt < 20; attempt += 1) {
           try {
-            await controlPlaneSession.reconnect(attachment.endpoint);
+            const status = await controlPlaneSession.reconnect(attachment.endpoint);
+            await desktopOwnerLease.bind(status.ownership);
             return;
           } catch {
             await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -210,9 +353,13 @@ void startElectronDesktopLifecycle({
       });
     });
   },
-  onSecondInstance: (listener) => app.on("second-instance", listener),
+  onSecondInstance: (listener) =>
+    app.on("second-instance", (_event, _argv, _workingDirectory, additionalData) =>
+      listener(additionalData),
+    ),
   onWindowAllClosed: (listener) => app.on("window-all-closed", listener),
-  quit: requestProductQuit,
+  exitDesktop: () => app.quit(),
+  quitProduct: requestProductQuit,
   openWindow: openManagementWindow,
   createTray,
 });
@@ -220,6 +367,7 @@ void startElectronDesktopLifecycle({
 // Closing the last management window intentionally leaves Electron Main and
 // the tray running. Explicit product Quit is a separate tray action.
 app.on("will-quit", () => {
+  desktopOwnerLease.dispose();
   void Promise.allSettled([
     desktopIpcBridge.dispose(),
     controlPlaneSession.dispose(),

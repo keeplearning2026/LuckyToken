@@ -15,6 +15,7 @@ import lockfile from "proper-lockfile";
 import type { AuthorizedClient } from "../auth.js";
 
 const SCHEMA_VERSION = "luckytoken-client-auth-v2";
+const LEGACY_SCHEMA_VERSION = "luckytoken-client-auth-v1";
 const AUTH_FILE_MODE = 0o600;
 const AUTH_DIRECTORY_MODE = 0o700;
 /** Lock staleness matches the Control Plane descriptor lease pattern. */
@@ -219,6 +220,20 @@ function parseData(content: string): ClientTokenData {
   });
 }
 
+function isLegacyClientTokenFile(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).schemaVersion === LEGACY_SCHEMA_VERSION
+    );
+  } catch {
+    return false;
+  }
+}
+
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? String((error as { code?: unknown }).code)
@@ -288,8 +303,20 @@ export function createFileClientTokenStore(
     revision: 0,
     globalDeleted: false,
   });
-  const readData = (): Promise<ClientTokenData | undefined> =>
-    readClientTokenData(path);
+  const readData = async (): Promise<ClientTokenData | undefined> => {
+    try {
+      const content = await readFile(path, "utf8");
+      // Client-auth v1 is disposable local access state, not a durable
+      // compatibility surface. Do not migrate or reuse its token values:
+      // treat it as never initialized so the current authority can generate
+      // a fresh v2 file/token through the normal atomic create path.
+      if (isLegacyClientTokenFile(content)) return undefined;
+      return parseData(content);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return undefined;
+      throw error;
+    }
+  };
   /**
    * Atomic publication: write the next state to a private same-directory
    * temporary file, flush it durably, then atomically replace the target.

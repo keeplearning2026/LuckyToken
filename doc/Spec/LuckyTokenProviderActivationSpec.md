@@ -46,15 +46,17 @@ Catalog/model availability refreshes
       ↓
 Provider shows connected / usable models
       ↓
-Every model already has default alias providerId/modelId
+Open the Provider's Models card
       ↓
-Optionally add/edit one friendly alias on the model row
+Every model already has a slash-free default Model name derived from its canonical model id
+      ↓
+Optionally Rename the Model name; Backend namespaces it as providerId/modelName
       ↓
 Start or restart the Data Plane if needed
       ↓
 Send a real request
       ↓
-Observe it in Activity
+Observe it in Overview
 ```
 
 The following must remain true while the Data Plane is `stopped` or `failed`:
@@ -196,14 +198,17 @@ Every model in the authoritative active Catalog has exactly one effective extern
 The system-generated default is:
 
 ```text
-providerId/modelId
+modelName = allocated(normalizeModelName(modelId), providerCatalog)
+alias     = providerId/modelName
 ```
+
+where `normalizeModelName(modelId)` replaces `/` inside the canonical model id with `-`, and Provider-local collisions receive deterministic numeric suffixes.
 
 For example:
 
 ```text
 anthropic/claude-sonnet-4-6
-commandcode-private/deepseek/deepseek-v4-flash
+commandcode-private/deepseek-deepseek-v4-flash
 ```
 
 The canonical Provider/model target is an internal routing fact. The product UI must not ask the user to create or understand that mapping.
@@ -327,13 +332,15 @@ For every canonical Catalog target:
 { provider: providerId, model: modelId }
 ```
 
-Alias Authority derives the default alias deterministically as:
+Alias Authority derives one default Model name for every target from the complete Provider-scoped Catalog set, then constructs the default alias deterministically as:
 
 ```ts
-`${providerId}/${modelId}`
+`${providerId}/${modelName}`
 ```
 
-This generated lower layer is not persisted. A new model automatically receives its default alias as soon as the authoritative Catalog snapshot contains it.
+The base Model name is `normalizeModelName(modelId)`, which replaces canonical model-id `/` separators with `-`. If multiple canonical model ids in the same Provider normalize to the same name, the allocator assigns deterministic numeric suffixes while preserving any other model's natural normalized name.
+
+This generated lower layer is not persisted. A new model automatically receives its default Model name and alias as soon as the authoritative Catalog snapshot contains it.
 
 The existing static `curatedAliasDefaults` / `CURATED_ALIAS_DEFAULTS_VERSION` model is obsolete under this specification and should be removed rather than adapted.
 
@@ -341,7 +348,7 @@ The existing static `curatedAliasDefaults` / `CURATED_ALIAS_DEFAULTS_VERSION` mo
 
 A model never starts in an "unaliased" state.
 
-The user-owned alias file stores only explicit custom overrides. A valid custom alias for a canonical target replaces that target's generated default in the effective registry.
+The user-owned alias file stores only explicit custom overrides. Every valid override remains inside the target Provider namespace and has the form `${providerId}/${modelName}`. A valid custom model name for a canonical target replaces that target's generated default in the effective registry.
 
 There remains at most one effective alias per canonical target.
 
@@ -352,13 +359,13 @@ Catalog target
   commandcode-private + deepseek/deepseek-v4-flash
         ↓
 generated default alias
-  commandcode-private/deepseek/deepseek-v4-flash
-        ↓ user chooses "flash"
+  commandcode-private/deepseek-deepseek-v4-flash
+        ↓ user chooses Model name "flash"
 user override
-  flash → same internal target
+  commandcode-private/flash → same internal target
         ↓
 effective alias
-  flash
+  commandcode-private/flash
 ```
 
 Deleting/resetting that override makes the generated default effective again without writing a default mapping to disk.
@@ -937,25 +944,36 @@ interface AliasCatalogFacts {
 
 The implementation may use an equivalent immutable shape, but it must not maintain both `targets` and a separately authoritative hand-built default alias list.
 
-For each target, the generated default alias is exactly:
+For each Provider, Alias Authority allocates the final default Model names from the complete canonical target set. The base normalization is:
 
 ```ts
-`${target.provider}/${target.model}`
+normalizeModelName(modelId) = modelId.replaceAll("/", "-")
 ```
 
-Alias text is opaque external identity. It may contain multiple `/` characters. A model id such as:
+The final alias is always:
+
+```ts
+`${target.provider}/${allocatedModelName}`
+```
+
+The Provider namespace is structural (`providerId/`) and is the only `/` allowed in an alias. Every active LuckyToken Provider ID is one safe namespace segment of 1–64 characters matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`; models.json and external Provider Package registration reject IDs outside that contract before they enter the authoritative Catalog. Canonical model ids remain unchanged internally and may contain any number of `/` characters. A canonical model id such as:
 
 ```text
 deepseek/deepseek-v4-flash
 ```
 
-therefore produces:
+therefore normally produces:
 
 ```text
-commandcode-private/deepseek/deepseek-v4-flash
+modelName = deepseek-deepseek-v4-flash
+alias     = commandcode-private/deepseek-deepseek-v4-flash
 ```
 
-The implementation must never parse this generated alias string to reconstruct canonical identity. The canonical target is carried explicitly as `{ provider, model }`.
+Default-name allocation is Provider-scoped and deterministic for one Catalog snapshot plus the currently valid user-owned Model names. The final external alias is bounded to 128 characters: after slash normalization, an overlong base Model name is deterministically shortened to the space left by `${providerId}/`, and numeric collision suffixes are fitted inside the same bound. When multiple model ids normalize/shorten to the same base name, a canonical model id that already equals that base keeps the natural name when that name is not user-reserved; remaining collisions receive the first available `-2`, `-3`, ... suffix, skipping names that are another model's natural normalized name, already allocated, or reserved by a user override. Allocation must not depend on Catalog array order.
+
+A valid user Model name is a Provider-local reservation. Catalog growth never steals it: if a new or existing generated default would use that name, the generated default is renumbered instead. Removing the user override releases the reservation and the derived defaults recompute from current Catalog facts.
+
+Alias strings are never parsed to reconstruct canonical routing identity. The canonical target is always carried explicitly as `{ provider, model }`.
 
 ## 11.6 User override replaces the generated alias for that model
 
@@ -977,14 +995,14 @@ system default
   anthropic/claude-sonnet-4-6
 
 user override
-  sonnet → same target
+  anthropic/sonnet → same target
 
 result
-  effective alias = sonnet
+  effective alias = anthropic/sonnet
   anthropic/claude-sonnet-4-6 is not simultaneously effective
 ```
 
-A custom alias that collides with the effective alias of a different target is rejected. The authority never guesses which model should win.
+A persisted override outside the target Provider namespace is invalid. Two user-owned aliases in the same Provider may not own the same Model name: `rename_model` rejects that custom↔custom collision without changing the file, revision, or active resolver. A user-owned Model name may coincide with a Catalog-derived default of another target; in that case the user name remains effective and that generated default is deterministically renumbered. The authority never guesses or silently transfers a user-owned name between canonical targets.
 
 ## 11.7 `model-aliases.json` stores overrides only
 
@@ -1248,28 +1266,31 @@ ProviderRegistrySnapshot
 
 Auth projection + Catalog projection + Credential status already contain the required facts.
 
-## 15.5 Add model-scoped alias mutation commands for product UI
+## 15.5 Product contract is model rename, internal contract remains alias-backed
 
-The normal product UI must not construct or replace the entire `model-aliases.json` mapping record just to rename one model.
+The normal product UI must not construct or replace the entire `model-aliases.json` mapping record just to rename one model, and it must not ask the user to understand an "alias" concept.
 
-Extend the existing Alias Control Plane contract with the smallest target-scoped mutations, conceptually:
+The target-scoped Control Plane vocabulary is:
 
 ```ts
-{ command: "set_for_model", revision, providerId, modelId, alias }
-{ command: "reset_for_model", revision, providerId, modelId }
+{ command: "rename_model", revision, providerId, modelId, modelName }
+{ command: "restore_model_name", revision, providerId, modelId }
 ```
 
-Exact field naming may follow existing contract conventions, but the semantics are fixed:
+The semantics are fixed:
 
-- `set_for_model` replaces the one user override for that canonical target;
-- `reset_for_model` removes the user override for that target so the generated `providerId/modelId` alias becomes effective again;
+- `modelName` is the user-editable suffix only;
+- Alias Authority constructs the internal effective alias as `${providerId}/${modelName}`;
+- the Provider namespace is therefore owned by Backend policy, not by Renderer string construction;
+- `rename_model` replaces the one user override for that canonical target;
+- `restore_model_name` removes the override so the Catalog-derived default Model name and `${providerId}/${defaultModelName}` alias become effective again;
 - both are compare-and-swap mutations against the Alias Authority revision;
 - both validate the canonical target against current Catalog facts;
 - neither exposes raw file mutation to the Renderer.
 
-The existing bulk `write` command may remain for Advanced/manual management if still required, but `ProvidersPage` must use the model-scoped operation.
+The existing bulk `write` command may remain for Advanced/manual management if still required, but `ProvidersPage` must use the model-name operations.
 
-This is not a second Alias authority. It is a narrower command vocabulary over the existing one.
+This is not a second authority. Internally Alias Authority and `model-aliases.json` remain the routing implementation; the normal product contract is model naming.
 
 ---
 
@@ -1339,11 +1360,11 @@ These are presentation labels only.
 Buttons are entirely driven by Provider metadata:
 
 ```text
-account === true  → account/OAuth button
-apiKey === true   → API-key button
+account === true  → Auth
+apiKey === true   → API key
 ```
 
-Use Provider-declared labels when present.
+The product uses these stable action labels rather than surfacing Provider-specific auth implementation names. The presence of each button still comes only from Provider metadata.
 
 No logic such as this is allowed:
 
@@ -1382,13 +1403,15 @@ Model refresh failed
 
 ## 16.7 Login interaction
 
-The existing typed interaction UX is retained:
+Authentication methods have intentionally different entry UX while remaining driven by Pi's typed interaction contract:
 
-- secret/text/manual-code/select prompts;
-- browser URL;
-- device code;
-- progress information;
-- cancellation.
+- clicking **API key** opens a Provider-scoped modal card and starts the Provider API-key login; secret/text/select prompts render inside that card;
+- clicking **Auth** starts the Provider OAuth/account login immediately; when Pi emits `auth_url`, Electron opens that URL in the system browser without requiring a second click;
+- when Pi emits `device_code`, Electron opens the verification URL immediately and the modal card shows the user code;
+- browser flows keep a small status card with `Open browser again`, cancellation, progress, and any `manual_code` fallback Pi requests;
+- closing/cancelling an active auth card cancels the typed auth interaction rather than merely hiding it.
+
+The Renderer never implements Provider-specific OAuth or polling. It projects Pi's `auth_url`, `device_code`, prompt, progress, and info events generically.
 
 Secret values remain one-shot interaction input and must never be stored in renderer state beyond the active prompt lifetime or returned in projections.
 
@@ -1410,56 +1433,39 @@ It filters only currently projected Provider cards by safe fields such as Provid
 
 It is not persisted and does not alter Backend Provider state.
 
-## 16.10 Model rows expose alias as a model action, not a routing editor
+## 16.10 Models are Provider-scoped and user-facing model names are renameable
 
-A connected/known Provider may expand or otherwise expose its projected model rows.
+The Providers landing page does not render a global model/alias section. Each Provider card has a **Models** action. Clicking it opens a modal card scoped to exactly that Provider and lists the models projected by Catalog.
 
-Each model already has an effective alias. The product UI does **not** present a separate "Provider/model target" field or ask the user to create a mapping.
+Normal product language uses **Model name**, never Alias. Internally the model name is backed by Alias Authority, but that implementation term is not exposed.
 
-For a model using its generated default, the row may conceptually look like:
-
-```text
-DeepSeek V4 Flash
-Alias: commandcode-private/deepseek/deepseek-v4-flash        [ + alias ]
-```
-
-The icon/action is product-language **Add alias**: the user is adding a friendly name to the model. Internally this is an override of the already assigned default alias, not creation of a second effective alias.
-
-Clicking it opens a small model-scoped editor such as:
+For an untouched model:
 
 ```text
-Add alias
+CommandCode Private — Models
 
-Model
-DeepSeek V4 Flash
-
-Current alias
-commandcode-private/deepseek/deepseek-v4-flash
-
-Custom alias
-[ flash________________ ]
-
-[ Cancel ]  [ Save ]
+Model name
+  deepseek-deepseek-v4-flash                     [ Rename ]
+  Original model: deepseek/deepseek-v4-flash
 ```
 
-There is no Provider selector, model selector, canonical-target editor, or raw JSON on this normal product surface. The model row already determines the target.
-
-After a custom alias is saved:
+Clicking **Rename** opens an inline editor within the Models card:
 
 ```text
-DeepSeek V4 Flash
-Alias: flash                                             [ edit alias ]
+Model name
+┌────────────────────────────────────────────────────────┐
+│ commandcode-private/ │ deepseek-deepseek-v4-flash     │
+└────────────────────────────────────────────────────────┘
+  fixed Provider prefix     editable, prefilled suffix
+
+[ Cancel ] [ Save ]
 ```
 
-The same icon may change tooltip/accessible label from `Add alias` to `Edit alias`; this is presentation only.
+The Provider prefix is visible but not editable. The input is prefilled with the current model-name suffix. The Renderer sends `modelName` only; Backend constructs the internal `${providerId}/${modelName}` alias.
 
-The editor also offers a small `Use default` / reset action when a custom override exists. Reset removes the user override and restores:
+When the default Model name differs from the canonical model id, or when the user has renamed it, the row may show the canonical/original model id as secondary information. A user override offers **Restore default**. Restore returns the model name to the Catalog-derived allocated default under the same Provider namespace.
 
-```text
-providerId/modelId
-```
-
-The Renderer sends only the model identity already present in Catalog projection plus the requested alias mutation through the typed Alias command. It never derives file structure or chooses a target independently.
+There is no Provider selector, canonical-target editor, raw JSON, `Add alias`, `Edit alias`, or `Use default` terminology on this surface.
 
 ## 16.11 Effective alias is the client-visible model identity
 
@@ -1469,13 +1475,15 @@ Therefore:
 
 ```text
 no override
-→ client-visible model = providerId/modelId
+→ canonical modelId = deepseek/deepseek-v4-flash
+→ default modelName = deepseek-deepseek-v4-flash
+→ client-visible model = commandcode-private/deepseek-deepseek-v4-flash
 
-custom override "flash"
-→ client-visible model = flash
+custom model name "flash"
+→ client-visible model = commandcode-private/flash
 ```
 
-The canonical Provider/model identity remains internal routing state even though the generated default alias happens to contain the same textual components.
+The canonical Provider/model identity remains internal routing state and is never reconstructed from the external alias text.
 
 Do not add UI copy explaining canonical mapping mechanics to normal users.
 
@@ -1812,15 +1820,11 @@ Login/recompose during an in-flight request affects only later requests.
 
 ### A1 — every Catalog model receives a default alias
 
-Given an authoritative Catalog snapshot, the effective Alias registry contains exactly one alias per canonical model target and the untouched alias is exactly:
+Given an authoritative Catalog snapshot, the effective Alias registry contains exactly one alias per canonical model target. Every alias has exactly one `/`, separating the Provider namespace from the allocated default Model name.
 
-```text
-providerId/modelId
-```
+The test derives the expected allocation from worked literal cases rather than maintaining a second production alias table.
 
-The test generates expected aliases from Catalog facts; it does not maintain a separate expected alias table.
-
-### A2 — slash-containing model IDs are preserved exactly
+### A2 — slash-containing canonical model IDs produce slash-free external Model names
 
 For:
 
@@ -1829,32 +1833,35 @@ provider = commandcode-private
 model = deepseek/deepseek-v4-flash
 ```
 
-expect the default alias:
+expect:
 
 ```text
-commandcode-private/deepseek/deepseek-v4-flash
+modelName = deepseek-deepseek-v4-flash
+alias     = commandcode-private/deepseek-deepseek-v4-flash
 ```
 
-and prove resolution uses the explicit canonical target rather than parsing the alias string.
+and prove resolution still uses the explicit canonical target `{ provider: "commandcode-private", model: "deepseek/deepseek-v4-flash" }` rather than parsing the alias string.
+
+Also prove a Provider-local collision set such as `a/b`, `a-b`, `a-b-2` receives unique deterministic names without stealing another model's natural normalized name.
 
 ### A3 — custom alias replaces, not supplements, the default
 
 ```text
 default: anthropic/claude-sonnet-4-6
-set_for_model(..., alias = "sonnet")
+rename_model(..., modelName = "sonnet")
 ```
 
 results in one effective alias for the target:
 
 ```text
-sonnet
+anthropic/sonnet
 ```
 
 The generated default is suppressed and no duplicate error is emitted.
 
 ### A4 — reset restores the generated default
 
-After a custom override, `reset_for_model` removes only that target's user override and immediately restores `providerId/modelId`.
+After a rename, `restore_model_name` removes only that target's user override and immediately restores its Catalog-derived allocated default Model name and alias.
 
 ### A5 — Catalog changes generate defaults automatically
 
@@ -1862,9 +1869,9 @@ A newly appearing model receives a default alias after the Catalog snapshot swap
 
 A model removed from the active Catalog no longer contributes a generated default.
 
-### A6 — custom collisions fail closed
+### A6 — user names reserve; custom/custom collisions fail closed
 
-A custom alias that collides with another target's effective default/custom alias is rejected and the previous effective registry remains active.
+A user-owned Model name reserves that Provider-local external name. If it coincides with another target's generated default, that default is deterministically renumbered and both targets remain callable. If `rename_model` attempts to reuse a Model name already owned by a different user override in the same Provider, the command is rejected and the previous file/revision/resolver remain active.
 
 ### A7 — client-visible model identity follows the effective alias
 
@@ -1898,10 +1905,11 @@ Using fake `LuckyTokenDesktopApi` only:
 - handles OAuth URL/device-code/progress/cancel;
 - distinguishes auth success from catalog refresh failure;
 - re-queries catalog after catalog version changes;
-- renders every known model with an already assigned effective alias;
-- shows Add alias / Edit alias as a model-row action without exposing a target selector;
-- sends target-scoped Alias mutations rather than rewriting the raw alias file;
-- reset restores the generated `providerId/modelId` alias;
+- opens a Provider-scoped Models card instead of a global model/alias section;
+- renders every known model using product-language Model name, never Alias;
+- Rename prefills the current suffix and keeps the Provider prefix fixed;
+- sends `rename_model` / `restore_model_name` mutations rather than rewriting the raw alias file;
+- restore returns the generated `${providerId}/${defaultModelName}` model identity;
 - contains no Provider-ID branching.
 
 A static architecture/certification test should reject Provider ID special-casing in the generic Provider page if practical without becoming brittle.
@@ -1919,13 +1927,13 @@ stop Data Plane
 Providers remain visible
 login deterministic test Provider / CommandCode interaction
 credential status updates
-expand a model row
-expect generated providerId/modelId alias
-add a custom alias through the model action
-expect effective alias to change
+open the Provider Models card
+expect the Catalog-derived default Model name and canonical model id as secondary identity when they differ
+rename the model using the prefilled fixed-prefix editor
+expect the internal effective identity to become providerId/modelName
 start Data Plane
-send deterministic real request using the custom alias
-open Activity
+send deterministic real request using the renamed model identity
+open Overview
 successful request visible
 ```
 
@@ -1943,7 +1951,7 @@ Release Backend must prove:
 - Auth query works before Data Plane startup success;
 - packaged Electron can render/authenticate through the same Control Plane contract;
 - every shipped Catalog model receives a generated default alias without a curated alias table;
-- packaged Electron can override one model alias and use it for a real deterministic request.
+- packaged Electron can rename one model and use the Provider-namespaced model identity for a real deterministic request.
 
 Failure blocks release.
 
@@ -1984,7 +1992,7 @@ Create/bind catalog controller before Data Plane startup and bind it to Provider
 
 Keep Alias Authority in Application and reuse the existing small initialization holder if needed to break the catalog/alias startup cycle.
 
-Replace the static curated alias default table with Catalog-derived `providerId/modelId` defaults for every canonical model target. Add target-scoped set/reset Alias mutations and prove custom override/reset semantics before changing Renderer UI.
+Replace the static curated alias default table with Catalog-derived Provider-scoped default Model names and `${providerId}/${modelName}` aliases for every canonical model target. Add target-scoped set/reset Alias mutations and prove normalization, collision allocation, custom override, and reset semantics before changing Renderer UI.
 
 ## Phase 4 — make Data Plane consume Provider Runtime facts
 
@@ -2077,12 +2085,13 @@ This specification is complete only when every item below is true.
 ## Alias/model identity
 
 - [ ] Every model in the active Catalog has exactly one effective alias without user configuration.
-- [ ] The generated default alias is exactly `providerId/modelId`, including models whose `modelId` itself contains `/`.
-- [ ] Generated defaults are derived from Catalog facts and are not persisted.
+- [ ] Every active Provider ID is one safe 1–64 character namespace segment, and every generated default alias is `${providerId}/${defaultModelName}`, contains exactly one `/`, and is at most 128 characters.
+- [ ] `defaultModelName` is derived from the canonical model id by slash normalization, deterministic length fitting, Provider-local user-name reservation, and collision numbering.
+- [ ] Generated defaults are derived from current Catalog targets plus valid Provider-local user-name reservations and are not persisted.
 - [ ] The static curated default alias table and redundant defaults generation counter are removed.
 - [ ] A valid custom alias replaces the generated default for exactly one canonical model target; both are never simultaneously effective.
 - [ ] Reset/delete of the custom override restores the generated default automatically.
-- [ ] Custom alias collisions fail closed without replacing the previous effective registry.
+- [ ] User-owned Model names reserve their Provider-local names; generated defaults renumber around them, while custom↔custom collisions fail closed without replacing the previous effective registry.
 - [ ] New Catalog models receive defaults automatically after publication.
 - [ ] `/v1/models`, Codex catalog generation, and alias-only request selection use the effective alias.
 - [ ] Canonical Provider/model target selection remains an internal implementation detail.
@@ -2095,10 +2104,12 @@ This specification is complete only when every item below is true.
 - [ ] CommandCode Private is labeled as LuckyToken-bundled without UI special-casing its authentication flow.
 - [ ] Pi built-ins use the same generic card/login components.
 - [ ] Auth failure and Catalog failure are presented as distinct states.
-- [ ] Provider model rows show the current effective alias and an Add/Edit alias icon/action.
-- [ ] Add alias never asks the user to choose a Provider or model target; the row already determines the model.
+- [ ] Each Provider card opens a Provider-scoped Models card; there is no global Alias section.
+- [ ] Model rows use `Model name` / `Rename` product language and never expose Alias terminology.
+- [ ] Rename shows a fixed `${providerId}/` prefix and a prefilled editable model-name suffix.
+- [ ] Renderer never derives a Model name from canonical `modelId`; if the effective Alias projection is unavailable for a model, the row shows Model name unavailable, keeps canonical model id only as secondary identity, and disables Rename.
 - [ ] The normal product UI does not expose raw `model-aliases.json` structure.
-- [ ] A custom alias can be reset to the default from the same model-scoped interaction.
+- [ ] A renamed model can be restored to the default from the same model-scoped interaction.
 
 ## Release
 
@@ -2200,7 +2211,7 @@ Backend Application lifetime
 │    Backend lifetime
 │
 ├── Alias Authority
-│    Catalog-derived default for every model: providerId/modelId
+│    Catalog-derived default for every model: providerId/defaultModelName
 │    optional one user override per canonical target
 │
 ├── Settings / Ledger / Diagnostics / Control Plane
@@ -2216,6 +2227,6 @@ All serving instances consume the same Backend-lifetime Provider Models.
 
 The product invariant is equally simple:
 
-> **A user can always discover and authenticate Providers while LuckyToken Backend is healthy, regardless of whether the model HTTP Gateway is running. Every Catalog model is immediately usable through a generated `providerId/modelId` alias, and the user may replace that alias from the model row without understanding internal Provider/model routing.**
+> **A user can always discover and authenticate Providers while LuckyToken Backend is healthy, regardless of whether the model HTTP Gateway is running. Every Catalog model is immediately usable through one generated `${providerId}/${defaultModelName}` alias with a slash-free Model name, and the user may replace that Model name from the model row without understanding internal Provider/model routing.**
 
 That invariant is the release-level definition of Provider activation for LuckyToken V1.

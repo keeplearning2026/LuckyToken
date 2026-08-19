@@ -27,6 +27,9 @@ export const controlPlaneVersion = 1 as const;
 export interface ApplicationIdentity {
   readonly id: "luckytoken";
   readonly version: string;
+  /** Exact bundled Backend build identity when launched by a desktop shell.
+   * Headless/legacy owners may omit it. */
+  readonly buildId?: string;
 }
 
 /** Owner identity of the one active LuckyToken application instance (Ticket
@@ -466,13 +469,12 @@ export interface AliasStatusProjection {
 }
 
 /**
- * Versioned alias registry commands (Ticket 14 + Provider Activation Spec
- * v1.0 §15.5): query the one authoritative model-aliases.json state and
- * the merged effective registry, replace the whole user mapping record
- * (advanced/manual), or mutate one canonical model target with a
- * target-scoped set/reset. All mutations are compare-and-swap on the
- * revision the client was served. A rejected proposal (invalid, ambiguous,
- * unknown or duplicate target) never replaces the active registry.
+ * Versioned model-name commands backed by the internal alias registry.
+ * Product clients rename one canonical model by supplying only the user
+ * editable model-name suffix; the Backend always constructs the internal
+ * alias as `${providerId}/${modelName}`. The raw `write` command remains an
+ * advanced/manual file seam. All mutations are compare-and-swap on the
+ * revision the client was served.
  */
 export type AliasCommand =
   | { readonly command: "query" }
@@ -482,14 +484,15 @@ export type AliasCommand =
       readonly aliases: Readonly<Record<string, unknown>>;
     }
   | {
-      readonly command: "set_for_model";
+      readonly command: "rename_model";
       readonly revision: number;
       readonly providerId: string;
       readonly modelId: string;
-      readonly alias: string;
+      /** User-visible suffix only. The Backend owns the provider namespace. */
+      readonly modelName: string;
     }
   | {
-      readonly command: "reset_for_model";
+      readonly command: "restore_model_name";
       readonly revision: number;
       readonly providerId: string;
       readonly modelId: string;
@@ -781,10 +784,11 @@ export interface AuthPromptOption {
 
 /**
  * Typed interaction events projected from the Provider-owned
- * AuthInteraction. Browser/device URLs are always visible and copyable
- * (opening is an OS capability of the thin desktop shell, with a manual
- * fallback); prompts carry a correlation id so responses never cross
- * flows. No credential or code value ever leaves the flow. Cancellation,
+ * AuthInteraction. Browser/device URLs cross only the typed desktop seam so
+ * Electron Main can open them with the OS browser; Renderer may retain a
+ * bounded retry action without exposing the raw URL as product copy. Prompts
+ * carry a correlation id so responses never cross flows. No credential or
+ * submitted code value is projected back out of the flow. Cancellation,
  * success and failure are terminal outcomes of the login command result.
  */
 export type AuthInteractionEvent =
@@ -1117,7 +1121,9 @@ export {
   averageOutputSpeedUnavailableReason,
   deriveRequestStatus,
   formatDuration,
+  formatPercent,
   formatTimestamp,
+  formatTokenCount,
   formatTokensPerSecond,
   formatCacheHitRate,
   ledgerPhaseLabel,
@@ -1319,12 +1325,19 @@ export type ApplicationCommand =
   | { readonly command: "attach" }
   | { readonly command: "quit"; readonly acknowledged: boolean }
   | {
+      readonly command: "desktop_owner";
+      readonly action: "claim" | "renew";
+      readonly leaseId: string;
+    }
+  | {
       readonly command: "auto_start";
       readonly action: "status" | "enable" | "disable";
     };
 
 export type ApplicationCommandOutcome =
   | "attached"
+  | "lease_claimed"
+  | "lease_renewed"
   | "drained"
   | "timed_out"
   | "conflict"
@@ -1333,7 +1346,8 @@ export type ApplicationCommandOutcome =
   | "unsupported";
 
 export type ApplicationCommandConflictCode =
-  "quit_requires_explicit_confirmation";
+  | "quit_requires_explicit_confirmation"
+  | "desktop_owner_lease_mismatch";
 
 export interface ApplicationCommandConflict {
   readonly code: ApplicationCommandConflictCode;
@@ -1353,7 +1367,7 @@ export interface ApplicationCommandExecution {
 }
 
 export interface ApplicationCommandResult extends ApplicationCommandExecution {
-  readonly command: "attach" | "quit" | "auto_start";
+  readonly command: "attach" | "desktop_owner" | "quit" | "auto_start";
   readonly snapshot: StatusSnapshot;
 }
 

@@ -304,6 +304,29 @@ describe("Application Control Plane public seam", () => {
     ).resolves.toEqual({ reason: "closed" });
   });
 
+  it("projects an exact optional Backend build identity only through hello", async () => {
+    const buildId = "a".repeat(64);
+    const server = await startControlPlane({
+      ...hostDependencies,
+      endpoint: endpoint(),
+      application: { id: "luckytoken", version: "1.2.3-test", buildId },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      },
+    });
+    servers.push(server);
+    const client = await connectControlPlane(server.endpoint, clientDependencies);
+
+    await expect(client.hello(1)).resolves.toEqual({
+      type: "compatible",
+      application: { id: "luckytoken", version: "1.2.3-test", buildId },
+      contractVersion: 1,
+    });
+    expect(JSON.stringify(await client.getStatus())).not.toContain(buildId);
+    await client.close();
+  });
+
   it("negotiates exact v1 identity and rejects commands until a compatible hello", async () => {
     const server = await startControlPlane({
       ...hostDependencies,

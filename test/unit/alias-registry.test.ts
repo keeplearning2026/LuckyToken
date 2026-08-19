@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeEffectiveAliasRegistry,
-  generatedDefaultAlias,
+  deriveDefaultModelNames,
   type AliasCatalogTarget,
 } from "../../src/aliases/domain.js";
 
@@ -39,10 +39,18 @@ function compute(userAliases: Record<string, unknown> = {}) {
   });
 }
 
+const expectedDefaultAliasByTarget = new Map<string, string>([
+  ["openai\u0000gpt-4o", "openai/gpt-4o"],
+  ["openai\u0000gpt-4o-mini", "openai/gpt-4o-mini"],
+  ["openai\u0000gpt-4.1", "openai/gpt-4.1"],
+  ["anthropic\u0000claude-opus-4-8", "anthropic/claude-opus-4-8"],
+  ["anthropic\u0000claude-sonnet-4", "anthropic/claude-sonnet-4"],
+  ["deepseek\u0000deepseek-chat", "deepseek/deepseek-chat"],
+]);
+
 function defaultsFor(...overrides: readonly string[]): string[] {
   const suppressed = new Set(overrides);
-  return catalogTargets
-    .map((target) => generatedDefaultAlias(target))
+  return [...expectedDefaultAliasByTarget.values()]
     .filter((alias) => !suppressed.has(alias))
     .sort();
 }
@@ -54,8 +62,8 @@ describe("effective alias registry layering over generated defaults", () => {
     expect(registry.aliases.map((entry) => entry.alias).sort()).toEqual(
       defaultsFor(),
     );
-    // Exactly one effective alias per canonical target, and the untouched
-    // alias is exactly provider/model.
+    // Exactly one effective alias per canonical target, using the literal
+    // worked defaults above rather than recomputing the production rule.
     for (const target of catalogTargets) {
       const entry = registry.aliases.find(
         (candidate) =>
@@ -63,7 +71,9 @@ describe("effective alias registry layering over generated defaults", () => {
           candidate.target.model === target.model,
       );
       expect(entry).toBeDefined();
-      expect(entry?.alias).toBe(generatedDefaultAlias(target));
+      expect(entry?.alias).toBe(
+        expectedDefaultAliasByTarget.get(`${target.provider}\u0000${target.model}`),
+      );
       expect(entry?.layer).toBe("default");
     }
     expect(new Set(registry.aliases.map((entry) => entry.alias)).size).toBe(
@@ -71,7 +81,7 @@ describe("effective alias registry layering over generated defaults", () => {
     );
   });
 
-  it("A2: slash-containing model ids are preserved exactly and never parsed", () => {
+  it("A2: slash-containing canonical model ids receive slash-free default model names", () => {
     const registry = computeEffectiveAliasRegistry({
       userAliases: {},
       catalogTargets: [
@@ -82,23 +92,77 @@ describe("effective alias registry layering over generated defaults", () => {
     });
     expect(registry.aliases).toEqual([
       {
-        alias: "commandcode-private/deepseek/deepseek-v4-flash",
+        alias: "commandcode-private/deepseek-deepseek-v4-flash",
         target: { provider: "commandcode-private", model: "deepseek/deepseek-v4-flash" },
         layer: "default",
       },
     ]);
   });
 
-  it("lets an explicit user mapping override the same alias and marks it user-owned", () => {
+  it("derives the final Provider-scoped default model name from canonical Catalog identity", () => {
+    const targets: readonly AliasCatalogTarget[] = [
+      { provider: "p", model: "a/b" },
+      { provider: "p", model: "a-b" },
+      { provider: "p", model: "a-b-2" },
+    ];
+    const names = deriveDefaultModelNames(targets);
+    expect(names.get({ provider: "p", model: "a/b" })).toBe("a-b-3");
+    expect(names.get({ provider: "p", model: "a-b" })).toBe("a-b");
+    expect(names.get({ provider: "p", model: "a-b-2" })).toBe("a-b-2");
+  });
+
+  it("shortens an overlong normalized default so the model keeps a valid external alias", () => {
+    const modelId = "x".repeat(140);
+    const registry = computeEffectiveAliasRegistry({
+      userAliases: {},
+      catalogTargets: [{ provider: "p", model: modelId }],
+      catalogVersion,
+      knownTargets: new Set([`p\u0000${modelId}`]),
+    });
+
+    expect(registry.errors).toEqual([]);
+    expect(registry.aliases).toEqual([
+      {
+        alias: `p/${"x".repeat(126)}`,
+        target: { provider: "p", model: modelId },
+        layer: "default",
+      },
+    ]);
+  });
+
+  it("numbers colliding default model names within one Provider without stealing another model's natural name", () => {
+    const registry = computeEffectiveAliasRegistry({
+      userAliases: {},
+      catalogTargets: [
+        { provider: "p", model: "a/b" },
+        { provider: "p", model: "a-b" },
+        { provider: "p", model: "a-b-2" },
+      ],
+      catalogVersion,
+      knownTargets: new Set(["p\u0000a/b", "p\u0000a-b", "p\u0000a-b-2"]),
+    });
+    expect(registry.errors).toEqual([]);
+    expect(
+      Object.fromEntries(
+        registry.aliases.map((entry) => [entry.target.model, entry.alias]),
+      ),
+    ).toEqual({
+      "a/b": "p/a-b-3",
+      "a-b": "p/a-b",
+      "a-b-2": "p/a-b-2",
+    });
+  });
+
+  it("lets an explicit namespaced user mapping override one target and marks it user-owned", () => {
     const registry = compute({
-      "gpt-4o": { provider: "openai", model: "gpt-4.1" },
+      "openai/routed": { provider: "openai", model: "gpt-4.1" },
     });
     expect(registry.errors).toEqual([]);
     const byAlias = new Map(
       registry.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("gpt-4o")).toEqual({
-      alias: "gpt-4o",
+    expect(byAlias.get("openai/routed")).toEqual({
+      alias: "openai/routed",
       target: { provider: "openai", model: "gpt-4.1" },
       layer: "user",
     });
@@ -108,15 +172,18 @@ describe("effective alias registry layering over generated defaults", () => {
     expect(byAlias.get("openai/gpt-4.1")).toBeUndefined();
   });
 
-  it("A3: a custom alias replaces, not supplements, the generated default", () => {
+  it("A3: a custom model name replaces, not supplements, the generated default", () => {
     const registry = compute({
-      "sonnet": { provider: "anthropic", model: "claude-sonnet-4" },
+      "anthropic/sonnet": {
+        provider: "anthropic",
+        model: "claude-sonnet-4",
+      },
     });
     expect(registry.errors).toEqual([]);
     const byAlias = new Map(
       registry.aliases.map((entry) => [entry.alias, entry]),
     );
-    expect(byAlias.get("sonnet")?.target).toEqual({
+    expect(byAlias.get("anthropic/sonnet")?.target).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4",
     });
@@ -132,28 +199,21 @@ describe("effective alias registry layering over generated defaults", () => {
     ).toHaveLength(1);
   });
 
-  it("A6: a custom alias colliding with another target's generated default is rejected", () => {
+  it("A6: a custom model name reserves its Provider-local name and conflicting defaults are renumbered", () => {
     const registry = compute({
-      // The alias text equals another target's generated default.
-      "openai/gpt-4o-mini": { provider: "anthropic", model: "claude-sonnet-4" },
+      "openai/gpt-4o-mini": { provider: "openai", model: "gpt-4.1" },
     });
-    const error = registry.errors.find(
-      (entry) => entry.alias === "openai/gpt-4o-mini",
-    );
-    expect(error?.code).toBe("duplicate");
-    // Both targets keep their generated defaults (the proposal failed
-    // closed; nothing was replaced).
-    expect(registry.aliases.some((entry) => entry.alias === "openai/gpt-4o-mini")).toBe(
-      false,
-    );
-    expect(
-      registry.aliases.some(
-        (entry) =>
-          entry.target.provider === "anthropic" &&
-          entry.target.model === "claude-sonnet-4" &&
-          entry.layer === "default",
-      ),
-    ).toBe(true);
+    expect(registry.errors).toEqual([]);
+    expect(registry.aliases).toContainEqual({
+      alias: "openai/gpt-4o-mini",
+      target: { provider: "openai", model: "gpt-4.1" },
+      layer: "user",
+    });
+    expect(registry.aliases).toContainEqual({
+      alias: "openai/gpt-4o-mini-2",
+      target: { provider: "openai", model: "gpt-4o-mini" },
+      layer: "default",
+    });
   });
 
   it("a broken user mapping blocks the generated default for that alias without silent repair", () => {
@@ -175,8 +235,8 @@ describe("effective alias registry layering over generated defaults", () => {
 
   it("every effective alias maps to exactly one canonical target", () => {
     const registry = compute({
-      "a": "openai/gpt-4o",
-      "b": { provider: "openai", model: "gpt-4o-mini" },
+      "openai/a": "openai/gpt-4o",
+      "openai/b": { provider: "openai", model: "gpt-4o-mini" },
     });
     for (const entry of registry.aliases) {
       expect(typeof entry.target.provider).toBe("string");
