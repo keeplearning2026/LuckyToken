@@ -337,7 +337,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     // The request-local baseUrl materializes the pinned env placeholders
     // (account/gateway ids from the resolved auth env) before the wire.
     expect(upstreamRequests[0]!.url).toBe(
-      "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/openai/v1/responses",
+      "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/openai/responses",
     );
   });
 
@@ -554,8 +554,8 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     expect(after.status).toBe(200);
 
     expect(upstreamUrls).toEqual([
-      "https://gateway.ai.cloudflare.com/v1/cf-account-111/cf-gateway-111/openai/v1/responses",
-      "https://gateway.ai.cloudflare.com/v1/cf-account-222/cf-gateway-222/openai/v1/responses",
+      "https://gateway.ai.cloudflare.com/v1/cf-account-111/cf-gateway-111/openai/responses",
+      "https://gateway.ai.cloudflare.com/v1/cf-account-222/cf-gateway-222/openai/responses",
     ]);
 
     // The catalog model is never mutated by requests and the effective

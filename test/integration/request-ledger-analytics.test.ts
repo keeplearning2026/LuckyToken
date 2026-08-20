@@ -26,13 +26,13 @@ import {
  * Fixture (epoch-ms = T0 + offset; terminalUsage snapshots follow the
  * Ticket 20 canonical contract; `-` = fact absent at request time):
  *
- *   r1 10:00 anthropic claude-x anthropic-messages C:\a success complete  (5,3,2,2,reason1,norm12,rate0.3)  terminal 18:30 — AFTER every range below
- *   r2 11:30 anthropic claude-x anthropic-messages C:\a failed   partial  (7,1,0,0, reason failed)
- *   r3 12:00 commandcode-private cc-mini anthropic-messages C:\b success complete (4,0,0,3,reason0,norm7,rate0)
- *   r4 13:00 openai gpt-r openai-responses –          aborted  partial  (2,1,0,0, reason aborted)
- *   r5 14:00 openai gpt-r openai-responses –          success complete  (4,4,2,3,reason1,norm13,rate0.4)
- *   r6 15:00 –      –      openai-responses –          unknown-alias unavailable (no usage; no provider/model snapshot)
- *   r7 16:00 –      –      anthropic-messages –        rejected-auth unavailable (no usage; no provider/model snapshot)
+ *   r1 10:00 anthropic claude-x anthropic-messages success complete  (5,3,2,2,reason1,norm12,rate0.3)  terminal 18:30 — AFTER every range below
+ *   r2 11:30 anthropic claude-x anthropic-messages failed   partial  (7,1,0,0, reason failed)
+ *   r3 12:00 commandcode-private cc-mini anthropic-messages success complete (4,0,0,3,reason0,norm7,rate0)
+ *   r4 13:00 openai gpt-r openai-responses aborted  partial  (2,1,0,0, reason aborted)
+ *   r5 14:00 openai gpt-r openai-responses success complete  (4,4,2,3,reason1,norm13,rate0.4)
+ *   r6 15:00 –      –      openai-responses unknown-alias unavailable (no usage; no provider/model snapshot)
+ *   r7 16:00 –      –      anthropic-messages rejected-auth unavailable (no usage; no provider/model snapshot)
  */
 
 const T0 = 1_700_000_000_000;
@@ -40,9 +40,6 @@ const HOUR = 3_600_000;
 const MINUTE = 60_000;
 const at = (hours: number, minutes = 0): number =>
   T0 + hours * HOUR + minutes * MINUTE;
-
-const C_A = "C:\\canonical\\projects\\alpha";
-const C_B = "C:\\canonical\\projects\\beta";
 
 let requestIdCounter = 0;
 function requestId(): string {
@@ -95,7 +92,6 @@ interface FixtureRow {
   readonly protocolId: string;
   readonly providerId?: string;
   readonly realModelId?: string;
-  readonly projectDir?: string;
   readonly outcome: "success" | "failed" | "aborted" | "unknown-alias" | "rejected-auth";
   readonly usage?: NormalizedTerminalUsage;
 }
@@ -106,7 +102,6 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "anthropic-messages",
     providerId: "anthropic",
     realModelId: "claude-x",
-    projectDir: C_A,
     outcome: "success",
     usage: completeUsage(5, 3, 2, 2, 1),
   },
@@ -115,7 +110,6 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "anthropic-messages",
     providerId: "anthropic",
     realModelId: "claude-x",
-    projectDir: C_A,
     outcome: "failed",
     usage: partialUsage(7, 1, 0, 0, "failed"),
   },
@@ -124,7 +118,6 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "anthropic-messages",
     providerId: "commandcode-private",
     realModelId: "cc-mini",
-    projectDir: C_B,
     outcome: "success",
     usage: completeUsage(4, 0, 0, 3, 0, "commandcode-private"),
   },
@@ -205,7 +198,6 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
       if (row.providerId !== undefined) {
         entry.authorized({
           effectiveSessionId: "30000000-0000-4000-8000-000000000032",
-          ...(row.projectDir === undefined ? {} : { projectDir: row.projectDir }),
         });
         entry.modelResolved({
           externalAlias: row.realModelId ?? "alias",
@@ -387,7 +379,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(result.truncated).toBeUndefined();
   });
 
-  it("groups by real model, client protocol, canonical project, and outcome", async () => {
+  it("groups by real model, client protocol, and outcome", async () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const byModel = summary(store, {
@@ -416,22 +408,6 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     ]);
     expect(byProtocol.rows?.[0]?.summary.total).toBe(4); // r1, r2, r3, r7
     expect(byProtocol.rows?.[1]?.summary.total).toBe(3); // r4, r5, r6
-    const byProject = summary(store, {
-      version: 1,
-      command: "summary",
-      from: at(10),
-      to: at(17),
-      groupBy: "project",
-    });
-    // null group first: 4 requests without a canonical project.
-    expect(byProject.rows?.map((row) => row.value)).toEqual([
-      null,
-      C_A,
-      C_B,
-    ]);
-    expect(byProject.rows?.[0]?.summary.total).toBe(4);
-    expect(byProject.rows?.[1]?.summary.total).toBe(2);
-    expect(byProject.rows?.[2]?.summary.total).toBe(1);
     const byOutcome = summary(store, {
       version: 1,
       command: "summary",
@@ -512,7 +488,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(result.totals.failed).toBe(1);
   });
 
-  it("filters by provider/model/protocol/project/outcome, combined", async () => {
+  it("filters by provider/model/protocol/outcome, combined", async () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const byProvider = summary(store, {
@@ -548,25 +524,6 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     }).totals;
     expect(byModelAndOutcome.total).toBe(1); // r2
     expect(byModelAndOutcome.participating).toBe(0);
-    const byProject = summary(store, {
-      version: 1,
-      command: "summary",
-      from: at(10),
-      to: at(17),
-      filters: { projects: [C_B] },
-    }).totals;
-    expect(byProject.total).toBe(1); // r3
-    expect(byProject.participating).toBe(1);
-    // A filter never matches a missing snapshot: C:\a plus openai-responses
-    // matches nothing (r4/r5 have no projectDir).
-    const noMatch = summary(store, {
-      version: 1,
-      command: "summary",
-      from: at(10),
-      to: at(17),
-      filters: { protocols: ["openai-responses"], projects: [C_A] },
-    }).totals;
-    expect(noMatch.total).toBe(0);
   });
 
   it("returns zero totals for an empty range without invented rates", async () => {
@@ -605,7 +562,6 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(all.providers).toEqual(["anthropic", "commandcode-private", "openai"]);
     expect(all.models).toEqual(["cc-mini", "claude-x", "gpt-r"]);
     expect(all.protocols).toEqual(["anthropic-messages", "openai-responses"]);
-    expect(all.projects).toEqual([C_A, C_B]);
     expect(all.outcomes).toEqual([
       "aborted",
       "failed",
@@ -623,7 +579,6 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     if (ranged.command !== "options") return;
     expect(ranged.providers).toEqual(["commandcode-private", "openai"]);
     expect(ranged.models).toEqual(["cc-mini", "gpt-r"]);
-    expect(ranged.projects).toEqual([C_B]);
     expect(ranged.outcomes).toEqual([
       "aborted",
       "rejected-auth",

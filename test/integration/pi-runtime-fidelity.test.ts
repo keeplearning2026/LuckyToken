@@ -13,7 +13,6 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 const usage: Usage = {
   input: 0,
@@ -127,7 +126,6 @@ async function run(apiKey: string): Promise<CapturedRun> {
       fetch,
       model,
       now: () => 1,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
     }),
   );
   const selected = models.getModels()[0] as Model<typeof commandCodePrivateApiId>;

@@ -35,7 +35,7 @@ describe("Anthropic ingress failure order", () => {
     modelId: "model",
   });
 
-  it("keeps client authorization independent from protocol validity", async () => {
+  it("does not gate protocol validity on a LuckyToken client credential", async () => {
     const response = await runtime.handle(
       request({
         authorization: "Bearer wrong-key",
@@ -43,9 +43,9 @@ describe("Anthropic ingress failure order", () => {
         body: "{malformed",
       }),
     );
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: { type: "authentication_error" },
+      error: { type: "invalid_request_error" },
     });
   });
 

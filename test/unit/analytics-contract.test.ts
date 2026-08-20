@@ -130,6 +130,15 @@ describe("normalizeAnalyticsQuery (Ticket 21 contract)", () => {
         command: "summary",
         from: 0,
         to: 1,
+        filters: { projects: ["C:\\project"] },
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeAnalyticsQuery({
+        version: 1,
+        command: "summary",
+        from: 0,
+        to: 1,
         filters: { providers: ["anthropic"], provider: ["x"] },
       }),
     ).toBeUndefined();
@@ -153,6 +162,9 @@ describe("normalizeAnalyticsQuery (Ticket 21 contract)", () => {
   it("rejects unknown group dimensions and unknown series granularity", () => {
     expect(
       normalizeAnalyticsQuery({ version: 1, command: "summary", from: 0, to: 1, groupBy: "api" }),
+    ).toBeUndefined();
+    expect(
+      normalizeAnalyticsQuery({ version: 1, command: "summary", from: 0, to: 1, groupBy: "project" }),
     ).toBeUndefined();
     expect(
       normalizeAnalyticsQuery({ version: 1, command: "summary", from: 0, to: 1, groupBy: "model" }),
@@ -262,7 +274,6 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
       providers: ["anthropic", "openai"],
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
-      projects: [],
       sessions: [],
       outcomes: ["success"],
     });
@@ -272,7 +283,6 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
       providers: ["anthropic", "openai"],
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
-      projects: [],
       sessions: [],
       outcomes: ["success"],
     });
@@ -302,7 +312,6 @@ describe("decodeAnalyticsResult (Ticket 21 wire)", () => {
           providers: [],
           models: [],
           protocols: [],
-          projects: [],
           sessions: [],
           outcomes: [],
           [key]: 5,

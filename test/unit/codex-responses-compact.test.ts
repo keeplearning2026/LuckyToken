@@ -1,4 +1,4 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
+import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ClientProtocolHandler } from "../../src/http.js";
@@ -72,6 +72,68 @@ describe("Codex Responses compact integration", () => {
     expect(requests[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
     expect(requests[0]?.headers.get("authorization")).toBe("Bearer codex-token");
     expect(requests[0]?.headers.get("chatgpt-account-id")).toBe("acct-request");
+  });
+
+  it("uses provider-native compact for a routed OpenAI Responses model without local Codex auth", async () => {
+    const openaiModel: Model<string> = {
+      id: "gpt-5",
+      name: "gpt-5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 10_000,
+    };
+    const models = {
+      getModels: () => [openaiModel],
+      getAuth: async () => ({ auth: { apiKey: "sk-openai" } }),
+    } as unknown as Models;
+    const compacted: string[] = [];
+    const nativePassthrough = {
+      supports: () => true,
+      supportsCompact: (model: Model<string>) => model.provider === "openai",
+      send: async () => {
+        throw new Error("not used");
+      },
+      compact: async (input: { rawBody: string }) => {
+        compacted.push(input.rawBody);
+        return new Response(
+          JSON.stringify({
+            id: "cmp_1",
+            object: "response.compaction",
+            output: [{ type: "compaction", encrypted_content: "opaque" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    };
+    const delegate = { handle: vi.fn() } as unknown as ClientProtocolHandler;
+    const handler = createCodexResponsesCompactHandler({
+      responsesHandler: delegate,
+      fetch: async () => {
+        throw new Error("local native fetch must not run");
+      },
+      maxRequestBytes: 1024 * 1024,
+      models,
+      nativePassthrough,
+      resolveRequestModel: (model: Model<string>) => model,
+    } as unknown as Parameters<typeof createCodexResponsesCompactHandler>[0]);
+
+    const response = await handler.handle(
+      compactRequest("openai/gpt-5", [
+        { type: "message", role: "user", content: "hello" },
+      ]),
+    );
+
+    expect(response.status).toBe(200);
+    expect(compacted).toHaveLength(1);
+    expect(delegate.handle).not.toHaveBeenCalled();
+    expect(JSON.parse(compacted[0] ?? "{}")).toMatchObject({
+      model: "openai/gpt-5",
+    });
   });
 
   it("compacts routed aliases by asking the existing Responses handler for a summary", async () => {

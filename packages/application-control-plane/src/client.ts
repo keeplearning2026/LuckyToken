@@ -43,8 +43,6 @@ import {
   type CatalogCommandResult,
   type CodexIntegrationCommand,
   type CodexIntegrationCommandResult,
-  type ClientTokenCommand,
-  type ClientTokenCommandResult,
   type CredentialCommand,
   type CredentialCommandResult,
   type ControlPlaneClient,
@@ -68,7 +66,6 @@ import {
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeCodexIntegrationCommandResult,
-  decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
   decodeRequestId,
   decodeServerMessage,
@@ -301,25 +298,6 @@ export async function connectApplicationControlPlane(
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
-    },
-    async executeClientTokenCommand(
-      command: ClientTokenCommand,
-    ): Promise<ClientTokenCommandResult> {
-      const response = await request({
-        type: "client_token_command",
-        command,
-      });
-      if (response.type !== "client_token_command_result") {
-        throw new Error("Control Plane response is malformed");
-      }
-      // The result shape depends on the command that was sent: only a
-      // Reveal may carry the active secret and list/mutation results must
-      // expose masked scopes only. Re-validate against the local command.
-      const result = decodeClientTokenCommandResult(response.result, command);
-      if (result === undefined) {
-        throw new Error("Control Plane response is malformed");
-      }
-      return result;
     },
     async executeCredentialCommand(
       command: CredentialCommand,

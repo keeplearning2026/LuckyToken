@@ -31,7 +31,6 @@ export type AnalyticsGroupBy =
   | "provider"
   | "model"
   | "protocol"
-  | "project"
   | "outcome";
 
 export type AnalyticsSeriesGranularity = "hour" | "day";
@@ -62,8 +61,6 @@ export interface AnalyticsFilter {
   readonly models?: readonly string[];
   /** Client protocol ids (ledger `protocolId`). */
   readonly protocols?: readonly string[];
-  /** Canonical project directories (ledger `projectDir` snapshots). */
-  readonly projects?: readonly string[];
   /** Client-supplied session ids (ledger `clientSessionId` snapshots). */
   readonly sessions?: readonly string[];
   /** Ledger outcome strings. */
@@ -183,7 +180,6 @@ export interface AnalyticsOptionsResult {
   readonly providers: readonly string[];
   readonly models: readonly string[];
   readonly protocols: readonly string[];
-  readonly projects: readonly string[];
   readonly sessions: readonly string[];
   readonly outcomes: readonly string[];
   /** True when any dimension was capped at MAX_ANALYTICS_OPTIONS_VALUES. */
@@ -210,7 +206,6 @@ const GROUP_BY_VALUES: readonly AnalyticsGroupBy[] = Object.freeze([
   "provider",
   "model",
   "protocol",
-  "project",
   "outcome",
 ]);
 
@@ -218,7 +213,6 @@ const FILTER_KEYS: ReadonlySet<string> = new Set([
   "providers",
   "models",
   "protocols",
-  "projects",
   "sessions",
   "outcomes",
 ]);
@@ -273,8 +267,6 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     value.protocols === undefined
       ? undefined
       : decodeFilterArray(value.protocols);
-  const projects =
-    value.projects === undefined ? undefined : decodeFilterArray(value.projects);
   const sessions =
     value.sessions === undefined ? undefined : decodeFilterArray(value.sessions);
   const outcomes =
@@ -283,7 +275,6 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     (value.providers !== undefined && providers === undefined) ||
     (value.models !== undefined && models === undefined) ||
     (value.protocols !== undefined && protocols === undefined) ||
-    (value.projects !== undefined && projects === undefined) ||
     (value.sessions !== undefined && sessions === undefined) ||
     (value.outcomes !== undefined && outcomes === undefined)
   ) {
@@ -293,7 +284,6 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     ...(providers === undefined ? {} : { providers }),
     ...(models === undefined ? {} : { models }),
     ...(protocols === undefined ? {} : { protocols }),
-    ...(projects === undefined ? {} : { projects }),
     ...(sessions === undefined ? {} : { sessions }),
     ...(outcomes === undefined ? {} : { outcomes }),
   });

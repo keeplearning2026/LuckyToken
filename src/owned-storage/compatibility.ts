@@ -97,48 +97,6 @@ async function inspectJsonVersion(
   });
 }
 
-async function inspectClientAuthVersion(
-  path: string,
-): Promise<CompatibilityIssue | undefined> {
-  if (!(await exists(path))) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    return issue({
-      path: resolve(path),
-      contract: "luckytoken-client-auth",
-      foundVersion: "invalid",
-      expectedVersion: "luckytoken-client-auth-v2",
-      validationError: "luckytoken-client-auth is not valid JSON.",
-    });
-  }
-  const record =
-    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  const found = record?.schemaVersion;
-  if (
-    found === "luckytoken-client-auth-v2" ||
-    found === "luckytoken-client-auth-v1"
-  ) {
-    // v1 is disposable local client-access state. Runtime does not migrate
-    // or reuse it; the current authority replaces it with a fresh v2 file.
-    return undefined;
-  }
-  return issue({
-    path: resolve(path),
-    contract: "luckytoken-client-auth",
-    foundVersion:
-      typeof found === "string" || typeof found === "number"
-        ? found
-        : "missing",
-    expectedVersion: "luckytoken-client-auth-v2",
-    validationError:
-      "luckytoken-client-auth version is incompatible with this LuckyToken build.",
-  });
-}
-
 async function inspectSqliteVersion(
   path: string,
   contract: string,
@@ -220,7 +178,7 @@ export async function inspectOwnedCompatibility(
       join(config.requestLedger.directory, "ledger.sqlite3"),
       "luckytoken-request-ledger",
       "luckytoken_request_ledger",
-      2,
+      3,
     ),
     inspectSqliteVersion(
       join(config.deepDiagnostics.directory, "capture.sqlite3"),
@@ -235,9 +193,6 @@ export async function inspectOwnedCompatibility(
       "luckytoken-catalog-cache-v1",
     ),
   ];
-  for (const protocol of Object.values(config.clientProtocols)) {
-    checks.push(inspectClientAuthVersion(protocol.authFile));
-  }
   const results = await Promise.all(checks);
   return Object.freeze(
     results.filter((entry): entry is CompatibilityIssue => entry !== undefined),

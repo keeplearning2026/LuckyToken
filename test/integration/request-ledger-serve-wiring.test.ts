@@ -17,7 +17,6 @@ import {
   createRuntimeDiagnosticsStoreFactory,
   parseRuntimeDiagnosticsConfiguration,
 } from "../../src/runtime-diagnostics/index.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
 
 /**
@@ -191,11 +190,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       config,
       credentials,
       fetch: (async () => commandCodeText("serve-wired answer")) as FetchFunction,
-      importModule: commandCodeProviderImportModule({
-        projectSnapshot: {
-          snapshot: async () => createEmptyServerConfig(),
-        },
-      }),
+      importModule: commandCodeProviderImportModule(),
       diagnosticsStore,
       requestLedgerStore: ledgerStore,
       now: () => 1_786_400_000_000,
@@ -327,11 +322,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
       config,
       credentials,
       fetch: (async () => commandCodeText("composed answer")) as FetchFunction,
-      importModule: commandCodeProviderImportModule({
-        projectSnapshot: {
-          snapshot: async () => createEmptyServerConfig(),
-        },
-      }),
+      importModule: commandCodeProviderImportModule(),
       diagnosticsStore,
       requestLedgerStore: ledgerStore,
       now: () => 1_786_400_000_000,

@@ -31,7 +31,6 @@ const RESULT_KEYS: ReadonlySet<string> = new Set([
   "providers",
   "models",
   "protocols",
-  "projects",
   "sessions",
   "outcomes",
 ]);
@@ -65,7 +64,6 @@ const GROUP_BY_VALUES: readonly AnalyticsGroupBy[] = Object.freeze([
   "provider",
   "model",
   "protocol",
-  "project",
   "outcome",
 ]);
 
@@ -373,14 +371,12 @@ export function decodeAnalyticsResult(
     const providers = decodeStringArray(value.providers);
     const models = decodeStringArray(value.models);
     const protocols = decodeStringArray(value.protocols);
-    const projects = decodeStringArray(value.projects);
     const sessions = decodeStringArray(value.sessions);
     const outcomes = decodeStringArray(value.outcomes);
     if (
       providers === undefined ||
       models === undefined ||
       protocols === undefined ||
-      projects === undefined ||
       sessions === undefined ||
       outcomes === undefined ||
       (value.truncated !== undefined && typeof value.truncated !== "boolean")
@@ -393,7 +389,6 @@ export function decodeAnalyticsResult(
       providers,
       models,
       protocols,
-      projects,
       sessions,
       outcomes,
       ...(value.truncated === undefined ? {} : { truncated: value.truncated }),

@@ -11,7 +11,6 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import type { ServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 function record(value: unknown): Record<string, unknown> {
@@ -73,17 +72,6 @@ function model(): Model<typeof commandCodePrivateApiId> {
 const context: Context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
-const projectConfig: ServerConfig = {
-  workingDir: "/project",
-  date: "2026-08-10",
-  environment: "linux",
-  structure: ["src"],
-  isGitRepo: true,
-  currentBranch: "main",
-  mainBranch: "main",
-  gitStatus: "Working tree clean",
-  recentCommits: ["abc initial"],
-};
 const sessionId = "00000000-0000-4000-8000-000000000090";
 
 describe("CommandCode payload authority", () => {
@@ -125,7 +113,6 @@ describe("CommandCode payload authority", () => {
       fetch,
       model: selected,
       now: () => 123,
-      projectSnapshot: { snapshot: async () => projectConfig },
     });
     const models = createModels();
     models.setProvider(provider);
@@ -135,7 +122,6 @@ describe("CommandCode payload authority", () => {
         maxTokens: 20,
         reasoning: "high",
         sessionId,
-        metadata: { projectDir: "/project" },
         onPayload: callback,
       })
       .result();
@@ -163,7 +149,7 @@ describe("CommandCode payload authority", () => {
     });
   });
 
-  it("isolates project authority and rejects coordinated payload/model mutation", async () => {
+  it("isolates fixed config authority and rejects coordinated payload/model mutation", async () => {
     const selected = model();
     let fetchCalls = 0;
     const fetch: FetchFunction = async () => {
@@ -175,7 +161,6 @@ describe("CommandCode payload authority", () => {
       fetch,
       model: selected,
       now: () => 123,
-      projectSnapshot: { snapshot: async () => projectConfig },
     });
     const models = createModels();
     models.setProvider(provider);
@@ -184,7 +169,6 @@ describe("CommandCode payload authority", () => {
       .streamSimple(selected, context, {
         maxTokens: 20,
         sessionId,
-        metadata: { projectDir: "/project" },
         onPayload: (payload, callbackModel) => {
           record(record(payload).config).workingDir = "/mutated";
           record(record(payload).params).model = "mutated-model";
@@ -194,7 +178,6 @@ describe("CommandCode payload authority", () => {
       .result();
 
     expect(fetchCalls).toBe(0);
-    expect(projectConfig.workingDir).toBe("/project");
     expect(result).toMatchObject({
       model: "authority-model",
       stopReason: "error",
@@ -215,7 +198,6 @@ describe("CommandCode payload authority", () => {
       },
       model: model(),
       now: () => 123,
-      projectSnapshot: { snapshot: async () => projectConfig },
     });
 
     const result = await provider
@@ -251,7 +233,6 @@ describe("CommandCode payload authority", () => {
       },
       model: model(),
       now: () => 123,
-      projectSnapshot: { snapshot: async () => projectConfig },
     });
 
     const result = await provider
@@ -285,7 +266,6 @@ describe("CommandCode payload authority", () => {
       },
       model: model(),
       now: () => 123,
-      projectSnapshot: { snapshot: async () => projectConfig },
     });
 
     const result = await provider

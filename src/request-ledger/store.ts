@@ -52,7 +52,7 @@ import { createLedgerAnalyticsAccumulator } from "./analytics.js";
 import { createSqliteBackupSnapshot } from "../owned-storage/sqlite-backup.js";
 
 const SCHEMA_NAME = "luckytoken_request_ledger";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_QUERY_LIMIT = 1_000;
 const DEFAULT_QUERY_LIMIT = 100;
 const MAX_NOTICES = 64;
@@ -102,7 +102,6 @@ interface Row {
   readonly realModelId: string | null;
   readonly clientSessionId: string | null;
   readonly effectiveSessionId: string | null;
-  readonly projectDir: string | null;
   readonly facts: string | null;
   readonly terminalUsage: string | null;
 }
@@ -137,7 +136,6 @@ interface LedgerDraft {
   realModelId?: string;
   clientSessionId?: string;
   effectiveSessionId?: string;
-  projectDir?: string;
   facts: DraftFacts;
   terminalUsage?: TerminalUsageDraft;
   /** True once the narrow persistence-failure seam fired for this entry:
@@ -205,7 +203,6 @@ function initializeSchema(database: DatabaseSync): void {
       real_model_id TEXT,
       client_session_id TEXT,
       effective_session_id TEXT,
-      project_dir TEXT,
       facts TEXT,
       terminal_usage TEXT
     );
@@ -213,7 +210,6 @@ function initializeSchema(database: DatabaseSync): void {
     CREATE INDEX requests_accepted ON requests (accepted_at, id);
     CREATE INDEX requests_outcome ON requests (outcome, id);
     CREATE INDEX requests_provider_model ON requests (provider_id, real_model_id, id);
-    CREATE INDEX requests_project ON requests (project_dir, id);
     INSERT INTO meta (key, value) VALUES ('schema_name', '${SCHEMA_NAME}');
     INSERT INTO meta (key, value) VALUES ('schema_version', ${SCHEMA_VERSION});
   `);
@@ -319,7 +315,6 @@ function rowToRecord(row: Row): RequestLedgerRecord {
     ...(row.effectiveSessionId === null
       ? {}
       : { effectiveSessionId: row.effectiveSessionId }),
-    ...(row.projectDir === null ? {} : { projectDir: row.projectDir }),
     ...(facts === undefined ? {} : { facts }),
     ...(terminalUsage === undefined ? {} : { terminalUsage }),
   };
@@ -432,15 +427,15 @@ export function createRequestLedgerStoreFactory(
            request_id, protocol_id, phase, outcome, accepted_at,
            execution_started_at, terminal_at, completed_at, client_http_status,
            external_alias, provider_id, real_model_id, client_session_id,
-           effective_session_id, project_dir, facts, terminal_usage
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           effective_session_id, facts, terminal_usage
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const update = database.prepare(
         `UPDATE requests SET
            phase = ?, outcome = ?, accepted_at = ?, execution_started_at = ?,
            terminal_at = ?, completed_at = ?, client_http_status = ?,
            external_alias = ?, provider_id = ?, real_model_id = ?,
-           client_session_id = ?, effective_session_id = ?, project_dir = ?,
+           client_session_id = ?, effective_session_id = ?,
            facts = ?, terminal_usage = ?
          WHERE id = ?`,
       );
@@ -454,7 +449,7 @@ export function createRequestLedgerStoreFactory(
            real_model_id AS realModelId,
            client_session_id AS clientSessionId,
            effective_session_id AS effectiveSessionId,
-           project_dir AS projectDir, facts, terminal_usage AS terminalUsage
+           facts, terminal_usage AS terminalUsage
          FROM requests`;
       const eventListeners = new Set<(event: RequestLedgerEvent) => void>();
       let attachedScrub = scrub;
@@ -491,7 +486,6 @@ export function createRequestLedgerStoreFactory(
               entry.realModelId ?? null,
               entry.clientSessionId ?? null,
               entry.effectiveSessionId ?? null,
-              entry.projectDir ?? null,
               encodeFacts(entry.facts),
               encodeTerminalUsage(entry.terminalUsage),
               entry.id,
@@ -547,7 +541,6 @@ export function createRequestLedgerStoreFactory(
             realModelId: entry.realModelId ?? null,
             clientSessionId: entry.clientSessionId ?? null,
             effectiveSessionId: entry.effectiveSessionId ?? null,
-            projectDir: entry.projectDir ?? null,
             facts: encodeFacts(entry.facts),
             terminalUsage: encodeTerminalUsage(entry.terminalUsage),
           });
@@ -654,7 +647,6 @@ export function createRequestLedgerStoreFactory(
                   null,
                   null,
                   null,
-                  null,
                   encodeFacts(entry.facts),
                   null,
                 );
@@ -694,7 +686,6 @@ export function createRequestLedgerStoreFactory(
               realModelId: null,
               clientSessionId: null,
               effectiveSessionId: null,
-              projectDir: null,
               facts: encodeFacts(entry.facts),
               terminalUsage: null,
             });
@@ -736,13 +727,6 @@ export function createRequestLedgerStoreFactory(
                   entry.clientSessionId = safeText(
                     factsInput.clientSessionId,
                     128,
-                    attachedScrub,
-                  );
-                }
-                if (factsInput.projectDir !== undefined) {
-                  entry.projectDir = safeText(
-                    factsInput.projectDir,
-                    1_024,
                     attachedScrub,
                   );
                 }
@@ -1004,12 +988,6 @@ export function createRequestLedgerStoreFactory(
             conditions.push("real_model_id = ?");
             params.push(
               safeText(query.realModelId, 256, attachedScrub),
-            );
-          }
-          if (query?.projectDir !== undefined) {
-            conditions.push("project_dir = ?");
-            params.push(
-              safeText(query.projectDir, 1_024, attachedScrub),
             );
           }
           if (query?.clientSessionId !== undefined) {

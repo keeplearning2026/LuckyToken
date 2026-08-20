@@ -18,7 +18,6 @@ import {
   createUnavailableDeepCaptureStore,
   observeDiagnosticsStore,
 } from "../../src/persistence-degradation/index.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
 
 /**
@@ -162,11 +161,7 @@ async function serveFixture(options: {
     createMessageId: () => "msg_fixture",
     fetch: (async () =>
       commandCodeText("serve-preserved answer")) as FetchFunction,
-    importModule: commandCodeProviderImportModule({
-      projectSnapshot: {
-        snapshot: async () => createEmptyServerConfig(),
-      },
-    }),
+    importModule: commandCodeProviderImportModule(),
     diagnosticsStore: diagnostics,
     now: () => 1_786_400_000_000,
     // An unavailable capture store keeps serving: every capture commit
@@ -357,11 +352,7 @@ describe("Persistence failure never changes an otherwise valid model response (T
       createMessageId: () => "msg_fixture",
       fetch: (async () =>
         commandCodeText("recovery answer")) as FetchFunction,
-      importModule: commandCodeProviderImportModule({
-        projectSnapshot: {
-          snapshot: async () => createEmptyServerConfig(),
-        },
-      }),
+      importModule: commandCodeProviderImportModule(),
       diagnosticsStore: observed,
       now: () => 1_786_400_000_000,
     });

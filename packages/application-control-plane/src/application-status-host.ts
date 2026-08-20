@@ -26,8 +26,6 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import {
-  type ClientTokenCommandHandler,
-  type ClientTokenCommandResult,
   type RequestIdentitiesQueryHandler,
   type RequestIdentityRecord,
 } from "./contracts.js";
@@ -81,7 +79,6 @@ import {
   decodeCatalogCommandResult,
   decodeCodexIntegrationCommandResult,
   decodeClientRequest,
-  decodeClientTokenCommandResult,
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
   decodeRequestIdentityRecord,
@@ -111,13 +108,6 @@ export interface StartControlPlaneOptions {
   readonly onApplicationCommandResultDelivered?: ApplicationCommandResultDeliveredHandler;
   /** Owner identity merged into every snapshot (Ticket 05). */
   readonly ownership?: ApplicationOwnership;
-
-  /**
-   * Optional Client Token command handler (Ticket 16): serves the versioned
-   * Client Token commands used by UI and CLI against the live per-protocol
-   * authorities.
-   */
-  readonly clientTokenCommandHandler?: ClientTokenCommandHandler;
 
   /** Optional request identity query handler (Ticket 17 identity seam):
    *  serves the recent authorized request identities used by the Requests
@@ -1075,45 +1065,6 @@ export async function startApplicationStatusHost(
             request.command,
             result,
           );
-        } else if (request.type === "client_token_command") {
-          if (options.clientTokenCommandHandler === undefined) {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "unknown_command",
-            });
-            continue;
-          }
-          let handled: ClientTokenCommandResult;
-          try {
-            handled = await options.clientTokenCommandHandler(request.command);
-          } catch {
-            handled = {
-              outcome: "unavailable",
-              revision: 0,
-              error: "Client Token Authority is unavailable",
-            };
-          }
-          // Validate the handler result against the request command before
-          // it is written: a masked scope field can never carry a raw token
-          // and a Reveal can only return the requested active secret.
-          const result = decodeClientTokenCommandResult(
-            handled,
-            request.command,
-          );
-          if (result === undefined) {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "invalid_request",
-            });
-            continue;
-          }
-          await writeFrame(state.connection, {
-            type: "client_token_command_result",
-            requestId: request.requestId,
-            result,
-          });
         } else if (request.type === "catalog_command") {
           if (options.catalogCommandHandler === undefined) {
             await writeFrame(state.connection, {

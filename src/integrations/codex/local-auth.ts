@@ -3,7 +3,7 @@ import { readFile, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { AuthorizedClient, ReadonlyHeaders } from "../../auth.js";
+import type { ReadonlyHeaders } from "../../request-identity.js";
 import type {
   CodexForwardAuth,
   CodexLocalCredentialAuthority,
@@ -98,12 +98,6 @@ export function createCodexLocalCredentialAuthority(
   return Object.freeze({
     async isAvailable(): Promise<boolean> {
       return (await readCurrent()) !== undefined;
-    },
-    async authorizeToken(token: string): Promise<AuthorizedClient | undefined> {
-      const current = await readCurrent();
-      return current !== undefined && equalSecret(token, current.accessToken)
-        ? Object.freeze({})
-        : undefined;
     },
     async resolveForwardAuth(headers: ReadonlyHeaders): Promise<CodexForwardAuth | undefined> {
       const incoming = bearerCredential(headers);

@@ -56,6 +56,18 @@ describe("19: Responses passthrough architecture isolation", () => {
     }
   });
 
+  it("keeps concrete Pi provider transport rules behind the injected native seam", async () => {
+    const source = await readFile(
+      "src/protocols/openai-responses/handler.ts",
+      "utf8",
+    );
+    expect(source).toContain("nativePassthrough");
+    expect(source).not.toMatch(/integrations[\\/]responses-native/u);
+    expect(source).not.toMatch(
+      /github-copilot|cloudflare-ai-gateway|azure-openai-responses/u,
+    );
+  });
+
   it("does not share conformance tests with the Anthropic passthrough profile", async () => {
     const responsesTests = await readFile(
       "test/unit/openai-responses-passthrough-contract.test.ts",

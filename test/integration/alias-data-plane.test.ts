@@ -14,7 +14,6 @@ import type {
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { parseModelsJson } from "../../src/providers/models-json.js";
 import {
   COMMANDCODE_PROVIDER_PACKAGE,
@@ -352,7 +351,11 @@ async function createAliasDataPlaneFixture(
     if (url.includes("/provider/v1/models")) return undefined;
     if (url.includes("api.commandcode.ai")) return "commandcode";
     if (url.includes("/v1/messages")) return "anthropic";
-    if (url.includes("/v1/responses") || url.includes("/codex/responses")) return "responses";
+    if (
+      url.includes("/v1/responses") ||
+      url.includes("/responses") ||
+      url.includes("/codex/responses")
+    ) return "responses";
     return undefined;
   };
   const fetch: FetchFunction = async (input, init) => {
@@ -397,9 +400,7 @@ async function createAliasDataPlaneFixture(
     config: await loadLuckyTokenCliConfig(configPath),
     credentials,
     fetch,
-    importModule: commandCodeProviderImportModule({
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
-    }),
+    importModule: commandCodeProviderImportModule(),
     aliasAuthority: authority,
     createMessageId: () => "msg_alias_plane",
     createSessionId: () => "00000000-0000-4000-8000-000000000300",

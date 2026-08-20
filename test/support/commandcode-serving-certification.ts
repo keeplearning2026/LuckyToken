@@ -40,13 +40,6 @@ export interface ServingCertificationFacts {
   readonly modelValidityPolicyRevision: string;
   readonly compatibility: CommandCodeCompatibilityPolicy;
   readonly fetchBound: boolean;
-  readonly projectSnapshotPolicy:
-    | "node-project-snapshot-v1"
-    | "bound-injected-project-snapshot-v1";
-  readonly projectAuthorizationPolicy:
-    | "project-dir-absent-v1"
-    | "fixed-authorized-project-dir-v1"
-    | "per-client-protocol-token-file-v1";
   readonly clientAuthorityPolicy:
     | "bound-injected-auth-v1"
     | "handler-bound-file-snapshot-v1";
@@ -359,7 +352,6 @@ export function certifyServingComposition(
         providerAuth: facts.providerAuthPolicy,
         endpoint: "model-base-url-alpha-generate-v1",
         authSemanticTransform: "inert-v1",
-        projectAuthorization: facts.projectAuthorizationPolicy,
       },
       toolId: "exact-injective-correlation-v1",
       transformHeaders: "absent",
@@ -368,7 +360,6 @@ export function certifyServingComposition(
       auxiliaryOptions: "closed-world-anthropic-simple-options-v1",
       ambientSemantics: {
         compatibility,
-        projectSnapshot: facts.projectSnapshotPolicy,
         routerDefaults: "empty-v1",
         globalFetchFallback: "prohibited-v1",
         maxRequestBytes: facts.maxRequestBytes,

@@ -11,21 +11,20 @@
     "x-command-code-version": "1.9.0",
     "x-custom": "last",
     "x-oss-primary-provider": "bound-oss",
-    "x-project-slug": "workspace-golden-project",
     "x-session-id": "00000000-0000-4000-8000-000000000080",
     "x-taste-learning": "false"
   },
   "body": {
     "config": {
-      "workingDir": "/Workspace/Golden Project",
-      "date": "2026-08-10",
-      "environment": "linux",
-      "structure": ["src"],
-      "isGitRepo": true,
-      "currentBranch": "main",
-      "mainBranch": "main",
-      "gitStatus": "Working tree clean",
-      "recentCommits": ["abc123 golden"]
+      "workingDir": "",
+      "date": "",
+      "environment": "",
+      "structure": [],
+      "isGitRepo": false,
+      "currentBranch": "",
+      "mainBranch": "",
+      "gitStatus": "",
+      "recentCommits": []
     },
     "memory": null,
     "taste": null,

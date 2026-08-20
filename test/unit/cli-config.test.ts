@@ -17,7 +17,7 @@ describe("LuckyToken CLI configuration", () => {
     );
   });
 
-  it("resolves a protocol-neutral auth file for each configured Client Protocol", async () => {
+  it("configures Client Protocols without any client-auth file", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
     directories.push(root);
     const directory = join(root, ".luckytoken");
@@ -29,12 +29,8 @@ describe("LuckyToken CLI configuration", () => {
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
-          "future-client-protocol": {
-            authFile: "client-auth/future-client-protocol.json",
-          },
+          "anthropic-messages": {},
+          "future-client-protocol": {},
         },
         pi: { directory: "pi" },
       }),
@@ -47,7 +43,6 @@ describe("LuckyToken CLI configuration", () => {
       server: { host: "127.0.0.1", port: 0 },
       clientProtocols: {
         "anthropic-messages": {
-          authFile: resolve(directory, "client-auth/anthropic-messages.json"),
           adapterConfiguration: {
             conversion: {
               request: { unknownContent: "error", unresolvedToolCall: "xrepair", localCacheControl: "ignore" },
@@ -55,9 +50,7 @@ describe("LuckyToken CLI configuration", () => {
             },
           },
         },
-        "future-client-protocol": {
-          authFile: resolve(directory, "client-auth/future-client-protocol.json"),
-        },
+        "future-client-protocol": {},
       },
       pi: { directory: resolve(directory, "pi") },
       limits: { maxRequestBytes: 32 * 1024 * 1024, requestTimeoutMs: 120_000 },

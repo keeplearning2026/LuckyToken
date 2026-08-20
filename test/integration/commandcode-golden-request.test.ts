@@ -6,15 +6,13 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import { readFile } from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import type { ServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
-
 const usage: Usage = {
   input: 0,
   output: 0,
@@ -22,18 +20,6 @@ const usage: Usage = {
   cacheWrite: 0,
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const config: ServerConfig = {
-  workingDir: "/Workspace/Golden Project",
-  date: "2026-08-10",
-  environment: "linux",
-  structure: ["src"],
-  isGitRepo: true,
-  currentBranch: "main",
-  mainBranch: "main",
-  gitStatus: "Working tree clean",
-  recentCommits: ["abc123 golden"],
 };
 
 function successResponse(): Response {
@@ -131,13 +117,11 @@ describe("complete CommandCode request conversion", () => {
       request = new Request(input, init);
       return successResponse();
     };
-    const snapshot = vi.fn(async () => config);
     const provider = createCommandCodePrivateProvider({
       apiKey: "bound-key",
       fetch,
       model,
       now: () => 1,
-      projectSnapshot: { snapshot },
       compatibility: {
         cliEnvironment: "prod",
         ossPrimaryProvider: "bound-oss",
@@ -155,7 +139,6 @@ describe("complete CommandCode request conversion", () => {
         temperature: 0,
         reasoning: "high",
         sessionId: "00000000-0000-4000-8000-000000000080",
-        metadata: { projectDir: "/Workspace/Golden Project" },
         headers: {
           "X-Custom": "first",
           "x-custom": "last",
@@ -170,10 +153,6 @@ describe("complete CommandCode request conversion", () => {
       })
       .result();
     expect(result.stopReason).toBe("stop");
-    expect(snapshot).toHaveBeenCalledWith({
-      projectDir: "/Workspace/Golden Project",
-      signal: expect.any(AbortSignal),
-    });
 
     const fixture = JSON.parse(
       await readFile(

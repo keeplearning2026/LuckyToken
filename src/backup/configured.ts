@@ -66,16 +66,6 @@ export function configuredBackupFiles(
       category: "credentials",
       optional: true,
     },
-    ...Object.entries(config.clientProtocols).map(
-      ([protocolId, protocol]) => ({
-        id: `client-tokens:${protocolId}`,
-        path: protocol.authFile,
-        contract: "luckytoken-client-auth",
-        version: 2,
-        category: "client_tokens" as const,
-        optional: true,
-      }),
-    ),
   ] satisfies readonly BackupFileSource[]);
 }
 
@@ -123,7 +113,7 @@ export function recoveryBackupSnapshots(
     rawSnapshot(
       "request-ledger",
       "luckytoken-request-ledger-sqlite",
-      2,
+      3,
       "history",
       join(config.requestLedger.directory, "ledger.sqlite3"),
     ),

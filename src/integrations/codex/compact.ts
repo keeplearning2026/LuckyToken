@@ -1,4 +1,4 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
+import type { FetchFunction, Models } from "@earendil-works/pi-ai";
 
 import type { ClientProtocolHandler } from "../../http.js";
 import {
@@ -15,6 +15,21 @@ import type {
   CodexNativeModelSource,
 } from "../../codex-native-seam.js";
 import {
+  resolveDataPlaneModel,
+  type AliasModelSource,
+} from "../../alias-model-seam.js";
+import {
+  identityRequestModelResolver,
+  type RequestModelResolver,
+} from "../../protocols/options.js";
+import {
+  bufferResponsesPassthroughResponse,
+  passthroughResponsesRequestHeaders,
+  ResponsesPassthroughBodyReadError,
+  ResponsesPassthroughTransportError,
+  type ResponsesNativePassthrough,
+} from "../../protocols/openai-responses/passthrough.js";
+import {
   CodexResponsesPassthroughBodyReadError,
   CodexResponsesPassthroughTransportError,
   passthroughCodexResponsesCompact,
@@ -28,8 +43,12 @@ export const CODEX_COMPACT_SUMMARY_PREFIX =
 const RETAINED_USER_CHAR_BUDGET = 80_000;
 
 export interface CodexResponsesCompactHandlerOptions {
-  readonly codexLocalAuth: CodexLocalCredentialAuthority;
-  readonly codexNativeModels: CodexNativeModelSource;
+  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
+  readonly codexNativeModels?: CodexNativeModelSource;
+  readonly models?: Models;
+  readonly aliasSource?: AliasModelSource;
+  readonly nativePassthrough?: ResponsesNativePassthrough;
+  readonly resolveRequestModel?: RequestModelResolver;
   readonly responsesHandler: ClientProtocolHandler;
   readonly fetch: FetchFunction;
   readonly maxRequestBytes: number;
@@ -144,6 +163,7 @@ async function nativeCompact(
   request: Request,
   rawBody: string,
 ): Promise<Response | undefined> {
+  if (options.codexLocalAuth === undefined) return undefined;
   const forwardAuth = await options.codexLocalAuth.resolveForwardAuth(request.headers);
   if (forwardAuth === undefined) return undefined;
   try {
@@ -163,6 +183,64 @@ async function nativeCompact(
     if (
       error instanceof CodexResponsesPassthroughTransportError ||
       error instanceof CodexResponsesPassthroughBodyReadError
+    ) {
+      return errorResponse(502, "Upstream compact request failed");
+    }
+    throw error;
+  }
+}
+
+async function providerNativeCompact(
+  options: CodexResponsesCompactHandlerOptions,
+  request: Request,
+  rawBody: string,
+  selector: string,
+): Promise<Response | undefined> {
+  if (options.models === undefined || options.nativePassthrough === undefined) {
+    return undefined;
+  }
+  const resolution = await resolveDataPlaneModel(
+    options.models,
+    options.aliasSource,
+    selector,
+  );
+  if (resolution.kind !== "model") return undefined;
+  if (!options.nativePassthrough.supportsCompact(resolution.model)) {
+    return undefined;
+  }
+  const auth = await options.models.getAuth(resolution.model);
+  if (auth === undefined) {
+    return errorResponse(502, `Provider is not configured: ${resolution.model.provider}`);
+  }
+  const resolveRequestModel =
+    options.resolveRequestModel ?? identityRequestModelResolver;
+  try {
+    let upstream: Response;
+    try {
+      upstream = await options.nativePassthrough.compact({
+        model: resolveRequestModel(resolution.model, auth),
+        auth,
+        rawBody,
+        signal: request.signal,
+        forwardedHeaders: passthroughResponsesRequestHeaders(request),
+      });
+    } catch (error) {
+      if (request.signal.aborted) throw error;
+      throw new ResponsesPassthroughTransportError(error);
+    }
+    const buffered = await bufferResponsesPassthroughResponse(
+      upstream,
+      request.signal,
+    );
+    return new Response(buffered.body, {
+      status: buffered.status,
+      headers: { ...buffered.headers },
+    });
+  } catch (error) {
+    if (request.signal.aborted) throw error;
+    if (
+      error instanceof ResponsesPassthroughTransportError ||
+      error instanceof ResponsesPassthroughBodyReadError
     ) {
       return errorResponse(502, "Upstream compact request failed");
     }
@@ -239,10 +317,17 @@ export function createCodexResponsesCompactHandler(
         if (typeof body.model !== "string" || body.model.length === 0) {
           return jsonError(400, "Compaction request requires a model");
         }
-        if (options.codexNativeModels.has(body.model)) {
+        if (options.codexNativeModels?.has(body.model) === true) {
           const native = await nativeCompact(options, request, decoded.text);
           if (native !== undefined) return native;
         }
+        const providerNative = await providerNativeCompact(
+          options,
+          request,
+          decoded.text,
+          body.model,
+        );
+        if (providerNative !== undefined) return providerNative;
         return await routedCompact(options, request, body);
       } catch (error) {
         if (request.signal.aborted) throw error;

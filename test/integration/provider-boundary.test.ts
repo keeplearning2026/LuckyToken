@@ -17,7 +17,6 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
 
@@ -182,9 +181,6 @@ describe("Pi Models provider boundary", () => {
       },
       model: commandCodeModel,
       now: () => 1_786_400_000_000,
-      projectSnapshot: {
-        snapshot: async () => createEmptyServerConfig(),
-      },
       createSessionId: () => "00000000-0000-4000-8000-000000000221",
     });
     const mutableModels = createModels();

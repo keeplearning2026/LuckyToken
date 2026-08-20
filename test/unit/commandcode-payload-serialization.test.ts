@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
+  createCommandCodePrivateProvider,
   prepareCommandCodeRequest,
   type CommandCodePreparationDependencies,
 } from "../../packages/provider-commandcode-private/src/provider.js";
@@ -39,7 +40,6 @@ const fetch: FetchFunction = async () => {
 };
 const dependencies: CommandCodePreparationDependencies = {
   boundFetch: fetch,
-  projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
   compatibility: {},
   createSessionId: () => "00000000-0000-4000-8000-000000000091",
 };
@@ -49,6 +49,17 @@ const baseOptions: SimpleStreamOptions = {
 };
 
 describe("CommandCode payload serialization boundary", () => {
+  it("constructs the Provider without any project snapshot capability", () => {
+    expect(() =>
+      createCommandCodePrivateProvider({
+        apiKey: "provider-key",
+        fetch,
+        model: model(),
+        now: () => 1,
+      } as never),
+    ).not.toThrow();
+  });
+
   it.each([
     ["https://host", "https://host/alpha/generate"],
     ["https://host/prefix", "https://host/alpha/generate"],
@@ -115,40 +126,18 @@ describe("CommandCode payload serialization boundary", () => {
     ).rejects.toThrow("CommandCode request conversion failed");
   });
 
-  it.each([
-    ["absent", undefined],
-    ["empty", ""],
-    ["non-string", 42],
-  ])("omits project authority for %s projectDir", async (_name, projectDir) => {
-    const snapshot = vi.fn(async () => createEmptyServerConfig());
+  it("ignores non-empty projectDir and always uses the empty server config", async () => {
     const prepared = await prepareCommandCodeRequest(
       model(),
       context,
-      {
-        ...baseOptions,
-        ...(projectDir === undefined ? {} : { metadata: { projectDir } }),
-      },
-      { ...dependencies, projectSnapshot: { snapshot } },
+      { ...baseOptions, metadata: { projectDir: "C:/project" } },
+      dependencies,
     );
 
-    expect(snapshot).not.toHaveBeenCalled();
     expect(prepared.headers).not.toHaveProperty("x-project-slug");
-  });
-
-  it("uses root only when a non-empty projectDir normalizes to no slug", async () => {
-    const snapshot = vi.fn(async () => createEmptyServerConfig());
-    const prepared = await prepareCommandCodeRequest(
-      model(),
-      context,
-      { ...baseOptions, metadata: { projectDir: "---" } },
-      { ...dependencies, projectSnapshot: { snapshot } },
-    );
-
-    expect(snapshot).toHaveBeenCalledWith({
-      projectDir: "---",
-      signal: expect.any(AbortSignal),
+    expect(JSON.parse(prepared.bodyText)).toMatchObject({
+      config: createEmptyServerConfig(),
     });
-    expect(prepared.headers["x-project-slug"]).toBe("root");
   });
 
   it("uses a replacement, serializes it once, and freezes stable prepared bytes", async () => {
@@ -185,7 +174,6 @@ describe("CommandCode payload serialization boundary", () => {
       context,
       baseOptions,
       {
-        projectSnapshot: dependencies.projectSnapshot,
         compatibility: {},
         createSessionId: dependencies.createSessionId,
       },

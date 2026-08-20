@@ -1,4 +1,4 @@
-import type { FetchFunction, Model } from "@earendil-works/pi-ai";
+import type { AuthResult, FetchFunction, Model } from "@earendil-works/pi-ai";
 
 import {
   parseSseFrames,
@@ -28,6 +28,27 @@ export interface PassthroughResponsesResult {
   readonly status: number;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Narrow native-wire seam implemented by the Provider integration layer.
+ * The Responses handler supplies only the resolved Pi model/auth facts and
+ * the unchanged client body; concrete Provider selection stays outside the
+ * client-protocol module.
+ */
+export interface ResponsesNativePassthroughRequest {
+  readonly model: Model<string>;
+  readonly auth: AuthResult;
+  readonly rawBody: string;
+  readonly signal: AbortSignal;
+  readonly forwardedHeaders?: Readonly<Record<string, string>>;
+}
+
+export interface ResponsesNativePassthrough {
+  supports(model: Model<string>): boolean;
+  supportsCompact(model: Model<string>): boolean;
+  send(request: ResponsesNativePassthroughRequest): Promise<Response>;
+  compact(request: ResponsesNativePassthroughRequest): Promise<Response>;
 }
 
 /**
@@ -193,6 +214,24 @@ function rewriteModelSelector(rawBody: string, modelId: string): string {
  * do. The upstream response is buffered once, its headers filtered to the
  * safe set, and returned for atomic delivery.
  */
+export async function bufferResponsesPassthroughResponse(
+  upstream: Response,
+  signal: AbortSignal,
+): Promise<PassthroughResponsesResult> {
+  let body: Uint8Array<ArrayBuffer>;
+  try {
+    body = new Uint8Array(await upstream.arrayBuffer());
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new ResponsesPassthroughBodyReadError(error);
+  }
+  return {
+    status: upstream.status,
+    headers: filterHeaders(upstream.headers, isSafeResponseHeader),
+    body,
+  };
+}
+
 export async function passthroughResponsesRequest(
   options: PassthroughResponsesRequestOptions,
 ): Promise<PassthroughResponsesResult> {
@@ -217,7 +256,7 @@ export async function passthroughResponsesRequest(
       );
     }
   }
-  const endpoint = joinEndpoint(model.baseUrl, "/v1/responses");
+  const endpoint = joinEndpoint(model.baseUrl, "/responses");
   const forwardedBody = rewriteModelSelector(rawBody, model.id);
   let upstream: Response;
   try {
@@ -237,23 +276,7 @@ export async function passthroughResponsesRequest(
     if (signal.aborted) throw error;
     throw new ResponsesPassthroughTransportError(error);
   }
-  let body: Uint8Array<ArrayBuffer>;
-  try {
-    body = new Uint8Array(await upstream.arrayBuffer());
-  } catch (error) {
-    // The upstream response headers arrived but the body read failed
-    // (pre-commit): the upstream response never committed to the client. Same
-    // pre-commit error lifecycle as above. Caller cancellation keeps its own
-    // identity so the handler can rethrow it as cancellation rather than as
-    // a body failure.
-    if (signal.aborted) throw error;
-    throw new ResponsesPassthroughBodyReadError(error);
-  }
-  return {
-    status: upstream.status,
-    headers: filterHeaders(upstream.headers, isSafeResponseHeader),
-    body,
-  };
+  return bufferResponsesPassthroughResponse(upstream, signal);
 }
 
 /**

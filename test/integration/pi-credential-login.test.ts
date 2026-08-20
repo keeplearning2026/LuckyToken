@@ -18,7 +18,6 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -217,7 +216,6 @@ describe("Pi persistent credential login", () => {
       },
       model: commandCodeModel,
       now: () => 1_786_400_000_000,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
     });
     expect(commandCodeProvider.auth.apiKey?.login).toBeTypeOf("function");
@@ -286,7 +284,6 @@ describe("Pi persistent credential login", () => {
         fetch: async () => new Response(),
         model: commandCodeModel,
         now: () => 1,
-        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
       }),
     );
 

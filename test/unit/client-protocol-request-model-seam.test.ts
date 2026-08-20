@@ -246,7 +246,7 @@ describe("Client Protocol request-model seam", () => {
       const response = await handleHttpRequest(dependencies, responsesRequest());
       expect(response.status).toBe(200);
       expect(capture.urls[0]).toBe(
-        "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/openai/v1/responses",
+        "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/openai/responses",
       );
     });
   });

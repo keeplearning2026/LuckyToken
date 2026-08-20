@@ -19,7 +19,6 @@ import { pathToFileURL } from "node:url";
 import { startLuckyTokenApplication } from "./application.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import { readControlPlaneDescriptor } from "./control-plane-discovery.js";
-import { runClientTokenCli } from "./client-auth/cli.js";
 import { runCredentialCli } from "./credentials/cli.js";
 import { runAuthCli } from "./credentials/auth-cli.js";
 import { createConfiguredPiModels } from "./composition.js";
@@ -41,8 +40,6 @@ Usage:
   luckytoken --config <path>
   luckytoken login [provider] --config <path>
   luckytoken logout [provider] --config <path>
-  luckytoken client-token <list|reveal|rotate|remove> <protocol> --descriptor <path>
-  luckytoken client-token <create|rotate|remove|list> <protocol> --config <path> [--global|--project <path>]
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
@@ -60,7 +57,6 @@ Commands:
   serve    Start the local Client Protocol service (default)
   login    Authenticate a Provider through Pi Models
   logout   Remove a Provider credential through Pi Models
-  client-token  Manage client tokens: live global tokens through the Control Plane, or token files offline
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
   control auto-start status|enable|disable  Query or change Windows login auto-start
@@ -76,9 +72,6 @@ Commands:
 Options:
   --config <path>  Strict LuckyToken JSON configuration
   --owner <kind>   Ownership identity for serve: cli (default) or desktop
-  --global         Select the protocol-global client token
-  --project <path> Select a project-bound client token
-  --token <value>  Use an explicit token for create/rotate
   --descriptor <path>  Current-user Control Plane discovery descriptor
   --help           Show this help
 
@@ -1222,17 +1215,6 @@ export async function runLuckyTokenCli(
       throw new Error(`Unknown control command: ${command ?? ""}`);
     }
     await runControlCommand(command, args.slice(2));
-    return;
-  }
-  if (args[0] === "client-token") {
-    await runClientTokenCli(args.slice(1), {
-      resolveAuthFile: async (configPath, protocolId) => {
-        const config = await loadLuckyTokenCliConfig(configPath);
-        return Object.hasOwn(config.clientProtocols, protocolId)
-          ? config.clientProtocols[protocolId]?.authFile
-          : undefined;
-      },
-    });
     return;
   }
   const parsed = parseArguments(args);

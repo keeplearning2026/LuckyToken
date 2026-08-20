@@ -53,7 +53,6 @@ export interface InvocationInfrastructureFacts {
   readonly sessionId: string;
   readonly signal: AbortSignal;
   readonly apiKey?: string;
-  readonly projectDir?: string;
   readonly telemetryContext?: ModelsSimpleStreamOptions["telemetryContext"];
   readonly env?: ModelsSimpleStreamOptions["env"];
   readonly headers?: ProviderHeaders;
@@ -82,7 +81,6 @@ const PROTOCOL_METADATA_KEYS = new Set(["user_id"]);
 const INFRASTRUCTURE_KEYS = new Set([
   "sessionId",
   "signal",
-  "projectDir",
   "apiKey",
   "telemetryContext",
   "env",
@@ -286,9 +284,6 @@ function validateInfrastructure(infrastructure: InvocationInfrastructureFacts): 
   ) {
     throw new InvocationCompositionFailure("HTTP lifecycle must own one AbortSignal");
   }
-  if (infrastructure.projectDir !== undefined && typeof infrastructure.projectDir !== "string") {
-    throw new InvocationCompositionFailure("Infrastructure projectDir must be a string");
-  }
   if (
     infrastructure.apiKey !== undefined &&
     (typeof infrastructure.apiKey !== "string" || infrastructure.apiKey.length === 0)
@@ -368,7 +363,7 @@ function validateRouterDefaults(defaults: RouterOptionDefaults): void {
   if (keys.length === 0) return;
   if (isRecord(defaults.metadata)) {
     for (const key of Object.keys(defaults.metadata)) {
-      if (key === "user_id" || key === "projectDir") {
+      if (key === "user_id") {
         throw new InvocationCompositionFailure(
           `Router defaults do not own reserved metadata.${key}`,
         );
@@ -448,9 +443,6 @@ export function composeOptions(
   const metadata: Record<string, unknown> = {};
   if (protocolOptions.metadata?.user_id !== undefined) {
     metadata.user_id = protocolOptions.metadata.user_id;
-  }
-  if (infrastructure.projectDir !== undefined) {
-    metadata.projectDir = infrastructure.projectDir;
   }
   if (Object.keys(metadata).length > 0) {
     effective.metadata = cloneAndFreezeValue(metadata) as Record<string, unknown>;

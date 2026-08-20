@@ -6,7 +6,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { Auth } from "../../auth.js";
+import {
+  resolveRequestIdentity,
+  type RequestIdentity,
+} from "../../request-identity.js";
 import {
   createNoopInvocationDiagnosticsFactory,
   type InvocationDiagnostics,
@@ -75,11 +78,14 @@ import {
   type ResponseSessionState,
 } from "./session-state.js";
 import {
+  bufferResponsesPassthroughResponse,
   isResponsesNativePassthroughModel,
   passthroughResponsesRequest,
   passthroughResponsesRequestHeaders,
   projectResponsesPassthroughBody,
+  ResponsesPassthroughTransportError,
   type PassthroughResponsesResult,
+  type ResponsesNativePassthrough,
 } from "./passthrough.js";
 import type {
   CodexLocalCredentialAuthority,
@@ -109,7 +115,8 @@ const requestIds = new WeakMap<Request, string>();
 
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
-  readonly auth: Auth;
+  readonly createSessionId?: () => string;
+  readonly onRequestIdentity?: (identity: RequestIdentity) => void;
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly stateFile: string;
@@ -121,6 +128,10 @@ export interface OpenAIResponsesHandlerOptions {
   readonly shutdownSignal?: AbortSignal;
   /** Narrow transport dependency used only by native wire passthrough. */
   readonly passthroughFetch?: FetchFunction;
+  /** Provider-integration native wire executor. The client protocol only asks
+   *  whether the resolved Pi model is supported and hands over the unchanged
+   *  Responses body plus bounded auth facts. */
+  readonly nativePassthrough?: ResponsesNativePassthrough;
   /**
    * Ticket 15 alias-only model data plane: when wired, only configured
    * aliases are valid selectors, converted and passthrough responses echo
@@ -175,13 +186,15 @@ export interface OpenAIResponsesHandlerOptions {
 
 interface OpenAIResponsesDependencies {
   readonly models: Models;
-  readonly auth: Auth;
+  readonly createSessionId: () => string;
+  readonly onRequestIdentity: ((identity: RequestIdentity) => void) | undefined;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
   readonly sessionState: ResponseSessionState;
   readonly passthroughFetch: FetchFunction;
+  readonly nativePassthrough: ResponsesNativePassthrough | undefined;
   readonly aliasSource: AliasModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
@@ -331,28 +344,16 @@ async function handleOpenAIResponses(
       );
     }
 
-    const authResult = await raceWithRequestSignal(
-      dependencies.auth.resolve(request.headers),
-      request.signal,
+    const requestIdentity = resolveRequestIdentity(
+      request.headers,
+      dependencies.createSessionId,
     );
-    if (!authResult.authorized) {
-      ledger.terminal("rejected-auth", { clientHttpStatus: 401 });
-      return toResponse(
-        renderResponsesError(
-          401,
-          "authentication_error",
-          "Invalid authorization credentials",
-        ),
-      );
-    }
+    dependencies.onRequestIdentity?.(requestIdentity);
     ledger.authorized({
-      effectiveSessionId: authResult.effectiveSessionId,
-      ...(authResult.clientSessionId === undefined
+      effectiveSessionId: requestIdentity.effectiveSessionId,
+      ...(requestIdentity.clientSessionId === undefined
         ? {}
-        : { clientSessionId: authResult.clientSessionId }),
-      ...(authResult.projectDir === undefined
-        ? {}
-        : { projectDir: authResult.projectDir }),
+        : { clientSessionId: requestIdentity.clientSessionId }),
     });
 
     const decodedBody = await readResponsesRequestBody(
@@ -468,7 +469,8 @@ async function handleOpenAIResponses(
     if (
       !routedCodexCompaction &&
       !routedCodexReplay &&
-      isResponsesNativePassthroughModel(model)
+      (dependencies.nativePassthrough?.supports(model) ??
+        isResponsesNativePassthroughModel(model))
     ) {
       return passthroughBranch(
         dependencies,
@@ -514,11 +516,8 @@ async function handleOpenAIResponses(
     const piOptions = composeInvocationOptions(
       invocation,
       {
-        sessionId: authResult.effectiveSessionId,
+        sessionId: requestIdentity.effectiveSessionId,
         signal: request.signal,
-        ...(authResult.projectDir === undefined
-          ? {}
-          : { projectDir: authResult.projectDir }),
       },
       dependencies.routerDefaults,
     );
@@ -817,7 +816,7 @@ async function passthroughBranch(
         value.trim().length > 0
       );
     });
-  if (apiKey === undefined && !hasHeaderAuth) {
+  if (auth === undefined || (apiKey === undefined && !hasHeaderAuth)) {
     ledger.terminal("failed", { clientHttpStatus: 502 });
     return toResponse(
       renderResponsesError(
@@ -830,20 +829,48 @@ async function passthroughBranch(
   let upstream: PassthroughResponsesResult;
   try {
     ledger.executing();
-    upstream = await raceWithRequestSignal(
-      passthroughResponsesRequest({
-        model: dependencies.resolveRequestModel(model, auth),
-        rawBody,
-        apiKey,
-        signal: request.signal,
-        fetch: fetchImpl,
-        upstreamHeaders: passthroughResponsesRequestHeaders(request),
-        ...(auth?.auth.headers === undefined
-          ? {}
-          : { composedHeaders: auth.auth.headers }),
-      }),
-      request.signal,
-    );
+    const requestModel = dependencies.resolveRequestModel(model, auth);
+    const forwardedHeaders = passthroughResponsesRequestHeaders(request);
+    if (
+      dependencies.nativePassthrough !== undefined &&
+      dependencies.nativePassthrough.supports(model)
+    ) {
+      let response: Response;
+      try {
+        response = await raceWithRequestSignal(
+          dependencies.nativePassthrough.send({
+            model: requestModel,
+            auth,
+            rawBody,
+            signal: request.signal,
+            forwardedHeaders,
+          }),
+          request.signal,
+        );
+      } catch (error) {
+        if (request.signal.aborted) throw error;
+        throw new ResponsesPassthroughTransportError(error);
+      }
+      upstream = await bufferResponsesPassthroughResponse(
+        response,
+        request.signal,
+      );
+    } else {
+      upstream = await raceWithRequestSignal(
+        passthroughResponsesRequest({
+          model: requestModel,
+          rawBody,
+          apiKey,
+          signal: request.signal,
+          fetch: fetchImpl,
+          upstreamHeaders: forwardedHeaders,
+          ...(auth.auth.headers === undefined
+            ? {}
+            : { composedHeaders: auth.auth.headers }),
+        }),
+        request.signal,
+      );
+    }
   } catch (error) {
     if (
       error instanceof Error &&
@@ -1114,7 +1141,8 @@ export function createOpenAIResponsesHandler(
   }
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
-    auth: options.auth,
+    createSessionId: options.createSessionId ?? randomUUID,
+    onRequestIdentity: options.onRequestIdentity,
     configuration,
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
@@ -1122,6 +1150,7 @@ export function createOpenAIResponsesHandler(
     deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     sessionState,
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
+    nativePassthrough: options.nativePassthrough,
     aliasSource: options.aliasSource,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),

@@ -176,7 +176,7 @@ describe("LuckyToken CLI", () => {
     expect(result.stdout).toContain("--config <path>");
     expect(result.stdout).toContain("login");
     expect(result.stdout).toContain("logout");
-    expect(result.stdout).toContain("client-token");
+    expect(result.stdout).not.toContain("client-token");
     expect(result.stdout).toContain("control history");
     expect(result.stderr).not.toContain("Error");
   }, 30_000);

@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  createAuth,
-  createLuckyTokenRuntime,
-  startLuckyTokenHttpServer,
-} from "../../src/index.js";
+import * as luckyToken from "../../src/index.js";
 
 describe("package public API", () => {
-  it("exports the Provider-blind composition seams from the package root", () => {
-    expect(createAuth).toBeTypeOf("function");
-    expect(createLuckyTokenRuntime).toBeTypeOf("function");
-    expect(startLuckyTokenHttpServer).toBeTypeOf("function");
+  it("exports session identity without a client-auth public surface", () => {
+    expect("createAuth" in luckyToken).toBe(false);
+    expect(luckyToken.resolveRequestIdentity).toBeTypeOf("function");
+    expect(luckyToken.createLuckyTokenRuntime).toBeTypeOf("function");
+    expect(luckyToken.startLuckyTokenHttpServer).toBeTypeOf("function");
   });
 });

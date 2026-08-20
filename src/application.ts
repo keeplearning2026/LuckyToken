@@ -28,15 +28,6 @@ import {
   createConfiguredBackupAuthority,
   recoveryBackupSnapshots,
 } from "./backup/index.js";
-import {
-  createClientTokenControlPlaneHandler,
-  createProtocolEnablementSettingsHandler,
-} from "./client-auth/control-plane.js";
-import { createFileClientTokenStore } from "./client-auth/file-token-store.js";
-import {
-  createLiveClientTokenAuthority,
-  type LiveClientTokenAuthority,
-} from "./client-auth/live-authority.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import { createConfiguredLuckyTokenDataPlane } from "./composition.js";
 import {
@@ -532,23 +523,6 @@ async function startNormalApplication(options: {
     );
     await settingsRegistry.load();
 
-    // Client Token authorities live for the whole Backend lifetime, not the
-    // HTTP Gateway lifetime. This keeps Settings reveal/rotate available
-    // while the Router is stopped and lets disposable legacy v1 auth files
-    // be replaced with fresh v2 state before requests can be accepted.
-    const tokenAuthorities: Record<string, LiveClientTokenAuthority> = {};
-    for (const [protocolId, protocol] of Object.entries(config.clientProtocols)) {
-      const authority = await createLiveClientTokenAuthority({
-        store: createFileClientTokenStore({ path: protocol.authFile }),
-      });
-      tokenAuthorities[protocolId] = authority;
-      const enabledSetting = settingsRegistry.query([
-        `protocols.${protocolId}.enabled`,
-      ])[`protocols.${protocolId}.enabled`];
-      const enabled =
-        enabledSetting === undefined ? true : enabledSetting.value !== false;
-      if (enabled) await authority.ensureGlobal({ freshOnly: true });
-    }
     // These bindings are assigned once after the Catalog controller exists
     // (below); the Control Plane handlers close over them, so they must be
     // declared before their creation site and cannot be const.
@@ -562,10 +536,6 @@ async function startNormalApplication(options: {
         >["requestIdentities"]
       | undefined;
 
-    const protocolNames = Object.freeze({
-      [anthropicMessagesProtocolId]: "Anthropic Messages",
-      [openaiResponsesProtocolId]: "OpenAI Responses",
-    });
     const operationalAttention = createOperationalAttentionAuthority({
       now: Date.now,
       credentials: () => credentialAuthority?.snapshot(),
@@ -582,11 +552,6 @@ async function startNormalApplication(options: {
           : 0;
       },
     });
-    const clientTokenCommandHandler = createClientTokenControlPlaneHandler({
-      authorities: () => tokenAuthorities,
-      protocolNames,
-      diagnostics: ownedDiagnosticsStore,
-    });
     const credentialCommandHandler = createCredentialControlPlaneHandler({
       authority: () => credentialAuthority,
     });
@@ -599,12 +564,7 @@ async function startNormalApplication(options: {
       providerSource: (providerId) =>
         providerRuntime?.providerSource(providerId) ?? "user",
     });
-    const settingsCommandHandler = createProtocolEnablementSettingsHandler({
-      settingsHandler: createSettingsControlPlaneHandler(settingsRegistry),
-      authorities: () => tokenAuthorities,
-      protocolNames,
-      diagnostics: ownedDiagnosticsStore,
-    });
+    const settingsCommandHandler = createSettingsControlPlaneHandler(settingsRegistry);
     const drainTimeoutMs = (): number => {
       const setting = settingsRegistry.query([
         "application.quitDrainTimeoutMs",
@@ -824,7 +784,6 @@ async function startNormalApplication(options: {
             requestLedgerStore: ownedLedgerStore,
             deepCaptureStore: ownedCaptureStore,
             settingsRegistry,
-            clientTokenAuthorities: tokenAuthorities,
             providerRuntime,
             aliasAuthority,
             codexLocalAuth,
@@ -967,7 +926,6 @@ async function startNormalApplication(options: {
       },
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
-      clientTokenCommandHandler,
       requestLedger: ownedLedgerStore,
       analyticsHandler: (query) => ownedLedgerStore.analyze(query),
       capture: ownedCaptureStore,

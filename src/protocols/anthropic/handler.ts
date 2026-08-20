@@ -5,7 +5,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { Auth } from "../../auth.js";
+import {
+  resolveRequestIdentity,
+  type RequestIdentity,
+} from "../../request-identity.js";
 import {
   createNoopInvocationDiagnosticsFactory,
   type InvocationDiagnostics,
@@ -98,7 +101,8 @@ const requestIds = new WeakMap<Request, string>();
 
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
-  readonly auth: Auth;
+  readonly createSessionId?: () => string;
+  readonly onRequestIdentity?: (identity: RequestIdentity) => void;
   readonly configuration?: AnthropicConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   /** Narrow transport dependency used only by native wire passthrough. */
@@ -153,7 +157,8 @@ export interface AnthropicMessagesHandlerOptions {
 
 interface AnthropicMessagesDependencies {
   readonly models: Models;
-  readonly auth: Auth;
+  readonly createSessionId: () => string;
+  readonly onRequestIdentity: ((identity: RequestIdentity) => void) | undefined;
   readonly configuration: AnthropicConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly requestLedger: RequestLedger;
@@ -307,29 +312,16 @@ async function handleAnthropicMessages(
       );
     }
 
-    const authResult = await raceWithRequestSignal(
-      dependencies.auth.resolve(request.headers),
-      request.signal,
+    const requestIdentity = resolveRequestIdentity(
+      request.headers,
+      dependencies.createSessionId,
     );
-    if (!authResult.authorized) {
-      ledger.terminal("rejected-auth", { clientHttpStatus: 401 });
-      return toResponse(
-        renderAnthropicError(
-          401,
-          "authentication_error",
-          "Invalid authorization credentials",
-          ledger.requestId,
-        ),
-      );
-    }
+    dependencies.onRequestIdentity?.(requestIdentity);
     ledger.authorized({
-      effectiveSessionId: authResult.effectiveSessionId,
-      ...(authResult.clientSessionId === undefined
+      effectiveSessionId: requestIdentity.effectiveSessionId,
+      ...(requestIdentity.clientSessionId === undefined
         ? {}
-        : { clientSessionId: authResult.clientSessionId }),
-      ...(authResult.projectDir === undefined
-        ? {}
-        : { projectDir: authResult.projectDir }),
+        : { clientSessionId: requestIdentity.clientSessionId }),
     });
 
     const sourceProfile = resolveAnthropicSourceProfile(request.headers);
@@ -437,11 +429,8 @@ async function handleAnthropicMessages(
     const piOptions = composeOptions(
       invocation.options,
       {
-        sessionId: authResult.effectiveSessionId,
+        sessionId: requestIdentity.effectiveSessionId,
         signal: request.signal,
-        ...(authResult.projectDir === undefined
-          ? {}
-          : { projectDir: authResult.projectDir }),
       },
       dependencies.routerDefaults,
     );
@@ -868,7 +857,8 @@ export function createAnthropicMessagesHandler(
   });
   const dependencies: AnthropicMessagesDependencies = Object.freeze({
     models: options.models,
-    auth: options.auth,
+    createSessionId: options.createSessionId ?? randomUUID,
+    onRequestIdentity: options.onRequestIdentity,
     configuration:
       options.configuration === undefined
         ? parseAnthropicConfiguration()

@@ -14,9 +14,6 @@
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@sindresorhus/slugify": "2.2.1"
-  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.1",
     "@luckytoken/provider-contract": "0.1.0"

@@ -12,14 +12,11 @@ import {
   type SimpleStreamOptions,
   type StreamFunction,
 } from "@earendil-works/pi-ai";
-import slugify from "@sindresorhus/slugify";
 import { randomUUID } from "node:crypto";
 
 import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
 import {
-  classifyProjectDir,
   createEmptyServerConfig,
-  type ProjectSnapshot,
   type ServerConfig,
 } from "./project.js";
 import {
@@ -65,7 +62,6 @@ export interface CommandCodePrivateProviderOptions {
   /** Full model catalog (e.g. the built-in 33-model directory). */
   models?: readonly Model<string>[];
   now: () => number;
-  projectSnapshot: ProjectSnapshot;
   compatibility?: CommandCodeCompatibilityPolicy;
   createSessionId?: () => string;
   traceContext?: CommandCodeTraceContextCapability;
@@ -401,7 +397,6 @@ function resolveProviderSessionId(
 function buildCommandCodeHeaders(
   options: SimpleStreamOptions | undefined,
   sessionId: string,
-  projectSlug: string | undefined,
   compatibility: CommandCodeCompatibilityPolicy,
 ): Record<string, string> {
   const headers = new Headers();
@@ -428,7 +423,6 @@ function buildCommandCodeHeaders(
       ? "production"
       : compatibility.cliEnvironment,
   );
-  if (projectSlug !== undefined) headers.set("x-project-slug", projectSlug);
   if ((options?.apiKey?.length ?? 0) > 0) {
     headers.set("authorization", `Bearer ${options?.apiKey ?? ""}`);
   }
@@ -830,7 +824,6 @@ async function racePayloadCallback<T>(
 
 export interface CommandCodePreparationDependencies {
   boundFetch?: FetchFunction;
-  projectSnapshot: ProjectSnapshot;
   compatibility: CommandCodeCompatibilityPolicy;
   createSessionId: () => string;
   traceContext?: CommandCodeTraceContextCapability;
@@ -863,24 +856,14 @@ export async function prepareCommandCodeRequest(
   const permissionMode = resolvePermissionMode(
     dependencies.compatibility.permissionMode,
   );
-  const projectDir = classifyProjectDir(options?.metadata);
-  const snapshot =
-    projectDir === undefined
-      ? createEmptyServerConfig()
-      : await dependencies.projectSnapshot.snapshot({ projectDir, signal });
-  signal.throwIfAborted();
-
-  const authoritativeConfig = cloneServerConfig(snapshot);
+  const authoritativeConfig = cloneServerConfig(createEmptyServerConfig());
   const callbackConfig = cloneServerConfig(authoritativeConfig);
-  const projectSlug =
-    projectDir === undefined ? undefined : slugify(projectDir) || "root";
   let headers: Record<string, string>;
   let built: BuiltCommandCodeBody;
   try {
     headers = buildCommandCodeHeaders(
       options,
       sessionId,
-      projectSlug,
       dependencies.compatibility,
     );
     built = buildCommandCodeBody(
@@ -971,7 +954,6 @@ export async function prepareCommandCodeRequest(
 function createCommandCodeStream(
   boundFetch: FetchFunction | undefined,
   now: () => number,
-  projectSnapshot: ProjectSnapshot,
   compatibility: CommandCodeCompatibilityPolicy,
   createSessionId: () => string,
   traceContext: CommandCodeTraceContextCapability | undefined,
@@ -995,7 +977,6 @@ function createCommandCodeStream(
           options,
           {
             ...(boundFetch === undefined ? {} : { boundFetch }),
-            projectSnapshot,
             compatibility,
             createSessionId,
             requestConversion: configuration.conversion.request,
@@ -1081,14 +1062,6 @@ function snapshotCompatibilityPolicy(
   });
 }
 
-function snapshotProjectCapability(source: ProjectSnapshot): ProjectSnapshot {
-  const snapshot = source.snapshot;
-  return Object.freeze({
-    snapshot: (input: Parameters<ProjectSnapshot["snapshot"]>[0]) =>
-      snapshot.call(source, input),
-  });
-}
-
 function snapshotTraceContextCapability(
   source: CommandCodeTraceContextCapability | undefined,
 ): CommandCodeTraceContextCapability | undefined {
@@ -1131,12 +1104,10 @@ export function createCommandCodePrivateProvider(
     deepFreezeProviderData(structuredClone(entry) as Model<typeof API_ID>),
   );
   const compatibility = snapshotCompatibilityPolicy(options.compatibility ?? {});
-  const projectSnapshot = snapshotProjectCapability(options.projectSnapshot);
   const traceContext = snapshotTraceContextCapability(options.traceContext);
   const streams = createCommandCodeStream(
     options.fetch,
     options.now,
-    projectSnapshot,
     compatibility,
     options.createSessionId ?? randomUUID,
     traceContext,

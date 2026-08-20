@@ -11,38 +11,20 @@ const sessionId = "00000000-0000-4000-8000-000000000070";
 describe("closed-world Pi option composition", () => {
   it.each([
     {
-      name: "neither metadata fact",
+      name: "no client metadata",
       protocol: { maxTokens: 10 },
-      projectDir: undefined,
       metadata: undefined,
     },
     {
       name: "client user id only",
       protocol: { maxTokens: 10, metadata: { user_id: "user" } },
-      projectDir: undefined,
       metadata: { user_id: "user" },
     },
-    {
-      name: "auth project only",
-      protocol: { maxTokens: 10 },
-      projectDir: "D:/project",
-      metadata: { projectDir: "D:/project" },
-    },
-    {
-      name: "both facts",
-      protocol: { maxTokens: 10, metadata: { user_id: "user" } },
-      projectDir: "D:/project",
-      metadata: { user_id: "user", projectDir: "D:/project" },
-    },
-  ])("merges $name per owned key", ({ protocol, projectDir, metadata }) => {
+  ])("merges $name per owned key", ({ protocol, metadata }) => {
     const controller = new AbortController();
     const effective = composeOptions(
       protocol,
-      {
-        sessionId,
-        signal: controller.signal,
-        ...(projectDir === undefined ? {} : { projectDir }),
-      },
+      { sessionId, signal: controller.signal },
       {},
     );
 
@@ -53,6 +35,17 @@ describe("closed-world Pi option composition", () => {
       ...(metadata === undefined ? {} : { metadata }),
     });
     expect(effective.signal).toBe(controller.signal);
+  });
+
+  it("rejects projectDir as an obsolete infrastructure fact", () => {
+    const signal = new AbortController().signal;
+    expect(() =>
+      composeOptions(
+        { maxTokens: 10 },
+        { sessionId, signal, projectDir: "D:/project" } as never,
+        {},
+      ),
+    ).toThrow(/Unknown infrastructure fact: projectDir/u);
   });
 
   it("preserves exact temperature presence and accepts only empty v1 defaults", () => {

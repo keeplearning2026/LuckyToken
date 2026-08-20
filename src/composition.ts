@@ -10,7 +10,6 @@ import {
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import { createAuth } from "./auth.js";
 import type { AliasRegistryAuthority } from "./aliases/authority.js";
 import type { AliasModelSource } from "./alias-model-seam.js";
 import {
@@ -42,14 +41,6 @@ import {
 } from "./deep-diagnostics/index.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { bindOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
-import {
-  createFileClientTokenStore,
-  type ClientTokenAuthority,
-} from "./client-auth/file-token-store.js";
-import {
-  createLiveClientTokenAuthority,
-  type LiveClientTokenAuthority,
-} from "./client-auth/live-authority.js";
 import type { LuckyTokenCliConfig } from "./cli-config.js";
 import {
   createLiveCredentialAuthority,
@@ -102,6 +93,7 @@ import type {
 import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
 import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
 import { createCodexResponsesCompactHandler } from "./integrations/codex/compact.js";
+import { createResponsesNativePassthrough } from "./integrations/responses-native.js";
 
 export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
@@ -185,18 +177,12 @@ function createCompositionConfigValueContext(
  * values (raw plus env-resolved references; commands are never executed).
  */
 async function createCompositionScrubber(owners: {
-  readonly clientAuthority: ClientTokenAuthority;
-  readonly responsesAuthority?: ClientTokenAuthority;
   readonly credentialAuthority: LiveCredentialAuthority;
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
 }): Promise<((value: string) => string) | undefined> {
   const scrubbers: Array<(value: string) => string> = [
-    owners.clientAuthority.scrub,
     owners.credentialAuthority.scrub,
   ];
-  if (owners.responsesAuthority !== undefined) {
-    scrubbers.push(owners.responsesAuthority.scrub);
-  }
   if (owners.codexLocalAuth !== undefined) {
     scrubbers.push(owners.codexLocalAuth.scrub);
   }
@@ -273,10 +259,6 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly onCapturePersistenceRecovery?: (fact: {
     readonly requestId: string;
   }) => void;
-  /** Backend-lifetime Client Token authorities. When provided, the Data
-   * Plane reuses them instead of opening protocol auth files itself, so
-   * Settings can reveal/rotate tokens while the HTTP Gateway is stopped. */
-  readonly clientTokenAuthorities?: Readonly<Record<string, LiveClientTokenAuthority>>;
   /**
    * Provider Activation (Spec v1.0): the Backend-lifetime Provider Runtime
    * created before the Data Plane. When provided, the Data Plane consumes
@@ -295,11 +277,6 @@ export interface ConfiguredLuckyTokenDataPlane {
   readonly userConfiguredProviderIds: readonly string[];
   /** Permanent Runtime Diagnostics store (Ticket 07). */
   readonly diagnosticsStore: RuntimeDiagnosticsStore;
-  /** Live per-protocol Client Token authorities (Ticket 16): the running
-   *  Data Plane's one active global token per protocol. */
-  readonly clientTokenAuthorities: Readonly<
-    Record<string, LiveClientTokenAuthority>
-  >;
   /** Live Credential Authority (Ticket 12): the running Data Plane's single
    *  serialized auth.json authority for UI/CLI credential commands. */
   readonly credentialAuthority: LiveCredentialAuthority;
@@ -484,20 +461,6 @@ export async function createConfiguredLuckyTokenDataPlane(
       `clientProtocols must configure ${anthropicMessagesProtocolId}`,
     );
   }
-  // Ticket 16: live per-protocol authorities own the one active global
-  // token. Production injects Backend-lifetime authorities so token
-  // management remains available while the HTTP Gateway is stopped. Direct
-  // composition tests may omit them and keep the self-contained seam.
-  const clientAuthorities: Record<string, LiveClientTokenAuthority> =
-    options.clientTokenAuthorities === undefined
-      ? {}
-      : { ...options.clientTokenAuthorities };
-  if (options.clientTokenAuthorities === undefined) {
-    clientAuthorities[anthropicMessagesProtocolId] =
-      await createLiveClientTokenAuthority({
-        store: createFileClientTokenStore({ path: anthropicConfig.authFile }),
-      });
-  }
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const openaiResponsesConfig = Object.hasOwn(
@@ -506,26 +469,6 @@ export async function createConfiguredLuckyTokenDataPlane(
   )
     ? config.clientProtocols[openaiResponsesProtocolId]
     : undefined;
-  if (
-    options.clientTokenAuthorities === undefined &&
-    openaiResponsesConfig !== undefined
-  ) {
-    clientAuthorities[openaiResponsesProtocolId] =
-      await createLiveClientTokenAuthority({
-        store: createFileClientTokenStore({ path: openaiResponsesConfig.authFile }),
-      });
-  }
-  const clientAuthority = clientAuthorities[anthropicMessagesProtocolId];
-  if (clientAuthority === undefined) {
-    throw new Error(`Client Token Authority is unavailable: ${anthropicMessagesProtocolId}`);
-  }
-  const responsesAuthority =
-    openaiResponsesConfig === undefined
-      ? undefined
-      : clientAuthorities[openaiResponsesProtocolId];
-  if (openaiResponsesConfig !== undefined && responsesAuthority === undefined) {
-    throw new Error(`Client Token Authority is unavailable: ${openaiResponsesProtocolId}`);
-  }
   const codexLocalAuth =
     openaiResponsesConfig === undefined
       ? undefined
@@ -534,24 +477,8 @@ export async function createConfiguredLuckyTokenDataPlane(
     openaiResponsesConfig === undefined
       ? undefined
       : options.codexNativeModels ?? createCodexNativeModelSource();
-  // First enabling creates exactly one protocol-global token when the scope
-  // has none — but only for a never-initialized scope: a deliberately
-  // deleted token must survive an ordinary restart, so boot-time enabling
-  // never resurrects one. The disabled→enabled transition is ensured by the
-  // Settings adapter (which may create in any state).
   const registry = options.settingsRegistry;
   if (registry !== undefined) await registry.load();
-  for (const [protocolId, authority] of Object.entries(clientAuthorities)) {
-    const enabledSetting =
-      registry === undefined
-        ? undefined
-        : registry.query([`protocols.${protocolId}.enabled`])[
-            `protocols.${protocolId}.enabled`
-          ];
-    const enabled =
-      enabledSetting === undefined ? true : enabledSetting.value !== false;
-    if (enabled) await authority.ensureGlobal({ freshOnly: true });
-  }
   // Provider Activation (Spec v1.0 §13): the Data Plane consumes the
   // Backend-lifetime Provider Runtime's one Pi Models / credential
   // authority / catalog handle when injected. The legacy internal
@@ -638,8 +565,6 @@ export async function createConfiguredLuckyTokenDataPlane(
   // through unrelated modules. The Credential Authority scrubs its owned
   // stored values (raw plus env-resolved references, never commands).
   const scrub = await createCompositionScrubber({
-    clientAuthority,
-    ...(responsesAuthority === undefined ? {} : { responsesAuthority }),
     credentialAuthority,
     ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
   });
@@ -760,16 +685,9 @@ export async function createConfiguredLuckyTokenDataPlane(
       }
     },
   });
-  // Ticket 17 identity seam: the internal effective session identity is
-  // created per request by the auth boundary; only the optional client
-  // identity and canonical project context may reach the public observer.
+  // Request identity is session-only. Client access authentication and
+  // project-scoped identity no longer exist on the Data Plane.
   const requestIdentities = createRequestIdentityObserver({ now });
-  const auth = createAuth({
-    authorizeToken: (token) => clientAuthority.authorize(token),
-    createEffectiveSessionId: createSessionId,
-    onAuthorized: (identity) =>
-      requestIdentities.observe(anthropicMessagesProtocolId, identity),
-  });
   // Ticket 15: the composition adapts the one alias authority into the
   // narrow data-plane source. Every request refreshes first so hot
   // alias/catalog replacement applies to new requests only, then captures
@@ -787,7 +705,13 @@ export async function createConfiguredLuckyTokenDataPlane(
         });
   const anthropic = createAnthropicMessagesHandler({
     models,
-    auth,
+    createSessionId,
+    onRequestIdentity: (identity) =>
+      requestIdentities.observe(anthropicMessagesProtocolId, {
+        ...(identity.clientSessionId === undefined
+          ? {}
+          : { clientSessionId: identity.clientSessionId }),
+      }),
     configuration: bindAnthropicConfiguration(
       anthropicConfig.adapterConfiguration,
     ),
@@ -810,8 +734,8 @@ export async function createConfiguredLuckyTokenDataPlane(
     executeOperation: createExecutionOperation(resolveUsageSemantics),
   });
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
-  // Shared, unauthenticated model discovery: any client may learn the
-  // selectors this endpoint serves, independent of Client Protocol Auth.
+  // Shared model discovery is unauthenticated like the rest of the local
+  // Data Plane.
   clientProtocols.push(
     createModelsDiscoveryHandler({
       models,
@@ -820,21 +744,20 @@ export async function createConfiguredLuckyTokenDataPlane(
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   );
-  if (openaiResponsesConfig !== undefined && responsesAuthority !== undefined) {
-    const responsesAuth = createAuth({
-      authorizeToken: async (token) =>
-        responsesAuthority.authorize(token) ??
-        (await codexLocalAuth?.authorizeToken(token)),
-      createEffectiveSessionId: createSessionId,
-      onAuthorized: (identity) =>
-        requestIdentities.observe(openaiResponsesProtocolId, identity),
-    });
+  if (openaiResponsesConfig !== undefined) {
     const stateFile =
       openaiResponsesConfig.stateFile ??
       join(dirname(config.configPath), "state", "openai-responses.json");
+    const nativeResponsesPassthrough = createResponsesNativePassthrough(options.fetch);
     const responses = createOpenAIResponsesHandler({
       models,
-      auth: responsesAuth,
+      createSessionId,
+      onRequestIdentity: (identity) =>
+        requestIdentities.observe(openaiResponsesProtocolId, {
+          ...(identity.clientSessionId === undefined
+            ? {}
+            : { clientSessionId: identity.clientSessionId }),
+        }),
       configuration: bindOpenAIResponsesConfiguration(
         openaiResponsesConfig.adapterConfiguration,
       ),
@@ -843,6 +766,7 @@ export async function createConfiguredLuckyTokenDataPlane(
       deepCapture,
       stateFile,
       passthroughFetch: options.fetch,
+      nativePassthrough: nativeResponsesPassthrough,
       ...(aliasSource === undefined ? {} : { aliasSource }),
       maxRequestBytes: config.limits.maxRequestBytes,
       ...(options.shutdownSignal === undefined
@@ -860,17 +784,19 @@ export async function createConfiguredLuckyTokenDataPlane(
       ...(codexNativeModels === undefined ? {} : { codexNativeModels }),
     });
     clientProtocols.push(responses);
-    if (codexLocalAuth !== undefined && codexNativeModels !== undefined) {
-      clientProtocols.push(
-        createCodexResponsesCompactHandler({
-          codexLocalAuth,
-          codexNativeModels,
-          responsesHandler: responses,
-          fetch: options.fetch,
-          maxRequestBytes: config.limits.maxRequestBytes,
-        }),
-      );
-    }
+    clientProtocols.push(
+      createCodexResponsesCompactHandler({
+        ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
+        ...(codexNativeModels === undefined ? {} : { codexNativeModels }),
+        models,
+        ...(aliasSource === undefined ? {} : { aliasSource }),
+        nativePassthrough: nativeResponsesPassthrough,
+        resolveRequestModel,
+        responsesHandler: responses,
+        fetch: options.fetch,
+        maxRequestBytes: config.limits.maxRequestBytes,
+      }),
+    );
   }
   const certification = certifyCoreServingComposition({
     clientProtocolIds: Object.keys(config.clientProtocols),
@@ -914,7 +840,6 @@ export async function createConfiguredLuckyTokenDataPlane(
     certification,
     userConfiguredProviderIds,
     diagnosticsStore,
-    clientTokenAuthorities: Object.freeze(clientAuthorities),
     credentialAuthority,
     // Ticket 11 handle with the credential authority's live models.json
     // facts kept current: a refresh recompose updates both the served

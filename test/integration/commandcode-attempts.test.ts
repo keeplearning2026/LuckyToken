@@ -16,7 +16,6 @@ import {
   type CommandCodePrivateProviderOptions,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 const sessionId = "00000000-0000-4000-8000-000000000100";
@@ -75,7 +74,6 @@ function createRunner(
     ...(fetch === undefined ? {} : { fetch }),
     model: selected,
     now: () => 1_000,
-    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
     ...overrides,
   });
   const models = createModels();
@@ -104,7 +102,6 @@ describe("CommandCode physical attempts", () => {
     expect(() =>
       createCommandCodePrivateProvider({
         now: () => 1_000,
-        projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
       }),
     ).toThrow(/model/i);
   });
@@ -126,7 +123,6 @@ describe("CommandCode physical attempts", () => {
         : success("second");
     });
     const boundFetch = vi.fn<FetchFunction>(async () => success("wrong"));
-    const snapshot = vi.fn(async () => createEmptyServerConfig());
     const payload = vi.fn((candidate: unknown) => ({
       ...(candidate as Record<string, unknown>),
       mode: "retry-stable",
@@ -144,7 +140,6 @@ describe("CommandCode physical attempts", () => {
       createSpanId: () => spanIds.shift() ?? "3333333333333333",
     };
     const { run } = createRunner(boundFetch, {
-      projectSnapshot: { snapshot },
       traceContext,
       sleep,
     });
@@ -158,7 +153,6 @@ describe("CommandCode physical attempts", () => {
       onPayload: payload,
       onResponse,
       telemetryContext,
-      metadata: { projectDir: "/project" },
     });
 
     expect(result).toMatchObject({ stopReason: "stop", content: [{ text: "second" }] });
@@ -180,7 +174,6 @@ describe("CommandCode physical attempts", () => {
     expect(requestFetch).toHaveBeenCalledTimes(2);
     expect(boundFetch).not.toHaveBeenCalled();
     expect(payload).toHaveBeenCalledTimes(1);
-    expect(snapshot).toHaveBeenCalledTimes(1);
     expect(resolveLogicalTraceId).toHaveBeenCalledTimes(1);
     expect(onResponse).toHaveBeenCalledTimes(2);
     expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([
@@ -775,14 +768,12 @@ describe("CommandCode physical attempts", () => {
     const preCancelled = new AbortController();
     preCancelled.abort(new Error("pre-cancelled"));
     const noFetch = vi.fn<FetchFunction>(async () => success("wrong"));
-    const snapshot = vi.fn(async () => createEmptyServerConfig());
     const payload = vi.fn(() => undefined);
-    const first = createRunner(noFetch, { projectSnapshot: { snapshot } });
+    const first = createRunner(noFetch);
 
     const firstResult = await first.runDirect({
       signal: preCancelled.signal,
       onPayload: payload,
-      metadata: { projectDir: "/project" },
     });
     expect(firstResult.stopReason).toBe("aborted");
     expect(findUpstreamFailureFact(firstResult.diagnostics)).toMatchObject({
@@ -791,7 +782,6 @@ describe("CommandCode physical attempts", () => {
     });
     expect(attemptFacts(firstResult)).toEqual([]);
     expect(noFetch).not.toHaveBeenCalled();
-    expect(snapshot).not.toHaveBeenCalled();
     expect(payload).not.toHaveBeenCalled();
 
     const controller = new AbortController();

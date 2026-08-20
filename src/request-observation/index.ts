@@ -14,8 +14,8 @@ export {
  * this public contract. The seam fixes the identity semantics now:
  *
  * - `RequestIdentityFact` carries ONLY the optional client-provided session
- *   identity (`clientSessionId`) and the canonical project context. The
- *   internal `effectiveSessionId` (the always-present Pi invocation
+ *   identity (`clientSessionId`). Project context is not request identity, and
+ *   the internal `effectiveSessionId` (the always-present Pi invocation
  *   identity) is not a field of this contract, so no ledger, wire decoder,
  *   or renderer projection can ever substitute it for the client's ID.
  * - `projectRequestIdentity` (shared with the renderer through the Control
@@ -25,8 +25,7 @@ export {
  */
 
 export interface RequestIdentityObserver {
-  /** Records one authorized request identity; never called for denied
-   *  requests. Returns the observer for chaining. */
+  /** Records one accepted request identity. Returns the observer for chaining. */
   observe(
     protocolId: string,
     fact: RequestIdentityFact,
@@ -64,9 +63,6 @@ export function createRequestIdentityObserver(
           ...(fact.clientSessionId === undefined
             ? {}
             : { clientSessionId: fact.clientSessionId }),
-          ...(fact.projectDir === undefined
-            ? {}
-            : { projectDir: fact.projectDir }),
         }),
       );
       nextId += 1;

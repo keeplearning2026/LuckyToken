@@ -1,6 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 
-import type { AuthorizedClient, ReadonlyHeaders } from "./auth.js";
+import type { ReadonlyHeaders } from "./request-identity.js";
 
 /** Bounded authentication facts needed by client-owned Codex passthrough. */
 export interface CodexForwardAuth {
@@ -14,7 +14,6 @@ export interface CodexForwardAuth {
  */
 export interface CodexLocalCredentialAuthority {
   isAvailable(): Promise<boolean>;
-  authorizeToken(token: string): Promise<AuthorizedClient | undefined>;
   resolveForwardAuth(
     headers: ReadonlyHeaders,
   ): Promise<CodexForwardAuth | undefined>;

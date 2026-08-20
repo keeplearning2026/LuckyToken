@@ -20,7 +20,6 @@ import {
 
 const clientSessionId = "20000000-0000-4000-8000-000000000031";
 const effectiveSessionId = "30000000-0000-4000-8000-000000000032";
-const projectDir = "C:\\Users\\fixture\\projects\\beta";
 
 let requestIdCounter = 0;
 function requestId(): string {
@@ -33,7 +32,6 @@ function runSuccessRequest(store: RequestLedgerStore): RequestLedgerRecord {
   entry.authorized({
     effectiveSessionId,
     clientSessionId,
-    projectDir,
   });
   entry.modelResolved({
     externalAlias: "alpha",
@@ -112,7 +110,6 @@ describe("Request Ledger store public seam", () => {
       realModelId: "claude-fixture",
       clientSessionId,
       effectiveSessionId,
-      projectDir,
     });
     expect(query.records[0]!.facts).toMatchObject({
       piStopReason: "stop",
@@ -137,7 +134,11 @@ describe("Request Ledger store public seam", () => {
       const version = snapshot
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
         .get() as { value: number };
-      expect(version.value).toBe(2);
+      expect(version.value).toBe(3);
+      const columns = snapshot.prepare("PRAGMA table_info(requests)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).not.toContain("project_dir");
     } finally {
       snapshot.close();
     }

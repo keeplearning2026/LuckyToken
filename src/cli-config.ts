@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
@@ -14,7 +14,6 @@ import {
 } from "./owned-storage/compatibility.js";
 
 export interface ClientProtocolCliConfiguration {
-  readonly authFile: string;
   readonly stateFile?: string;
   readonly adapterConfiguration?: unknown;
 }
@@ -96,22 +95,6 @@ function fromConfigDirectory(value: string, directory: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(directory, value);
 }
 
-function errorCode(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code)
-    : undefined;
-}
-
-async function existingFileIdentity(path: string): Promise<string | undefined> {
-  try {
-    const file = await stat(path, { bigint: true });
-    return `${file.dev}:${file.ino}`;
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
 export async function loadLuckyTokenCliConfig(
   inputPath: string,
 ): Promise<LuckyTokenCliConfig> {
@@ -189,13 +172,10 @@ export async function loadLuckyTokenCliConfig(
   const resolvedClientProtocols = Object.create(null) as Record<
     string,
     {
-      readonly authFile: string;
       readonly stateFile?: string;
       readonly adapterConfiguration?: unknown;
     }
   >;
-  const authFiles = new Set<string>();
-  const physicalAuthFiles = new Set<string>();
   for (const [protocolId, rawProtocol] of Object.entries(clientProtocols)) {
     nonEmptyString(protocolId, "Client Protocol id");
     if (/\s/u.test(protocolId)) {
@@ -207,29 +187,9 @@ export async function loadLuckyTokenCliConfig(
     );
     assertKeys(
       protocol,
-      ["authFile", "stateFile", "conversion"],
+      ["stateFile", "conversion"],
       `clientProtocols.${protocolId}`,
     );
-    const authFile = fromConfigDirectory(
-      nonEmptyString(
-        protocol.authFile,
-        `clientProtocols.${protocolId}.authFile`,
-      ),
-      directory,
-    );
-    const identity = process.platform === "win32" ? authFile.toLowerCase() : authFile;
-    if (authFiles.has(identity)) {
-      throw new Error("Client Protocol auth files must be unique");
-    }
-    const physicalIdentity = await existingFileIdentity(authFile);
-    if (
-      physicalIdentity !== undefined &&
-      physicalAuthFiles.has(physicalIdentity)
-    ) {
-      throw new Error("Client Protocol auth files must be unique");
-    }
-    authFiles.add(identity);
-    if (physicalIdentity !== undefined) physicalAuthFiles.add(physicalIdentity);
     const stateFile =
       protocol.stateFile === undefined
         ? undefined
@@ -255,7 +215,6 @@ export async function loadLuckyTokenCliConfig(
       throw new Error(`clientProtocols.${protocolId}.conversion requires an installed adapter parser`);
     }
     resolvedClientProtocols[protocolId] = Object.freeze({
-      authFile,
       ...(stateFile === undefined ? {} : { stateFile }),
       ...(adapterConfiguration === undefined ? {} : { adapterConfiguration }),
     });

@@ -184,8 +184,6 @@ function dimensionValue(
       return record.realModelId ?? null;
     case "protocol":
       return record.protocolId;
-    case "project":
-      return record.projectDir ?? null;
     case "outcome":
       return record.outcome;
   }
@@ -214,13 +212,6 @@ function matchesFilters(
   if (
     filters.protocols !== undefined &&
     !filters.protocols.includes(record.protocolId)
-  ) {
-    return false;
-  }
-  if (
-    filters.projects !== undefined &&
-    (record.projectDir === undefined ||
-      !filters.projects.includes(record.projectDir))
   ) {
     return false;
   }
@@ -381,7 +372,6 @@ interface OptionsState {
   providers: Set<string>;
   models: Set<string>;
   protocols: Set<string>;
-  projects: Set<string>;
   sessions: Set<string>;
   outcomes: Set<string>;
 }
@@ -394,7 +384,6 @@ function createOptionsState(
     providers: new Set(),
     models: new Set(),
     protocols: new Set(),
-    projects: new Set(),
     sessions: new Set(),
     outcomes: new Set(),
   };
@@ -407,7 +396,6 @@ function addToOptionsState(state: OptionsState, record: RequestLedgerRecord): vo
   if (record.providerId !== undefined) state.providers.add(record.providerId);
   if (record.realModelId !== undefined) state.models.add(record.realModelId);
   state.protocols.add(record.protocolId);
-  if (record.projectDir !== undefined) state.projects.add(record.projectDir);
   if (record.clientSessionId !== undefined) state.sessions.add(record.clientSessionId);
   state.outcomes.add(record.outcome);
 }
@@ -419,14 +407,12 @@ function finishOptionsState(state: OptionsState): AnalyticsOptionsResult {
   const providers = sorted(state.providers);
   const models = sorted(state.models);
   const protocols = sorted(state.protocols);
-  const projects = sorted(state.projects);
   const sessions = sorted(state.sessions);
   const outcomes = sorted(state.outcomes);
   const truncated =
     state.providers.size > cap ||
     state.models.size > cap ||
     state.protocols.size > cap ||
-    state.projects.size > cap ||
     state.sessions.size > cap ||
     state.outcomes.size > cap;
   return Object.freeze({
@@ -435,7 +421,6 @@ function finishOptionsState(state: OptionsState): AnalyticsOptionsResult {
     providers: Object.freeze(providers.slice(0, cap)),
     models: Object.freeze(models.slice(0, cap)),
     protocols: Object.freeze(protocols.slice(0, cap)),
-    projects: Object.freeze(projects.slice(0, cap)),
     sessions: Object.freeze(sessions.slice(0, cap)),
     outcomes: Object.freeze(outcomes.slice(0, cap)),
     ...(truncated ? { truncated: true } : {}),

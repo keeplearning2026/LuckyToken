@@ -127,7 +127,56 @@ describe("19: native Responses passthrough contract", () => {
     expect(isResponsesNativePassthroughModel(anyProvider)).toBe(true);
   });
 
-  it("forwards the raw body verbatim to {baseUrl}/v1/responses with upstream auth", async () => {
+  it("uses an injected native passthrough seam for Responses-family provider protocols", async () => {
+    const codexModel = responsesModel(
+      "openai-codex-responses",
+      "https://chatgpt.com/backend-api",
+    );
+    codexModel.provider = "openai-codex";
+    const sent: Array<{ model: Model<string>; rawBody: string }> = [];
+    const nativePassthrough = {
+      supports: (candidate: Model<string>) =>
+        candidate.api === "openai-codex-responses",
+      supportsCompact: () => true,
+      send: async (input: {
+        model: Model<string>;
+        rawBody: string;
+      }) => {
+        sent.push({ model: input.model, rawBody: input.rawBody });
+        return new Response(
+          JSON.stringify({
+            id: "resp_codex_native",
+            object: "response",
+            status: "completed",
+            model: "gpt-5",
+            output: [],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      compact: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    const response = await handleHttpRequest(
+      dependencies(
+        passthroughModels(codexModel),
+        { nativePassthrough } as unknown as Partial<OpenAIResponsesHandlerOptions>,
+      ),
+      request(JSON.stringify({ model: "openai-codex/gpt-5", input: "hi" })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.model.api).toBe("openai-codex-responses");
+    expect(JSON.parse(sent[0]?.rawBody ?? "{}")).toMatchObject({
+      model: "openai-codex/gpt-5",
+      input: "hi",
+    });
+  });
+
+  it("forwards the raw body verbatim to {baseUrl}/responses with upstream auth", async () => {
     const model = responsesModel();
     const upstreamRequests: Request[] = [];
     const { restore, passthroughFetch } = captureFetch(async (input, init) => {
@@ -170,7 +219,7 @@ describe("19: native Responses passthrough contract", () => {
       expect(body.id).toBe("resp_upstream");
       expect(upstreamRequests).toHaveLength(1);
       expect(upstreamRequests[0]?.url).toBe(
-        "https://responses.example.com/v1/responses",
+        "https://responses.example.com/responses",
       );
       expect(upstreamRequests[0]?.headers.get("authorization")).toBe(
         "Bearer sk-responses",
@@ -627,7 +676,7 @@ describe("19: native Responses passthrough contract", () => {
       );
       expect(response.status).toBe(200);
       expect(upstreamRequests[0]?.url).toBe(
-        "https://responses.example.com/api/v1/responses",
+        "https://responses.example.com/api/responses",
       );
     } finally {
       restore();

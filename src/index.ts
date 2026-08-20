@@ -1,10 +1,8 @@
 export {
-  createAuth,
-  type Auth,
-  type AuthDependencies,
-  type AuthResult,
-  type AuthorizedClient,
-} from "./auth.js";
+  resolveRequestIdentity,
+  type ReadonlyHeaders,
+  type RequestIdentity,
+} from "./request-identity.js";
 export {
   createRuntimeDiagnosticsStoreFactory,
   parseRuntimeDiagnosticsConfiguration,

@@ -6,7 +6,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import { createAuth } from "../../src/auth.js";
 import type { AliasModelSource } from "../../src/alias-model-seam.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
@@ -24,10 +23,6 @@ import {
   type CommandCodeCompatibilityPolicy,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import type { CommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import {
-  createNodeProjectSnapshot,
-  type ProjectSnapshot,
-} from "../../packages/provider-commandcode-private/src/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
@@ -55,8 +50,6 @@ export interface CommandCodeServingTestOptions {
   commandCodeConfiguration?: CommandCodeConfiguration;
   createMessageId?: () => string;
   createSessionId?: () => string;
-  projectDir?: string;
-  projectSnapshot?: ProjectSnapshot;
   maxRequestBytes?: number;
   requestTimeoutMs?: number;
   shutdownSignal?: AbortSignal;
@@ -108,7 +101,6 @@ export function createCommandCodeServingTestComposition(
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
   const compatibilitySource = options.commandCodeCompatibility ?? {};
-  const projectSnapshot = options.projectSnapshot ?? createNodeProjectSnapshot();
   const routerDefaults = Object.freeze({ ...(options.routerDefaults ?? {}) });
   const model = createModel(options);
   const maxRequestBytes = options.maxRequestBytes ?? 1_048_576;
@@ -119,14 +111,6 @@ export function createCommandCodeServingTestComposition(
       defaultAnthropicModelValidityPolicy.revision,
     compatibility: compatibilitySource,
     fetchBound: typeof options.fetch === "function",
-    projectSnapshotPolicy:
-      options.projectSnapshot === undefined
-        ? "node-project-snapshot-v1"
-        : "bound-injected-project-snapshot-v1",
-    projectAuthorizationPolicy:
-      options.projectDir === undefined
-        ? "project-dir-absent-v1"
-        : "fixed-authorized-project-dir-v1",
     clientAuthorityPolicy: "bound-injected-auth-v1",
     routerDefaults,
     clientAuthConfigured: options.clientApiKey.length > 0,
@@ -165,24 +149,13 @@ export function createCommandCodeServingTestComposition(
       fetch: options.fetch,
       model,
       now,
-      projectSnapshot,
       compatibility: compatibilitySource,
       createSessionId,
     }),
   );
   const models: Models = mutableModels;
-  const clientApiKey = options.clientApiKey;
-  const projectDir = options.projectDir;
-  const auth = createAuth({
-    authorizeToken: async (token) => {
-      if (token !== clientApiKey) return undefined;
-      return projectDir === undefined ? {} : { projectDir };
-    },
-    createEffectiveSessionId: createSessionId,
-  });
   const anthropic = createAnthropicMessagesHandler({
     models,
-    auth,
     passthroughFetch: options.fetch,
     ...(options.anthropicModelValidityPolicy === undefined
       ? {}

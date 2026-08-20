@@ -69,6 +69,24 @@ describe("OpenAI Responses serving", () => {
     return composition;
   }
 
+  it("does not require a LuckyToken client credential", async () => {
+    const fetch: FetchFunction = async () => commandCodeText("anonymous");
+    const { runtime } = await start({ fetch });
+
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: [{ role: "user", content: "hello" }],
+        },
+        "not-a-client-token",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("expands incremental turns into full history and replays it upstream", async () => {
     const upstreamBodies: unknown[] = [];
     const fetch: FetchFunction = async (input, init) => {

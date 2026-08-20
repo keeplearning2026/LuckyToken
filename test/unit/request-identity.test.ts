@@ -51,7 +51,7 @@ describe("request identity observation and projection", () => {
     expect(JSON.stringify(record)).not.toContain(effectiveSession);
   });
 
-  it("records the canonical projectDir as a separate optional fact", () => {
+  it("never records project context as request identity", () => {
     const observer = createRequestIdentityObserver({
       now: () => 1_700_000_000_000,
     });
@@ -59,15 +59,15 @@ describe("request identity observation and projection", () => {
       .observe("anthropic-messages", {
         clientSessionId: clientSession,
         projectDir: "C:\\canonical\\project",
-      })
+      } as unknown as RequestIdentityFact)
       .list()[0]!;
     expect(record).toEqual({
       id: 1,
       time: 1_700_000_000_000,
       protocolId: "anthropic-messages",
       clientSessionId: clientSession,
-      projectDir: "C:\\canonical\\project",
     });
+    expect(record).not.toHaveProperty("projectDir");
   });
 
   it("keeps a bounded ring of the most recent identities in order", () => {

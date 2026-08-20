@@ -1,8 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ServingCertificationFailure } from "../support/commandcode-serving-certification.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
   createCommandCodeServingTestComposition,
@@ -82,23 +81,14 @@ describe("certified serving composition", () => {
   });
 
   it("isolates admitted and future requests from caller-owned configuration mutation", async () => {
-    let releaseSnapshot: (() => void) | undefined;
-    let snapshotStarted: (() => void) | undefined;
+    let releaseFetch: (() => void) | undefined;
+    let markFetchStarted: (() => void) | undefined;
     const started = new Promise<void>((resolve) => {
-      snapshotStarted = resolve;
+      markFetchStarted = resolve;
     });
     const release = new Promise<void>((resolve) => {
-      releaseSnapshot = resolve;
+      releaseFetch = resolve;
     });
-    const originalSnapshot = vi.fn(async () => {
-      snapshotStarted?.();
-      await release;
-      return createEmptyServerConfig();
-    });
-    const mutatedSnapshot = vi.fn(async () => {
-      throw new Error("mutated snapshot must be unreachable");
-    });
-    const projectSnapshot = { snapshot: originalSnapshot };
     const compatibility = { cliEnvironment: "prod" };
     const modelInput: Array<"text" | "image"> = ["text", "image"];
     const validityPolicy = {
@@ -109,6 +99,10 @@ describe("certified serving composition", () => {
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       upstreamRequests.push(new Request(input, init));
+      if (upstreamRequests.length === 1) {
+        markFetchStarted?.();
+        await release;
+      }
       return textResponse();
     };
     const runtimeOptions: CommandCodeServingTestOptions = {
@@ -119,8 +113,6 @@ describe("certified serving composition", () => {
       modelId: "model",
       modelInput,
       commandCodeCompatibility: compatibility,
-      projectDir: "D:/certified-project",
-      projectSnapshot,
       anthropicModelValidityPolicy: validityPolicy,
       createSessionId: () => "00000000-0000-4000-8000-000000000121",
     };
@@ -146,13 +138,11 @@ describe("certified serving composition", () => {
     );
     await started;
 
-    runtimeOptions.clientApiKey = "mutated-client-key";
     compatibility.cliEnvironment = "staging";
     modelInput.splice(0, modelInput.length, "text");
     validityPolicy.revision = "mutated-policy";
     validityPolicy.hasCertifiedImageFidelity = () => false;
-    projectSnapshot.snapshot = mutatedSnapshot;
-    releaseSnapshot?.();
+    releaseFetch?.();
 
     const response = await handling;
     expect(response.status).toBe(200);
@@ -169,8 +159,7 @@ describe("certified serving composition", () => {
       }),
     );
     expect(futureResponse.status).toBe(200);
-    expect(originalSnapshot).toHaveBeenCalledTimes(2);
-    expect(mutatedSnapshot).not.toHaveBeenCalled();
+    expect(upstreamRequests).toHaveLength(2);
   });
 
   it("preserves a provider tool-call identity through the next client turn", async () => {

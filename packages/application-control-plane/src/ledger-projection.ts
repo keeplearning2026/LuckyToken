@@ -280,8 +280,8 @@ function countFacts(record: RequestLedgerRecord): {
   };
 }
 
-/** One row of the Requests list. Missing client-scope values render `-`;
- *  the effective session identity has no field here. */
+/** One row of the Requests list. Missing client session values render `-`;
+ * the effective session identity has no field here. */
 export interface RequestLedgerListProjection {
   readonly id: number;
   readonly requestId: string;
@@ -298,7 +298,6 @@ export interface RequestLedgerListProjection {
   readonly acceptedAt: number;
   readonly completedAt?: number;
   readonly clientSessionId: string;
-  readonly projectDir: string;
   readonly duration: string;
   readonly speed: string;
   readonly speedUnavailableReason?: string;
@@ -334,7 +333,6 @@ export function projectRequestLedger(
       ? {}
       : { completedAt: record.completedAt }),
     clientSessionId: record.clientSessionId ?? "-",
-    projectDir: record.projectDir ?? "-",
     duration:
       record.executionStartedAt !== undefined &&
       record.terminalAt !== undefined &&

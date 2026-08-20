@@ -9,7 +9,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createAuth } from "../../src/auth.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
@@ -20,9 +19,6 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import {
-  createEmptyServerConfig,
-} from "../../packages/provider-commandcode-private/src/project.js";
 import {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,
@@ -108,21 +104,11 @@ export async function createOpenAIResponsesServingTestComposition(
       fetch: options.fetch,
       model,
       now,
-      projectSnapshot: {
-        snapshot: async () => createEmptyServerConfig(),
-      },
       createSessionId,
     }),
   );
   const models: Models = mutableModels;
 
-  const auth = createAuth({
-    authorizeToken: async (token) =>
-      token === options.clientApiKey
-        ? {}
-        : await options.codexLocalAuth?.authorizeToken(token),
-    createEffectiveSessionId: createSessionId,
-  });
   const sessionState = createResponseSessionState({
     stateFile,
     storeFalsePolicy:
@@ -132,7 +118,6 @@ export async function createOpenAIResponsesServingTestComposition(
   });
   const handler = createOpenAIResponsesHandler({
     models,
-    auth,
     stateFile,
     sessionState,
     passthroughFetch: options.fetch,

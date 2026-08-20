@@ -32,7 +32,6 @@ function validRecord(overrides: Record<string, unknown> = {}): Record<string, un
     realModelId: "claude-fixture",
     clientSessionId,
     effectiveSessionId,
-    projectDir: "C:\\Users\\fixture\\projects\\alpha",
     ...overrides,
   };
 }
@@ -54,7 +53,6 @@ describe("Request Ledger wire contract", () => {
       realModelId: "claude-fixture",
       clientSessionId,
       effectiveSessionId,
-      projectDir: "C:\\Users\\fixture\\projects\\alpha",
     });
     expect(record!.facts).toBeUndefined();
   });
@@ -102,9 +100,7 @@ describe("Request Ledger wire contract", () => {
     expect(decodeRequestLedgerRecord(validRecord({ clientHttpStatus: 42 }))).toBeUndefined();
     expect(decodeRequestLedgerRecord(validRecord({ protocolId: "" }))).toBeUndefined();
     expect(
-      decodeRequestLedgerRecord(
-        validRecord({ projectDir: "x".repeat(2_048) }),
-      ),
+      decodeRequestLedgerRecord(validRecord({ projectDir: "C:\\project" })),
     ).toBeUndefined();
   });
 
@@ -277,7 +273,6 @@ describe("Request Ledger wire contract", () => {
         protocolId: "anthropic-messages",
         providerId: "commandcode-private",
         realModelId: "claude-fixture",
-        projectDir: "C:\\projects",
         outcome: "failed",
         from: 100,
         to: 200,
@@ -297,6 +292,7 @@ describe("Request Ledger wire contract", () => {
     expect(decodeRequestLedgerQuery({ outcome: "cancelled" })).toBeUndefined();
     expect(decodeRequestLedgerQuery({ from: 200, to: 100 })).toBeUndefined();
     expect(decodeRequestLedgerQuery({ protocolId: "" })).toBeUndefined();
+    expect(decodeRequestLedgerQuery({ projectDir: "C:\\projects" })).toBeUndefined();
     // Unknown keys are rejected, consistent with the record/event allowlists.
     expect(decodeRequestLedgerQuery({ unknown: 1 })).toBeUndefined();
     expect(decodeRequestLedgerQuery({ afterId: 5, extra: true })).toBeUndefined();

@@ -34,7 +34,6 @@ const LEDGER_QUERY_KEYS: ReadonlySet<string> = new Set([
   "protocolId",
   "providerId",
   "realModelId",
-  "projectDir",
   "clientSessionId",
   "outcome",
   "from",
@@ -57,7 +56,6 @@ const LEDGER_RECORD_KEYS: ReadonlySet<string> = new Set([
   "realModelId",
   "clientSessionId",
   "effectiveSessionId",
-  "projectDir",
   "facts",
   "terminalUsage",
 ]);
@@ -387,12 +385,10 @@ export function decodeRequestLedgerRecord(
   const externalAlias = boundedText(value.externalAlias, 4_096);
   const providerId = boundedText(value.providerId, 256);
   const realModelId = boundedText(value.realModelId, 256);
-  const projectDir = boundedText(value.projectDir, 1_024);
   if (
     (value.externalAlias !== undefined && externalAlias === undefined) ||
     (value.providerId !== undefined && providerId === undefined) ||
-    (value.realModelId !== undefined && realModelId === undefined) ||
-    (value.projectDir !== undefined && projectDir === undefined)
+    (value.realModelId !== undefined && realModelId === undefined)
   ) {
     return undefined;
   }
@@ -442,7 +438,6 @@ export function decodeRequestLedgerRecord(
     ...(effectiveSessionId === undefined
       ? {}
       : { effectiveSessionId: effectiveSessionId as string }),
-    ...(projectDir === undefined ? {} : { projectDir }),
     ...(facts === undefined ? {} : { facts }),
     ...(terminalUsage === undefined ? {} : { terminalUsage }),
   });
@@ -498,10 +493,6 @@ export function decodeRequestLedgerQuery(
     value.realModelId === undefined
       ? undefined
       : boundedText(value.realModelId, 256);
-  const projectDir =
-    value.projectDir === undefined
-      ? undefined
-      : boundedText(value.projectDir, 1_024);
   const clientSessionId =
     value.clientSessionId === undefined
       ? undefined
@@ -510,7 +501,6 @@ export function decodeRequestLedgerQuery(
     (value.protocolId !== undefined && protocolId === undefined) ||
     (value.providerId !== undefined && providerId === undefined) ||
     (value.realModelId !== undefined && realModelId === undefined) ||
-    (value.projectDir !== undefined && projectDir === undefined) ||
     (value.clientSessionId !== undefined && clientSessionId === undefined)
   ) {
     return undefined;
@@ -542,7 +532,6 @@ export function decodeRequestLedgerQuery(
     ...(protocolId === undefined ? {} : { protocolId }),
     ...(providerId === undefined ? {} : { providerId }),
     ...(realModelId === undefined ? {} : { realModelId }),
-    ...(projectDir === undefined ? {} : { projectDir }),
     ...(clientSessionId === undefined ? {} : { clientSessionId }),
     ...(outcome === undefined ? {} : { outcome }),
     ...(from === undefined ? {} : { from }),

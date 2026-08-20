@@ -12,7 +12,6 @@ import {
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
 import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 
 function lifecycleModel(): Model<typeof commandCodePrivateApiId> {
@@ -92,7 +91,6 @@ it("converts and replays a committed mixed CommandCode response in order", async
     fetch,
     model,
     now: () => 10,
-    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
   });
   const stream = provider.streamSimple(model, context, {
     maxTokens: 20,
@@ -165,7 +163,6 @@ it("keeps committed model content successful when terminal usage is inconsistent
       ]),
     model,
     now: () => 10,
-    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
   });
 
   const result = await provider
@@ -258,7 +255,6 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
     fetch,
     model,
     now: () => 10,
-    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
     configuration: parseCommandCodeConfiguration({
       conversion: {
         request: { syntheticMissingToolResultOutputType: "error-text" },
@@ -344,7 +340,6 @@ it("applies unknown-ignore and pause-stop policies through the Provider seam", a
       ]),
     model,
     now: () => 10,
-    projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
     configuration: parseCommandCodeConfiguration({
       conversion: {
         response: { pauseTurn: "stop", unknownEvent: "ignore" },
@@ -405,7 +400,6 @@ it("rolls back pause-error and wire-abort as distinct neutral failures", async (
       fetch: async () => jsonl(events),
       model,
       now: () => 10,
-      projectSnapshot: { snapshot: async () => createEmptyServerConfig() },
       configuration: parseCommandCodeConfiguration({
         conversion: { response: { pauseTurn } },
       }),

@@ -6,17 +6,24 @@ Repository:
 keeplearning2026/LuckyToken
 ```
 
-LuckyToken is a protocol-conversion project built around Pi AI IR as the shared semantic-conversion boundary, with a strictly bounded native-wire preservation path:
+LuckyToken serves client protocol wires through three independent data-plane lanes. Pi AI IR is the shared semantic-conversion boundary only for the Semantic Conversion lane; the two native preservation lanes bypass Pi AI IR and remain independent from each other:
 
 ```text
 Anthropic / OpenAI Responses / other client protocol wires
-                              ↕
-                 ┌────────────┴────────────┐
-                 │                         │
-              Pi AI IR          Native wire passthrough
-                 ↕                         ↕
-            Pi Providers          Compatible upstream wire
+                              │
+             ┌────────────────┼────────────────┐
+             │                │                │
+             ▼                ▼                ▼
+      Local Native     Provider Native      Pi AI IR
+      Preservation      Preservation           │
+             │                │                ▼
+             │                │           Pi Providers
+             │                │                │
+             ▼                ▼                ▼
+      Local Upstream   Provider Upstream   Provider Wire
 ```
+
+The three lanes may share only the minimum request-edge and lifecycle facts needed for routing and observation; they do not share execution, credential, transport, or semantic-conversion abstractions.
 
 ## Response Style
 
@@ -103,27 +110,46 @@ Pi AI IR is the only shared semantic-conversion boundary between external client
 - Provider-specific or client-protocol-specific fields must not leak into the common Pi AI IR merely for convenience.
 - Runtime and composition code may connect the two sides, but must not perform cross-side semantic conversion.
 
-### Native Wire Passthrough
+### Independent Data-Plane Lanes
 
-Pi AI IR is not required when no semantic conversion takes place. A native wire passthrough may bypass Pi AI IR only as a preservation path from a client wire to an explicitly compatible upstream wire.
-
-A passthrough path must satisfy all of these rules:
-
-- compatibility is established from an explicit wire/API contract or model capability, never from provider names or similar-looking payloads;
-- the model-visible request and response semantics are preserved rather than translated into another protocol;
-- only boundary-required transport, authentication, header filtering, content-encoding handling, and selected-model identity projection may alter the wire representation;
-- credentials remain owned by their credential authority, and passthrough code receives only the bounded authentication facts it needs;
-- passthrough-specific state and provider details stay out of Pi AI IR and do not become a second shared semantic model;
-- if serving the request requires semantic reinterpretation, invented defaults, cross-protocol repair, or an uncertain mapping, use the Pi AI IR conversion path or fail explicitly.
-
-The two valid data-plane shapes are therefore:
+Pi AI IR is not required when no semantic conversion takes place. LuckyToken has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
 
 ```text
-Semantic conversion: Client Wire → Pi AI IR → Pi Provider → Provider Wire
-Native preservation: Compatible Client Wire → Native Wire Passthrough → Compatible Upstream Wire
+1. Local Native Preservation
+   Compatible Client Wire
+   → local model recognition
+   → local credential authority
+   → local native passthrough transport
+   → Compatible Upstream Wire
+
+2. Provider Native Preservation
+   Compatible Client Wire
+   → resolved Pi Model
+   → Pi Models credential/auth resolution
+   → provider-native passthrough transport
+   → Compatible Upstream Wire
+
+3. Semantic Conversion
+   Client Wire
+   → Pi AI IR
+   → Pi Provider
+   → Provider Wire
 ```
 
-A client-protocol handler may hand an unchanged payload to a narrow passthrough seam using explicit compatibility and credential facts, but it must not directly instantiate or special-case a concrete provider implementation. Native passthrough is an exception for wire preservation, not an alternate provider abstraction.
+These lanes must remain independent:
+
+- Local Native Preservation owns its own model recognition, local credential lookup, request construction, transport, and response handling. It must not depend on alias resolution, Pi `Models`, Provider Native Passthrough, Pi AI IR, or Pi Provider execution.
+- Provider Native Preservation may use alias/model resolution, the resolved Pi `Model`, `Models.getAuth()`, request-local effective model facts, and provider/protocol-specific transport rules. It must not enter Pi AI IR or Pi Provider execution, and it must not read or reuse Local Native credentials, model registries, transports, or execution abstractions.
+- Semantic Conversion owns Client Wire ↔ Pi AI IR conversion and Pi Provider execution. It must not import, call, or reuse either native passthrough lane's request builders, credential authorities, transports, or response handling.
+- The two native lanes must not be unified behind a shared native target, native credential, native executor, native transport, or fallback abstraction. Similar wire-construction code may remain duplicated when sharing it would couple credential ownership or lifecycle.
+- Runtime/composition or the Client Protocol edge may select a lane using only the minimum routing facts required by that lane. After a lane is selected and execution begins, failure in that lane must not fall through to another lane.
+- Local Native eligibility is established by that integration's explicit local model/capability contract. Provider Native eligibility is established by an explicit `(provider, api/protocol)` transport contract or equivalent model capability; fuzzy provider-name similarity or payload resemblance is not sufficient.
+- Native lanes preserve model-visible request and response semantics rather than translating them. Only boundary-required model identity projection, credential/auth transport, header filtering, content encoding, and endpoint construction may alter the wire representation.
+- The raw client wire remains authoritative on native lanes. Native passthrough must not reconstruct or semantically normalize unrelated request fields merely to forward them.
+- Credentials remain owned by the authority of the selected lane. Local credentials never become Pi Provider credentials; Pi Provider credentials never become Local Native credentials; neither credential representation enters Pi AI IR.
+- If serving a request requires semantic reinterpretation, invented defaults, cross-protocol repair, or an uncertain mapping, that request is not native preservation. Route it to Semantic Conversion before execution begins, or fail explicitly if no valid semantic mapping exists.
+
+A Client Protocol edge may invoke narrow lane-specific seams, but it must not implement the concrete transport rules of any lane itself. Local Native, Provider Native, and Semantic Conversion are three separate execution paths with separate ownership and lifecycle.
 
 The CommandCode private provider must implement and register through the same Pi Provider contract and invocation path as Pi built-in providers. It is a LuckyToken implementation detail. External protocol adapters and public interfaces may use it only through the standard Pi model/provider path and must not directly instantiate, import, or special-case its private implementation.
 

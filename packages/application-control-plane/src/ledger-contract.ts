@@ -146,7 +146,6 @@ export interface RequestLedgerRecord {
   /** Internal Pi invocation identity; stored and delivered under its own
    *  labeled field, never substituted for the client id. */
   readonly effectiveSessionId?: string;
-  readonly projectDir?: string;
   readonly facts?: Readonly<LedgerFacts>;
   /** Ticket 20: the canonical terminal-usage snapshot captured at the Pi
    *  terminal (terminalAt), stored independently from any Client Wire usage
@@ -165,7 +164,6 @@ export interface RequestLedgerQuery {
   readonly protocolId?: string;
   readonly providerId?: string;
   readonly realModelId?: string;
-  readonly projectDir?: string;
   readonly clientSessionId?: string;
   readonly outcome?: LedgerOutcome;
   /** Inclusive acceptedAt range (epoch-ms). */
@@ -185,13 +183,12 @@ export interface RequestLedgerEvent {
   readonly record: RequestLedgerRecord;
 }
 
-/** Session/project facts captured from the auth authority after a
- *  successful authorization. The effective identity is always present; the
- *  client identity only when the client supplied a valid one. */
+/** Session facts captured at request acceptance. The effective identity is
+ * always present; the client identity only when the client supplied a valid
+ * session id. */
 export interface LedgerAuthFacts {
   readonly effectiveSessionId: string;
   readonly clientSessionId?: string;
-  readonly projectDir?: string;
 }
 
 /** Immutable alias/provider/real-model snapshot captured at model

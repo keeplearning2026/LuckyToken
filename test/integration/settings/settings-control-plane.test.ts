@@ -36,10 +36,25 @@ import type { ClientProtocolHandler } from "../../../src/http.js";
 const anthropic: ClientProtocolHandler = {
   method: "POST",
   pathname: "/v1/messages",
-  handle: async () =>
-    new Response("anthropic", {
+  handle: async (request) => {
+    if (request.headers.get("authorization") !== "Bearer settings-test-token") {
+      return new Response(
+        JSON.stringify({
+          error: {
+            type: "authentication_error",
+            message: "Invalid authentication credentials",
+          },
+        }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    return new Response("anthropic", {
       headers: { "content-type": "application/json" },
-    }),
+    });
+  },
 };
 const responses: ClientProtocolHandler = {
   method: "POST",
