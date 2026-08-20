@@ -36,11 +36,16 @@ describe("OpenAI Responses three-lane architecture certification", () => {
   });
 
   it("keeps Semantic conversion independent from both Native transports", async () => {
-    const text = await source("src/protocols/openai-responses/semantic.ts");
-    expect(text).not.toMatch(/provider-native-responses/u);
-    expect(text).not.toMatch(/integrations[\\/]codex/u);
-    expect(text).not.toMatch(/codex-responses-passthrough/u);
-    expect(text).not.toMatch(/passthroughResponsesRequest/u);
+    for (const file of [
+      "src/protocols/openai-responses/semantic.ts",
+      "src/protocols/openai-responses/compact-semantic.ts",
+    ]) {
+      const text = await source(file);
+      expect(text).not.toMatch(/provider-native-responses/u);
+      expect(text).not.toMatch(/integrations[\\/]codex/u);
+      expect(text).not.toMatch(/codex-responses-passthrough/u);
+      expect(text).not.toMatch(/passthroughResponsesRequest/u);
+    }
   });
 
   it("keeps the Responses handler as a lane selector instead of a concrete transport owner", async () => {
@@ -58,7 +63,8 @@ describe("OpenAI Responses three-lane architecture certification", () => {
     const text = await source("src/protocols/openai-responses/compact.ts");
     expect(text).toContain("localNativeLane");
     expect(text).toContain("providerNativeLane");
-    expect(text).toContain("executeSemanticResponses");
+    expect(text).toContain("executeSemanticCompact");
+    expect(text).not.toContain("executeSemanticResponses");
     expect(text).not.toMatch(/responsesHandler/u);
     expect(text).not.toMatch(/\.handle\(internalRequest/u);
     expect(text).not.toMatch(/integrations[\\/]codex/u);

@@ -3,10 +3,8 @@ import type { AliasModelSource } from "../../src/alias-model-seam.js";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  CODEX_COMPACT_PROMPT,
-  createOpenAIResponsesCompactHandler,
-} from "../../src/protocols/openai-responses/compact.js";
+import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
+import { CODEX_COMPACT_PROMPT } from "../../src/protocols/openai-responses/compact-semantic.js";
 
 function compactRequest(model: string, input: unknown[]): Request {
   return new Request("http://luckytoken.test/v1/responses/compact", {
@@ -119,20 +117,18 @@ describe("OpenAI Responses compact three-lane routing", () => {
     expect(executeOperation).not.toHaveBeenCalled();
   });
 
-  it("projects Provider Native compact success model identity back to the requested alias", async () => {
+  it("projects Provider Native compact success model identity losslessly back to the requested alias", async () => {
     const target = model("openai", "gpt-5", "openai-responses");
     const models = { getModels: () => [target] } as unknown as Models;
+    const upstreamBody =
+      '{\n  "object":"response.compaction", "model" : "gpt-5", "future_number":9007199254740993, "negative_zero":-0,\n  "output":[{"type":"compaction","encrypted_content":"opaque"}]\n}';
     const provider = {
       claims: vi.fn(() => true),
       execute: vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            object: "response.compaction",
-            model: "gpt-5",
-            output: [{ type: "compaction", encrypted_content: "opaque" }],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+        new Response(upstreamBody, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
       ),
     };
     const handler = createOpenAIResponsesCompactHandler({
@@ -146,10 +142,81 @@ describe("OpenAI Responses compact three-lane routing", () => {
     const response = await handler.handle(compactRequest("my-alias", []));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      object: "response.compaction",
-      model: "my-alias",
+    await expect(response.text()).resolves.toBe(
+      upstreamBody.replace('"gpt-5"', '"my-alias"'),
+    );
+  });
+
+  it("filters unsafe Provider Native compact response headers", async () => {
+    const target = model("openai", "gpt-5", "openai-responses");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const provider = {
+      claims: vi.fn(() => true),
+      execute: vi.fn(async () =>
+        new Response('{"object":"response.compaction","output":[]}', {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "sid=secret",
+            authorization: "Bearer upstream-secret",
+            "content-length": "999",
+            "content-encoding": "gzip",
+            "x-safe-provider-header": "keep-me",
+          },
+        }),
+      ),
+    };
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      providerNativeLane: provider,
+      stateFile: "unused-compact-header-filter.json",
+      maxRequestBytes: 1024,
     });
+
+    const response = await handler.handle(compactRequest("openai/gpt-5", []));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("authorization")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("x-safe-provider-header")).toBe("keep-me");
+  });
+
+  it("returns 502 when a claimed Provider Native compact response body cannot be read", async () => {
+    const target = model("openai", "gpt-5", "openai-responses");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const executeOperation = vi.fn(async () => {
+      throw new Error("Semantic execution must not run after Provider Native claims");
+    });
+    const provider = {
+      claims: vi.fn(() => true),
+      execute: vi.fn(async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(new Error("compact-body-canary"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    };
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      providerNativeLane: provider,
+      executeOperation,
+      stateFile: "unused-compact-body-read.json",
+      maxRequestBytes: 1024,
+    });
+
+    const response = await handler.handle(compactRequest("openai/gpt-5", []));
+
+    expect(response.status).toBe(502);
+    const wire = await response.text();
+    expect(wire).toContain("Upstream compact response could not be read");
+    expect(wire).not.toContain("compact-body-canary");
+    expect(executeOperation).not.toHaveBeenCalled();
   });
 
   it("sanitizes Provider Native compact alias errors instead of leaking canonical identity", async () => {
@@ -220,14 +287,22 @@ describe("OpenAI Responses compact three-lane routing", () => {
     expect(JSON.stringify(body.output[2])).toContain("SUMMARY BODY");
   });
 
-  it("contains no full Responses handler re-entry or Codex integration ownership", async () => {
+  it("keeps compact routing separate from Semantic compact execution", async () => {
     const source = await readFile(
       "src/protocols/openai-responses/compact.ts",
+      "utf8",
+    );
+    const semantic = await readFile(
+      "src/protocols/openai-responses/compact-semantic.ts",
       "utf8",
     );
     expect(source).not.toContain("responsesHandler");
     expect(source).not.toContain(".handle(internalRequest)");
     expect(source).not.toMatch(/integrations[\\/]codex/u);
-    expect(source).toContain("executeSemanticResponses");
+    expect(source).not.toContain("executeSemanticResponses");
+    expect(source).not.toContain("RETAINED_USER_CHAR_BUDGET");
+    expect(source).toContain("executeSemanticCompact");
+    expect(semantic).toContain("executeSemanticResponses");
+    expect(semantic).toContain("CODEX_COMPACT_PROMPT");
   });
 });

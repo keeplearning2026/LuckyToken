@@ -54,6 +54,36 @@ describe("Ticket 15 Responses passthrough response projection", () => {
     expect(parsed.model).toBe(ALIAS);
   });
 
+  it("changes only the model string in native JSON and preserves future numeric wire forms", () => {
+    const source =
+      '{\n  "id":"resp_lossless",  "model" : "gpt-4o",\n  "future_number":9007199254740993, "negative_zero":-0, "scientific":1e+30,\n  "future":{"opaque":true}\n}';
+    const expected = source.replace('"gpt-4o"', '"my-alias"');
+
+    const result = projectResponsesPassthroughBody(
+      encode(source),
+      "application/json",
+      ALIAS,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(decode((result as { body: Uint8Array }).body)).toBe(expected);
+  });
+
+  it("changes only the model string inside a native SSE data line", () => {
+    const source =
+      'event: response.completed\r\ndata: {  "id":"resp_sse", "model" : "gpt-4o", "future_number":9007199254740993, "negative_zero":-0 }\r\n\r\n';
+    const expected = source.replace('"gpt-4o"', '"my-alias"');
+
+    const result = projectResponsesPassthroughBody(
+      encode(source),
+      "text/event-stream",
+      ALIAS,
+    );
+
+    expect("error" in result).toBe(false);
+    expect(decode((result as { body: Uint8Array }).body)).toBe(expected);
+  });
+
   it("rewrites every model-bearing streaming event and preserves other events", () => {
     const stream = [
       "event: response.created",
