@@ -11,7 +11,6 @@ export interface CodexCatalogAliasEntry {
 }
 
 export interface BuildCodexCatalogOptions {
-  readonly nativeModels: readonly Model<string>[];
   readonly nativeCatalogEntries?: readonly Readonly<Record<string, unknown>>[];
   readonly models: Pick<Models, "getModels">;
   readonly aliases: readonly CodexCatalogAliasEntry[];
@@ -50,11 +49,8 @@ function codexEntry(
   const supportsImage = model.input.includes("image");
   return Object.freeze({
     slug,
-    display_name: model.name || slug,
-    description:
-      model.provider === "openai-codex" && slug === model.id
-        ? "Native Codex model routed through LuckyToken."
-        : `LuckyToken model: ${model.name || slug}`,
+    display_name: slug,
+    description: `LuckyToken model: ${slug}`,
     shell_type: "shell_command",
     visibility: "list",
     supported_in_api: true,
@@ -86,25 +82,6 @@ function codexEntry(
   });
 }
 
-function nativeCodexEntry(
-  model: Model<string>,
-  baseline: Readonly<Record<string, unknown>>,
-  priority: number,
-): CodexCatalogEntry {
-  const contextWindow = safeContextWindow(model);
-  return Object.freeze({
-    ...baseline,
-    slug: model.id,
-    prefer_websockets: false,
-    input_modalities: Object.freeze([...model.input]),
-    supports_image_detail_original: model.input.includes("image"),
-    context_window: contextWindow,
-    max_context_window: contextWindow,
-    auto_compact_token_limit: Math.floor(contextWindow * 0.9),
-    priority,
-  }) as CodexCatalogEntry;
-}
-
 /**
  * Project the current LuckyToken model surface into a Codex-facing catalog.
  * Native Codex models keep bare ids; Pi targets appear only through explicit,
@@ -124,26 +101,18 @@ export function buildCodexCatalog(
           typeof value === "string" && value.trim().length > 0,
       ) ?? "You are a helpful coding assistant.";
   const nativeIds = new Set<string>();
-  const nativeBaseline = new Map<string, Readonly<Record<string, unknown>>>();
   for (const entry of options.nativeCatalogEntries ?? []) {
     const slug = entry.slug;
-    if (typeof slug === "string" && slug.length > 0 && !slug.includes("/")) {
-      nativeBaseline.set(slug, entry);
-    }
-  }
-
-  for (const model of options.nativeModels) {
-    if (model.id.length === 0 || model.id.includes("/")) continue;
-    if (nativeIds.has(model.id)) continue;
-    nativeIds.add(model.id);
-    const baseline = nativeBaseline.get(model.id);
-    if (baseline === undefined) {
-      warnings.push(
-        `Native Codex model "${model.id}" is not exposed to the picker because its native metadata is unavailable.`,
-      );
+    if (
+      typeof slug !== "string" ||
+      slug.length === 0 ||
+      slug.includes("/") ||
+      nativeIds.has(slug)
+    ) {
       continue;
     }
-    entries.push(nativeCodexEntry(model, baseline, entries.length + 1));
+    nativeIds.add(slug);
+    entries.push(Object.freeze({ ...entry, slug }) as CodexCatalogEntry);
   }
 
   const callable = new Map(

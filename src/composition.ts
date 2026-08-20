@@ -91,7 +91,6 @@ import type {
   CodexNativeModelSource,
 } from "./codex-native-seam.js";
 import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
-import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
 import { createCodexLocalResponsesLane } from "./integrations/codex/local-responses.js";
 import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
 import { createProviderNativeResponses } from "./provider-native-responses/index.js";
@@ -238,9 +237,8 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly modelsStore?: ModelsStore;
   /** See `ConfiguredPiModelsOptions.onProviderLogin` (Ticket 11). */
   readonly onProviderLogin?: (providerId: string) => void;
-  /** Native Codex request seams. Production uses the local file-backed
-   *  authority and Pi builtin model source; tests may inject deterministic
-   *  implementations without changing the generic Auth contract. */
+  /** Native Codex request seams. The Backend-owned Codex integration authority
+   *  supplies model identity; tests may inject deterministic implementations. */
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
   /**
@@ -477,9 +475,7 @@ export async function createConfiguredLuckyTokenDataPlane(
       ? undefined
       : options.codexLocalAuth ?? createCodexLocalCredentialAuthority();
   const codexNativeModels =
-    openaiResponsesConfig === undefined
-      ? undefined
-      : options.codexNativeModels ?? createCodexNativeModelSource();
+    openaiResponsesConfig === undefined ? undefined : options.codexNativeModels;
   const registry = options.settingsRegistry;
   if (registry !== undefined) await registry.load();
   // Provider Activation (Spec v1.0 §13): the Data Plane consumes the

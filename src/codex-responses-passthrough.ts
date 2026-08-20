@@ -1,6 +1,4 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
-
-import type { CodexForwardAuth } from "./codex-native-seam.js";
+import type { CodexFetchFunction, CodexForwardAuth } from "./codex-native-seam.js";
 
 export const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 export const CODEX_RESPONSES_COMPACT_URL =
@@ -17,7 +15,7 @@ export interface CodexResponsesPassthroughOptions {
   readonly requestHeaders: Headers;
   readonly forwardAuth: CodexForwardAuth;
   readonly signal: AbortSignal;
-  readonly fetch: FetchFunction;
+  readonly fetch: CodexFetchFunction;
 }
 
 const HOP_BY_HOP = new Set([

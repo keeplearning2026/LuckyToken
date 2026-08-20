@@ -259,6 +259,147 @@ describe("Backend Application public lifecycle seam", () => {
     }
   });
 
+  it("owns Codex integration across Enable, application exit restore, and the next startup", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const codexHome = join(dirname(configPath), "codex-home");
+    await mkdir(codexHome, { recursive: true });
+    const originalCodexConfig = [
+      'model_provider = "before"',
+      'openai_base_url = "https://before.example/v1"',
+      'model = "before-model"',
+      "",
+    ].join("\n");
+    await writeFile(join(codexHome, "config.toml"), originalCodexConfig, "utf8");
+    await writeFile(
+      join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-native", display_name: "GPT Native" }] })}\n`,
+      "utf8",
+    );
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+
+    try {
+      const first = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(first.kind).toBe("running");
+      if (first.kind !== "running") return;
+      applications.push(first.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        const enabled = await client.executeCodexIntegrationCommand({
+          command: "set_enabled",
+          enabled: true,
+        });
+        expect(enabled.state).toMatchObject({
+          desiredEnabled: true,
+          observedState: "managed",
+        });
+      } finally {
+        await client.close();
+      }
+
+      const injected = await readFile(join(codexHome, "config.toml"), "utf8");
+      expect(injected).toContain('model_provider = "openai"');
+      expect(injected).toContain("openai_base_url = ");
+      expect(injected).toContain("model_catalog_json = ");
+
+      await first.application.close();
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+
+      const second = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(second.kind).toBe("running");
+      if (second.kind !== "running") return;
+      applications.push(second.application);
+
+      const reinjected = await readFile(join(codexHome, "config.toml"), "utf8");
+      expect(reinjected).toContain('model_provider = "openai"');
+      expect(reinjected).toContain("openai_base_url = ");
+      expect(reinjected).toContain("model_catalog_json = ");
+
+      await second.application.close();
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    }
+  });
+
+  it("refuses application quit when an active Codex projection cannot be restored", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const codexHome = join(dirname(configPath), "codex-home-restore-failure");
+    await mkdir(codexHome, { recursive: true });
+    const originalCodexConfig = 'openai_base_url = "https://before.example/v1"\n';
+    await writeFile(join(codexHome, "config.toml"), originalCodexConfig, "utf8");
+    await writeFile(
+      join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-native" }] })}\n`,
+      "utf8",
+    );
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+
+    try {
+      const started = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        await client.executeCodexIntegrationCommand({ command: "set_enabled", enabled: true });
+        await rm(join(codexHome, "config.toml"), { force: true });
+
+        const quit = await client.executeApplicationCommand({
+          command: "quit",
+          acknowledged: true,
+        });
+
+        expect(quit.outcome).toBe("failed");
+        expect(quit.error).toContain("Codex integration");
+        await expect(client.getStatus()).resolves.toMatchObject({ modelDataPlane: "running" });
+      } finally {
+        await client.close();
+      }
+
+      await writeFile(join(codexHome, "config.toml"), "", "utf8");
+      await started.application.close();
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    }
+  });
+
   it("delivers an ownership-aware quit result before the application exits", async () => {
     const { configPath, descriptorPath } = await fixture();
     const started = await startLuckyTokenApplication({

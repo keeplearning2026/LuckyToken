@@ -509,9 +509,10 @@ export type AliasCommandHandler = (
   command: AliasCommand,
 ) => Promise<AliasCommandResult>;
 
-/** Optional local Codex configuration integration. Native Codex request
- * support is a Data Plane capability and is deliberately not controlled by
- * this desired-state switch. */
+/** Codex integration desired state. While active, the Backend-owned authority
+ * controls the three Codex routing keys, the projected model catalog, and the
+ * Local Native model-identity snapshot. Restoring the integration clears that
+ * Local Native snapshot without changing unrelated Provider lanes. */
 export type CodexIntegrationObservedState =
   | "native"
   | "managed"
@@ -535,7 +536,7 @@ export interface CodexIntegrationProjection {
 export type CodexIntegrationCommand =
   | { readonly command: "query" }
   | { readonly command: "set_enabled"; readonly enabled: boolean }
-  | { readonly command: "sync_catalog" };
+  | { readonly command: "sync" };
 
 export interface CodexIntegrationCommandResult {
   readonly state: CodexIntegrationProjection;

@@ -167,10 +167,12 @@ npm run test:online-codex      # Codex CLI 真实客户端套件（新增，自�
   单 `input` 参数的 function；`namespace` 组展平；追加到已有 assistant 的
   `function_call` 必须同步记录 call_id → tool_name 索引（否则后续
   `function_call_output` 报 unknown tool call id）。
-- **Codex 模型元数据**：`model_catalog_json` 是 Codex **根级**字段（`--strict-config`
-  拒绝放在 `[model_providers]` 里），所以 catalog 通过独立 profile 提供；
-  `env_key` 让 Codex 从环境变量读 LuckyToken token，不触碰 `auth.json` 的
-  OpenAI key。
+- **Codex 模型元数据**：LuckyToken 仅管理用户级 `$CODEX_HOME/config.toml` 的三个
+  根级字段：`model_provider = "openai"`、`openai_base_url = <LuckyToken /v1>`、
+  `model_catalog_json = <LuckyToken-owned catalog>`。Codex 原生 row 来自当前 Codex
+  bundled catalog（失败时只读 `models_cache.json`）；LuckyToken 注入 row 统一以 alias
+  作为 `slug`/`display_name`。`auth.json` 不参与 Integration Enable，只在请求实际命中
+  Local Native 时作为 read-only credential authority。
 - **CommandCode 4 个模型对外可发现 + Codex 可选**（用户已确认）：`deepseek-v4-flash`、
   `deepseek-v4-pro`、`gpt-5.6-luna`、`Qwen/Qwen3.7-Flash`，selector 契约
   `provider/model_id`（首个斜杠分割，model_id 可含斜杠）。`/v1/models` 已暴露
@@ -184,9 +186,11 @@ npm run test:online-codex      # Codex CLI 真实客户端套件（新增，自�
   `~/.codex/sessions/.../rollout-*.jsonl`（按会话 id 匹配，全在）。
   opencodex 时代的会话标签是 `openai`（它借用 openai 身份注入 base_url）；
   改用 luckytoken 后 UI 按 provider 过滤，旧记录不丢但被隐藏。
-- **opencodex 会持续接管 `~/.codex/config.toml`**：它运行在 10100 端口，自动
-  注入 `model`/`model_catalog_json`/`openai_base_url` 并删除 luckytoken 的
-  provider/catalog 文件。要让 LuckyToken 稳定生效需先停 opencodex。
+- **Codex Integration 生命周期**：Enable/Startup/Sync/Disable/Application Exit 全部
+  经一个 `CodexIntegrationAuthority` 收敛。Active 时 Authority 同步发布 LuckyToken
+  catalog 与同一 native snapshot 派生的内存 Local Native set；Disable/正常退出恢复
+  本次 Active 前第一次观察到的三个 root key 状态并清空 native set。退出不会改写
+  durable Enable 意图，因此下次启动会重新观察新的 preimage 后再次注入。
 - 单实例假设：快照不做跨进程锁；多实例共享历史是后续分布式问题。
 - SSE 为原子合成序列，首版不做逐 delta 流式。
 - opencodex 的重量级设施（spill、加密 payload、compaction 缓存、metrics）未移植，
@@ -205,9 +209,9 @@ npm run test:online-codex      # Codex CLI 真实客户端套件（新增，自�
 
 **候选下一步**：
 
-- 若需 LuckyToken 在 Codex 默认生效：先停 opencodex（10100 端口），再重建
-  `~/.codex/luckytoken-catalog.json` 与 `[model_providers.luckytoken]`
-  （本次会话已做过，被 opencodex 覆盖删除）；
+- Codex Integration 若与其他仍在运行的配置管理器同时控制同一 `config.toml`，应由用户
+  明确选择唯一运行中的配置 owner；LuckyToken Enable 本身的契约是对三个 root key
+  做确定目标收敛，而不是与另一个 manager 争抢写入。
 - 若需要，把 OpenAI Responses 纳入 serving certification 范围（当前不在）；
 - 方案 C（按已配置凭据过滤模型）若用户提出再实现。
 - **与 opencodex 的全面对比已完成**（交付物

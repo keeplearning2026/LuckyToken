@@ -1,7 +1,6 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
-
 import type { LocalResponsesLane } from "../../protocols/openai-responses/handler.js";
 import type {
+  CodexFetchFunction,
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
   CodexForwardAuth,
@@ -20,7 +19,7 @@ import {
 export interface CreateCodexLocalResponsesLaneOptions {
   readonly credentials: CodexLocalCredentialAuthority;
   readonly models: CodexNativeModelSource;
-  readonly fetch: FetchFunction;
+  readonly fetch: CodexFetchFunction;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -33,7 +32,7 @@ function toResponse(prepared: PreparedHttpResponse): Response {
 async function executeWithAuth(
   input: Parameters<LocalResponsesLane["execute"]>[0],
   forwardAuth: CodexForwardAuth,
-  fetch: FetchFunction,
+  fetch: CodexFetchFunction,
 ): Promise<Response> {
   try {
     input.ledger.executing();

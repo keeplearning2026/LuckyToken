@@ -850,7 +850,7 @@ export function decodeCodexIntegrationCommand(
 ): CodexIntegrationCommand | undefined {
   if (!isRecord(value) || typeof value.command !== "string") return undefined;
   if (value.command === "query") return { command: "query" };
-  if (value.command === "sync_catalog") return { command: "sync_catalog" };
+  if (value.command === "sync") return { command: "sync" };
   if (value.command === "set_enabled" && typeof value.enabled === "boolean") {
     return { command: "set_enabled", enabled: value.enabled };
   }

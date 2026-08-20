@@ -1,8 +1,8 @@
-import type { Model } from "@earendil-works/pi-ai";
-
 import type { ReadonlyHeaders } from "./request-identity.js";
 
 /** Bounded authentication facts needed by client-owned Codex passthrough. */
+export type CodexFetchFunction = typeof globalThis.fetch;
+
 export interface CodexForwardAuth {
   readonly authorization: string;
   readonly accountId?: string;
@@ -13,19 +13,13 @@ export interface CodexForwardAuth {
  * contract; the Codex integration owns filesystem observation and secrets.
  */
 export interface CodexLocalCredentialAuthority {
-  isAvailable(): Promise<boolean>;
   resolveForwardAuth(
     headers: ReadonlyHeaders,
   ): Promise<CodexForwardAuth | undefined>;
   scrub(value: string): string;
 }
 
-/**
- * Neutral source of Pi's bundled native Codex model identities. The protocol
- * asks only whether a bare id is native; integration/catalog code may consume
- * the bounded model list.
- */
+/** Read-only Local Native model identity seam published by the Codex integration authority. */
 export interface CodexNativeModelSource {
   has(modelId: string): boolean;
-  models(): readonly Model<string>[];
 }

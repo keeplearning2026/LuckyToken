@@ -96,9 +96,6 @@ export function createCodexLocalCredentialAuthority(
   };
 
   return Object.freeze({
-    async isAvailable(): Promise<boolean> {
-      return (await readCurrent()) !== undefined;
-    },
     async resolveForwardAuth(headers: ReadonlyHeaders): Promise<CodexForwardAuth | undefined> {
       const incoming = bearerCredential(headers);
       if (incoming === undefined) return undefined;

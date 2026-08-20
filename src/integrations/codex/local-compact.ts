@@ -1,6 +1,5 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
-
 import type {
+  CodexFetchFunction,
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../codex-native-seam.js";
@@ -18,7 +17,7 @@ import {
 export interface CreateCodexLocalCompactLaneOptions {
   readonly credentials: CodexLocalCredentialAuthority;
   readonly models: CodexNativeModelSource;
-  readonly fetch: FetchFunction;
+  readonly fetch: CodexFetchFunction;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {

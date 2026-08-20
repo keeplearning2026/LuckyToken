@@ -95,8 +95,7 @@ import { createFileSettingsStore } from "./settings/file-store.js";
 import { startLuckyTokenHttpServer } from "./server.js";
 import { resolveCodexHome } from "./integrations/codex/home.js";
 import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
-import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
-import { readCodexNativeCatalogEntries } from "./integrations/codex/native-catalog-source.js";
+import { createCodexNativeCatalogSource } from "./integrations/codex/native-catalog-source.js";
 import { buildCodexCatalog } from "./integrations/codex/catalog.js";
 import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
 import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
@@ -655,10 +654,8 @@ async function startNormalApplication(options: {
     });
     aliasAuthorityHolder.current = aliasAuthority;
 
-    const codexLocalAuth = createCodexLocalCredentialAuthority({
-      codexHome: resolveCodexHome(),
-    });
-    const codexNativeModels = createCodexNativeModelSource();
+    const codexHome = resolveCodexHome();
+    const codexLocalAuth = createCodexLocalCredentialAuthority({ codexHome });
     const codexDialHost = (host: string): string => {
       const normalized = host.trim().toLowerCase();
       if (
@@ -673,30 +670,29 @@ async function startNormalApplication(options: {
       return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
     };
     const codexIntegrationAuthority = createCodexIntegrationAuthority({
-      codexHome: resolveCodexHome(),
+      codexHome,
       stateDirectory: join(dirname(options.configPath), "integrations", "codex"),
       endpoint: () => {
-        if (lastPublishedStatus.modelDataPlane !== "running") return undefined;
         const address = resolveEffectiveSettings(settingsRegistry.query([]));
         return `http://${codexDialHost(address.host)}:${address.port}/v1`;
       },
-      localAuthAvailable: () => codexLocalAuth.isAvailable(),
-      buildCatalog: async () => {
+      nativeCatalog: createCodexNativeCatalogSource({ codexHome }),
+      buildCatalog: async (nativeCatalogEntries) => {
         const models = providerRuntime?.models;
         if (models === undefined) {
-          throw new Error(
-            "LuckyToken model catalog is unavailable",
-          );
+          throw new Error("LuckyToken model catalog is unavailable");
         }
         await aliasAuthority.query();
         return buildCodexCatalog({
-          nativeModels: codexNativeModels.models(),
-          nativeCatalogEntries: await readCodexNativeCatalogEntries(resolveCodexHome()),
+          nativeCatalogEntries,
           models,
           aliases: aliasAuthority.resolver().entries(),
         });
       },
     });
+    const restoreCodexBeforeShutdown = async (): Promise<void> => {
+      await codexIntegrationAuthority.reconcile("shutdown");
+    };
 
     const historyAuthority = createHistoryAuthority({
       sources: {
@@ -776,6 +772,7 @@ async function startNormalApplication(options: {
       startListener: async (address) => {
         const shutdownController = new AbortController();
         try {
+          await codexIntegrationAuthority.reconcile("startup");
           const composition = await createConfiguredLuckyTokenDataPlane({
             config,
             fetch: globalThis.fetch,
@@ -787,7 +784,7 @@ async function startNormalApplication(options: {
             providerRuntime,
             aliasAuthority,
             codexLocalAuth,
-            codexNativeModels,
+            codexNativeModels: codexIntegrationAuthority.nativeModels,
             onCapturePersistenceFailure: (failure) => {
               persistenceAuthority.reportFailure("capture", {
                 ...(failure.requestId.length === 0
@@ -828,6 +825,14 @@ async function startNormalApplication(options: {
           shutdownController.abort(
             new Error("LuckyToken model gateway startup failed"),
           );
+          try {
+            await restoreCodexBeforeShutdown();
+          } catch (restoreError) {
+            throw new AggregateError(
+              [error, restoreError],
+              "LuckyToken model gateway startup failed and Codex integration could not be restored",
+            );
+          }
           throw error;
         }
       },
@@ -848,6 +853,7 @@ async function startNormalApplication(options: {
         now: Date.now,
         requireInitialClaim: true,
         onExpired: async () => {
+          await restoreCodexBeforeShutdown();
           const outcome = await supervisor?.quit({
             timeoutMs: drainTimeoutMs(),
             publishStatus: publish,
@@ -869,6 +875,7 @@ async function startNormalApplication(options: {
         }
         attentionLedgerSubscription?.unsubscribe();
         attentionLedgerSubscription = undefined;
+        await restoreCodexBeforeShutdown();
         if (supervisor !== undefined) {
           await supervisor
             .execute(
@@ -991,9 +998,11 @@ async function startNormalApplication(options: {
         const state =
           command.command === "query"
             ? await codexIntegrationAuthority.query()
-            : command.command === "sync_catalog"
-              ? await codexIntegrationAuthority.syncCatalog()
-              : await codexIntegrationAuthority.setEnabled(command.enabled);
+            : command.command === "sync"
+              ? await codexIntegrationAuthority.reconcile("sync")
+              : await codexIntegrationAuthority.reconcile(
+                  command.enabled ? "enable" : "disable",
+                );
         return { state };
       },
       applicationCommandHandler: async (command, publishStatus) => {
@@ -1013,6 +1022,14 @@ async function startNormalApplication(options: {
             };
           }
           case "quit": {
+            try {
+              await restoreCodexBeforeShutdown();
+            } catch {
+              return {
+                outcome: "failed",
+                error: "Codex integration could not be restored; LuckyToken remains running.",
+              };
+            }
             const outcome = await supervisor?.quit({
               timeoutMs: drainTimeoutMs(),
               publishStatus,
@@ -1069,11 +1086,15 @@ async function startNormalApplication(options: {
     lifecycle = createLifecycle({
       ownership,
       cleanup,
-      drain: async () =>
-        (await supervisor?.quit({
-          timeoutMs: drainTimeoutMs(),
-          publishStatus: publish,
-        })) ?? "timed_out",
+      drain: async () => {
+        await restoreCodexBeforeShutdown();
+        return (
+          (await supervisor?.quit({
+            timeoutMs: drainTimeoutMs(),
+            publishStatus: publish,
+          })) ?? "timed_out"
+        );
+      },
       ...(options.events === undefined ? {} : { events: options.events }),
     });
     if (desktopOwnerLease !== undefined) {
