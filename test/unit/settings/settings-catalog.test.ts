@@ -25,7 +25,6 @@ describe("authoritative registered settings catalog", () => {
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
       "server.port",
-      "server.bindHost",
       "application.quitDrainTimeoutMs",
     ]);
 
@@ -51,17 +50,6 @@ describe("authoritative registered settings catalog", () => {
       effective: 3000,
     });
     expect(port?.validation).toBeDefined();
-
-    const bindHost = byKey.get("server.bindHost");
-    expect(bindHost).toMatchObject({
-      key: "server.bindHost",
-      type: "string",
-      default: "127.0.0.1",
-      sensitivity: "public",
-      applyMode: "restart-required",
-      value: "127.0.0.1",
-      effective: "127.0.0.1",
-    });
 
     const drainTimeout = byKey.get("application.quitDrainTimeoutMs");
     expect(drainTimeout).toMatchObject({
@@ -95,6 +83,17 @@ describe("authoritative registered settings catalog", () => {
     expect(registry.query(["unknown.internal.flag"])).toEqual({});
   });
 
+  it("does not expose a configurable bind host", () => {
+    const registry = createSettingsRegistry(emptyStore());
+
+    expect(registry.catalog().some((setting) => setting.key === "server.bindHost")).toBe(false);
+    expect(registry.query(["server.bindHost"])).toEqual({});
+    expect(registry.validate("server.bindHost", "0.0.0.0")).toMatchObject({
+      valid: false,
+      error: "server.bindHost is not a registered setting",
+    });
+  });
+
   it("validates values and rejects values outside the declared validation", () => {
     const registry = createSettingsRegistry(emptyStore());
     const port = registry.catalog().find((setting) => setting.key === "server.port");
@@ -112,12 +111,6 @@ describe("authoritative registered settings catalog", () => {
       valid: false,
     });
     expect(registry.validate("server.port", 3000)).toMatchObject({ valid: true });
-    expect(registry.validate("server.bindHost", "0.0.0.0")).toMatchObject({
-      valid: true,
-    });
-    expect(registry.validate("server.bindHost", "not a host")).toMatchObject({
-      valid: false,
-    });
     expect(registry.validate("protocols.anthropic-messages.enabled", true)).toMatchObject({
       valid: true,
     });

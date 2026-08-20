@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { projectResponsesPassthroughBody } from "../../src/protocols/openai-responses/passthrough.js";
+import { projectNativeResponsesBody as projectResponsesPassthroughBody } from "../../src/protocols/openai-responses/native-response.js";
 
 const ALIAS = "my-alias";
 const CANONICAL = "gpt-4o";

@@ -1,6 +1,5 @@
 export {
   createSettingsRegistry,
-  type LanConfirmation,
   type RegisteredSetting,
   type SettingsCommandResult,
   type SettingsRegistry,
@@ -11,7 +10,7 @@ export {
   type SettingValidation,
 } from "./catalog.js";
 export {
-  isLoopbackHost,
+  DATA_PLANE_LOOPBACK_HOST,
   protocolEnabled,
   resolveEffectiveSettings,
   type EffectiveDataPlaneAddress,

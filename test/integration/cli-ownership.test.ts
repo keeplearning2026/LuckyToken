@@ -17,7 +17,6 @@ import {
   type RunningControlPlane,
 } from "@luckytoken/application-control-plane/control-plane";
 
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import {
   createUnsupportedAutoStartRegistrar,
@@ -120,27 +119,16 @@ describe("LuckyToken CLI ownership lifecycle", () => {
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
         server: {
-          host: "127.0.0.1",
           port: options.port ?? (await reserveFreePort()),
         },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
-          "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
-          },
+          "anthropic-messages": {},
+          "openai-responses": {},
         },
         pi: { directory: "pi" },
       }),
       "utf8",
     );
-    await createFileClientTokenStore({
-      path: join(stateDirectory, "client-auth", "anthropic-messages.json"),
-    }).create({ type: "global" }, "owner-cli-anthropic-token");
-    await createFileClientTokenStore({
-      path: join(stateDirectory, "client-auth", "openai-responses.json"),
-    }).create({ type: "global" }, "owner-cli-responses-token");
     if (options.settings !== undefined) {
       await writeFile(
         join(stateDirectory, "settings.json"),

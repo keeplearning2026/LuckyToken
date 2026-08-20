@@ -9,7 +9,6 @@ import type {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
 import {
   createAnthropicMessagesHandler,
@@ -90,12 +89,8 @@ function dependencies(
   models: Models,
   passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
-  const auth: Auth = {
-    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-  };
   const options: AnthropicMessagesHandlerOptions = {
     models,
-    auth,
     modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,

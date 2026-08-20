@@ -230,7 +230,7 @@ button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
 .overview-stat-card { min-width: 0; display: grid; gap: 7px; padding: 16px; border: 1px solid #e0e2e5; border-radius: 11px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 3%); }
 .overview-stat-card span { color: #737880; font-size: 12px; }
 .overview-stat-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 680; }
-.overview-filters { display: grid; grid-template-columns: repeat(6, minmax(145px, 1fr)); gap: 10px; padding: 14px; border: 1px solid #e0e2e5; border-radius: 11px; background: #fff; }
+.overview-filters { display: grid; grid-template-columns: repeat(5, minmax(145px, 1fr)); gap: 10px; padding: 14px; border: 1px solid #e0e2e5; border-radius: 11px; background: #fff; }
 .overview-filter-field { min-width: 0; display: grid; gap: 5px; color: #666b72; font-size: 12px; }
 .overview-filter-field input, .overview-filter-field select { min-width: 0; width: 100%; border: 1px solid #cfd2d6; border-radius: 7px; background: #fff; color: #30343a; padding: 7px 8px; }
 .overview-requests { min-width: 0; border: 1px solid #e0e2e5; border-radius: 11px; background: #fff; overflow: hidden; }
@@ -241,7 +241,6 @@ button.secondary { background: #fff; color: #30343a; border-color: #cfd2d6; }
 .overview-request-table tbody tr:last-child td { border-bottom: 0; }
 .overview-request-table code { font-size: 11px; color: #62676e; }
 .overview-col-compact { width: 1%; }
-.overview-col-project { max-width: 260px; }
 .overview-col-model { max-width: 220px; }
 .overview-col-request-id { min-width: 0; }
 .overview-status-badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 650; vertical-align: middle; }

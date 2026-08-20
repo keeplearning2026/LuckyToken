@@ -19,7 +19,6 @@ import { fileURLToPath } from "node:url";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -712,20 +711,15 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   await mkdir(configDirectory, { recursive: true });
   await mkdir(workspace, { recursive: true });
 
-  const clientToken = randomUUID();
-  const authFile = join(stateDirectory, "client-auth", "anthropic-messages.json");
-  await createFileClientTokenStore({ path: authFile }).create(
-    { type: "global" },
-    clientToken,
-  );
+  const localSdkCredential = "unused-local-client-key";
   const configPath = join(stateDirectory, "config.json");
   await writeFile(
     configPath,
     JSON.stringify({
       schemaVersion: "luckytoken-config-v1",
-      server: { host: "127.0.0.1", port: 0 },
+      server: { port: 0 },
       clientProtocols: {
-        "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
+        "anthropic-messages": {},
       },
       providerPackages:
         providerId === "commandcode-private"
@@ -827,11 +821,11 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   const runtime = captureRuntime(composition.runtime, captures, () => marker);
   const server = await startLuckyTokenHttpServer({
     runtime,
-    host: config.server.host,
+    host: "127.0.0.1",
     port: config.server.port,
   });
   try {
-    await writeClaudeSettings(server.origin, clientToken, selector);
+    await writeClaudeSettings(server.origin, localSdkCredential, selector);
     const matrix: Array<{
       id: string;
       status: "pass" | "fail";

@@ -821,7 +821,6 @@ describe("adapter-owned configuration", () => {
           schemaVersion: "luckytoken-config-v1",
           clientProtocols: {
             "anthropic-messages": {
-              authFile: "auth/anthropic.json",
               conversion: {
                 request: {
                   unknownContent: "ignore",
@@ -832,7 +831,6 @@ describe("adapter-owned configuration", () => {
               },
             },
             "openai-responses": {
-              authFile: "auth/responses.json",
               stateFile: "state/responses.json",
               conversion: {
                 request: {
@@ -888,9 +886,7 @@ describe("adapter-owned configuration", () => {
 
       const loaded = await loadLuckyTokenCliConfig(configPath);
       const configDirectory = resolve(root, "config");
-      expect(loaded.clientProtocols["anthropic-messages"]?.authFile).toBe(
-        join(configDirectory, "auth", "anthropic.json"),
-      );
+      expect(loaded.clientProtocols["anthropic-messages"]).not.toHaveProperty("authFile");
       expect(loaded.clientProtocols["openai-responses"]?.stateFile).toBe(
         join(configDirectory, "state", "responses.json"),
       );

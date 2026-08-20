@@ -111,9 +111,7 @@ export function createCommandCodeServingTestComposition(
       defaultAnthropicModelValidityPolicy.revision,
     compatibility: compatibilitySource,
     fetchBound: typeof options.fetch === "function",
-    clientAuthorityPolicy: "bound-injected-auth-v1",
     routerDefaults,
-    clientAuthConfigured: options.clientApiKey.length > 0,
     providerApiKeyConfigured: options.commandCodeApiKey.length > 0,
     providerAuthPolicy: "fixed-api-key-header-v1",
     providerRegistrationPolicy: "startup-only-mutable-models-v1",
@@ -156,6 +154,7 @@ export function createCommandCodeServingTestComposition(
   const models: Models = mutableModels;
   const anthropic = createAnthropicMessagesHandler({
     models,
+    createSessionId,
     passthroughFetch: options.fetch,
     ...(options.anthropicModelValidityPolicy === undefined
       ? {}

@@ -55,7 +55,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     expect(await readFile(path)).toEqual(bytes);
   });
 
-  it("reports incompatible durable schemas while allowing disposable legacy client-auth to rebuild at runtime", async () => {
+  it("reports incompatible durable schemas while ignoring obsolete client-auth files", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-preflight-"));
     roots.push(root);
     const configPath = join(root, "config.json");
@@ -65,7 +65,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
-          "anthropic-messages": { authFile: "anthropic-client-tokens.json" },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi" },
       }),
@@ -100,7 +100,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
           path: ledgerPath,
           contract: "luckytoken-request-ledger",
           foundVersion: 1,
-          expectedVersion: 2,
+          expectedVersion: 3,
           validationError:
             "luckytoken-request-ledger version is incompatible with this LuckyToken build.",
         },
@@ -120,7 +120,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
-          "anthropic-messages": { authFile: "anthropic-client-tokens.json" },
+          "anthropic-messages": {},
         },
         providerPackages: {
           "@luckytoken/provider-commandcode-private": {},

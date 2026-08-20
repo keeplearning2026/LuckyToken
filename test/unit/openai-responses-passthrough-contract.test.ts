@@ -1,29 +1,16 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
-import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
-import {
-  isResponsesNativePassthroughModel,
-  passthroughResponsesRequest,
-  passthroughResponsesRequestHeaders,
-} from "../../src/protocols/openai-responses/passthrough.js";
 import {
   createOpenAIResponsesHandler,
   type OpenAIResponsesHandlerOptions,
 } from "../../src/protocols/openai-responses/handler.js";
+import {
+  createProviderNativeResponses,
+  supportsProviderNativeResponses,
+} from "../../src/provider-native-responses/index.js";
 import { createRecordingRequestLedger } from "../support/recording-request-ledger.js";
-
-/**
- * Ticket 19: native Responses passthrough contract. The classifier, transport,
- * header policy, and certification are Responses-owned; nothing here may be
- * shared with (or imported from) the Anthropic passthrough profile.
- */
 
 function responsesModel(
   api = "openai-responses",
@@ -38,210 +25,97 @@ function responsesModel(
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 64000,
+    contextWindow: 200_000,
+    maxTokens: 64_000,
   };
 }
 
-function request(
-  body: string,
-  headers: Record<string, string> = {},
-): Request {
+function request(body: string, headers: Record<string, string> = {}): Request {
   return new Request("http://luckytoken.test/v1/responses", {
     method: "POST",
-    headers: {
-      authorization: "Bearer client",
-      "content-type": "application/json",
-      ...headers,
-    },
+    headers: { "content-type": "application/json", ...headers },
     body,
   });
 }
 
+function models(
+  model: Model<string>,
+  auth: unknown = { auth: { apiKey: "sk-responses" } },
+): Models {
+  return {
+    getModels: () => [model],
+    getAuth: async () => auth,
+  } as unknown as Models;
+}
+
 function dependencies(
-  models: Models,
+  source: Models,
+  fetch: FetchFunction,
   extra: Partial<OpenAIResponsesHandlerOptions> = {},
-  passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
-  const auth: Auth = {
-    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-  };
-  const options: OpenAIResponsesHandlerOptions = {
-    models,
-    auth,
-    createResponseId: () => "resp_test",
+  const handler = createOpenAIResponsesHandler({
+    models: source,
+    providerNativeLane: createProviderNativeResponses({ models: source, fetch }),
+    stateFile: "provider-native-contract-state.json",
     maxRequestBytes: 1_000_000,
-    routerDefaults: {},
-    stateFile: join(tmpdir(), "luckytoken-responses-passthrough-state.json"),
+    createResponseId: () => "resp_test",
     now: () => 1,
     ...extra,
-    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
-  };
-  const responses = createOpenAIResponsesHandler(options);
+  });
   return {
-    clientProtocols: [responses],
+    clientProtocols: [handler],
     requestTimeoutMs: undefined,
     shutdownSignal: undefined,
   };
 }
 
-function passthroughModels(
-  model: Model<string>,
-  authResult: unknown = { auth: { apiKey: "sk-responses" } },
-): Models {
-  return {
-    getModels: () => [model],
-    getAuth: async () => authResult,
-  } as unknown as Models;
-}
+describe("Provider Native Responses contract", () => {
+  it("claims only explicit provider/protocol native contracts", () => {
+    expect(supportsProviderNativeResponses(responsesModel("openai-responses"))).toBe(true);
+    expect(supportsProviderNativeResponses(responsesModel("anthropic-messages"))).toBe(false);
 
-function captureFetch(
-  impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
-): { restore: () => void; passthroughFetch: FetchFunction } {
-  return {
-    restore: () => undefined,
-    passthroughFetch: impl as FetchFunction,
-  };
-}
-
-describe("19: native Responses passthrough contract", () => {
-  const roots: string[] = [];
-  afterEach(async () => {
-    await Promise.all(
-      roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-    );
-  });
-
-  it("selects on declared Responses wire compatibility, not provider identity", () => {
-    expect(isResponsesNativePassthroughModel(responsesModel("openai-responses"))).toBe(
-      true,
-    );
-    expect(isResponsesNativePassthroughModel(responsesModel("anthropic-messages"))).toBe(
-      false,
-    );
-    expect(isResponsesNativePassthroughModel(responsesModel("openai-codex-responses"))).toBe(
-      false,
-    );
-    const anyProvider = responsesModel("openai-responses");
-    anyProvider.provider = "some-other-vendor";
-    expect(isResponsesNativePassthroughModel(anyProvider)).toBe(true);
-  });
-
-  it("uses an injected native passthrough seam for Responses-family provider protocols", async () => {
-    const codexModel = responsesModel(
+    const codex = responsesModel(
       "openai-codex-responses",
       "https://chatgpt.com/backend-api",
     );
-    codexModel.provider = "openai-codex";
-    const sent: Array<{ model: Model<string>; rawBody: string }> = [];
-    const nativePassthrough = {
-      supports: (candidate: Model<string>) =>
-        candidate.api === "openai-codex-responses",
-      supportsCompact: () => true,
-      send: async (input: {
-        model: Model<string>;
-        rawBody: string;
-      }) => {
-        sent.push({ model: input.model, rawBody: input.rawBody });
-        return new Response(
-          JSON.stringify({
-            id: "resp_codex_native",
-            object: "response",
-            status: "completed",
-            model: "gpt-5",
-            output: [],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      },
-      compact: async () => {
-        throw new Error("not used");
-      },
+    codex.provider = "openai-codex";
+    expect(supportsProviderNativeResponses(codex)).toBe(true);
+
+    const unrelated = responsesModel("openai-codex-responses");
+    unrelated.provider = "another-provider";
+    expect(supportsProviderNativeResponses(unrelated)).toBe(false);
+  });
+
+  it("preserves opaque request fields while rewriting only the upstream model selector", async () => {
+    const model = responsesModel();
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({ id: "resp_upstream", object: "response", status: "completed", model: "gpt-5", output: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     };
+    const rawBody = '{\n  "model": "my-responses/gpt-5",\n  "future_number": 9007199254740993,\n  "negative_zero": -0,\n  "future_field": {"opaque":true}\n}';
 
     const response = await handleHttpRequest(
-      dependencies(
-        passthroughModels(codexModel),
-        { nativePassthrough } as unknown as Partial<OpenAIResponsesHandlerOptions>,
-      ),
-      request(JSON.stringify({ model: "openai-codex/gpt-5", input: "hi" })),
+      dependencies(models(model), fetch),
+      request(rawBody),
     );
 
     expect(response.status).toBe(200);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.model.api).toBe("openai-codex-responses");
-    expect(JSON.parse(sent[0]?.rawBody ?? "{}")).toMatchObject({
-      model: "openai-codex/gpt-5",
-      input: "hi",
-    });
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]?.url).toBe("https://responses.example.com/responses");
+    expect(upstream[0]?.headers.get("authorization")).toBe("Bearer sk-responses");
+    await expect(upstream[0]?.text()).resolves.toBe(
+      rawBody.replace('"my-responses/gpt-5"', '"gpt-5"'),
+    );
   });
 
-  it("forwards the raw body verbatim to {baseUrl}/responses with upstream auth", async () => {
-    const model = responsesModel();
-    const upstreamRequests: Request[] = [];
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      upstreamRequests.push(new Request(input, init));
-      return new Response(
-        JSON.stringify({
-          id: "resp_upstream",
-          object: "response",
-          created_at: 1,
-          status: "completed",
-          error: null,
-          incomplete_details: null,
-          instructions: null,
-          metadata: {},
-          model: "gpt-5",
-          output: [{ type: "message", id: "msg_1", role: "assistant", status: "completed", content: [] }],
-          parallel_tool_calls: true,
-          temperature: null,
-          tool_choice: "auto",
-          tools: [],
-          top_p: null,
-          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-    try {
-      const rawBody = JSON.stringify({
-        model: "my-responses/gpt-5",
-        input: "hi",
-        stream: false,
-        future_field: { opaque: true },
-      });
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(rawBody),
-      );
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as Record<string, unknown>;
-      expect(body.id).toBe("resp_upstream");
-      expect(upstreamRequests).toHaveLength(1);
-      expect(upstreamRequests[0]?.url).toBe(
-        "https://responses.example.com/responses",
-      );
-      expect(upstreamRequests[0]?.headers.get("authorization")).toBe(
-        "Bearer sk-responses",
-      );
-      const upstreamBody = JSON.parse(
-        (await upstreamRequests[0]?.text()) ?? "{}",
-      ) as Record<string, unknown>;
-      // The qualified Lucky selector is rewritten to the registered model id.
-      expect(upstreamBody).toMatchObject({
-        model: "gpt-5",
-        input: "hi",
-        future_field: { opaque: true },
-      });
-    } finally {
-      restore();
-    }
-  });
-
-  it("records Provider-native passthrough usage through the shared Request Ledger contract", async () => {
+  it("records native upstream usage through the Request Ledger", async () => {
     const model = responsesModel();
     const recorded = createRecordingRequestLedger();
-    const passthroughFetch: FetchFunction = async () =>
+    const fetch: FetchFunction = async () =>
       new Response(
         JSON.stringify({
           id: "resp_usage",
@@ -261,11 +135,7 @@ describe("19: native Responses passthrough contract", () => {
       );
 
     const response = await handleHttpRequest(
-      dependencies(
-        passthroughModels(model),
-        { requestLedger: recorded.ledger },
-        passthroughFetch,
-      ),
+      dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
       request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
     );
 
@@ -283,490 +153,86 @@ describe("19: native Responses passthrough contract", () => {
     });
   });
 
-  it("passes native handles, hosted tools, background/store and future fields without conversion loss", async () => {
+  it("returns upstream SSE bytes unchanged when no alias projection is required", async () => {
     const model = responsesModel();
-    const upstreamRequests: Request[] = [];
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      upstreamRequests.push(new Request(input, init));
-      return new Response(
-        JSON.stringify({
-          id: "resp_upstream",
-          object: "response",
-          status: "completed",
-          output: [],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-    try {
-      // Fields that Core conversion v1 would reject or degrade must survive
-      // verbatim under native passthrough: conversation/prompt handles, file
-      // IDs, compaction encrypted state, hosted tool declarations, background
-      // jobs, store policy, and future wire fields.
-      const rawBody = JSON.stringify({
-        model: "my-responses/gpt-5",
-        conversation: "conv_abc",
-        prompt: "prompt_xyz",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_image", file_id: "file_123" },
-              { type: "input_text", text: "hi" },
-            ],
-          },
-          {
-            type: "compaction",
-            id: "comp_1",
-            encrypted_content: "encrypted-bytes",
-          },
-          {
-            type: "item_reference",
-            id: "item_456",
-            envelope: { authority: "external-service" },
-          },
-        ],
-        tools: [
-          { type: "web_search_preview" },
-          { type: "file_search" },
-          { type: "code_interpreter" },
-        ],
-        background: true,
-        store: false,
-        stream_options: { include_obfuscation: true },
-        future_field: { nested: { value: 1 } },
-      });
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(rawBody),
-      );
-      expect(response.status).toBe(200);
-      expect(upstreamRequests).toHaveLength(1);
-      const upstreamBody = JSON.parse(
-        (await upstreamRequests[0]?.text()) ?? "{}",
-      ) as Record<string, unknown>;
-      // Everything except the qualified selector is preserved verbatim; the
-      // selector itself is rewritten to the registered model id.
-      const expected = JSON.parse(rawBody) as Record<string, unknown>;
-      expected.model = "gpt-5";
-      expect(upstreamBody).toEqual(expected);
-    } finally {
-      restore();
-    }
-  });
-
-  it("filters request headers: approved end-to-end only; no hop-by-hop/cookie/auth", async () => {
-    const headers = new Headers({
-      authorization: "Bearer client-secret",
-      cookie: "session=abc",
-      "x-api-key": "client-key",
-      "x-stainless-retry-count": "2",
-      "openai-beta": "responses-v1",
-      "content-length": "999",
-      connection: "keep-alive",
-      "transfer-encoding": "chunked",
-    });
-    const forwarded = passthroughResponsesRequestHeaders(
-      new Request("http://lucky.test/v1/responses", { headers }),
-    );
-    expect(forwarded).toEqual({ "x-stainless-retry-count": "2" });
-    expect(forwarded).not.toHaveProperty("authorization");
-    expect(forwarded).not.toHaveProperty("cookie");
-    expect(forwarded).not.toHaveProperty("x-api-key");
-    expect(forwarded).not.toHaveProperty("openai-beta");
-    expect(forwarded).not.toHaveProperty("content-length");
-    expect(forwarded).not.toHaveProperty("connection");
-    expect(forwarded).not.toHaveProperty("transfer-encoding");
-  });
-
-  it("preserves status, body, and safe response headers; strips unsafe ones", async () => {
-    const model = responsesModel();
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response('{"id":"resp_1","object":"response","status":"completed"}', {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-          "request-id": "req_resp_ok",
-          "set-cookie": "sid=1",
-          "transfer-encoding": "chunked",
-          "x-ratelimit-remaining": "7",
-        },
-      }),
-    );
-    try {
-      const result = await passthroughResponsesRequest({
-        model,
-        rawBody: "{}",
-        apiKey: "upstream-key",
-        signal: new AbortController().signal,
-        fetch: passthroughFetch,
-      });
-      expect(result.status).toBe(200);
-      expect(new TextDecoder().decode(result.body)).toBe(
-        '{"id":"resp_1","object":"response","status":"completed"}',
-      );
-      expect(result.headers).toEqual({
-        "content-type": "application/json",
-        "request-id": "req_resp_ok",
-        "x-ratelimit-remaining": "7",
-      });
-      expect(result.headers).not.toHaveProperty("set-cookie");
-      expect(result.headers).not.toHaveProperty("transfer-encoding");
-    } finally {
-      restore();
-    }
-  });
-
-  it("preserves native SSE frames byte-for-byte", async () => {
-    const model = responsesModel();
-    const sseBody =
+    const sse =
       'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
-      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"message"}}\n\n' +
-      'data: {"type":"response.completed","sequence_number":2,"response":{"status":"completed"}}\n\n' +
+      'data: {"type":"response.completed","sequence_number":1,"response":{"status":"completed"}}\n\n' +
       "data: [DONE]\n\n";
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response(sseBody, {
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      }),
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi", stream: true })),
     );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-            stream: true,
-          }),
-        ),
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("text/event-stream");
-      await expect(response.text()).resolves.toBe(sseBody);
-    } finally {
-      restore();
-    }
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    await expect(response.text()).resolves.toBe(sse);
   });
 
-  it("preserves incomplete native SSE frames byte-for-byte", async () => {
+  it("returns a fixed 502 when Provider credential resolution fails, without transport fallback", async () => {
     const model = responsesModel();
-    // A native passthrough must forward the upstream's incomplete lifecycle
-    // verbatim, never normalize it into a completed Response or a
-    // conversion-semantic error.
-    const sseBody =
-      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
-      'data: {"type":"response.incomplete","sequence_number":1,"response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}\n\n' +
-      "data: [DONE]\n\n";
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response(sseBody, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-            stream: true,
-          }),
-        ),
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("text/event-stream");
-      await expect(response.text()).resolves.toBe(sseBody);
-    } finally {
-      restore();
-    }
-  });
+    let fetchCalls = 0;
+    const fetch: FetchFunction = async () => {
+      fetchCalls += 1;
+      return new Response("unexpected");
+    };
 
-  it("preserves failed native SSE frames byte-for-byte", async () => {
-    const model = responsesModel();
-    // A failed lifecycle must pass through verbatim: the client receives the
-    // upstream's failed terminal event unchanged, never a conversion-rendered
-    // error envelope.
-    const sseBody =
-      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
-      'data: {"type":"response.failed","sequence_number":1,"response":{"status":"failed","error":{"code":"server_error","message":"upstream exploded"}}}\n\n' +
-      "data: [DONE]\n\n";
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response(sseBody, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
+    const missingCredentialModels = {
+      getModels: () => [model],
+      getAuth: async () => undefined,
+    } as unknown as Models;
+    const response = await handleHttpRequest(
+      dependencies(missingCredentialModels, fetch),
+      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
     );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-            stream: true,
-          }),
-        ),
-      );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("text/event-stream");
-      await expect(response.text()).resolves.toBe(sseBody);
-    } finally {
-      restore();
-    }
-  });
 
-  it("returns a legal Responses error when the upstream body read fails (pre-commit)", async () => {
-    const model = responsesModel();
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response(
-        new ReadableStream({
-          pull(controller) {
-            controller.error(new Error("connection reset while reading body"));
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-        ),
-      );
-      expect(response.status).toBeGreaterThanOrEqual(500);
-      const body = (await response.json()) as Record<string, unknown>;
-      const error = body.error as Record<string, unknown>;
-      expect(error.type).toBeDefined();
-    } finally {
-      restore();
-    }
-  });
-
-  it("writes one bounded failure journal for a final upstream failure", async () => {
-    const model = responsesModel();
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-responses-pt-journal-"));
-    roots.push(root);
-    const journal = createInvocationDiagnosticsFactory({
-      configuration: parseFailureLoggingConfiguration(
-        {
-          directory: root,
-          detail: "safe",
-          maxFileBytes: 64 * 1024,
-          retentionDays: 1,
-          maxFiles: 10,
-          logCancellation: true,
-        },
-        root,
-      ),
+    expect(response.status).toBe(502);
+    expect(fetchCalls).toBe(0);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "api_error", message: "Provider is not configured" },
     });
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response('{"error":{"message":"rate limited","type":"rate_limit"}}', {
-        status: 429,
-        headers: { "content-type": "application/json" },
-      }),
+  });
+
+  it("returns a fixed 502 when Provider Native transport rejects", async () => {
+    const model = responsesModel();
+    const fetch: FetchFunction = async () => {
+      throw new TypeError("connection refused to secret.example");
+    };
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
     );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(
-          passthroughModels(model),
-          { invocationDiagnostics: journal },
-          passthroughFetch,
-        ),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-        ),
-      );
-      expect(response.status).toBe(429);
-      const days = await readdir(root);
-      const files = await readdir(join(root, days[0] ?? ""));
-      expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^[0-9a-f-]{36}\.json$/u);
-    } finally {
-      restore();
-    }
+
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toBe("Upstream provider request failed");
+    expect(JSON.stringify(body)).not.toContain("secret.example");
   });
 
-  it("aborts upstream work and never writes a closed response", async () => {
-    const model = responsesModel();
-    const controller = new AbortController();
-    let upstreamSignal: AbortSignal | null | undefined;
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      void input;
-      upstreamSignal = init?.signal;
-      controller.abort(new Error("client went away"));
-      return new Response("{}", { status: 200 });
-    });
-    try {
-      const responsePromise = handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        new Request("http://luckytoken.test/v1/responses", {
-          method: "POST",
-          headers: {
-            authorization: "Bearer client",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-          signal: controller.signal,
-        }),
-      );
-      await expect(responsePromise).rejects.toThrow();
-      expect(upstreamSignal?.aborted).toBe(true);
-    } finally {
-      restore();
-    }
-  });
-
-  it("requires an upstream credential before any transport work", async () => {
-    const model = responsesModel();
-    const { restore, passthroughFetch } = captureFetch(async () => {
-      throw new Error("must not be called");
-    });
-    try {
-      const response = await handleHttpRequest(
-        dependencies(
-          passthroughModels(model, undefined),
-          {},
-          passthroughFetch,
-        ),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-        ),
-      );
-      expect(response.status).toBeGreaterThanOrEqual(500);
-    } finally {
-      restore();
-    }
-  });
-
-  it("preserves a configured base-path prefix on the endpoint", async () => {
+  it("preserves a configured base-path prefix", async () => {
     const model = responsesModel("openai-responses", "https://responses.example.com/api");
-    const upstreamRequests: Request[] = [];
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      upstreamRequests.push(new Request(input, init));
+    const urls: string[] = [];
+    const fetch: FetchFunction = async (input) => {
+      urls.push(String(input));
       return new Response(
-        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
+        JSON.stringify({ id: "resp", object: "response", status: "completed", model: "gpt-5", output: [] }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
-    });
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-        ),
-      );
-      expect(response.status).toBe(200);
-      expect(upstreamRequests[0]?.url).toBe(
-        "https://responses.example.com/api/responses",
-      );
-    } finally {
-      restore();
-    }
-  });
+    };
 
-  it("rewrites a qualified Lucky selector to the registered model id", async () => {
-    const model = responsesModel();
-    const upstreamRequests: Request[] = [];
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      upstreamRequests.push(new Request(input, init));
-      return new Response(
-        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-    try {
-      const rawBody = JSON.stringify({
-        model: "my-responses/gpt-5",
-        input: "hi",
-        future_field: { opaque: true },
-      });
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(rawBody),
-      );
-      expect(response.status).toBe(200);
-      const upstreamBody = JSON.parse(
-        (await upstreamRequests[0]?.text()) ?? "{}",
-      ) as Record<string, unknown>;
-      // The qualified Lucky selector is rewritten to the registered model id;
-      // a Lucky selector must never leak to the upstream wire.
-      expect(upstreamBody).toEqual({
-        model: "gpt-5",
-        input: "hi",
-        future_field: { opaque: true },
-      });
-    } finally {
-      restore();
-    }
-  });
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+    );
 
-  it("keeps the raw body byte-identical when the selector already equals the model id", async () => {
-    const model = responsesModel();
-    const upstreamRequests: Request[] = [];
-    const { restore, passthroughFetch } = captureFetch(async (input, init) => {
-      upstreamRequests.push(new Request(input, init));
-      return new Response(
-        JSON.stringify({ id: "resp_1", object: "response", status: "completed" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-    try {
-      const rawBody = JSON.stringify({ model: "gpt-5", input: "hi" });
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(rawBody),
-      );
-      expect(response.status).toBe(200);
-      expect(await upstreamRequests[0]?.text()).toBe(rawBody);
-    } finally {
-      restore();
-    }
-  });
-
-  it("renders a legal Responses error when the upstream fetch rejects (pre-commit network failure)", async () => {
-    const model = responsesModel();
-    const { restore, passthroughFetch } = captureFetch(async () => {
-      throw new TypeError("fetch failed: connection refused");
-    });
-    try {
-      const response = await handleHttpRequest(
-        dependencies(passthroughModels(model), {}, passthroughFetch),
-        request(
-          JSON.stringify({
-            model: "my-responses/gpt-5",
-            input: "hi",
-          }),
-        ),
-      );
-      expect(response.status).toBeGreaterThanOrEqual(500);
-      const body = (await response.json()) as Record<string, unknown>;
-      const error = body.error as Record<string, unknown>;
-      expect(error.type).toBe("api_error");
-      // The client sees fixed actionable text; the raw transport cause
-      // (which may name endpoints) never reaches the wire.
-      expect(String(error.message)).toBe("Upstream provider request failed");
-      expect(String(error.message)).not.toContain("fetch failed");
-    } finally {
-      restore();
-    }
+    expect(response.status).toBe(200);
+    expect(urls).toEqual(["https://responses.example.com/api/responses"]);
   });
 });

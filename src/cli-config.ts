@@ -21,7 +21,7 @@ export interface ClientProtocolCliConfiguration {
 export interface LuckyTokenCliConfig {
   readonly schemaVersion: typeof LUCKYTOKEN_CONFIG_SCHEMA_VERSION;
   readonly configPath: string;
-  readonly server: { readonly host: string; readonly port: number };
+  readonly server: { readonly port: number };
   readonly clientProtocols: Readonly<
     Record<
       string,
@@ -151,14 +151,10 @@ export async function loadLuckyTokenCliConfig(
     resolvedProviderPackages[specifier] = configuration;
   }
   Object.freeze(resolvedProviderPackages);
-  assertKeys(server, ["host", "port"], "server");
+  assertKeys(server, ["port"], "server");
   assertKeys(pi, ["directory", "modelsJson"], "pi");
   assertKeys(limits, ["maxRequestBytes", "requestTimeoutMs"], "limits");
 
-  const host = server.host === undefined
-    ? "127.0.0.1"
-    : nonEmptyString(server.host, "server.host");
-  if (/\s|:\/\//u.test(host)) throw new Error("server.host must be a host name or address");
   const port = safeInteger(server.port, 3000, "server.port", 0, 65_535);
   const piDirectoryValue = nonEmptyString(pi.directory, "pi.directory");
   const modelsJsonValue =
@@ -223,7 +219,7 @@ export async function loadLuckyTokenCliConfig(
   const result: LuckyTokenCliConfig = {
     schemaVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
     configPath,
-    server: Object.freeze({ host, port }),
+    server: Object.freeze({ port }),
     clientProtocols: resolvedClientProtocols,
     pi: Object.freeze({
       directory: fromConfigDirectory(piDirectoryValue, directory),

@@ -43,7 +43,7 @@ Usage:
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
-  luckytoken control settings <query|set|confirm> [<key> <value>] --descriptor <path>
+  luckytoken control settings <query|set> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
   luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
   luckytoken control auth <query|login> ... --descriptor <path>
@@ -60,7 +60,7 @@ Commands:
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
   control auto-start status|enable|disable  Query or change Windows login auto-start
-  control settings query|set|confirm  Read or change registered Settings through the Control Plane
+  control settings query|set  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
   control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
   control auth query|login  Run Provider-owned account/subscription or API-key login
@@ -566,13 +566,6 @@ function parseSettingsCommand(args: readonly string[]): {
     if (positional.length > 1)
       throw new Error("settings query takes no key arguments");
     return { descriptorPath, command: { command: "query" } };
-  }
-  if (action === "confirm") {
-    const actionId = positional[1];
-    if (actionId === undefined || positional.length > 2) {
-      throw new Error("settings confirm requires the pending action id");
-    }
-    return { descriptorPath, command: { command: "confirm", actionId } };
   }
   if (action === "set") {
     const key = positional[1];

@@ -3,7 +3,6 @@ export const desktopIpcChannels = Object.freeze({
   statusEvent: "luckytoken:control:status:event",
   runtime: "luckytoken:control:runtime",
   settings: "luckytoken:control:settings",
-  clientToken: "luckytoken:control:client-token",
   credential: "luckytoken:control:credential",
   auth: "luckytoken:control:auth",
   authEvent: "luckytoken:control:auth:event",

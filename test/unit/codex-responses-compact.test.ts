@@ -1,177 +1,210 @@
-import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClientProtocolHandler } from "../../src/http.js";
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
 import {
   CODEX_COMPACT_PROMPT,
-  createCodexResponsesCompactHandler,
-} from "../../src/integrations/codex/compact.js";
-
-function localAuth(): CodexLocalCredentialAuthority {
-  return Object.freeze({
-    isAvailable: async () => true,
-    authorizeToken: async (token: string) => (token === "codex-token" ? {} : undefined),
-    resolveForwardAuth: async (headers: Headers) =>
-      headers.get("authorization") === "Bearer codex-token"
-        ? { authorization: "Bearer codex-token", accountId: "acct" }
-        : undefined,
-    scrub: (value: string) => value,
-  });
-}
-
-function nativeModels(...ids: string[]): CodexNativeModelSource {
-  const models = new Set(ids);
-  return Object.freeze({
-    has: (id: string) => models.has(id),
-    models: () => Object.freeze([]),
-  });
-}
+  createOpenAIResponsesCompactHandler,
+} from "../../src/protocols/openai-responses/compact.js";
 
 function compactRequest(model: string, input: unknown[]): Request {
   return new Request("http://luckytoken.test/v1/responses/compact", {
     method: "POST",
-    headers: {
-      authorization: "Bearer codex-token",
-      "chatgpt-account-id": "acct-request",
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, input }),
   });
 }
 
-describe("Codex Responses compact integration", () => {
-  it("forwards native Codex compact requests to the native ChatGPT compact endpoint", async () => {
-    const requests: Request[] = [];
-    const delegate = { handle: vi.fn() } as unknown as ClientProtocolHandler;
-    const fetch: FetchFunction = async (input, init) => {
-      requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ output: [{ type: "message", role: "user", content: [] }] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+function model(provider: string, id: string, api = "fixture-api"): Model<string> {
+  return {
+    id,
+    name: id,
+    provider,
+    api,
+    baseUrl: "https://provider.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 10_000,
+  };
+}
+
+function aliasSource(alias: string, target: Model<string>): AliasModelSource {
+  return {
+    requestSnapshot: async () =>
+      ({
+        resolve: (selector: string) =>
+          selector === alias
+            ? { providerId: target.provider, modelId: target.id }
+            : undefined,
+      }) as never,
+  };
+}
+
+function summaryMessage(target: Model<string>, text: string): AssistantMessage {
+  return {
+    role: "assistant",
+    api: target.api,
+    provider: target.provider,
+    model: target.id,
+    content: [{ type: "text", text }],
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+}
+
+describe("OpenAI Responses compact three-lane routing", () => {
+  it("lets Local Native claim compact without resolving Pi Models or falling through", async () => {
+    const local = {
+      claims: vi.fn((selector: string) => selector === "gpt-native"),
+      execute: vi.fn(async () => new Response("local-compact", { status: 502 })),
     };
-    const handler = createCodexResponsesCompactHandler({
-      codexLocalAuth: localAuth(),
-      codexNativeModels: nativeModels("gpt-native"),
-      responsesHandler: delegate,
-      fetch,
-      maxRequestBytes: 1024 * 1024,
+    const models = new Proxy({} as Models, {
+      get() {
+        throw new Error("Pi Models must not be touched after Local Compact claims");
+      },
+    });
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      localNativeLane: local,
+      stateFile: "unused-compact-local.json",
+      maxRequestBytes: 1024,
     });
 
-    const response = await handler.handle(
-      compactRequest("gpt-native", [{ type: "message", role: "user", content: "hello" }]),
-    );
+    const response = await handler.handle(compactRequest("gpt-native", []));
 
-    expect(response.status).toBe(200);
-    expect(delegate.handle).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
-    expect(requests[0]?.headers.get("authorization")).toBe("Bearer codex-token");
-    expect(requests[0]?.headers.get("chatgpt-account-id")).toBe("acct-request");
+    expect(response.status).toBe(502);
+    await expect(response.text()).resolves.toBe("local-compact");
+    expect(local.execute).toHaveBeenCalledOnce();
   });
 
-  it("uses provider-native compact for a routed OpenAI Responses model without local Codex auth", async () => {
-    const openaiModel: Model<string> = {
-      id: "gpt-5",
-      name: "gpt-5",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 100_000,
-      maxTokens: 10_000,
+  it("lets Provider Native claim the resolved model without entering Semantic execution", async () => {
+    const target = model("openai", "gpt-5", "openai-responses");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const executeOperation = vi.fn(async () => {
+      throw new Error("Semantic execution must not run after Provider Native claims");
+    });
+    const provider = {
+      claims: vi.fn(() => true),
+      execute: vi.fn(async () =>
+        new Response(JSON.stringify({ object: "response.compaction", output: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
     };
-    const models = {
-      getModels: () => [openaiModel],
-      getAuth: async () => ({ auth: { apiKey: "sk-openai" } }),
-    } as unknown as Models;
-    const compacted: string[] = [];
-    const nativePassthrough = {
-      supports: () => true,
-      supportsCompact: (model: Model<string>) => model.provider === "openai",
-      send: async () => {
-        throw new Error("not used");
-      },
-      compact: async (input: { rawBody: string }) => {
-        compacted.push(input.rawBody);
-        return new Response(
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      providerNativeLane: provider,
+      executeOperation,
+      stateFile: "unused-compact-provider.json",
+      maxRequestBytes: 1024,
+    });
+
+    const response = await handler.handle(compactRequest("openai/gpt-5", []));
+
+    expect(response.status).toBe(200);
+    expect(provider.claims).toHaveBeenCalledWith(target, "compact");
+    expect(provider.execute).toHaveBeenCalledOnce();
+    expect(executeOperation).not.toHaveBeenCalled();
+  });
+
+  it("projects Provider Native compact success model identity back to the requested alias", async () => {
+    const target = model("openai", "gpt-5", "openai-responses");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const provider = {
+      claims: vi.fn(() => true),
+      execute: vi.fn(async () =>
+        new Response(
           JSON.stringify({
-            id: "cmp_1",
             object: "response.compaction",
+            model: "gpt-5",
             output: [{ type: "compaction", encrypted_content: "opaque" }],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
-        );
-      },
+        ),
+      ),
     };
-    const delegate = { handle: vi.fn() } as unknown as ClientProtocolHandler;
-    const handler = createCodexResponsesCompactHandler({
-      responsesHandler: delegate,
-      fetch: async () => {
-        throw new Error("local native fetch must not run");
-      },
-      maxRequestBytes: 1024 * 1024,
+    const handler = createOpenAIResponsesCompactHandler({
       models,
-      nativePassthrough,
-      resolveRequestModel: (model: Model<string>) => model,
-    } as unknown as Parameters<typeof createCodexResponsesCompactHandler>[0]);
+      aliasSource: aliasSource("my-alias", target),
+      providerNativeLane: provider,
+      stateFile: "unused-compact-alias-success.json",
+      maxRequestBytes: 1024,
+    });
 
-    const response = await handler.handle(
-      compactRequest("openai/gpt-5", [
-        { type: "message", role: "user", content: "hello" },
-      ]),
-    );
+    const response = await handler.handle(compactRequest("my-alias", []));
 
     expect(response.status).toBe(200);
-    expect(compacted).toHaveLength(1);
-    expect(delegate.handle).not.toHaveBeenCalled();
-    expect(JSON.parse(compacted[0] ?? "{}")).toMatchObject({
-      model: "openai/gpt-5",
+    await expect(response.json()).resolves.toMatchObject({
+      object: "response.compaction",
+      model: "my-alias",
     });
   });
 
-  it("compacts routed aliases by asking the existing Responses handler for a summary", async () => {
-    const delegated: Request[] = [];
-    const delegate: ClientProtocolHandler = {
-      method: "POST",
-      pathname: "/v1/responses",
-      handle: async (request) => {
-        delegated.push(request.clone());
-        return new Response(
+  it("sanitizes Provider Native compact alias errors instead of leaking canonical identity", async () => {
+    const target = model("openai", "gpt-5", "openai-responses");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const provider = {
+      claims: vi.fn(() => true),
+      execute: vi.fn(async () =>
+        new Response(
           JSON.stringify({
-            id: "resp_summary",
-            object: "response",
-            status: "completed",
-            model: "anthropic/claude",
-            output: [
-              {
-                type: "message",
-                role: "assistant",
-                content: [{ type: "output_text", text: "SUMMARY BODY", annotations: [] }],
-              },
-            ],
+            error: {
+              message: "canonical gpt-5 at openai provider failed canary-compact-secret",
+            },
           }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      },
+          { status: 429, headers: { "content-type": "application/json" } },
+        ),
+      ),
     };
-    const handler = createCodexResponsesCompactHandler({
-      codexLocalAuth: localAuth(),
-      codexNativeModels: nativeModels("gpt-native"),
-      responsesHandler: delegate,
-      fetch: async () => {
-        throw new Error("native fetch must not run");
-      },
-      maxRequestBytes: 1024 * 1024,
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      aliasSource: aliasSource("my-alias", target),
+      providerNativeLane: provider,
+      stateFile: "unused-compact-alias-error.json",
+      maxRequestBytes: 1024,
     });
+
+    const response = await handler.handle(compactRequest("my-alias", []));
+
+    expect(response.status).toBe(502);
+    const wire = await response.text();
+    expect(wire).toContain("Upstream provider failed");
+    expect(wire).not.toContain("gpt-5");
+    expect(wire).not.toContain("openai");
+    expect(wire).not.toContain("canary-compact-secret");
+  });
+
+  it("runs synthetic compact directly through the Semantic executor and retains recent user turns", async () => {
+    const target = model("semantic", "summary-model");
+    const models = { getModels: () => [target] } as unknown as Models;
+    const executeOperation = vi.fn(async (_models, selected, context) => {
+      expect(selected).toBe(target);
+      expect(JSON.stringify(context)).toContain(CODEX_COMPACT_PROMPT);
+      return summaryMessage(target, "SUMMARY BODY");
+    });
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      executeOperation,
+      stateFile: "unused-compact-semantic.json",
+      maxRequestBytes: 1024 * 1024,
+      createResponseId: () => "resp_summary",
+      now: () => 1,
+    });
+
     const response = await handler.handle(
-      compactRequest("anthropic/claude", [
+      compactRequest("semantic/summary-model", [
         { type: "message", role: "user", content: [{ type: "input_text", text: "FIRST" }] },
         { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
         { type: "message", role: "user", content: [{ type: "input_text", text: "SECOND" }] },
@@ -179,15 +212,7 @@ describe("Codex Responses compact integration", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(delegated).toHaveLength(1);
-    const internal = (await delegated[0]?.json()) as Record<string, unknown>;
-    expect(internal).toMatchObject({
-      model: "anthropic/claude",
-      stream: false,
-      store: false,
-    });
-    expect(JSON.stringify(internal)).toContain(CODEX_COMPACT_PROMPT);
-
+    expect(executeOperation).toHaveBeenCalledOnce();
     const body = (await response.json()) as { output: Array<Record<string, unknown>> };
     expect(body.output).toHaveLength(3);
     expect(JSON.stringify(body.output[0])).toContain("FIRST");
@@ -195,30 +220,14 @@ describe("Codex Responses compact integration", () => {
     expect(JSON.stringify(body.output[2])).toContain("SUMMARY BODY");
   });
 
-  it("returns a legal error when the routed summary turn completes without text", async () => {
-    const delegate: ClientProtocolHandler = {
-      method: "POST",
-      pathname: "/v1/responses",
-      handle: async () =>
-        new Response(
-          JSON.stringify({ object: "response", status: "completed", output: [] }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-    };
-    const handler = createCodexResponsesCompactHandler({
-      codexLocalAuth: localAuth(),
-      codexNativeModels: nativeModels(),
-      responsesHandler: delegate,
-      fetch: async () => {
-        throw new Error("unused");
-      },
-      maxRequestBytes: 1024 * 1024,
-    });
-
-    const response = await handler.handle(compactRequest("alias", []));
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { type: "api_error" },
-    });
+  it("contains no full Responses handler re-entry or Codex integration ownership", async () => {
+    const source = await readFile(
+      "src/protocols/openai-responses/compact.ts",
+      "utf8",
+    );
+    expect(source).not.toContain("responsesHandler");
+    expect(source).not.toContain(".handle(internalRequest)");
+    expect(source).not.toMatch(/integrations[\\/]codex/u);
+    expect(source).toContain("executeSemanticResponses");
   });
 });

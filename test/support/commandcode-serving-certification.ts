@@ -40,11 +40,7 @@ export interface ServingCertificationFacts {
   readonly modelValidityPolicyRevision: string;
   readonly compatibility: CommandCodeCompatibilityPolicy;
   readonly fetchBound: boolean;
-  readonly clientAuthorityPolicy:
-    | "bound-injected-auth-v1"
-    | "handler-bound-file-snapshot-v1";
   readonly routerDefaults: RouterOptionDefaults;
-  readonly clientAuthConfigured: boolean;
   readonly providerApiKeyConfigured: boolean;
   readonly providerAuthPolicy:
     | "fixed-api-key-header-v1"
@@ -247,8 +243,8 @@ export function certifyServingComposition(
   if (!facts.fetchBound) {
     failures.push("A bound fetch implementation is required; ambient fetch is prohibited");
   }
-  if (!facts.clientAuthConfigured || !facts.providerApiKeyConfigured) {
-    failures.push("Both client and Provider authentication must be configured");
+  if (!facts.providerApiKeyConfigured) {
+    failures.push("Provider authentication must be configured");
   }
   if (Object.keys(facts.routerDefaults).length > 0) {
     failures.push("Router defaults contain unclassified ambient semantics");
@@ -347,8 +343,7 @@ export function certifyServingComposition(
         responseTransfer: "status-headers-complete-bytes-v1",
       },
       authEndpoint: {
-        clientAuth: "x-api-key-or-bearer-token-v1",
-        clientAuthority: facts.clientAuthorityPolicy,
+        clientAuth: "none-local-data-plane-v1",
         providerAuth: facts.providerAuthPolicy,
         endpoint: "model-base-url-alpha-generate-v1",
         authSemanticTransform: "inert-v1",
@@ -418,9 +413,6 @@ export function certifyServingComposition(
       localLoopbackHttpBoundary: "verified",
       piConfigurationCredentialCli: "verified",
       realProviderOnlineConformance: "verified",
-      ...(facts.clientAuthorityPolicy === "handler-bound-file-snapshot-v1"
-        ? { perClientProtocolAuthIsolation: "verified" as const }
-        : {}),
     },
     verification: {
       commands: [...VERIFICATION_COMMANDS],

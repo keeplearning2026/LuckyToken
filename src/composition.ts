@@ -92,8 +92,11 @@ import type {
 } from "./codex-native-seam.js";
 import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
 import { createCodexNativeModelSource } from "./integrations/codex/native-models.js";
-import { createCodexResponsesCompactHandler } from "./integrations/codex/compact.js";
-import { createResponsesNativePassthrough } from "./integrations/responses-native.js";
+import { createCodexLocalResponsesLane } from "./integrations/codex/local-responses.js";
+import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
+import { createProviderNativeResponses } from "./provider-native-responses/index.js";
+import { createOpenAIResponsesCompactHandler } from "./protocols/openai-responses/compact.js";
+import { createResponseSessionState } from "./protocols/openai-responses/session-state.js";
 
 export interface ConfiguredPiModelsOptions {
   readonly piDirectory: string;
@@ -748,7 +751,33 @@ export async function createConfiguredLuckyTokenDataPlane(
     const stateFile =
       openaiResponsesConfig.stateFile ??
       join(dirname(config.configPath), "state", "openai-responses.json");
-    const nativeResponsesPassthrough = createResponsesNativePassthrough(options.fetch);
+    const providerNativeLane = createProviderNativeResponses({
+      models,
+      fetch: options.fetch,
+    });
+    const localNativeLane =
+      codexLocalAuth === undefined || codexNativeModels === undefined
+        ? undefined
+        : createCodexLocalResponsesLane({
+            credentials: codexLocalAuth,
+            models: codexNativeModels,
+            fetch: options.fetch,
+          });
+    const localCompactLane =
+      codexLocalAuth === undefined || codexNativeModels === undefined
+        ? undefined
+        : createCodexLocalCompactLane({
+            credentials: codexLocalAuth,
+            models: codexNativeModels,
+            fetch: options.fetch,
+          });
+    const responsesConfiguration = bindOpenAIResponsesConfiguration(
+      openaiResponsesConfig.adapterConfiguration,
+    );
+    const sessionState = createResponseSessionState({
+      stateFile,
+      storeFalsePolicy: responsesConfiguration.conversion.response.storeFalse,
+    });
     const responses = createOpenAIResponsesHandler({
       models,
       createSessionId,
@@ -758,43 +787,39 @@ export async function createConfiguredLuckyTokenDataPlane(
             ? {}
             : { clientSessionId: identity.clientSessionId }),
         }),
-      configuration: bindOpenAIResponsesConfiguration(
-        openaiResponsesConfig.adapterConfiguration,
-      ),
+      configuration: responsesConfiguration,
       invocationDiagnostics,
       requestLedger,
       deepCapture,
       stateFile,
-      passthroughFetch: options.fetch,
-      nativePassthrough: nativeResponsesPassthrough,
+      sessionState,
+      providerNativeLane,
       ...(aliasSource === undefined ? {} : { aliasSource }),
       maxRequestBytes: config.limits.maxRequestBytes,
       ...(options.shutdownSignal === undefined
         ? {}
         : { shutdownSignal: options.shutdownSignal }),
       now,
-      // Ticket 10: the Provider/request-composition seam owns request-local
-      // baseUrl derivation; the handler receives it as a narrow Pi-typed op.
-      resolveRequestModel,
       // Ticket 20: the Provider integration side owns the usage-semantics
       // declaration table; the composition binds it into the neutral
       // execution operation the handler already knows.
       executeOperation: createExecutionOperation(resolveUsageSemantics),
-      ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
-      ...(codexNativeModels === undefined ? {} : { codexNativeModels }),
+      ...(localNativeLane === undefined ? {} : { localNativeLane }),
     });
     clientProtocols.push(responses);
     clientProtocols.push(
-      createCodexResponsesCompactHandler({
-        ...(codexLocalAuth === undefined ? {} : { codexLocalAuth }),
-        ...(codexNativeModels === undefined ? {} : { codexNativeModels }),
+      createOpenAIResponsesCompactHandler({
         models,
         ...(aliasSource === undefined ? {} : { aliasSource }),
-        nativePassthrough: nativeResponsesPassthrough,
-        resolveRequestModel,
-        responsesHandler: responses,
-        fetch: options.fetch,
+        ...(localCompactLane === undefined ? {} : { localNativeLane: localCompactLane }),
+        providerNativeLane,
+        configuration: responsesConfiguration,
+        stateFile,
+        sessionState,
+        createSessionId,
+        executeOperation: createExecutionOperation(resolveUsageSemantics),
         maxRequestBytes: config.limits.maxRequestBytes,
+        now,
       }),
     );
   }

@@ -224,13 +224,11 @@ describe("invocation diagnostics public interface", () => {
     });
     const anthropic = createAnthropicMessagesHandler({
       models: {} as never,
-      auth: {} as never,
       invocationDiagnostics,
       maxRequestBytes: 1_024,
     });
     const responses = createOpenAIResponsesHandler({
       models: {} as never,
-      auth: {} as never,
       invocationDiagnostics,
       stateFile: join(root, "responses-state.json"),
       maxRequestBytes: 1_024,

@@ -68,8 +68,6 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly sequence: number;
   /** Optional registered settings catalog projection (Ticket 06). */
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
-  /** Present only while a non-loopback bind action waits for confirmation. */
-  readonly confirmation?: LanConfirmation;
   /** Present while at least one history persistence authority is unavailable
    *  (Ticket 23): the audit-unavailable state, visible in every snapshot
    *  until acknowledged or demonstrated recovery. Acknowledgment never
@@ -106,13 +104,6 @@ export interface RegisteredSetting {
   readonly applyMode: "hot-apply" | "restart-required";
   readonly value: boolean | number | string;
   readonly effective?: boolean | number | string;
-}
-
-export interface LanConfirmation {
-  readonly actionId: string;
-  readonly settingKey: "server.bindHost";
-  readonly value: string;
-  readonly message: string;
 }
 
 /**
@@ -903,24 +894,18 @@ export type SettingsCommand =
       readonly command: "set";
       readonly key: string;
       readonly value: unknown;
-    }
-  | {
-      readonly command: "confirm";
-      readonly actionId: string;
     };
 
 export type SettingsCommandOutcome =
   | "ok"
   | "applied"
   | "pending"
-  | "confirmation_required"
   | "unknown_key"
   | "invalid_value";
 
 export interface SettingsCommandResult {
   readonly outcome: SettingsCommandOutcome;
   readonly error?: string;
-  readonly confirmation?: LanConfirmation;
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
 }
 
@@ -1210,7 +1195,6 @@ export type RuntimeCommandHandler = (
 export type SettingsCommandHandler = (command: SettingsCommand) => Promise<{
   readonly outcome: SettingsCommandOutcome;
   readonly error?: string;
-  readonly confirmation?: LanConfirmation;
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
 }>;
 
@@ -1229,7 +1213,6 @@ export type CredentialCommandHandler = (
 /** Live settings projection merged into every published status snapshot. */
 export interface SettingsProjection {
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
-  readonly confirmation?: LanConfirmation;
 }
 
 export type ApplicationCommand =

@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import { createInvocationAttemptDiagnostic } from "@luckytoken/provider-contract/diagnostics";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
@@ -21,10 +20,6 @@ import {
 } from "@luckytoken/provider-contract/diagnostics";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import type { ResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
-
-const auth: Auth = {
-  resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-};
 
 function model(api: string): Model<string> {
   return {
@@ -139,7 +134,6 @@ describe("Provider execution boundary", () => {
     } as unknown as Models;
     const handler = createOpenAIResponsesHandler({
       models,
-      auth,
       stateFile: "unused.json",
       sessionState: {
         ...sessionState,
@@ -171,7 +165,6 @@ describe("Provider execution boundary", () => {
     const createResponseId = vi.fn(() => "resp_luckytoken_owned");
     const handler = createOpenAIResponsesHandler({
       models,
-      auth,
       stateFile: "unused.json",
       sessionState,
       maxRequestBytes: 1024,
@@ -195,7 +188,6 @@ describe("Provider execution boundary", () => {
     const remember = vi.fn(async () => undefined);
     const handler = createOpenAIResponsesHandler({
       models,
-      auth,
       stateFile: "unused.json",
       sessionState: {
         ...sessionState,
@@ -246,14 +238,12 @@ describe("Provider execution boundary", () => {
       const handler = client === "anthropic"
         ? createAnthropicMessagesHandler({
             models,
-            auth,
             maxRequestBytes: 1024,
             createMessageId: () => "msg_test",
             now: () => 1,
           })
         : createOpenAIResponsesHandler({
             models,
-            auth,
             stateFile: "unused.json",
             sessionState,
             maxRequestBytes: 1024,
@@ -292,7 +282,6 @@ describe("Provider execution boundary", () => {
       } as unknown as Models;
       const handler = createOpenAIResponsesHandler({
         models,
-        auth,
         stateFile: "unused.json",
         sessionState,
         maxRequestBytes: 1024,
@@ -325,7 +314,6 @@ describe("Provider execution boundary", () => {
     } as unknown as Models;
     const handler = createAnthropicMessagesHandler({
       models,
-      auth,
       maxRequestBytes: 1024,
       createMessageId: () => "msg_test",
       now: () => 1,
@@ -402,13 +390,11 @@ describe("Provider execution boundary", () => {
     } as unknown as Models;
     const anthropic = createAnthropicMessagesHandler({
       models: anthropicModels,
-      auth,
       maxRequestBytes: 1024,
       now: () => 1,
     });
     const responses = createOpenAIResponsesHandler({
       models: responsesModels,
-      auth,
       stateFile: "unused.json",
       sessionState,
       maxRequestBytes: 1024,
@@ -547,14 +533,12 @@ describe("Provider execution boundary", () => {
       } as unknown as Models;
       const anthropic = createAnthropicMessagesHandler({
         models,
-        auth,
         invocationDiagnostics,
         maxRequestBytes: 1024,
         now: () => 1,
       });
       const responses = createOpenAIResponsesHandler({
         models,
-        auth,
         invocationDiagnostics,
         stateFile: join(root, "responses-state.json"),
         sessionState,

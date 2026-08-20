@@ -19,7 +19,6 @@ import {
 } from "@luckytoken/provider-commandcode-private";
 import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
-import { createNodeProjectSnapshot } from "../../packages/provider-commandcode-private/src/project.js";
 
 /**
  * Direct Pi AI IR <-> CommandCode private provider online probe.
@@ -274,7 +273,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -335,7 +333,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -417,7 +414,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -471,7 +467,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -642,7 +637,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -708,7 +702,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -774,7 +767,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -997,7 +989,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: fetchImpl,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2
@@ -1030,7 +1021,6 @@ async function main(): Promise<void> {
         models: COMMANDCODE_MODELS,
         fetch: captured.fetch,
         now: Date.now,
-        projectSnapshot: createNodeProjectSnapshot(),
       }),
     );
     const model2 = models2

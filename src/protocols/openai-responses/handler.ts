@@ -1,9 +1,4 @@
-import type {
-  FetchFunction,
-  Model,
-  Models,
-  ModelsSimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+import type { Model, Models } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -34,7 +29,6 @@ import {
 import {
   execute,
   ExecutionAbortedError,
-  freezePiInvocation,
   type ExecutionOperation,
 } from "../../execution.js";
 import type { ClientProtocolHandler } from "../../http.js";
@@ -43,12 +37,7 @@ import {
   resolveDataPlaneModel,
   type AliasModelSource,
 } from "../../alias-model-seam.js";
-import {
-  composeOptions,
-  identityRequestModelResolver,
-  type RequestModelResolver,
-  type RouterOptionDefaults,
-} from "../options.js";
+import type { RouterOptionDefaults } from "../options.js";
 import { InvalidRequest } from "./request.js";
 import {
   readResponsesRequestBody,
@@ -56,51 +45,26 @@ import {
   UnsupportedResponsesContentEncodingError,
 } from "./request-body.js";
 import {
-  convertAssistantMessageToResponses,
   renderResponsesError,
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
-  type ResponsesEchoTool,
-  type ResponsesRenderState,
-  type ResponsesResponseObject,
 } from "./response.js";
 import { mapUpstreamFailureFact } from "./error-rendering.js";
 import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
-import {
-  convertResponsesRequest,
-  extractResponsesModelSelector,
-  type ResponsesInvocation,
-} from "./request.js";
-import { renderResponsesSse } from "./sse.js";
+import { extractResponsesModelSelector } from "./request.js";
 import {
   createResponseSessionState,
   ResponseStateConversionFailure,
   type ResponseSessionState,
 } from "./session-state.js";
 import {
-  bufferResponsesPassthroughResponse,
-  isResponsesNativePassthroughModel,
-  passthroughResponsesRequest,
-  passthroughResponsesRequestHeaders,
-  projectResponsesPassthroughBody,
-  ResponsesPassthroughTransportError,
-  type PassthroughResponsesResult,
-  type ResponsesNativePassthrough,
-} from "./passthrough.js";
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../codex-native-seam.js";
-import { executeCodexNativeBranch } from "./codex-native-branch.js";
-import {
-  buildCodexRoutedCompactionRequest,
-  CodexRoutedCompactionSummaryError,
-  expandLuckyTokenCompactionEnvelopes,
-  hasLuckyTokenCompactionEnvelope,
-  isCodexRoutedCompactionRequest,
-  projectRoutedCompactionResponse,
-} from "./codex-routed-compaction.js";
+  bufferNativeResponsesResponse,
+  projectNativeResponsesBody,
+  type NativeResponsesResult,
+} from "./native-response.js";
 import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";
+import { executeSemanticResponses } from "./semantic.js";
+import type { ProviderResponsesLane } from "../../provider-native-responses/contract.js";
 
 export const openaiResponsesProtocolId = "openai-responses";
 
@@ -113,8 +77,21 @@ export const openaiResponsesProtocolId = "openai-responses";
  */
 const requestIds = new WeakMap<Request, string>();
 
+export interface LocalResponsesLane {
+  claims(selector: string): boolean;
+  execute(input: {
+    readonly request: Request;
+    readonly rawBody: string;
+    readonly selector: string;
+    readonly diagnostics: InvocationDiagnostics;
+    readonly ledger: RequestLedgerEntry;
+  }): Promise<Response>;
+}
+
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
+  readonly localNativeLane?: LocalResponsesLane;
+  readonly providerNativeLane?: ProviderResponsesLane;
   readonly createSessionId?: () => string;
   readonly onRequestIdentity?: (identity: RequestIdentity) => void;
   readonly configuration?: OpenAIResponsesConfiguration;
@@ -126,12 +103,6 @@ export interface OpenAIResponsesHandlerOptions {
    */
   readonly sessionState?: ResponseSessionState;
   readonly shutdownSignal?: AbortSignal;
-  /** Narrow transport dependency used only by native wire passthrough. */
-  readonly passthroughFetch?: FetchFunction;
-  /** Provider-integration native wire executor. The client protocol only asks
-   *  whether the resolved Pi model is supported and hands over the unchanged
-   *  Responses body plus bounded auth facts. */
-  readonly nativePassthrough?: ResponsesNativePassthrough;
   /**
    * Ticket 15 alias-only model data plane: when wired, only configured
    * aliases are valid selectors, converted and passthrough responses echo
@@ -163,13 +134,6 @@ export interface OpenAIResponsesHandlerOptions {
   readonly createResponseId?: () => string;
   readonly now?: () => number;
   /**
-   * Narrow Pi-typed request-local model derivation (Ticket 10): the
-   * composition root wires the Provider/request-composition implementation.
-   * Defaults to identity so direct handler tests and handlers without a
-   * wired resolver pass the catalog model through unchanged.
-   */
-  readonly resolveRequestModel?: RequestModelResolver;
-  /**
    * Ticket 20: the neutral Pi execution operation. The composition root
    * binds the Provider usage-semantics resolver into the operation
    * (`createExecutionOperation`); the handler never names or carries
@@ -177,15 +141,12 @@ export interface OpenAIResponsesHandlerOptions {
    * snapshots are honest Partial undeclared_semantics.
    */
   readonly executeOperation?: ExecutionOperation;
-  /** Optional native Codex capability. It is independent of local Codex
-   *  config management: when wired, authenticated bare native model ids can
-   *  use the client-owned Codex OAuth passthrough path. */
-  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
-  readonly codexNativeModels?: CodexNativeModelSource;
 }
 
 interface OpenAIResponsesDependencies {
   readonly models: Models;
+  readonly localNativeLane: LocalResponsesLane | undefined;
+  readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly createSessionId: () => string;
   readonly onRequestIdentity: ((identity: RequestIdentity) => void) | undefined;
   readonly configuration: OpenAIResponsesConfiguration;
@@ -193,17 +154,12 @@ interface OpenAIResponsesDependencies {
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
   readonly sessionState: ResponseSessionState;
-  readonly passthroughFetch: FetchFunction;
-  readonly nativePassthrough: ResponsesNativePassthrough | undefined;
   readonly aliasSource: AliasModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
   readonly now: () => number;
-  readonly resolveRequestModel: RequestModelResolver;
   readonly executeOperation: ExecutionOperation;
-  readonly codexLocalAuth: CodexLocalCredentialAuthority | undefined;
-  readonly codexNativeModels: CodexNativeModelSource | undefined;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -301,28 +257,6 @@ function hasJsonContentType(headers: Headers): boolean {
   );
 }
 
-async function rememberAfterSuccess(
-  dependencies: OpenAIResponsesDependencies,
-  diagnostics: InvocationDiagnostics,
-  ledger: RequestLedgerEntry,
-  rawBody: unknown,
-  rendered: ResponsesResponseObject,
-): Promise<void> {
-  // Admission, anti-poisoning, and storage policy live in the deep state
-  // module. Awaiting remember provides in-process read-after-write for an
-  // admitted checkpoint; disk persistence remains debounced and best-effort.
-  await dependencies.sessionState.remember(rawBody, rendered, (code) => {
-    const notice = {
-      adapter: openaiResponsesProtocolId,
-      direction: "request" as const,
-      code,
-      action: "degrade" as const,
-    };
-    diagnostics.notice(notice);
-    ledger.notice(notice);
-  });
-}
-
 async function handleOpenAIResponses(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
@@ -381,48 +315,15 @@ async function handleOpenAIResponses(
     // the raw request verbatim to the upstream endpoint, never through Pi.
     const selector = extractResponsesModelSelector(body);
     diagnostics.checkpoint({ stage: "model-resolution", selector });
-    if (
-      dependencies.codexLocalAuth !== undefined &&
-      dependencies.codexNativeModels?.has(selector) === true
-    ) {
-      const forwardAuth = await raceWithRequestSignal(
-        dependencies.codexLocalAuth.resolveForwardAuth(request.headers),
-        request.signal,
-      );
-      if (forwardAuth !== undefined) {
-        ledger.modelResolved({
-          externalAlias: selector,
-          providerId: "openai-codex",
-          realModelId: selector,
-        });
-        return executeCodexNativeBranch({
-          request,
-          rawBody,
-          forwardAuth,
-          fetch: dependencies.passthroughFetch,
-          diagnostics,
-          ledger,
-        });
-      }
+    if (dependencies.localNativeLane?.claims(selector) === true) {
+      return dependencies.localNativeLane.execute({
+        request,
+        rawBody,
+        selector,
+        diagnostics,
+        ledger,
+      });
     }
-    const codexCompactionRequested = isCodexRoutedCompactionRequest(body);
-    const codexReplayRequested = hasLuckyTokenCompactionEnvelope(body);
-    const routedCodexAuthenticated =
-      (codexCompactionRequested || codexReplayRequested) &&
-      dependencies.codexLocalAuth !== undefined &&
-      (await raceWithRequestSignal(
-        dependencies.codexLocalAuth.resolveForwardAuth(request.headers),
-        request.signal,
-      )) !== undefined;
-    const routedCodexCompaction =
-      codexCompactionRequested && routedCodexAuthenticated;
-    const routedCodexReplay = codexReplayRequested && routedCodexAuthenticated;
-    const routedCompactionStream =
-      routedCodexCompaction &&
-      typeof body === "object" &&
-      body !== null &&
-      (body as Record<string, unknown>).stream === true;
-
     // Ticket 15: the request captures one immutable alias snapshot at
     // acceptance; the resolved canonical target reaches the standard Pi
     // Provider invocation path. Bare ids and canonical selectors are never
@@ -466,15 +367,9 @@ async function handleOpenAIResponses(
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
       dependencies.aliasSource === undefined ? undefined : resolution.alias;
-    if (
-      !routedCodexCompaction &&
-      !routedCodexReplay &&
-      (dependencies.nativePassthrough?.supports(model) ??
-        isResponsesNativePassthroughModel(model))
-    ) {
-      return passthroughBranch(
+    if (dependencies.providerNativeLane?.claims(model, "responses") === true) {
+      return providerNativeBranch(
         dependencies,
-        dependencies.passthroughFetch,
         request,
         model,
         rawBody,
@@ -484,113 +379,21 @@ async function handleOpenAIResponses(
       );
     }
 
-    // Complete requests stay on the existing conversion path. Only requests
-    // that actually reference local continuation state pay the expansion cost.
-    const previousResponseId =
-      typeof body === "object" && body !== null
-        ? (body as Record<string, unknown>).previous_response_id
-        : undefined;
-    const expanded =
-      typeof previousResponseId === "string" && previousResponseId.length > 0
-        ? await raceWithRequestSignal(
-            dependencies.sessionState.expand(body),
-            request.signal,
-          )
-        : body;
-
-    const replayExpanded = routedCodexReplay
-      ? expandLuckyTokenCompactionEnvelopes(expanded)
-      : expanded;
-    const executionBody = routedCodexCompaction
-      ? buildCodexRoutedCompactionRequest(replayExpanded)
-      : replayExpanded;
-    const invocation = convertResponsesRequest(
-      executionBody,
-      dependencies.now(),
-      dependencies.configuration.conversion.request,
-    );
-    for (const notice of invocation.notices) {
-      diagnostics.notice(notice);
-      ledger.notice(notice);
-    }
-    const piOptions = composeInvocationOptions(
-      invocation,
-      {
-        sessionId: requestIdentity.effectiveSessionId,
-        signal: request.signal,
-      },
-      dependencies.routerDefaults,
-    );
-    diagnostics.checkpoint({ stage: "pi-execution", selector: invocation.selector });
-    freezePiInvocation(model, invocation.context, piOptions);
-    ledger.executing();
-    const message = await dependencies.executeOperation(
-      dependencies.models,
+    return executeSemanticResponses({
+      request,
+      body,
       model,
-      invocation.context,
-      piOptions,
-      {
-        notice: (notice) => {
-          diagnostics.notice(notice);
-          ledger.notice(notice);
-        },
-        attempt: (attempt) => {
-          diagnostics.attempt(attempt);
-          ledger.attempt(attempt);
-        },
-        // Ticket 20: the canonical terminal-usage snapshot is persisted in
-        // the Request Ledger independently of Client Wire usage conversion.
-        terminalUsage: (snapshot) => {
-          ledger.terminalUsage(snapshot);
-        },
-      },
-    );
-    request.signal.throwIfAborted();
-    ledger.terminal("success", { piStopReason: message.stopReason });
-    diagnostics.checkpoint({ stage: "client-render", selector: invocation.selector });
-    ledger.rendering();
-
-    const responseId = dependencies.createResponseId();
-    const renderState = buildRenderState(
-      invocation,
-      dependencies.configuration.conversion.response.unknownPiContent,
-      (notice) => {
-        diagnostics.notice(notice);
-        ledger.notice(notice);
-      },
-    );
-    const renderedBase = convertAssistantMessageToResponses(
-      message,
-      renderState,
-      responseId,
-      Math.floor(dependencies.now() / 1000),
-      typeof body === "object" && body !== null
-        ? ((body as Record<string, unknown>).previous_response_id as
-            | string
-            | undefined)
-        : undefined,
-    );
-    const rendered = routedCodexCompaction
-      ? projectRoutedCompactionResponse(renderedBase, message)
-      : renderedBase;
-    // Compaction replaces the client's history, so the synthetic summary
-    // turn must never be recorded as an ordinary continuation checkpoint.
-    if (!routedCodexCompaction) {
-      await rememberAfterSuccess(
-        dependencies,
-        diagnostics,
-        ledger,
-        body,
-        rendered,
-      );
-    }
-
-    const prepared =
-      (routedCodexCompaction ? routedCompactionStream : invocation.renderState.stream)
-        ? renderResponsesSse(rendered)
-        : renderResponsesJson(rendered);
-    request.signal.throwIfAborted();
-    return toResponse(prepared);
+      requestIdentity,
+      models: dependencies.models,
+      configuration: dependencies.configuration,
+      sessionState: dependencies.sessionState,
+      routerDefaults: dependencies.routerDefaults,
+      createResponseId: dependencies.createResponseId,
+      now: dependencies.now,
+      executeOperation: dependencies.executeOperation,
+      diagnostics,
+      ledger,
+    });
   } catch (error) {
     if (request.signal.aborted || error instanceof ExecutionAbortedError) {
       throw new ExecutionAbortedError(request.signal.reason);
@@ -622,17 +425,6 @@ async function handleOpenAIResponses(
           400,
           "invalid_request_error",
           "Request body is not valid JSON",
-        ),
-      );
-    }
-    if (error instanceof CodexRoutedCompactionSummaryError) {
-      ledger.fail({ classification: "runtime-failure", error });
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      return toResponse(
-        renderResponsesError(
-          502,
-          "api_error",
-          "Routed compaction summarizer produced no text",
         ),
       );
     }
@@ -780,18 +572,11 @@ async function handleOpenAIResponsesWithDiagnostics(
   }
 }
 
-/**
- * Passthrough branch: forward the client's raw Responses request verbatim to
- * the upstream endpoint and return its response unchanged (buffered atomic).
- *
- * Owns the full passthrough lifecycle: upstream auth resolution, forwarding,
- * and verbatim response return (status + headers + body) for both success
- * and upstream HTTP failure. Selection precedes conversion; the client always
- * sees the upstream response as-is.
- */
-async function passthroughBranch(
+/** Provider Native execution stays behind its lane seam. The protocol owns
+ * lifecycle observation and alias projection, never Provider credentials or
+ * request construction. */
+async function providerNativeBranch(
   dependencies: OpenAIResponsesDependencies,
-  fetchImpl: FetchFunction,
   request: Request,
   model: Model<string>,
   rawBody: string,
@@ -799,110 +584,34 @@ async function passthroughBranch(
   ledger: RequestLedgerEntry,
   alias: string | undefined,
 ): Promise<Response> {
-  const auth = await raceWithRequestSignal(
-    dependencies.models.getAuth(model),
-    request.signal,
-  );
-  const apiKey = auth?.auth.apiKey;
-  const composedHeaders = auth?.auth.headers;
-  const hasHeaderAuth =
-    composedHeaders !== undefined &&
-    Object.entries(composedHeaders).some(([name, value]) => {
-      const lower = name.toLowerCase();
-      return (
-        (lower === "authorization" || lower === "cf-aig-authorization") &&
-        value !== undefined &&
-        value !== null &&
-        value.trim().length > 0
-      );
-    });
-  if (auth === undefined || (apiKey === undefined && !hasHeaderAuth)) {
-    ledger.terminal("failed", { clientHttpStatus: 502 });
-    return toResponse(
-      renderResponsesError(
-        502,
-        "api_error",
-        `Provider is not configured: ${model.provider}`,
-      ),
-    );
-  }
-  let upstream: PassthroughResponsesResult;
+  const lane = dependencies.providerNativeLane;
+  if (lane === undefined) throw new Error("Provider Native lane is unavailable");
+  let upstream: NativeResponsesResult;
   try {
     ledger.executing();
-    const requestModel = dependencies.resolveRequestModel(model, auth);
-    const forwardedHeaders = passthroughResponsesRequestHeaders(request);
-    if (
-      dependencies.nativePassthrough !== undefined &&
-      dependencies.nativePassthrough.supports(model)
-    ) {
-      let response: Response;
-      try {
-        response = await raceWithRequestSignal(
-          dependencies.nativePassthrough.send({
-            model: requestModel,
-            auth,
-            rawBody,
-            signal: request.signal,
-            forwardedHeaders,
-          }),
-          request.signal,
-        );
-      } catch (error) {
-        if (request.signal.aborted) throw error;
-        throw new ResponsesPassthroughTransportError(error);
-      }
-      upstream = await bufferResponsesPassthroughResponse(
-        response,
-        request.signal,
-      );
-    } else {
-      upstream = await raceWithRequestSignal(
-        passthroughResponsesRequest({
-          model: requestModel,
-          rawBody,
-          apiKey,
-          signal: request.signal,
-          fetch: fetchImpl,
-          upstreamHeaders: forwardedHeaders,
-          ...(auth.auth.headers === undefined
-            ? {}
-            : { composedHeaders: auth.auth.headers }),
-        }),
-        request.signal,
-      );
-    }
+    const response = await raceWithRequestSignal(
+      lane.execute({
+        model,
+        rawBody,
+        request,
+        operation: "responses",
+      }),
+      request.signal,
+    );
+    upstream = await bufferNativeResponsesResponse(response, request.signal);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "kind" in error &&
-      (error.kind === "ResponsesPassthroughBodyReadError" ||
-        error.kind === "ResponsesPassthroughTransportError")
-    ) {
-      // Pre-commit upstream failure (body-read or transport): no upstream
-      // response byte ever committed to the client, so this is a legal
-      // non-streaming Responses error, never a raw exception. The client
-      // sees fixed actionable text — the raw cause may name the endpoint
-      // or the canonical target and goes only to the sanitized
-      // diagnostics journal.
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error });
-      await diagnostics.fail({
-        classification: "runtime-failure",
-        stage: "native-passthrough",
-        clientStatus: 502,
-        error,
-      });
-      return toResponse(
-        renderResponsesError(
-          502,
-          "api_error",
-          error.kind === "ResponsesPassthroughTransportError"
-            ? "Upstream provider request failed"
-            : "Upstream provider response could not be read",
-        ),
-      );
-    }
-    throw error;
+    if (request.signal.aborted) throw error;
+    ledger.terminal("failed", { clientHttpStatus: 502 });
+    ledger.fail({ classification: "runtime-failure", error });
+    await diagnostics.fail({
+      classification: "runtime-failure",
+      stage: "native-passthrough",
+      clientStatus: 502,
+      error,
+    });
+    return toResponse(
+      renderResponsesError(502, "api_error", "Upstream provider request failed"),
+    );
   }
   request.signal.throwIfAborted();
   const terminalUsage = extractResponsesPassthroughUsage(
@@ -946,7 +655,7 @@ async function passthroughBranch(
   // safely (no upstream bytes, no canonical identity).
   let body = upstream.body;
   if (alias !== undefined) {
-    const projected = projectResponsesPassthroughBody(
+    const projected = projectNativeResponsesBody(
       body,
       upstream.headers["content-type"] ?? "",
       alias,
@@ -979,132 +688,6 @@ async function passthroughBranch(
     status: upstream.status,
     headers: { ...upstream.headers },
   });
-}
-
-function renderResponsesJson(
-  target: ResponsesResponseObject,
-): PreparedHttpResponse {
-  return {
-    status: 200,
-    contentType: "application/json",
-    body: new TextEncoder().encode(JSON.stringify(target)),
-  };
-}
-
-/**
- * Build the immutable render facts the Response converter consumes: the
- * effective normalized controls that actually took effect, echoed from the
- * request-local render state. Raw caller intent that was dropped or degraded
- * (hosted tools, forced choices, parallel flag, unsupported controls) never
- * appears here, so the wire can never claim it took effect.
- *
- * Only function/custom tools that were actually offered to Pi are echoed. A
- * tool is echoed exactly once: its flattened name (used for calls) or its
- * reversed child name under a namespace, matching how the call output items
- * are rendered.
- */
-function buildRenderState(
-  invocation: ResponsesInvocation,
-  unknownPiContent: "error" | "ignore",
-  notice: (notice: {
-    readonly adapter: string;
-    readonly direction: "request" | "response";
-    readonly code: string;
-    readonly jsonPath?: string;
-    readonly action: "ignore" | "degrade" | "xrepair";
-  }) => void,
-): ResponsesRenderState {
-  const state = invocation.renderState;
-  const tools = buildEchoTools(invocation);
-  const freeformNames = state.freeformToolNames;
-  const namespaceReverse = state.namespaceReverse;
-  // Effective sampling values are echoed only when the caller provided them;
-  // the target defaults (null) apply otherwise.
-  const temperature =
-    typeof invocation.options.temperature === "number"
-      ? invocation.options.temperature
-      : undefined;
-  const topP =
-    typeof invocation.options.samplingParams?.top_p === "number"
-      ? (invocation.options.samplingParams.top_p as number)
-      : undefined;
-  return Object.freeze({
-    clientModel: state.clientModel,
-    stream: state.stream,
-    ...(state.toolChoice === undefined ? {} : { toolChoice: state.toolChoice }),
-    ...(freeformNames === undefined || freeformNames.size === 0
-      ? {}
-      : { freeformToolNames: freeformNames }),
-    ...(namespaceReverse === undefined ||
-    Object.keys(namespaceReverse).length === 0
-      ? {}
-      : { namespaceReverse }),
-    ...(state.metadataEcho === undefined ? {} : { metadataEcho: state.metadataEcho }),
-    ...(temperature === undefined ? {} : { temperature }),
-    ...(topP === undefined ? {} : { topP }),
-    ...(tools.length === 0 ? {} : { tools }),
-    unknownPiContent,
-    notices: { push: notice },
-  });
-}
-
-function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
-  const state = invocation.renderState;
-  const freeformNames = state.freeformToolNames;
-  const namespaceReverse = state.namespaceReverse;
-  const catalog = invocation.context.tools;
-  if (catalog === undefined || catalog.length === 0) return [];
-  const seen = new Set<string>();
-  const tools: ResponsesEchoTool[] = [];
-  for (const tool of catalog) {
-    const reverse = namespaceReverse?.[tool.name];
-    const name = reverse?.child ?? tool.name;
-    const key = reverse === undefined ? tool.name : `${reverse.namespace}.${name}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const freeform = freeformNames?.has(tool.name) === true;
-    // A freeform custom tool is echoed under its own `custom` type. The
-    // installed SDK models CustomTool as {type,name,description?,format?}
-    // with no `input_schema` field; the freeform input contract is the SDK
-    // `format: {type:"text"}` shape. Ordinary functions echo as strict
-    // function declarations.
-    if (freeform) {
-      tools.push({
-        type: "custom",
-        name,
-        ...(reverse === undefined ? {} : { namespace: reverse.namespace }),
-        description: tool.description,
-        format: { type: "text" },
-      });
-      continue;
-    }
-    tools.push({
-      type: "function",
-      name,
-      ...(reverse === undefined ? {} : { namespace: reverse.namespace }),
-      description: tool.description,
-      parameters: tool.parameters as Readonly<Record<string, unknown>>,
-      strict:
-        tool.constrainedSampling !== undefined &&
-        tool.constrainedSampling !== false &&
-        tool.constrainedSampling.type === "json_schema",
-    });
-  }
-  return tools as ResponsesEchoTool[];
-}
-
-function composeInvocationOptions(
-  invocation: ResponsesInvocation,
-  infrastructure: {
-    sessionId: string;
-    signal: AbortSignal;
-    fetch?: FetchFunction;
-    projectDir?: string;
-  },
-  routerDefaults: RouterOptionDefaults,
-): ModelsSimpleStreamOptions {
-  const options: ModelsSimpleStreamOptions = { ...invocation.options };
-  return composeOptions(options, infrastructure, routerDefaults);
 }
 
 function dependenciesConfiguration(
@@ -1141,6 +724,8 @@ export function createOpenAIResponsesHandler(
   }
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
+    localNativeLane: options.localNativeLane,
+    providerNativeLane: options.providerNativeLane,
     createSessionId: options.createSessionId ?? randomUUID,
     onRequestIdentity: options.onRequestIdentity,
     configuration,
@@ -1149,17 +734,12 @@ export function createOpenAIResponsesHandler(
     requestLedger: options.requestLedger ?? createNoopRequestLedger(),
     deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     sessionState,
-    passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
-    nativePassthrough: options.nativePassthrough,
     aliasSource: options.aliasSource,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),
     now: options.now ?? Date.now,
-    resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
     executeOperation: options.executeOperation ?? execute,
-    codexLocalAuth: options.codexLocalAuth,
-    codexNativeModels: options.codexNativeModels,
   });
   return Object.freeze({
     method: "POST",

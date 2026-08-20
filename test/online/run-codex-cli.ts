@@ -59,7 +59,6 @@ import { fileURLToPath } from "node:url";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -1275,29 +1274,17 @@ export async function runCodexCliOnlineSuite(
   const stateDirectory = join(directory, ".luckytoken");
   const piDirectory = join(stateDirectory, "pi");
   await mkdir(piDirectory, { recursive: true });
-  const responsesAuthFile = join(stateDirectory, "client-auth", "openai-responses.json");
-  const anthropicAuthFile = join(stateDirectory, "client-auth", "anthropic-messages.json");
-  const responsesToken = randomUUID();
-  const anthropicToken = randomUUID();
-  await createFileClientTokenStore({ path: responsesAuthFile }).create(
-    { type: "global" },
-    responsesToken,
-  );
-  await createFileClientTokenStore({ path: anthropicAuthFile }).create(
-    { type: "global" },
-    anthropicToken,
-  );
+  const responsesToken = "unused-local-sdk-key";
   const stateFile = join(stateDirectory, "state", "openai-responses.json");
   const configPath = join(stateDirectory, "config.json");
   await writeFile(
     configPath,
     JSON.stringify({
       schemaVersion: "luckytoken-config-v1",
-      server: { host: "127.0.0.1", port: 0 },
+      server: { port: 0 },
       clientProtocols: {
-        "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
+        "anthropic-messages": {},
         "openai-responses": {
-          authFile: "client-auth/openai-responses.json",
           stateFile: "state/openai-responses.json",
         },
       },
@@ -1404,7 +1391,7 @@ export async function runCodexCliOnlineSuite(
   );
   let server = await startLuckyTokenHttpServer({
     runtime,
-    host: config.server.host,
+    host: "127.0.0.1",
     port: config.server.port,
   });
   const origin = server.origin;
@@ -1499,7 +1486,7 @@ export async function runCodexCliOnlineSuite(
               );
               server = await startLuckyTokenHttpServer({
                 runtime,
-                host: config.server.host,
+                host: "127.0.0.1",
                 port: config.server.port,
               });
               codexBaseUrl = `${server.origin}/v1`;

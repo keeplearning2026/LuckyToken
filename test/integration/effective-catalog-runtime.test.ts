@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 
 /**
@@ -49,15 +48,6 @@ describe("effective composition in the data plane", () => {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const clientAuthPath = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: clientAuthPath }).create(
-      { type: "global" },
-      "client-token",
-    );
     const modelsJsonPath = join(piDirectory, "models.json");
     await writeFile(modelsJsonPath, JSON.stringify(modelsJson), "utf8");
     const configPath = join(stateDirectory, "config.json");
@@ -67,9 +57,7 @@ describe("effective composition in the data plane", () => {
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi", modelsJson: "pi/models.json" },
       }),

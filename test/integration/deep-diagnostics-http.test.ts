@@ -562,21 +562,21 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
     await expect.poll(() => recoveries).toHaveLength(1);
   });
 
-  it("records partial captures for a rejected-auth request and an aborted request, and reports them through the Control Plane query", async () => {
+  it("records partial captures for an early protocol rejection and an aborted request, and reports them through the Control Plane query", async () => {
     const { runtime, store, registry, client } =
       await createCaptureHttpFixture();
     await registry.set(DEEP_CAPTURE_SETTING, true, undefined);
 
-    // 401: accepted while enabled, no body read, error envelope response.
-    // The independent x-api-key canary rides this request: both credentials
-    // differ, so auth truthfully rejects.
+    // 415: accepted while enabled, but Content-Type fails before body read.
+    // Credential-shaped header canaries still must be redacted even though
+    // LuckyToken no longer performs Client Auth.
     const rejected = await runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer wrong-token",
           "x-api-key": "canary-x-api-key-4c8f1a62",
-          "content-type": "application/json",
+          "content-type": "text/plain",
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
@@ -586,7 +586,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
         }),
       }),
     );
-    expect(rejected.status).toBe(401);
+    expect(rejected.status).toBe(415);
     const rejectedId = rejected.headers.get("x-luckytoken-request-id");
     await expect
       .poll(() => store.query({ requestId: rejectedId! }))
@@ -596,7 +596,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
     });
     expect(rejectedResult.state).toBe("partial");
     expect(rejectedResult.record!.requestBody).toBeUndefined();
-    expect(rejectedResult.record!.clientHttpStatus).toBe(401);
+    expect(rejectedResult.record!.clientHttpStatus).toBe(415);
     expect(
       JSON.stringify(rejectedResult.record!.requestHeaders),
     ).toContain("[REDACTED]");

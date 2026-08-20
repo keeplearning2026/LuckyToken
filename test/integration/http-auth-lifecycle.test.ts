@@ -67,7 +67,7 @@ function runtimeOptions(
   };
 }
 
-describe("HTTP, Auth, and session lifecycle", () => {
+describe("HTTP and session lifecycle", () => {
   it("rejects edge-invalid requests without dispatching upstream", async () => {
     let fetchCalls = 0;
     const fixtureFetch: FetchFunction = async () => {
@@ -78,7 +78,7 @@ describe("HTTP, Auth, and session lifecycle", () => {
       runtimeOptions(fixtureFetch, { maxRequestBytes: 32 }),
     );
 
-    const unauthorized = await runtime.handle(
+    const invalidBody = await runtime.handle(
       new Request("http://luckytoken.test/v1/messages", {
         method: "POST",
         headers: {
@@ -89,7 +89,7 @@ describe("HTTP, Auth, and session lifecycle", () => {
         body: "{}",
       }),
     );
-    expect(unauthorized.status).toBe(401);
+    expect(invalidBody.status).toBe(400);
 
     const wrongRoute = await runtime.handle(
       new Request("http://luckytoken.test/not-messages", { method: "POST" }),
@@ -113,7 +113,7 @@ describe("HTTP, Auth, and session lifecycle", () => {
     expect(fetchCalls).toBe(0);
   });
 
-  it("uses Auth session precedence and carries one identity to header and body", async () => {
+  it("uses request-session precedence and carries one identity to header and body", async () => {
     let upstreamRequest: Request | undefined;
     const fixtureFetch: FetchFunction = async (input, init) => {
       upstreamRequest = new Request(input, init);

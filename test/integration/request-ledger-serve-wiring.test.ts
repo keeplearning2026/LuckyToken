@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import {
   createRequestLedgerStoreFactory,
@@ -73,23 +72,14 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     const stateDirectory = join(root, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const anthropicAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: anthropicAuthFile }).create(
-      { type: "global" },
-      CLIENT_TOKEN,
-    );
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
+        server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
+          "anthropic-messages": {},
         },
         providerPackages: { "@luckytoken/provider-commandcode-private": {} },
         pi: { directory: "pi" },
@@ -273,23 +263,14 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     const stateDirectory = join(root, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const anthropicAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: anthropicAuthFile }).create(
-      { type: "global" },
-      CLIENT_TOKEN,
-    );
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
+        server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": { authFile: "client-auth/anthropic-messages.json" },
+          "anthropic-messages": {},
         },
         providerPackages: { "@luckytoken/provider-commandcode-private": {} },
         pi: { directory: "pi" },

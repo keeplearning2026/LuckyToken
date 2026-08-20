@@ -12,8 +12,6 @@ import type {
   BackupResult,
   CatalogCommand,
   CatalogCommandResult,
-  ClientTokenCommand,
-  ClientTokenCommandResult,
   CodexIntegrationCommand,
   CodexIntegrationCommandResult,
   CredentialCommand,
@@ -63,7 +61,6 @@ export interface DesktopControlPlaneApi {
 
   executeRuntime(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettings(command: SettingsCommand): Promise<SettingsCommandResult>;
-  executeClientToken(command: ClientTokenCommand): Promise<ClientTokenCommandResult>;
   executeCredential(command: CredentialCommand): Promise<CredentialCommandResult>;
   executeAuth(
     command: AuthCommand,

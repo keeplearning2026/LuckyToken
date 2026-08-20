@@ -5,7 +5,6 @@ import type {
   AuthInteractionResponse,
   BackupCreateCommand,
   CatalogCommand,
-  ClientTokenCommand,
   CodexIntegrationCommand,
   CredentialCommand,
   HistoryDeleteCommand,
@@ -82,9 +81,6 @@ export function registerDesktopIpcHandlers(options: {
   );
   register(desktopIpcChannels.settings, (_event, ...args) =>
     session.client().executeSettingsCommand(first<SettingsCommand>(args)),
-  );
-  register(desktopIpcChannels.clientToken, (_event, ...args) =>
-    session.client().executeClientTokenCommand(first<ClientTokenCommand>(args)),
   );
   register(desktopIpcChannels.credential, (_event, ...args) =>
     session.client().executeCredentialCommand(first<CredentialCommand>(args)),

@@ -334,7 +334,7 @@ describe("OpenAI Responses serving", () => {
     expect(notices).toContain("openai-responses_store_false_persisted");
   });
 
-  it("rejects an invalid client token with 401", async () => {
+  it("does not let Authorization affect unknown-model classification", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),
     });
@@ -344,7 +344,7 @@ describe("OpenAI Responses serving", () => {
         "wrong-token",
       ),
     );
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
   });
 
   it("returns 400 for malformed requests", async () => {

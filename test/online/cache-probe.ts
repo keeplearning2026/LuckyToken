@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
@@ -58,25 +57,15 @@ async function main(): Promise<void> {
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
-    const clientAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
     await mkdir(piDirectory, { recursive: true });
-    const localGlobalClientKey = randomUUID();
-    const clientTokenStore = createFileClientTokenStore({ path: clientAuthFile });
-    await clientTokenStore.create({ type: "global" }, localGlobalClientKey);
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
+        server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi" },
         limits: {
@@ -100,11 +89,11 @@ async function main(): Promise<void> {
     });
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const client = new Anthropic({
-      apiKey: localGlobalClientKey,
+      apiKey: "unused-local-sdk-key",
       baseURL: server.origin,
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,

@@ -470,11 +470,10 @@ async function waitForNoRendererProcesses(application) {
   );
 }
 
-async function sendResponsesRequest(origin, clientToken, message) {
+async function sendResponsesRequest(origin, message) {
   const response = await fetch(`${origin}/v1/responses`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${clientToken}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -489,26 +488,6 @@ async function sendResponsesRequest(origin, clientToken, message) {
   const requestId = response.headers.get("x-luckytoken-request-id");
   assert.ok(requestId, "successful request must expose the LuckyToken request id");
   return requestId;
-}
-
-async function revealResponsesClientToken(client) {
-  const listed = await client.executeClientTokenCommand({
-    command: "list",
-    protocolId: "openai-responses",
-  });
-  assert.equal(listed.outcome, "ok");
-  assert.ok(
-    listed.scopes?.some((scope) => scope.type === "global"),
-    "enabled Responses protocol must own its boot-created global client token",
-  );
-  const revealed = await client.executeClientTokenCommand({
-    command: "reveal",
-    protocolId: "openai-responses",
-    scope: { type: "global" },
-  });
-  assert.equal(revealed.outcome, "ok");
-  assert.ok(revealed.token);
-  return revealed.token;
 }
 
 test(
@@ -615,10 +594,8 @@ test(
       await page.getByRole("button", { name: "Settings" }).click();
       await page.getByRole("heading", { name: "Settings", exact: true, level: 1 }).waitFor();
 
-      const clientToken = await revealResponsesClientToken(client);
       const firstRequestId = await sendResponsesRequest(
         running.dataPlane.configuredOrigin,
-        clientToken,
         "first product request",
       );
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
@@ -640,7 +617,6 @@ test(
       await waitForNoWindows(application);
       const secondRequestId = await sendResponsesRequest(
         running.dataPlane.configuredOrigin,
-        clientToken,
         "tray-only request",
       );
       assert.equal(application.windows().length, 0);

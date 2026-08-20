@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
 import {
   createAnthropicMessagesHandler,
@@ -14,6 +13,7 @@ import {
   createOpenAIResponsesHandler,
   type OpenAIResponsesHandlerOptions,
 } from "../../src/protocols/openai-responses/handler.js";
+import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { resolveRequestModel } from "../../src/providers/request-composition.js";
 
 /**
@@ -101,12 +101,6 @@ describe("Client Protocol request-model seam", () => {
     );
   });
 
-  function auth(): Auth {
-    return {
-      resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-    };
-  }
-
   describe("Anthropic handler", () => {
     function anthropicDependencies(
       models: Models,
@@ -115,7 +109,6 @@ describe("Client Protocol request-model seam", () => {
     ): HttpBoundaryDependencies {
       const options: AnthropicMessagesHandlerOptions = {
         models,
-        auth: auth(),
         modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         createMessageId: () => "msg_client",
         maxRequestBytes: 1_000_000,
@@ -179,26 +172,22 @@ describe("Client Protocol request-model seam", () => {
     });
   });
 
-  describe("OpenAI Responses handler", () => {
+  describe("OpenAI Responses Provider Native ownership", () => {
     function responsesDependencies(
       models: Models,
       extra: Partial<OpenAIResponsesHandlerOptions> = {},
-      passthroughFetch?: FetchFunction,
     ): HttpBoundaryDependencies {
       const stateFile = join(tmpdir(), `luckytoken-seam-state-${Math.random()}.json`);
       roots.push(stateFile);
-      const options: OpenAIResponsesHandlerOptions = {
+      const responses = createOpenAIResponsesHandler({
         models,
-        auth: auth(),
         createResponseId: () => "resp_test",
         maxRequestBytes: 1_000_000,
         routerDefaults: {},
         stateFile,
         now: () => 1,
         ...extra,
-        ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
-      };
-      const responses = createOpenAIResponsesHandler(options);
+      });
       return {
         clientProtocols: [responses],
         requestTimeoutMs: undefined,
@@ -209,10 +198,7 @@ describe("Client Protocol request-model seam", () => {
     function responsesRequest(): Request {
       return new Request("http://luckytoken.test/v1/responses", {
         method: "POST",
-        headers: {
-          authorization: "Bearer client",
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: "cloudflare-ai-gateway/gpt-4o",
           input: "hello",
@@ -220,30 +206,46 @@ describe("Client Protocol request-model seam", () => {
       });
     }
 
-    it("defaults to identity: without a wired resolver the catalog baseUrl passes through", async () => {
+    it("hands the resolved catalog model unchanged to the claiming Provider Native lane", async () => {
       const model = cloudflareModel("openai-responses");
-      const capture = captureFetch();
-      const dependencies = responsesDependencies(
-        passthroughModels(model, cloudflareAuth()),
-        {},
-        capture.passthroughFetch,
+      let received: Model<string> | undefined;
+      const providerNativeLane = {
+        claims: () => true,
+        execute: async (input: { model: Model<string> }) => {
+          received = input.model;
+          return new Response(JSON.stringify({ model: "gpt-4o", output: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      };
+      const response = await handleHttpRequest(
+        responsesDependencies(passthroughModels(model, cloudflareAuth()), {
+          providerNativeLane,
+        }),
+        responsesRequest(),
       );
-      const response = await handleHttpRequest(dependencies, responsesRequest());
+
       expect(response.status).toBe(200);
-      expect(capture.urls[0]).toContain(
+      expect(received).toBe(model);
+      expect(received?.baseUrl).toContain(
         "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai",
       );
     });
 
-    it("applies the wired Provider-seam resolver to the passthrough request model", async () => {
+    it("materializes Provider request-local facts inside the Provider Native lane", async () => {
       const model = cloudflareModel("openai-responses");
+      const models = passthroughModels(model, cloudflareAuth());
       const capture = captureFetch();
-      const dependencies = responsesDependencies(
-        passthroughModels(model, cloudflareAuth()),
-        { resolveRequestModel },
-        capture.passthroughFetch,
+      const providerNativeLane = createProviderNativeResponses({
+        models,
+        fetch: capture.passthroughFetch,
+      });
+      const response = await handleHttpRequest(
+        responsesDependencies(models, { providerNativeLane }),
+        responsesRequest(),
       );
-      const response = await handleHttpRequest(dependencies, responsesRequest());
+
       expect(response.status).toBe(200);
       expect(capture.urls[0]).toBe(
         "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/openai/responses",

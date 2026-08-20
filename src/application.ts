@@ -69,8 +69,6 @@ import {
   createUnavailableRequestLedgerStore,
   observeDiagnosticsStore,
 } from "./persistence-degradation/index.js";
-import { anthropicMessagesProtocolId } from "./protocols/anthropic/handler.js";
-import { openaiResponsesProtocolId } from "./protocols/openai-responses/handler.js";
 import { createCatalogCacheStore } from "./providers/catalog-cache.js";
 import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
@@ -89,7 +87,10 @@ import {
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
-import { resolveEffectiveSettings } from "./settings/data-plane.js";
+import {
+  DATA_PLANE_LOOPBACK_HOST,
+  resolveEffectiveSettings,
+} from "./settings/data-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { startLuckyTokenHttpServer } from "./server.js";
 import { resolveCodexHome } from "./integrations/codex/home.js";
@@ -516,7 +517,6 @@ async function startNormalApplication(options: {
       {
         initial: {
           "server.port": config.server.port,
-          "server.bindHost": config.server.host,
           "diagnostics.deepCapture.enabled": config.deepDiagnostics.enabled,
         },
       },
@@ -769,7 +769,7 @@ async function startNormalApplication(options: {
       provider: lastPublishedStatus.provider,
     });
     supervisor = createDataPlaneRuntimeSupervisor({
-      host: config.server.host,
+      host: DATA_PLANE_LOOPBACK_HOST,
       port: config.server.port,
       readProvider: () => lastPublishedStatus.provider,
       resolveAddress: () => resolveEffectiveSettings(settingsRegistry.query([])),

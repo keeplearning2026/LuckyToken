@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadFileClientTokenAuthority } from "../../src/client-auth/file-token-store.js";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 
@@ -35,29 +34,14 @@ describe("failure journal universal redaction seam", () => {
       { directory: root, detail: "full" },
       root,
     );
-    // Credential-owner known values: a Client Protocol token authority owns
-    // the raw token and exposes only scrub; an arbitrary non-token-shaped
-    // value must still be removed from any journal text.
-    const authority = await loadFileClientTokenAuthority(
-      await (async () => {
-        const { createFileClientTokenStore } = await import(
-          "../../src/client-auth/file-token-store.js"
-        );
-        const path = join(root, "tokens.json");
-        const store = createFileClientTokenStore({
-          path,
-          generateToken: () => "hunter2",
-        });
-        await store.create({ type: "global" });
-        return path;
-      })(),
-    );
+    // Credential owners contribute their known-value scrubbers without any
+    // LuckyToken Client Auth/token authority.
+    const localCredential = "hunter2";
     const providerSecret = "mydogspot";
-    const scrub = (value: string) => {
-      let redacted = authority.scrub(value);
-      redacted = redacted.replaceAll(providerSecret, "[REDACTED]");
-      return redacted;
-    };
+    const scrub = (value: string) =>
+      value
+        .replaceAll(localCredential, "[REDACTED]")
+        .replaceAll(providerSecret, "[REDACTED]");
 
     const invocation = createInvocationDiagnosticsFactory({
       configuration,

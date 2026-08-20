@@ -26,14 +26,16 @@ describe("desktop first-run configuration template", () => {
 
     const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
       readonly schemaVersion?: unknown;
-      readonly server?: { readonly host?: unknown; readonly port?: unknown };
+      readonly server?: { readonly port?: unknown };
       readonly clientProtocols?: Record<string, unknown>;
       readonly pi?: { readonly directory?: unknown };
     };
     expect(parsed.schemaVersion).toBe("luckytoken-config-v1");
-    expect(parsed.server).toEqual({ host: "127.0.0.1", port: 3000 });
+    expect(parsed.server).toEqual({ port: 3000 });
     expect(parsed.clientProtocols).toHaveProperty("anthropic-messages");
     expect(parsed.clientProtocols).toHaveProperty("openai-responses");
+    expect(parsed.clientProtocols?.["anthropic-messages"]).not.toHaveProperty("authFile");
+    expect(parsed.clientProtocols?.["openai-responses"]).not.toHaveProperty("authFile");
     expect(parsed.pi).toHaveProperty("directory");
 
     if (process.platform === "win32") return; // Windows mode bits are advisory

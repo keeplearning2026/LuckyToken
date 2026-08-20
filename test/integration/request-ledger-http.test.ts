@@ -35,7 +35,6 @@ import { createOpenAIResponsesServingTestComposition } from "../support/openai-r
 import {
   createAnthropicMessagesHandler,
 } from "../../src/protocols/anthropic/handler.js";
-import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest } from "../../src/http.js";
 
 /**
@@ -47,7 +46,6 @@ import { handleHttpRequest } from "../../src/http.js";
 
 const fallbackSession = "00000000-0000-4000-8000-000000000020";
 const primarySession = "00000000-0000-4000-8000-000000000021";
-const projectDir = "C:\\Users\\fixture\\projects\\alpha";
 
 function commandCodeSuccess(text = "ok"): Response {
   return new Response(
@@ -145,7 +143,6 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
   async function createLedgerHttpFixture(
     options: {
       fetch?: FetchFunction;
-      projectDir?: string;
       now?: () => number;
       store?: RequestLedgerStore;
       aliasSource?: AliasModelSource;
@@ -167,9 +164,6 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       createMessageId: () => "msg_fixture",
       createSessionId: options.sessionId ?? (() => fallbackSession),
       now: options.now ?? (() => 1_786_400_000_000),
-      ...(options.projectDir === undefined
-        ? {}
-        : { projectDir: options.projectDir }),
       ...(options.maxRequestBytes === undefined
         ? {}
         : { maxRequestBytes: options.maxRequestBytes }),
@@ -270,8 +264,8 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
     expect(JSON.stringify(events)).not.toContain("Hello");
   });
 
-  it("records distinct client session and effective session identities plus the canonical project directory", async () => {
-    const { runtime, store } = await createLedgerHttpFixture({ projectDir });
+  it("records distinct client session and effective session identities without project context", async () => {
+    const { runtime, store } = await createLedgerHttpFixture();
     const withClientId = await runtime.handle(
       validRequest({ "x-session-id": primarySession }),
     );
@@ -283,60 +277,32 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
     expect(query.records).toHaveLength(2);
     // Newest-first: records[0] is the second (headerless) request.
     const [second, first] = query.records;
-    // The client-supplied id is retained as the effective identity (auth
-    // contract), and the ledger stores each under its own labeled field.
+    // The client-supplied id is retained as the effective identity, and the
+    // ledger stores each session identity under its own labeled field.
     expect(second).toMatchObject({
       effectiveSessionId: fallbackSession,
-      projectDir,
     });
     expect(second!.clientSessionId).toBeUndefined();
     expect(first).toMatchObject({
       clientSessionId: primarySession,
       effectiveSessionId: primarySession,
-      projectDir,
     });
     expect(JSON.stringify(query.records)).not.toContain("fixture-commandcode-key");
   });
 
-  it("records rejected auth as a single terminal row with only known facts and the header on the 401", async () => {
+  it("does not classify arbitrary Authorization headers as client-auth failures", async () => {
     const { runtime, store } = await createLedgerHttpFixture();
-    const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer wrong-token",
-          "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({ model: "claude-fixture", messages: [] }),
-      }),
-    );
-    expect(response.status).toBe(401);
-    const headerRequestId = response.headers.get("x-luckytoken-request-id");
-    expect(headerRequestId).toBeTruthy();
-    // Anthropic error envelope carries the same request id in the body.
-    const body = (await response.json()) as { request_id: string };
-    expect(body.request_id).toBe(headerRequestId);
+    const response = await runtime.handle(validRequest({ authorization: "Bearer ignored-token" }));
+    expect(response.status).toBe(200);
 
     const query = store.query(undefined);
     expect(query.records).toHaveLength(1);
     expect(query.records[0]).toMatchObject({
-      requestId: headerRequestId,
       protocolId: "anthropic-messages",
-      outcome: "rejected-auth",
-      phase: "terminal-preparation",
-      clientHttpStatus: 401,
-      acceptedAt: 1_786_400_000_000,
-      terminalAt: 1_786_400_000_000,
-      completedAt: 1_786_400_000_000,
+      outcome: "success",
+      clientHttpStatus: 200,
     });
-    // Early-failure records preserve only facts actually known: no session,
-    // no alias snapshot, no execution.
-    expect(query.records[0]!.clientSessionId).toBeUndefined();
-    expect(query.records[0]!.effectiveSessionId).toBeUndefined();
-    expect(query.records[0]!.projectDir).toBeUndefined();
-    expect(query.records[0]!.externalAlias).toBeUndefined();
-    expect(query.records[0]!.executionStartedAt).toBeUndefined();
+    expect(query.records[0]?.outcome).not.toBe("rejected-auth");
   });
 
   it("classifies unknown and unavailable aliases into their terminal outcomes", async () => {
@@ -552,15 +518,8 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       getModels: () => [model],
       getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
     } as unknown as Models;
-    const auth: Auth = {
-      resolve: async () => ({
-        authorized: true,
-        effectiveSessionId: fallbackSession,
-      }),
-    };
     const handler = createAnthropicMessagesHandler({
       models,
-      auth,
       maxRequestBytes: 1_000_000,
       passthroughFetch,
       requestLedger: store,
@@ -936,12 +895,6 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
         getModels: () => [passthroughModel],
         getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
       } as unknown as Models,
-      auth: {
-        resolve: async () => ({
-          authorized: true,
-          effectiveSessionId: fallbackSession,
-        }),
-      },
       maxRequestBytes: 1_000_000,
       passthroughFetch,
       requestLedger: passthroughStore,

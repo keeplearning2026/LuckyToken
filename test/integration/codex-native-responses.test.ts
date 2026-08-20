@@ -209,23 +209,23 @@ describe("Codex-native Responses routing", () => {
     });
   });
 
-  it("does not steal a bare model from the ordinary path when the request is authorized by a LuckyToken client token", async () => {
+  it("does not fall through when a local native model is claimed but its credential is unavailable", async () => {
     const calls: Request[] = [];
     const { runtime } = await start({
       modelId: "gpt-native",
       fetch: async (input, init) => {
-        const outbound = new Request(input, init);
-        calls.push(outbound.clone());
-        return commandCodeText("converted answer");
+        calls.push(new Request(input, init));
+        return commandCodeText("must not execute");
       },
     });
 
-    const response = await runtime.handle(request("gpt-native", "client-token"));
+    const response = await runtime.handle(request("gpt-native", "not-the-local-codex-token"));
 
-    expect(response.status).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toContain("commandcode.test");
-    expect(calls[0]?.headers.get("authorization")).not.toBe("Bearer client-token");
+    expect(response.status).toBe(401);
+    expect(calls).toHaveLength(0);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "authentication_error" },
+    });
   });
 
   it("lets a Codex-authenticated request use an ordinary Pi model when its model is not native", async () => {

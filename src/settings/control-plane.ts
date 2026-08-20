@@ -1,5 +1,4 @@
 import type {
-  LanConfirmation,
   RegisteredSetting,
   SettingsCommand,
   SettingsCommandHandler,
@@ -22,7 +21,6 @@ export function createSettingsControlPlaneHandler(
   ): Promise<{
     readonly outcome: SettingsCommandOutcome;
     readonly error?: string;
-    readonly confirmation?: LanConfirmation;
     readonly settings: Readonly<Record<string, RegisteredSetting>>;
   }> => {
     if (command.command === "query") {
@@ -36,20 +34,12 @@ export function createSettingsControlPlaneHandler(
       return {
         outcome: result.outcome,
         ...(result.error === undefined ? {} : { error: result.error }),
-        ...(result.confirmation === undefined
-          ? {}
-          : { confirmation: result.confirmation }),
         settings: result.settings,
       };
     }
-    const confirmed = await registry.confirm({
-      actionId: command.actionId,
-      token: undefined,
-    });
     return {
-      outcome: confirmed.outcome,
-      ...(confirmed.error === undefined ? {} : { error: confirmed.error }),
-      settings: confirmed.settings,
+      outcome: "unknown_key",
+      settings: registry.query([]),
     };
   };
 }

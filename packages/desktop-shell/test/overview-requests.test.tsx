@@ -49,7 +49,6 @@ function record(
     providerId: "anthropic",
     realModelId: "claude-sonnet-4-5",
     clientSessionId: CLIENT_SESSION,
-    projectDir: "C:\\work\\alpha",
     terminalUsage: {
       api: "anthropic",
       input: 20,
@@ -78,7 +77,6 @@ function analytics(query: AnalyticsQuery) {
       providers: [],
       models: ["claude-sonnet-4-5"],
       protocols: ["anthropic-messages"],
-      projects: ["C:\\work\\alpha"],
       sessions: [CLIENT_SESSION],
       outcomes: ["success", "failed"],
     };
@@ -171,7 +169,6 @@ describe("Overview request table", () => {
       "Start time",
       "Session",
       "Request ID",
-      "Project",
       "Protocol",
       "Input",
       "Cache read",
@@ -190,7 +187,6 @@ describe("Overview request table", () => {
     expect(row?.textContent).toContain(first.requestId.slice(0, 8));
     expect(row?.textContent).not.toContain(first.requestId);
     expect(row?.querySelector('[title="' + first.requestId + '"]')).not.toBeNull();
-    expect(row?.textContent).toContain("C:\\work\\alpha");
     expect(row?.textContent).toContain("anthropic-messages");
     expect(row?.textContent).toContain("20");
     expect(row?.textContent).toContain("5");
@@ -200,7 +196,6 @@ describe("Overview request table", () => {
     expect(row?.textContent).toContain("2.0 s");
     expect(row?.textContent).toContain("external-sonnet");
     expect(row?.textContent).toContain("Server error");
-    expect(row?.querySelector("td.overview-col-project")?.textContent).toBe("C:\\work\\alpha");
     expect(row?.querySelector("td.overview-col-request-id")?.textContent).toBe(first.requestId.slice(0, 8));
     expect(container.querySelector(`tr[data-request-id="${second.requestId}"]`)?.textContent).toContain("-");
 

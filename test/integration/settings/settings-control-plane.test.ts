@@ -19,6 +19,7 @@ import {
   parseRuntimeDiagnosticsConfiguration,
 } from "../../../src/runtime-diagnostics/index.js";
 import { createSettingsControlPlaneHandler } from "../../../src/settings/control-plane.js";
+import { resolveEffectiveSettings } from "../../../src/settings/data-plane.js";
 
 import { createDataPlaneRuntimeSupervisor } from "../../../src/runtime-supervisor.js";
 import {
@@ -92,7 +93,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
   });
 
   async function startSettingsControlPlane(options: {
-    readonly bindHost?: string;
     readonly port?: number;
     readonly onStart?: () => void;
     readonly diagnostics?: ControlPlaneDiagnostics;
@@ -119,13 +119,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       host: "127.0.0.1",
       port: 3000,
       readProvider: () => "unconfigured",
-      resolveAddress: () => {
-        const address = registry.query(["server.bindHost", "server.port"]);
-        return {
-          host: String(address["server.bindHost"]?.effective),
-          port: Number(address["server.port"]?.effective),
-        };
-      },
+      resolveAddress: () => resolveEffectiveSettings(registry.query([])),
       startListener: async (address) => {
         options.onStart?.();
         activeServer = await startLuckyTokenHttpServer({
@@ -174,7 +168,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
       "server.port",
-      "server.bindHost",
       "application.quitDrainTimeoutMs",
     ]);
     expect(settings["server.port"]).toMatchObject({
@@ -183,13 +176,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       applyMode: "restart-required",
       value: 3000,
       effective: 3000,
-    });
-    expect(settings["server.bindHost"]).toMatchObject({
-      type: "string",
-      default: "127.0.0.1",
-      applyMode: "restart-required",
-      value: "127.0.0.1",
-      effective: "127.0.0.1",
     });
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({
       type: "boolean",
@@ -254,19 +240,8 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     expect(running.dataPlane?.configuredOrigin).toContain(":3000");
   });
 
-  it("requires explicit one-time confirmation for a non-loopback bind and accepts plaintext HTTP", async () => {
+  it("does not expose LAN bind configuration or a settings confirmation command", async () => {
     const { client } = await startSettingsControlPlane({ port: 0 });
-
-    const attempted = await client.executeSettingsCommand({
-      command: "set",
-      key: "server.bindHost",
-      value: "0.0.0.0",
-    });
-    expect(attempted.outcome).toBe("confirmation_required");
-    const confirmation = (
-      attempted as { readonly confirmation: { readonly actionId: string } }
-    ).confirmation;
-    expect(confirmation.actionId).toBeTruthy();
 
     await expect(
       client.executeSettingsCommand({
@@ -274,60 +249,31 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         key: "server.bindHost",
         value: "0.0.0.0",
       }),
-    ).resolves.toMatchObject({ outcome: "confirmation_required" });
+    ).resolves.toMatchObject({ outcome: "unknown_key" });
 
-    const confirmed = await client.executeSettingsCommand({
-      command: "confirm",
-      actionId: confirmation.actionId,
-    });
-    expect(confirmed).toMatchObject({ outcome: "applied" });
-    const snapshot = await client.getStatus();
-    expect(snapshot.settings?.["server.bindHost"]).toMatchObject({
-      value: "0.0.0.0",
-      effective: "0.0.0.0",
-    });
-
-    // The accepted plaintext HTTP LAN listener starts without any persistent
-    // warning: the confirmation is consumed and never repeated.
-    await client.executeRuntimeCommand("start");
-    const origin = (await client.getStatus()).dataPlane?.configuredOrigin;
-    expect(origin).toContain(":3000");
-    const plaintext = await fetch(`${origin}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    });
-    expect(plaintext.status).toBe(401);
-    await expect(plaintext.json()).resolves.toMatchObject({
-      error: { type: "authentication_error" },
-    });
+    await expect(
+      client.executeSettingsCommand({
+        command: "confirm",
+        actionId: "obsolete-lan-confirmation",
+      } as never),
+    ).rejects.toThrow(/invalid_request/iu);
   });
 
-  it("never binds to an unconfirmed LAN host even when the gateway restarts", async () => {
-    const started: string[] = [];
-    const { client } = await startSettingsControlPlane({
-      port: 0,
-      onStart: () => {
-        const address = client.getStatus();
-        started.push("started");
-        void address;
-      },
-    });
-    await client.executeSettingsCommand({
-      command: "set",
-      key: "server.bindHost",
-      value: "0.0.0.0",
-    });
+  it("always starts the real Data Plane listener on the fixed loopback host", async () => {
+    const { client } = await startSettingsControlPlane({ port: 0 });
 
-    // The pending LAN value is visible, but a restart must still bind
-    // loopback: the effective value stays 127.0.0.1 until confirmation.
+    await expect(
+      client.executeSettingsCommand({
+        command: "set",
+        key: "server.bindHost",
+        value: "0.0.0.0",
+      }),
+    ).resolves.toMatchObject({ outcome: "unknown_key" });
+
     await client.executeRuntimeCommand("start");
     const snapshot = await client.getStatus();
-    expect(snapshot.settings?.["server.bindHost"]).toMatchObject({
-      value: "0.0.0.0",
-      effective: "127.0.0.1",
-    });
-    expect(snapshot.dataPlane?.configuredOrigin).toContain("127.0.0.1");
+    expect(snapshot.settings).not.toHaveProperty("server.bindHost");
+    expect(snapshot.dataPlane?.configuredOrigin).toBe("http://127.0.0.1:3000");
   });
 
   it("rejects unknown keys and unregistered values with closed outcomes", async () => {

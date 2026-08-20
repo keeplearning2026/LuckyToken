@@ -106,7 +106,6 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     entry.authorized({
       effectiveSessionId: "30000000-0000-4000-8000-000000000032",
       clientSessionId: SESSION_ALPHA,
-      projectDir: "C:\\canonical\\alpha",
     });
     entry.modelResolved({
       externalAlias: "alpha",
@@ -127,7 +126,6 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     entry.authorized({
       effectiveSessionId: "30000000-0000-4000-8000-000000000032",
       clientSessionId: SESSION_BETA,
-      projectDir: "C:\\canonical\\alpha",
     });
     entry.modelResolved({
       externalAlias: "alpha",
@@ -243,7 +241,6 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       providers: ["anthropic"],
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
-      projects: ["C:\\canonical\\alpha"],
       sessions: [SESSION_ALPHA, SESSION_BETA],
       outcomes: ["failed", "success"],
     });

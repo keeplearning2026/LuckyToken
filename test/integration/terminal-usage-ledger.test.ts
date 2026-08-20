@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import type {
   ConversionNotice,
   InvocationDiagnostics,
@@ -47,10 +46,6 @@ import { createCommandCodeServingTestComposition } from "../support/commandcode-
  * Expected totals and rates are independent worked examples (Ticket 20 AC),
  * never the production formula.
  */
-
-const auth: Auth = {
-  resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-};
 
 let requestIdCounter = 0;
 function requestId(): string {
@@ -135,13 +130,18 @@ function terminalStream(
   } as AssistantMessageEventStream;
 }
 
-function anthropicRequest(modelSelector = "provider/model", content = "hello"): Request {
+function anthropicRequest(
+  modelSelector = "provider/model",
+  content = "hello",
+  sessionId?: string,
+): Request {
   return new Request("https://luckytoken.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client",
       "content-type": "application/json",
       "anthropic-version": "2023-06-01",
+      ...(sessionId === undefined ? {} : { "x-session-id": sessionId }),
     },
     body: JSON.stringify({
       model: modelSelector,
@@ -192,7 +192,6 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
     } as unknown as Models;
     const handler = createAnthropicMessagesHandler({
       models,
-      auth,
       requestLedger: store,
       maxRequestBytes: 1024,
       now: () => 1_700_000_000_000,
@@ -695,7 +694,6 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
       models.setProvider(faux.provider);
       const handler = createAnthropicMessagesHandler({
         models,
-        auth,
         requestLedger: store,
         maxRequestBytes: 1024,
         now: () => 1_700_000_000_000,
@@ -741,8 +739,13 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
         fauxAssistantMessage("hello world"),
       ]);
 
-      const first = await handler.handle(anthropicRequest("faux/faux-model"));
-      const second = await handler.handle(anthropicRequest("faux/faux-model"));
+      const sessionId = "20000000-0000-4000-8000-000000000041";
+      const first = await handler.handle(
+        anthropicRequest("faux/faux-model", "hello", sessionId),
+      );
+      const second = await handler.handle(
+        anthropicRequest("faux/faux-model", "hello", sessionId),
+      );
 
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
@@ -850,7 +853,6 @@ describe("Ticket 20 terminal usage through the real Request Ledger", () => {
       } as unknown as Models;
       const handler = createOpenAIResponsesHandler({
         models,
-        auth,
         stateFile,
         sessionState: createResponseSessionState({ stateFile }),
         requestLedger: store,

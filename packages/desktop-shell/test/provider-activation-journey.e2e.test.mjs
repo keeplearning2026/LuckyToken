@@ -309,11 +309,10 @@ async function waitForNoWindows(application) {
   throw new Error("management window did not close");
 }
 
-async function sendAnthropicRequest(origin, clientToken, model) {
+async function sendAnthropicRequest(origin, model) {
   const response = await fetch(`${origin}/v1/messages`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${clientToken}`,
       "content-type": "application/json",
       "anthropic-version": "2023-06-01",
     },
@@ -327,26 +326,6 @@ async function sendAnthropicRequest(origin, clientToken, model) {
   assert.equal(response.status, 200, body);
   assert.match(body, /activation journey ok/u);
   return response.headers.get("x-luckytoken-request-id");
-}
-
-async function revealAnthropicClientToken(client) {
-  const listed = await client.executeClientTokenCommand({
-    command: "list",
-    protocolId: "anthropic-messages",
-  });
-  assert.equal(listed.outcome, "ok");
-  assert.ok(
-    listed.scopes?.some((scope) => scope.type === "global"),
-    "enabled Anthropic protocol must own its boot-created global client token",
-  );
-  const revealed = await client.executeClientTokenCommand({
-    command: "reveal",
-    protocolId: "anthropic-messages",
-    scope: { type: "global" },
-  });
-  assert.equal(revealed.outcome, "ok");
-  assert.ok(revealed.token);
-  return revealed.token;
 }
 
 test(
@@ -544,10 +523,9 @@ test(
       await anthropicModels.getByRole("button", { name: "Close models" }).click();
 
       // 9. The request uses the internal Provider-namespaced model identity.
-      const clientToken = await revealAnthropicClientToken(client);
       const origin = started.snapshot.dataPlane?.configuredOrigin;
       assert.ok(origin);
-      const requestId = await sendAnthropicRequest(origin, clientToken, CUSTOM_ALIAS);
+      const requestId = await sendAnthropicRequest(origin, CUSTOM_ALIAS);
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
 
       // 10. Overview shows the successful request through the real ledger

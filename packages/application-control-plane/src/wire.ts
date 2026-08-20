@@ -47,7 +47,6 @@ import {
   type EffectiveProviderLayer,
   type EffectiveProviderProjection,
   type HelloResult,
-  type LanConfirmation,
   type ModelsCommand,
   type ModelsCommandResult,
   type ModelsFileError,
@@ -479,16 +478,7 @@ export function decodeApplicationStatus(
   if (value.aliases !== undefined && aliases === undefined) {
     return undefined;
   }
-  const confirmation =
-    value.confirmation === undefined
-      ? undefined
-      : decodeLanConfirmation(value.confirmation);
-  if (value.confirmation !== undefined && confirmation === undefined) {
-    return undefined;
-  }
-  if (confirmation !== undefined && settings === undefined) {
-    return undefined;
-  }
+  if (value.confirmation !== undefined) return undefined;
   return {
     modelDataPlane: value.modelDataPlane,
     provider: value.provider,
@@ -498,7 +488,6 @@ export function decodeApplicationStatus(
     ...(credentials === undefined ? {} : { credentials }),
     ...(catalog === undefined ? {} : { catalog }),
     ...(aliases === undefined ? {} : { aliases }),
-    ...(confirmation === undefined ? {} : { confirmation }),
   };
 }
 
@@ -562,25 +551,6 @@ export function decodeSettingsProjection(
   return Object.freeze(result);
 }
 
-function decodeLanConfirmation(value: unknown): LanConfirmation | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.actionId !== "string" ||
-    value.actionId.length === 0 ||
-    value.settingKey !== "server.bindHost" ||
-    typeof value.value !== "string" ||
-    typeof value.message !== "string"
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    actionId: value.actionId,
-    settingKey: "server.bindHost",
-    value: value.value,
-    message: value.message,
-  });
-}
-
 function decodeSettingsCommand(value: unknown): SettingsCommand | undefined {
   if (!isRecord(value)) return undefined;
   if (value.command === "query") {
@@ -598,12 +568,6 @@ function decodeSettingsCommand(value: unknown): SettingsCommand | undefined {
       return undefined;
     }
     return { command: "set", key: value.key, value: value.value };
-  }
-  if (value.command === "confirm") {
-    if (typeof value.actionId !== "string" || value.actionId.length === 0) {
-      return undefined;
-    }
-    return { command: "confirm", actionId: value.actionId };
   }
   return undefined;
 }
@@ -2386,7 +2350,6 @@ export function decodeSettingsCommandResult(
     (value.outcome !== "ok" &&
       value.outcome !== "applied" &&
       value.outcome !== "pending" &&
-      value.outcome !== "confirmation_required" &&
       value.outcome !== "unknown_key" &&
       value.outcome !== "invalid_value")
   ) {
@@ -2394,32 +2357,13 @@ export function decodeSettingsCommandResult(
   }
   const settings = decodeSettingsProjection(value.settings);
   if (settings === undefined) return undefined;
-  if (
-    value.outcome === "confirmation_required" &&
-    value.confirmation === undefined
-  ) {
-    return undefined;
-  }
-  if (
-    value.outcome !== "confirmation_required" &&
-    value.confirmation !== undefined
-  ) {
-    return undefined;
-  }
-  const confirmation =
-    value.confirmation === undefined
-      ? undefined
-      : decodeLanConfirmation(value.confirmation);
-  if (value.confirmation !== undefined && confirmation === undefined) {
-    return undefined;
-  }
+  if (value.confirmation !== undefined) return undefined;
   if (value.outcome === "invalid_value" && typeof value.error !== "string") {
     return undefined;
   }
   return Object.freeze({
     outcome: value.outcome,
     ...(typeof value.error === "string" ? { error: value.error } : {}),
-    ...(confirmation === undefined ? {} : { confirmation }),
     settings,
   });
 }

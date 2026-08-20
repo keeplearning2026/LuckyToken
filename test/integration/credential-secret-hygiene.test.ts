@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 
@@ -44,15 +43,6 @@ describe("credential canary hygiene across public surfaces", () => {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const clientAuthPath = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: clientAuthPath }).create(
-      { type: "global" },
-      "client-token-canary",
-    );
     const modelsJsonPath = join(piDirectory, "models.json");
     await writeFile(
       modelsJsonPath,
@@ -75,9 +65,7 @@ describe("credential canary hygiene across public surfaces", () => {
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi", modelsJson: "pi/models.json" },
         failureLogging: { detail: "full", directory: "logs/failed-requests" },

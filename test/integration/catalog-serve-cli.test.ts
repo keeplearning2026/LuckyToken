@@ -93,10 +93,9 @@ describe("catalog serve wiring", () => {
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: await reserveFreePort() },
+        server: { port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
           },
         },
         pi: { directory: "pi" },

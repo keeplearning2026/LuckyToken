@@ -7,7 +7,6 @@ import type {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import {
   handleHttpRequest,
   HttpRequestAbortedError,
@@ -94,16 +93,12 @@ function dependencies(
   streamFactory: () => AssistantMessageEventStream,
   overrides: Partial<AnthropicMessagesHandlerOptions> = {},
 ): HttpBoundaryDependencies {
-  const auth: Auth = {
-    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-  };
   const models = {
     getModels: () => [model],
     streamSimple: vi.fn(streamFactory),
   } as unknown as Models;
   const anthropic = createAnthropicMessagesHandler({
     models,
-    auth,
     modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,
@@ -156,21 +151,13 @@ describe("atomic HTTP failure delivery", () => {
     expect(never).not.toHaveBeenCalled();
   });
 
-  it("keeps transport, authorization, and model-resolution classifications", async () => {
+  it("keeps transport and model-resolution classifications", async () => {
     const never = vi.fn(() => streamFrom([]));
     const wrongRoute = await handleHttpRequest(
       dependencies(never),
       new Request("http://luckytoken.test/no-route"),
     );
     expect(wrongRoute.status).toBe(404);
-
-    const denied = await handleHttpRequest(
-      dependencies(never, {
-        auth: { resolve: async () => ({ authorized: false }) },
-      }),
-      request(),
-    );
-    await expectError(denied, 401, "authentication_error");
 
     const missing = await handleHttpRequest(
       dependencies(never),
@@ -208,16 +195,12 @@ describe("atomic HTTP failure delivery", () => {
     }) as typeof fetch;
 
     try {
-      const auth: Auth = {
-        resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-      };
       const models = {
         getModels: () => [observableModel],
         getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
       } as unknown as Models;
       const anthropic = createAnthropicMessagesHandler({
         models,
-        auth,
         modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         createMessageId: () => "msg_client",
         maxRequestBytes: 1_000_000,

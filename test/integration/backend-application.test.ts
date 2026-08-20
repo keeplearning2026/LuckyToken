@@ -45,7 +45,7 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function fixture(): Promise<{ configPath: string; descriptorPath: string }> {
+async function fixture(): Promise<{ configPath: string; descriptorPath: string; port: number }> {
   const root = await mkdtemp(join(tmpdir(), "luckytoken-application-"));
   const port = await freePort();
   roots.push(root);
@@ -56,10 +56,9 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string }
     `${JSON.stringify(
       {
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port },
+        server: { port },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
             conversion: {
               request: {
                 unknownContent: "error",
@@ -95,24 +94,20 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string }
     )}\n`,
     "utf8",
   );
-  return { configPath, descriptorPath };
+  return { configPath, descriptorPath, port };
 }
 
 describe("Backend Application public lifecycle seam", () => {
-  it("rebuilds legacy v1 client auth as fresh v2 and keeps global-token management available while the Router is stopped", async () => {
+  it("ignores obsolete client-auth files and exposes no token-management surface", async () => {
     const { configPath, descriptorPath } = await fixture();
     const authPath = join(dirname(configPath), "client-auth", "anthropic-messages.json");
-    const legacyToken = "legacy-v1-token-canary";
+    const legacy = JSON.stringify({
+      schemaVersion: "luckytoken-client-auth-v1",
+      global: "legacy-v1-token-canary",
+      projects: {},
+    });
     await mkdir(dirname(authPath), { recursive: true });
-    await writeFile(
-      authPath,
-      JSON.stringify({
-        schemaVersion: "luckytoken-client-auth-v1",
-        global: legacyToken,
-        projects: {},
-      }),
-      "utf8",
-    );
+    await writeFile(authPath, legacy, "utf8");
 
     const started = await startLuckyTokenApplication({
       configPath,
@@ -132,42 +127,15 @@ describe("Backend Application public lifecycle seam", () => {
       await client.hello(controlPlaneVersion);
       const stopped = await client.executeRuntimeCommand("stop");
       expect(stopped.snapshot.modelDataPlane).toBe("stopped");
-
-      const listed = await client.executeClientTokenCommand({
-        command: "list",
-        protocolId: "anthropic-messages",
-      });
-      expect(listed.outcome).toBe("ok");
-      expect(listed.scopes?.some((scope) => scope.type === "global")).toBe(true);
-      const revealed = await client.executeClientTokenCommand({
-        command: "reveal",
-        protocolId: "anthropic-messages",
-      });
-      expect(revealed.outcome).toBe("ok");
-      expect(revealed.token).toBeDefined();
-      expect(revealed.token).not.toBe(legacyToken);
-
-      const onDisk = JSON.parse(await readFile(authPath, "utf8")) as {
-        schemaVersion: string;
-        global: string;
-        revision: number;
-        globalDeleted: boolean;
-        projects: Record<string, string>;
-      };
-      expect(onDisk).toEqual({
-        schemaVersion: "luckytoken-client-auth-v2",
-        global: revealed.token,
-        projects: {},
-        revision: 1,
-        globalDeleted: false,
-      });
+      expect("executeClientTokenCommand" in client).toBe(false);
+      expect(await readFile(authPath, "utf8")).toBe(legacy);
     } finally {
       await client.close();
     }
   });
 
   it("starts normal serving, exposes the Control Plane, and closes idempotently", async () => {
-    const { configPath, descriptorPath } = await fixture();
+    const { configPath, descriptorPath, port } = await fixture();
 
     const started = await startLuckyTokenApplication({
       configPath,
@@ -189,6 +157,9 @@ describe("Backend Application public lifecycle seam", () => {
       });
       await expect(client.getStatus()).resolves.toMatchObject({
         modelDataPlane: "running",
+        dataPlane: {
+          configuredOrigin: `http://127.0.0.1:${port}`,
+        },
       });
     } finally {
       await client.close();

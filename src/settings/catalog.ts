@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 /**
  * Authoritative registered settings catalog.
  *
@@ -18,11 +16,7 @@ export type SettingApplyMode = "hot-apply" | "restart-required";
 
 export type SettingValidation =
   | { readonly type: "boolean" }
-  | { readonly type: "integer"; readonly minimum: number; readonly maximum: number }
-  | {
-      readonly type: "host";
-      readonly label: string;
-    };
+  | { readonly type: "integer"; readonly minimum: number; readonly maximum: number };
 
 export interface SettingValue {
   readonly value: boolean | number | string;
@@ -42,28 +36,17 @@ export interface RegisteredSetting extends SettingValue {
 
 export interface SettingsSnapshot {
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
-  /** Present only while a non-loopback bind action waits for confirmation. */
-  readonly confirmation?: LanConfirmation;
-}
-
-export interface LanConfirmation {
-  readonly actionId: string;
-  readonly settingKey: "server.bindHost";
-  readonly value: string;
-  readonly message: string;
 }
 
 export type SettingsCommandOutcome =
   | "applied"
   | "pending"
-  | "confirmation_required"
   | "unknown_key"
   | "invalid_value";
 
 export interface SettingsCommandResult {
   readonly outcome: SettingsCommandOutcome;
   readonly error?: string;
-  readonly confirmation?: LanConfirmation;
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
 }
 
@@ -81,10 +64,6 @@ export interface SettingsRegistry {
     value: unknown,
     token: unknown,
   ): Promise<SettingsCommandResult>;
-  confirm(input: {
-    readonly actionId: string;
-    readonly token: unknown;
-  }): Promise<SettingsCommandResult>;
   snapshot(): SettingsSnapshot;
 }
 
@@ -94,10 +73,8 @@ export interface SettingsStore {
 }
 
 export interface SettingsRegistryOptions {
-  readonly createActionId?: () => string;
-  /** Bootstrap values (e.g. the config file's fixed host and port). They
-   *  become the initial effective values for valid registered keys that have
-   *  no persisted value; they never trigger the LAN confirmation gate. */
+  /** Bootstrap values become the initial effective values for valid
+   * registered keys that have no persisted value. */
   readonly initial?: Readonly<Record<string, unknown>>;
 }
 
@@ -108,12 +85,6 @@ interface SettingDefinition {
   readonly validation: SettingValidation;
   readonly sensitivity: SettingSensitivity;
   readonly applyMode: SettingApplyMode;
-}
-
-const LOOPBACK_PATTERN = /^(127(?:\.\d{1,3}){3}|localhost|::1|\[::1\])$/iu;
-
-function loopbackHost(host: string): boolean {
-  return LOOPBACK_PATTERN.test(host);
 }
 
 function validateValue(
@@ -135,20 +106,6 @@ function validateValue(
       return {
         valid: false,
         error: `${definition.key} must be an integer between ${definition.validation.minimum} and ${definition.validation.maximum}`,
-      };
-    }
-    return { valid: true };
-  }
-  if (definition.validation.type === "host") {
-    const host = value as string;
-    if (
-      host.trim().length === 0 ||
-      /\s|\/\//u.test(host) ||
-      host.length > 255
-    ) {
-      return {
-        valid: false,
-        error: `${definition.key} must be a host name or address`,
       };
     }
     return { valid: true };
@@ -211,14 +168,6 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "restart-required",
   }),
   Object.freeze({
-    key: "server.bindHost",
-    type: "string",
-    default: "127.0.0.1",
-    validation: Object.freeze({ type: "host", label: "bind host" }),
-    sensitivity: "public",
-    applyMode: "restart-required",
-  }),
-  Object.freeze({
     key: "application.quitDrainTimeoutMs",
     type: "number",
     default: 5000,
@@ -241,18 +190,15 @@ export function createSettingsRegistry(
   const definitionsByKey = new Map(
     definitions.map((definition) => [definition.key, definition]),
   );
-  const createActionId = options.createActionId ?? randomUUID;
   const persisted = new Map<string, boolean | number | string>();
-  let pending = new Map<string, boolean | number | string>();
+  const pending = new Map<string, boolean | number | string>();
   // Effective values start at the declared defaults: before any restart a
   // restart-required setting is in effect with its default, never with a
   // pending value.
   const effective = new Map<string, boolean | number | string>(
     definitions.map((definition) => [definition.key, definition.default]),
   );
-  let confirmation: LanConfirmation | undefined;
   let loaded = false;
-  let confirmedOnce = false;
 
   const definitionsFor = (key: string): SettingDefinition | undefined =>
     definitionsByKey.get(key);
@@ -273,42 +219,11 @@ export function createSettingsRegistry(
     return Object.freeze(result);
   };
 
-  const snapshot = (): SettingsSnapshot => {
-    const settings = currentSettings(allKeys);
-    return Object.freeze({
-      settings,
-      ...(confirmation === undefined ? {} : { confirmation }),
-    });
-  };
+  const snapshot = (): SettingsSnapshot =>
+    Object.freeze({ settings: currentSettings(allKeys) });
 
   const persist = async (key: string, value: boolean | number | string) => {
     persisted.set(key, value);
-    const raw: Record<string, unknown> = Object.create(null);
-    for (const [persistedKey, persistedValue] of persisted) {
-      raw[persistedKey] = persistedValue;
-    }
-    await store.save(raw);
-  };
-
-  const setLanConfirmation = (
-    host: string,
-  ): { readonly outcome: "confirmation_required"; readonly confirmation: LanConfirmation } => {
-    confirmation = Object.freeze({
-      actionId: createActionId(),
-      settingKey: "server.bindHost",
-      value: host,
-      message: `The model gateway will listen on ${host} and accept plaintext HTTP from other devices. Confirm this bind once for this change.`,
-    });
-    return { outcome: "confirmation_required", confirmation };
-  };
-
-  const applyPending = async () => {
-    for (const [key, value] of pending) {
-      effective.set(key, value);
-    }
-    pending = new Map();
-    confirmation = undefined;
-    confirmedOnce = true;
     const raw: Record<string, unknown> = Object.create(null);
     for (const [persistedKey, persistedValue] of persisted) {
       raw[persistedKey] = persistedValue;
@@ -391,31 +306,9 @@ export function createSettingsRegistry(
       }
       const typed = value as boolean | number | string;
       pending.set(key, typed);
-      if (
-        key === "server.bindHost" &&
-        !loopbackHost(typed as string) &&
-        (effective.get(key) !== typed || !confirmedOnce)
-      ) {
-        // The enable/change action is not yet confirmed: the value stays
-        // pending and is not persisted, so an unconfirmed LAN bind never
-        // survives a restart. Repeating the same pending bind returns the
-        // same one-time action until it is confirmed or replaced.
-        const gate =
-          confirmation !== undefined && confirmation.value === typed
-            ? {
-                outcome: "confirmation_required" as const,
-                confirmation,
-              }
-            : setLanConfirmation(typed as string);
-        return {
-          ...gate,
-          settings: currentSettings(allKeys),
-        };
-      }
       await persist(key, typed);
       if (definition.applyMode === "hot-apply") {
         effective.set(key, typed);
-        confirmation = undefined;
         return {
           outcome: "applied",
           settings: currentSettings(allKeys),
@@ -423,26 +316,6 @@ export function createSettingsRegistry(
       }
       return {
         outcome: "pending",
-        settings: currentSettings(allKeys),
-      };
-    },
-    async confirm(input: {
-      readonly actionId: string;
-      readonly token: unknown;
-    }): Promise<SettingsCommandResult> {
-      void input.token;
-      await load();
-      if (
-        confirmation === undefined ||
-        confirmation.actionId !== input.actionId
-      ) {
-        throw new Error(
-          "No matching settings confirmation is pending for that action",
-        );
-      }
-      await applyPending();
-      return {
-        outcome: "applied",
         settings: currentSettings(allKeys),
       };
     },

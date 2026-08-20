@@ -17,7 +17,7 @@ const commandCodeRoot = path.join(
 );
 
 const CLIENT_SHARED_SEAMS = new Set([
-  "auth.ts",
+  "request-identity.ts",
   "execution.ts",
   "http.ts",
   "model-resolution.ts",
@@ -29,12 +29,10 @@ const CLIENT_SHARED_SEAMS = new Set([
   // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
   "alias-model-seam.ts",
   "protocols/sse-lines.ts",
-  // Client-owned Codex native paths cross the Responses/Integration boundary
-  // only through these two neutral seams: capability contracts and bounded
-  // HTTP passthrough. Neither file imports a concrete Client Protocol or
-  // Integration implementation.
-  "codex-native-seam.ts",
-  "codex-responses-passthrough.ts",
+  // Provider Native is visible to the Responses protocol only as an
+  // operation/claim contract. Credential resolution, request construction,
+  // and transport implementations remain outside the Client Protocol tree.
+  "provider-native-responses/contract.ts",
   // Ticket 18 neutral handler seam: both Client Protocols observe the
   // Request Lifecycle Ledger only through this narrow seam (observer
   // contract + safe no-op); persistence/configuration/store DTOs stay out

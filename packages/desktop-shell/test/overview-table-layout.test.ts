@@ -16,6 +16,6 @@ describe("Overview request table layout", () => {
     expect(tableRule).not.toContain("min-width: 1540px");
     expect(css).not.toMatch(/\.overview-request-table th:nth-child\(/u);
     expect(css).toMatch(/\.overview-col-compact\s*\{[^}]*width:\s*1%/u);
-    expect(css).toMatch(/\.overview-col-project\s*\{[^}]*max-width:/u);
+    expect(css).not.toContain("overview-col-project");
   });
 });

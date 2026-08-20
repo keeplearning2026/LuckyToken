@@ -20,7 +20,6 @@ const REQUEST_PAGE_SIZE = 50;
 interface OverviewFilters {
   readonly from: number;
   readonly to: number;
-  readonly project: string;
   readonly protocol: string;
   readonly session: string;
   readonly model: string;
@@ -34,7 +33,6 @@ function defaultFilters(): OverviewFilters {
   return {
     from: start.getTime(),
     to: end.getTime(),
-    project: "",
     protocol: "",
     session: "",
     model: "",
@@ -55,7 +53,6 @@ function parseInputDateTime(value: string): number | undefined {
 
 function analyticsFilter(filters: OverviewFilters): AnalyticsFilter | undefined {
   const value: AnalyticsFilter = {
-    ...(filters.project === "" ? {} : { projects: [filters.project] }),
     ...(filters.protocol === "" ? {} : { protocols: [filters.protocol] }),
     ...(filters.session === "" ? {} : { sessions: [filters.session] }),
     ...(filters.model === "" ? {} : { models: [filters.model] }),
@@ -68,7 +65,6 @@ function ledgerQuery(filters: OverviewFilters): RequestLedgerQuery {
     limit: REQUEST_PAGE_SIZE,
     from: filters.from,
     to: filters.to,
-    ...(filters.project === "" ? {} : { projectDir: filters.project }),
     ...(filters.protocol === "" ? {} : { protocolId: filters.protocol }),
     ...(filters.session === "" ? {} : { clientSessionId: filters.session }),
     ...(filters.model === "" ? {} : { realModelId: filters.model }),
@@ -77,7 +73,6 @@ function ledgerQuery(filters: OverviewFilters): RequestLedgerQuery {
 
 function matchesRecord(record: RequestLedgerRecord, filters: OverviewFilters): boolean {
   if (record.acceptedAt < filters.from || record.acceptedAt >= filters.to) return false;
-  if (filters.project !== "" && record.projectDir !== filters.project) return false;
   if (filters.protocol !== "" && record.protocolId !== filters.protocol) return false;
   if (filters.session !== "" && record.clientSessionId !== filters.session) return false;
   if (filters.model !== "" && record.realModelId !== filters.model) return false;
@@ -307,7 +302,6 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             }}
           />
         </label>
-        <FilterSelect label="Project" value={filters.project} values={options?.projects ?? []} allLabel="All projects" onChange={(value) => updateFilter("project", value)} />
         <FilterSelect label="Protocol" value={filters.protocol} values={options?.protocols ?? []} allLabel="All protocols" onChange={(value) => updateFilter("protocol", value)} />
         <FilterSelect label="Session" value={filters.session} values={options?.sessions ?? []} allLabel="All sessions" onChange={(value) => updateFilter("session", value)} />
         <FilterSelect label="Model" value={filters.model} values={options?.models ?? []} allLabel="All models" onChange={(value) => updateFilter("model", value)} />
@@ -321,7 +315,6 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 <th className="overview-col-compact">Start time</th>
                 <th className="overview-col-compact">Session</th>
                 <th className="overview-col-compact">Request ID</th>
-                <th className="overview-col-project">Project</th>
                 <th className="overview-col-compact">Protocol</th>
                 <th className="overview-col-compact">Input</th>
                 <th className="overview-col-compact">Cache read</th>
@@ -336,7 +329,7 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <tbody>
               {records.length === 0 ? (
                 <tr>
-                  <td className="overview-empty" colSpan={13}>No requests</td>
+                  <td className="overview-empty" colSpan={12}>No requests</td>
                 </tr>
               ) : records.map((record) => {
                 const row = projectRequestLedger(record);
@@ -345,7 +338,6 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                     <td className="overview-col-compact">{formatTimestamp(row.acceptedAt)}</td>
                     <td className="overview-col-compact">{shortCodeDisplay(row.clientSessionId)}</td>
                     <td className="overview-col-compact overview-col-request-id"><code title={row.requestId}>{row.requestId.slice(0, 8)}</code></td>
-                    <td className="overview-col-project" title={row.projectDir === "-" ? undefined : row.projectDir}>{row.projectDir}</td>
                     <td className="overview-col-compact">{row.protocolId}</td>
                     <td className="overview-col-compact">{row.usage.input}</td>
                     <td className="overview-col-compact">{row.usage.cacheRead}</td>

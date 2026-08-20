@@ -11,7 +11,6 @@ type InvokeResults = {
   [desktopIpcChannels.statusGet]: ReturnType<DesktopControlPlaneApi["getStatus"]>;
   [desktopIpcChannels.runtime]: ReturnType<DesktopControlPlaneApi["executeRuntime"]>;
   [desktopIpcChannels.settings]: ReturnType<DesktopControlPlaneApi["executeSettings"]>;
-  [desktopIpcChannels.clientToken]: ReturnType<DesktopControlPlaneApi["executeClientToken"]>;
   [desktopIpcChannels.credential]: ReturnType<DesktopControlPlaneApi["executeCredential"]>;
   [desktopIpcChannels.auth]: ReturnType<DesktopControlPlaneApi["executeAuth"]>;
   [desktopIpcChannels.authRespond]: ReturnType<DesktopControlPlaneApi["respondAuth"]>;
@@ -66,7 +65,6 @@ const control: DesktopControlPlaneApi = {
   onStatus: (listener) => onEvent(desktopIpcChannels.statusEvent, listener),
   executeRuntime: (command) => invoke(desktopIpcChannels.runtime, command),
   executeSettings: (command) => invoke(desktopIpcChannels.settings, command),
-  executeClientToken: (command) => invoke(desktopIpcChannels.clientToken, command),
   executeCredential: (command) => invoke(desktopIpcChannels.credential, command),
   async executeAuth(command, listener) {
     const stop = listener === undefined ? undefined : onEvent(desktopIpcChannels.authEvent, listener);

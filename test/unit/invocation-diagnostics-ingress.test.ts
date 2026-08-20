@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createAuth } from "../../src/auth.js";
 import type {
   InvocationDiagnostics,
   InvocationDiagnosticsFactory,
@@ -32,10 +31,6 @@ describe("request-ingress diagnostics lifecycle", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  const auth = createAuth({
-    authorizeToken: async () => ({}),
-    createEffectiveSessionId: () => "00000000-0000-4000-8000-000000000001",
-  });
   const invalidRequest = () => new Request("https://localhost/v1/test", {
     method: "POST",
     headers: { authorization: "Bearer client", "content-type": "text/plain" },
@@ -45,7 +40,7 @@ describe("request-ingress diagnostics lifecycle", () => {
   it("creates and finalizes one Anthropic failure collector at handler ingress", async () => {
     const spy = diagnosticsSpy();
     const handler = createAnthropicMessagesHandler({
-      models: {} as Models, auth, invocationDiagnostics: spy.factory,
+      models: {} as Models, invocationDiagnostics: spy.factory,
       maxRequestBytes: 1024,
     });
     const response = await handler.handle(invalidRequest());
@@ -61,7 +56,7 @@ describe("request-ingress diagnostics lifecycle", () => {
     roots.push(root);
     const spy = diagnosticsSpy();
     const handler = createOpenAIResponsesHandler({
-      models: {} as Models, auth, invocationDiagnostics: spy.factory,
+      models: {} as Models, invocationDiagnostics: spy.factory,
       stateFile: join(root, "state.json"), maxRequestBytes: 1024,
     });
     const response = await handler.handle(invalidRequest());

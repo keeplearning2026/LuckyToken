@@ -15,12 +15,10 @@ function firstRunConfig(): unknown {
   return {
     schemaVersion: "luckytoken-config-v1",
     server: {
-      host: "127.0.0.1",
       port: 3000,
     },
     clientProtocols: {
       "anthropic-messages": {
-        authFile: "client-auth/anthropic-messages.json",
         conversion: {
           request: {
             unknownContent: "error",
@@ -31,7 +29,6 @@ function firstRunConfig(): unknown {
         },
       },
       "openai-responses": {
-        authFile: "client-auth/openai-responses.json",
         stateFile: "state/openai-responses.json",
         conversion: {
           request: {

@@ -29,6 +29,7 @@ import type {
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
+import { createCodexLocalResponsesLane } from "../../src/integrations/codex/local-responses.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;
@@ -116,11 +117,19 @@ export async function createOpenAIResponsesServingTestComposition(
         ? "honor"
         : options.configuration.conversion.response.storeFalse,
   });
+  const localNativeLane =
+    options.codexLocalAuth === undefined || options.codexNativeModels === undefined
+      ? undefined
+      : createCodexLocalResponsesLane({
+          credentials: options.codexLocalAuth,
+          models: options.codexNativeModels,
+          fetch: options.fetch,
+        });
   const handler = createOpenAIResponsesHandler({
     models,
+    createSessionId,
     stateFile,
     sessionState,
-    passthroughFetch: options.fetch,
     ...(options.createResponseId === undefined
       ? {}
       : { createResponseId: options.createResponseId }),
@@ -138,12 +147,7 @@ export async function createOpenAIResponsesServingTestComposition(
     ...(options.deepCapture === undefined
       ? {}
       : { deepCapture: options.deepCapture }),
-    ...(options.codexLocalAuth === undefined
-      ? {}
-      : { codexLocalAuth: options.codexLocalAuth }),
-    ...(options.codexNativeModels === undefined
-      ? {}
-      : { codexNativeModels: options.codexNativeModels }),
+    ...(localNativeLane === undefined ? {} : { localNativeLane }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,

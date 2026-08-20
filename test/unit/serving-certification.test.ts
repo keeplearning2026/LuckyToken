@@ -46,11 +46,7 @@ function facts(
     modelValidityPolicyRevision: "fixture-model-validity-v1",
     compatibility: {},
     fetchBound: true,
-    projectSnapshotPolicy: "node-project-snapshot-v1",
-    projectAuthorizationPolicy: "project-dir-absent-v1",
-    clientAuthorityPolicy: "handler-bound-file-snapshot-v1",
     routerDefaults: {},
-    clientAuthConfigured: true,
     providerApiKeyConfigured: true,
     providerAuthPolicy: "fixed-api-key-header-v1",
     providerRegistrationPolicy: "startup-only-mutable-models-v1",
@@ -144,12 +140,10 @@ describe("serving composition certification", () => {
           responseTransfer: "status-headers-complete-bytes-v1",
         },
         authEndpoint: {
-          clientAuth: "x-api-key-or-bearer-token-v1",
-          clientAuthority: "handler-bound-file-snapshot-v1",
+          clientAuth: "none-local-data-plane-v1",
           providerAuth: "fixed-api-key-header-v1",
           endpoint: "model-base-url-alpha-generate-v1",
           authSemanticTransform: "inert-v1",
-          projectAuthorization: "project-dir-absent-v1",
         },
         toolId: "exact-injective-correlation-v1",
         transformHeaders: "absent",
@@ -158,7 +152,6 @@ describe("serving composition certification", () => {
         auxiliaryOptions: "closed-world-anthropic-simple-options-v1",
         ambientSemantics: {
           compatibility: {},
-          projectSnapshot: "node-project-snapshot-v1",
           routerDefaults: "empty-v1",
           globalFetchFallback: "prohibited-v1",
         },
@@ -179,7 +172,6 @@ describe("serving composition certification", () => {
         localLoopbackHttpBoundary: "verified",
         piConfigurationCredentialCli: "verified",
         realProviderOnlineConformance: "verified",
-        perClientProtocolAuthIsolation: "verified",
       },
       profiles: {
         anthropicConversion: {
@@ -284,17 +276,12 @@ describe("serving composition certification", () => {
     );
   });
 
-  it("does not claim file-snapshot isolation for an injected Auth authority", () => {
-    const manifest = certifyServingComposition(
-      facts({ clientAuthorityPolicy: "bound-injected-auth-v1" }),
+  it("certifies the local data plane as having no LuckyToken client auth", () => {
+    const manifest = certifyServingComposition(facts());
+    expect(manifest.policies.authEndpoint.clientAuth).toBe(
+      "none-local-data-plane-v1",
     );
-
-    expect(manifest.policies.authEndpoint.clientAuthority).toBe(
-      "bound-injected-auth-v1",
-    );
-    expect(manifest.coverage).not.toHaveProperty(
-      "perClientProtocolAuthIsolation",
-    );
+    expect(manifest.coverage).not.toHaveProperty("perClientProtocolAuthIsolation");
   });
 
   it.each([

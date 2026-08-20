@@ -70,10 +70,9 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     `${JSON.stringify(
       {
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port },
+        server: { port },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
             conversion: {
               request: {
                 unknownContent: "error",

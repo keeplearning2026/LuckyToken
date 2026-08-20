@@ -34,14 +34,11 @@ describe("Codex local credential authority", () => {
     await expect(missing.isAvailable()).resolves.toBe(false);
   });
 
-  it("authorizes only the current file-backed Codex access token", async () => {
+  it("resolves forwarding auth only for the current file-backed Codex access token", async () => {
     const home = await createHome({
       tokens: { access_token: "codex-access-a", account_id: "acct-a" },
     });
     const authority = createCodexLocalCredentialAuthority({ codexHome: home });
-
-    await expect(authority.authorizeToken("codex-access-a")).resolves.toEqual({});
-    await expect(authority.authorizeToken("wrong")).resolves.toBeUndefined();
 
     await expect(
       authority.resolveForwardAuth(
@@ -51,6 +48,9 @@ describe("Codex local credential authority", () => {
       authorization: "Bearer codex-access-a",
       accountId: "acct-a",
     });
+    await expect(
+      authority.resolveForwardAuth(new Headers({ authorization: "Bearer wrong" })),
+    ).resolves.toBeUndefined();
   });
 
   it("re-reads auth.json on every request so a Codex refresh takes effect without restarting LuckyToken", async () => {
@@ -59,7 +59,9 @@ describe("Codex local credential authority", () => {
     });
     const authority = createCodexLocalCredentialAuthority({ codexHome: home });
 
-    await expect(authority.authorizeToken("codex-access-a")).resolves.toEqual({});
+    await expect(
+      authority.resolveForwardAuth(new Headers({ authorization: "Bearer codex-access-a" })),
+    ).resolves.toMatchObject({ authorization: "Bearer codex-access-a" });
 
     const replacement = join(home, "auth.next.json");
     await writeFile(
@@ -69,25 +71,32 @@ describe("Codex local credential authority", () => {
     );
     await rename(replacement, join(home, "auth.json"));
 
-    await expect(authority.authorizeToken("codex-access-a")).resolves.toBeUndefined();
-    await expect(authority.authorizeToken("codex-access-b")).resolves.toEqual({});
+    await expect(
+      authority.resolveForwardAuth(new Headers({ authorization: "Bearer codex-access-a" })),
+    ).resolves.toBeUndefined();
+    await expect(
+      authority.resolveForwardAuth(new Headers({ authorization: "Bearer codex-access-b" })),
+    ).resolves.toEqual({
+      authorization: "Bearer codex-access-b",
+      accountId: "acct-b",
+    });
   });
 
   it("fails closed for missing, malformed, or incomplete auth.json", async () => {
     const missing = await mkdtemp(join(tmpdir(), "luckytoken-codex-auth-missing-"));
     homes.push(missing);
     const missingAuthority = createCodexLocalCredentialAuthority({ codexHome: missing });
-    await expect(missingAuthority.authorizeToken("anything")).resolves.toBeUndefined();
+    await expect(missingAuthority.isAvailable()).resolves.toBe(false);
 
     const malformed = await mkdtemp(join(tmpdir(), "luckytoken-codex-auth-bad-"));
     homes.push(malformed);
     await writeFile(join(malformed, "auth.json"), "{bad json", "utf8");
     const malformedAuthority = createCodexLocalCredentialAuthority({ codexHome: malformed });
-    await expect(malformedAuthority.authorizeToken("anything")).resolves.toBeUndefined();
+    await expect(malformedAuthority.isAvailable()).resolves.toBe(false);
 
     const incomplete = await createHome({ tokens: { account_id: "acct" } });
     const incompleteAuthority = createCodexLocalCredentialAuthority({ codexHome: incomplete });
-    await expect(incompleteAuthority.authorizeToken("anything")).resolves.toBeUndefined();
+    await expect(incompleteAuthority.isAvailable()).resolves.toBe(false);
   });
 
   it("never accepts x-api-key as the Codex forwarding credential", async () => {
@@ -107,7 +116,7 @@ describe("Codex local credential authority", () => {
     });
     const authority = createCodexLocalCredentialAuthority({ codexHome: home });
 
-    await authority.authorizeToken("codex-secret-access");
+    await authority.isAvailable();
     expect(authority.scrub("before codex-secret-access after")).toBe("before [REDACTED] after");
   });
 });

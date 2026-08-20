@@ -1,109 +1,101 @@
-import type { FetchFunction, Model } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
 
-import {
-  passthroughResponsesRequest,
-  passthroughResponsesRequestHeaders,
-} from "../../src/protocols/openai-responses/passthrough.js";
+import { bufferNativeResponsesResponse } from "../../src/protocols/openai-responses/native-response.js";
+import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 
-function model(
-  api = "openai-responses",
-  baseUrl = "https://responses.example.com",
-): Model<string> {
+function model(): Model<string> {
   return {
     id: "gpt-5",
     name: "gpt-5",
-    api,
-    provider: "my-responses",
-    baseUrl,
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 64000,
+    contextWindow: 200_000,
+    maxTokens: 64_000,
   };
 }
 
-describe("19: native Responses passthrough header boundary matrix", () => {
-  it("strips every hop-by-hop, cookie, auth, and stale body header from upstream responses", async () => {
-    const result = await passthroughResponsesRequest({
-      model: model(),
-      rawBody: "{}",
-      apiKey: "sk-upstream",
-      signal: new AbortController().signal,
-      fetch: (async () =>
-        new Response("{}", {
-          status: 200,
-          headers: {
-            "connection": "keep-alive",
-            "keep-alive": "timeout=5",
-            "proxy-authenticate": 'Basic realm="x"',
-            "proxy-authorization": "Basic abc",
-            "te": "trailers",
-            "trailer": "x-checksum",
-            "transfer-encoding": "chunked",
-            "upgrade": "websocket",
-            "host": "upstream.example.com",
-            "content-length": "123",
-            "content-encoding": "gzip",
-            "set-cookie": "sid=1",
-            "cookie": "session=abc",
-            "authorization": "Bearer upstream",
-            "www-authenticate": "Bearer",
-            "x-api-key": "sk-upstream",
-          },
-        })) as unknown as FetchFunction,
+describe("Provider Native Responses header boundary", () => {
+  it("strips hop-by-hop, credential, cookie, and stale body headers from upstream responses", async () => {
+    const result = await bufferNativeResponsesResponse(
+      new Response("{}", {
+        status: 200,
+        headers: {
+          connection: "keep-alive",
+          "keep-alive": "timeout=5",
+          "proxy-authenticate": 'Basic realm="x"',
+          "proxy-authorization": "Basic abc",
+          te: "trailers",
+          trailer: "x-checksum",
+          "transfer-encoding": "chunked",
+          upgrade: "websocket",
+          host: "upstream.example.com",
+          "content-length": "123",
+          "content-encoding": "gzip",
+          "set-cookie": "sid=1",
+          cookie: "session=abc",
+          authorization: "Bearer upstream",
+          "www-authenticate": "Bearer",
+          "x-api-key": "sk-upstream",
+          "request-id": "req-safe",
+          "x-ratelimit-remaining": "7",
+          "content-type": "application/json",
+        },
+      }),
+      new AbortController().signal,
+    );
+
+    expect(result.headers).toEqual({
+      "content-type": "application/json",
+      "request-id": "req-safe",
+      "x-ratelimit-remaining": "7",
     });
-    for (const name of [
-      "connection",
-      "keep-alive",
-      "proxy-authenticate",
-      "proxy-authorization",
-      "te",
-      "trailer",
-      "transfer-encoding",
-      "upgrade",
-      "host",
-      "content-length",
-      "content-encoding",
-      "set-cookie",
-      "cookie",
-      "authorization",
-      "www-authenticate",
-      "x-api-key",
-    ]) {
-      expect(result.headers).not.toHaveProperty(name);
-    }
   });
 
-  it("never forwards stale content-length/content-encoding on the upstream request", async () => {
-    const baseFetch = vi.fn(
-      async (input: RequestInfo | URL) => {
-        void input;
-        return new Response("{}", { status: 200 });
+  it("forwards only approved client request headers while Provider auth owns Authorization", async () => {
+    const captured: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      captured.push(new Request(input, init));
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const models = {
+      getAuth: async () => ({ auth: { apiKey: "sk-provider" } }),
+    } as unknown as Pick<Models, "getAuth">;
+    const lane = createProviderNativeResponses({ models, fetch });
+    const request = new Request("http://luckytoken.test/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer client-secret",
+        cookie: "session=abc",
+        "x-api-key": "client-key",
+        "x-stainless-retry-count": "2",
+        "openai-beta": "client-beta",
+        "content-length": "999",
+        "content-encoding": "gzip",
       },
-    );
-    const headers = new Headers({
-      "content-length": "999",
-      "content-encoding": "gzip",
-      "x-stainless-retry-count": "2",
     });
-    await passthroughResponsesRequest({
+
+    await lane.execute({
       model: model(),
-      rawBody: "raw",
-      apiKey: "upstream-key",
-      signal: new AbortController().signal,
-      fetch: baseFetch as unknown as FetchFunction,
-      upstreamHeaders: passthroughResponsesRequestHeaders(
-        new Request("http://lucky.test/v1/responses", { headers }),
-      ),
+      rawBody: JSON.stringify({ model: "openai/gpt-5", input: "hi" }),
+      request,
+      operation: "responses",
     });
-    const call = baseFetch.mock.calls[0] as
-      | [RequestInfo | URL, RequestInit | undefined]
-      | undefined;
-    const initHeaders = new Headers(call?.[1]?.headers);
-    expect(initHeaders.has("content-length")).toBe(false);
-    expect(initHeaders.has("content-encoding")).toBe(false);
-    expect(initHeaders.get("x-stainless-retry-count")).toBe("2");
+
+    expect(captured).toHaveLength(1);
+    const outbound = captured[0]!;
+    expect(outbound.headers.get("authorization")).toBe("Bearer sk-provider");
+    expect(outbound.headers.get("x-stainless-retry-count")).toBe("2");
+    expect(outbound.headers.has("cookie")).toBe(false);
+    expect(outbound.headers.has("x-api-key")).toBe(false);
+    expect(outbound.headers.has("openai-beta")).toBe(false);
+    expect(outbound.headers.has("content-encoding")).toBe(false);
   });
 });

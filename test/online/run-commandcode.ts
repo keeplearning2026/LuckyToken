@@ -11,7 +11,6 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import {
@@ -400,37 +399,16 @@ export async function runCommandCodeOnlineSuite(
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
-    const projectDirectory = join(directory, "project-auth-evidence");
-    const clientAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
     await mkdir(piDirectory, { recursive: true });
-    await mkdir(projectDirectory);
-    await writeFile(
-      join(projectDirectory, "online-auth-scope.txt"),
-      "controlled online project scope\n",
-      "utf8",
-    );
-    const localGlobalClientKey = randomUUID();
-    const localProjectClientKey = randomUUID();
-    const clientTokenStore = createFileClientTokenStore({ path: clientAuthFile });
-    await clientTokenStore.create({ type: "global" }, localGlobalClientKey);
-    await clientTokenStore.create(
-      { type: "project", projectDir: projectDirectory },
-      localProjectClientKey,
-    );
+    const localSdkCredential = "unused-local-sdk-key";
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
+        server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         providerPackages: {
           "@luckytoken/provider-commandcode-private": {},
@@ -457,11 +435,11 @@ export async function runCommandCodeOnlineSuite(
     });
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const client = new Anthropic({
-      apiKey: localGlobalClientKey,
+      apiKey: localSdkCredential,
       baseURL: server.origin,
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,
@@ -489,11 +467,11 @@ export async function runCommandCodeOnlineSuite(
     });
     server = await startLuckyTokenHttpServer({
       runtime: conformanceComposition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const conformanceClient = new Anthropic({
-      apiKey: localGlobalClientKey,
+      apiKey: localSdkCredential,
       baseURL: server.origin,
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,
@@ -503,21 +481,12 @@ export async function runCommandCodeOnlineSuite(
       modelId,
       totalSignal,
       capture.exchanges,
-      {
-        projectClient: new Anthropic({
-          apiKey: localProjectClientKey,
-          baseURL: server.origin,
-          maxRetries: 0,
-          timeout: REQUEST_TIMEOUT_MS,
-        }),
-        projectDir: projectDirectory,
-      },
     );
     const writtenSamplesPath = await writeOnlineConformanceArtifact(
       samplesPath,
       modelId,
       conformanceCases,
-      [apiKey, localGlobalClientKey, localProjectClientKey],
+      [apiKey],
     );
     const report = {
       model: modelId,

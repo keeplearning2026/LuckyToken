@@ -1,5 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { readFile } from "node:fs/promises";
 
 /**
  * Deep online verification against the real CommandCode API.
@@ -18,10 +17,7 @@ interface CaseResult {
 }
 
 async function main(): Promise<void> {
-  const clientAuth = JSON.parse(
-    await readFile(".luckytoken/client-auth/anthropic-messages.json", "utf8"),
-  ) as { global: string };
-  const apiKey = clientAuth.global;
+  const apiKey = "unused-local-sdk-key";
   const client = new Anthropic({
     apiKey,
     baseURL: BASE_URL,

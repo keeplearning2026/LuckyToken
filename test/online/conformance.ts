@@ -73,11 +73,6 @@ export interface OnlineConformanceArtifact {
   readonly cases: readonly OnlineConformanceSample[];
 }
 
-export interface OnlineAuthScopeEvidence {
-  readonly projectClient: Anthropic;
-  readonly projectDir: string;
-}
-
 function fail(category: string): never {
   throw new Error(`online_conformance_${category}`);
 }
@@ -426,7 +421,6 @@ export async function runOnlineConformance(
   modelId: string,
   totalSignal: AbortSignal,
   captures: CapturedCommandCodeExchange[],
-  authScope: OnlineAuthScopeEvidence,
 ): Promise<readonly OnlineConformanceSample[]> {
   const expectedCases = new Set(ONLINE_CONFORMANCE_CASES.map((entry) => entry.id));
   const samples: OnlineConformanceSample[] = [];
@@ -807,112 +801,6 @@ export async function runOnlineConformance(
       sample(seeded.scenario, "json", [exchange.client], [exchange.commandCode]),
     );
   }
-
-  const globalAuthMarker = "LT_CONFORMANCE_AUTH_GLOBAL";
-  const globalAuthRequest: MessageCreateParamsNonStreaming = {
-    model: modelId,
-    max_tokens: 512,
-    messages: [
-      { role: "user", content: `Reply with exactly ${globalAuthMarker}.` },
-    ],
-  };
-  const globalAuth = await jsonExchange(
-    "client_auth_global",
-    client,
-    modelId,
-    globalAuthRequest,
-    totalSignal,
-    captures,
-  );
-  const globalBody = record(
-    globalAuth.commandCode.request.body,
-    "global_auth_body",
-  );
-  const globalConfig = record(globalBody.config, "global_auth_config");
-  if (
-    !JSON.stringify(globalAuth.commandCode.request.body).includes(
-      globalAuthMarker,
-    ) ||
-    JSON.stringify(Object.keys(globalConfig).sort()) !==
-      JSON.stringify([
-        "currentBranch",
-        "date",
-        "environment",
-        "gitStatus",
-        "isGitRepo",
-        "mainBranch",
-        "recentCommits",
-        "structure",
-        "workingDir",
-      ]) ||
-    globalConfig.workingDir !== "" ||
-    globalConfig.date !== "" ||
-    globalConfig.environment !== "" ||
-    globalConfig.isGitRepo !== false ||
-    globalConfig.currentBranch !== "" ||
-    globalConfig.mainBranch !== "" ||
-    globalConfig.gitStatus !== "" ||
-    !Array.isArray(globalConfig.structure) ||
-    globalConfig.structure.length !== 0 ||
-    !Array.isArray(globalConfig.recentCommits) ||
-    globalConfig.recentCommits.length !== 0 ||
-    globalAuth.commandCode.request.headers["x-project-slug"] !== undefined
-  ) {
-    fail("global_auth_project_leak");
-  }
-  validateMessage(globalAuth.client.response, modelId, ["end_turn", "max_tokens"]);
-  samples.push(
-    sample(
-      "client-auth-global",
-      "json",
-      [globalAuth.client],
-      [globalAuth.commandCode],
-    ),
-  );
-
-  const projectAuthMarker = "LT_CONFORMANCE_AUTH_PROJECT";
-  const projectAuthRequest: MessageCreateParamsNonStreaming = {
-    model: modelId,
-    max_tokens: 512,
-    messages: [
-      { role: "user", content: `Reply with exactly ${projectAuthMarker}.` },
-    ],
-  };
-  const projectAuth = await jsonExchange(
-    "client_auth_project",
-    authScope.projectClient,
-    modelId,
-    projectAuthRequest,
-    totalSignal,
-    captures,
-  );
-  const projectBody = record(
-    projectAuth.commandCode.request.body,
-    "project_auth_body",
-  );
-  const projectConfig = record(projectBody.config, "project_auth_config");
-  const projectSlug = projectAuth.commandCode.request.headers["x-project-slug"];
-  if (
-    !JSON.stringify(projectAuth.commandCode.request.body).includes(
-      projectAuthMarker,
-    ) ||
-    projectConfig.workingDir !== authScope.projectDir ||
-    !Array.isArray(projectConfig.structure) ||
-    !projectConfig.structure.includes("online-auth-scope.txt") ||
-    typeof projectSlug !== "string" ||
-    projectSlug.length === 0
-  ) {
-    fail("project_auth_mapping");
-  }
-  validateMessage(projectAuth.client.response, modelId, ["end_turn", "max_tokens"]);
-  samples.push(
-    sample(
-      "client-auth-project",
-      "json",
-      [projectAuth.client],
-      [projectAuth.commandCode],
-    ),
-  );
 
   const observedCases = new Set(samples.map((entry) => entry.scenario));
   if (

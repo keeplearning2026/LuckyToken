@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import type {
   CodexLocalCredentialAuthority,
@@ -260,24 +259,6 @@ async function createAliasDataPlaneFixture(
   const stateDirectory = join(directory, ".luckytoken");
   const piDirectory = join(stateDirectory, "pi");
   await mkdir(piDirectory, { recursive: true });
-  const clientAuthPath = join(
-    stateDirectory,
-    "client-auth",
-    "anthropic-messages.json",
-  );
-  await createFileClientTokenStore({ path: clientAuthPath }).create(
-    { type: "global" },
-    "client-token",
-  );
-  const responsesAuthPath = join(
-    stateDirectory,
-    "client-auth",
-    "openai-responses.json",
-  );
-  await createFileClientTokenStore({ path: responsesAuthPath }).create(
-    { type: "global" },
-    "responses-token",
-  );
   const modelsJsonPath = join(piDirectory, "models.json");
   await writeFile(
     modelsJsonPath,
@@ -306,12 +287,8 @@ async function createAliasDataPlaneFixture(
       schemaVersion: "luckytoken-config-v1",
       server: { port: 0 },
       clientProtocols: {
-        "anthropic-messages": {
-          authFile: "client-auth/anthropic-messages.json",
-        },
-        "openai-responses": {
-          authFile: "client-auth/openai-responses.json",
-        },
+        "anthropic-messages": {},
+        "openai-responses": {},
       },
       providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
       pi: { directory: "pi", modelsJson: "pi/models.json" },
@@ -559,11 +536,9 @@ describe("alias-only model data plane", () => {
     expect(response.status).toBe(200);
   });
 
-  it("returns the one synthetic compaction item Codex requires for routed remote-compaction v2", async () => {
+  it("keeps Local Codex credentials isolated from an alias Semantic request", async () => {
     const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
       isAvailable: async () => true,
-      authorizeToken: async (token: string) =>
-        token === "codex-token" ? Object.freeze({}) : undefined,
       resolveForwardAuth: async (headers: Headers) =>
         headers.get("authorization") === "Bearer codex-token"
           ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
@@ -579,150 +554,11 @@ describe("alias-only model data plane", () => {
       codexNativeModels,
     });
     const pending = fixture.runtime.handle(
-      responsesRequest(
-        {
-          model: FLASH_ALIAS,
-          stream: true,
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: "EARLIER CONTEXT" }],
-            },
-            { type: "compaction_trigger" },
-          ],
-        },
-        "codex-token",
-      ),
+      responsesRequest({ model: FLASH_ALIAS, input: "hello" }, "codex-token"),
     );
     const call = await fixture.nextUpstreamCall();
-    call.respond(commandCodeText("HANDOFF SUMMARY"));
-
-    const response = await pending;
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-    const wire = await response.text();
-    const events = wire
-      .split(/\n\n/u)
-      .flatMap((frame): Array<Record<string, unknown>> => {
-        const line = frame
-          .split("\n")
-          .find((candidate) => candidate.startsWith("data: "));
-        if (line === undefined || line === "data: [DONE]") return [];
-        return [JSON.parse(line.slice(6)) as Record<string, unknown>];
-      });
-    const completedItems = events
-      .filter((event) => event.type === "response.output_item.done")
-      .map((event) => event.item as Record<string, unknown>);
-    expect(completedItems).toHaveLength(1);
-    expect(completedItems[0]).toMatchObject({ type: "compaction" });
-    expect(completedItems[0]?.encrypted_content).toEqual(
-      expect.stringMatching(/^luckytoken1:/u),
-    );
-  });
-
-  it("fails routed remote-compaction v2 when the summarizer produces no text", async () => {
-    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
-      isAvailable: async () => true,
-      authorizeToken: async (token: string) =>
-        token === "codex-token" ? Object.freeze({}) : undefined,
-      resolveForwardAuth: async (headers: Headers) =>
-        headers.get("authorization") === "Bearer codex-token"
-          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
-          : undefined,
-      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
-    });
-    const codexNativeModels: CodexNativeModelSource = Object.freeze({
-      has: (id: string) => id === "gpt-native",
-      models: () => Object.freeze([]),
-    });
-    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
-      codexLocalAuth,
-      codexNativeModels,
-    });
-    const pending = fixture.runtime.handle(
-      responsesRequest(
-        {
-          model: FLASH_ALIAS,
-          stream: true,
-          input: [
-            { type: "message", role: "user", content: "history" },
-            { type: "compaction_trigger" },
-          ],
-        },
-        "codex-token",
-      ),
-    );
-    const call = await fixture.nextUpstreamCall();
-    call.respond(
-      new Response(
-        `${JSON.stringify({
-          type: "finish",
-          finishReason: "stop",
-          totalUsage: { inputTokens: 2, outputTokens: 0, totalTokens: 2 },
-        })}\n`,
-      ),
-    );
-
-    const response = await pending;
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { type: "api_error" },
-    });
-  });
-
-  it("replays a LuckyToken compaction envelope as summary context for the routed model", async () => {
-    const codexLocalAuth: CodexLocalCredentialAuthority = Object.freeze({
-      isAvailable: async () => true,
-      authorizeToken: async (token: string) =>
-        token === "codex-token" ? Object.freeze({}) : undefined,
-      resolveForwardAuth: async (headers: Headers) =>
-        headers.get("authorization") === "Bearer codex-token"
-          ? Object.freeze({ authorization: "Bearer codex-token", accountId: "acct" })
-          : undefined,
-      scrub: (value: string) => value.split("codex-token").join("[REDACTED]"),
-    });
-    const codexNativeModels: CodexNativeModelSource = Object.freeze({
-      has: (id: string) => id === "gpt-native",
-      models: () => Object.freeze([]),
-    });
-    const fixture = await createAliasDataPlaneFixture(INITIAL_ALIASES, {
-      codexLocalAuth,
-      codexNativeModels,
-    });
-    const encoded = `luckytoken1:${Buffer.from("STORED HANDOFF SUMMARY", "utf8").toString("base64")}`;
-    const pending = fixture.runtime.handle(
-      responsesRequest(
-        {
-          model: FLASH_ALIAS,
-          input: [
-            {
-              type: "compaction",
-              id: "cmp_saved",
-              encrypted_content: encoded,
-            },
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: "AFTER COMPACTION" }],
-            },
-          ],
-        },
-        "codex-token",
-      ),
-    );
-    const first = await Promise.race([
-      fixture.nextUpstreamCall().then((call) => ({ kind: "call" as const, call })),
-      pending.then((response) => ({ kind: "response" as const, response })),
-    ]);
-    expect(first.kind).toBe("call");
-    if (first.kind !== "call") return;
-    const upstream = JSON.parse(first.call.body) as { params?: { messages?: unknown[] } };
-    const upstreamText = JSON.stringify(upstream.params?.messages ?? []);
-    expect(upstreamText).toContain("STORED HANDOFF SUMMARY");
-    expect(upstreamText).toContain("AFTER COMPACTION");
-    expect(upstreamText).not.toContain("luckytoken1:");
-    first.call.respond(commandCodeText("continued"));
+    expect(call.url).toContain("commandcode");
+    call.respond(commandCodeText("semantic answer"));
     const response = await pending;
     expect(response.status).toBe(200);
   });

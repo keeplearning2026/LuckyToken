@@ -139,7 +139,7 @@ describe("Ticket 23 store-owned range delete/count", () => {
     // `all` (no endpoints) deletes everything eligible.
     expect(store.deleteRange()).toEqual({ deleted: 3 });
     expect(store.countRange()).toBe(0);
-    expect(store.schemaVersion).toBe(2);
+    expect(store.schemaVersion).toBe(3);
     // The store stays usable after an all-deletion: schema name/version in
     // `meta` survive, appends work, and the schemaVersion fact is intact.
     store.begin("anthropic-messages");
@@ -249,7 +249,7 @@ describe("Ticket 23 store-owned range delete/count", () => {
 
     const { store: ledger } = await openLedger();
     expect(() => ledger.deleteRange(200, 100)).toThrow();
-    expect(ledger.schemaVersion).toBe(2);
+    expect(ledger.schemaVersion).toBe(3);
 
     const { store: capture } = await openCapture();
     expect(() => capture.deleteRange(200, 100)).toThrow();

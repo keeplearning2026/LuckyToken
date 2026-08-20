@@ -53,7 +53,6 @@ function record(overrides: RecordOverrides = {}): RequestLedgerRecord {
     realModelId: "claude-fixture",
     clientSessionId,
     effectiveSessionId,
-    projectDir: "C:\\Users\\fixture\\projects\\alpha",
   };
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
@@ -486,7 +485,6 @@ describe("projectRequestLedger list projection", () => {
     expect(projection.acceptedAt).toBe(1_700_000_000_000);
     expect(projection.completedAt).toBe(1_700_000_003_010);
     expect(projection.clientSessionId).toBe(clientSessionId);
-    expect(projection.projectDir).toBe("C:\\Users\\fixture\\projects\\alpha");
     expect(projection.duration).toBe("2.0 s");
     expect(projection.speed).toBe("50.0 tokens/s");
     expect(projection.attemptCount).toBe(2);
@@ -499,7 +497,6 @@ describe("projectRequestLedger list projection", () => {
       record({
         clientSessionId: undefined,
         effectiveSessionId: undefined,
-        projectDir: undefined,
         externalAlias: undefined,
         providerId: undefined,
         realModelId: undefined,
@@ -507,7 +504,6 @@ describe("projectRequestLedger list projection", () => {
       }),
     );
     expect(projection.clientSessionId).toBe("-");
-    expect(projection.projectDir).toBe("-");
     expect(projection.alias).toBe("-");
     expect(projection.providerId).toBe("-");
     expect(projection.realModelId).toBe("-");

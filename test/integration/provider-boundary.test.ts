@@ -11,7 +11,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { createAuth } from "../../src/auth.js";
 import {
   commandCodePrivateApiId,
   commandCodePrivateProviderId,
@@ -20,7 +19,6 @@ import {
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
 
-const sessionId = "00000000-0000-4000-8000-000000000220";
 
 function model(provider: string, id: string): Model<Api> {
   return {
@@ -113,14 +111,8 @@ describe("Pi Models provider boundary", () => {
     mutableModels.setProvider(
       provider("private-two", "model-two", "second", secondDispatch),
     );
-    const auth = createAuth({
-      authorizeToken: async (token) => (token === "client-key" ? {} : undefined),
-      createEffectiveSessionId: () => sessionId,
-    });
-
     const anthropic = createAnthropicMessagesHandler({
       models: mutableModels,
-      auth,
       createMessageId: () => "msg_provider_boundary",
       now: () => 1_786_400_000_000,
       maxRequestBytes: 1_048_576,
@@ -186,13 +178,8 @@ describe("Pi Models provider boundary", () => {
     const mutableModels = createModels();
     mutableModels.setProvider(commandCodeProvider);
     const models: Models = mutableModels;
-    const auth = createAuth({
-      authorizeToken: async (token) => (token === "client-key" ? {} : undefined),
-      createEffectiveSessionId: () => "00000000-0000-4000-8000-000000000222",
-    });
     const anthropic = createAnthropicMessagesHandler({
       models,
-      auth,
       createMessageId: () => "msg_commandcode_through_pi",
       now: () => 1_786_400_000_000,
       maxRequestBytes: 1_048_576,

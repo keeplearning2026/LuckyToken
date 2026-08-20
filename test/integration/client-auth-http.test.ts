@@ -1,20 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { FetchFunction } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
-import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
-import {
-  COMMANDCODE_PROVIDER_PACKAGE,
-  commandCodeProviderImportModule,
-} from "../support/commandcode-provider-package.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
+import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
 function commandCodeText(text: string): Response {
   return new Response(
@@ -31,142 +18,35 @@ function commandCodeText(text: string): Response {
   );
 }
 
-describe("per-Client-Protocol Auth over real HTTP", () => {
-  const directories: string[] = [];
-  const servers: Array<Awaited<ReturnType<typeof startLuckyTokenHttpServer>>> = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
-
-  afterEach(async () => {
-    await Promise.all(servers.splice(0).map((server) => server.close()));
-    compositions.splice(0).forEach((composition) => {
-      composition.diagnosticsStore.close();
-      composition.requestLedger.close();
-        composition.deepCaptureStore.close();
+describe("local HTTP client access contract", () => {
+  it("serves Anthropic requests without a LuckyToken client credential", async () => {
+    const fetch: FetchFunction = async () => commandCodeText("anonymous");
+    const runtime = createCommandCodeTestRuntime({
+      clientApiKey: "unused",
+      commandCodeApiKey: "provider-secret",
+      commandCodeBaseUrl: "https://fixture.commandcode.test",
+      fetch,
+      modelId: "model",
     });
-    await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
-    );
-  });
 
-  it("isolates global/project facts and activates file changes only after restart", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-client-auth-http-"));
-    directories.push(root);
-    const stateDirectory = join(root, ".luckytoken");
-    const piDirectory = join(stateDirectory, "pi");
-    const projectDir = join(root, "project");
-    const authFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    const otherAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "future-client-protocol.json",
-    );
-    await mkdir(piDirectory, { recursive: true });
-    await mkdir(projectDir);
-    const configPath = join(stateDirectory, "config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
-        clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+    const response = await runtime.handle(
+      new Request("http://luckytoken.test/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
         },
-        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
-        pi: { directory: "pi" },
-      }),
-      "utf8",
-    );
-    const tokenStore = createFileClientTokenStore({ path: authFile });
-    await tokenStore.create({ type: "global" }, "old-global-token");
-    await tokenStore.create(
-      { type: "project", projectDir },
-      "project-token",
-    );
-    await createFileClientTokenStore({ path: otherAuthFile }).create(
-      { type: "global" },
-      "other-protocol-token",
-    );
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
-    const projectSnapshot = vi.fn(
-      async (input: { readonly projectDir: string; readonly signal: AbortSignal }) => {
-        input.signal.throwIfAborted();
-        return createEmptyServerConfig();
-      },
-    );
-    const config = await loadLuckyTokenCliConfig(configPath);
-    const start = async () => {
-      const composition = await createConfiguredLuckyTokenDataPlane({
-        config,
-        credentials,
-        fetch: async () => commandCodeText("authorized"),
-        importModule: commandCodeProviderImportModule({
-          projectSnapshot: { snapshot: projectSnapshot },
+        body: JSON.stringify({
+          model: "model",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hello" }],
         }),
-      });
-      compositions.push(composition);
-      const server = await startLuckyTokenHttpServer({
-        runtime: composition.runtime,
-        host: "127.0.0.1",
-        port: 0,
-      });
-      servers.push(server);
-      return server;
-    };
-    const client = (origin: string, apiKey: string) =>
-      new Anthropic({ apiKey, baseURL: origin, maxRetries: 0, timeout: 10_000 });
-    const complete = (sdk: Anthropic) =>
-      sdk.messages.create({
-        model: "commandcode-private/deepseek/deepseek-v4-flash",
-        max_tokens: 32,
-        messages: [{ role: "user", content: "hello" }],
-      });
+      }),
+    );
 
-    const firstServer = await start();
-    const oldGlobal = client(firstServer.origin, "old-global-token");
-    const project = client(firstServer.origin, "project-token");
-    await expect(
-      Promise.all([complete(oldGlobal), complete(project)]),
-    ).resolves.toHaveLength(2);
-    expect(projectSnapshot).toHaveBeenCalledTimes(1);
-    expect(projectSnapshot.mock.calls[0]?.[0].projectDir).toBe(projectDir);
-    await expect(
-      complete(client(firstServer.origin, "invalid-token")),
-    ).rejects.toMatchObject({ status: 401 });
-    await expect(
-      complete(client(firstServer.origin, "other-protocol-token")),
-    ).rejects.toMatchObject({ status: 401 });
-
-    await tokenStore.rotate({ type: "global" }, "new-global-token");
-    await tokenStore.remove({ type: "project", projectDir });
-    await expect(
-      Promise.all([complete(oldGlobal), complete(project)]),
-    ).resolves.toHaveLength(2);
-    expect(projectSnapshot).toHaveBeenCalledTimes(2);
-
-    await firstServer.close();
-    servers.splice(servers.indexOf(firstServer), 1);
-    const secondServer = await start();
-    await expect(
-      complete(client(secondServer.origin, "new-global-token")),
-    ).resolves.toMatchObject({ stop_reason: "end_turn" });
-    await expect(
-      complete(client(secondServer.origin, "old-global-token")),
-    ).rejects.toMatchObject({ status: 401 });
-    await expect(
-      complete(client(secondServer.origin, "project-token")),
-    ).rejects.toMatchObject({ status: 401 });
-    expect(projectSnapshot).toHaveBeenCalledTimes(2);
-  }, 30_000);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "anonymous" }],
+    });
+  });
 });

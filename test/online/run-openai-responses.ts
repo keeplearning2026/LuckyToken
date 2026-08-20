@@ -4,8 +4,8 @@
  * Drives the REAL CommandCode provider through the local LuckyToken
  * `/v1/responses` endpoint with genuine Codex-style incremental requests:
  * `previous_response_id` chaining, durable snapshot recovery across a
- * simulated process restart, atomic SSE, tool round-trips, auth isolation,
- * cancellation, and concurrent isolation.
+ * simulated process restart, atomic SSE, tool round-trips, cancellation,
+ * and concurrent isolation.
  *
  * Reads the API key file (git-ignored) into memory only. Defaults to the
  * CommandCode provider (`CommandcodeAPIKey.txt`); pass `--provider
@@ -19,7 +19,6 @@ import {
   type AuthPrompt,
   type FetchFunction,
 } from "@earendil-works/pi-ai";
-import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +27,6 @@ import { pathToFileURL } from "node:url";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
 import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -656,36 +654,16 @@ export async function runOpenAIResponsesOnlineSuite(
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const responsesAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "openai-responses.json",
-    );
-    const anthropicAuthFile = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    const responsesToken = randomUUID();
-    const anthropicToken = randomUUID();
-    await createFileClientTokenStore({
-      path: responsesAuthFile,
-    }).create({ type: "global" }, responsesToken);
-    await createFileClientTokenStore({
-      path: anthropicAuthFile,
-    }).create({ type: "global" }, anthropicToken);
+    const responsesToken = "unused-local-sdk-key";
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: 0 },
+        server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
           "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
             stateFile: "state/openai-responses.json",
           },
         },
@@ -788,7 +766,7 @@ export async function runOpenAIResponsesOnlineSuite(
     }
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const origin = server.origin;
@@ -836,7 +814,7 @@ export async function runOpenAIResponsesOnlineSuite(
     });
     const hangingServer = await startLuckyTokenHttpServer({
       runtime: hangingComposition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const hangingOrigin = hangingServer.origin;
@@ -888,7 +866,7 @@ export async function runOpenAIResponsesOnlineSuite(
     await server.close();
     server = await startLuckyTokenHttpServer({
       runtime: conformanceComposition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const conformanceOrigin = server.origin;
@@ -939,23 +917,6 @@ export async function runOpenAIResponsesOnlineSuite(
       throw new Error("online_chain_expansion_missing");
     }
     summary.successfulChain += 1;
-
-    // Auth isolation: the Anthropic token must be rejected on /v1/responses.
-    const authProbe = await fetch(`${conformanceOrigin}/v1/responses`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${anthropicToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: selector,
-        input: "auth isolation probe",
-      }),
-      signal: requestSignal(totalSignal),
-    });
-    if (authProbe.status !== 401) {
-      throw new Error(`online_auth_isolation_${authProbe.status}`);
-    }
 
     // Tool round-trip: provider emits a function_call; we reply with a
     // function_call_output and verify the model consumes it.
@@ -1088,7 +1049,7 @@ export async function runOpenAIResponsesOnlineSuite(
     });
     server = await startLuckyTokenHttpServer({
       runtime: restartComposition.runtime,
-      host: config.server.host,
+      host: "127.0.0.1",
       port: config.server.port,
     });
     const restartMarker = "LT_RESP_RESTART_01";

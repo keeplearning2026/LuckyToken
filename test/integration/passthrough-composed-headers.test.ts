@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createFileClientTokenStore } from "../../src/client-auth/file-token-store.js";
 import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
@@ -55,15 +54,6 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
-    const clientAuthPath = join(
-      stateDirectory,
-      "client-auth",
-      "anthropic-messages.json",
-    );
-    await createFileClientTokenStore({ path: clientAuthPath }).create(
-      { type: "global" },
-      "client-token",
-    );
     const modelsJsonPath = join(piDirectory, "models.json");
     await writeFile(modelsJsonPath, JSON.stringify(modelsJson), "utf8");
     const configPath = join(stateDirectory, "config.json");
@@ -73,25 +63,12 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
-          "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
-          },
+          "anthropic-messages": {},
+          "openai-responses": {},
         },
         pi: { directory: "pi", modelsJson: "pi/models.json" },
       }),
       "utf8",
-    );
-    const responsesAuthPath = join(
-      stateDirectory,
-      "client-auth",
-      "openai-responses.json",
-    );
-    await createFileClientTokenStore({ path: responsesAuthPath }).create(
-      { type: "global" },
-      "responses-token",
     );
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),

@@ -14,11 +14,11 @@ import {
 import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
 
 /** Ticket 24 supersedes the old migration behavior: owned schemas are never
- * migrated automatically. This file also retains Ticket 20's v2 persistence
+ * migrated automatically. This file also retains Ticket 20's persistence
  * coverage for fresh, compatible stores. */
 
 const V1_SCHEMA_VERSION = 1;
-const V2_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 /**
  * Independent v1 fixture: the exact Ticket 18 schema, retained to prove the
@@ -397,7 +397,7 @@ describe("Request Ledger incompatible-schema refusal", () => {
   });
 });
 
-describe("Request Ledger v2 fresh store", () => {
+describe("Request Ledger current fresh store", () => {
   const roots: string[] = [];
   const stores: RequestLedgerStore[] = [];
 
@@ -408,7 +408,7 @@ describe("Request Ledger v2 fresh store", () => {
     );
   });
 
-  it("creates a v2 schema without any v1 step", async () => {
+  it("creates the current schema without any migration step", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-ledger-v2-"));
     roots.push(root);
     const configuration = parseRequestLedgerConfiguration(
@@ -430,7 +430,7 @@ describe("Request Ledger v2 fresh store", () => {
       const version = database
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
         .get() as { value: number };
-      expect(version.value).toBe(V2_SCHEMA_VERSION);
+      expect(version.value).toBe(CURRENT_SCHEMA_VERSION);
     } finally {
       database.close();
     }

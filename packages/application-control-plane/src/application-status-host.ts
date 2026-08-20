@@ -285,12 +285,7 @@ export async function startApplicationStatusHost(
         : { ownership: options.ownership }),
       ...(projection === undefined
         ? {}
-        : {
-            settings: projection.settings,
-            ...(projection.confirmation === undefined
-              ? {}
-              : { confirmation: projection.confirmation }),
-          }),
+        : { settings: projection.settings }),
       ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
       ...(credentialProjection === undefined
         ? {}
@@ -983,9 +978,6 @@ export async function startApplicationStatusHost(
           const result = decodeSettingsCommandResult({
             outcome: handled.outcome,
             ...(handled.error === undefined ? {} : { error: handled.error }),
-            ...(handled.confirmation === undefined
-              ? {}
-              : { confirmation: handled.confirmation }),
             settings: handled.settings,
           });
           if (result === undefined) {
@@ -998,8 +990,7 @@ export async function startApplicationStatusHost(
           }
           if (
             handled.outcome === "applied" ||
-            handled.outcome === "pending" ||
-            handled.outcome === "confirmation_required"
+            handled.outcome === "pending"
           ) {
             // The live projection is merged by publishStatus, so the base
             // status alone is enough to emit the settings_changed event.

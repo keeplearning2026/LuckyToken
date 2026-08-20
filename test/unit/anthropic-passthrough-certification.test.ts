@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Auth } from "../../src/auth.js";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
@@ -57,12 +56,8 @@ function dependencies(
   extra: Partial<AnthropicMessagesHandlerOptions> = {},
   passthroughFetch?: FetchFunction,
 ): HttpBoundaryDependencies {
-  const auth: Auth = {
-    resolve: async () => ({ authorized: true, effectiveSessionId: "session" }),
-  };
   const options: AnthropicMessagesHandlerOptions = {
     models,
-    auth,
     modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,

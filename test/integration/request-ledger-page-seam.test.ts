@@ -44,7 +44,6 @@ function usageRecord(
     realModelId: "claude-fixture",
     clientSessionId,
     effectiveSessionId,
-    projectDir: "C:\\Users\\fixture\\projects\\alpha",
     terminalUsage: {
       api: "commandcode-private",
       input: 5,
@@ -146,7 +145,6 @@ describe("Request Ledger page seam (Ticket 19)", () => {
       providerId: "commandcode-private",
       realModelId: "claude-fixture",
       protocolId: "anthropic-messages",
-      projectDir: "C:\\Users\\fixture\\projects\\alpha",
       clientSessionId,
       from: 1_700_000_000_000,
       to: 1_700_000_100_000,
@@ -160,7 +158,6 @@ describe("Request Ledger page seam (Ticket 19)", () => {
       providerId: "commandcode-private",
       realModelId: "claude-fixture",
       protocolId: "anthropic-messages",
-      projectDir: "C:\\Users\\fixture\\projects\\alpha",
       clientSessionId,
       from: 1_700_000_000_000,
       to: 1_700_000_100_000,

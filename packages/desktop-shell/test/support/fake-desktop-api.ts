@@ -17,7 +17,6 @@ export function createFakeDesktopApi(options: {
     onStatus: () => () => undefined,
     executeRuntime: unavailable,
     executeSettings: unavailable,
-    executeClientToken: unavailable,
     executeCredential: unavailable,
     executeAuth: unavailable,
     respondAuth: unavailable,

@@ -3,9 +3,9 @@ import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import {
-  createResponsesNativePassthrough,
-  createResponsesNativeSender,
-} from "../../src/integrations/responses-native.js";
+  createProviderResponsesSender as createResponsesNativeSender,
+  supportsProviderNativeResponses,
+} from "../../src/provider-native-responses/index.js";
 
 function model(
   provider: string,
@@ -74,6 +74,34 @@ function codexToken(accountId: string): string {
 }
 
 describe("Responses native provider sender", () => {
+  it("preserves the raw request bytes exactly when the selected model already matches", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      auth: auth({ apiKey: "sk-openai" }),
+      fetch: captured.fetch,
+    });
+    const raw = '{\n  "model" : "real-model",  "future_number":9007199254740993, "negative_zero":-0, "scientific":1e+30\n}';
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(raw);
+  });
+
+  it("patches only the top-level model literal without normalizing unrelated JSON tokens", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      auth: auth({ apiKey: "sk-openai" }),
+      fetch: captured.fetch,
+    });
+    const raw = '{\n "model" : "alias", "future_number":9007199254740993, "negative_zero":-0, "scientific":1e+30, "nested":{"model":"leave-me"}\n}';
+    const expected = raw.replace('"alias"', '"real-model"');
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+  });
   it("returns raw non-2xx upstream Responses instead of converting them into transport errors", async () => {
     const requests: Request[] = [];
     const fetch: FetchFunction = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -440,7 +468,6 @@ describe("Responses native provider sender", () => {
   });
 
   it("exposes native compact for every supported Responses provider/protocol pair", () => {
-    const passthrough = createResponsesNativePassthrough(capture().fetch);
     const models = [
       model("openai", "openai-responses", "https://api.openai.com/v1"),
       model("xai", "openai-responses", "https://api.x.ai/v1"),
@@ -457,8 +484,7 @@ describe("Responses native provider sender", () => {
     ];
 
     for (const candidate of models) {
-      expect(passthrough.supports(candidate)).toBe(true);
-      expect(passthrough.supportsCompact(candidate)).toBe(true);
+      expect(supportsProviderNativeResponses(candidate)).toBe(true);
     }
   });
 });

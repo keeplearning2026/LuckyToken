@@ -33,7 +33,6 @@ function analyticsResult(query: AnalyticsQuery): AnalyticsQueryResult {
       providers: ["anthropic"],
       models: ["claude-sonnet-4-5"],
       protocols: ["anthropic-messages"],
-      projects: ["C:\\work\\alpha"],
       sessions: ["20000000-0000-4000-8000-000000000041"],
       outcomes: ["success"],
     };
@@ -129,9 +128,7 @@ describe("Overview analytics", () => {
     expect((from as HTMLInputElement).value).toBe("2026-08-18T00:00");
     expect((to as HTMLInputElement).value).toBe("2026-08-19T00:00");
 
-    expect(container.querySelector('select[aria-label="Project filter"]')?.textContent).toContain(
-      "C:\\work\\alpha",
-    );
+    expect(container.querySelector('select[aria-label="Project filter"]')).toBeNull();
     expect(container.querySelector('select[aria-label="Protocol filter"]')?.textContent).toContain(
       "anthropic-messages",
     );
@@ -143,10 +140,10 @@ describe("Overview analytics", () => {
     );
 
     await act(async () => {
-      const project = container.querySelector('select[aria-label="Project filter"]');
-      if (!(project instanceof HTMLSelectElement)) throw new Error("Project filter missing");
-      project.value = "C:\\work\\alpha";
-      project.dispatchEvent(new Event("change", { bubbles: true }));
+      const protocol = container.querySelector('select[aria-label="Protocol filter"]');
+      if (!(protocol instanceof HTMLSelectElement)) throw new Error("Protocol filter missing");
+      protocol.value = "anthropic-messages";
+      protocol.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
 
@@ -155,7 +152,7 @@ describe("Overview analytics", () => {
     );
     expect(summaries.length).toBeGreaterThanOrEqual(2);
     expect(summaries.at(-1)?.filters).toEqual({
-      projects: ["C:\\work\\alpha"],
+      protocols: ["anthropic-messages"],
     });
   });
 });

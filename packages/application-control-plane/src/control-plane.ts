@@ -102,7 +102,6 @@ export {
   type EffectiveProviderLayer,
   type EffectiveProviderProjection,
   type HelloResult,
-  type LanConfirmation,
   type LedgerAliasFact,
   type LedgerAttempt,
   type LedgerAuthFacts,

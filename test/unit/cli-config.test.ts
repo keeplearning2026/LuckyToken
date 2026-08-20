@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -40,7 +40,7 @@ describe("LuckyToken CLI configuration", () => {
     const config = await loadLuckyTokenCliConfig(path);
     expect(config).toMatchObject({
       configPath: resolve(path),
-      server: { host: "127.0.0.1", port: 0 },
+      server: { port: 0 },
       clientProtocols: {
         "anthropic-messages": {
           adapterConfiguration: {
@@ -62,6 +62,24 @@ describe("LuckyToken CLI configuration", () => {
     expect(config.clientProtocols["toString"]).toBeUndefined();
   });
 
+  it("rejects server.host because the Data Plane bind address is fixed to loopback", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-host-"));
+    directories.push(directory);
+    const path = join(directory, "config.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
+        server: { host: "127.0.0.1", port: 0 },
+        clientProtocols: { "anthropic-messages": {} },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+
+    await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow("server has unknown field: host");
+  });
+
   it("defaults the canonical models.json to the config data directory and never to Pi Agent's or the Pi credential directory", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
     directories.push(directory);
@@ -72,9 +90,7 @@ describe("LuckyToken CLI configuration", () => {
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi" },
       }),
@@ -101,9 +117,7 @@ describe("LuckyToken CLI configuration", () => {
         schemaVersion: "luckytoken-config-v1",
         server: { port: 0 },
         clientProtocols: {
-          "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
-          },
+          "anthropic-messages": {},
         },
         pi: { directory: "pi", modelsJson: "models/custom.json" },
       }),
@@ -127,7 +141,7 @@ describe("LuckyToken CLI configuration", () => {
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
         clientProtocols: {
-          fixture: { authFile: "fixture.json" },
+          fixture: {},
         },
         providerPackages: {
           "@luckytoken/provider-commandcode-private": packageConfiguration,
@@ -150,7 +164,7 @@ describe("LuckyToken CLI configuration", () => {
     const path = join(directory, "config.json");
     await writeFile(
       path,
-      '{"schemaVersion":"luckytoken-config-v1","clientProtocols":{"__proto__":{"authFile":"proto.json"}},"pi":{"directory":"pi"}}',
+      '{"schemaVersion":"luckytoken-config-v1","clientProtocols":{"__proto__":{}},"pi":{"directory":"pi"}}',
       "utf8",
     );
 
@@ -158,9 +172,7 @@ describe("LuckyToken CLI configuration", () => {
 
     expect(Object.keys(config.clientProtocols)).toEqual(["__proto__"]);
     expect(Object.hasOwn(config.clientProtocols, "__proto__")).toBe(true);
-    expect(config.clientProtocols["__proto__"]?.authFile).toBe(
-      resolve(directory, "proto.json"),
-    );
+    expect(config.clientProtocols["__proto__"]).toEqual({});
   });
 
   it("refuses an unversioned legacy config instead of migrating or overwriting it", async () => {
@@ -180,79 +192,15 @@ describe("LuckyToken CLI configuration", () => {
   });
 
   it.each([
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: { fixture: { authFile: "fixture.json" } },
-        pi: { directory: "pi" },
-        extra: true,
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        server: { port: 65_536 },
-        clientProtocols: { fixture: { authFile: "fixture.json" } },
-        pi: { directory: "pi" },
-      },
-    ],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: {} }, pi: { directory: "pi" }, extra: true }],
+    [{ schemaVersion: "luckytoken-config-v1", server: { port: 65_536 }, clientProtocols: { fixture: {} }, pi: { directory: "pi" } }],
     [{ schemaVersion: "luckytoken-config-v1", clientProtocols: {}, pi: { directory: "pi" } }],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: { fixture: { authFile: "" } },
-        pi: { directory: "pi" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: {
-          fixture: { authFile: "fixture.json", extra: true },
-        },
-        pi: { directory: "pi" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: {
-          first: { authFile: "shared.json" },
-          second: { authFile: "./shared.json" },
-        },
-        pi: { directory: "pi" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        client: { apiKey: "legacy", projectDir: "legacy-project" },
-        pi: { directory: "pi" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: { fixture: { authFile: "fixture.json" } },
-        pi: { directory: "" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: { fixture: { authFile: "fixture.json" } },
-        providerAdapters: { "commandcode-private": {} },
-        pi: { directory: "pi" },
-      },
-    ],
-    [
-      {
-        schemaVersion: "luckytoken-config-v1",
-        clientProtocols: { fixture: { authFile: "fixture.json" } },
-        providerPackages: { "../private-provider": {} },
-        pi: { directory: "pi" },
-      },
-    ],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: { authFile: "obsolete.json" } }, pi: { directory: "pi" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: { extra: true } }, pi: { directory: "pi" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: {} }, client: { apiKey: "legacy", projectDir: "legacy-project" }, pi: { directory: "pi" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: {} }, pi: { directory: "" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: {} }, providerAdapters: { "commandcode-private": {} }, pi: { directory: "pi" } }],
+    [{ schemaVersion: "luckytoken-config-v1", clientProtocols: { fixture: {} }, providerPackages: { "../private-provider": {} }, pi: { directory: "pi" } }],
   ])("rejects invalid or unknown configuration %#", async (input) => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
     directories.push(directory);
@@ -262,29 +210,20 @@ describe("LuckyToken CLI configuration", () => {
     await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow();
   });
 
-  it("rejects distinct auth-file paths that are hard links to one physical file", async () => {
+  it("rejects the obsolete authFile field instead of treating it as compatibility data", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-"));
     directories.push(directory);
-    const firstAuthFile = join(directory, "first.json");
-    const secondAuthFile = join(directory, "second.json");
-    await writeFile(firstAuthFile, "{}", "utf8");
-    await link(firstAuthFile, secondAuthFile);
     const path = join(directory, "config.json");
     await writeFile(
       path,
       JSON.stringify({
         schemaVersion: "luckytoken-config-v1",
-        clientProtocols: {
-          first: { authFile: "first.json" },
-          second: { authFile: "second.json" },
-        },
+        clientProtocols: { fixture: { authFile: "obsolete.json" } },
         pi: { directory: "pi" },
       }),
       "utf8",
     );
 
-    await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow(
-      "auth files must be unique",
-    );
+    await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow(/authFile/u);
   });
 });

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
-import { ClientAccessSettings } from "./ClientAccessSettings.js";
 
 export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [enabled, setEnabled] = useState<boolean>();
@@ -39,7 +38,6 @@ export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi })
   };
 
   return (
-    <>
       <section className="settings-section page-card">
         <div>
           <p className="eyebrow">DESKTOP</p>
@@ -60,7 +58,5 @@ export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi })
           {busy ? "Updating…" : enabled ? "Disable auto-start" : "Enable auto-start"}
         </button>
       </section>
-      <ClientAccessSettings api={api} />
-    </>
   );
 }

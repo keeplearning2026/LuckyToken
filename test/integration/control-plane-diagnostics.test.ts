@@ -16,10 +16,6 @@ import {
   createRuntimeDiagnosticsStoreFactory,
   parseRuntimeDiagnosticsConfiguration,
 } from "../../src/runtime-diagnostics/index.js";
-import {
-  createFileClientTokenStore,
-  loadFileClientTokenAuthority,
-} from "../../src/client-auth/file-token-store.js";
 
 async function allPersistedBytes(root: string): Promise<string> {
   const entries = await readdir(root, { recursive: true });
@@ -236,22 +232,15 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       { directory: diagnosticsDir },
       root,
     );
-    // Credential owners: an explicitly configured non-token-shaped Client
-    // token and a Provider API key. The token file lives outside the
-    // diagnostics directory so the byte scan only covers the store.
-    const tokenFile = join(root, "auth", "tokens.json");
-    const tokenStore = createFileClientTokenStore({
-      path: tokenFile,
-      generateToken: () => "hunter2",
-    });
-    await tokenStore.create({ type: "global" }, "hunter2");
-    const clientAuthority = await loadFileClientTokenAuthority(tokenFile);
+    // Credential owners attach one scrub operation to the diagnostics store.
+    // Exercise multiple credential canaries without reviving the removed
+    // LuckyToken Client Auth/token authority.
+    const localCredential = "hunter2";
     const providerSecret = "mydogspot";
-    const scrub = (value: string) => {
-      let redacted = clientAuthority.scrub(value);
-      redacted = redacted.replaceAll(providerSecret, "[REDACTED]");
-      return redacted;
-    };
+    const scrub = (value: string) =>
+      value
+        .replaceAll(localCredential, "[REDACTED]")
+        .replaceAll(providerSecret, "[REDACTED]");
     const store = await createRuntimeDiagnosticsStoreFactory({
       configuration,
       now: () => 1_700_000_000_000,

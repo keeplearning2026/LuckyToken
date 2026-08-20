@@ -247,7 +247,7 @@ describe("History export workflow through the Control Plane (Ticket 23)", () => 
       sensitive: false,
       auditUnavailable: false,
       sources: {
-        requestLedger: { schemaVersion: 2, count: 3 },
+        requestLedger: { schemaVersion: 3, count: 3 },
         diagnostics: { schemaVersion: 1, count: 2 },
         capture: { included: false, reason: "excluded-by-default" },
       },
