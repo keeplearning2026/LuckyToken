@@ -8,10 +8,66 @@ const unavailable = async (): Promise<never> => {
   throw new Error("Fake LuckyToken Desktop API operation is not configured");
 };
 
+type LegacyAliasCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "rename_model" | "restore_model_name";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly modelName?: string;
+    };
+
+interface LegacyAliasResult {
+  readonly outcome: "ok" | "conflict" | "invalid" | "storage_failure";
+  readonly state: {
+    readonly revision: number;
+    readonly catalogVersion: number;
+    readonly effective?: {
+      readonly aliases: readonly {
+        readonly alias: string;
+        readonly target: { readonly provider: string; readonly model: string };
+      }[];
+    };
+  };
+}
+
+type FakeControlOverrides = Partial<DesktopControlPlaneApi> & {
+  readonly executeAliases?: (command: LegacyAliasCommand) => Promise<LegacyAliasResult>;
+};
+
 export function createFakeDesktopApi(options: {
-  readonly control?: Partial<DesktopControlPlaneApi>;
+  readonly control?: FakeControlOverrides;
   readonly platform?: Partial<DesktopPlatformApi>;
 } = {}): LuckyTokenDesktopApi {
+  const { executeAliases, ...controlOverrides } = options.control ?? {};
+  const legacyPublicModels: DesktopControlPlaneApi["executePublicModels"] = async (command) => {
+    if (executeAliases === undefined) return unavailable();
+    const aliasCommand =
+      command.command === "rename_model" || command.command === "restore_model_name"
+        ? command
+        : { command: "query" as const };
+    const aliases = await executeAliases(aliasCommand);
+    const byProvider = new Map<string, Array<{ alias: string; target: string; on: boolean }>>();
+    for (const entry of aliases.state.effective?.aliases ?? []) {
+      const rows = byProvider.get(entry.target.provider) ?? [];
+      rows.push({ alias: entry.alias, target: entry.target.model, on: true });
+      byProvider.set(entry.target.provider, rows);
+    }
+    return {
+      outcome: aliases.outcome === "ok" ? "ok" : "conflict",
+      state: {
+        revision: aliases.state.revision,
+        version: aliases.state.catalogVersion,
+        endpoint: { host: "127.0.0.1", port: 3000 },
+        providers: [...byProvider].map(([providerId, models]) => ({
+          providerId,
+          on: true,
+          models,
+        })),
+      },
+    };
+  };
   const control: DesktopControlPlaneApi = {
     getStatus: unavailable,
     onStatus: () => () => undefined,
@@ -22,7 +78,7 @@ export function createFakeDesktopApi(options: {
     respondAuth: unavailable,
     executeModels: unavailable,
     executeCatalog: unavailable,
-    executeAliases: unavailable,
+    executePublicModels: legacyPublicModels,
     executeCodexIntegration: unavailable,
     getRequestLedger: unavailable,
     onRequestLedger: () => () => undefined,
@@ -36,7 +92,7 @@ export function createFakeDesktopApi(options: {
     executeBackup: unavailable,
     confirmBackup: unavailable,
     getDiagnostics: unavailable,
-    ...options.control,
+    ...controlOverrides,
   };
   const platform: DesktopPlatformApi = {
     getAutoStart: unavailable,

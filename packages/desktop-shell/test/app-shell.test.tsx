@@ -126,7 +126,7 @@ describe("desktop command-router shell", () => {
 
     expect(container.querySelectorAll(".color-nav-button")).toHaveLength(3);
     expect(container.querySelector("h1")?.textContent).toBe("Overview");
-    expect(container.textContent).toContain("http://127.0.0.1:4317");
+    expect(container.textContent).toContain("127.0.0.1:4317");
     expect(container.textContent).toContain("Router running");
     expect(container.textContent).toContain("Active requests");
     expect(container.textContent).toContain("2");
@@ -175,5 +175,142 @@ describe("desktop command-router shell", () => {
       for (const listener of ledgerListeners) listener({ type: "request_ledger", record });
     });
     expect(container.querySelector(".active-request-count")?.textContent).toBe("2");
+  });
+
+  it("edits only the port value and exposes icon-only Codex enable/sync controls with dirty highlighting", async () => {
+    let publicState = {
+      outcome: "ok" as const,
+      state: {
+        revision: 3,
+        version: 8,
+        endpoint: { host: "127.0.0.1", port: 4317 },
+        providers: [],
+      },
+    };
+    let codexState = {
+      desiredEnabled: true,
+      observedState: "managed" as const,
+      codexHome: "C:\\Users\\test\\.codex",
+      configPath: "C:\\Users\\test\\.codex\\config.toml",
+      catalogPath: "C:\\LuckyToken\\model-catalog.json",
+      endpoint: "http://127.0.0.1:4317/v1",
+      warnings: [],
+      restartRequired: false,
+      desiredGeneration: 8,
+      appliedGeneration: 7,
+      needsSync: true,
+    };
+    const executePublicModels = vi.fn(async (command) => {
+      if (command.command === "set_port") {
+        publicState = {
+          ...publicState,
+          state: {
+            ...publicState.state,
+            revision: publicState.state.revision + 1,
+            version: publicState.state.version + 1,
+            endpoint: { ...publicState.state.endpoint, port: command.port },
+          },
+        };
+        codexState = {
+          ...codexState,
+          desiredGeneration: publicState.state.version,
+          needsSync: true,
+        };
+      }
+      return publicState;
+    });
+    const executeCodexIntegration = vi.fn(async (command) => {
+      if (command.command === "sync") {
+        codexState = {
+          ...codexState,
+          appliedGeneration: codexState.desiredGeneration,
+          needsSync: false,
+        };
+      }
+      return { state: codexState };
+    });
+    const api = createFakeDesktopApi({
+      control: {
+        getStatus: async () => runningStatus,
+        onStatus: () => () => undefined,
+        executePublicModels,
+        executeCodexIntegration,
+        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        onRequestLedger: () => () => undefined,
+        getAnalytics: async (query) =>
+          query.command === "options"
+            ? {
+                version: 1,
+                command: "options",
+                providers: [],
+                models: [],
+                protocols: [],
+                projects: [],
+                sessions: [],
+                outcomes: [],
+              }
+            : {
+                version: 1,
+                command: "summary",
+                totals: {
+                  total: 0,
+                  success: 0,
+                  failed: 0,
+                  aborted: 0,
+                  other: 0,
+                  pending: 0,
+                  successRate: 0,
+                  failureRate: 0,
+                  abortRate: 0,
+                  participating: 0,
+                  totalRequests: 0,
+                  excluded: 0,
+                  inputTokens: 0,
+                  cacheReadTokens: 0,
+                  cacheWriteTokens: 0,
+                  outputTokens: 0,
+                  cacheHitNumerator: 0,
+                  cacheHitDenominator: 0,
+                },
+              },
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    const endpoint = container.querySelector('button[aria-label="Edit LuckyToken port"]');
+    expect(endpoint?.textContent).toBe("127.0.0.1:4317");
+    await act(async () => (endpoint as HTMLButtonElement).click());
+    const input = container.querySelector('input[aria-label="LuckyToken port"]');
+    if (!(input instanceof HTMLInputElement)) throw new Error("port editor missing");
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(input, "5000");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(executePublicModels).toHaveBeenCalledWith({
+      command: "set_port",
+      revision: 3,
+      port: 5000,
+    });
+
+    const toggle = container.querySelector('button[aria-label="Disable Codex integration"]');
+    const sync = container.querySelector('button[aria-label="Sync Codex"]');
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(sync).toBeInstanceOf(HTMLButtonElement);
+    expect(sync?.classList.contains("dirty")).toBe(true);
+    expect(toggle?.textContent).toBe("◇");
+    expect(sync?.textContent).toBe("↻");
+
+    await act(async () => {
+      (sync as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(executeCodexIntegration).toHaveBeenCalledWith({ command: "sync" });
+    expect(container.querySelector('button[aria-label="Sync Codex"]')?.classList.contains("dirty")).toBe(false);
   });
 });

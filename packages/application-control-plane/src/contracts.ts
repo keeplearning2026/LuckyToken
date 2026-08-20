@@ -88,8 +88,6 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly credentials?: CredentialProjection;
   /** Optional sanitized catalog lifecycle projection (Ticket 11). */
   readonly catalog?: CatalogStatusProjection;
-  /** Optional sanitized model-aliases.json projection (Ticket 14). */
-  readonly aliases?: AliasStatusProjection;
 }
 
 /** Registered setting: type, default, validation, sensitivity, and apply mode
@@ -358,128 +356,61 @@ export type CatalogCommandHandler = (
 ) => Promise<CatalogCommandResult>;
 
 /**
- * Source layer of an effective alias: `default` is the Catalog-derived
- * generated `provider/model` alias (the lower layer), `user` is an
- * explicit override from the manually editable LuckyToken-owned
- * model-aliases.json (the authority layer, always winning).
+ * LuckyToken's one Public Model runtime projection. The Backend owns this
+ * state; product clients never read or edit public-models.json directly.
+ * Provider `on` is the current total-switch state (saved user switch gated by
+ * effective login). Model `on` is the saved user model switch and remains
+ * independently editable while its Provider is OFF.
  */
-export type AliasLayer = "default" | "user";
-
-/** Distinguished alias validation failure category (Ticket 14):
- *  `invalid` is a malformed alias/target, `ambiguous` is a target that
- *  cannot name one canonical model, `unknown` is a well-formed target absent
- *  from the authoritative catalog snapshot, and `duplicate` is a canonical
- *  target that already has an effective alias. Alias text is opaque and may
- *  contain `/`; it is never interpreted as canonical identity. */
-export type AliasValidationCode =
-  | "invalid"
-  | "ambiguous"
-  | "unknown"
-  | "duplicate";
-
-/** Canonical Provider/model target of one alias. */
-export interface AliasCanonicalTarget {
-  readonly provider: string;
-  readonly model: string;
+export interface PublicModelsEndpointProjection {
+  readonly host: string;
+  readonly port: number;
 }
 
-/** One effective alias in the authoritative registry. */
-export interface EffectiveAliasProjection {
+export interface PublicModelProjection {
   readonly alias: string;
-  readonly target: AliasCanonicalTarget;
-  readonly layer: AliasLayer;
+  readonly target: string;
+  readonly on: boolean;
 }
 
-/** One rejected alias entry with a fixed value-safe message. */
-export interface AliasValidationErrorProjection {
-  readonly alias: string;
-  readonly code: AliasValidationCode;
-  readonly message: string;
+export interface PublicProviderProjection {
+  readonly providerId: string;
+  readonly on: boolean;
+  readonly models: readonly PublicModelProjection[];
 }
 
-/**
- * The authoritative effective alias registry (Provider Activation Spec
- * v1.0 §5.7/§11.5): generated `provider/model` defaults as the lower
- * layer, explicit user overrides as the authority layer, and every
- * rejected entry distinguished by failure category. Never carries
- * credentials or file content.
- */
-export interface EffectiveAliasRegistryProjection {
-  readonly aliases: readonly EffectiveAliasProjection[];
-  readonly errors: readonly AliasValidationErrorProjection[];
-}
-
-/** Value-free failure kinds of the model-aliases.json authority. */
-export type AliasFileErrorKind =
-  | "parse"
-  | "schema"
-  | "validation"
-  | "load"
-  | "storage";
-
-/** Value-free failure of the model-aliases.json authority; `entries` is
- *  present exactly for kind `validation` and carries the per-alias failure
- *  categories (never raw content or guessed repairs). */
-export interface AliasFileError {
-  readonly kind: AliasFileErrorKind;
-  readonly message: string;
-  readonly entries?: readonly AliasValidationErrorProjection[];
-}
-
-/**
- * Full authoritative model-aliases.json state returned by the alias
- * commands. `raw` is the exact current file content (or "" when the file
- * is absent) so manual round-trips stay byte-exact; `aliases` is the
- * parsed user mapping record (valid files only); `effective` is the
- * authoritative merged registry (defaults + user mappings) and is present
- * whenever the file is absent or valid — a broken file contributes no
- * user mappings, never a guessed repair. `catalogVersion` is the Ticket 11
- * catalog snapshot the effective registry was validated against.
- */
-export interface AliasFileState {
+export interface PublicModelsState {
   readonly revision: number;
-  readonly path: string;
-  readonly present: boolean;
-  readonly valid: boolean;
-  readonly raw: string;
-  readonly catalogVersion: number;
-  readonly aliases?: Readonly<Record<string, unknown>>;
-  readonly effective?: EffectiveAliasRegistryProjection;
-  readonly error?: AliasFileError;
+  readonly version: number;
+  readonly endpoint: PublicModelsEndpointProjection;
+  readonly providers: readonly PublicProviderProjection[];
 }
 
-/** Sanitized model-aliases.json projection merged into status snapshots:
- *  revision, location, presence, validity and value-free error only — never
- *  content. */
-export interface AliasStatusProjection {
-  readonly revision: number;
-  readonly path: string;
-  readonly present: boolean;
-  readonly valid: boolean;
-  readonly error?: AliasFileError;
-}
-
-/**
- * Versioned model-name commands backed by the internal alias registry.
- * Product clients rename one canonical model by supplying only the user
- * editable model-name suffix; the Backend always constructs the internal
- * alias as `${providerId}/${modelName}`. The raw `write` command remains an
- * advanced/manual file seam. All mutations are compare-and-swap on the
- * revision the client was served.
- */
-export type AliasCommand =
+export type PublicModelsCommand =
   | { readonly command: "query" }
   | {
-      readonly command: "write";
+      readonly command: "set_port";
       readonly revision: number;
-      readonly aliases: Readonly<Record<string, unknown>>;
+      readonly port: number;
+    }
+  | {
+      readonly command: "set_provider";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly on: boolean;
+    }
+  | {
+      readonly command: "set_model";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly on: boolean;
     }
   | {
       readonly command: "rename_model";
       readonly revision: number;
       readonly providerId: string;
       readonly modelId: string;
-      /** User-visible suffix only. The Backend owns the provider namespace. */
       readonly modelName: string;
     }
   | {
@@ -489,25 +420,21 @@ export type AliasCommand =
       readonly modelId: string;
     };
 
-export type AliasCommandOutcome =
+export type PublicModelsCommandOutcome =
   | "ok"
   | "conflict"
   | "invalid"
+  | "unavailable"
   | "storage_failure";
 
-export interface AliasCommandResult {
-  readonly outcome: AliasCommandOutcome;
-  /** The authoritative state after the attempt (current revision). */
-  readonly state: AliasFileState;
-  /** Value-free failure detail: the rejected proposal's validation errors
-   *  (`invalid`) or the sanitized storage fault (`storage_failure`). */
-  readonly error?: AliasFileError;
+export interface PublicModelsCommandResult {
+  readonly outcome: PublicModelsCommandOutcome;
+  readonly state: PublicModelsState;
 }
 
-/** Handles versioned alias registry commands against the live authority. */
-export type AliasCommandHandler = (
-  command: AliasCommand,
-) => Promise<AliasCommandResult>;
+export type PublicModelsCommandHandler = (
+  command: PublicModelsCommand,
+) => Promise<PublicModelsCommandResult>;
 
 /** Codex integration desired state. While active, the Backend-owned authority
  * controls the three Codex routing keys, the projected model catalog, and the
@@ -530,6 +457,9 @@ export interface CodexIntegrationProjection {
   readonly modelCount?: number;
   readonly warnings: readonly string[];
   readonly restartRequired: boolean;
+  readonly desiredGeneration: number;
+  readonly appliedGeneration?: number;
+  readonly needsSync: boolean;
   readonly message?: string;
 }
 
@@ -1312,7 +1242,9 @@ export interface ControlPlaneClient {
   getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
-  executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult>;
+  executePublicModelsCommand(
+    command: PublicModelsCommand,
+  ): Promise<PublicModelsCommandResult>;
   executeCodexIntegrationCommand(
     command: CodexIntegrationCommand,
   ): Promise<CodexIntegrationCommandResult>;

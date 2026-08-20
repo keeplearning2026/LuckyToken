@@ -17,8 +17,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
-import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
+import {
+  createOnlinePublicModelAuthority,
+  reconcileOnlinePublicModels,
+} from "./public-model-fixture.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -731,34 +733,20 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     "utf8",
   );
   const config = await loadLuckyTokenCliConfig(configPath);
-  // Alias-only data plane (Ticket 15): when the run certifies a built-in
-  // Provider (e.g. opencode-go), a curated/user alias must expose it. The
-  // authority is created before the composition and its catalog facts are
-  // wired once the served catalog exists (alias query happens lazily at
-  // request time).
-  let catalogFacts: AliasCatalogFacts = Object.freeze({
-    catalogVersion: 0,
-    targets: Object.freeze([]),
-    knownTargets: Object.freeze(new Set<string>()),
-  });
-  const aliasAuthority =
+  const aliasTarget = aliasTargetFor(providerId, model);
+  const publicModelAuthority =
     alias === undefined
       ? undefined
-      : createAliasRegistryAuthority({
-          path: join(stateDirectory, "model-aliases.json"),
-          catalogFacts: () => catalogFacts,
+      : await createOnlinePublicModelAuthority({
+          path: join(stateDirectory, "public-models.json"),
+          endpoint: {
+            host: "127.0.0.1",
+            port: config.server.port > 0 ? config.server.port : 3000,
+          },
+          alias,
+          providerId: aliasTarget.provider,
+          modelId: aliasTarget.model,
         });
-  if (alias !== undefined) {
-    await writeFile(
-      join(stateDirectory, "model-aliases.json"),
-      `${JSON.stringify(
-        { aliases: { [alias]: aliasTargetFor(providerId, model) } },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  }
   // Real login first: the composition's served catalog owns the provider
   // registration, so login runs through the served Models and persists into
   // the same store the composition will use for request-time auth.
@@ -793,28 +781,14 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     config,
     credentials,
     fetch: globalThis.fetch,
-    ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+    ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
-  if (alias !== undefined) {
-    const models = composition.catalog.models.getModels();
-    const knownTargets = new Set<string>();
-    for (const candidate of models) {
-      knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
-    }
-    catalogFacts = Object.freeze({
-      catalogVersion: 1,
-      targets: Object.freeze(
-        [...knownTargets].map((key) => {
-          const separator = key.indexOf("\u0000");
-          return {
-            provider: key.slice(0, separator),
-            model: key.slice(separator + 1),
-          };
-        }),
-      ),
-      knownTargets,
-    });
-    await aliasAuthority!.query();
+  if (publicModelAuthority !== undefined) {
+    await reconcileOnlinePublicModels(
+      publicModelAuthority,
+      composition.catalog.models,
+      providerId,
+    );
   }
   const captures: CapturedRequest[] = [];
   let marker = "bootstrap";

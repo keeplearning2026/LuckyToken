@@ -160,14 +160,6 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
-    key: "server.port",
-    type: "number",
-    default: 3000,
-    validation: Object.freeze({ type: "integer", minimum: 1, maximum: 65_535 }),
-    sensitivity: "public",
-    applyMode: "restart-required",
-  }),
-  Object.freeze({
     key: "application.quitDrainTimeoutMs",
     type: "number",
     default: 5000,

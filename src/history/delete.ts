@@ -13,7 +13,7 @@
  * deletes nothing).
  *
  * Deletion only ever calls the three stores' `deleteRange` methods:
- * settings.json, models.json, model-aliases.json, auth.json, Client Token
+ * settings.json, models.json, public-models.json, auth.json, Client Token
  * files, and failure journals are structurally untouched (pinned by tests
  * with byte-compare).
  */

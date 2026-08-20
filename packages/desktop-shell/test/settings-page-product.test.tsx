@@ -43,18 +43,6 @@ async function render(api: ReturnType<typeof createFakeDesktopApi>): Promise<voi
   });
 }
 
-function setInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLInputElement.prototype,
-    "value",
-  )?.set;
-  if (setter === undefined) throw new Error("input value setter missing");
-  act(() => {
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLTextAreaElement.prototype,
@@ -67,19 +55,9 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
   });
 }
 
-const settingsResult = (port = 3000, effective = 3000) => ({
+const settingsResult = () => ({
   outcome: "ok" as const,
   settings: {
-    "server.port": {
-      key: "server.port",
-      type: "number" as const,
-      default: 3000,
-      validation: { min: 1, max: 65535 },
-      sensitivity: "public" as const,
-      applyMode: "restart-required" as const,
-      value: port,
-      effective,
-    },
     "diagnostics.deepCapture.enabled": {
       key: "diagnostics.deepCapture.enabled",
       type: "boolean" as const,
@@ -90,18 +68,6 @@ const settingsResult = (port = 3000, effective = 3000) => ({
       value: false,
     },
   },
-});
-
-const aliasesState = (revision: number) => ({
-  revision,
-  path: "aliases.json",
-  present: true,
-  valid: true,
-  raw: "{}\n",
-  defaultsVersion: 1,
-  catalogVersion: 1,
-  aliases: { fast: { providerId: "example", modelId: "model-a" } },
-  effective: { defaultsVersion: 1, aliases: [], errors: [] },
 });
 
 const modelsState = (revision: number) => ({
@@ -139,54 +105,26 @@ describe("Settings product slice", () => {
     expect(container.textContent).toContain("Starts at sign-in");
   });
 
-  it("uses registered setting semantics and shows restart-required state", async () => {
-    const executeSettings = vi.fn(async (command: SettingsCommand) =>
-      command.command === "query"
-        ? settingsResult()
-        : { ...settingsResult(4000, 3000), outcome: "applied" as const },
-    );
+  it("keeps endpoint port out of Settings because PublicModelAuthority owns it", async () => {
+    const executeSettings = vi.fn(async () => settingsResult());
     await render(createFakeDesktopApi({ control: { executeSettings } }));
-    await click("Network");
 
-    const input = container.querySelector('input[aria-label="Gateway port"]');
-    if (!(input instanceof HTMLInputElement)) throw new Error("Gateway port input missing");
-    setInputValue(input, "4000");
-    await click("Save network");
-    expect(executeSettings).toHaveBeenLastCalledWith({
-      command: "set",
-      key: "server.port",
-      value: 4000,
-    });
-    expect(container.textContent).toContain("Restart required");
+    expect([...container.querySelectorAll("button")].some(
+      (entry) => entry.textContent?.trim() === "Network",
+    )).toBe(false);
+    expect(container.querySelector('input[aria-label="Gateway port"]')).toBeNull();
   });
 
-  it("keeps routing drafts local and preserves alias/model CAS revisions", async () => {
-    const executeAliases = vi
-      .fn()
-      .mockResolvedValueOnce({ outcome: "ok", state: aliasesState(4) })
-      .mockResolvedValueOnce({ outcome: "conflict", state: aliasesState(5) });
+  it("keeps models.json as a startup-only routing draft with no raw Alias editor", async () => {
     const executeModels = vi
       .fn()
       .mockResolvedValueOnce({ outcome: "ok", state: modelsState(7) })
       .mockResolvedValueOnce({ outcome: "ok", state: modelsState(8) });
-    await render(
-      createFakeDesktopApi({ control: { executeAliases, executeModels } }),
-    );
+    await render(createFakeDesktopApi({ control: { executeModels } }));
     await click("Routing");
 
-    const aliasDraft = container.querySelector('textarea[aria-label="Alias mappings"]');
-    if (!(aliasDraft instanceof HTMLTextAreaElement)) throw new Error("Alias draft missing");
-    setTextareaValue(
-      aliasDraft,
-      '{"fast":{"providerId":"example","modelId":"model-b"}}',
-    );
-    await click("Save aliases");
-    expect(executeAliases).toHaveBeenLastCalledWith({
-      command: "write",
-      revision: 4,
-      aliases: { fast: { providerId: "example", modelId: "model-b" } },
-    });
-    expect(container.textContent).toContain("Changed elsewhere");
+    expect(container.querySelector('textarea[aria-label="Alias mappings"]')).toBeNull();
+    expect(container.textContent).toContain("models.json is read when the Backend starts");
 
     const modelDraft = container.querySelector('textarea[aria-label="Raw model configuration"]');
     if (!(modelDraft instanceof HTMLTextAreaElement)) throw new Error("Model draft missing");
@@ -197,6 +135,7 @@ describe("Settings product slice", () => {
       revision: 7,
       content: '{"providers":{}}',
     });
+    expect(container.textContent).toContain("Restart LuckyToken to apply");
   });
 
   it("keeps irreversible data actions behind Backend confirmation gates", async () => {

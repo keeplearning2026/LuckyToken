@@ -186,8 +186,8 @@ export function applyLuckyTokenProviderComposition(
   const newUserProviderIds = new Set(
     Object.keys(dependencies.modelsJson?.providers ?? {}),
   );
-  // Pinned recomposeProvider delete branch: user Providers that are no
-  // longer configured disappear from the runtime catalog.
+  // Composition replacement deletes user Providers omitted by the supplied
+  // startup models.json generation. Production does not call this after startup.
   for (const providerId of dependencies.previousUserProviderIds) {
     if (newUserProviderIds.has(providerId)) continue;
     if (models.getProvider(providerId) !== undefined) {

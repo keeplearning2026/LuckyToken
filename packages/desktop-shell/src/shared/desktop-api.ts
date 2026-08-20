@@ -1,6 +1,4 @@
 import type {
-  AliasCommand,
-  AliasCommandResult,
   AnalyticsOptionsResult,
   AnalyticsQuery,
   AnalyticsResult,
@@ -25,6 +23,8 @@ import type {
   HistoryRange,
   ModelsCommand,
   ModelsCommandResult,
+  PublicModelsCommand,
+  PublicModelsCommandResult,
   RequestLedgerEvent,
   RequestLedgerQuery,
   RequestLedgerQueryResult,
@@ -70,7 +70,7 @@ export interface DesktopControlPlaneApi {
 
   executeModels(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalog(command: CatalogCommand): Promise<CatalogCommandResult>;
-  executeAliases(command: AliasCommand): Promise<AliasCommandResult>;
+  executePublicModels(command: PublicModelsCommand): Promise<PublicModelsCommandResult>;
   executeCodexIntegration(
     command: CodexIntegrationCommand,
   ): Promise<CodexIntegrationCommandResult>;

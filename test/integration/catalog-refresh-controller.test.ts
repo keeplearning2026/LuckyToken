@@ -338,8 +338,6 @@ function createRuntimeHandle(options: {
   const wrapped = createCatalogSnapshotModels(mutable);
   return {
     models: wrapped,
-    recompose: (modelsJson) =>
-      apply(modelsJson?.providers as Record<string, unknown> | undefined),
     capture: () => wrapped.capture(),
   };
 }
@@ -543,19 +541,21 @@ describe("catalog refresh controller", () => {
     });
     await controller.bind(handle);
     const before = controller.snapshot();
-    // Custom Provider dropped; the authority's invalid state is surfaced.
+    // The current file error is surfaced, but the startup-composed Provider
+    // remains part of this Backend lifetime.
     expect(before.modelsJsonValid).toBe(false);
     expect(before.modelsJsonError?.kind).toBe("parse");
-    expect(before.providers.find((p) => p.providerId === "custom-gateway")).toBeUndefined();
-    expect(handle.models.getModels("custom-gateway")).toEqual([]);
+    expect(before.providers.find((p) => p.providerId === "custom-gateway")).toBeDefined();
+    expect(handle.models.getModels("custom-gateway").length).toBe(1);
     // The invalid file was not repaired.
     expect(fixture.files.get(fixture.modelsJsonPath)).toBe("{ not json");
-    // A refresh keeps the same isolated behavior (pinned Pi semantics).
+    // Refresh never recomposes Provider identity.
     await controller.refreshManual();
     const after = controller.snapshot();
-    expect(after.providers.find((p) => p.providerId === "custom-gateway")).toBeUndefined();
+    expect(after.providers.find((p) => p.providerId === "custom-gateway")).toBeDefined();
     expect(fixture.files.get(fixture.modelsJsonPath)).toBe("{ not json");
-    // A later valid file is picked up by refresh: providers come back.
+    // A later valid file updates only management validity; Provider identity
+    // was already fixed at startup.
     writeModelsJson(fixture, {
       "custom-gateway": {
         baseUrl: "https://c.example/v1",
@@ -705,7 +705,7 @@ describe("catalog refresh controller", () => {
     expect((await restarted.read("dynamic-b"))?.models[0]?.id).toBe("mb");
   });
 
-  it("overlays models.json over the base Provider's live dynamic catalog", async () => {
+  it("does not overlay a newly edited models.json during dynamic catalog refresh", async () => {
     const fixture = await createFixture();
     // A refreshModels-bearing base registered like a built-in…
     const base = createControlledProvider("dynamic-a", {
@@ -717,7 +717,7 @@ describe("catalog refresh controller", () => {
       models: [dynamicModelFact("dynamic-a", "cached-model", "https://cached.example/v1")],
       checkedAt: 100,
     });
-    // …and a models.json overlay for the same id (pinned overlay config).
+    // …while models.json is edited after the runtime composition exists.
     writeModelsJson(fixture, {
       "dynamic-a": {
         baseUrl: "https://gateway.example.com/v1",
@@ -732,15 +732,15 @@ describe("catalog refresh controller", () => {
       builtins: [base.provider],
     });
     await controller.bind(handle);
-    // The overlay composes the LIVE base catalog: the restored cached
-    // facts are served together with the models.json model.
+    // Cached runtime facts are served, but the newly edited models.json is
+    // not hot-applied.
     let served = handle.models.getModels("dynamic-a");
     expect(
       served?.some((model) => model.id === "cached-model"),
     ).toBe(true);
     expect(
       served?.some((model) => model.id === "configured-model"),
-    ).toBe(true);
+    ).toBe(false);
     // A request captured its Model object from the served snapshot.
     const captured = handle.models.getModel("dynamic-a", "cached-model");
     const capturedBaseUrl = captured?.baseUrl;

@@ -32,6 +32,15 @@ export function App({ api }: AppProps) {
   const [page, setPage] = useState<ProductPage>("overview");
   const [status, setStatus] = useState<StatusSnapshot>();
   const [runtimePending, setRuntimePending] = useState(false);
+  const [publicModels, setPublicModels] = useState<Awaited<
+    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
+  >>();
+  const [codex, setCodex] = useState<
+    Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeCodexIntegration"]>>["state"]
+  >();
+  const [editingPort, setEditingPort] = useState(false);
+  const [portDraft, setPortDraft] = useState("");
+  const [codexPending, setCodexPending] = useState(false);
   const latestSequence = useRef(-1);
   const activeRequests = useActiveRequests(api);
 
@@ -41,6 +50,18 @@ export function App({ api }: AppProps) {
       if (!active || next.sequence < latestSequence.current) return;
       latestSequence.current = next.sequence;
       setStatus(next);
+      void api.control.executePublicModels({ command: "query" }).then(
+        (result) => {
+          if (active) setPublicModels(result);
+        },
+        () => undefined,
+      );
+      void api.control.executeCodexIntegration({ command: "query" }).then(
+        (result) => {
+          if (active) setCodex(result.state);
+        },
+        () => undefined,
+      );
     };
     const unsubscribe = api.control.onStatus(accept);
     void api.control.getStatus().then(accept, () => undefined);
@@ -65,8 +86,61 @@ export function App({ api }: AppProps) {
     }
   };
 
+  const setPort = async (port: number): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined || !Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+      return;
+    }
+    const result = await api.control.executePublicModels({
+      command: "set_port",
+      revision: state.revision,
+      port,
+    });
+    setPublicModels(result);
+    const codexResult = await api.control
+      .executeCodexIntegration({ command: "query" })
+      .catch(() => undefined);
+    if (codexResult !== undefined) setCodex(codexResult.state);
+  };
+
+  const commitPort = (): void => {
+    const value = Number(portDraft);
+    if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) return;
+    setEditingPort(false);
+    void setPort(value);
+  };
+
+  const toggleCodex = async (): Promise<void> => {
+    if (codexPending) return;
+    setCodexPending(true);
+    try {
+      const result = await api.control.executeCodexIntegration({
+        command: "set_enabled",
+        enabled: !(codex?.desiredEnabled ?? false),
+      });
+      setCodex(result.state);
+    } finally {
+      setCodexPending(false);
+    }
+  };
+
+  const syncCodex = async (): Promise<void> => {
+    if (codexPending || codex?.desiredEnabled !== true) return;
+    setCodexPending(true);
+    try {
+      const result = await api.control.executeCodexIntegration({ command: "sync" });
+      setCodex(result.state);
+    } finally {
+      setCodexPending(false);
+    }
+  };
+
   const action = runtimeAction(status);
   const pageTitle = pages.find((entry) => entry.id === page)?.label ?? page;
+  const endpoint = publicModels?.state.endpoint;
+  const endpointText = endpoint === undefined
+    ? status?.dataPlane?.configuredOrigin?.replace(/^https?:\/\//u, "") ?? "-"
+    : `${endpoint.host}:${endpoint.port}`;
 
   return (
     <div className="product-shell">
@@ -89,9 +163,63 @@ export function App({ api }: AppProps) {
       <header className="product-header">
         <h1>{pageTitle}</h1>
         <div className="runtime-header-status" aria-label="Router status">
-          <span className="runtime-endpoint" title={status?.dataPlane?.configuredOrigin}>
-            {status?.dataPlane?.configuredOrigin ?? "-"}
-          </span>
+          <div className="runtime-endpoint-stack">
+            {editingPort && endpoint !== undefined ? (
+              <div className="runtime-endpoint-editor">
+                <span>{endpoint.host}:</span>
+                <input
+                  aria-label="LuckyToken port"
+                  inputMode="numeric"
+                  value={portDraft}
+                  onChange={(event) => setPortDraft(event.currentTarget.value)}
+                  onBlur={commitPort}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitPort();
+                    if (event.key === "Escape") setEditingPort(false);
+                  }}
+                  autoFocus
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="runtime-endpoint runtime-endpoint-button"
+                aria-label="Edit LuckyToken port"
+                title={endpointText}
+                disabled={endpoint === undefined}
+                onClick={() => {
+                  if (endpoint === undefined) return;
+                  setPortDraft(String(endpoint.port));
+                  setEditingPort(true);
+                }}
+              >
+                {endpointText}
+              </button>
+            )}
+            <div className="codex-icon-row" aria-label="Codex integration controls">
+              <button
+                type="button"
+                className={`icon-button codex-toggle${codex?.desiredEnabled ? " active" : ""}`}
+                aria-label={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
+                aria-pressed={codex?.desiredEnabled ?? false}
+                disabled={codexPending || codex === undefined}
+                onClick={() => void toggleCodex()}
+                title={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
+              >
+                <span aria-hidden="true">◇</span>
+              </button>
+              <button
+                type="button"
+                className={`icon-button codex-sync${codex?.needsSync ? " dirty" : ""}`}
+                aria-label="Sync Codex"
+                disabled={codexPending || codex?.desiredEnabled !== true}
+                onClick={() => void syncCodex()}
+                title="Sync Codex"
+              >
+                <span aria-hidden="true">↻</span>
+              </button>
+            </div>
+          </div>
           <span className="runtime-state">
             <span className={`runtime-status-dot ${status?.modelDataPlane ?? "unavailable"}`} aria-hidden="true" />
             {runtimeLabel(status)}

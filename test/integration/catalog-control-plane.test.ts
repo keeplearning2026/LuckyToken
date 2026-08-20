@@ -225,7 +225,6 @@ async function createCatalogPlane(options?: {
   }
   await controller.bind({
     models: wrapped,
-    recompose: () => undefined,
     capture: () => wrapped.capture(),
   });
   // Settle the non-blocking startup background refresh so the snapshot is

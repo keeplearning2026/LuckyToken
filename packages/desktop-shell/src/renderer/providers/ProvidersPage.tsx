@@ -25,8 +25,8 @@ export interface ProviderModelRow {
   readonly providerId: string;
   readonly modelId: string;
   readonly availability: "available" | "unavailable" | "unknown";
-  readonly modelName?: string;
-  readonly nameLayer?: "default" | "user";
+  readonly modelName: string;
+  readonly on: boolean;
 }
 
 interface AuthModalState {
@@ -53,8 +53,8 @@ function modelNameFromInternalAlias(
 export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [providers, setProviders] = useState<readonly ProviderOption[]>([]);
   const [catalog, setCatalog] = useState<CatalogResult>();
-  const [aliases, setAliases] = useState<Awaited<
-    ReturnType<LuckyTokenDesktopApi["control"]["executeAliases"]>
+  const [publicModels, setPublicModels] = useState<Awaited<
+    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
   >>();
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(false);
@@ -94,8 +94,8 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         setCatalogError(nextCatalog.outcome !== "ok");
       })
       .catch(() => setCatalogError(true));
-    void api.control.executeAliases({ command: "query" }).then(
-      (nextAliases) => setAliases(nextAliases),
+    void api.control.executePublicModels({ command: "query" }).then(
+      (nextPublicModels) => setPublicModels(nextPublicModels),
       () => undefined,
     );
     void Promise.resolve().then(() => setLoading(false));
@@ -124,9 +124,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       .catch(() => {
         if (active) setCatalogError(true);
       });
-    void api.control.executeAliases({ command: "query" }).then(
-      (nextAliases) => {
-        if (active) setAliases(nextAliases);
+    void api.control.executePublicModels({ command: "query" }).then(
+      (nextPublicModels) => {
+        if (active) setPublicModels(nextPublicModels);
       },
       () => undefined,
     );
@@ -159,9 +159,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           if (active) setCatalogError(true);
         },
       );
-      void api.control.executeAliases({ command: "query" }).then(
-        (nextAliases) => {
-          if (active) setAliases(nextAliases);
+      void api.control.executePublicModels({ command: "query" }).then(
+        (nextPublicModels) => {
+          if (active) setPublicModels(nextPublicModels);
         },
         () => undefined,
       );
@@ -183,42 +183,38 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     [catalog],
   );
 
-  const aliasByTarget = useMemo(() => {
-    const map = new Map<
-      string,
-      { readonly alias: string; readonly layer: "default" | "user" }
-    >();
-    for (const entry of aliases?.state.effective?.aliases ?? []) {
-      map.set(`${entry.target.provider}\u0000${entry.target.model}`, {
-        alias: entry.alias,
-        layer: entry.layer,
-      });
-    }
-    return map;
-  }, [aliases]);
+  const publicProviderById = useMemo(
+    () =>
+      new Map(
+        publicModels?.state.providers.map((provider) => [
+          provider.providerId,
+          provider,
+        ]) ?? [],
+      ),
+    [publicModels],
+  );
 
   const modelRows = useMemo(() => {
     const rows: ProviderModelRow[] = [];
-    for (const provider of catalog?.snapshot.providers ?? []) {
+    for (const provider of publicModels?.state.providers ?? []) {
+      const catalogProvider = catalogByProvider.get(provider.providerId);
+      const availabilityByModel = new Map(
+        catalogProvider?.models.map((model) => [model.id, model.availability]) ?? [],
+      );
       for (const model of provider.models) {
-        const current = aliasByTarget.get(
-          `${provider.providerId}\u0000${model.id}`,
-        );
-        const modelName = modelNameFromInternalAlias(
-          provider.providerId,
-          current?.alias,
-        );
+        const modelName = modelNameFromInternalAlias(provider.providerId, model.alias);
+        if (modelName === undefined) continue;
         rows.push({
           providerId: provider.providerId,
-          modelId: model.id,
-          availability: model.availability,
-          ...(modelName === undefined ? {} : { modelName }),
-          ...(current === undefined ? {} : { nameLayer: current.layer }),
+          modelId: model.target,
+          availability: availabilityByModel.get(model.target) ?? "unavailable",
+          modelName,
+          on: model.on,
         });
       }
     }
     return rows;
-  }, [catalog, aliasByTarget]);
+  }, [catalogByProvider, publicModels]);
 
   const applyAuthState = (result: AuthResult): void => {
     const statuses = new Map(
@@ -355,8 +351,8 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setModelNameBusy(true);
     setModelNameError(undefined);
     try {
-      const revision = aliases?.state.revision ?? 0;
-      const result = await api.control.executeAliases({
+      const revision = publicModels?.state.revision ?? 0;
+      const result = await api.control.executePublicModels({
         command: "rename_model",
         revision,
         providerId: row.providerId,
@@ -367,15 +363,15 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         setModelNameError(
           result.outcome === "conflict"
             ? "Model names changed. Refresh and try again."
-            : (result.error?.message ?? "The model name could not be saved."),
+            : "The model name could not be saved.",
         );
         const next = await api.control
-          .executeAliases({ command: "query" })
+          .executePublicModels({ command: "query" })
           .catch(() => undefined);
-        if (next !== undefined) setAliases(next);
+        if (next !== undefined) setPublicModels(next);
         return;
       }
-      setAliases(result);
+      setPublicModels(result);
       setEditingRow(undefined);
       setNotice(`Model name saved for ${row.modelId}.`);
     } catch {
@@ -389,8 +385,8 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setModelNameBusy(true);
     setModelNameError(undefined);
     try {
-      const revision = aliases?.state.revision ?? 0;
-      const result = await api.control.executeAliases({
+      const revision = publicModels?.state.revision ?? 0;
+      const result = await api.control.executePublicModels({
         command: "restore_model_name",
         revision,
         providerId: row.providerId,
@@ -400,11 +396,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         setModelNameError(
           result.outcome === "conflict"
             ? "Model names changed. Refresh and try again."
-            : (result.error?.message ?? "The default model name could not be restored."),
+            : "The default model name could not be restored.",
         );
         return;
       }
-      setAliases(result);
+      setPublicModels(result);
       setEditingRow(undefined);
       setNotice(`Default model name restored for ${row.modelId}.`);
     } catch {
@@ -412,6 +408,37 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     } finally {
       setModelNameBusy(false);
     }
+  };
+
+  const setProviderOn = async (
+    providerId: string,
+    on: boolean,
+  ): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined) return;
+    const result = await api.control.executePublicModels({
+      command: "set_provider",
+      revision: state.revision,
+      providerId,
+      on,
+    });
+    setPublicModels(result);
+    if (result.outcome === "unavailable") {
+      setNotice("Sign in before turning this provider on.");
+    }
+  };
+
+  const setModelOn = async (row: ProviderModelRow, on: boolean): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined) return;
+    const result = await api.control.executePublicModels({
+      command: "set_model",
+      revision: state.revision,
+      providerId: row.providerId,
+      modelId: row.modelId,
+      on,
+    });
+    setPublicModels(result);
   };
 
   if (loading) {
@@ -451,12 +478,15 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
 
   const renderProviderCard = (provider: ProviderOption): React.ReactElement => {
     const availability = catalogByProvider.get(provider.providerId);
+    const publicProvider = publicProviderById.get(provider.providerId);
     const availableModels =
       availability?.models.filter(
         (model) => model.availability === "available",
       ).length ?? 0;
-    const knownModels = availability?.models.length ?? 0;
+    const knownModels = publicProvider?.models.length ?? 0;
+    const enabledModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
     const isConnected = !provider.status.unavailable && !provider.status.expired;
+    const providerOn = publicProvider?.on ?? false;
     const catalogFailed = availability?.state === "failed";
     return (
       <article className="page-card provider-card" key={provider.providerId}>
@@ -465,18 +495,30 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <h3>{provider.name}</h3>
             <p className="provider-source">{SOURCE_LABELS[provider.source]}</p>
           </div>
-          <span className={`badge ${isConnected ? "good" : "warning"}`}>
-            {provider.status.expired
-              ? "Reconnect required"
-              : isConnected
-                ? "Connected"
-                : "Not connected"}
-          </span>
+          <div className="provider-title-actions">
+            <span className={`badge ${isConnected ? "good" : "warning"}`}>
+              {provider.status.expired
+                ? "Reconnect required"
+                : isConnected
+                  ? "Connected"
+                  : "Not connected"}
+            </span>
+            <button
+              type="button"
+              className="runtime-toggle"
+              aria-label={`${providerOn ? "Turn off" : "Turn on"} ${provider.name}`}
+              aria-pressed={providerOn}
+              disabled={publicProvider === undefined || (!providerOn && !isConnected)}
+              onClick={() => void setProviderOn(provider.providerId, !providerOn)}
+            >
+              {providerOn ? "ON" : "OFF"}
+            </button>
+          </div>
         </div>
         <p>
           {knownModels === 0
             ? "Models unavailable"
-            : `${availableModels} of ${knownModels} model${knownModels === 1 ? "" : "s"} available`}
+            : `${enabledModels} enabled · ${availableModels} currently available`}
         </p>
         {catalogFailed ? (
           <p className="error-text">
@@ -759,6 +801,15 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                       <span className={`badge ${row.availability === "available" ? "good" : "neutral"}`}>
                         {row.availability}
                       </span>
+                      <button
+                        type="button"
+                        className="runtime-toggle"
+                        aria-label={`${row.on ? "Turn off" : "Turn on"} ${row.modelName}`}
+                        aria-pressed={row.on}
+                        onClick={() => void setModelOn(row, !row.on)}
+                      >
+                        {row.on ? "ON" : "OFF"}
+                      </button>
                       {editing ? (
                         <form
                           className="model-name-editor"
@@ -794,16 +845,14 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                             >
                               Cancel
                             </button>
-                            {row.nameLayer === "user" ? (
-                              <button
-                                type="button"
-                                className="secondary"
-                                disabled={modelNameBusy}
-                                onClick={() => void restoreModelName(row)}
-                              >
-                                Restore default
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={modelNameBusy}
+                              onClick={() => void restoreModelName(row)}
+                            >
+                              Restore default
+                            </button>
                           </div>
                         </form>
                       ) : (

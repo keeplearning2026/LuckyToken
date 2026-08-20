@@ -1,9 +1,6 @@
 import {
   assertControlPlaneEndpoint,
   controlPlaneVersion,
-  type AliasCommandHandler,
-  type AliasCommandResult,
-  type AliasStatusProjection,
   type ApplicationCommandHandler,
   type ApplicationCommandResult,
   type ApplicationCommandResultDeliveredHandler,
@@ -18,6 +15,8 @@ import {
   type ControlPlaneEndpoint,
   type ModelsCommandHandler,
   type ModelsProjection,
+  type PublicModelsCommandHandler,
+  type PublicModelsCommandResult,
   type RunningControlPlane,
   type RuntimeCommandExecution,
   type RuntimeCommandHandler,
@@ -72,7 +71,6 @@ import { decodeAnalyticsResult } from "./wire-analytics.js";
 import type { AnalyticsQueryHandler } from "./analytics-contract.js";
 import {
   compatibleHello,
-  decodeAliasCommandResult,
   decodeApplicationCommandExecution,
   decodeApplicationStatus,
   decodeAuthCommandResult,
@@ -81,6 +79,7 @@ import {
   decodeClientRequest,
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
+  decodePublicModelsCommandResult,
   decodeRequestIdentityRecord,
   decodeRuntimeCommandExecution,
   decodeSettingsCommandResult,
@@ -132,10 +131,9 @@ export interface StartControlPlaneOptions {
    * catalog snapshot.
    */
   readonly catalogCommandHandler?: CatalogCommandHandler;
-  /** Optional alias registry command handler (Ticket 14): serves the
-   *  versioned alias commands against the live model-aliases.json
-   *  authority. */
-  readonly aliasCommandHandler?: AliasCommandHandler;
+  /** The one live Public Model command seam used by desktop/CLI product
+   * clients. The backing JSON file is never a Control Plane surface. */
+  readonly publicModelsCommandHandler?: PublicModelsCommandHandler;
   /** Optional local Codex config/catalog integration. This controls only
    *  external Codex artifacts; native Codex request support remains in the
    *  Data Plane regardless of this handler. */
@@ -150,9 +148,6 @@ export interface StartControlPlaneOptions {
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
-  /** Live sanitized model-aliases.json projection merged into every
-   *  published snapshot (Ticket 14). */
-  readonly aliasesProjection?: () => AliasStatusProjection;
   /**
    * Explicit diagnostics ownership (Ticket 07): when present, the Control
    * Plane serves bounded diagnostics queries and typed diagnostic events to
@@ -274,7 +269,6 @@ export async function startApplicationStatusHost(
     const modelsProjection = options.modelsProjection?.();
     const credentialProjection = options.credentialProjection?.();
     const catalogProjection = options.catalogProjection?.();
-    const aliasesProjection = options.aliasesProjection?.();
     const persistenceProjection = options.persistenceProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
     const attentionProjection = options.attentionProjection?.(status);
@@ -293,9 +287,6 @@ export async function startApplicationStatusHost(
       ...(catalogProjection === undefined
         ? {}
         : { catalog: catalogProjection }),
-      ...(aliasesProjection === undefined
-        ? {}
-        : { aliases: aliasesProjection }),
       ...(persistenceProjection === undefined
         ? {}
         : { persistence: persistenceProjection }),
@@ -1093,8 +1084,8 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             result,
           });
-        } else if (request.type === "alias_command") {
-          if (options.aliasCommandHandler === undefined) {
+        } else if (request.type === "public_models_command") {
+          if (options.publicModelsCommandHandler === undefined) {
             await writeFrame(state.connection, {
               type: "error",
               requestId: request.requestId,
@@ -1102,13 +1093,9 @@ export async function startApplicationStatusHost(
             });
             continue;
           }
-          // An alias command publishes only when it changed the
-          // authoritative revision (external edits discovered by a query or
-          // a successful write); read-only queries never broadcast.
-          const aliasesBefore = options.aliasesProjection?.();
-          let handled: AliasCommandResult;
+          let handled: PublicModelsCommandResult;
           try {
-            handled = await options.aliasCommandHandler(request.command);
+            handled = await options.publicModelsCommandHandler(request.command);
           } catch {
             await writeFrame(state.connection, {
               type: "error",
@@ -1117,7 +1104,7 @@ export async function startApplicationStatusHost(
             });
             continue;
           }
-          const result = decodeAliasCommandResult(handled);
+          const result = decodePublicModelsCommandResult(handled);
           if (result === undefined) {
             await writeFrame(state.connection, {
               type: "error",
@@ -1126,11 +1113,7 @@ export async function startApplicationStatusHost(
             });
             continue;
           }
-          if (
-            handled.outcome === "ok" &&
-            aliasesBefore !== undefined &&
-            result.state.revision !== aliasesBefore.revision
-          ) {
+          if (handled.outcome === "ok" && request.command.command !== "query") {
             await publishStatus({
               modelDataPlane: current.modelDataPlane,
               provider: current.provider,
@@ -1140,7 +1123,7 @@ export async function startApplicationStatusHost(
             });
           }
           await writeFrame(state.connection, {
-            type: "alias_command_result",
+            type: "public_models_command_result",
             requestId: request.requestId,
             result,
           });

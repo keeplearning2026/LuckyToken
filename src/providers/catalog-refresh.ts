@@ -20,7 +20,6 @@ import type {
 import type { ModelsJsonAuthority } from "../models-config/authority.js";
 import type { RuntimeDiagnosticsStore } from "../runtime-diagnostics/index.js";
 import type { CatalogCacheStore } from "./catalog-cache.js";
-import type { ModelsJsonConfig } from "./models-json.js";
 
 /**
  * Ticket 11 catalog refresh controller — the single owner of the refresh
@@ -34,12 +33,9 @@ import type { ModelsJsonConfig } from "./models-json.js";
  *   catalog from the validated LuckyToken-owned cache first; the startup
  *   bind restores the cache and only then schedules the background network
  *   refresh;
- * - rebuild-on-refresh: every run re-reads the authoritative models.json
- *   through the authority and recomposes the runtime providers (pinned
- *   `ModelConfig.load` + `rebuildProviders`) — an invalid models.json keeps
- *   compatible built-ins, drops affected custom Providers, is never
- *   silently repaired, and its value-free error is aggregated into the
- *   snapshot;
+ * - startup-only models.json: Provider composition is fixed for the Backend
+ *   lifetime. Refresh may re-read models.json only to report current file
+ *   validity; it never applies file changes to the running Provider set;
  * - per-Provider isolation: `Models.refresh` restores/publishes per
  *   Provider, so a failed Provider keeps its cached/built-in facts while
  *   unaffected Providers refresh; failures become value-safe warnings (no
@@ -55,17 +51,11 @@ import type { ModelsJsonConfig } from "./models-json.js";
 
 export interface CatalogRuntimeHandle {
   /** The served Models facade; `getModels`/`getModel` read the captured
-   *  active snapshot (one authoritative catalog). */
+   * active snapshot. Provider composition is fixed for the Backend lifetime. */
   readonly models: Models;
-  /**
-   * Re-apply the built-in + models.json provider composition over the Pi
-   * built-in base (pinned rebuildProviders). `undefined` means no user
-   * providers; external Provider Packages are never touched.
-   */
-  readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
-  /** Atomically capture the current runtime catalog as the served
-   *  snapshot. New requests only — captured Model objects are never
-   *  mutated. */
+  /** Atomically capture the current runtime catalog as the served snapshot.
+   * Dynamic Provider catalog refresh may change model facts; models.json never
+   * changes the Provider set after startup. */
   readonly capture: () => void;
 }
 
@@ -108,7 +98,7 @@ export interface CatalogRefreshController {
   /** Serialized, forced manual refresh; resolves with bounded per-Provider
    *  results. */
   refreshManual(signal?: AbortSignal): Promise<CatalogRefreshReportProjection>;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 const VALUE_SAFE_FAILURE_TEMPLATE =
@@ -275,14 +265,9 @@ export function createCatalogRefreshController(
       modelsState.present && !modelsState.valid
         ? modelsState.error
         : undefined;
-    // Pinned rebuild-on-refresh: compose the CURRENT authoritative
-    // models.json facts over the built-in base (an invalid file keeps
-    // compatible built-ins and drops affected custom Providers).
-    runtime.recompose(
-      modelsState.present && modelsState.valid
-        ? ({ providers: modelsState.providers } as ModelsJsonConfig)
-        : undefined,
-    );
+    // models.json is startup-only. Refresh may report the current file's
+    // validity for management UI, but it never mutates this Backend's fixed
+    // Provider composition.
     const inScopeProviders = (runtime.models.getProviders() ?? []).filter(
       (provider) =>
         provider.refreshModels !== undefined &&
@@ -606,9 +591,11 @@ export function createCatalogRefreshController(
       runQueue = run.catch(() => undefined);
       return run;
     },
-    dispose(): void {
+    async dispose(): Promise<void> {
       disposed = true;
+      pendingBackground = undefined;
       activeController?.abort();
+      await runQueue.catch(() => undefined);
       runtime = undefined;
     },
   });

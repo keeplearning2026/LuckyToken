@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import type { PublicModelSource } from "../../src/public-model-seam.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
@@ -63,8 +63,8 @@ export interface CommandCodeServingTestOptions {
   /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
    *  uses its no-op authority. */
   deepCapture?: DeepCaptureAuthority;
-  /** Ticket 15 alias-only data plane seam (handler-level test stub). */
-  aliasSource?: AliasModelSource;
+  /** Public Model data-plane seam (handler-level test stub). */
+  publicModels?: PublicModelSource;
   /** Ticket 20 usage-semantics resolver; defaults to the real Provider
    *  integration declaration table, mirroring the production composition. */
   resolveUsageSemantics?: UsageSemanticsResolver;
@@ -174,9 +174,9 @@ export function createCommandCodeServingTestComposition(
     ...(options.deepCapture === undefined
       ? {}
       : { deepCapture: options.deepCapture }),
-    ...(options.aliasSource === undefined
+    ...(options.publicModels === undefined
       ? {}
-      : { aliasSource: options.aliasSource }),
+      : { publicModels: options.publicModels }),
     ...(options.resolveUsageSemantics === undefined
       ? { executeOperation: createExecutionOperation(resolveUsageSemantics) }
       : {

@@ -15,7 +15,7 @@ import {
   type ControlPlaneEndpoint,
   type RunningControlPlane,
 } from "@luckytoken/application-control-plane/control-plane";
-import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import type { PublicModelSource } from "../../src/public-model-seam.js";
 import { HttpRequestAbortedError } from "../../src/http.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
@@ -145,7 +145,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       fetch?: FetchFunction;
       now?: () => number;
       store?: RequestLedgerStore;
-      aliasSource?: AliasModelSource;
+      publicModels?: PublicModelSource;
       sessionId?: () => string;
       maxRequestBytes?: number;
       invocationDiagnostics?: InvocationDiagnosticsFactory;
@@ -168,9 +168,9 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
         ? {}
         : { maxRequestBytes: options.maxRequestBytes }),
       requestLedger: store,
-      ...(options.aliasSource === undefined
+      ...(options.publicModels === undefined
         ? {}
-        : { aliasSource: options.aliasSource }),
+        : { publicModels: options.publicModels }),
       ...(options.invocationDiagnostics === undefined
         ? {}
         : { invocationDiagnostics: options.invocationDiagnostics }),
@@ -306,7 +306,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
   });
 
   it("classifies unknown and unavailable aliases into their terminal outcomes", async () => {
-    const unknownSource: AliasModelSource = {
+    const unknownSource: PublicModelSource = {
       requestSnapshot: async () =>
         snapshotResolving({
           "known-alias": {
@@ -316,7 +316,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
         }),
     };
     const { runtime: unknownRuntime, store: unknownStore } =
-      await createLedgerHttpFixture({ aliasSource: unknownSource });
+      await createLedgerHttpFixture({ publicModels: unknownSource });
     const unknown = await unknownRuntime.handle(
       requestBody({
         model: "missing-alias",
@@ -337,7 +337,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
     expect(unknownRows.records[0]!.providerId).toBeUndefined();
     expect(unknownRows.records[0]!.realModelId).toBeUndefined();
 
-    const unavailableSource: AliasModelSource = {
+    const unavailableSource: PublicModelSource = {
       requestSnapshot: async () =>
         snapshotResolving({
           "known-alias": {
@@ -347,7 +347,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
         }),
     };
     const { runtime, store } = await createLedgerHttpFixture({
-      aliasSource: unavailableSource,
+      publicModels: unavailableSource,
     });
     const unavailable = await runtime.handle(
       requestBody({ model: "known-alias", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }),
@@ -958,11 +958,10 @@ function snapshotResolving(
 ) {
   return {
     version: 1,
-    catalogVersion: 1,
-    fileRevision: 1,
+    endpoint: { host: "127.0.0.1", port: 3000 },
+    providers: [],
     resolve: (alias: string) => mappings[alias],
-    entries: () =>
-      Object.entries(mappings).map(([alias, target]) => ({ alias, target })),
+    publishedModels: () => [],
   };
 }
 

@@ -1,5 +1,5 @@
 import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
-import type { AliasModelSource } from "../../src/alias-model-seam.js";
+import type { PublicModelSource } from "../../src/public-model-seam.js";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 
@@ -29,7 +29,7 @@ function model(provider: string, id: string, api = "fixture-api"): Model<string>
   };
 }
 
-function aliasSource(alias: string, target: Model<string>): AliasModelSource {
+function publicModelSource(alias: string, target: Model<string>): PublicModelSource {
   return {
     requestSnapshot: async () =>
       ({
@@ -133,7 +133,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     };
     const handler = createOpenAIResponsesCompactHandler({
       models,
-      aliasSource: aliasSource("my-alias", target),
+      publicModels: publicModelSource("my-alias", target),
       providerNativeLane: provider,
       stateFile: "unused-compact-alias-success.json",
       maxRequestBytes: 1024,
@@ -237,7 +237,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     };
     const handler = createOpenAIResponsesCompactHandler({
       models,
-      aliasSource: aliasSource("my-alias", target),
+      publicModels: publicModelSource("my-alias", target),
       providerNativeLane: provider,
       stateFile: "unused-compact-alias-error.json",
       maxRequestBytes: 1024,

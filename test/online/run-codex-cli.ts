@@ -57,8 +57,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
-import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
+import {
+  createOnlinePublicModelAuthority,
+  reconcileOnlinePublicModels,
+} from "./public-model-fixture.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -1330,56 +1332,33 @@ export async function runCodexCliOnlineSuite(
     throw new Error(`Provider login did not persist a credential for ${providerId}`);
   }
   console.error("[codex-suite] credentials ready");
-  let catalogFacts: AliasCatalogFacts = Object.freeze({
-    catalogVersion: 0,
-    targets: Object.freeze([]),
-    knownTargets: Object.freeze(new Set<string>()),
-  });
-  const aliasAuthority =
+  const aliasTarget = aliasTargetFor(providerId, model);
+  const publicModelAuthority =
     alias === undefined
       ? undefined
-      : createAliasRegistryAuthority({
-          path: join(stateDirectory, "model-aliases.json"),
-          catalogFacts: () => catalogFacts,
+      : await createOnlinePublicModelAuthority({
+          path: join(stateDirectory, "public-models.json"),
+          endpoint: {
+            host: "127.0.0.1",
+            port: config.server.port > 0 ? config.server.port : 3000,
+          },
+          alias,
+          providerId: aliasTarget.provider,
+          modelId: aliasTarget.model,
         });
-  if (alias !== undefined) {
-    await writeFile(
-      join(stateDirectory, "model-aliases.json"),
-      `${JSON.stringify(
-        { aliases: { [alias]: aliasTargetFor(providerId, model) } },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  }
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
   const composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     fetch: upstreamLogger.fetch,
-    ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+    ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
-  if (alias !== undefined) {
-    const models = composition.catalog.models.getModels();
-    const knownTargets = new Set<string>();
-    for (const candidate of models) {
-      knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
-    }
-    catalogFacts = Object.freeze({
-      catalogVersion: 1,
-      targets: Object.freeze(
-        [...knownTargets].map((key) => {
-          const separator = key.indexOf("\u0000");
-          return {
-            provider: key.slice(0, separator),
-            model: key.slice(separator + 1),
-          };
-        }),
-      ),
-      knownTargets,
-    });
-    await aliasAuthority!.query();
+  if (publicModelAuthority !== undefined) {
+    await reconcileOnlinePublicModels(
+      publicModelAuthority,
+      composition.catalog.models,
+      providerId,
+    );
   }
   console.error("[codex-suite] composition ready");
   // Capture every real Codex request for later reuse as golden samples.

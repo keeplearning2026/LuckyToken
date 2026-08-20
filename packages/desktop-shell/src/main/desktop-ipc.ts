@@ -1,5 +1,4 @@
 import type {
-  AliasCommand,
   AnalyticsQuery,
   AuthCommand,
   AuthInteractionResponse,
@@ -11,6 +10,7 @@ import type {
   HistoryExportCommand,
   HistoryRange,
   ModelsCommand,
+  PublicModelsCommand,
   RequestLedgerQuery,
   RuntimeCommand,
   RuntimeDiagnosticQuery,
@@ -99,8 +99,8 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.catalog, (_event, ...args) =>
     session.client().executeCatalogCommand(first<CatalogCommand>(args)),
   );
-  register(desktopIpcChannels.aliases, (_event, ...args) =>
-    session.client().executeAliasCommand(first<AliasCommand>(args)),
+  register(desktopIpcChannels.publicModels, (_event, ...args) =>
+    session.client().executePublicModelsCommand(first<PublicModelsCommand>(args)),
   );
   register(desktopIpcChannels.codex, (_event, ...args) =>
     session.client().executeCodexIntegrationCommand(first<CodexIntegrationCommand>(args)),

@@ -31,8 +31,6 @@ import type {
 import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
 import {
   assertControlPlaneEndpoint,
-  type AliasCommand,
-  type AliasCommandResult,
   type ApplicationCommand,
   type ApplicationCommandResult,
   type AuthCommand,
@@ -51,6 +49,8 @@ import {
   type HelloResult,
   type ModelsCommand,
   type ModelsCommandResult,
+  type PublicModelsCommand,
+  type PublicModelsCommandResult,
   type RequestIdentitiesQueryResult,
   type RuntimeCommand,
   type RuntimeCommandResult,
@@ -62,11 +62,11 @@ import {
 import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
-  decodeAliasCommandResult,
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeCodexIntegrationCommandResult,
   decodeCredentialCommandResult,
+  decodePublicModelsCommandResult,
   decodeRequestId,
   decodeServerMessage,
   type RecordValue,
@@ -491,17 +491,17 @@ export async function connectApplicationControlPlane(
       }
       return result;
     },
-    async executeAliasCommand(command: AliasCommand): Promise<AliasCommandResult> {
+    async executePublicModelsCommand(
+      command: PublicModelsCommand,
+    ): Promise<PublicModelsCommandResult> {
       const response = await request({
-        type: "alias_command",
+        type: "public_models_command",
         command,
       });
-      if (response.type !== "alias_command_result") {
+      if (response.type !== "public_models_command_result") {
         throw new Error("Control Plane response is malformed");
       }
-      // Strictly validate the state crossing the pipe: the alias registry
-      // must never carry malformed or unexpected state.
-      const result = decodeAliasCommandResult(response.result);
+      const result = decodePublicModelsCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

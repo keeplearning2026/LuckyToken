@@ -45,9 +45,9 @@ import {
   ModelResolutionFailure,
 } from "../../model-resolution.js";
 import {
-  resolveDataPlaneModel,
-  type AliasModelSource,
-} from "../../alias-model-seam.js";
+  resolveDataPlanePublicModel,
+  type PublicModelSource,
+} from "../../public-model-seam.js";
 import {
   composeOptions,
   identityRequestModelResolver,
@@ -109,15 +109,9 @@ export interface AnthropicMessagesHandlerOptions {
   readonly passthroughFetch?: FetchFunction;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
-  /**
-   * Ticket 15 alias-only model data plane: when wired, only configured
-   * aliases are valid selectors, converted and passthrough responses echo
-   * the requested alias, and the request captures one immutable resolver
-   * snapshot at acceptance. Without it the legacy provider/model selector
-   * contract applies (handler-level test seam); the composition root
-   * always wires the real authority in production.
-   */
-  readonly aliasSource?: AliasModelSource;
+  /** Backend-lifetime Public Model source. When absent, direct handler tests
+   * use the canonical provider/model selector seam. */
+  readonly publicModels?: PublicModelSource;
   /**
    * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
    * handler-local entry at acceptance, drives the lifecycle transitions,
@@ -166,7 +160,7 @@ interface AnthropicMessagesDependencies {
   readonly passthroughFetch: FetchFunction;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
-  readonly aliasSource: AliasModelSource | undefined;
+  readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
@@ -354,13 +348,9 @@ async function handleAnthropicMessages(
     assertImplementedAnthropicProfile(sourceProfile);
     const selector = extractAnthropicModelSelector(body);
     diagnostics.checkpoint({ stage: "model-resolution", selector });
-    // Ticket 15: the request captures one immutable alias snapshot at
-    // acceptance; the resolved canonical target reaches the standard Pi
-    // Provider invocation path. Bare ids and canonical selectors are never
-    // valid aliases.
-    const resolution = await resolveDataPlaneModel(
+    const resolution = await resolveDataPlanePublicModel(
       dependencies.models,
-      dependencies.aliasSource,
+      dependencies.publicModels,
       selector,
     );
     if (resolution.kind === "unknown") {
@@ -396,7 +386,7 @@ async function handleAnthropicMessages(
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
-      dependencies.aliasSource === undefined ? undefined : resolution.alias;
+      dependencies.publicModels === undefined ? undefined : resolution.alias;
     if (isAnthropicNativePassthroughModel(model)) {
       return passthroughBranch(
         dependencies,
@@ -870,7 +860,7 @@ export function createAnthropicMessagesHandler(
     passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
-    aliasSource: options.aliasSource,
+    publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,

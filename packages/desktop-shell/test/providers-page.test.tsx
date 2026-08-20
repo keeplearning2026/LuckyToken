@@ -122,6 +122,26 @@ const catalogQuery = () =>
     },
   ]);
 
+const publicModelsState = (overrides: Record<string, unknown> = {}) => ({
+  outcome: "ok" as const,
+  state: {
+    revision: 0,
+    version: 1,
+    endpoint: { host: "127.0.0.1", port: 3000 },
+    providers: [
+      {
+        providerId: "example",
+        on: true,
+        models: [
+          { alias: "example/model-a", target: "model-a", on: true },
+          { alias: "example/flash", target: "model-b", on: false },
+        ],
+      },
+    ],
+  },
+  ...overrides,
+});
+
 const aliasState = (overrides: Record<string, unknown> = {}) => ({
   outcome: "ok" as const,
   state: {
@@ -567,45 +587,83 @@ describe("Providers product slice", () => {
     expect(container.textContent).toContain("model-b");
   });
 
-  it("does not guess a model name from canonical modelId while the Alias projection is unavailable", async () => {
-    const providerId = "commandcode-private";
-    const modelId = "deepseek/deepseek-v4-flash";
-    await render(
-      createFakeDesktopApi({
-        control: {
-          executeAuth: async () =>
-            authQueryMulti([
-              {
-                providerId,
-                name: "CommandCode Private",
-                source: "luckytoken_bundled",
-                stored: true,
-                effectiveSource: "stored",
-              },
-            ]),
-          executeCatalog: async () =>
-            catalogQueryFor([
-              {
-                providerId,
-                name: "CommandCode Private",
-                models: [
-                  { id: modelId, dynamic: true, availability: "available" as const },
-                ],
-              },
-            ]),
-          executeAliases: () => new Promise(() => undefined),
-        },
-      }),
-    );
+  it("keeps Provider and model switches independent while the Provider is OFF", async () => {
+    let state = publicModelsState({
+      state: {
+        ...publicModelsState().state,
+        providers: [
+          {
+            providerId: "example",
+            on: false,
+            models: [
+              { alias: "example/model-a", target: "model-a", on: true },
+              { alias: "example/flash", target: "model-b", on: false },
+            ],
+          },
+        ],
+      },
+    });
+    const executePublicModels = vi.fn(async (command) => {
+      if (command.command === "set_provider") {
+        state = {
+          ...state,
+          state: {
+            ...state.state,
+            revision: state.state.revision + 1,
+            providers: state.state.providers.map((provider) =>
+              provider.providerId === command.providerId
+                ? { ...provider, on: command.on }
+                : provider,
+            ),
+          },
+        };
+      }
+      if (command.command === "set_model") {
+        state = {
+          ...state,
+          state: {
+            ...state.state,
+            revision: state.state.revision + 1,
+            providers: state.state.providers.map((provider) => ({
+              ...provider,
+              models: provider.models.map((model) =>
+                model.target === command.modelId ? { ...model, on: command.on } : model,
+              ),
+            })),
+          },
+        };
+      }
+      return state;
+    });
+    await render(createFakeDesktopApi({ control: {
+      executeAuth: async () => authQuery(),
+      executeCatalog: async () => catalogQuery(),
+      executePublicModels,
+    } }));
 
-    await click("Models 1");
-    expect(container.textContent).toContain("Model name unavailable");
-    expect(container.textContent).toContain(`Original model: ${modelId}`);
-    const rename = [...container.querySelectorAll("button")].find(
-      (entry) => entry.textContent?.trim() === "Rename",
-    );
-    expect(rename).toBeInstanceOf(HTMLButtonElement);
-    expect((rename as HTMLButtonElement).disabled).toBe(true);
+    const turnOnProvider = container.querySelector('button[aria-label="Turn on Example AI"]');
+    expect(turnOnProvider).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => (turnOnProvider as HTMLButtonElement).click());
+    expect(executePublicModels).toHaveBeenCalledWith({
+      command: "set_provider",
+      revision: 0,
+      providerId: "example",
+      on: true,
+    });
+
+    const turnOffProvider = container.querySelector('button[aria-label="Turn off Example AI"]');
+    await act(async () => (turnOffProvider as HTMLButtonElement).click());
+    await click("Models 2");
+    const modelSwitch = container.querySelector('button[aria-label="Turn off model-a"]');
+    expect(modelSwitch).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => (modelSwitch as HTMLButtonElement).click());
+    expect(executePublicModels).toHaveBeenLastCalledWith({
+      command: "set_model",
+      revision: 2,
+      providerId: "example",
+      modelId: "model-a",
+      on: false,
+    });
   });
 
   it("keeps slash-containing canonical model IDs as secondary identity while editing the normalized model name", async () => {
@@ -727,7 +785,7 @@ describe("Providers product slice", () => {
     expect(container.textContent).toContain("Example AI");
     expect(container.textContent).toContain("Connected");
     expect(container.textContent).toContain("Model catalog unavailable");
-    expect(container.textContent).toContain("Models unavailable");
+    expect(container.textContent).toContain("Models 2");
   });
 
   it("re-queries Catalog on authoritative catalog-version change", async () => {
@@ -770,7 +828,7 @@ describe("Providers product slice", () => {
         },
       }),
     );
-    expect(container.textContent).toContain("Models 1");
+    expect(container.textContent).toContain("Models 2");
     await act(async () => {
       version = 2;
       statusListener?.({

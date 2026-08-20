@@ -42,13 +42,13 @@ export function configuredBackupFiles(
       parseJson: (text: string) => JSON.parse(stripJsonComments(text)),
     },
     {
-      id: "model-aliases",
-      path: join(dirname(config.pi.modelsJson), "model-aliases.json"),
-      contract: "luckytoken-model-aliases",
+      id: "public-models",
+      path: join(dirname(config.pi.modelsJson), "public-models.json"),
+      contract: "luckytoken-public-models",
       version: 1,
       category: "configuration",
       optional: true,
-      parseJson: (text: string) => JSON.parse(stripJsonComments(text)),
+      parseJson: (text: string) => JSON.parse(text),
     },
     {
       id: "settings",

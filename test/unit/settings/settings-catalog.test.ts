@@ -24,7 +24,6 @@ describe("authoritative registered settings catalog", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
-      "server.port",
       "application.quitDrainTimeoutMs",
     ]);
 
@@ -38,18 +37,6 @@ describe("authoritative registered settings catalog", () => {
       value: true,
     });
     expect(anthropic?.validation).toBeDefined();
-
-    const port = byKey.get("server.port");
-    expect(port).toMatchObject({
-      key: "server.port",
-      type: "number",
-      default: 3000,
-      sensitivity: "public",
-      applyMode: "restart-required",
-      value: 3000,
-      effective: 3000,
-    });
-    expect(port?.validation).toBeDefined();
 
     const drainTimeout = byKey.get("application.quitDrainTimeoutMs");
     expect(drainTimeout).toMatchObject({
@@ -96,21 +83,13 @@ describe("authoritative registered settings catalog", () => {
 
   it("validates values and rejects values outside the declared validation", () => {
     const registry = createSettingsRegistry(emptyStore());
-    const port = registry.catalog().find((setting) => setting.key === "server.port");
-    const portValidation = port?.validation as {
-      readonly minimum: number;
-      readonly maximum: number;
-      readonly type: string;
-    };
-    expect(portValidation).toEqual({ type: "integer", minimum: 1, maximum: 65_535 });
-
-    expect(registry.validate("server.port", 0)).toMatchObject({
+    expect(registry.validate("server.port", 3000)).toMatchObject({
       valid: false,
+      error: "server.port is not a registered setting",
     });
-    expect(registry.validate("server.port", 65_536)).toMatchObject({
-      valid: false,
+    expect(registry.validate("application.quitDrainTimeoutMs", 99_999)).toMatchObject({
+      valid: true,
     });
-    expect(registry.validate("server.port", 3000)).toMatchObject({ valid: true });
     expect(registry.validate("protocols.anthropic-messages.enabled", true)).toMatchObject({
       valid: true,
     });

@@ -11,7 +11,7 @@
  * - external user Provider Package loading;
  * - the one Pi-compatible credential store and the Live Credential
  *   Authority over it;
- * - the catalog runtime handle (`models`, `recompose`, `capture`);
+ * - the catalog runtime handle (`models`, `capture`);
  * - Provider source classification (`pi_builtin` / `luckytoken_bundled` /
  *   `user`).
  *
@@ -44,10 +44,7 @@ import {
   bundledProviderPackages,
   bundledProviderSpecifiers,
 } from "./bundled.js";
-import {
-  applyLuckyTokenProviderComposition,
-  registerLuckyTokenProviders,
-} from "./catalog.js";
+import { registerLuckyTokenProviders } from "./catalog.js";
 import {
   createCatalogSnapshotModels,
   type CatalogRuntimeHandle,
@@ -58,7 +55,7 @@ import {
   type ConfigValueResolver,
   type EnvSource,
 } from "./config-value.js";
-import { loadModelsJson, type ModelsJsonConfig } from "./models-json.js";
+import { loadModelsJson } from "./models-json.js";
 import {
   loadProviderPackages,
   type ImportProviderModule,
@@ -228,18 +225,12 @@ export async function createProviderRuntime(
     ...bundledLoaded.providerIds,
     ...userLoaded.providerIds,
   ]);
-  // The models.json Provider ids the composition currently owns. recompose
-  // uses ONLY these as the previous user set: external user Provider
-  // Packages are never touched by models.json recomposition (pinned
-  // semantics), so they must not be in the delete scope.
-  let currentModelsJsonProviderIds: ReadonlySet<string> = new Set(
-    modelsJsonProviderIds,
+  const modelsJsonProviderIdSet: ReadonlySet<string> = Object.freeze(
+    new Set(modelsJsonProviderIds),
   );
   const userPackageProviderIds: ReadonlySet<string> = Object.freeze(
     new Set(userLoaded.providerIds),
   );
-  let currentModelsJson: ModelsJsonConfig | undefined = modelsJson;
-
   // Ticket 10: the same effective Provider/model/runtime composition serves
   // catalog facts and invocation; the facade adds only the per-request
   // model-level configured header layer above the standard Pi auth path.
@@ -247,11 +238,6 @@ export async function createProviderRuntime(
     mutableModels,
     modelsJson,
     { configValues },
-    // Provider Activation (Spec v1.0 §12.1): the request composition
-    // facade must observe the CURRENT models.json generation, not the
-    // initial one — recompose updates the same variable the facade reads,
-    // so per-request auth/header composition and the catalog never diverge.
-    { readConfig: () => currentModelsJson },
   );
 
   // Ticket 11 login seam: a successful Provider login through the served
@@ -290,35 +276,13 @@ export async function createProviderRuntime(
     configValues,
     authContext,
     providers: () => served.getProviders(),
-    modelsJsonProviders: () =>
-      currentModelsJson?.providers ?? Object.freeze({}),
+    modelsJsonProviders: () => modelsJson?.providers ?? Object.freeze({}),
     now,
   });
 
-  const recompose = (next: ModelsJsonConfig | undefined): void => {
-    // Provider Activation (Spec v1.0 §12.1/§19.4): one logical operation.
-    // The composition is applied FIRST — it can fail (e.g. a reserved
-    // bundled Provider ID) — and only a successful composition commits the
-    // new generation to the request-config reader and source metadata.
-    // A failed recompose never produces a mixed generation where the
-    // request config reader already points at N+1 while the composition
-    // and catalog are still generation N.
-    const nextUserProviderIds = applyLuckyTokenProviderComposition(
-      mutableModels,
-      {
-        ...(next === undefined ? {} : { modelsJson: next }),
-        configValues,
-        previousUserProviderIds: currentModelsJsonProviderIds,
-      },
-    );
-    currentModelsJson = next;
-    currentModelsJsonProviderIds = new Set(nextUserProviderIds);
-  };
-
   // Source classification is deterministic (Spec §9.3): bundled IDs win,
-  // then Pi built-in IDs, then current user Providers. The user Provider
-  // set is updated by the same recompose operation that changes models.json
-  // composition (Spec §12.1).
+  // then Pi built-in IDs, then the startup models.json/user-package Provider
+  // set. That source classification stays fixed for the Backend lifetime.
   const piBuiltinIds: ReadonlySet<string> = Object.freeze(
     new Set(builtinProviders().map((provider) => provider.id)),
   );
@@ -327,7 +291,7 @@ export async function createProviderRuntime(
     if (bundledProviderIds.has(providerId)) return "luckytoken_bundled";
     if (piBuiltinIds.has(providerId)) return "pi_builtin";
     if (
-      currentModelsJsonProviderIds.has(providerId) ||
+      modelsJsonProviderIdSet.has(providerId) ||
       userPackageProviderIds.has(providerId)
     ) {
       return "user";
@@ -343,7 +307,6 @@ export async function createProviderRuntime(
     externalProviderIds,
     catalog: Object.freeze({
       models: served,
-      recompose,
       capture: () => served.capture(),
     }),
     providerSource,

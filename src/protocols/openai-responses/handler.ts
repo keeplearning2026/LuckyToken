@@ -34,9 +34,9 @@ import {
 import type { ClientProtocolHandler } from "../../http.js";
 import { ModelResolutionFailure } from "../../model-resolution.js";
 import {
-  resolveDataPlaneModel,
-  type AliasModelSource,
-} from "../../alias-model-seam.js";
+  resolveDataPlanePublicModel,
+  type PublicModelSource,
+} from "../../public-model-seam.js";
 import type { RouterOptionDefaults } from "../options.js";
 import { InvalidRequest } from "./request.js";
 import {
@@ -103,15 +103,9 @@ export interface OpenAIResponsesHandlerOptions {
    */
   readonly sessionState?: ResponseSessionState;
   readonly shutdownSignal?: AbortSignal;
-  /**
-   * Ticket 15 alias-only model data plane: when wired, only configured
-   * aliases are valid selectors, converted and passthrough responses echo
-   * the requested alias, and the request captures one immutable resolver
-   * snapshot at acceptance. Without it the legacy provider/model selector
-   * contract applies (handler-level test seam); the composition root
-   * always wires the real authority in production.
-   */
-  readonly aliasSource?: AliasModelSource;
+  /** Backend-lifetime Public Model source. When absent, direct handler tests
+   * use the canonical provider/model selector seam. */
+  readonly publicModels?: PublicModelSource;
   /**
    * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
    * handler-local entry at acceptance, drives the lifecycle transitions,
@@ -154,7 +148,7 @@ interface OpenAIResponsesDependencies {
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
   readonly sessionState: ResponseSessionState;
-  readonly aliasSource: AliasModelSource | undefined;
+  readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
@@ -324,13 +318,9 @@ async function handleOpenAIResponses(
         ledger,
       });
     }
-    // Ticket 15: the request captures one immutable alias snapshot at
-    // acceptance; the resolved canonical target reaches the standard Pi
-    // Provider invocation path. Bare ids and canonical selectors are never
-    // valid aliases.
-    const resolution = await resolveDataPlaneModel(
+    const resolution = await resolveDataPlanePublicModel(
       dependencies.models,
-      dependencies.aliasSource,
+      dependencies.publicModels,
       selector,
     );
     if (resolution.kind === "unknown") {
@@ -366,7 +356,7 @@ async function handleOpenAIResponses(
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
-      dependencies.aliasSource === undefined ? undefined : resolution.alias;
+      dependencies.publicModels === undefined ? undefined : resolution.alias;
     if (dependencies.providerNativeLane?.claims(model, "responses") === true) {
       return providerNativeBranch(
         dependencies,
@@ -734,7 +724,7 @@ export function createOpenAIResponsesHandler(
     requestLedger: options.requestLedger ?? createNoopRequestLedger(),
     deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     sessionState,
-    aliasSource: options.aliasSource,
+    publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),

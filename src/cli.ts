@@ -29,10 +29,10 @@ import {
   type ControlPlaneClient,
   type HistoryRange,
   type ModelsCommand,
+  type PublicModelsCommand,
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
-import { stripJsonComments } from "./providers/models-json-schema.js";
 
 const HELP = `LuckyToken
 
@@ -48,7 +48,7 @@ Usage:
   luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
   luckytoken control auth <query|login> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
-  luckytoken control aliases <query|write> [<revision> <file>] --descriptor <path>
+  luckytoken control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
   luckytoken control history <query|export|export-confirm|delete|delete-confirm|acknowledge> ... --descriptor <path>
   luckytoken control backup <ordinary|full|confirm> ... --descriptor <path>
   luckytoken --help
@@ -65,7 +65,7 @@ Commands:
   control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
   control auth query|login  Run Provider-owned account/subscription or API-key login
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
-  control aliases query|write  Read the authoritative alias registry or replace the user mapping record
+  control public-models ...  Read or change the live Public Model authority
   control history query|export|export-confirm|delete|delete-confirm|acknowledge  Export, delete, or acknowledge permanent history state
   control backup ordinary|full|confirm  Create a redacted or explicitly confirmed full-sensitive backup
 
@@ -103,12 +103,13 @@ control catalog commands:
   refresh-background        Schedule a non-blocking background refresh
   refresh-manual            Run a forced refresh with per-Provider results
 
-control aliases commands:
-  query                     Print the authoritative model-aliases.json state
-                            (revision, file facts, effective registry)
-  write <rev> <file>        Validate and atomically replace the user mapping
-                            record with the file's content (compare-and-swap
-                             on <rev>; the file must be { "aliases": {...} })
+control public-models commands:
+  query                     Print the live Public Model state
+  set-port <rev> <port>     Change the Public endpoint port
+  set-provider <rev> <provider> <on|off>
+  set-model <rev> <provider> <model> <on|off>
+  rename <rev> <provider> <model> <name>
+  restore <rev> <provider> <model>
 
 control history commands:
   query [--all|--from <ms>|--to <ms>]
@@ -813,24 +814,18 @@ async function runControlCatalogCommand(
   }
 }
 
-function parseAliasesCommand(args: readonly string[]): {
+function parsePublicModelsCommand(args: readonly string[]): {
   readonly descriptorPath: string;
-  readonly action: "query" | "write";
-  readonly revision?: number;
-  readonly file?: string;
+  readonly command: PublicModelsCommand;
 } {
   let descriptorPath: string | undefined;
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     if (argument === "--descriptor") {
-      if (descriptorPath !== undefined) {
-        throw new Error("--descriptor may be provided once");
-      }
+      if (descriptorPath !== undefined) throw new Error("--descriptor may be provided once");
       const value = args[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error("--descriptor requires a path");
-      }
+      if (value === undefined || value.startsWith("-")) throw new Error("--descriptor requires a path");
       descriptorPath = value;
       index += 1;
       continue;
@@ -838,83 +833,38 @@ function parseAliasesCommand(args: readonly string[]): {
     if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
     positional.push(argument);
   }
-  if (descriptorPath === undefined) {
-    throw new Error("--descriptor <path> is required");
-  }
+  if (descriptorPath === undefined) throw new Error("--descriptor <path> is required");
   const action = positional[0];
-  if (action === "query") {
-    if (positional.length > 1) {
-      throw new Error("aliases query takes no arguments");
-    }
-    return { descriptorPath, action: "query" };
+  if (action === "query" && positional.length === 1) {
+    return { descriptorPath, command: { command: "query" } };
   }
-  const revision = positional[1];
-  const file = positional[2];
-  if (
-    action !== "write" ||
-    !/^[0-9]+$/u.test(revision ?? "") ||
-    file === undefined ||
-    positional.length > 3
-  ) {
-    throw new Error("aliases write requires <revision> <file>");
+  const revisionText = positional[1] ?? "";
+  if (!/^[0-9]+$/u.test(revisionText)) throw new Error("public-models mutation requires <revision>");
+  const revision = Number.parseInt(revisionText, 10);
+  if (action === "set-port" && positional.length === 3 && /^[0-9]+$/u.test(positional[2] ?? "")) {
+    return { descriptorPath, command: { command: "set_port", revision, port: Number.parseInt(positional[2] as string, 10) } };
   }
-  return {
-    descriptorPath,
-    action: "write",
-    revision: Number.parseInt(revision as string, 10),
-    file,
-  };
+  if (action === "set-provider" && positional.length === 4) {
+    const on = positional[3];
+    if (on !== "on" && on !== "off") throw new Error("set-provider requires <on|off>");
+    return { descriptorPath, command: { command: "set_provider", revision, providerId: positional[2] as string, on: on === "on" } };
+  }
+  if (action === "set-model" && positional.length === 5) {
+    const on = positional[4];
+    if (on !== "on" && on !== "off") throw new Error("set-model requires <on|off>");
+    return { descriptorPath, command: { command: "set_model", revision, providerId: positional[2] as string, modelId: positional[3] as string, on: on === "on" } };
+  }
+  if (action === "rename" && positional.length === 5) {
+    return { descriptorPath, command: { command: "rename_model", revision, providerId: positional[2] as string, modelId: positional[3] as string, modelName: positional[4] as string } };
+  }
+  if (action === "restore" && positional.length === 4) {
+    return { descriptorPath, command: { command: "restore_model_name", revision, providerId: positional[2] as string, modelId: positional[3] as string } };
+  }
+  throw new Error("Invalid public-models command");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Read and validate the transparent alias proposal file before any write:
- *  the same JSON-with-comments flavor the authority parses, a root object
- *  with a required non-null non-array `aliases` record. A malformed
- *  proposal is rejected value-safely with a clear error — an empty mapping
- *  is never guessed, so a bad file can never wipe the registry. */
-async function readAliasProposalFile(
-  filePath: string,
-): Promise<Record<string, unknown>> {
-  let text: string;
-  try {
-    text = await readFile(filePath, "utf8");
-  } catch {
-    throw new Error(`Cannot read the aliases proposal file: ${filePath}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonComments(text));
-  } catch (error) {
-    throw new Error(
-      `The aliases proposal file is not a valid proposal: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  if (!isRecord(parsed)) {
-    throw new Error("aliases proposal must be a JSON object");
-  }
-  if (!isRecord(parsed.aliases)) {
-    throw new Error("aliases proposal must contain an aliases object");
-  }
-  return parsed.aliases;
-}
-
-async function runControlAliasesCommand(args: readonly string[]): Promise<void> {
-  const parsed = parseAliasesCommand(args);
-  const command =
-    parsed.action === "query"
-      ? ({ command: "query" } as const)
-      : ({
-          command: "write",
-          revision: parsed.revision as number,
-          // The proposal file is validated before the write: the transparent
-          // { "aliases": {...} } shape is required as-is and never guessed.
-          aliases: await readAliasProposalFile(parsed.file as string),
-        } as const);
+async function runControlPublicModelsCommand(args: readonly string[]): Promise<void> {
+  const parsed = parsePublicModelsCommand(args);
   const endpoint = await readControlPlaneDescriptor(parsed.descriptorPath);
   const client = await connectControlPlane(endpoint, {
     createRequestId: randomUUID,
@@ -922,7 +872,7 @@ async function runControlAliasesCommand(args: readonly string[]): Promise<void> 
   });
   try {
     await assertCompatibleControlPlane(client);
-    const result = await client.executeAliasCommand(command);
+    const result = await client.executePublicModelsCommand(parsed.command);
     stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await client.close();
@@ -1194,8 +1144,8 @@ export async function runLuckyTokenCli(
       await runControlCatalogCommand(args.slice(2));
       return;
     }
-    if (command === "aliases") {
-      await runControlAliasesCommand(args.slice(2));
+    if (command === "public-models") {
+      await runControlPublicModelsCommand(args.slice(2));
       return;
     }
     if (

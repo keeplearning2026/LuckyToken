@@ -25,8 +25,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import type { AliasCatalogFacts } from "../../src/aliases/authority.js";
-import { createAliasRegistryAuthority } from "../../src/aliases/authority.js";
+import {
+  createOnlinePublicModelAuthority,
+  reconcileOnlinePublicModels,
+} from "./public-model-fixture.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
@@ -711,58 +713,32 @@ export async function runOpenAIResponsesOnlineSuite(
     if (stored?.type !== "api_key" || stored.key !== apiKey) {
       throw new Error(`Provider login did not persist a credential for ${providerId}`);
     }
-    // Alias-only data plane (Ticket 15): a built-in Provider target is
-    // selected through its alias; the authority validates against the live
-    // served catalog once the first composition exists.
-    let catalogFacts: AliasCatalogFacts = Object.freeze({
-      catalogVersion: 0,
-      targets: Object.freeze([]),
-      knownTargets: Object.freeze(new Set<string>()),
-    });
-    const aliasAuthority =
+    const aliasTarget = aliasTargetFor(providerId, model);
+    const publicModelAuthority =
       alias === undefined
         ? undefined
-        : createAliasRegistryAuthority({
-            path: join(stateDirectory, "model-aliases.json"),
-            catalogFacts: () => catalogFacts,
+        : await createOnlinePublicModelAuthority({
+            path: join(stateDirectory, "public-models.json"),
+            endpoint: {
+              host: "127.0.0.1",
+              port: config.server.port > 0 ? config.server.port : 3000,
+            },
+            alias,
+            providerId: aliasTarget.provider,
+            modelId: aliasTarget.model,
           });
-    if (alias !== undefined) {
-      await writeFile(
-        join(stateDirectory, "model-aliases.json"),
-        `${JSON.stringify(
-          { aliases: { [alias]: aliasTargetFor(providerId, model) } },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-    }
     const composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
-      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
-    if (alias !== undefined) {
-      const models = composition.catalog.models.getModels();
-      const knownTargets = new Set<string>();
-      for (const candidate of models) {
-        knownTargets.add(`${candidate.provider}\u0000${candidate.id}`);
-      }
-      catalogFacts = Object.freeze({
-        catalogVersion: 1,
-        targets: Object.freeze(
-          [...knownTargets].map((key) => {
-            const separator = key.indexOf("\u0000");
-            return {
-              provider: key.slice(0, separator),
-              model: key.slice(separator + 1),
-            };
-          }),
-        ),
-        knownTargets,
-      });
-      await aliasAuthority!.query();
+    if (publicModelAuthority !== undefined) {
+      await reconcileOnlinePublicModels(
+        publicModelAuthority,
+        composition.catalog.models,
+        providerId,
+      );
     }
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
@@ -810,7 +786,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: hangingFetch,
-      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
     const hangingServer = await startLuckyTokenHttpServer({
       runtime: hangingComposition.runtime,
@@ -861,7 +837,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: capture.fetch,
-      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
     await server.close();
     server = await startLuckyTokenHttpServer({
@@ -1045,7 +1021,7 @@ export async function runOpenAIResponsesOnlineSuite(
       config,
       credentials,
       fetch: dispatchObserver.fetch,
-      ...(aliasAuthority === undefined ? {} : { aliasAuthority }),
+      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
     server = await startLuckyTokenHttpServer({
       runtime: restartComposition.runtime,

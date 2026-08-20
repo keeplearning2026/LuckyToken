@@ -15,29 +15,12 @@ function emptyStore(): SettingsStore {
 }
 
 describe("settings registry pending and effective lifecycle", () => {
-  it("reports pending versus effective only for restart-required settings", async () => {
+  it("does not admit the Public Model endpoint port into the Settings authority", async () => {
     const registry = createSettingsRegistry(emptyStore());
-    const applied = await registry.set(
-      "server.port",
-      3100,
-      undefined,
-    );
-    const snapshot = registry.snapshot();
+    const applied = await registry.set("server.port", 3100, undefined);
 
-    expect(applied).toMatchObject({
-      outcome: "pending",
-    });
-    expect(snapshot.settings).toMatchObject({
-      "server.port": {
-        key: "server.port",
-        type: "number",
-        default: 3000,
-        sensitivity: "public",
-        applyMode: "restart-required",
-        value: 3100,
-        effective: 3000,
-      },
-    });
+    expect(applied).toMatchObject({ outcome: "unknown_key" });
+    expect(registry.snapshot().settings).not.toHaveProperty("server.port");
   });
 
   it("applies hot-apply settings immediately without pending state", async () => {
@@ -62,7 +45,7 @@ describe("settings registry pending and effective lifecycle", () => {
     );
   });
 
-  it("makes a persisted restart-required port effective after a new registry loads", async () => {
+  it("restores persisted hot-apply settings when a new registry loads", async () => {
     let persisted: Record<string, unknown> = {};
     const store: SettingsStore = {
       async load() {
@@ -73,17 +56,17 @@ describe("settings registry pending and effective lifecycle", () => {
       },
     };
     const first = createSettingsRegistry(store);
-    await first.set("server.port", 3200, undefined);
-    expect(first.snapshot().settings["server.port"]).toMatchObject({
-      value: 3200,
-      effective: 3000,
+    await first.set("protocols.openai-responses.enabled", false, undefined);
+    expect(first.snapshot().settings["protocols.openai-responses.enabled"]).toMatchObject({
+      value: false,
+      applyMode: "hot-apply",
     });
 
     const restarted = createSettingsRegistry(store);
     await restarted.load();
-    expect(restarted.snapshot().settings["server.port"]).toMatchObject({
-      value: 3200,
-      effective: 3200,
+    expect(restarted.snapshot().settings["protocols.openai-responses.enabled"]).toMatchObject({
+      value: false,
+      applyMode: "hot-apply",
     });
   });
 });

@@ -48,6 +48,9 @@ export interface CodexIntegrationProjection {
   readonly modelCount?: number;
   readonly warnings: readonly string[];
   readonly restartRequired: boolean;
+  readonly desiredGeneration: number;
+  readonly appliedGeneration?: number;
+  readonly needsSync: boolean;
   readonly message?: string;
 }
 
@@ -61,6 +64,8 @@ export interface CodexIntegrationAuthorityOptions {
   readonly codexHome: string;
   readonly stateDirectory: string;
   readonly endpoint: () => string | undefined;
+  /** Monotonic generation of the complete Public Model runtime snapshot. */
+  readonly generation?: () => number;
   readonly nativeCatalog: CodexNativeCatalogSource;
   readonly buildCatalog: (
     nativeEntries: readonly CodexNativeCatalogEntry[],
@@ -79,6 +84,7 @@ interface IntegrationState {
   readonly preimage?: RootValues;
   readonly modelCount?: number;
   readonly warnings?: readonly string[];
+  readonly appliedGeneration?: number;
 }
 
 interface RootInspection {
@@ -345,6 +351,13 @@ async function readState(path: string): Promise<IntegrationState> {
   ) {
     return invalidState();
   }
+  const appliedGeneration = parsed.appliedGeneration;
+  if (
+    appliedGeneration !== undefined &&
+    (!Number.isSafeInteger(appliedGeneration) || (appliedGeneration as number) < 0)
+  ) {
+    return invalidState();
+  }
 
   return Object.freeze({
     schemaVersion: STATE_SCHEMA,
@@ -352,6 +365,9 @@ async function readState(path: string): Promise<IntegrationState> {
     ...(preimage === undefined ? {} : { preimage }),
     ...(modelCount === undefined ? {} : { modelCount: modelCount as number }),
     ...(warnings === undefined ? {} : { warnings: Object.freeze([...warnings]) }),
+    ...(appliedGeneration === undefined
+      ? {}
+      : { appliedGeneration: appliedGeneration as number }),
   });
 }
 
@@ -416,6 +432,7 @@ export function createCodexIntegrationAuthority(
       }
     }
 
+    const desiredGeneration = options.generation?.() ?? 0;
     return Object.freeze({
       desiredEnabled: state.desiredEnabled,
       observedState,
@@ -426,6 +443,12 @@ export function createCodexIntegrationAuthority(
       ...(state.modelCount === undefined ? {} : { modelCount: state.modelCount }),
       warnings: Object.freeze([...(state.warnings ?? [])]),
       restartRequired: false,
+      desiredGeneration,
+      ...(state.appliedGeneration === undefined
+        ? {}
+        : { appliedGeneration: state.appliedGeneration }),
+      needsSync:
+        state.desiredEnabled && state.appliedGeneration !== desiredGeneration,
       ...(message === undefined ? {} : { message }),
       ...override,
     });
@@ -442,6 +465,7 @@ export function createCodexIntegrationAuthority(
   };
 
   const activate = async (state: IntegrationState): Promise<CodexIntegrationProjection> => {
+    const syncGeneration = options.generation?.() ?? 0;
     const endpoint = options.endpoint();
     if (endpoint === undefined) {
       currentNativeIds = new Set<string>();
@@ -477,16 +501,15 @@ export function createCodexIntegrationAuthority(
       ...nativeSnapshot.warnings,
       ...catalog.warnings,
     ]);
-    const committed: IntegrationState = {
+    const committedBeforeApply: IntegrationState = {
       ...working,
       modelCount: catalog.modelCount,
       warnings,
     };
-    // Persist every fact needed by a later query/restore before mutating the
-    // Codex-facing catalog or config. After this point no state-file write is
-    // needed to complete a successful activation.
-    await writeState(committed);
-    const catalogChanged = await atomicWriteIfChanged(catalogPath, catalog.content);
+    // Persist restore authority before mutating Codex-facing files. The
+    // applied generation is committed only after the full projection verifies.
+    await writeState(committedBeforeApply);
+    await atomicWrite(catalogPath, catalog.content);
 
     const currentConfig = await readOptional(configPath);
     if (currentConfig === undefined) {
@@ -498,8 +521,7 @@ export function createCodexIntegrationAuthority(
     }
     const desired = activeTarget(endpoint, catalogPath);
     const nextConfig = convergeRoot(currentConfig, desired);
-    const configChanged = nextConfig !== currentConfig;
-    if (configChanged) await atomicWrite(configPath, nextConfig);
+    await atomicWrite(configPath, nextConfig);
 
     const verified = await readOptional(configPath);
     if (verified === undefined) {
@@ -520,9 +542,14 @@ export function createCodexIntegrationAuthority(
     }
 
     currentNativeIds = new Set(nativeSnapshot.entries.map((entry) => entry.slug));
+    const committed: IntegrationState = {
+      ...committedBeforeApply,
+      appliedGeneration: syncGeneration,
+    };
+    await writeState(committed);
     return project(committed, {
       observedState: "managed",
-      restartRequired: configChanged || catalogChanged,
+      restartRequired: true,
     });
   };
 

@@ -52,10 +52,11 @@ import {
 } from "./desktop-owner-lease.js";
 import { createFirstRunConfig } from "./first-run-config.js";
 import { createHistoryAuthority } from "./history/index.js";
-import { createAliasControlPlaneHandler } from "./aliases/control-plane.js";
-import { createAliasRegistryAuthority } from "./aliases/authority.js";
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
+import { createPublicModelAuthority } from "./public-models/authority.js";
+import { createPublicModelsControlPlaneHandler } from "./public-models/control-plane.js";
+import { publicModelRuntimeFacts } from "./public-models/runtime-facts.js";
 import { createOperationalAttentionAuthority } from "./operational-attention/index.js";
 import {
   configCompatibilityIssue,
@@ -87,10 +88,7 @@ import {
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
-import {
-  DATA_PLANE_LOOPBACK_HOST,
-  resolveEffectiveSettings,
-} from "./settings/data-plane.js";
+import { DATA_PLANE_LOOPBACK_HOST } from "./settings/data-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { startLuckyTokenHttpServer } from "./server.js";
 import { resolveCodexHome } from "./integrations/codex/home.js";
@@ -515,12 +513,32 @@ async function startNormalApplication(options: {
       createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
       {
         initial: {
-          "server.port": config.server.port,
           "diagnostics.deepCapture.enabled": config.deepDiagnostics.enabled,
         },
       },
     );
     await settingsRegistry.load();
+    const publicModelAuthority = createPublicModelAuthority({
+      path: join(dirname(config.pi.modelsJson), "public-models.json"),
+      initialEndpoint: {
+        host: DATA_PLANE_LOOPBACK_HOST,
+        port: config.server.port,
+      },
+    });
+    let publicModelReconcileChain: Promise<void> = Promise.resolve();
+    const reconcilePublicModels = (
+      snapshot: Parameters<typeof publicModelRuntimeFacts>[0],
+    ): Promise<void> => {
+      const task = publicModelReconcileChain
+        .catch(() => undefined)
+        .then(async () => {
+          await publicModelAuthority.reconcile(
+            publicModelRuntimeFacts(snapshot, credentialAuthority?.snapshot()),
+          );
+        });
+      publicModelReconcileChain = task;
+      return task;
+    };
 
     // These bindings are assigned once after the Catalog controller exists
     // (below); the Control Plane handlers close over them, so they must be
@@ -551,9 +569,18 @@ async function startNormalApplication(options: {
           : 0;
       },
     });
-    const credentialCommandHandler = createCredentialControlPlaneHandler({
+    const baseCredentialCommandHandler = createCredentialControlPlaneHandler({
       authority: () => credentialAuthority,
     });
+    const credentialCommandHandler: typeof baseCredentialCommandHandler = async (
+      command,
+    ) => {
+      const result = await baseCredentialCommandHandler(command);
+      if (result.outcome !== "unavailable") {
+        await reconcilePublicModels(catalogController.snapshot());
+      }
+      return result;
+    };
     // Provider Activation (Spec v1.0 §10.2): the Auth handler is wired to
     // the Backend-lifetime Provider Runtime — never to optional slots
     // populated by Data Plane startup.
@@ -573,9 +600,6 @@ async function startNormalApplication(options: {
       return Number.isSafeInteger(value) && value >= 0 ? value : 5000;
     };
 
-    const aliasAuthorityHolder: {
-      current?: ReturnType<typeof createAliasRegistryAuthority>;
-    } = {};
     const catalogController = createCatalogRefreshController({
       store: catalogCacheStore,
       authority: modelsAuthority,
@@ -594,7 +618,7 @@ async function startNormalApplication(options: {
             provider: nextProvider,
           });
         }
-        aliasAuthorityHolder.current?.onCatalogSnapshot();
+        void reconcilePublicModels(snapshot).catch(() => undefined);
         controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
       },
     });
@@ -624,36 +648,14 @@ async function startNormalApplication(options: {
       onProviderLogin: (providerId) =>
         catalogController.onProviderLogin(providerId),
     });
+    credentialAuthority = providerRuntime.credentialAuthority;
     // The Catalog refresh controller binds to the Provider Runtime BEFORE
     // Data Plane startup and stays bound for the Backend lifetime (Spec
-    // §11.2): stopping the Data Plane never aborts the Catalog.
+    // §11.2): stopping the Data Plane never aborts the Catalog. Credential
+    // Authority is already bound so the first Catalog publication can derive
+    // Provider ON from the real login authority rather than Catalog health.
     await catalogController.bind(providerRuntime.catalog);
-    credentialAuthority = providerRuntime.credentialAuthority;
-    const aliasAuthority = createAliasRegistryAuthority({
-      path: join(dirname(config.pi.modelsJson), "model-aliases.json"),
-      catalogFacts: () => {
-        const snapshot = catalogController.snapshot();
-        const knownTargets = new Set<string>();
-        const targets: { readonly provider: string; readonly model: string }[] =
-          [];
-        for (const catalogProvider of snapshot.providers) {
-          for (const model of catalogProvider.models) {
-            knownTargets.add(`${catalogProvider.providerId}\u0000${model.id}`);
-            targets.push({
-              provider: catalogProvider.providerId,
-              model: model.id,
-            });
-          }
-        }
-        return {
-          catalogVersion: snapshot.version,
-          targets: Object.freeze(targets),
-          knownTargets,
-        };
-      },
-    });
-    aliasAuthorityHolder.current = aliasAuthority;
-
+    await reconcilePublicModels(catalogController.snapshot());
     const codexHome = resolveCodexHome();
     const codexLocalAuth = createCodexLocalCredentialAuthority({ codexHome });
     const codexDialHost = (host: string): string => {
@@ -673,26 +675,38 @@ async function startNormalApplication(options: {
       codexHome,
       stateDirectory: join(dirname(options.configPath), "integrations", "codex"),
       endpoint: () => {
-        const address = resolveEffectiveSettings(settingsRegistry.query([]));
+        const address = publicModelAuthority.snapshot().endpoint;
         return `http://${codexDialHost(address.host)}:${address.port}/v1`;
       },
+      generation: () => publicModelAuthority.snapshot().version,
       nativeCatalog: createCodexNativeCatalogSource({ codexHome }),
       buildCatalog: async (nativeCatalogEntries) => {
         const models = providerRuntime?.models;
         if (models === undefined) {
           throw new Error("LuckyToken model catalog is unavailable");
         }
-        await aliasAuthority.query();
         return buildCodexCatalog({
           nativeCatalogEntries,
           models,
-          aliases: aliasAuthority.resolver().entries(),
+          aliases: publicModelAuthority
+            .snapshot()
+            .publishedModels()
+            .map((entry) => ({
+              alias: entry.alias,
+              target: {
+                providerId: entry.providerId,
+                modelId: entry.modelId,
+              },
+            })),
         });
       },
     });
     const restoreCodexBeforeShutdown = async (): Promise<void> => {
       await codexIntegrationAuthority.reconcile("shutdown");
     };
+    // Backend startup is the one automatic Codex apply point. Data Plane
+    // listener restarts (for example after a port edit) never resync Codex.
+    await codexIntegrationAuthority.reconcile("startup");
 
     const historyAuthority = createHistoryAuthority({
       sources: {
@@ -764,15 +778,16 @@ async function startNormalApplication(options: {
       modelDataPlane: "stopped",
       provider: lastPublishedStatus.provider,
     });
+    const initialPublicEndpoint = publicModelAuthority.snapshot().endpoint;
+    let dataPlaneStartedOnce = false;
     supervisor = createDataPlaneRuntimeSupervisor({
-      host: DATA_PLANE_LOOPBACK_HOST,
-      port: config.server.port,
+      host: initialPublicEndpoint.host,
+      port: initialPublicEndpoint.port,
       readProvider: () => lastPublishedStatus.provider,
-      resolveAddress: () => resolveEffectiveSettings(settingsRegistry.query([])),
+      resolveAddress: () => publicModelAuthority.snapshot().endpoint,
       startListener: async (address) => {
         const shutdownController = new AbortController();
         try {
-          await codexIntegrationAuthority.reconcile("startup");
           const composition = await createConfiguredLuckyTokenDataPlane({
             config,
             fetch: globalThis.fetch,
@@ -782,7 +797,7 @@ async function startNormalApplication(options: {
             deepCaptureStore: ownedCaptureStore,
             settingsRegistry,
             providerRuntime,
-            aliasAuthority,
+            publicModelAuthority,
             codexLocalAuth,
             codexNativeModels: codexIntegrationAuthority.nativeModels,
             onCapturePersistenceFailure: (failure) => {
@@ -803,6 +818,7 @@ async function startNormalApplication(options: {
             host: address.host,
             port: address.port,
           });
+          dataPlaneStartedOnce = true;
           for (const route of composition.runtime.routes) {
             options.events?.onRoute?.({
               method: route.method,
@@ -825,13 +841,15 @@ async function startNormalApplication(options: {
           shutdownController.abort(
             new Error("LuckyToken model gateway startup failed"),
           );
-          try {
-            await restoreCodexBeforeShutdown();
-          } catch (restoreError) {
-            throw new AggregateError(
-              [error, restoreError],
-              "LuckyToken model gateway startup failed and Codex integration could not be restored",
-            );
+          if (!dataPlaneStartedOnce) {
+            try {
+              await restoreCodexBeforeShutdown();
+            } catch (restoreError) {
+              throw new AggregateError(
+                [error, restoreError],
+                "LuckyToken model gateway startup failed and Codex integration could not be restored",
+              );
+            }
           }
           throw error;
         }
@@ -845,6 +863,24 @@ async function startNormalApplication(options: {
       return plane === undefined
         ? Promise.reject(new Error("Control Plane is not ready"))
         : plane.publishStatus(status);
+    };
+    const basePublicModelsCommandHandler = createPublicModelsControlPlaneHandler(
+      publicModelAuthority,
+    );
+    const publicModelsCommandHandler = async (
+      command: Parameters<typeof basePublicModelsCommandHandler>[0],
+    ): ReturnType<typeof basePublicModelsCommandHandler> => {
+      const previousPort = publicModelAuthority.snapshot().endpoint.port;
+      const result = await basePublicModelsCommandHandler(command);
+      if (
+        command.command === "set_port" &&
+        result.outcome === "ok" &&
+        result.state.endpoint.port !== previousPort &&
+        lastPublishedStatus.modelDataPlane === "running"
+      ) {
+        await supervisor?.execute("restart", publish);
+      }
+      return result;
     };
 
     if (options.ownerKind === "desktop") {
@@ -876,6 +912,7 @@ async function startNormalApplication(options: {
         attentionLedgerSubscription?.unsubscribe();
         attentionLedgerSubscription = undefined;
         await restoreCodexBeforeShutdown();
+        await publicModelAuthority.flush();
         if (supervisor !== undefined) {
           await supervisor
             .execute(
@@ -884,6 +921,7 @@ async function startNormalApplication(options: {
             )
             .catch(() => undefined);
         }
+        await catalogController.dispose();
         const results = await Promise.allSettled([
           descriptor?.close() ?? Promise.resolve(),
           controlPlane?.close() ?? Promise.resolve(),
@@ -891,7 +929,6 @@ async function startNormalApplication(options: {
           requestLedgerStore?.close() ?? Promise.resolve(),
           deepCaptureStore?.close() ?? Promise.resolve(),
         ]);
-        catalogController.dispose();
         if (results.some((result) => result.status === "rejected")) {
           throw new Error("LuckyToken application resource cleanup failed");
         }
@@ -992,8 +1029,7 @@ async function startNormalApplication(options: {
           ),
         });
       },
-      aliasCommandHandler: createAliasControlPlaneHandler(aliasAuthority),
-      aliasesProjection: () => aliasAuthority.snapshot(),
+      publicModelsCommandHandler,
       codexIntegrationCommandHandler: async (command) => {
         const state =
           command.command === "query"

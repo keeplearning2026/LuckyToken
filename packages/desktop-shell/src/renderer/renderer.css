@@ -53,6 +53,16 @@ button { cursor: pointer; }
 .product-header h1 { margin: 0; font-size: 22px; font-weight: 680; }
 .runtime-header-status { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 16px; color: #62676e; font-size: 13px; }
 .runtime-endpoint { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #3f444a; }
+.runtime-endpoint-stack { display: grid; justify-items: end; gap: 4px; }
+.runtime-endpoint-button { border: 0; background: transparent; padding: 0; }
+.runtime-endpoint-button:disabled { cursor: default; }
+.runtime-endpoint-editor { display: inline-flex; align-items: center; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #3f444a; }
+.runtime-endpoint-editor input { width: 64px; border: 1px solid #c9ccd0; border-radius: 6px; padding: 2px 5px; }
+.codex-icon-row { display: inline-flex; gap: 5px; }
+.codex-icon-row .icon-button { width: 26px; height: 24px; padding: 0; border: 1px solid #c9ccd0; border-radius: 6px; background: #fff; color: #5f646b; display: inline-grid; place-items: center; }
+.codex-icon-row .icon-button.active { color: #202124; border-color: #8e949b; }
+.codex-icon-row .codex-sync.dirty { box-shadow: inset 0 0 0 2px #b67a20; color: #8b5c16; }
+.codex-icon-row .icon-button:disabled { opacity: .4; cursor: default; }
 .runtime-state, .runtime-active { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .runtime-status-dot { width: 8px; height: 8px; border-radius: 999px; background: #858a91; }
 .runtime-status-dot.running { background: #2f8f57; }

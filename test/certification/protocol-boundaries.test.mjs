@@ -23,11 +23,10 @@ const CLIENT_SHARED_SEAMS = new Set([
   "model-resolution.ts",
   "invocation-diagnostics/index.ts",
   "protocols/options.ts",
-  // Ticket 15 neutral data-plane seams: both Client Protocols resolve
-  // aliases and project passthrough bodies through these narrow shared
-  // modules; neither imports concrete Providers or protocol modules
-  // (alias-model-seam.ts is Pi/core-only, sse-lines.ts is import-free).
-  "alias-model-seam.ts",
+  // Public Model resolution is a narrow Pi/core-only data-plane seam shared
+  // by both Client Protocols; it does not import Provider implementations or
+  // sibling protocol modules. SSE line parsing is likewise import-free.
+  "public-model-seam.ts",
   "protocols/sse-lines.ts",
   // Provider Native is visible to the Responses protocol only as an
   // operation/claim contract. Credential resolution, request construction,

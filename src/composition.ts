@@ -10,8 +10,8 @@ import {
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import type { AliasRegistryAuthority } from "./aliases/authority.js";
-import type { AliasModelSource } from "./alias-model-seam.js";
+import type { PublicModelSource } from "./public-model-seam.js";
+import type { PublicModelAuthority } from "./public-models/authority.js";
 import {
   certifyCoreServingComposition,
   type CoreServingCertificationManifest,
@@ -59,10 +59,7 @@ import {
   loadModelsJson,
   type ModelsJsonConfig,
 } from "./providers/models-json.js";
-import {
-  applyLuckyTokenProviderComposition,
-  registerLuckyTokenProviders,
-} from "./providers/catalog.js";
+import { registerLuckyTokenProviders } from "./providers/catalog.js";
 import { createCatalogSnapshotModels } from "./providers/catalog-refresh.js";
 import {
   createRequestCompositionModels,
@@ -241,14 +238,9 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
    *  supplies model identity; tests may inject deterministic implementations. */
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
-  /**
-   * Ticket 15: the Ticket 14 alias authority created by the run/serve
-   * composition root (one registry, never duplicated). When provided, the
-   * data plane is alias-only: handlers and model discovery capture one
-   * immutable resolver snapshot per request. When absent, the legacy
-   * provider/model selector contract applies (test seam).
-   */
-  readonly aliasAuthority?: AliasRegistryAuthority;
+  /** Backend-lifetime Public Model authority. Discovery captures its current
+   * immutable snapshot; no request path reads the persistence file. */
+  readonly publicModelAuthority?: PublicModelAuthority;
   /**
    * Ticket 23: narrow sanitized capture persistence hooks wired by the
    * owner to the persistence degradation authority. When the failure hook
@@ -281,11 +273,10 @@ export interface ConfiguredLuckyTokenDataPlane {
   /** Live Credential Authority (Ticket 12): the running Data Plane's single
    *  serialized auth.json authority for UI/CLI credential commands. */
   readonly credentialAuthority: LiveCredentialAuthority;
-  /** Ticket 11 catalog runtime handle: served snapshot Models, recompose
-   *  and atomic capture for the refresh controller. */
+  /** Ticket 11 catalog runtime handle: served snapshot Models plus atomic
+   * capture. Provider composition is fixed for the Backend lifetime. */
   readonly catalog: {
     readonly models: Models;
-    readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
     readonly capture: () => void;
   };
   /** Request identity observer (Ticket 17 identity seam): the bounded
@@ -314,12 +305,10 @@ export async function createConfiguredPiModels(
    *  the file is absent or invalid); the Credential Authority shares these
    *  provider facts for its status classification. */
   modelsJson?: ModelsJsonConfig;
-  /** Ticket 11 catalog runtime handle: the served snapshot Models, the
-   *  recompose capability and the atomic capture (one authoritative active
-   *  catalog). */
+  /** Ticket 11 catalog runtime handle: served snapshot Models plus atomic
+   * capture. models.json is read only during this composition. */
   catalog: {
     readonly models: Models;
-    readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
     readonly capture: () => void;
   };
 }> {
@@ -372,10 +361,6 @@ export async function createConfiguredPiModels(
     mutableModels,
     modelsJson,
     { configValues },
-    // Provider Activation (Spec v1.0 §12.1 mirror): the facade observes the
-    // current models.json generation so recompose keeps request-level auth/
-    // header composition coherent with the served catalog.
-    { readConfig: () => currentModelsJson },
   );
   // Ticket 11 login seam: a successful Provider login through the served
   // Models schedules a background refresh for the relevant Provider.
@@ -402,25 +387,6 @@ export async function createConfiguredPiModels(
   const served = createCatalogSnapshotModels(loginAware);
   await served.refresh({ allowNetwork: false });
   served.capture();
-  let currentModelsJsonProviderIds: ReadonlySet<string> = new Set(
-    modelsJsonProviderIds,
-  );
-  let currentModelsJson: ModelsJsonConfig | undefined = modelsJson;
-  const recompose = (next: ModelsJsonConfig | undefined): void => {
-    // Mirror of the Provider Runtime recompose (Spec v1.0 §12.1): commit
-    // the new generation only after the composition succeeded, so a failed
-    // recompose never leaves a mixed generation.
-    const nextUserProviderIds = applyLuckyTokenProviderComposition(
-      mutableModels,
-      {
-        ...(next === undefined ? {} : { modelsJson: next }),
-        configValues,
-        previousUserProviderIds: currentModelsJsonProviderIds,
-      },
-    );
-    currentModelsJson = next;
-    currentModelsJsonProviderIds = new Set(nextUserProviderIds);
-  };
   return Object.freeze({
     models: served,
     externalProviderIds: loaded.providerIds,
@@ -431,7 +397,6 @@ export async function createConfiguredPiModels(
     ...(modelsJson === undefined ? {} : { modelsJson }),
     catalog: Object.freeze({
       models: served,
-      recompose,
       capture: () => served.capture(),
     }),
   });
@@ -535,11 +500,8 @@ export async function createConfiguredLuckyTokenDataPlane(
     modelsJson = composed.modelsJson;
     catalog = composed.catalog;
     // Ticket 12: the running Data Plane's Credential Authority owns the
-    // one Pi-compatible auth.json. It shares the composition's resolver
-    // and auth context, so its status facts and the request path can never
-    // diverge. The models.json facts follow the live composed config:
-    // catalog refresh recomposes with a new config, so the authority reads
-    // through a slot the wrapped recompose keeps current.
+    // one Pi-compatible auth.json. models.json facts are fixed at composition
+    // time; runtime file edits take effect only after a new Backend startup.
     const { configValues, authContext } = createCompositionConfigValueContext(
       options.configValueAdapters,
       options.authContext,
@@ -687,20 +649,12 @@ export async function createConfiguredLuckyTokenDataPlane(
   // Request identity is session-only. Client access authentication and
   // project-scoped identity no longer exist on the Data Plane.
   const requestIdentities = createRequestIdentityObserver({ now });
-  // Ticket 15: the composition adapts the one alias authority into the
-  // narrow data-plane source. Every request refreshes first so hot
-  // alias/catalog replacement applies to new requests only, then captures
-  // the frozen resolver snapshot for its own resolution and response
-  // projection (in-flight requests keep the snapshot they captured).
-  const aliasAuthority = options.aliasAuthority;
-  const aliasSource: AliasModelSource | undefined =
-    aliasAuthority === undefined
+  const publicModelAuthority = options.publicModelAuthority;
+  const publicModels: PublicModelSource | undefined =
+    publicModelAuthority === undefined
       ? undefined
       : Object.freeze({
-          requestSnapshot: async () => {
-            await aliasAuthority.query();
-            return aliasAuthority.resolver();
-          },
+          requestSnapshot: async () => publicModelAuthority.snapshot(),
         });
   const anthropic = createAnthropicMessagesHandler({
     models,
@@ -721,7 +675,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),
-    ...(aliasSource === undefined ? {} : { aliasSource }),
+    ...(publicModels === undefined ? {} : { publicModels }),
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
     // Ticket 10: the Provider/request-composition seam owns request-local
@@ -739,7 +693,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     createModelsDiscoveryHandler({
       models,
       providerIds: externalProviderIds,
-      ...(aliasSource === undefined ? {} : { aliasSource }),
+      ...(publicModels === undefined ? {} : { publicModels }),
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   );
@@ -790,7 +744,7 @@ export async function createConfiguredLuckyTokenDataPlane(
       stateFile,
       sessionState,
       providerNativeLane,
-      ...(aliasSource === undefined ? {} : { aliasSource }),
+      ...(publicModels === undefined ? {} : { publicModels }),
       maxRequestBytes: config.limits.maxRequestBytes,
       ...(options.shutdownSignal === undefined
         ? {}
@@ -806,7 +760,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     clientProtocols.push(
       createOpenAIResponsesCompactHandler({
         models,
-        ...(aliasSource === undefined ? {} : { aliasSource }),
+        ...(publicModels === undefined ? {} : { publicModels }),
         ...(localCompactLane === undefined ? {} : { localNativeLane: localCompactLane }),
         providerNativeLane,
         configuration: responsesConfiguration,
@@ -862,15 +816,8 @@ export async function createConfiguredLuckyTokenDataPlane(
     userConfiguredProviderIds,
     diagnosticsStore,
     credentialAuthority,
-    // Ticket 11 handle with the credential authority's live models.json
-    // facts kept current: a refresh recompose updates both the served
-    // catalog and the status classification source.
     catalog: Object.freeze({
       models: catalog.models,
-      recompose: (next: ModelsJsonConfig | undefined) => {
-        composedModelsJson = next;
-        catalog.recompose(next);
-      },
       capture: catalog.capture,
     }),
     requestIdentities,

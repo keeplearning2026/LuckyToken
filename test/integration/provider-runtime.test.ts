@@ -208,7 +208,7 @@ describe("Provider Runtime composition", () => {
     ).rejects.toThrow(/bundled product Provider/);
   });
 
-  it("Ticket 13: models.json recompose updates source metadata coherently before the next capture", async () => {
+  it("models.json edits do not change the Provider Runtime until a new Backend startup", async () => {
     const { modelsJsonPath } = await fixture();
     await writeFile(
       modelsJsonPath,
@@ -236,9 +236,8 @@ describe("Provider Runtime composition", () => {
     expect(runtime.providerSource("first-custom")).toBe("user");
     expect(runtime.models.getProvider("first-custom")).toBeDefined();
 
-    // A models.json swap removes the old custom Provider and adds a new one:
-    // one recompose operation updates the composition AND the user Provider
-    // id set before the next capture (Spec §12.1).
+    // The file can change while this Backend is running, but Provider
+    // composition is startup-only.
     await writeFile(
       modelsJsonPath,
       JSON.stringify({
@@ -252,20 +251,15 @@ describe("Provider Runtime composition", () => {
       }),
       "utf8",
     );
-    const next = await import("../../src/providers/models-json.js").then(
-      (module) => module.loadModelsJson(modelsJsonPath),
-    );
-    runtime.catalog.recompose(next);
     runtime.catalog.capture();
 
-    expect(runtime.models.getProvider("second-custom")).toBeDefined();
-    expect(runtime.models.getProvider("first-custom")).toBeUndefined();
-    expect(runtime.providerSource("second-custom")).toBe("user");
-    // The captured snapshot serves the new composition.
-    expect(runtime.catalog.models.getModels("second-custom").length).toBe(1);
+    expect(runtime.models.getProvider("second-custom")).toBeUndefined();
+    expect(runtime.models.getProvider("first-custom")).toBeDefined();
+    expect(runtime.providerSource("first-custom")).toBe("user");
+    expect(runtime.catalog.models.getModels("second-custom").length).toBe(0);
   });
 
-  it("Ticket 13b: recompose keeps an in-flight auth resolution at generation N while later resolutions use generation N+1", async () => {
+  it("models.json API-key edits do not hot-apply to later requests in the same Backend", async () => {
     const { modelsJsonPath } = await fixture();
     await writeFile(
       modelsJsonPath,
@@ -299,8 +293,7 @@ describe("Provider Runtime composition", () => {
     const requestA = await runtime.models.getAuth(model!);
     expect(requestA?.auth.apiKey).toBe("initial-key");
 
-    // A models.json swap changes the configured key; recompose is one
-    // logical operation that also updates the request-composition reader.
+    // Changing the file does not mutate the fixed request-composition facts.
     await writeFile(
       modelsJsonPath,
       JSON.stringify({
@@ -315,22 +308,14 @@ describe("Provider Runtime composition", () => {
       }),
       "utf8",
     );
-    const next = await import("../../src/providers/models-json.js").then(
-      (module) => module.loadModelsJson(modelsJsonPath),
-    );
-    runtime.catalog.recompose(next);
     runtime.catalog.capture();
 
-    // Request A keeps the generation-N facts it already resolved — an
-    // in-flight invocation is never remapped by a later recompose.
     expect(requestA?.auth.apiKey).toBe("initial-key");
-
-    // A later resolution (Request B) uses generation N+1 facts.
     const requestB = await runtime.models.getAuth(model!);
-    expect(requestB?.auth.apiKey).toBe("rotated-key");
+    expect(requestB?.auth.apiKey).toBe("initial-key");
   });
 
-  it("Ticket 13c: removing models.json clears the configured auth instead of resurrecting the initial config (Spec §12.1)", async () => {
+  it("removing models.json does not remove startup auth facts from the running Backend", async () => {
     const { modelsJsonPath } = await fixture();
     await writeFile(
       modelsJsonPath,
@@ -362,22 +347,14 @@ describe("Provider Runtime composition", () => {
       "initial-key",
     );
 
-    // The file is removed: the current generation has no models.json.
     await rm(modelsJsonPath, { force: true });
-    const next = await import("../../src/providers/models-json.js").then(
-      (module) => module.loadModelsJson(modelsJsonPath),
-    );
-    expect(next).toBeUndefined();
-    runtime.catalog.recompose(next);
     runtime.catalog.capture();
 
-    // The configured key must NOT resurrect: the reader distinguishes
-    // "no reader" from "reader says no config".
     const authAfter = await runtime.models.getAuth(model!);
-    expect(authAfter?.auth.apiKey).toBeUndefined();
+    expect(authAfter?.auth.apiKey).toBe("initial-key");
   });
 
-  it("Ticket 13d: a failed recompose never commits a mixed generation (Spec §19.4)", async () => {
+  it("an invalid replacement models.json cannot disturb the already composed runtime", async () => {
     const { modelsJsonPath } = await fixture();
     await writeFile(
       modelsJsonPath,
@@ -409,9 +386,8 @@ describe("Provider Runtime composition", () => {
       "generation-n-key",
     );
 
-    // The next generation claims the reserved bundled Provider ID: the
-    // composition must fail WITHOUT committing the new config to the
-    // request reader.
+    // A replacement file may even be invalid for a future startup; it is
+    // not interpreted by this already-running Provider Runtime.
     await writeFile(
       modelsJsonPath,
       JSON.stringify({
@@ -426,15 +402,9 @@ describe("Provider Runtime composition", () => {
       }),
       "utf8",
     );
-    const next = await import("../../src/providers/models-json.js").then(
-      (module) => module.loadModelsJson(modelsJsonPath),
-    );
-    expect(() => runtime.catalog.recompose(next)).toThrow(
-      /bundled product Provider/,
-    );
+    runtime.catalog.capture();
 
-    // Generation N remains fully authoritative: composition, source
-    // metadata and the request reader are all still N.
+    // Startup generation remains fully authoritative.
     expect(runtime.models.getProvider("keyed-custom")).toBeDefined();
     expect(runtime.providerSource("keyed-custom")).toBe("user");
     expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(

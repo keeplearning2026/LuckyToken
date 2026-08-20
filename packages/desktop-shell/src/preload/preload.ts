@@ -16,7 +16,7 @@ type InvokeResults = {
   [desktopIpcChannels.authRespond]: ReturnType<DesktopControlPlaneApi["respondAuth"]>;
   [desktopIpcChannels.models]: ReturnType<DesktopControlPlaneApi["executeModels"]>;
   [desktopIpcChannels.catalog]: ReturnType<DesktopControlPlaneApi["executeCatalog"]>;
-  [desktopIpcChannels.aliases]: ReturnType<DesktopControlPlaneApi["executeAliases"]>;
+  [desktopIpcChannels.publicModels]: ReturnType<DesktopControlPlaneApi["executePublicModels"]>;
   [desktopIpcChannels.codex]: ReturnType<DesktopControlPlaneApi["executeCodexIntegration"]>;
   [desktopIpcChannels.ledgerGet]: ReturnType<DesktopControlPlaneApi["getRequestLedger"]>;
   [desktopIpcChannels.ledgerSubscribe]: Promise<void>;
@@ -77,7 +77,7 @@ const control: DesktopControlPlaneApi = {
   respondAuth: (response) => invoke(desktopIpcChannels.authRespond, response),
   executeModels: (command) => invoke(desktopIpcChannels.models, command),
   executeCatalog: (command) => invoke(desktopIpcChannels.catalog, command),
-  executeAliases: (command) => invoke(desktopIpcChannels.aliases, command),
+  executePublicModels: (command) => invoke(desktopIpcChannels.publicModels, command),
   executeCodexIntegration: (command) => invoke(desktopIpcChannels.codex, command),
   getRequestLedger: (query) => invoke(desktopIpcChannels.ledgerGet, query),
   onRequestLedger(listener) {

@@ -167,16 +167,8 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
-      "server.port",
       "application.quitDrainTimeoutMs",
     ]);
-    expect(settings["server.port"]).toMatchObject({
-      type: "number",
-      default: 3000,
-      applyMode: "restart-required",
-      value: 3000,
-      effective: 3000,
-    });
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({
       type: "boolean",
       default: true,
@@ -189,13 +181,13 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     await client.subscribe((event) => events.push(event));
     await client.executeSettingsCommand({
       command: "set",
-      key: "server.port",
-      value: 3210,
+      key: "diagnostics.deepCapture.enabled",
+      value: true,
     });
     expect(events.length).toBe(1);
-    expect(events[0]?.snapshot.settings?.["server.port"]).toMatchObject({
-      value: 3210,
-      effective: 3000,
+    expect(events[0]?.snapshot.settings?.["diagnostics.deepCapture.enabled"]).toMatchObject({
+      value: true,
+      applyMode: "hot-apply",
     });
   });
 
@@ -220,24 +212,18 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     ).toMatchObject({ value: false });
   });
 
-  it("reports a pending fixed port and applies it only through the declared restart lifecycle", async () => {
+  it("rejects server.port because endpoint ownership moved to PublicModelAuthority", async () => {
     const { client } = await startSettingsControlPlane({ port: 0 });
 
-    const pending = await client.executeSettingsCommand({
-      command: "set",
-      key: "server.port",
-      value: 3280,
-    });
-    expect(pending).toMatchObject({
-      outcome: "pending",
-    });
-    await client.executeRuntimeCommand("start");
-    const running = await client.getStatus();
-    expect(running.settings?.["server.port"]).toMatchObject({
-      value: 3280,
-      effective: 3000,
-    });
-    expect(running.dataPlane?.configuredOrigin).toContain(":3000");
+    await expect(
+      client.executeSettingsCommand({
+        command: "set",
+        key: "server.port",
+        value: 3280,
+      }),
+    ).resolves.toMatchObject({ outcome: "unknown_key" });
+    const snapshot = await client.getStatus();
+    expect(snapshot.settings).not.toHaveProperty("server.port");
   });
 
   it("does not expose LAN bind configuration or a settings confirmation command", async () => {
@@ -292,7 +278,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         key: "server.port",
         value: 99_999,
       }),
-    ).resolves.toMatchObject({ outcome: "invalid_value" });
+    ).resolves.toMatchObject({ outcome: "unknown_key" });
     const catalog = await client.executeSettingsCommand({ command: "query" });
     expect(JSON.stringify(catalog)).not.toContain("internal.experimental.flag");
   });

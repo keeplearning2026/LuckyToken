@@ -2,9 +2,9 @@ import type { Models } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import {
-  resolveDataPlaneModel,
-  type AliasModelSource,
-} from "../../alias-model-seam.js";
+  resolveDataPlanePublicModel,
+  type PublicModelSource,
+} from "../../public-model-seam.js";
 import type { ClientProtocolHandler } from "../../http.js";
 import type { ProviderResponsesLane } from "../../provider-native-responses/contract.js";
 import type { LocalResponsesCompactLane } from "./compact-contract.js";
@@ -37,7 +37,7 @@ import type { RouterOptionDefaults } from "../options.js";
 
 export interface OpenAIResponsesCompactHandlerOptions {
   readonly models: Models;
-  readonly aliasSource?: AliasModelSource;
+  readonly publicModels?: PublicModelSource;
   readonly localNativeLane?: LocalResponsesCompactLane;
   readonly providerNativeLane?: ProviderResponsesLane;
   readonly configuration?: OpenAIResponsesConfiguration;
@@ -176,9 +176,9 @@ export function createOpenAIResponsesCompactHandler(
           });
         }
 
-        const resolution = await resolveDataPlaneModel(
+        const resolution = await resolveDataPlanePublicModel(
           options.models,
-          options.aliasSource,
+          options.publicModels,
           selector,
         );
         if (resolution.kind === "unknown") {
@@ -188,7 +188,8 @@ export function createOpenAIResponsesCompactHandler(
           return errorResponse(503, "The requested model is not currently available");
         }
         const model = resolution.model;
-        const alias = options.aliasSource === undefined ? undefined : resolution.alias;
+        const alias =
+          options.publicModels === undefined ? undefined : resolution.alias;
         if (options.providerNativeLane?.claims(model, "compact") === true) {
           return providerCompact(
             options.providerNativeLane,

@@ -170,39 +170,6 @@ describe("catalog composition runtime", () => {
     expect(catalog.models.getModel("dynamic-pkg", "cached-model")).toBeDefined();
   });
 
-  it("recomposes the runtime from authoritative models.json facts", async () => {
-    const files = new Map<string, string>();
-    const store = createCatalogCacheStore({
-      path: "C:\\app\\models-catalog-cache.json",
-      fileSystem: memoryFileSystem(files),
-    });
-    const { models, catalog } = await createConfiguredPiModels({
-      piDirectory: ".unused-in-memory-pi",
-      modelsStore: store,
-      credentials: new InMemoryCredentialStore(),
-      fetch: async () => new Response(null, { status: 500 }),
-      providerPackages: {},
-      now: () => 1,
-      createUuid: () => "00000000-0000-4000-8000-000000000002",
-    });
-    expect(models.getProvider("my-gateway")).toBeUndefined();
-    catalog.recompose({
-      providers: {
-        "my-gateway": {
-          baseUrl: "https://gateway.example.com/v1",
-          api: "openai-completions",
-          models: [{ id: "my-model" }],
-        },
-      },
-    });
-    // The atomic capture swaps the served snapshot for new requests.
-    catalog.capture();
-    expect(models.getProvider("my-gateway")).toBeDefined();
-    expect(
-      models.getModels("my-gateway")?.some((model) => model.id === "my-model"),
-    ).toBe(true);
-  });
-
   it("schedules a background refresh when a Provider login succeeds", async () => {
     const files = new Map<string, string>();
     const store = createCatalogCacheStore({

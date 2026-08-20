@@ -4,16 +4,6 @@ import type {
 } from "./diagnostics-contract.js";
 import {
   controlPlaneVersion,
-  type AliasCanonicalTarget,
-  type AliasCommand,
-  type AliasCommandResult,
-  type AliasFileError,
-  type AliasFileErrorKind,
-  type AliasFileState,
-  type AliasLayer,
-  type AliasStatusProjection,
-  type AliasValidationCode,
-  type AliasValidationErrorProjection,
   type ApplicationCommand,
   type ApplicationCommandConflict,
   type ApplicationCommandExecution,
@@ -37,8 +27,6 @@ import {
   type CatalogSnapshotProjection,
   type CatalogStatusProjection,
   type DataPlaneFailure,
-  type EffectiveAliasProjection,
-  type EffectiveAliasRegistryProjection,
   type EffectiveCatalogCompositionError,
   type EffectiveCatalogProjection,
   type EffectiveModelCost,
@@ -54,6 +42,9 @@ import {
   type ModelsFileErrorKind,
   type ModelsFileState,
   type ModelsProjection,
+  type PublicModelsCommand,
+  type PublicModelsCommandResult,
+  type PublicModelsState,
   type CaptureEvent,
   type CaptureQueryResult,
   type RegisteredSetting,
@@ -246,9 +237,9 @@ export type ClientRequest =
       readonly command: CatalogCommand;
     }
   | {
-      readonly type: "alias_command";
+      readonly type: "public_models_command";
       readonly requestId: string;
-      readonly command: AliasCommand;
+      readonly command: PublicModelsCommand;
     }
   | {
       readonly type: "codex_integration_command";
@@ -363,9 +354,9 @@ export type ServerMessage =
       readonly result: CatalogCommandResult;
     }
   | {
-      readonly type: "alias_command_result";
+      readonly type: "public_models_command_result";
       readonly requestId: string;
-      readonly result: AliasCommandResult;
+      readonly result: PublicModelsCommandResult;
     }
   | {
       readonly type: "codex_integration_command_result";
@@ -474,10 +465,7 @@ export function decodeApplicationStatus(
   if (value.catalog !== undefined && catalog === undefined) {
     return undefined;
   }
-  const aliases = decodeAliasStatusProjection(value.aliases);
-  if (value.aliases !== undefined && aliases === undefined) {
-    return undefined;
-  }
+  if (value.aliases !== undefined) return undefined;
   if (value.confirmation !== undefined) return undefined;
   return {
     modelDataPlane: value.modelDataPlane,
@@ -487,7 +475,6 @@ export function decodeApplicationStatus(
     ...(models === undefined ? {} : { models }),
     ...(credentials === undefined ? {} : { credentials }),
     ...(catalog === undefined ? {} : { catalog }),
-    ...(aliases === undefined ? {} : { aliases }),
   };
 }
 
@@ -880,6 +867,10 @@ export function decodeCodexIntegrationProjection(
     typeof value.catalogPath !== "string" ||
     value.catalogPath.length === 0 ||
     typeof value.restartRequired !== "boolean" ||
+    typeof value.desiredGeneration !== "number" ||
+    !Number.isSafeInteger(value.desiredGeneration) ||
+    value.desiredGeneration < 0 ||
+    typeof value.needsSync !== "boolean" ||
     !Array.isArray(value.warnings) ||
     value.warnings.some((warning) => typeof warning !== "string")
   ) {
@@ -896,6 +887,14 @@ export function decodeCodexIntegrationProjection(
   ) {
     return undefined;
   }
+  if (
+    value.appliedGeneration !== undefined &&
+    (typeof value.appliedGeneration !== "number" ||
+      !Number.isSafeInteger(value.appliedGeneration) ||
+      value.appliedGeneration < 0)
+  ) {
+    return undefined;
+  }
   if (value.message !== undefined && typeof value.message !== "string") {
     return undefined;
   }
@@ -909,6 +908,11 @@ export function decodeCodexIntegrationProjection(
     ...(value.modelCount === undefined ? {} : { modelCount: value.modelCount }),
     warnings: Object.freeze([...(value.warnings as string[])]),
     restartRequired: value.restartRequired,
+    desiredGeneration: value.desiredGeneration,
+    ...(value.appliedGeneration === undefined
+      ? {}
+      : { appliedGeneration: value.appliedGeneration }),
+    needsSync: value.needsSync,
     ...(value.message === undefined ? {} : { message: value.message }),
   });
 }
@@ -921,24 +925,61 @@ export function decodeCodexIntegrationCommandResult(
   return state === undefined ? undefined : Object.freeze({ state });
 }
 
-export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
-  if (!isRecord(value) || typeof value.command !== "string") {
-    return undefined;
-  }
+export function decodePublicModelsCommand(
+  value: unknown,
+): PublicModelsCommand | undefined {
+  if (!isRecord(value) || typeof value.command !== "string") return undefined;
   if (value.command === "query") return { command: "query" };
   const revision = value.revision;
   if (
     typeof revision !== "number" ||
     !Number.isSafeInteger(revision) ||
-    (revision as number) < 0
+    revision < 0
   ) {
     return undefined;
   }
-  if (value.command === "write" && isRecord(value.aliases)) {
+  if (value.command === "set_port") {
+    if (
+      typeof value.port !== "number" ||
+      !Number.isSafeInteger(value.port) ||
+      value.port < 1 ||
+      value.port > 65_535
+    ) {
+      return undefined;
+    }
+    return { command: "set_port", revision, port: value.port };
+  }
+  if (value.command === "set_provider") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.on !== "boolean"
+    ) {
+      return undefined;
+    }
     return {
-      command: "write",
-      revision: revision as number,
-      aliases: Object.freeze({ ...value.aliases }),
+      command: "set_provider",
+      revision,
+      providerId: value.providerId,
+      on: value.on,
+    };
+  }
+  if (value.command === "set_model") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.modelId !== "string" ||
+      value.modelId.length === 0 ||
+      typeof value.on !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      command: "set_model",
+      revision,
+      providerId: value.providerId,
+      modelId: value.modelId,
+      on: value.on,
     };
   }
   if (
@@ -955,7 +996,7 @@ export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
       }
       return {
         command: "rename_model",
-        revision: revision as number,
+        revision,
         providerId: value.providerId,
         modelId: value.modelId,
         modelName: value.modelName,
@@ -963,7 +1004,7 @@ export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
     }
     return {
       command: "restore_model_name",
-      revision: revision as number,
+      revision,
       providerId: value.providerId,
       modelId: value.modelId,
     };
@@ -971,254 +1012,107 @@ export function decodeAliasCommand(value: unknown): AliasCommand | undefined {
   return undefined;
 }
 
-const aliasValidationCodes: ReadonlySet<string> = new Set([
-  "invalid",
-  "ambiguous",
-  "unknown",
-  "duplicate",
-]);
-
-function decodeAliasValidationError(
-  value: unknown,
-): AliasValidationErrorProjection | undefined {
-  if (
-    !isRecord(value) ||
-    // The failing alias may itself be the invalid input (e.g. an empty
-    // key), so any string is a valid error entry.
-    typeof value.alias !== "string" ||
-    typeof value.code !== "string" ||
-    !aliasValidationCodes.has(value.code) ||
-    typeof value.message !== "string" ||
-    value.message.length === 0
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    alias: value.alias,
-    code: value.code as AliasValidationCode,
-    message: value.message,
-  });
-}
-
-function decodeAliasTarget(
-  value: unknown,
-): AliasCanonicalTarget | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.provider !== "string" ||
-    value.provider.length === 0 ||
-    typeof value.model !== "string" ||
-    value.model.length === 0
-  ) {
-    return undefined;
-  }
-  return Object.freeze({ provider: value.provider, model: value.model });
-}
-
-function decodeEffectiveAlias(
-  value: unknown,
-): EffectiveAliasProjection | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.alias !== "string" ||
-    value.alias.length === 0 ||
-    (value.layer !== "default" && value.layer !== "user")
-  ) {
-    return undefined;
-  }
-  const target = decodeAliasTarget(value.target);
-  if (target === undefined) return undefined;
-  return Object.freeze({
-    alias: value.alias,
-    target,
-    layer: value.layer as AliasLayer,
-  });
-}
-
-function decodeEffectiveAliasRegistry(
-  value: unknown,
-): EffectiveAliasRegistryProjection | undefined {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.aliases) ||
-    !Array.isArray(value.errors)
-  ) {
-    return undefined;
-  }
-  const aliases = value.aliases.map(decodeEffectiveAlias);
-  if (aliases.some((entry) => entry === undefined)) return undefined;
-  const errors = value.errors.map(decodeAliasValidationError);
-  if (errors.some((entry) => entry === undefined)) return undefined;
-  return Object.freeze({
-    aliases: Object.freeze(
-      aliases.filter(
-        (entry): entry is EffectiveAliasProjection => entry !== undefined,
-      ),
-    ),
-    errors: Object.freeze(
-      errors.filter(
-        (entry): entry is AliasValidationErrorProjection => entry !== undefined,
-      ),
-    ),
-  });
-}
-
-const aliasErrorKinds: ReadonlySet<string> = new Set([
-  "parse",
-  "schema",
-  "validation",
-  "load",
-  "storage",
-]);
-
-export function decodeAliasFileError(
-  value: unknown,
-): AliasFileError | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.kind !== "string" ||
-    !aliasErrorKinds.has(value.kind) ||
-    typeof value.message !== "string" ||
-    value.message.length === 0
-  ) {
-    return undefined;
-  }
-  const rawEntries = value.entries;
-  if (rawEntries !== undefined && !Array.isArray(rawEntries)) {
-    return undefined;
-  }
-  const entries =
-    rawEntries === undefined
-      ? undefined
-      : rawEntries.map(decodeAliasValidationError);
-  if (value.entries !== undefined && entries === undefined) return undefined;
-  if (
-    value.entries !== undefined &&
-    entries !== undefined &&
-    entries.some((entry) => entry === undefined)
-  ) {
-    return undefined;
-  }
-  // Per-alias entries exist exactly for the validation kind.
-  if (value.kind !== "validation" && value.entries !== undefined) {
-    return undefined;
-  }
-  if (value.kind === "validation" && value.entries === undefined) {
-    return undefined;
-  }
-  return Object.freeze({
-    kind: value.kind as AliasFileErrorKind,
-    message: value.message,
-    ...(entries === undefined
-      ? {}
-      : {
-          entries: Object.freeze(
-            entries.filter(
-              (entry): entry is AliasValidationErrorProjection =>
-                entry !== undefined,
-            ),
-          ),
-        }),
-  });
-}
-
-export function decodeAliasFileState(value: unknown): AliasFileState | undefined {
+function decodePublicModelsState(value: unknown): PublicModelsState | undefined {
   if (
     !isRecord(value) ||
     typeof value.revision !== "number" ||
     !Number.isSafeInteger(value.revision) ||
-    (value.revision as number) < 0 ||
-    typeof value.path !== "string" ||
-    value.path.length === 0 ||
-    typeof value.present !== "boolean" ||
-    typeof value.valid !== "boolean" ||
-    typeof value.raw !== "string" ||
-    typeof value.catalogVersion !== "number" ||
-    !Number.isSafeInteger(value.catalogVersion) ||
-    (value.catalogVersion as number) < 0
+    value.revision < 0 ||
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 0 ||
+    !isRecord(value.endpoint) ||
+    typeof value.endpoint.host !== "string" ||
+    value.endpoint.host.length === 0 ||
+    typeof value.endpoint.port !== "number" ||
+    !Number.isSafeInteger(value.endpoint.port) ||
+    value.endpoint.port < 1 ||
+    value.endpoint.port > 65_535 ||
+    !Array.isArray(value.providers)
   ) {
     return undefined;
   }
-  const error = decodeAliasFileError(value.error);
-  if (value.error !== undefined && error === undefined) return undefined;
-  const aliases = value.aliases;
-  if (aliases !== undefined && !isRecord(aliases)) return undefined;
-  if (!value.present && aliases !== undefined) return undefined;
-  if (aliases !== undefined && !value.valid) return undefined;
-  if (aliases === undefined && value.present && value.valid) return undefined;
-  const effective = decodeEffectiveAliasRegistry(value.effective);
-  if (effective === undefined) {
-    // The effective registry is always authoritative: defaults apply even
-    // when the file is absent or broken (a broken file contributes no user
-    // mappings, never a repair).
-    return undefined;
-  }
+  const providers = value.providers.map((provider) => {
+    if (
+      !isRecord(provider) ||
+      typeof provider.providerId !== "string" ||
+      provider.providerId.length === 0 ||
+      typeof provider.on !== "boolean" ||
+      !Array.isArray(provider.models)
+    ) {
+      return undefined;
+    }
+    const models = provider.models.map((model) => {
+      if (
+        !isRecord(model) ||
+        typeof model.alias !== "string" ||
+        model.alias.length === 0 ||
+        typeof model.target !== "string" ||
+        model.target.length === 0 ||
+        typeof model.on !== "boolean"
+      ) {
+        return undefined;
+      }
+      return Object.freeze({
+        alias: model.alias,
+        target: model.target,
+        on: model.on,
+      });
+    });
+    if (models.some((model) => model === undefined)) return undefined;
+    return Object.freeze({
+      providerId: provider.providerId,
+      on: provider.on,
+      models: Object.freeze(
+        models.filter(
+          (model): model is { readonly alias: string; readonly target: string; readonly on: boolean } =>
+            model !== undefined,
+        ),
+      ),
+    });
+  });
+  if (providers.some((provider) => provider === undefined)) return undefined;
   return Object.freeze({
-    revision: value.revision as number,
-    path: value.path,
-    present: value.present,
-    valid: value.valid,
-    raw: value.raw,
-    catalogVersion: value.catalogVersion as number,
-    ...(aliases === undefined ? {} : { aliases }),
-    ...(effective === undefined ? {} : { effective }),
-    ...(error === undefined ? {} : { error }),
+    revision: value.revision,
+    version: value.version,
+    endpoint: Object.freeze({
+      host: value.endpoint.host,
+      port: value.endpoint.port,
+    }),
+    providers: Object.freeze(
+      providers.filter(
+        (provider): provider is {
+          readonly providerId: string;
+          readonly on: boolean;
+          readonly models: readonly {
+            readonly alias: string;
+            readonly target: string;
+            readonly on: boolean;
+          }[];
+        } => provider !== undefined,
+      ),
+    ),
   });
 }
 
-export function decodeAliasCommandResult(
+export function decodePublicModelsCommandResult(
   value: unknown,
-): AliasCommandResult | undefined {
+): PublicModelsCommandResult | undefined {
   if (
     !isRecord(value) ||
     (value.outcome !== "ok" &&
       value.outcome !== "conflict" &&
       value.outcome !== "invalid" &&
+      value.outcome !== "unavailable" &&
       value.outcome !== "storage_failure")
   ) {
     return undefined;
   }
-  const state = decodeAliasFileState(value.state);
+  const state = decodePublicModelsState(value.state);
   if (state === undefined) return undefined;
-  const error = decodeAliasFileError(value.error);
-  if (value.error !== undefined && error === undefined) return undefined;
-  if (value.outcome === "invalid" && error === undefined) return undefined;
-  if (value.outcome === "storage_failure" && error === undefined) {
-    return undefined;
-  }
-  if (value.outcome === "ok" || value.outcome === "conflict") {
-    if (error !== undefined) return undefined;
-  }
   return Object.freeze({
-    outcome: value.outcome as AliasCommandResult["outcome"],
+    outcome: value.outcome as PublicModelsCommandResult["outcome"],
     state,
-    ...(error === undefined ? {} : { error }),
-  });
-}
-
-export function decodeAliasStatusProjection(
-  value: unknown,
-): AliasStatusProjection | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.revision !== "number" ||
-    !Number.isSafeInteger(value.revision) ||
-    (value.revision as number) < 0 ||
-    typeof value.path !== "string" ||
-    value.path.length === 0 ||
-    typeof value.present !== "boolean" ||
-    typeof value.valid !== "boolean"
-  ) {
-    return undefined;
-  }
-  const error = decodeAliasFileError(value.error);
-  if (value.error !== undefined && error === undefined) return undefined;
-  return Object.freeze({
-    revision: value.revision as number,
-    path: value.path,
-    present: value.present,
-    valid: value.valid,
-    ...(error === undefined ? {} : { error }),
   });
 }
 
@@ -2722,15 +2616,15 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
-  if (value.type === "alias_command") {
-    const command = decodeAliasCommand(value.command);
+  if (value.type === "public_models_command") {
+    const command = decodePublicModelsCommand(value.command);
     if (command === undefined) {
       return { type: "invalid", requestId, code: "invalid_request" };
     }
     return {
       type: "valid",
       request: {
-        type: "alias_command",
+        type: "public_models_command",
         requestId,
         command,
       },
@@ -3382,11 +3276,11 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "catalog_command_result", requestId, result };
   }
-  if (value.type === "alias_command_result") {
-    const result = decodeAliasCommandResult(value.result);
+  if (value.type === "public_models_command_result") {
+    const result = decodePublicModelsCommandResult(value.result);
     return result === undefined
       ? undefined
-      : { type: "alias_command_result", requestId, result };
+      : { type: "public_models_command_result", requestId, result };
   }
   if (value.type === "codex_integration_command_result") {
     const result = decodeCodexIntegrationCommandResult(value.result);

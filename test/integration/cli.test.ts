@@ -417,7 +417,6 @@ describe("LuckyToken CLI", () => {
       outcome: "ok",
       settings: {
         "protocols.anthropic-messages.enabled": { value: true },
-        "server.port": { value: 3000, effective: 3000 },
       },
     });
     expect(queryResult.stdout).not.toContain("cli-settings-capability");
