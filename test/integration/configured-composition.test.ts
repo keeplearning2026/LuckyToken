@@ -2,7 +2,7 @@ import {
   InMemoryCredentialStore,
   type FetchFunction,
 } from "@earendil-works/pi-ai";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -112,6 +112,7 @@ describe("configured serving composition", () => {
     expect(Object.keys(composition).sort()).toEqual([
       "catalog",
       "certification",
+      "close",
       "credentialAuthority",
       "deepCapture",
       "deepCaptureStore",
@@ -423,5 +424,38 @@ describe("configured serving composition", () => {
     expect(modelsJson.data.map((entry: { id: string }) => entry.id)).toContain(
       "commandcode-private/deepseek/deepseek-v4-flash",
     );
+
+    await Promise.all([
+      composition.close(),
+      composition.close(),
+      composition.close(),
+    ]);
+    const persisted = JSON.parse(
+      await readFile(join(stateDirectory, "state", "openai-responses.json"), "utf8"),
+    ) as { readonly states: ReadonlyArray<readonly [string, unknown]> };
+    expect(persisted.states.map(([id]) => id)).toContain(responsesJson.id);
+
+    const restarted = await createConfiguredLuckyTokenDataPlane({
+      config: await loadLuckyTokenCliConfig(configPath),
+      credentials,
+      fetch: async () => commandCodeText("continued after restart"),
+      importModule: commandCodeProviderImportModule(),
+      createSessionId: () => "00000000-0000-4000-8000-000000000252",
+      now: () => 1_786_400_000_001,
+    });
+    compositions.push(restarted);
+    const continuation = await restarted.runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "continue",
+          previous_response_id: responsesJson.id,
+        }),
+      }),
+    );
+    expect(continuation.status).toBe(200);
+    expect((await continuation.json()).previous_response_id).toBe(responsesJson.id);
   });
 });

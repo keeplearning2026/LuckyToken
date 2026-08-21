@@ -11,6 +11,7 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
   const [diagnostics, setDiagnostics] = useState<DiagnosticResult>();
   const [deepCaptureUnavailable, setDeepCaptureUnavailable] = useState(false);
   const [diagnosticsUnavailable, setDiagnosticsUnavailable] = useState(false);
+  const [storageNotice, setStorageNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -57,6 +58,11 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
         value: !deepCapture.value,
       });
       setDeepCapture(result.settings["diagnostics.deepCapture.enabled"]);
+      setStorageNotice(
+        result.outcome === "storage_failure"
+          ? result.error ?? "Settings could not be saved"
+          : undefined,
+      );
     } finally {
       setBusy(false);
     }
@@ -73,6 +79,7 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
           <p>Capture is off by default. The Backend owns redaction, retention, and persistence.</p>
           {deepCapture?.applyMode === "hot-apply" ? <p className="setting-state">Applies immediately</p> : null}
           {deepCaptureUnavailable ? <p className="error-text">Deep diagnostics setting is temporarily unavailable.</p> : null}
+          {storageNotice === undefined ? null : <p className="error-text">{storageNotice}</p>}
         </div>
         <button type="button" disabled={deepCapture === undefined || busy} onClick={() => void toggleDeepCapture()}>
           {busy ? "Updating…" : enabled ? "Disable deep diagnostics" : "Enable deep diagnostics"}

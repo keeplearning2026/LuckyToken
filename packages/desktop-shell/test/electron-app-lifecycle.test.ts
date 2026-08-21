@@ -73,6 +73,7 @@ describe("Electron desktop lifecycle seam", () => {
       quitProduct,
       openWindow,
       createTray: vi.fn(),
+      startBackendRecovery: vi.fn(),
     });
 
     expect(result).toBe("secondary");
@@ -110,6 +111,7 @@ describe("Electron desktop lifecycle seam", () => {
       quitProduct: vi.fn(),
       openWindow: vi.fn(),
       createTray,
+      startBackendRecovery: vi.fn(),
     });
 
     expect(result).toBe("primary");
@@ -138,6 +140,7 @@ describe("Electron desktop lifecycle seam", () => {
       quitProduct,
       openWindow,
       createTray: vi.fn(),
+      startBackendRecovery: vi.fn(),
     });
 
     secondInstance?.(activation("build-new"));
@@ -170,6 +173,7 @@ describe("Electron desktop lifecycle seam", () => {
       quitProduct: vi.fn(),
       openWindow,
       createTray,
+      startBackendRecovery: vi.fn(),
     });
 
     expect(result).toBe("primary");
@@ -202,6 +206,7 @@ describe("Electron desktop lifecycle seam", () => {
       quitProduct: vi.fn(),
       openWindow,
       createTray: vi.fn(),
+      startBackendRecovery: vi.fn(),
     });
 
     secondInstance?.(undefined);

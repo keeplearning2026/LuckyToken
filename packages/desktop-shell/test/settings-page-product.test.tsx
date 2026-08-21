@@ -251,4 +251,28 @@ describe("Settings product slice", () => {
     });
     expect(container.textContent).toContain("Applies immediately");
   });
+
+  it("shows the typed settings storage failure without changing the effective toggle", async () => {
+    const baseline = settingsResult();
+    await render(
+      createFakeDesktopApi({
+        control: {
+          executeSettings: async (command) =>
+            command.command === "query"
+              ? baseline
+              : {
+                  outcome: "storage_failure",
+                  error: "Settings could not be saved",
+                  settings: baseline.settings,
+                },
+          getDiagnostics: async () => ({ records: [], hasMore: false }),
+        },
+      }),
+    );
+    await click("Advanced");
+    await click("Enable deep diagnostics");
+
+    expect(container.textContent).toContain("Settings could not be saved");
+    expect(container.textContent).toContain("Enable deep diagnostics");
+  });
 });

@@ -2242,14 +2242,18 @@ export function decodeSettingsCommandResult(
       value.outcome !== "applied" &&
       value.outcome !== "pending" &&
       value.outcome !== "unknown_key" &&
-      value.outcome !== "invalid_value")
+      value.outcome !== "invalid_value" &&
+      value.outcome !== "storage_failure")
   ) {
     return undefined;
   }
   const settings = decodeSettingsProjection(value.settings);
   if (settings === undefined) return undefined;
   if (value.confirmation !== undefined) return undefined;
-  if (value.outcome === "invalid_value" && typeof value.error !== "string") {
+  if (
+    (value.outcome === "invalid_value" || value.outcome === "storage_failure") &&
+    typeof value.error !== "string"
+  ) {
     return undefined;
   }
   return Object.freeze({

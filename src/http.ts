@@ -94,23 +94,6 @@ function assertWritable(lifecycle: RequestLifecycle): void {
   }
 }
 
-async function raceWithRequestSignal<T>(
-  value: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) throw new HttpRequestAbortedError(signal.reason);
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new HttpRequestAbortedError(signal.reason));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([value, aborted]);
-  } finally {
-    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
-  }
-}
-
 function selectClientProtocol(
   protocols: readonly ClientProtocolHandler[],
   request: Request,
@@ -141,10 +124,10 @@ export async function handleHttpRequest(
       return new Response(null, { status: 404 });
     }
     routedRequest = new Request(request, { signal: lifecycle.signal });
-    const response = await raceWithRequestSignal(
-      protocol.handle(routedRequest),
-      lifecycle.signal,
-    );
+    // Completion is also the serving-lifecycle quiescence barrier.  Do not
+    // race the handler with cancellation here: the handler receives the
+    // combined signal and must be allowed to unwind before `handle()` settles.
+    const response = await protocol.handle(routedRequest);
     assertWritable(lifecycle);
     lifecycle.markDelivered();
     return response;

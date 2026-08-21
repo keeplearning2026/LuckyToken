@@ -55,9 +55,20 @@ export {
   projectRequestLedger,
 } from "@luckytoken/application-control-plane/ledger-projection";
 
+export type DesktopBackendState =
+  | {
+      readonly revision: number;
+      readonly kind: "connecting" | "reconnecting" | "unavailable";
+    }
+  | {
+      readonly revision: number;
+      readonly kind: "ready";
+      readonly status: StatusSnapshot;
+    };
+
 export interface DesktopControlPlaneApi {
-  getStatus(): Promise<StatusSnapshot>;
-  onStatus(listener: (status: StatusSnapshot) => void): () => void;
+  getBackendState(): Promise<DesktopBackendState>;
+  onBackendState(listener: (state: DesktopBackendState) => void): () => void;
 
   executeRuntime(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettings(command: SettingsCommand): Promise<SettingsCommandResult>;

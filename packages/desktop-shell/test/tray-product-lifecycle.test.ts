@@ -24,10 +24,13 @@ describe("tray-only Electron product lifecycle", () => {
     const openWindow = vi.fn();
     const quitProduct = vi.fn();
     const exitDesktop = vi.fn();
+    const startupOrder: string[] = [];
     const createTray = vi.fn((actions: { open: () => void; quit: () => void }) => {
+      startupOrder.push("tray");
       trayOpen = actions.open;
       trayQuit = actions.quit;
     });
+    const startBackendRecovery = vi.fn(() => startupOrder.push("recovery"));
 
     const result = await startElectronDesktopLifecycle({
       buildId: "build-a",
@@ -43,9 +46,11 @@ describe("tray-only Electron product lifecycle", () => {
       quitProduct,
       openWindow,
       createTray,
+      startBackendRecovery,
     });
 
     expect(result).toBe("primary");
+    expect(startupOrder).toEqual(["tray", "recovery"]);
     expect(createTray).toHaveBeenCalledTimes(1);
     expect(openWindow).not.toHaveBeenCalled();
 
@@ -80,6 +85,7 @@ describe("tray-only Electron product lifecycle", () => {
       quitProduct,
       openWindow,
       createTray,
+      startBackendRecovery: vi.fn(),
     });
 
     expect(result).toBe("secondary");

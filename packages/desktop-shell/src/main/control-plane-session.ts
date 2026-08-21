@@ -8,15 +8,9 @@ import {
   type StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
 import { randomUUID } from "node:crypto";
+import type { DesktopBackendState } from "../shared/desktop-api.js";
 
 export type TrayHealth = "ready" | "starting" | "attention" | "stopped";
-
-export type MainControlPlaneState =
-  | { readonly kind: "idle" }
-  | { readonly kind: "connecting" }
-  | { readonly kind: "reconnecting" }
-  | { readonly kind: "ready"; readonly status: StatusSnapshot }
-  | { readonly kind: "unavailable" };
 
 export interface ControlPlaneSessionDependencies {
   readonly connect: (endpoint: ControlPlaneEndpoint) => Promise<ControlPlaneClient>;
@@ -27,42 +21,57 @@ export interface ControlPlaneSession {
   reconnect(endpoint: ControlPlaneEndpoint): Promise<StatusSnapshot>;
   client(): ControlPlaneClient;
   application(): ApplicationIdentity;
-  state(): MainControlPlaneState;
+  state(): DesktopBackendState;
   trayHealth(): TrayHealth;
-  subscribeState(listener: (state: MainControlPlaneState) => void): () => void;
+  subscribeState(listener: (state: DesktopBackendState) => void): () => void;
   dispose(): Promise<void>;
 }
 
-function deriveTrayHealth(state: MainControlPlaneState): TrayHealth {
-  if (state.kind === "connecting" || state.kind === "reconnecting") return "starting";
-  if (state.kind === "idle" || state.kind === "unavailable") return "attention";
-  if (state.status.attention?.conditions.length) return "attention";
-  switch (state.status.modelDataPlane) {
-    case "running":
-      return "ready";
-    case "starting":
-    case "stopping":
+function deriveTrayHealth(state: DesktopBackendState): TrayHealth {
+  switch (state.kind) {
+    case "connecting":
+    case "reconnecting":
       return "starting";
-    case "failed":
+    case "unavailable":
       return "attention";
-    case "stopped":
-      return "stopped";
+    case "ready":
+      if (state.status.attention?.conditions.length) return "attention";
+      switch (state.status.modelDataPlane) {
+        case "running":
+          return "ready";
+        case "starting":
+        case "stopping":
+          return "starting";
+        case "failed":
+          return "attention";
+        case "stopped":
+          return "stopped";
+      }
   }
 }
 
 export function createControlPlaneSession(
   dependencies: ControlPlaneSessionDependencies,
 ): ControlPlaneSession {
-  let currentState: MainControlPlaneState = Object.freeze({ kind: "idle" });
+  let revision = 0;
+  let currentState: DesktopBackendState = Object.freeze({
+    revision,
+    kind: "connecting",
+  });
   let currentClient: ControlPlaneClient | undefined;
   let currentApplication: ApplicationIdentity | undefined;
   let unsubscribeStatus: (() => Promise<void>) | undefined;
   let generation = 0;
-  const listeners = new Set<(state: MainControlPlaneState) => void>();
+  const listeners = new Set<(state: DesktopBackendState) => void>();
 
-  const publish = (state: MainControlPlaneState): void => {
-    currentState = state;
-    for (const listener of listeners) listener(state);
+  const publish = (
+    state:
+      | { readonly kind: "connecting" | "reconnecting" | "unavailable" }
+      | { readonly kind: "ready"; readonly status: StatusSnapshot },
+  ): void => {
+    revision += 1;
+    currentState = Object.freeze({ revision, ...state }) as DesktopBackendState;
+    for (const listener of listeners) listener(currentState);
   };
 
   const releaseCurrent = async (): Promise<void> => {
@@ -103,20 +112,20 @@ export function createControlPlaneSession(
         throw new Error("LuckyToken Control Plane connection was replaced");
       }
       if (latest === undefined || snapshot.sequence >= latest.sequence) latest = snapshot;
-      publish(Object.freeze({ kind: "ready", status: latest }));
+      publish({ kind: "ready", status: latest });
 
       void client.disconnected.then((disconnect) => {
         if (myGeneration !== generation || disconnect.reason === "closed") return;
         currentClient = undefined;
         currentApplication = undefined;
         unsubscribeStatus = undefined;
-        publish(Object.freeze({ kind: "unavailable" }));
+        publish({ kind: "unavailable" });
       });
       return latest;
     } catch (error) {
       if (myGeneration === generation) {
         await releaseCurrent();
-        publish(Object.freeze({ kind: "unavailable" }));
+        publish({ kind: "unavailable" });
       }
       throw error;
     }
@@ -139,7 +148,7 @@ export function createControlPlaneSession(
     },
     state: () => currentState,
     trayHealth: () => deriveTrayHealth(currentState),
-    subscribeState(listener: (state: MainControlPlaneState) => void) {
+    subscribeState(listener: (state: DesktopBackendState) => void) {
       listeners.add(listener);
       listener(currentState);
       return () => listeners.delete(listener);
@@ -147,7 +156,7 @@ export function createControlPlaneSession(
     async dispose(): Promise<void> {
       generation += 1;
       await releaseCurrent();
-      publish(Object.freeze({ kind: "idle" }));
+      publish({ kind: "unavailable" });
       listeners.clear();
     },
   });

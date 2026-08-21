@@ -266,6 +266,8 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
 export interface ConfiguredLuckyTokenDataPlane {
   readonly runtime: LuckyTokenRuntime;
   readonly certification: CoreServingCertificationManifest;
+  /** Finalize protocol-owned resources after serving has become quiescent. */
+  close(): Promise<void>;
   /** User-configured models.json and external Provider Package registrations. */
   readonly userConfiguredProviderIds: readonly string[];
   /** Permanent Runtime Diagnostics store (Ticket 07). */
@@ -687,6 +689,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     executeOperation: createExecutionOperation(resolveUsageSemantics),
   });
   const clientProtocols: ClientProtocolHandler[] = [anthropic];
+  let finalizeResponsesState: (() => Promise<void>) | undefined;
   // Shared model discovery is unauthenticated like the rest of the local
   // Data Plane.
   clientProtocols.push(
@@ -728,6 +731,7 @@ export async function createConfiguredLuckyTokenDataPlane(
       stateFile,
       storeFalsePolicy: responsesConfiguration.conversion.response.storeFalse,
     });
+    finalizeResponsesState = () => sessionState.flush();
     const responses = createOpenAIResponsesHandler({
       models,
       createSessionId,
@@ -746,9 +750,6 @@ export async function createConfiguredLuckyTokenDataPlane(
       providerNativeLane,
       ...(publicModels === undefined ? {} : { publicModels }),
       maxRequestBytes: config.limits.maxRequestBytes,
-      ...(options.shutdownSignal === undefined
-        ? {}
-        : { shutdownSignal: options.shutdownSignal }),
       now,
       // Ticket 20: the Provider integration side owns the usage-semantics
       // declaration table; the composition binds it into the neutral
@@ -810,9 +811,14 @@ export async function createConfiguredLuckyTokenDataPlane(
             },
           ],
         });
+  let closePromise: Promise<void> | undefined;
   return Object.freeze({
     runtime,
     certification,
+    close(): Promise<void> {
+      closePromise ??= finalizeResponsesState?.() ?? Promise.resolve();
+      return closePromise;
+    },
     userConfiguredProviderIds,
     diagnosticsStore,
     credentialAuthority,

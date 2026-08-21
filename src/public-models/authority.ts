@@ -436,23 +436,26 @@ export function createPublicModelAuthority(
     currentFacts,
   );
   let cancelScheduledFlush: (() => void) | undefined;
-  let flushChain: Promise<void> = Promise.resolve();
+  let operationTail = Promise.resolve();
 
   const currentState = (): PublicModelState =>
     Object.freeze({ revision, snapshot: currentSnapshot });
 
+  const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = operationTail.then(operation, operation);
+    operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   const flushLatest = async (): Promise<void> => {
     cancelScheduledFlush?.();
     cancelScheduledFlush = undefined;
-    flushChain = flushChain.then(async () => {
-      while (loaded !== undefined && persistedRevision < revision) {
-        const capturedRevision = revision;
-        const capturedDocument = loaded;
-        await writeAtomic(options.path, capturedDocument, fileSystem);
-        persistedRevision = capturedRevision;
-      }
-    });
-    return flushChain;
+    if (loaded === undefined || persistedRevision >= revision) return;
+    await writeAtomic(options.path, loaded, fileSystem);
+    persistedRevision = revision;
   };
 
   const scheduleFlush = (): void => {
@@ -460,206 +463,230 @@ export function createPublicModelAuthority(
     cancelScheduledFlush = persistence.schedule(
       () => {
         cancelScheduledFlush = undefined;
-        void flushLatest().catch(() => undefined);
+        void serialize(flushLatest).catch(() => undefined);
       },
       persistence.delayMs,
     );
   };
 
+  const commitUserDocument = async (
+    document: PublicModelsDocument,
+    changed: boolean,
+  ): Promise<PublicModelCommandResult> => {
+    const nextRevision = changed ? revision + 1 : revision;
+    try {
+      if (changed || persistedRevision < revision) {
+        await writeAtomic(options.path, document, fileSystem);
+      }
+    } catch {
+      return Object.freeze({ outcome: "storage_failure", state: currentState() });
+    }
+    if (!changed) {
+      persistedRevision = revision;
+      cancelScheduledFlush?.();
+      cancelScheduledFlush = undefined;
+      return Object.freeze({ outcome: "ok", state: currentState() });
+    }
+    loaded = document;
+    revision = nextRevision;
+    persistedRevision = nextRevision;
+    snapshotVersion += 1;
+    currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
+    cancelScheduledFlush?.();
+    cancelScheduledFlush = undefined;
+    return Object.freeze({ outcome: "ok", state: currentState() });
+  };
+
   return Object.freeze({
-    async reconcile(facts: PublicModelRuntimeFacts): Promise<PublicModelState> {
-      if (loaded === undefined) {
-        loaded = await readInitialDocument(options.path, fileSystem, initialEndpoint);
-      }
-      const next = materializeRuntime(loaded, facts);
-      const runtimeChanged = !sameRuntimeFacts(currentFacts, facts);
-      if (next.changed) {
-        loaded = next.document;
-        revision += 1;
-        scheduleFlush();
-      }
-      currentFacts = facts;
-      if (next.changed || runtimeChanged) {
-        snapshotVersion += 1;
-        currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      }
-      return currentState();
+    reconcile(facts: PublicModelRuntimeFacts): Promise<PublicModelState> {
+      return serialize(async () => {
+        if (loaded === undefined) {
+          loaded = await readInitialDocument(options.path, fileSystem, initialEndpoint);
+        }
+        const next = materializeRuntime(loaded, facts);
+        const runtimeChanged = !sameRuntimeFacts(currentFacts, facts);
+        if (next.changed) {
+          loaded = next.document;
+          revision += 1;
+          scheduleFlush();
+        }
+        currentFacts = facts;
+        if (next.changed || runtimeChanged) {
+          snapshotVersion += 1;
+          currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
+        }
+        return currentState();
+      });
     },
-    async setPort(
+    setPort(
       input: Parameters<PublicModelAuthority["setPort"]>[0],
     ): Promise<PublicModelCommandResult> {
-      if (loaded === undefined || input.revision !== revision) {
-        return Object.freeze({ outcome: "conflict", state: currentState() });
-      }
-      if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65_535) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      if (loaded.endpoint.port === input.port) {
-        return Object.freeze({ outcome: "ok", state: currentState() });
-      }
-      loaded = {
-        schemaVersion: 1,
-        endpoint: { host: loaded.endpoint.host, port: input.port },
-        providers: loaded.providers,
-      };
-      revision += 1;
-      snapshotVersion += 1;
-      currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      scheduleFlush();
-      return Object.freeze({ outcome: "ok", state: currentState() });
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65_535) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const changed = loaded.endpoint.port !== input.port;
+        const next: PublicModelsDocument = changed
+          ? {
+              schemaVersion: 1,
+              endpoint: { host: loaded.endpoint.host, port: input.port },
+              providers: loaded.providers,
+            }
+          : loaded;
+        return commitUserDocument(next, changed);
+      });
     },
-    async setProviderOn(
+    setProviderOn(
       input: Parameters<PublicModelAuthority["setProviderOn"]>[0],
     ): Promise<PublicModelCommandResult> {
-      if (loaded === undefined || input.revision !== revision) {
-        return Object.freeze({ outcome: "conflict", state: currentState() });
-      }
-      const provider = loaded.providers[input.providerId];
-      const runtime = currentFacts.providers.find(
-        (candidate) => candidate.providerId === input.providerId,
-      );
-      if (provider === undefined || runtime === undefined || (input.on && !runtime.usable)) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const next: PublicModelsDocument = {
-        schemaVersion: 1,
-        endpoint: loaded.endpoint,
-        providers: {
-          ...loaded.providers,
-          [input.providerId]: {
-            enabled: input.on,
-            models: { ...provider.models },
-          },
-        },
-      };
-      loaded = next;
-      revision += 1;
-      snapshotVersion += 1;
-      currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      scheduleFlush();
-      return Object.freeze({ outcome: "ok", state: currentState() });
-    },
-    async setModelOn(
-      input: Parameters<PublicModelAuthority["setModelOn"]>[0],
-    ): Promise<PublicModelCommandResult> {
-      if (loaded === undefined || input.revision !== revision) {
-        return Object.freeze({ outcome: "conflict", state: currentState() });
-      }
-      const provider = loaded.providers[input.providerId];
-      if (provider === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const entry = Object.entries(provider.models).find(
-        ([, model]) => model.target === input.modelId,
-      );
-      if (entry === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const [alias, model] = entry;
-      const next: PublicModelsDocument = {
-        schemaVersion: 1,
-        endpoint: loaded.endpoint,
-        providers: {
-          ...loaded.providers,
-          [input.providerId]: {
-            enabled: provider.enabled,
-            models: {
-              ...provider.models,
-              [alias]: { target: model.target, enabled: input.on },
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        const runtime = currentFacts.providers.find(
+          (candidate) => candidate.providerId === input.providerId,
+        );
+        if (provider === undefined || runtime === undefined || (input.on && !runtime.usable)) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        if (provider.enabled === input.on) {
+          return commitUserDocument(loaded, false);
+        }
+        const next: PublicModelsDocument = {
+          schemaVersion: 1,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: {
+              enabled: input.on,
+              models: { ...provider.models },
             },
           },
-        },
-      };
-      loaded = next;
-      revision += 1;
-      snapshotVersion += 1;
-      currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      scheduleFlush();
-      return Object.freeze({ outcome: "ok", state: currentState() });
+        };
+        return commitUserDocument(next, true);
+      });
     },
-    async renameModel(
+    setModelOn(
+      input: Parameters<PublicModelAuthority["setModelOn"]>[0],
+    ): Promise<PublicModelCommandResult> {
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const entry = Object.entries(provider.models).find(
+          ([, model]) => model.target === input.modelId,
+        );
+        if (entry === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const [alias, model] = entry;
+        if (model.enabled === input.on) {
+          return commitUserDocument(loaded, false);
+        }
+        const next: PublicModelsDocument = {
+          schemaVersion: 1,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: {
+              enabled: provider.enabled,
+              models: {
+                ...provider.models,
+                [alias]: { target: model.target, enabled: input.on },
+              },
+            },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
+    },
+    renameModel(
       input: Parameters<PublicModelAuthority["renameModel"]>[0],
     ): Promise<PublicModelCommandResult> {
-      if (loaded === undefined || input.revision !== revision) {
-        return Object.freeze({ outcome: "conflict", state: currentState() });
-      }
-      if (!validModelName(input.providerId, input.modelName)) {
-        return Object.freeze({ outcome: "invalid", state: currentState() });
-      }
-      const provider = loaded.providers[input.providerId];
-      if (provider === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const entry = Object.entries(provider.models).find(
-        ([, model]) => model.target === input.modelId,
-      );
-      if (entry === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const [currentAlias, model] = entry;
-      const alias = `${input.providerId}/${input.modelName}`;
-      if (alias === currentAlias) {
-        return Object.freeze({ outcome: "ok", state: currentState() });
-      }
-      if (provider.models[alias] !== undefined) {
-        return Object.freeze({ outcome: "invalid", state: currentState() });
-      }
-      const models: Record<string, StoredPublicModel> = { ...provider.models };
-      delete models[currentAlias];
-      models[alias] = model;
-      loaded = {
-        schemaVersion: 1,
-        endpoint: loaded.endpoint,
-        providers: {
-          ...loaded.providers,
-          [input.providerId]: { enabled: provider.enabled, models },
-        },
-      };
-      revision += 1;
-      snapshotVersion += 1;
-      currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      scheduleFlush();
-      return Object.freeze({ outcome: "ok", state: currentState() });
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        if (!validModelName(input.providerId, input.modelName)) {
+          return Object.freeze({ outcome: "invalid", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const entry = Object.entries(provider.models).find(
+          ([, model]) => model.target === input.modelId,
+        );
+        if (entry === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const [currentAlias, model] = entry;
+        const alias = `${input.providerId}/${input.modelName}`;
+        if (alias === currentAlias) {
+          return commitUserDocument(loaded, false);
+        }
+        if (provider.models[alias] !== undefined) {
+          return Object.freeze({ outcome: "invalid", state: currentState() });
+        }
+        const models: Record<string, StoredPublicModel> = { ...provider.models };
+        delete models[currentAlias];
+        models[alias] = model;
+        const next: PublicModelsDocument = {
+          schemaVersion: 1,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: { enabled: provider.enabled, models },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
     },
-    async restoreModelName(
+    restoreModelName(
       input: Parameters<PublicModelAuthority["restoreModelName"]>[0],
     ): Promise<PublicModelCommandResult> {
-      if (loaded === undefined || input.revision !== revision) {
-        return Object.freeze({ outcome: "conflict", state: currentState() });
-      }
-      const provider = loaded.providers[input.providerId];
-      if (provider === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const entry = Object.entries(provider.models).find(
-        ([, model]) => model.target === input.modelId,
-      );
-      if (entry === undefined) {
-        return Object.freeze({ outcome: "unavailable", state: currentState() });
-      }
-      const [currentAlias, model] = entry;
-      const occupied = new Set(Object.keys(provider.models));
-      occupied.delete(currentAlias);
-      const alias = allocateDefaultAlias(input.providerId, input.modelId, occupied);
-      if (alias === currentAlias) {
-        return Object.freeze({ outcome: "ok", state: currentState() });
-      }
-      const models: Record<string, StoredPublicModel> = { ...provider.models };
-      delete models[currentAlias];
-      models[alias] = model;
-      loaded = {
-        schemaVersion: 1,
-        endpoint: loaded.endpoint,
-        providers: {
-          ...loaded.providers,
-          [input.providerId]: { enabled: provider.enabled, models },
-        },
-      };
-      revision += 1;
-      snapshotVersion += 1;
-      currentSnapshot = buildSnapshot(snapshotVersion, loaded, currentFacts);
-      scheduleFlush();
-      return Object.freeze({ outcome: "ok", state: currentState() });
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const entry = Object.entries(provider.models).find(
+          ([, model]) => model.target === input.modelId,
+        );
+        if (entry === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const [currentAlias, model] = entry;
+        const occupied = new Set(Object.keys(provider.models));
+        occupied.delete(currentAlias);
+        const alias = allocateDefaultAlias(input.providerId, input.modelId, occupied);
+        if (alias === currentAlias) {
+          return commitUserDocument(loaded, false);
+        }
+        const models: Record<string, StoredPublicModel> = { ...provider.models };
+        delete models[currentAlias];
+        models[alias] = model;
+        const next: PublicModelsDocument = {
+          schemaVersion: 1,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: { enabled: provider.enabled, models },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
     },
     state(): PublicModelState {
       return currentState();
@@ -667,6 +694,6 @@ export function createPublicModelAuthority(
     snapshot(): PublicModelSnapshot {
       return currentSnapshot;
     },
-    flush: flushLatest,
+    flush: () => serialize(flushLatest),
   });
 }

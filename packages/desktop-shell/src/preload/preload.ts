@@ -8,7 +8,7 @@ import type {
 import { desktopIpcChannels } from "../shared/ipc-channels.js";
 
 type InvokeResults = {
-  [desktopIpcChannels.statusGet]: ReturnType<DesktopControlPlaneApi["getStatus"]>;
+  [desktopIpcChannels.backendStateGet]: ReturnType<DesktopControlPlaneApi["getBackendState"]>;
   [desktopIpcChannels.runtime]: ReturnType<DesktopControlPlaneApi["executeRuntime"]>;
   [desktopIpcChannels.settings]: ReturnType<DesktopControlPlaneApi["executeSettings"]>;
   [desktopIpcChannels.credential]: ReturnType<DesktopControlPlaneApi["executeCredential"]>;
@@ -61,8 +61,9 @@ const onEvent = <T>(
 let ledgerListenerCount = 0;
 
 const control: DesktopControlPlaneApi = {
-  getStatus: () => invoke(desktopIpcChannels.statusGet),
-  onStatus: (listener) => onEvent(desktopIpcChannels.statusEvent, listener),
+  getBackendState: () => invoke(desktopIpcChannels.backendStateGet),
+  onBackendState: (listener) =>
+    onEvent(desktopIpcChannels.backendStateEvent, listener),
   executeRuntime: (command) => invoke(desktopIpcChannels.runtime, command),
   executeSettings: (command) => invoke(desktopIpcChannels.settings, command),
   executeCredential: (command) => invoke(desktopIpcChannels.credential, command),

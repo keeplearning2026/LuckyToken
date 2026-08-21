@@ -151,6 +151,8 @@ export interface ElectronDesktopLifecycleDependencies {
   readonly quitProduct: () => void;
   readonly openWindow: () => void;
   readonly createTray: (actions: TrayActions) => void;
+  /** Starts the long-running recovery owner; it does not wait for Backend readiness. */
+  readonly startBackendRecovery: () => void;
 }
 
 export async function startElectronDesktopLifecycle(
@@ -202,5 +204,6 @@ export async function startElectronDesktopLifecycle(
     open: dependencies.openWindow,
     quit: dependencies.quitProduct,
   });
+  dependencies.startBackendRecovery();
   return "primary";
 }

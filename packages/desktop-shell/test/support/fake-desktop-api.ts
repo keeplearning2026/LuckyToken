@@ -69,8 +69,8 @@ export function createFakeDesktopApi(options: {
     };
   };
   const control: DesktopControlPlaneApi = {
-    getStatus: unavailable,
-    onStatus: () => () => undefined,
+    getBackendState: unavailable,
+    onBackendState: () => () => undefined,
     executeRuntime: unavailable,
     executeSettings: unavailable,
     executeCredential: unavailable,

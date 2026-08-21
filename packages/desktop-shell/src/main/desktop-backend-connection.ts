@@ -59,9 +59,24 @@ export function createDesktopBackendConnection(
   let disposed = false;
   let started = false;
   let recoveryEnabled = true;
-  let generation = 0;
-  let activeTask: Promise<void> | undefined;
+  const disposeController = new AbortController();
+  let recoveryTask: Promise<void> | undefined;
   let unsubscribeState: (() => void) | undefined;
+
+  const waitForRetry = async (): Promise<boolean> => {
+    let onDispose: (() => void) | undefined;
+    const disposedWake = new Promise<false>((resolve) => {
+      onDispose = () => resolve(false);
+      disposeController.signal.addEventListener("abort", onDispose, { once: true });
+    });
+    try {
+      return await Promise.race([retryDelay().then(() => true), disposedWake]);
+    } finally {
+      if (onDispose !== undefined) {
+        disposeController.signal.removeEventListener("abort", onDispose);
+      }
+    }
+  };
 
   const connectEndpoint = async (
     endpoint: ControlPlaneEndpoint,
@@ -114,35 +129,85 @@ export function createDesktopBackendConnection(
     }
   };
 
-  const resolveConnection = async (
-    reconnecting: boolean,
-    myGeneration: number,
-  ): Promise<void> => {
-    const expectedBuildId = await dependencies.expectedBuildId();
-    let spawned: SpawnedBackend | undefined;
-    let childExit: Awaited<SpawnedBackend["exited"]> | undefined;
+  const waitForRecoveryWake = async (
+    spawned: SpawnedBackend,
+  ): Promise<
+    | { readonly kind: "disposed" }
+    | { readonly kind: "exit"; readonly exit: Awaited<SpawnedBackend["exited"]> }
+    | { readonly kind: "retry" }
+  > => {
+    let onDispose: (() => void) | undefined;
+    const disposedWake = new Promise<{ readonly kind: "disposed" }>((resolve) => {
+      onDispose = () => resolve({ kind: "disposed" });
+      disposeController.signal.addEventListener("abort", onDispose, { once: true });
+    });
     try {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (disposed || myGeneration !== generation) {
-          throw new Error("LuckyToken desktop Backend connection was disposed");
+      return await Promise.race([
+        spawned.exited.then((exit) => ({ kind: "exit" as const, exit })),
+        retryDelay().then(() => ({ kind: "retry" as const })),
+        disposedWake,
+      ]);
+    } finally {
+      if (onDispose !== undefined) {
+        disposeController.signal.removeEventListener("abort", onDispose);
+      }
+    }
+  };
+
+  const resolveConnection = async (reconnecting: boolean): Promise<void> => {
+    let spawned: SpawnedBackend | undefined;
+    let attempts = 0;
+    let recoveryDifficultyReported = false;
+    let lastFailure: unknown = new Error(
+      "LuckyToken Backend did not become management-ready",
+    );
+    try {
+      while (!disposed && recoveryEnabled) {
+        let expectedBuildId: string;
+        try {
+          expectedBuildId = await dependencies.expectedBuildId();
+        } catch (error) {
+          lastFailure = error;
+          attempts += 1;
+          if (attempts >= 100 && !recoveryDifficultyReported) {
+            recoveryDifficultyReported = true;
+            dependencies.onRecoveryFailure?.(lastFailure);
+          }
+          if (!(await waitForRetry())) return;
+          continue;
         }
 
         const endpoint = await dependencies.discovery.read().catch(() => undefined);
         if (endpoint !== undefined) {
           const outcome = await connectEndpoint(endpoint, expectedBuildId, reconnecting);
-          if (outcome === "connected") return;
+          if (outcome === "connected") {
+            recoveryDifficultyReported = false;
+            attempts = 0;
+            return;
+          }
+          lastFailure = new Error("LuckyToken Control Plane connection failed");
         }
 
         if (spawned === undefined) {
-          spawned = await dependencies.launcher.launch();
+          try {
+            spawned = await dependencies.launcher.launch();
+          } catch (error) {
+            lastFailure = error;
+            attempts += 1;
+            if (attempts >= 100 && !recoveryDifficultyReported) {
+              recoveryDifficultyReported = true;
+              dependencies.onRecoveryFailure?.(lastFailure);
+            }
+            if (!(await waitForRetry())) return;
+            continue;
+          }
         }
 
-        const wake = await Promise.race([
-          spawned.exited.then((exit) => ({ kind: "exit" as const, exit })),
-          retryDelay().then(() => ({ kind: "retry" as const })),
-        ]);
+        const wake = await waitForRecoveryWake(spawned);
+        if (wake.kind === "disposed") return;
         if (wake.kind === "exit") {
-          childExit = wake.exit;
+          spawned.release();
+          spawned = undefined;
           const finalEndpoint = await dependencies.discovery.read().catch(() => undefined);
           if (finalEndpoint !== undefined) {
             const outcome = await connectEndpoint(
@@ -152,53 +217,58 @@ export function createDesktopBackendConnection(
             );
             if (outcome === "connected") return;
           }
-          throw new Error(
-            `LuckyToken Backend exited before becoming management-ready (code=${String(childExit.code)}, signal=${String(childExit.signal)})`,
+          lastFailure = new Error(
+            `LuckyToken Backend exited before becoming management-ready (code=${String(wake.exit.code)}, signal=${String(wake.exit.signal)})`,
           );
+          // A dead candidate cannot justify an immediate second launch. Give
+          // discovery another complete recovery interval first.
+          if (!(await waitForRetry())) return;
+        }
+        attempts += 1;
+        if (attempts >= 100 && !recoveryDifficultyReported) {
+          recoveryDifficultyReported = true;
+          dependencies.onRecoveryFailure?.(lastFailure);
         }
       }
-      throw new Error("LuckyToken Backend did not become management-ready");
     } finally {
       spawned?.release();
     }
   };
 
-  const ensureConnection = (reconnecting: boolean): Promise<void> => {
-    if (disposed) {
-      return Promise.reject(new Error("LuckyToken desktop Backend connection is disposed"));
-    }
-    if (activeTask !== undefined) return activeTask;
-    const myGeneration = generation;
-    activeTask = resolveConnection(reconnecting, myGeneration).finally(() => {
-      activeTask = undefined;
+  const ensureConnection = (reconnecting: boolean): void => {
+    if (disposed || !recoveryEnabled || recoveryTask !== undefined) return;
+    recoveryTask = resolveConnection(reconnecting).finally(() => {
+      recoveryTask = undefined;
+      if (
+        started &&
+        !disposed &&
+        recoveryEnabled &&
+        dependencies.session.state().kind === "unavailable"
+      ) {
+        ensureConnection(true);
+      }
     });
-    return activeTask;
   };
 
   return Object.freeze({
     async start(): Promise<void> {
       if (disposed) throw new Error("LuckyToken desktop Backend connection is disposed");
       if (started) return;
+      started = true;
       unsubscribeState ??= dependencies.session.subscribeState((state) => {
         if (!started || disposed || !recoveryEnabled || state.kind !== "unavailable") return;
-        void ensureConnection(true).catch((error) => {
-          dependencies.onRecoveryFailure?.(error);
-        });
+        ensureConnection(true);
       });
-      await ensureConnection(false);
-      started = true;
-      if (recoveryEnabled && dependencies.session.state().kind === "unavailable") {
-        await ensureConnection(true);
-      }
+      ensureConnection(false);
     },
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      generation += 1;
+      disposeController.abort();
       unsubscribeState?.();
       unsubscribeState = undefined;
       dependencies.desktopOwnerLease.dispose();
-      await activeTask?.catch(() => undefined);
+      await recoveryTask?.catch(() => undefined);
       await dependencies.session.dispose();
       started = false;
     },

@@ -332,11 +332,10 @@ void startElectronDesktopLifecycle({
   whenReady: async () => {
     await app.whenReady();
     reconcileDesktopLoginItem();
-    await backendConnection.start();
     controlPlaneSession.subscribeState((state) => {
       updateTray(controlPlaneSession.trayHealth());
-      if (state.kind === "ready" && mainWindow !== undefined && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(desktopIpcChannels.statusEvent, state.status);
+      if (mainWindow !== undefined && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(desktopIpcChannels.backendStateEvent, state);
       }
     });
   },
@@ -349,6 +348,9 @@ void startElectronDesktopLifecycle({
   quitProduct: requestProductQuit,
   openWindow: openManagementWindow,
   createTray,
+  startBackendRecovery: () => {
+    void backendConnection.start().catch(() => undefined);
+  },
 });
 
 // Closing the last management window intentionally leaves Electron Main and

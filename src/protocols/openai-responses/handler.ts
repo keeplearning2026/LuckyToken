@@ -102,7 +102,6 @@ export interface OpenAIResponsesHandlerOptions {
    * creates and owns its own store bound to `stateFile`.
    */
   readonly sessionState?: ResponseSessionState;
-  readonly shutdownSignal?: AbortSignal;
   /** Backend-lifetime Public Model source. When absent, direct handler tests
    * use the canonical provider/model selector seam. */
   readonly publicModels?: PublicModelSource;
@@ -699,19 +698,6 @@ export function createOpenAIResponsesHandler(
       ...(options.now === undefined ? {} : { now: options.now }),
       storeFalsePolicy: configuration.conversion.response.storeFalse,
     });
-  if (options.shutdownSignal !== undefined) {
-    if (options.shutdownSignal.aborted) {
-      void sessionState.flush();
-    } else {
-      options.shutdownSignal.addEventListener(
-        "abort",
-        () => {
-          void sessionState.flush();
-        },
-        { once: true },
-      );
-    }
-  }
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
     localNativeLane: options.localNativeLane,

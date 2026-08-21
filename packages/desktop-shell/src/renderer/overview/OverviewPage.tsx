@@ -160,7 +160,13 @@ function FilterSelect({
   );
 }
 
-export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function OverviewPage({
+  api,
+  readyRevision,
+}: {
+  readonly api: LuckyTokenDesktopApi;
+  readonly readyRevision: number | undefined;
+}) {
   const [filters, setFilters] = useState<OverviewFilters>(defaultFilters);
   const [summary, setSummary] = useState<AnalyticsSummary>();
   const [options, setOptions] = useState<AnalyticsOptionsResult>();
@@ -173,7 +179,7 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const requestQuery = useMemo(() => ledgerQuery(filters), [filters]);
 
   useEffect(() => {
-    if (!validRange) {
+    if (!validRange || readyRevision === undefined) {
       setSummary(undefined);
       return;
     }
@@ -192,10 +198,10 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     return () => {
       active = false;
     };
-  }, [api, filters.from, filters.to, summaryFilters, validRange]);
+  }, [api, filters.from, filters.to, readyRevision, summaryFilters, validRange]);
 
   useEffect(() => {
-    if (!validRange) {
+    if (!validRange || readyRevision === undefined) {
       setOptions(undefined);
       return;
     }
@@ -213,10 +219,10 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     return () => {
       active = false;
     };
-  }, [api, filters.from, filters.to, validRange]);
+  }, [api, filters.from, filters.to, readyRevision, validRange]);
 
   useEffect(() => {
-    if (!validRange) {
+    if (!validRange || readyRevision === undefined) {
       setRecords([]);
       setHasMore(false);
       return;
@@ -254,7 +260,7 @@ export function OverviewPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       active = false;
       unsubscribe();
     };
-  }, [api, filters, requestQuery, validRange]);
+  }, [api, filters, readyRevision, requestQuery, validRange]);
 
   const loadMore = async (): Promise<void> => {
     const afterId = records.at(-1)?.id;

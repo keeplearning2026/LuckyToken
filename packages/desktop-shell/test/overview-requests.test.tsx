@@ -151,8 +151,8 @@ describe("Overview request table", () => {
 
     const api = createFakeDesktopApi({
       control: {
-        getStatus: async () => status,
-        onStatus: () => () => undefined,
+        getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+        onBackendState: () => () => undefined,
         getAnalytics: async (query) => analytics(query),
         getRequestLedger,
         onRequestLedger: (listener) => {
@@ -224,8 +224,8 @@ describe("Overview request table", () => {
   it('shows "No requests" for an empty filtered result', async () => {
     const api = createFakeDesktopApi({
       control: {
-        getStatus: async () => status,
-        onStatus: () => () => undefined,
+        getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+        onBackendState: () => () => undefined,
         getAnalytics: async (query) => analytics(query),
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,

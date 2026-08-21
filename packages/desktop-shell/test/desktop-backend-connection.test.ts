@@ -11,8 +11,8 @@ import { createDesktopBackendConnection } from "../src/main/desktop-backend-conn
 import type { SpawnedBackend } from "../src/main/backend-launcher.js";
 import type {
   ControlPlaneSession,
-  MainControlPlaneState,
 } from "../src/main/control-plane-session.js";
+import type { DesktopBackendState } from "../src/shared/desktop-api.js";
 import type { DesktopOwnerLeaseClient } from "../src/main/desktop-owner-lease.js";
 
 const endpointA: ControlPlaneEndpoint = Object.freeze({
@@ -46,10 +46,14 @@ interface EndpointBehavior {
 }
 
 function fakeSession(behaviors: Map<string, EndpointBehavior>) {
-  let currentState: MainControlPlaneState = Object.freeze({ kind: "idle" });
+  let revision = 0;
+  let currentState: DesktopBackendState = Object.freeze({
+    revision,
+    kind: "connecting",
+  });
   let currentApplication: ApplicationIdentity | undefined;
   let currentClient: ControlPlaneClient | undefined;
-  const listeners = new Set<(state: MainControlPlaneState) => void>();
+  const listeners = new Set<(state: DesktopBackendState) => void>();
   const connect = vi.fn(async (endpoint: ControlPlaneEndpoint) => {
     const behavior = behaviors.get(endpoint.address);
     if (behavior === undefined) throw new Error(`unreachable ${endpoint.address}`);
@@ -77,7 +81,11 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
       version: "test",
       ...(behavior.buildId === undefined ? {} : { buildId: behavior.buildId }),
     });
-    currentState = Object.freeze({ kind: "ready", status: behavior.status });
+    currentState = Object.freeze({
+      revision: ++revision,
+      kind: "ready",
+      status: behavior.status,
+    });
     for (const listener of listeners) listener(currentState);
     return behavior.status;
   });
@@ -98,7 +106,7 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
     },
     state: () => currentState,
     trayHealth: () => "ready" as const,
-    subscribeState(listener: (state: MainControlPlaneState) => void) {
+    subscribeState(listener: (state: DesktopBackendState) => void) {
       listeners.add(listener);
       listener(currentState);
       return () => listeners.delete(listener);
@@ -106,7 +114,7 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
     dispose: vi.fn(async () => {
       currentClient = undefined;
       currentApplication = undefined;
-      currentState = Object.freeze({ kind: "idle" });
+      currentState = Object.freeze({ revision: ++revision, kind: "unavailable" });
     }),
   } as ControlPlaneSession;
   return {
@@ -115,7 +123,7 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
     lose() {
       currentClient = undefined;
       currentApplication = undefined;
-      currentState = Object.freeze({ kind: "unavailable" });
+      currentState = Object.freeze({ revision: ++revision, kind: "unavailable" });
       for (const listener of listeners) listener(currentState);
     },
   };
@@ -148,6 +156,8 @@ function harness(options: {
   behaviors: Map<string, EndpointBehavior>;
   launch?: () => Promise<SpawnedBackend>;
   onLeaseBind?: (session: ReturnType<typeof fakeSession>) => void;
+  retryDelay?: () => Promise<void>;
+  onRecoveryFailure?: (error: unknown) => void;
 }) {
   const session = fakeSession(options.behaviors);
   const lease = fakeLease(() => options.onLeaseBind?.(session));
@@ -160,8 +170,13 @@ function harness(options: {
     session: session.session,
     desktopOwnerLease: lease,
     expectedBuildId: async () => "build-current",
-    retryDelay: async () => undefined,
+    retryDelay:
+      options.retryDelay ??
+      (() => new Promise<void>((resolve) => setTimeout(resolve, 0))),
     staleBackendExitTimeoutMs: 100,
+    ...(options.onRecoveryFailure === undefined
+      ? {}
+      : { onRecoveryFailure: options.onRecoveryFailure }),
   });
   return { connection, session, lease, launch };
 }
@@ -176,6 +191,8 @@ describe("DesktopBackendConnection", () => {
     });
 
     await h.connection.start();
+
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
 
     expect(h.session.connect).toHaveBeenCalledWith(endpointA);
     expect(h.lease.bind).toHaveBeenCalledWith(owner);
@@ -193,6 +210,8 @@ describe("DesktopBackendConnection", () => {
       ]),
     });
     await h.connection.start();
+
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
 
     discovery.current = endpointB;
     h.session.lose();
@@ -221,8 +240,8 @@ describe("DesktopBackendConnection", () => {
 
     await h.connection.start();
 
+    await vi.waitFor(() => expect(h.session.connect).toHaveBeenCalledWith(endpointB));
     expect(h.session.connect).toHaveBeenCalledWith(endpointA);
-    expect(h.session.connect).toHaveBeenCalledWith(endpointB);
     expect(h.lease.isBound()).toBe(true);
     await h.connection.dispose();
   });
@@ -241,19 +260,26 @@ describe("DesktopBackendConnection", () => {
 
     await h.connection.start();
 
+    await vi.waitFor(() => expect(h.session.connect).toHaveBeenCalledWith(endpointB));
     expect(h.launch).toHaveBeenCalledTimes(1);
-    expect(h.session.connect).toHaveBeenCalledWith(endpointB);
     expect(child.release).toHaveBeenCalledTimes(1);
     await h.connection.dispose();
   });
 
-  it("fails startup promptly when the launched process exits before any usable publication", async () => {
+  it("keeps recovering when a launched process exits before any usable publication", async () => {
     const discovery = { current: undefined as ControlPlaneEndpoint | undefined };
     const child = spawnedBackend({ exit: Promise.resolve({ code: 1, signal: null }) });
-    const h = harness({ discovery, behaviors: new Map(), launch: async () => child });
+    const recoveryFailure = vi.fn();
+    const h = harness({
+      discovery,
+      behaviors: new Map(),
+      launch: async () => child,
+      onRecoveryFailure: recoveryFailure,
+    });
 
-    await expect(h.connection.start()).rejects.toThrow("LuckyToken Backend exited before becoming management-ready");
-    expect(child.release).toHaveBeenCalledTimes(1);
+    await expect(h.connection.start()).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(child.release).toHaveBeenCalled());
+    expect(h.session.session.state().kind).not.toBe("ready");
     await h.connection.dispose();
   });
 
@@ -283,8 +309,8 @@ describe("DesktopBackendConnection", () => {
 
     await h.connection.start();
 
+    await vi.waitFor(() => expect(h.session.connect).toHaveBeenCalledWith(endpointB));
     expect(h.launch).toHaveBeenCalledTimes(1);
-    expect(h.session.connect).toHaveBeenLastCalledWith(endpointB);
     await h.connection.dispose();
   });
 
@@ -306,6 +332,7 @@ describe("DesktopBackendConnection", () => {
       ]),
     });
     await h.connection.start();
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
     expect(h.lease.bind).toHaveBeenCalledTimes(1);
 
     discovery.current = endpointB;
@@ -328,6 +355,7 @@ describe("DesktopBackendConnection", () => {
       ]),
     });
     await h.connection.start();
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
 
     discovery.current = endpointB;
     h.session.lose();
@@ -353,6 +381,7 @@ describe("DesktopBackendConnection", () => {
 
     await h.connection.start();
 
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
     expect(h.launch).not.toHaveBeenCalled();
     expect(h.lease.bind).toHaveBeenCalledWith(owner);
     await h.connection.dispose();
@@ -368,6 +397,7 @@ describe("DesktopBackendConnection", () => {
       ]),
     });
     await h.connection.start();
+    await vi.waitFor(() => expect(h.session.session.state().kind).toBe("ready"));
     discovery.current = endpointB;
 
     h.session.lose();
@@ -377,5 +407,50 @@ describe("DesktopBackendConnection", () => {
     await vi.waitFor(() => expect(h.session.connect).toHaveBeenCalledWith(endpointB));
     expect(h.session.connect).toHaveBeenCalledTimes(2);
     await h.connection.dispose();
+  });
+
+  it("continues recovery after the 100-attempt degradation threshold", async () => {
+    const discovery = { current: undefined as ControlPlaneEndpoint | undefined };
+    const recoveryFailure = vi.fn();
+    let recoveryCycles = 0;
+    const h = harness({
+      discovery,
+      behaviors: new Map([
+        [endpointA.address, { buildId: "build-current", status: snapshot(ownership("desktop")) }],
+      ]),
+      retryDelay: async () => {
+        recoveryCycles += 1;
+        if (recoveryCycles === 101) discovery.current = endpointA;
+      },
+      onRecoveryFailure: recoveryFailure,
+    });
+
+    await h.connection.start();
+
+    await vi.waitFor(() => expect(h.session.connect).toHaveBeenCalledWith(endpointA));
+    expect(recoveryCycles).toBeGreaterThan(100);
+    expect(recoveryFailure).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledTimes(1);
+    await h.connection.dispose();
+  });
+
+  it("keeps one slow spawned candidate and dispose cancels the recovery worker", async () => {
+    const discovery = { current: undefined as ControlPlaneEndpoint | undefined };
+    const child = spawnedBackend();
+    const h = harness({
+      discovery,
+      behaviors: new Map(),
+      launch: async () => child,
+      retryDelay: async () => await new Promise<void>(() => undefined),
+    });
+
+    await h.connection.start();
+    await vi.waitFor(() => expect(h.launch).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(h.launch).toHaveBeenCalledTimes(1);
+
+    await Promise.all([h.connection.dispose(), h.connection.dispose()]);
+    expect(child.release).toHaveBeenCalledTimes(1);
+    expect(h.session.session.dispose).toHaveBeenCalledTimes(1);
   });
 });

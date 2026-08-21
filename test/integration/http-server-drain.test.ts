@@ -95,15 +95,26 @@ describe("Data Plane HTTP drain lifecycle", () => {
     const started = new Promise<void>((resolve) => {
       handlerStarted = resolve;
     });
+    let releaseUnwind: (() => void) | undefined;
+    const unwind = new Promise<void>((resolve) => {
+      releaseUnwind = resolve;
+    });
+    let handlerSettled = false;
     const runtime = createLuckyTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
           pathname: "/never-completes",
-          handle: async () => {
+          handle: async (request) => {
             handlerStarted?.();
-            await new Promise<void>(() => undefined);
-            return new Response("never");
+            await new Promise<void>((resolve) => {
+              request.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+            await unwind;
+            handlerSettled = true;
+            throw request.signal.reason;
           },
         },
       ],
@@ -126,7 +137,12 @@ describe("Data Plane HTTP drain lifecycle", () => {
 
     fakeClock.advance();
 
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(handlerSettled).toBe(false);
+    releaseUnwind?.();
     await expect(drain).resolves.toBe("timed_out");
+    expect(handlerSettled).toBe(true);
     await expect(inFlight).rejects.toThrow();
   });
 

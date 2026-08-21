@@ -98,8 +98,8 @@ describe("Overview analytics", () => {
     });
     const api = createFakeDesktopApi({
       control: {
-        getStatus: async () => status,
-        onStatus: () => () => undefined,
+        getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+        onBackendState: () => () => undefined,
         getAnalytics,
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,

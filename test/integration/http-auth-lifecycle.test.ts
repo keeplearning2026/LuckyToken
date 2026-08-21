@@ -172,7 +172,16 @@ describe("HTTP and session lifecycle", () => {
   });
 
   it("merges request timeout and shutdown into the same cancellation path", async () => {
-    const neverFetch: FetchFunction = async () => await new Promise<Response>(() => {});
+    const neverFetch: FetchFunction = async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectAborted = (): void => reject(signal?.reason);
+        if (signal?.aborted === true) {
+          rejectAborted();
+          return;
+        }
+        signal?.addEventListener("abort", rejectAborted, { once: true });
+      });
     const timedRuntime = createLuckyTokenRuntime(
       runtimeOptions(neverFetch, { requestTimeoutMs: 5 }),
     );

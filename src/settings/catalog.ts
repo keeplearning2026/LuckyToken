@@ -42,7 +42,8 @@ export type SettingsCommandOutcome =
   | "applied"
   | "pending"
   | "unknown_key"
-  | "invalid_value";
+  | "invalid_value"
+  | "storage_failure";
 
 export interface SettingsCommandResult {
   readonly outcome: SettingsCommandOutcome;
@@ -191,6 +192,8 @@ export function createSettingsRegistry(
     definitions.map((definition) => [definition.key, definition.default]),
   );
   let loaded = false;
+  let loadPromise: Promise<void> | undefined;
+  let mutationTail = Promise.resolve();
 
   const definitionsFor = (key: string): SettingDefinition | undefined =>
     definitionsByKey.get(key);
@@ -214,35 +217,52 @@ export function createSettingsRegistry(
   const snapshot = (): SettingsSnapshot =>
     Object.freeze({ settings: currentSettings(allKeys) });
 
-  const persist = async (key: string, value: boolean | number | string) => {
-    persisted.set(key, value);
+  const persistedDocument = (
+    candidate?: readonly [string, boolean | number | string],
+  ): Readonly<Record<string, unknown>> => {
     const raw: Record<string, unknown> = Object.create(null);
     for (const [persistedKey, persistedValue] of persisted) {
       raw[persistedKey] = persistedValue;
     }
-    await store.save(raw);
+    if (candidate !== undefined) raw[candidate[0]] = candidate[1];
+    return raw;
   };
 
-  const load = async (): Promise<void> => {
-    if (loaded) return;
-    loaded = true;
-    const stored = await store.load();
-    for (const [key, value] of Object.entries(stored)) {
-      const definition = definitionsFor(key);
-      if (definition === undefined) continue;
-      if (!validateValue(definition, value).valid) continue;
-      pending.set(key, value as boolean | number | string);
-      effective.set(key, value as boolean | number | string);
-      persisted.set(key, value as boolean | number | string);
-    }
-    for (const [key, value] of Object.entries(options.initial ?? {})) {
-      const definition = definitionsFor(key);
-      if (definition === undefined || persisted.has(key)) continue;
-      if (!validateValue(definition, value).valid) continue;
-      pending.set(key, value as boolean | number | string);
-      effective.set(key, value as boolean | number | string);
-      persisted.set(key, value as boolean | number | string);
-    }
+  const load = (): Promise<void> => {
+    if (loaded) return Promise.resolve();
+    loadPromise ??= (async () => {
+      const stored = await store.load();
+      for (const [key, value] of Object.entries(stored)) {
+        const definition = definitionsFor(key);
+        if (definition === undefined) continue;
+        if (!validateValue(definition, value).valid) continue;
+        pending.set(key, value as boolean | number | string);
+        effective.set(key, value as boolean | number | string);
+        persisted.set(key, value as boolean | number | string);
+      }
+      for (const [key, value] of Object.entries(options.initial ?? {})) {
+        const definition = definitionsFor(key);
+        if (definition === undefined || persisted.has(key)) continue;
+        if (!validateValue(definition, value).valid) continue;
+        pending.set(key, value as boolean | number | string);
+        effective.set(key, value as boolean | number | string);
+        persisted.set(key, value as boolean | number | string);
+      }
+      loaded = true;
+    })().catch((error: unknown) => {
+      loadPromise = undefined;
+      throw error;
+    });
+    return loadPromise;
+  };
+
+  const serializeMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   const registry: SettingsRegistry = {
@@ -272,44 +292,55 @@ export function createSettingsRegistry(
       }
       return validateValue(definition, value);
     },
-    async set(
+    set(
       key: string,
       value: unknown,
       token: unknown,
     ): Promise<SettingsCommandResult> {
       void token;
-      await load();
-      const definition = definitionsFor(key);
-      if (definition === undefined) {
+      return serializeMutation(async () => {
+        await load();
+        const definition = definitionsFor(key);
+        if (definition === undefined) {
+          return {
+            outcome: "unknown_key",
+            settings: currentSettings(allKeys),
+          };
+        }
+        const validated = validateValue(definition, value);
+        if (!validated.valid) {
+          return {
+            outcome: "invalid_value",
+            ...(validated.error === undefined
+              ? {}
+              : { error: validated.error }),
+            settings: currentSettings(allKeys),
+          };
+        }
+        const typed = value as boolean | number | string;
+        try {
+          await store.save(persistedDocument([key, typed]));
+        } catch {
+          return {
+            outcome: "storage_failure",
+            error: "Settings could not be saved",
+            settings: currentSettings(allKeys),
+          };
+        }
+        persisted.set(key, typed);
+        pending.set(key, typed);
+        if (definition.applyMode === "hot-apply") {
+          effective.set(key, typed);
+          return {
+            outcome: "applied",
+            settings: currentSettings(allKeys),
+          };
+        }
         return {
-          outcome: "unknown_key",
+          outcome: "pending",
           settings: currentSettings(allKeys),
         };
-      }
-      const validated = validateValue(definition, value);
-      if (!validated.valid) {
-        return {
-          outcome: "invalid_value",
-          ...(validated.error === undefined
-            ? {}
-            : { error: validated.error }),
-          settings: currentSettings(allKeys),
-        };
-      }
-      const typed = value as boolean | number | string;
-      pending.set(key, typed);
-      await persist(key, typed);
-      if (definition.applyMode === "hot-apply") {
-        effective.set(key, typed);
-        return {
-          outcome: "applied",
-          settings: currentSettings(allKeys),
-        };
-      }
-      return {
-        outcome: "pending",
-        settings: currentSettings(allKeys),
-      };
+      });
     },
     snapshot,
   };

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/renderer/app/App.js";
+import type { DesktopBackendState } from "../src/shared/desktop-api.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 
 let container: HTMLDivElement;
@@ -453,7 +454,9 @@ describe("Providers product slice", () => {
     const dialog = container.querySelector('[role="dialog"][aria-label="Example AI models"]');
     expect(dialog?.textContent).toContain("model-a");
     expect(dialog?.textContent).toContain("flash");
-    expect(dialog?.textContent?.toLowerCase()).not.toContain("alias");
+    expect(dialog?.textContent).toContain(
+      "Hidden models leave discovery but remain callable by a known alias.",
+    );
   });
 
   it("Rename prefills the current model name, fixes the Provider prefix, and sends only modelName", async () => {
@@ -641,7 +644,7 @@ describe("Providers product slice", () => {
       executePublicModels,
     } }));
 
-    const turnOnProvider = container.querySelector('button[aria-label="Turn on Example AI"]');
+    const turnOnProvider = container.querySelector('button[aria-label="Publish Example AI"]');
     expect(turnOnProvider).toBeInstanceOf(HTMLButtonElement);
     await act(async () => (turnOnProvider as HTMLButtonElement).click());
     expect(executePublicModels).toHaveBeenCalledWith({
@@ -651,10 +654,10 @@ describe("Providers product slice", () => {
       on: true,
     });
 
-    const turnOffProvider = container.querySelector('button[aria-label="Turn off Example AI"]');
+    const turnOffProvider = container.querySelector('button[aria-label="Hide Example AI"]');
     await act(async () => (turnOffProvider as HTMLButtonElement).click());
     await click("Models 2");
-    const modelSwitch = container.querySelector('button[aria-label="Turn off model-a"]');
+    const modelSwitch = container.querySelector('button[aria-label="Hide model-a"]');
     expect(modelSwitch).toBeInstanceOf(HTMLButtonElement);
     await act(async () => (modelSwitch as HTMLButtonElement).click());
     expect(executePublicModels).toHaveBeenLastCalledWith({
@@ -790,16 +793,7 @@ describe("Providers product slice", () => {
 
   it("re-queries Catalog on authoritative catalog-version change", async () => {
     let version = 1;
-    let statusListener: ((status: {
-      readonly sequence: number;
-      readonly modelDataPlane: "running";
-      readonly provider: "configured";
-      readonly catalog?: {
-        readonly version: number;
-        readonly refreshing: boolean;
-        readonly failedProviderIds: readonly string[];
-      };
-    }) => void) | undefined;
+    let statusListener: ((state: DesktopBackendState) => void) | undefined;
     const executeCatalog = vi.fn(async () => {
       const result = catalogQueryFor([
         {
@@ -821,7 +815,7 @@ describe("Providers product slice", () => {
           executeAuth: async () => authQuery(),
           executeCatalog,
           executeAliases: async () => aliasState(),
-          onStatus: (listener) => {
+          onBackendState: (listener) => {
             statusListener = listener;
             return () => undefined;
           },
@@ -832,10 +826,14 @@ describe("Providers product slice", () => {
     await act(async () => {
       version = 2;
       statusListener?.({
-        sequence: 2,
-        modelDataPlane: "running",
-        provider: "configured",
-        catalog: { version: 2, refreshing: false, failedProviderIds: [] },
+        revision: 2,
+        kind: "ready",
+        status: {
+          sequence: 2,
+          modelDataPlane: "running",
+          provider: "configured",
+          catalog: { version: 2, refreshing: false, failedProviderIds: [] },
+        },
       });
       await Promise.resolve();
       await Promise.resolve();

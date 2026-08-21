@@ -832,7 +832,8 @@ export type SettingsCommandOutcome =
   | "applied"
   | "pending"
   | "unknown_key"
-  | "invalid_value";
+  | "invalid_value"
+  | "storage_failure";
 
 export interface SettingsCommandResult {
   readonly outcome: SettingsCommandOutcome;

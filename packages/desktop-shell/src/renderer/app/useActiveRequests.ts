@@ -4,10 +4,17 @@ import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 
 const ACTIVE_PAGE_SIZE = 1_000;
 
-export function useActiveRequests(api: LuckyTokenDesktopApi): number {
+export function useActiveRequests(
+  api: LuckyTokenDesktopApi,
+  readyRevision: number | undefined,
+): number {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
+    if (readyRevision === undefined) {
+      setCount(0);
+      return;
+    }
     let active = true;
     let initialized = false;
     const running = new Set<string>();
@@ -62,7 +69,7 @@ export function useActiveRequests(api: LuckyTokenDesktopApi): number {
       active = false;
       unsubscribe();
     };
-  }, [api]);
+  }, [api, readyRevision]);
 
   return count;
 }

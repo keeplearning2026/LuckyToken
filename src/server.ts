@@ -120,11 +120,16 @@ export async function startLuckyTokenHttpServer(
   interface ActiveRequest {
     readonly controller: AbortController;
     readonly response: ServerResponse;
+    readonly completion: Promise<void>;
   }
   const activeRequests = new Set<ActiveRequest>();
   const server = createServer((request, response) => {
     const controller = new AbortController();
-    const activeRequest: ActiveRequest = { controller, response };
+    let settleCompletion: (() => void) | undefined;
+    const completion = new Promise<void>((resolve) => {
+      settleCompletion = resolve;
+    });
+    const activeRequest: ActiveRequest = { controller, response, completion };
     activeRequests.add(activeRequest);
     const abortRequest = (reason: unknown): void => {
       if (!controller.signal.aborted) controller.abort(reason);
@@ -173,6 +178,7 @@ export async function startLuckyTokenHttpServer(
         activeRequests.delete(activeRequest);
         request.off("aborted", onRequestAborted);
         response.off("close", onResponseClose);
+        settleCompletion?.();
       });
   });
 
@@ -195,6 +201,9 @@ export async function startLuckyTokenHttpServer(
       }
       if (!active.response.destroyed) active.response.destroy(shutdownReason);
     }
+  };
+  const awaitQuiescence = async (): Promise<void> => {
+    await Promise.all([...activeRequests].map((active) => active.completion));
   };
   const realClock: DrainClock = {
     now: Date.now,
@@ -230,19 +239,21 @@ export async function startLuckyTokenHttpServer(
       // in-flight requests keep running while the active set drains.
       const serverClosed = closeServer(server);
       const timeout = clock.sleep(timeoutMs);
-      const timedOut = timeout.promise.then((): DrainOutcome => {
-        abortActive();
-        return "timed_out";
-      });
+      const quiescent = Promise.all([serverClosed, awaitQuiescence()]);
       draining = Promise.race([
-        serverClosed.then((): DrainOutcome => "drained"),
-        timedOut,
-      ]).then((outcome) => {
+        quiescent.then(() => false),
+        timeout.promise.then(() => true),
+      ]).then(async (timedOut): Promise<DrainOutcome> => {
+        if (timedOut) {
+          abortActive();
+          server.closeAllConnections();
+          await quiescent;
+        }
         // An early drain must not leave the timeout timer pending: it would
         // keep the owner process alive past the quit.
         timeout.cancel();
         closed = true;
-        return outcome;
+        return timedOut ? "timed_out" : "drained";
       });
       return draining;
     },
@@ -252,7 +263,8 @@ export async function startLuckyTokenHttpServer(
       if (draining !== undefined) return draining.then(() => undefined);
       const serverClosed = closeServer(server);
       abortActive();
-      closing = serverClosed.then(() => {
+      server.closeAllConnections();
+      closing = Promise.all([serverClosed, awaitQuiescence()]).then(() => {
         closed = true;
       });
       return closing;

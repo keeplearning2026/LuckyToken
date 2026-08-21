@@ -10,6 +10,7 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
+import type { DesktopBackendState } from "../src/shared/desktop-api.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 
 let container: HTMLDivElement;
@@ -59,6 +60,8 @@ async function flush(): Promise<void> {
 describe("desktop command-router shell", () => {
   it("switches the three color pages and keeps endpoint, runtime state, active count, and start/stop control in the header", async () => {
     const ledgerListeners = new Set<(event: RequestLedgerEvent) => void>();
+    const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
+    let runningRecords = [ledgerRecord(1, "running"), ledgerRecord(2, "running")];
     const executeRuntime = vi.fn(async (command: "start" | "stop" | "restart") => ({
       command,
       outcome: "completed" as const,
@@ -70,12 +73,15 @@ describe("desktop command-router shell", () => {
     }));
     const api = createFakeDesktopApi({
       control: {
-        getStatus: async () => runningStatus,
-        onStatus: () => () => undefined,
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: (listener) => {
+          backendStateListeners.add(listener);
+          return () => backendStateListeners.delete(listener);
+        },
         executeRuntime,
         getRequestLedger: async (query) => ({
           records: query?.outcome === "running"
-            ? [ledgerRecord(1, "running"), ledgerRecord(2, "running")]
+            ? runningRecords
             : [],
           hasMore: false,
         }),
@@ -161,6 +167,16 @@ describe("desktop command-router shell", () => {
     });
     await flush();
     expect(executeRuntime).toHaveBeenCalledWith("stop");
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({
+          revision: 2,
+          kind: "ready",
+          status: { ...runningStatus, sequence: 2, modelDataPlane: "stopped" },
+        });
+      }
+    });
+    await flush();
     expect(container.textContent).toContain("Router stopped");
 
     act(() => {
@@ -175,6 +191,27 @@ describe("desktop command-router shell", () => {
       for (const listener of ledgerListeners) listener({ type: "request_ledger", record });
     });
     expect(container.querySelector(".active-request-count")?.textContent).toBe("2");
+
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({ revision: 3, kind: "unavailable" });
+      }
+    });
+    expect(container.textContent).toContain("Router unavailable");
+    expect(container.querySelector<HTMLButtonElement>(".runtime-toggle")?.disabled).toBe(true);
+
+    runningRecords = [];
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({
+          revision: 4,
+          kind: "ready",
+          status: { ...runningStatus, sequence: 0, modelDataPlane: "stopped" },
+        });
+      }
+    });
+    await flush();
+    expect(container.querySelector(".active-request-count")?.textContent).toBe("0");
   });
 
   it("edits only the port value and exposes icon-only Codex enable/sync controls with dirty highlighting", async () => {
@@ -231,8 +268,8 @@ describe("desktop command-router shell", () => {
     });
     const api = createFakeDesktopApi({
       control: {
-        getStatus: async () => runningStatus,
-        onStatus: () => () => undefined,
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: () => () => undefined,
         executePublicModels,
         executeCodexIntegration,
         getRequestLedger: async () => ({ records: [], hasMore: false }),

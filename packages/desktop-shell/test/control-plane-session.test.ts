@@ -66,13 +66,21 @@ describe("Main ControlPlaneSession", () => {
     const session = createControlPlaneSession({ connect: async () => first.client });
 
     await session.connect(endpoint);
-    expect(session.state()).toEqual({ kind: "ready", status: status(1, "stopped") });
+    expect(session.state()).toMatchObject({
+      revision: 2,
+      kind: "ready",
+      status: status(1, "stopped"),
+    });
     expect(session.trayHealth()).toBe("stopped");
     expect(session.client()).toBe(first.client);
     expect(session.application()).toEqual({ id: "luckytoken", version: "test" });
 
     first.emit(status(2, "running"));
-    expect(session.state()).toEqual({ kind: "ready", status: status(2, "running") });
+    expect(session.state()).toMatchObject({
+      revision: 3,
+      kind: "ready",
+      status: status(2, "running"),
+    });
     expect(session.trayHealth()).toBe("ready");
     expect(JSON.stringify(session.state())).not.toContain(endpoint.address);
     expect(JSON.stringify(session.state())).not.toContain(endpoint.capability);
@@ -97,7 +105,10 @@ describe("Main ControlPlaneSession", () => {
     const reconnect = session.reconnect(endpoint);
     expect(session.state().kind).toBe("reconnecting");
     await reconnect;
-    expect(session.state()).toEqual({ kind: "ready", status: status(9, "stopped") });
+    expect(session.state()).toMatchObject({
+      kind: "ready",
+      status: status(9, "stopped"),
+    });
     expect(seen).toContain("unavailable");
     expect(seen).toContain("reconnecting");
   });
@@ -119,5 +130,34 @@ describe("Main ControlPlaneSession", () => {
     await session.dispose();
     expect(second.unsubscribe).toHaveBeenCalledTimes(1);
     expect(second.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a restarted Backend sequence and rejects callbacks from the old generation", async () => {
+    const first = fakeClient(status(100, "running"));
+    const second = fakeClient(status(0, "stopped"));
+    const connect = vi
+      .fn<() => Promise<ControlPlaneClient>>()
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(second.client);
+    const session = createControlPlaneSession({ connect: async () => connect() });
+
+    await session.connect(endpoint);
+    const firstRevision = session.state().revision;
+    await session.reconnect(endpoint);
+    const restarted = session.state();
+    expect(restarted).toMatchObject({
+      kind: "ready",
+      status: status(0, "stopped"),
+    });
+    expect(restarted.revision).toBeGreaterThan(firstRevision);
+
+    first.emit(status(101, "running"));
+    expect(session.state()).toBe(restarted);
+    second.emit(status(1, "running"));
+    expect(session.state()).toMatchObject({
+      kind: "ready",
+      status: status(1, "running"),
+    });
+    await session.dispose();
   });
 });

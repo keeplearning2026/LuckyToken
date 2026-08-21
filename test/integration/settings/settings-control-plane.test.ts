@@ -96,13 +96,14 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     readonly port?: number;
     readonly onStart?: () => void;
     readonly diagnostics?: ControlPlaneDiagnostics;
+    readonly settingsStore?: SettingsStore;
   }): Promise<{
     readonly host: RunningControlPlane;
     readonly registry: ReturnType<typeof createSettingsRegistry>;
     readonly client: Awaited<ReturnType<typeof connectControlPlane>>;
     readonly endpoint: ControlPlaneEndpoint;
   }> {
-    const store = memoryStore();
+    const store = options.settingsStore ?? memoryStore();
     const registry = createSettingsRegistry(store);
     let activeServer: RunningLuckyTokenHttpServer | undefined;
     const runtime = createProtocolAwareRuntime({
@@ -210,6 +211,35 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         "protocols.anthropic-messages.enabled"
       ],
     ).toMatchObject({ value: false });
+  });
+
+  it("returns a typed storage failure and keeps the old Control Plane projection", async () => {
+    const { client } = await startSettingsControlPlane({
+      settingsStore: {
+        async load() {
+          return { "protocols.anthropic-messages.enabled": true };
+        },
+        async save() {
+          throw new Error("secret operating-system write failure");
+        },
+      },
+    });
+
+    const result = await client.executeSettingsCommand({
+      command: "set",
+      key: "protocols.anthropic-messages.enabled",
+      value: false,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "storage_failure",
+      error: "Settings could not be saved",
+      settings: {
+        "protocols.anthropic-messages.enabled": { value: true },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("operating-system");
+    expect((await client.getStatus()).settings?.["protocols.anthropic-messages.enabled"]?.value).toBe(true);
   });
 
   it("rejects server.port because endpoint ownership moved to PublicModelAuthority", async () => {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type {
+  DesktopBackendState,
   LuckyTokenDesktopApi,
   RuntimeCommand,
   StatusSnapshot,
@@ -30,7 +31,7 @@ function runtimeAction(status: StatusSnapshot | undefined): RuntimeCommand | und
 
 export function App({ api }: AppProps) {
   const [page, setPage] = useState<ProductPage>("overview");
-  const [status, setStatus] = useState<StatusSnapshot>();
+  const [backendState, setBackendState] = useState<DesktopBackendState>();
   const [runtimePending, setRuntimePending] = useState(false);
   const [publicModels, setPublicModels] = useState<Awaited<
     ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
@@ -41,15 +42,15 @@ export function App({ api }: AppProps) {
   const [editingPort, setEditingPort] = useState(false);
   const [portDraft, setPortDraft] = useState("");
   const [codexPending, setCodexPending] = useState(false);
-  const latestSequence = useRef(-1);
-  const activeRequests = useActiveRequests(api);
+  const latestRevision = useRef(-1);
 
   useEffect(() => {
     let active = true;
-    const accept = (next: StatusSnapshot): void => {
-      if (!active || next.sequence < latestSequence.current) return;
-      latestSequence.current = next.sequence;
-      setStatus(next);
+    const accept = (next: DesktopBackendState): void => {
+      if (!active || next.revision < latestRevision.current) return;
+      latestRevision.current = next.revision;
+      setBackendState(next);
+      if (next.kind !== "ready") return;
       void api.control.executePublicModels({ command: "query" }).then(
         (result) => {
           if (active) setPublicModels(result);
@@ -63,24 +64,24 @@ export function App({ api }: AppProps) {
         () => undefined,
       );
     };
-    const unsubscribe = api.control.onStatus(accept);
-    void api.control.getStatus().then(accept, () => undefined);
+    const unsubscribe = api.control.onBackendState(accept);
+    void api.control.getBackendState().then(accept, () => undefined);
     return () => {
       active = false;
       unsubscribe();
     };
   }, [api]);
 
+  const status = backendState?.kind === "ready" ? backendState.status : undefined;
+  const readyRevision = backendState?.kind === "ready" ? backendState.revision : undefined;
+  const activeRequests = useActiveRequests(api, readyRevision);
+
   const executeRuntime = async (): Promise<void> => {
     const command = runtimeAction(status);
     if (command === undefined || runtimePending) return;
     setRuntimePending(true);
     try {
-      const result = await api.control.executeRuntime(command);
-      if (result.snapshot.sequence >= latestSequence.current) {
-        latestSequence.current = result.snapshot.sequence;
-        setStatus(result.snapshot);
-      }
+      await api.control.executeRuntime(command);
     } finally {
       setRuntimePending(false);
     }
@@ -242,7 +243,7 @@ export function App({ api }: AppProps) {
 
       <main className="product-content">
         {page === "overview" ? (
-          <OverviewPage api={api} />
+          <OverviewPage api={api} readyRevision={readyRevision} />
         ) : page === "providers" ? (
           <ProvidersPage api={api} />
         ) : (

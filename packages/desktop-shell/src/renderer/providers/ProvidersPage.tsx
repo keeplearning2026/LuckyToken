@@ -140,7 +140,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
 
   useEffect(() => {
     let active = true;
-    const stop = api.control.onStatus((status) => {
+    const stop = api.control.onBackendState((state) => {
+      if (state.kind !== "ready") return;
+      const status = state.status;
       const publishedVersion = status.catalog?.version;
       if (
         publishedVersion === undefined ||
@@ -484,7 +486,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         (model) => model.availability === "available",
       ).length ?? 0;
     const knownModels = publicProvider?.models.length ?? 0;
-    const enabledModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
+    const publishedModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
     const isConnected = !provider.status.unavailable && !provider.status.expired;
     const providerOn = publicProvider?.on ?? false;
     const catalogFailed = availability?.state === "failed";
@@ -506,19 +508,19 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <button
               type="button"
               className="runtime-toggle"
-              aria-label={`${providerOn ? "Turn off" : "Turn on"} ${provider.name}`}
+              aria-label={`${providerOn ? "Hide" : "Publish"} ${provider.name}`}
               aria-pressed={providerOn}
               disabled={publicProvider === undefined || (!providerOn && !isConnected)}
               onClick={() => void setProviderOn(provider.providerId, !providerOn)}
             >
-              {providerOn ? "ON" : "OFF"}
+              {providerOn ? "Published" : "Hidden"}
             </button>
           </div>
         </div>
         <p>
           {knownModels === 0
             ? "Models unavailable"
-            : `${enabledModels} enabled · ${availableModels} currently available`}
+            : `${publishedModels} published · ${availableModels} currently available`}
         </p>
         {catalogFailed ? (
           <p className="error-text">
@@ -767,6 +769,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 <p className="eyebrow">MODELS</p>
                 <h3>{selectedModelsProvider.name}</h3>
                 <p>{selectedModelRows.length} model{selectedModelRows.length === 1 ? "" : "s"}</p>
+                <p>Hidden models leave discovery but remain callable by a known alias.</p>
               </div>
               <button
                 type="button"
@@ -804,11 +807,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                       <button
                         type="button"
                         className="runtime-toggle"
-                        aria-label={`${row.on ? "Turn off" : "Turn on"} ${row.modelName}`}
+                        aria-label={`${row.on ? "Hide" : "Publish"} ${row.modelName}`}
                         aria-pressed={row.on}
                         onClick={() => void setModelOn(row, !row.on)}
                       >
-                        {row.on ? "ON" : "OFF"}
+                        {row.on ? "Published" : "Hidden"}
                       </button>
                       {editing ? (
                         <form

@@ -398,10 +398,14 @@ describe("Control Plane ownership and application lifecycle seam", () => {
         {
           method: "POST",
           pathname: "/never",
-          handle: async () => {
+          handle: async (request) => {
             handlerStarted?.();
-            await new Promise<void>(() => undefined);
-            return new Response("never");
+            await new Promise<void>((resolve) => {
+              request.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+            throw request.signal.reason;
           },
         },
       ],

@@ -6,6 +6,7 @@ import {
   type DesktopIpcHandler,
 } from "../src/main/desktop-ipc.js";
 import { desktopIpcChannels } from "../src/shared/ipc-channels.js";
+import type { DesktopBackendState } from "../src/shared/desktop-api.js";
 
 function fixture() {
   const handlers = new Map<string, DesktopIpcHandler>();
@@ -16,6 +17,7 @@ function fixture() {
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
   };
   const ledgerStop = vi.fn(async () => undefined);
+  const ledgerListeners: Array<(event: never) => void> = [];
   const runtimeResult = {
     command: "start" as const,
     outcome: "started" as const,
@@ -29,12 +31,25 @@ function fixture() {
       return { outcome: "ok", state: { revision: 1, path: "auth.json", present: true, valid: true, providers: [] } };
     }),
     subscribeRequestLedger: vi.fn(async (listener) => {
+      ledgerListeners.push(listener);
       listener({ type: "request_ledger", record: { id: 1 } } as never);
       return ledgerStop;
     }),
   } as unknown as ControlPlaneClient;
+  let backendState: DesktopBackendState = {
+    revision: 1,
+    kind: "ready" as const,
+    status: runtimeResult.snapshot,
+  };
+  const stateListeners = new Set<(state: DesktopBackendState) => void>();
   const session = {
     client: () => client,
+    state: () => backendState,
+    subscribeState(listener: (state: DesktopBackendState) => void) {
+      stateListeners.add(listener);
+      listener(backendState);
+      return () => stateListeners.delete(listener);
+    },
   } as never;
   const platform = {
     getAutoStart: vi.fn(async () => false),
@@ -55,7 +70,21 @@ function fixture() {
     senderId,
     send: vi.fn(),
   });
-  return { handlers, registrar, client, platform, bridge, ledgerStop, runtimeResult, event };
+  return {
+    handlers,
+    registrar,
+    client,
+    platform,
+    bridge,
+    ledgerStop,
+    ledgerListeners,
+    runtimeResult,
+    event,
+    publishBackendState(state: DesktopBackendState) {
+      backendState = state;
+      for (const listener of stateListeners) listener(state);
+    },
+  };
 }
 
 describe("typed Electron desktop IPC", () => {
@@ -95,6 +124,39 @@ describe("typed Electron desktop IPC", () => {
     );
     await bridge.releaseSender(7);
     expect(ledgerStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebinds a logical ledger subscription and rejects stale-client callbacks", async () => {
+    const fixtureState = fixture();
+    const trusted = fixtureState.event(7);
+    await fixtureState.handlers.get(desktopIpcChannels.ledgerSubscribe)?.(trusted);
+    expect(fixtureState.client.subscribeRequestLedger).toHaveBeenCalledTimes(1);
+
+    fixtureState.publishBackendState({ revision: 2, kind: "unavailable" });
+    fixtureState.publishBackendState({
+      revision: 3,
+      kind: "ready",
+      status: { ...fixtureState.runtimeResult.snapshot, sequence: 2 },
+    });
+    await vi.waitFor(() =>
+      expect(fixtureState.client.subscribeRequestLedger).toHaveBeenCalledTimes(2),
+    );
+    const sendsBeforeStale = trusted.send.mock.calls.length;
+    fixtureState.ledgerListeners[0]?.({
+      type: "request_ledger",
+      record: { id: 99 },
+    } as never);
+    expect(trusted.send).toHaveBeenCalledTimes(sendsBeforeStale);
+
+    fixtureState.ledgerListeners[1]?.({
+      type: "request_ledger",
+      record: { id: 100 },
+    } as never);
+    expect(trusted.send).toHaveBeenLastCalledWith(
+      desktopIpcChannels.ledgerEvent,
+      expect.objectContaining({ record: { id: 100 } }),
+    );
+    await fixtureState.bridge.dispose();
   });
 
   it("keeps platform capabilities separate and validates external URLs", async () => {

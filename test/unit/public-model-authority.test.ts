@@ -53,7 +53,7 @@ const runtime: PublicModelRuntimeFacts = {
 };
 
 describe("PublicModelAuthority", () => {
-  it("owns the local endpoint in memory and delays a port change to the same persistence boundary", async () => {
+  it("owns the local endpoint and makes a port command durable before ok", async () => {
     let writes = 0;
     const memory = memoryFileSystem();
     const fileSystem: PublicModelFileSystem = {
@@ -81,7 +81,7 @@ describe("PublicModelAuthority", () => {
       host: "127.0.0.1",
       port: 4321,
     });
-    expect(writes).toBe(0);
+    expect(writes).toBe(1);
 
     await authority.flush();
     expect(writes).toBe(1);
@@ -91,7 +91,7 @@ describe("PublicModelAuthority", () => {
     });
   });
 
-  it("publishes a model switch change immediately but coalesces persistence behind the debounce boundary", async () => {
+  it("makes an explicit model switch durable while leaving reconcile debounce separate", async () => {
     let writes = 0;
     let scheduled: (() => void) | undefined;
     const initial = {
@@ -145,8 +145,10 @@ describe("PublicModelAuthority", () => {
 
     expect(result.outcome).toBe("ok");
     expect(result.state.snapshot.providers[0]?.models[0]?.on).toBe(false);
-    expect(writes).toBe(0);
-    expect(JSON.parse(memory.files.get(path) ?? "null")).toEqual(initial);
+    expect(writes).toBe(1);
+    expect(JSON.parse(memory.files.get(path) ?? "null").providers.anthropic.models[
+      "anthropic/claude-opus"
+    ].enabled).toBe(false);
 
     scheduled?.();
     await authority.flush();
@@ -306,7 +308,7 @@ describe("PublicModelAuthority", () => {
     });
   });
 
-  it("allows Provider OFF while logged out, rejects OFF to ON until login, and delays persistence", async () => {
+  it("allows Provider OFF while logged out, durably, and rejects OFF to ON until login", async () => {
     let writes = 0;
     const initial = {
       schemaVersion: 1,
@@ -345,7 +347,7 @@ describe("PublicModelAuthority", () => {
     });
     expect(off.outcome).toBe("ok");
     expect(off.state.snapshot.providers[0]?.on).toBe(false);
-    expect(writes).toBe(0);
+    expect(writes).toBe(1);
 
     const rejected = await authority.setProviderOn({
       revision: off.state.revision,
@@ -534,5 +536,125 @@ describe("PublicModelAuthority", () => {
       providerId: "anthropic",
       modelId: "claude/opus",
     });
+  });
+
+  it("returns storage_failure without publishing a user mutation", async () => {
+    const initial = {
+      schemaVersion: 1,
+      endpoint,
+      providers: {},
+    };
+    const memory = memoryFileSystem({ [path]: JSON.stringify(initial) });
+    const authority = createPublicModelAuthority({
+      path,
+      fileSystem: {
+        ...memory.fileSystem,
+        rename: async () => {
+          throw new Error("disk unavailable");
+        },
+      },
+    });
+    const ready = await authority.reconcile({ version: 1, providers: [] });
+
+    const result = await authority.setPort({ revision: ready.revision, port: 4321 });
+
+    expect(result.outcome).toBe("storage_failure");
+    expect(result.state.revision).toBe(ready.revision);
+    expect(result.state.snapshot.endpoint).toEqual(endpoint);
+    expect(authority.snapshot().endpoint).toEqual(endpoint);
+  });
+
+  it("persists pending reconcile materialization with the next user command", async () => {
+    const memory = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem: memory.fileSystem });
+    const reconciled = await authority.reconcile(runtime);
+
+    const result = await authority.setPort({ revision: reconciled.revision, port: 4321 });
+
+    expect(result.outcome).toBe("ok");
+    const durable = JSON.parse(memory.files.get(path) ?? "null");
+    expect(durable.endpoint.port).toBe(4321);
+    expect(durable.providers.anthropic.models).toHaveProperty(
+      "anthropic/claude-opus",
+    );
+  });
+
+  it("prevents an old reconcile timer from overwriting a later user command", async () => {
+    const memory = memoryFileSystem();
+    let scheduled: (() => void) | undefined;
+    let writes = 0;
+    const authority = createPublicModelAuthority({
+      path,
+      fileSystem: {
+        ...memory.fileSystem,
+        writeFile: async (filePath, content) => {
+          writes += 1;
+          await memory.fileSystem.writeFile(filePath, content);
+        },
+      },
+      persistence: {
+        delayMs: 1_000,
+        schedule(task) {
+          scheduled = task;
+          return () => undefined;
+        },
+      },
+    });
+    const reconciled = await authority.reconcile(runtime);
+    const staleTimer = scheduled;
+    await authority.setPort({ revision: reconciled.revision, port: 4321 });
+
+    staleTimer?.();
+    await authority.flush();
+    expect(writes).toBe(1);
+    expect(JSON.parse(memory.files.get(path) ?? "null").endpoint.port).toBe(4321);
+  });
+
+  it("recovers after a background flush failure and lets the next user command persist", async () => {
+    const memory = memoryFileSystem();
+    let renameAttempts = 0;
+    let scheduled: (() => void) | undefined;
+    const authority = createPublicModelAuthority({
+      path,
+      fileSystem: {
+        ...memory.fileSystem,
+        rename: async (from, to) => {
+          renameAttempts += 1;
+          if (renameAttempts === 1) throw new Error("background write failed");
+          await memory.fileSystem.rename(from, to);
+        },
+      },
+      persistence: {
+        delayMs: 1_000,
+        schedule(task) {
+          scheduled = task;
+          return () => undefined;
+        },
+      },
+    });
+    const reconciled = await authority.reconcile(runtime);
+    scheduled?.();
+    await expect.poll(() => renameAttempts).toBe(1);
+
+    const result = await authority.setPort({ revision: reconciled.revision, port: 4321 });
+
+    expect(result.outcome).toBe("ok");
+    expect(renameAttempts).toBe(2);
+    expect(JSON.parse(memory.files.get(path) ?? "null").endpoint.port).toBe(4321);
+  });
+
+  it("flushes dirty reconcile state for a no-op user command", async () => {
+    const memory = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem: memory.fileSystem });
+    const reconciled = await authority.reconcile(runtime);
+
+    const result = await authority.setProviderOn({
+      revision: reconciled.revision,
+      providerId: "anthropic",
+      on: true,
+    });
+
+    expect(result).toMatchObject({ outcome: "ok", state: { revision: reconciled.revision } });
+    expect(memory.files.has(path)).toBe(true);
   });
 });

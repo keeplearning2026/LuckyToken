@@ -62,8 +62,51 @@ export function registerDesktopIpcHandlers(options: {
   readonly isTrustedSender: (senderId: number) => boolean;
 }): DesktopIpcBridge {
   const { registrar, session, platform, isTrustedSender } = options;
-  const ledgerSubscriptions = new Map<number, () => Promise<void>>();
+  interface LedgerSubscription {
+    readonly event: DesktopIpcEvent;
+    generation: number;
+    stop: (() => Promise<void>) | undefined;
+  }
+  const ledgerSubscriptions = new Map<number, LedgerSubscription>();
   const channels = new Set<string>();
+
+  const unbindLedger = async (subscription: LedgerSubscription): Promise<void> => {
+    subscription.generation += 1;
+    const stop = subscription.stop;
+    subscription.stop = undefined;
+    await stop?.().catch(() => undefined);
+  };
+
+  const bindLedger = async (subscription: LedgerSubscription): Promise<void> => {
+    await unbindLedger(subscription);
+    if (session.state().kind !== "ready") return;
+    const bindingGeneration = subscription.generation;
+    let stop: (() => Promise<void>) | undefined;
+    try {
+      stop = await session.client().subscribeRequestLedger((ledgerEvent) => {
+        if (
+          subscription.generation === bindingGeneration &&
+          session.state().kind === "ready"
+        ) {
+          subscription.event.send(desktopIpcChannels.ledgerEvent, ledgerEvent);
+        }
+      });
+    } catch {
+      return;
+    }
+    if (subscription.generation !== bindingGeneration) {
+      await stop().catch(() => undefined);
+      return;
+    }
+    subscription.stop = stop;
+  };
+
+  const unsubscribeSessionState = session.subscribeState((state) => {
+    for (const subscription of ledgerSubscriptions.values()) {
+      if (state.kind === "ready") void bindLedger(subscription);
+      else void unbindLedger(subscription);
+    }
+  });
 
   const register = (channel: string, handler: DesktopIpcHandler): void => {
     channels.add(channel);
@@ -75,7 +118,7 @@ export function registerDesktopIpcHandlers(options: {
     });
   };
 
-  register(desktopIpcChannels.statusGet, () => session.client().getStatus());
+  register(desktopIpcChannels.backendStateGet, () => session.state());
   register(desktopIpcChannels.runtime, (_event, ...args) =>
     session.client().executeRuntimeCommand(first<RuntimeCommand>(args)),
   );
@@ -109,16 +152,20 @@ export function registerDesktopIpcHandlers(options: {
     session.client().getRequestLedger(first<RequestLedgerQuery | undefined>(args)),
   );
   register(desktopIpcChannels.ledgerSubscribe, async (event) => {
-    await ledgerSubscriptions.get(event.senderId)?.().catch(() => undefined);
-    const stop = await session.client().subscribeRequestLedger((ledgerEvent) => {
-      event.send(desktopIpcChannels.ledgerEvent, ledgerEvent);
-    });
-    ledgerSubscriptions.set(event.senderId, stop);
+    const previous = ledgerSubscriptions.get(event.senderId);
+    if (previous !== undefined) await unbindLedger(previous);
+    const subscription: LedgerSubscription = {
+      event,
+      generation: 0,
+      stop: undefined,
+    };
+    ledgerSubscriptions.set(event.senderId, subscription);
+    await bindLedger(subscription);
   });
   register(desktopIpcChannels.ledgerUnsubscribe, async (event) => {
-    const stop = ledgerSubscriptions.get(event.senderId);
+    const subscription = ledgerSubscriptions.get(event.senderId);
     ledgerSubscriptions.delete(event.senderId);
-    await stop?.();
+    if (subscription !== undefined) await unbindLedger(subscription);
   });
   register(desktopIpcChannels.analytics, (_event, ...args) =>
     session.client().getAnalytics(first<AnalyticsQuery>(args)),
@@ -187,14 +234,15 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.desktopVersion, () => platform.getDesktopVersion());
 
   const releaseSender = async (senderId: number): Promise<void> => {
-    const stop = ledgerSubscriptions.get(senderId);
+    const subscription = ledgerSubscriptions.get(senderId);
     ledgerSubscriptions.delete(senderId);
-    await stop?.().catch(() => undefined);
+    if (subscription !== undefined) await unbindLedger(subscription);
   };
 
   return Object.freeze({
     releaseSender,
     async dispose(): Promise<void> {
+      unsubscribeSessionState();
       await Promise.allSettled(
         [...ledgerSubscriptions.keys()].map((senderId) => releaseSender(senderId)),
       );

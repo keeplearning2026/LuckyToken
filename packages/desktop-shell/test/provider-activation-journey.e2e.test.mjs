@@ -413,14 +413,16 @@ test(
       });
       assert.equal((await client.getStatus()).modelDataPlane, "stopped");
 
-      // 4. Models are opened from the Provider card; the user sees model
-      // names, never the Alias implementation concept.
+      // 4. Models are opened from the Provider card. Publication is explicit:
+      // hiding affects discovery while a known alias remains callable.
       await commandCodeCard.getByRole("button", { name: /^Models/u }).click();
       const commandCodeModels = page.getByRole("dialog", {
         name: "CommandCode Private models",
       });
       await commandCodeModels.waitFor();
-      assert.equal(await commandCodeModels.getByText(/alias/iu).count(), 0);
+      await commandCodeModels
+        .getByText("Hidden models leave discovery but remain callable by a known alias.")
+        .waitFor();
       const modelRow = commandCodeModels
         .locator("li.provider-model-row")
         .filter({ hasText: "deepseek/deepseek-v4-flash" });
