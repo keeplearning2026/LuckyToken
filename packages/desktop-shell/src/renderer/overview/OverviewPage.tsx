@@ -162,10 +162,10 @@ function FilterSelect({
 
 export function OverviewPage({
   api,
-  readyRevision,
+  backendAvailable,
 }: {
   readonly api: LuckyTokenDesktopApi;
-  readonly readyRevision: number | undefined;
+  readonly backendAvailable: boolean;
 }) {
   const [filters, setFilters] = useState<OverviewFilters>(defaultFilters);
   const [summary, setSummary] = useState<AnalyticsSummary>();
@@ -179,7 +179,7 @@ export function OverviewPage({
   const requestQuery = useMemo(() => ledgerQuery(filters), [filters]);
 
   useEffect(() => {
-    if (!validRange || readyRevision === undefined) {
+    if (!validRange || !backendAvailable) {
       setSummary(undefined);
       return;
     }
@@ -198,10 +198,10 @@ export function OverviewPage({
     return () => {
       active = false;
     };
-  }, [api, filters.from, filters.to, readyRevision, summaryFilters, validRange]);
+  }, [api, backendAvailable, filters.from, filters.to, summaryFilters, validRange]);
 
   useEffect(() => {
-    if (!validRange || readyRevision === undefined) {
+    if (!validRange || !backendAvailable) {
       setOptions(undefined);
       return;
     }
@@ -219,10 +219,10 @@ export function OverviewPage({
     return () => {
       active = false;
     };
-  }, [api, filters.from, filters.to, readyRevision, validRange]);
+  }, [api, backendAvailable, filters.from, filters.to, validRange]);
 
   useEffect(() => {
-    if (!validRange || readyRevision === undefined) {
+    if (!validRange || !backendAvailable) {
       setRecords([]);
       setHasMore(false);
       return;
@@ -260,7 +260,7 @@ export function OverviewPage({
       active = false;
       unsubscribe();
     };
-  }, [api, filters, readyRevision, requestQuery, validRange]);
+  }, [api, backendAvailable, filters, requestQuery, validRange]);
 
   const loadMore = async (): Promise<void> => {
     const afterId = records.at(-1)?.id;

@@ -123,7 +123,14 @@ export async function startLuckyTokenHttpServer(
     readonly completion: Promise<void>;
   }
   const activeRequests = new Set<ActiveRequest>();
+  let accepting = true;
   const server = createServer((request, response) => {
+    if (!accepting) {
+      request.resume();
+      response.writeHead(503, { connection: "close" });
+      response.end();
+      return;
+    }
     const controller = new AbortController();
     let settleCompletion: (() => void) | undefined;
     const completion = new Promise<void>((resolve) => {
@@ -235,8 +242,10 @@ export async function startLuckyTokenHttpServer(
       if (draining !== undefined) return draining;
       if (closing !== undefined) return closing.then(() => "drained");
       const clock = options?.clock ?? realClock;
-      // close() stops accepting and resolves when every connection ended;
-      // in-flight requests keep running while the active set drains.
+      // Admission closes synchronously so the active set is a closed set before
+      // its completion promises are captured. Existing connections may still
+      // deliver HTTP requests after server.close().
+      accepting = false;
       const serverClosed = closeServer(server);
       const timeout = clock.sleep(timeoutMs);
       const quiescent = Promise.all([serverClosed, awaitQuiescence()]);
@@ -261,6 +270,7 @@ export async function startLuckyTokenHttpServer(
       if (closed) return Promise.resolve();
       if (closing !== undefined) return closing;
       if (draining !== undefined) return draining.then(() => undefined);
+      accepting = false;
       const serverClosed = closeServer(server);
       abortActive();
       server.closeAllConnections();

@@ -101,9 +101,13 @@ export function registerDesktopIpcHandlers(options: {
     subscription.stop = stop;
   };
 
+  let backendAvailable = session.state().kind === "ready";
   const unsubscribeSessionState = session.subscribeState((state) => {
+    const nextAvailable = state.kind === "ready";
+    if (nextAvailable === backendAvailable) return;
+    backendAvailable = nextAvailable;
     for (const subscription of ledgerSubscriptions.values()) {
-      if (state.kind === "ready") void bindLedger(subscription);
+      if (backendAvailable) void bindLedger(subscription);
       else void unbindLedger(subscription);
     }
   });

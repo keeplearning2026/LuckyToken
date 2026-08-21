@@ -1356,11 +1356,11 @@ The existing root CLI may remain a thin product adapter or move under an `apps/`
 
 ---
 
-# 14. Revision and consistency rules
+# 14. Ordering and consistency rules
 
-The Electron migration must remove the current extra desktop revision layer.
-
-Do not introduce:
+The Electron migration must not introduce a Desktop-owned authority revision
+that competes with Backend facts. Do not create semantic revision layers such
+as:
 
 ```text
 ShellRevision
@@ -1378,7 +1378,26 @@ credential revision
 other capability-specific revision
 ```
 
-The Control Plane client remains responsible for its own ordered event/request contract.
+Electron Main may add one monotonically increasing `DesktopBackendState.revision`
+as a delivery-ordering token for the typed preload state stream. This token exists
+because Backend `StatusSnapshot.sequence` restarts when Main attaches to a new
+Backend process. It has no authority over Backend facts and is not a capability
+revision, Control Plane generation, or Renderer-owned state version.
+
+The ordering token has exactly one Renderer use: reject a state whose revision is
+older than the latest accepted Desktop state. It must not be used as Backend session
+identity or as a lifecycle dependency for subscriptions and authoritative queries.
+Those lifecycles follow availability transitions:
+
+```text
+non-ready → ready    bind / query
+ready → non-ready    unbind / clear
+ready → ready        keep the existing lifecycle
+```
+
+Control Plane client generation remains private to Electron Main and rejects stale
+callbacks from replaced clients. The Control Plane client remains responsible for
+its own ordered event/request contract.
 
 Renderer features apply capability-specific concurrency rules only when editing that capability.
 

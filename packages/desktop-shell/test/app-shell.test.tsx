@@ -214,6 +214,81 @@ describe("desktop command-router shell", () => {
     expect(container.querySelector(".active-request-count")?.textContent).toBe("0");
   });
 
+  it("keeps Backend observation active across ready status updates", async () => {
+    const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
+    const getRequestLedger = vi.fn(async () => ({ records: [], hasMore: false }));
+    const onRequestLedger = vi.fn(() => () => undefined);
+    const getAnalytics = vi.fn(async (query) => query.command === "options"
+      ? {
+          version: 1 as const,
+          command: "options" as const,
+          providers: [],
+          models: [],
+          protocols: [],
+          projects: [],
+          sessions: [],
+          outcomes: [],
+        }
+      : {
+          version: 1 as const,
+          command: "summary" as const,
+          totals: {
+            total: 0,
+            success: 0,
+            failed: 0,
+            aborted: 0,
+            other: 0,
+            pending: 0,
+            successRate: 0,
+            failureRate: 0,
+            abortRate: 0,
+            participating: 0,
+            totalRequests: 0,
+            excluded: 0,
+            inputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            cacheHitNumerator: 0,
+            cacheHitDenominator: 0,
+          },
+        });
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: (listener) => {
+          backendStateListeners.add(listener);
+          return () => backendStateListeners.delete(listener);
+        },
+        getRequestLedger,
+        onRequestLedger,
+        getAnalytics,
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    const ledgerQueries = getRequestLedger.mock.calls.length;
+    const ledgerSubscriptions = onRequestLedger.mock.calls.length;
+    const analyticsQueries = getAnalytics.mock.calls.length;
+
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({
+          revision: 2,
+          kind: "ready",
+          status: { ...runningStatus, sequence: 2, modelDataPlane: "stopped" },
+        });
+      }
+    });
+    await flush();
+
+    expect(getRequestLedger).toHaveBeenCalledTimes(ledgerQueries);
+    expect(onRequestLedger).toHaveBeenCalledTimes(ledgerSubscriptions);
+    expect(getAnalytics).toHaveBeenCalledTimes(analyticsQueries);
+    expect(container.textContent).toContain("Router stopped");
+  });
+
   it("edits only the port value and exposes icon-only Codex enable/sync controls with dirty highlighting", async () => {
     let publicState = {
       outcome: "ok" as const,

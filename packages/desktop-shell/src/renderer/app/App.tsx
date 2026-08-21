@@ -73,8 +73,8 @@ export function App({ api }: AppProps) {
   }, [api]);
 
   const status = backendState?.kind === "ready" ? backendState.status : undefined;
-  const readyRevision = backendState?.kind === "ready" ? backendState.revision : undefined;
-  const activeRequests = useActiveRequests(api, readyRevision);
+  const backendAvailable = backendState?.kind === "ready";
+  const activeRequests = useActiveRequests(api, backendAvailable);
 
   const executeRuntime = async (): Promise<void> => {
     const command = runtimeAction(status);
@@ -243,7 +243,7 @@ export function App({ api }: AppProps) {
 
       <main className="product-content">
         {page === "overview" ? (
-          <OverviewPage api={api} readyRevision={readyRevision} />
+          <OverviewPage api={api} backendAvailable={backendAvailable} />
         ) : page === "providers" ? (
           <ProvidersPage api={api} />
         ) : (

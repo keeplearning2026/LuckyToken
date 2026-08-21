@@ -1,3 +1,5 @@
+import { connect as connectSocket } from "node:net";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
@@ -88,6 +90,62 @@ describe("Data Plane HTTP drain lifecycle", () => {
     await expect(inFlight).resolves.toMatchObject({ status: 200 });
     expect(await (await inFlight).text()).toBe("completed-after-drain");
     await expect(drain).resolves.toBe("drained");
+  });
+
+  it("does not admit a second request from an existing keep-alive connection", async () => {
+    let firstStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handledPaths: string[] = [];
+    const runtime = createLuckyTokenRuntime({
+      clientProtocols: [
+        {
+          method: "GET",
+          pathname: "/first",
+          handle: async () => {
+            handledPaths.push("/first");
+            firstStarted?.();
+            await firstGate;
+            return new Response("first");
+          },
+        },
+        {
+          method: "GET",
+          pathname: "/second",
+          handle: async () => {
+            handledPaths.push("/second");
+            return new Response("second");
+          },
+        },
+      ],
+    });
+    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    servers.push(server);
+    const socket = connectSocket(server.port, server.host);
+    socket.on("error", () => undefined);
+    await new Promise<void>((resolve) => socket.once("connect", resolve));
+
+    socket.write(
+      "GET /first HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n",
+    );
+    await started;
+
+    const drain = server.drain(5_000, { clock: createFakeClock().clock });
+    socket.write(
+      "GET /second HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const pathsBeforeRelease = [...handledPaths];
+    releaseFirst?.();
+    await expect(drain).resolves.toBe("drained");
+    socket.destroy();
+    expect(pathsBeforeRelease).toEqual(["/first"]);
   });
 
   it("aborts the remaining active set after the drain timeout and reports timed_out", async () => {

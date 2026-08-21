@@ -159,6 +159,28 @@ describe("typed Electron desktop IPC", () => {
     await fixtureState.bridge.dispose();
   });
 
+  it("keeps the Ledger binding across ready status updates", async () => {
+    const fixtureState = fixture();
+    const trusted = fixtureState.event(7);
+    await fixtureState.handlers.get(desktopIpcChannels.ledgerSubscribe)?.(trusted);
+    expect(fixtureState.client.subscribeRequestLedger).toHaveBeenCalledTimes(1);
+
+    fixtureState.publishBackendState({
+      revision: 2,
+      kind: "ready",
+      status: { ...fixtureState.runtimeResult.snapshot, sequence: 2 },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const subscribeCount = vi.mocked(
+      fixtureState.client.subscribeRequestLedger,
+    ).mock.calls.length;
+    const stopCount = fixtureState.ledgerStop.mock.calls.length;
+    await fixtureState.bridge.dispose();
+
+    expect(subscribeCount).toBe(1);
+    expect(stopCount).toBe(0);
+  });
+
   it("keeps platform capabilities separate and validates external URLs", async () => {
     const { handlers, platform, event } = fixture();
     await expect(

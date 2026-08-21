@@ -6,12 +6,12 @@ const ACTIVE_PAGE_SIZE = 1_000;
 
 export function useActiveRequests(
   api: LuckyTokenDesktopApi,
-  readyRevision: number | undefined,
+  backendAvailable: boolean,
 ): number {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    if (readyRevision === undefined) {
+    if (!backendAvailable) {
       setCount(0);
       return;
     }
@@ -69,7 +69,7 @@ export function useActiveRequests(
       active = false;
       unsubscribe();
     };
-  }, [api, readyRevision]);
+  }, [api, backendAvailable]);
 
   return count;
 }
