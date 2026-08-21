@@ -130,11 +130,6 @@ export {
   type RequestLedgerRecord,
   type RequestLedgerStore,
   type RequestLedgerStoreFactory,
-  type RequestIdentitiesQueryHandler,
-  type RequestIdentitiesQueryResult,
-  type RequestIdentityFact,
-  type RequestIdentityProjection,
-  type RequestIdentityRecord,
   type RequestUsageProjection,
   type RunningControlPlane,
   type RuntimeCommand,
@@ -223,9 +218,6 @@ export {
   decodeBackupResult,
   decodeRecoveryProjection,
 } from "./wire-backup.js";
-export {
-  projectRequestIdentity,
-} from "./contracts.js";
 export {
   averageOutputSpeedUnavailableReason,
   deriveRequestStatus,

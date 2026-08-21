@@ -64,8 +64,7 @@ import {
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
-  type ConfiguredLuckyTokenDataPlane,
-} from "../../src/composition.js";
+} from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
 
@@ -121,9 +120,7 @@ function keyFileLoginInteraction(apiKey: string): AuthInteraction {
   return Object.freeze({
     prompt: async (prompt: AuthPrompt) => {
       if (prompt.type !== "secret" && prompt.type !== "text") {
-        throw new Error(
-          `Online login does not support ${prompt.type} prompts`,
-        );
+        throw new Error(`Online login does not support ${prompt.type} prompts`);
       }
       return apiKey;
     },
@@ -144,9 +141,7 @@ function aliasTargetFor(
   model: string,
 ): { readonly provider: string; readonly model: string } {
   const prefix = `${providerId}/`;
-  const modelId = model.startsWith(prefix)
-    ? model.slice(prefix.length)
-    : model;
+  const modelId = model.startsWith(prefix) ? model.slice(prefix.length) : model;
   return { provider: providerId, model: modelId };
 }
 
@@ -217,6 +212,62 @@ function parseArguments(args: readonly string[]): OnlineArguments {
   return { providerId, model, apiKeyFile, alias, batches, onlyScenario };
 }
 
+const ARTIFACT_REDACTED = "<redacted>";
+
+function sanitizedCodexTurnMetadata(value: string): string {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return ARTIFACT_REDACTED;
+    }
+    return JSON.stringify(
+      Object.fromEntries(
+        Object.entries(parsed).map(([name, fieldValue]) => [
+          name,
+          /(?:^|_)(?:installation_id|agent_name|account_id|user_id|organization_id|project_id|api_key|token|secret|credential)(?:_|$)/u.test(
+            name.toLowerCase(),
+          )
+            ? ARTIFACT_REDACTED
+            : fieldValue,
+        ]),
+      ),
+    );
+  } catch {
+    return ARTIFACT_REDACTED;
+  }
+}
+
+/** Online artifacts are intentionally retained after a run. Preserve benign
+ * protocol headers (including request/session/thread identity) while ensuring
+ * credentials and account authorities never reach disk. */
+function sanitizedArtifactHeaders(
+  headers: Headers,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      [...headers.entries()].map(([name, value]) => {
+        const normalized = name.toLowerCase().replaceAll("_", "-");
+        const sensitive =
+          normalized === "authorization" ||
+          normalized === "proxy-authorization" ||
+          normalized === "cookie" ||
+          normalized === "set-cookie" ||
+          /(?:^|-)(?:api-?key|token|secret|credential|account-id|organization|project)(?:-|$)/u.test(
+            normalized,
+          );
+        return [
+          name,
+          sensitive
+            ? ARTIFACT_REDACTED
+            : normalized === "x-codex-turn-metadata"
+              ? sanitizedCodexTurnMetadata(value)
+              : value,
+        ];
+      }),
+    ),
+  );
+}
+
 /**
  * Outbound dispatch logger: wraps the composition's fetch so every request
  * LuckyToken sends to the upstream Provider is recorded (URL, request body,
@@ -236,7 +287,9 @@ function createUpstreamLogger(
   const upstreamDir = join(artifactDir, "upstream");
   const fetch: FetchFunction = async (input, init) => {
     const request =
-      input instanceof Request ? input : new Request(input as RequestInfo, init);
+      input instanceof Request
+        ? input
+        : new Request(input as RequestInfo, init);
     const requestBody = await request.clone().text();
     const startedAt = performance.now();
     const response = await upstream(request);
@@ -250,7 +303,7 @@ function createUpstreamLogger(
       status: response.status,
       statusText: response.statusText,
       durationMs: Math.round(performance.now() - startedAt),
-      requestHeaders: Object.fromEntries(request.headers.entries()),
+      requestHeaders: sanitizedArtifactHeaders(request.headers),
       requestBody,
       responseBody,
     });
@@ -472,7 +525,10 @@ function failureCategory(error: unknown, totalSignal: AbortSignal): string {
 }
 
 function requestSignal(totalSignal: AbortSignal): AbortSignal {
-  return AbortSignal.any([totalSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+  return AbortSignal.any([
+    totalSignal,
+    AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  ]);
 }
 
 /**
@@ -486,7 +542,12 @@ function parseCodexJsonEvents(stdout: string): readonly CodexJsonEvent[] {
     if (trimmed.length === 0) continue;
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      )
+        continue;
       const record = parsed as Record<string, unknown>;
       const type = typeof record.type === "string" ? record.type : "";
       if (type.length === 0) continue;
@@ -552,20 +613,16 @@ async function runCodexExec(
           prompt,
         ];
 
-  const child = spawn(
-    process.execPath,
-    [CODEX_JS, ...args],
-    {
-      cwd,
-      env: {
-        ...process.env,
-        [CODEX_PROMPT_ENV_KEY]: token,
-        ...extraEnv,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+  const child = spawn(process.execPath, [CODEX_JS, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      [CODEX_PROMPT_ENV_KEY]: token,
+      ...extraEnv,
     },
-  );
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
   console.error(`[codex-exec] spawned ${marker} (${mode})`);
 
   let stdout = "";
@@ -577,15 +634,16 @@ async function runCodexExec(
     stderr += chunk.toString("utf8");
   });
 
-  const exitPromise = new Promise<{ code: number | null; signal: string | null }>(
-    (resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
-      // On Windows, child.kill() does not always emit "close"; also resolve
-      // on "exit" so a killed child never leaves the suite hanging.
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    },
-  );
+  const exitPromise = new Promise<{
+    code: number | null;
+    signal: string | null;
+  }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal }));
+    // On Windows, child.kill() does not always emit "close"; also resolve
+    // on "exit" so a killed child never leaves the suite hanging.
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
 
   let timedOut = false;
   const abort = abortPromise(totalSignal, child);
@@ -817,7 +875,8 @@ function assertCodexResult(
     const item = event.payload.item as Record<string, unknown> | undefined;
     if (item === undefined) continue;
     if (
-      (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+      (item.type === "function_call_output" ||
+        item.type === "custom_tool_call_output") &&
       typeof item.call_id === "string" &&
       !callIds.has(item.call_id)
     ) {
@@ -861,21 +920,29 @@ async function assertSnapshotHealthy(stateFile: string): Promise<void> {
       throw new Error("snapshot_bad_value");
     }
     const valueRecord = value as Record<string, unknown>;
-    if (typeof valueRecord.createdAt !== "number" || !Array.isArray(valueRecord.items)) {
+    if (
+      typeof valueRecord.createdAt !== "number" ||
+      !Array.isArray(valueRecord.items)
+    ) {
       throw new Error("snapshot_bad_value_shape");
     }
     // Orphan detection: function_call_output must pair with a function_call
     // earlier in the same entry.
     const seenCallIds = new Set<string>();
     for (const item of valueRecord.items as unknown[]) {
-      if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+      if (typeof item !== "object" || item === null || Array.isArray(item))
+        continue;
       const itemRecord = item as Record<string, unknown>;
-      if (itemRecord.type === "function_call" && typeof itemRecord.call_id === "string") {
+      if (
+        itemRecord.type === "function_call" &&
+        typeof itemRecord.call_id === "string"
+      ) {
         seenCallIds.add(itemRecord.call_id);
       }
     }
     for (const item of valueRecord.items as unknown[]) {
-      if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+      if (typeof item !== "object" || item === null || Array.isArray(item))
+        continue;
       const itemRecord = item as Record<string, unknown>;
       if (
         itemRecord.type === "function_call_output" &&
@@ -943,6 +1010,22 @@ function directedScenarios(): readonly Scenario[] {
       prompt:
         "Reply with exactly: NO_TOOLS_OK. Do not use any tools, do not explain.",
       expectedText: "NO_TOOLS_OK",
+    }),
+
+    // Exercise the longest stateful tool chain before the stress matrix can
+    // influence an external Provider's tool-selection quality. Assertions stay
+    // strict: malformed tool text is never repaired into a tool call.
+    Object.freeze({
+      id: "multi_turn_tool",
+      prompt:
+        "This is a multi-turn tool session. For turn 1, use exec_command exactly once " +
+        "to create multi_turn_probe.txt containing exactly MULTI_TURN_TOOL_1. Do not " +
+        "plan, spawn sub-agents, inspect artifacts, or use another tool. After the command " +
+        "completes, immediately reply with exactly: MULTI_TURN_TOOL_1_OK.",
+      expectedText: "MULTI_TURN_TOOL_1_OK",
+      requiredItemType: "command_execution",
+      special: "multi_turn",
+      turns: 3,
     }),
     Object.freeze({
       id: "reasoning",
@@ -1029,20 +1112,6 @@ function directedScenarios(): readonly Scenario[] {
         "reply with exactly: MULTI_TURN_1_OK. Do not plan, use tools, spawn sub-agents, " +
         "inspect artifacts, or explain.",
       expectedText: "MULTI_TURN_1_OK",
-      special: "multi_turn",
-      turns: 3,
-    }),
-
-    // --- wire: multi-turn tool state across a real conversation ---
-    Object.freeze({
-      id: "multi_turn_tool",
-      prompt:
-        "This is a multi-turn tool session. For turn 1, use exec_command exactly once " +
-        "to create multi_turn_probe.txt containing exactly MULTI_TURN_TOOL_1. Do not " +
-        "plan, spawn sub-agents, inspect artifacts, or use another tool. After the command " +
-        "completes, immediately reply with exactly: MULTI_TURN_TOOL_1_OK.",
-      expectedText: "MULTI_TURN_TOOL_1_OK",
-      requiredItemType: "command_execution",
       special: "multi_turn",
       turns: 3,
     }),
@@ -1155,7 +1224,9 @@ function latencySummary(values: readonly number[]): Record<string, number> {
   if (values.length === 0) return {};
   const sorted = [...values].sort((left, right) => left - right);
   const percentile = (ratio: number) =>
-    sorted[Math.min(Math.ceil(sorted.length * ratio) - 1, sorted.length - 1)] as number;
+    sorted[
+      Math.min(Math.ceil(sorted.length * ratio) - 1, sorted.length - 1)
+    ] as number;
   return {
     minimum: Math.round(sorted[0] as number),
     p50: Math.round(percentile(0.5)),
@@ -1165,7 +1236,8 @@ function latencySummary(values: readonly number[]): Record<string, number> {
 }
 
 /**
- * Wrap the runtime so every inbound `/v1/responses` request body is captured
+ * Wrap the runtime so every inbound `/v1/responses` request body and sanitized
+ * header map are captured
  * to `artifacts/requests/<marker>_<seq>.json`. These are REAL Codex CLI
  * request samples (incremental input + previous_response_id + tools), which
  * can later be replayed as golden fixtures in unit/integration tests.
@@ -1193,6 +1265,7 @@ function createCapturingRuntime(
             marker,
             method: cloned.method,
             url: cloned.url,
+            requestHeaders: sanitizedArtifactHeaders(cloned.headers),
             body: (() => {
               try {
                 return JSON.parse(bodyText);
@@ -1261,12 +1334,6 @@ async function assertCapturedCustomToolRoundTrip(
   }
 }
 
-function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
-  composition.deepCaptureStore.close();
-  composition.requestLedger.close();
-  composition.diagnosticsStore.close();
-}
-
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
@@ -1311,12 +1378,12 @@ export async function runCodexCliOnlineSuite(
           stateFile: "state/openai-responses.json",
         },
       },
-      providerPackages:
-        providerId === "commandcode-private"
-          ? { "@luckytoken/provider-commandcode-private": {} }
-          : {},
+      providerPackages: {},
       pi: { directory: "pi" },
-      limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
+      limits: {
+        maxRequestBytes: 1_048_576,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      },
     }),
     "utf8",
   );
@@ -1350,7 +1417,9 @@ export async function runCodexCliOnlineSuite(
   }
   const stored = await credentials.read(providerId);
   if (stored?.type !== "api_key" || stored.key !== apiKey) {
-    throw new Error(`Provider login did not persist a credential for ${providerId}`);
+    throw new Error(
+      `Provider login did not persist a credential for ${providerId}`,
+    );
   }
   console.error("[codex-suite] credentials ready");
   const aliasTarget = aliasTargetFor(providerId, model);
@@ -1479,7 +1548,7 @@ export async function runCodexCliOnlineSuite(
             stateFile,
             async () => {
               await server.close();
-              closeDataPlaneStores(composition);
+              await composition.close();
               composition = await createConfiguredLuckyTokenDataPlane({
                 config,
                 credentials,
@@ -1563,13 +1632,17 @@ export async function runCodexCliOnlineSuite(
         summary.successful += 1;
         const elapsed = performance.now() - startedAt;
         summary.latenciesMs.push(elapsed);
-        matrix.push({ id: scenario.id, status: "pass", ms: Math.round(elapsed) });
+        matrix.push({
+          id: scenario.id,
+          status: "pass",
+          ms: Math.round(elapsed),
+        });
       } catch (error) {
         summary.failed += 1;
         const category = failureCategory(error, totalSignal);
         if (category === "unknown_failure") {
           process.stderr.write(
-            `[codex job ${marker}] error: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+            `[codex job ${marker}] error: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
           );
         }
         recordFailure(summary, category);
@@ -1602,13 +1675,19 @@ export async function runCodexCliOnlineSuite(
       );
     }
     stdout.push(`failures: ${JSON.stringify(summary.failures)}`);
-    stdout.push(`latenciesMs: ${JSON.stringify(latencySummary(summary.latenciesMs))}`);
+    stdout.push(
+      `latenciesMs: ${JSON.stringify(latencySummary(summary.latenciesMs))}`,
+    );
     stdout.push(`events: ${JSON.stringify(summary.events)}`);
     const summaryText = stdout.join("\n");
     process.stdout.write(`${summaryText}\n`);
     // Persist the summary to disk AND emit it on stderr (unbuffered) so a
     // forced exit cannot lose the result.
-    await writeFile(join(artifactDir, "summary.txt"), `${summaryText}\n`, "utf8");
+    await writeFile(
+      join(artifactDir, "summary.txt"),
+      `${summaryText}\n`,
+      "utf8",
+    );
     process.stderr.write(`${summaryText}\n`);
 
     if (summary.failed > 0 || summary.events.missingOutputTokensDetails > 0) {
@@ -1620,7 +1699,7 @@ export async function runCodexCliOnlineSuite(
   } finally {
     await upstreamLogger.flush();
     await server.close();
-    closeDataPlaneStores(composition);
+    await composition.close();
   }
 }
 
@@ -1755,11 +1834,7 @@ async function runRestartRecoveryScenario(
     codexEnvironment,
     "resume",
   );
-  assertCodexResult(
-    second,
-    "RESTART_RECOVERY_CONTINUED_OK",
-    emptySummary(),
-  );
+  assertCodexResult(second, "RESTART_RECOVERY_CONTINUED_OK", emptySummary());
   await assertSnapshotHealthy(stateFile);
 }
 
@@ -1785,18 +1860,21 @@ async function runCancellationScenario(
   const outputFile = join(artifactDir, `${marker}_cancel.final.md`);
   const child = spawn(
     process.execPath,
-    [CODEX_JS, ...[
-      "-p",
-      CODEX_PROFILE,
-      "exec",
-      ...codexProviderOverrides(baseUrl, model),
-      "--dangerously-bypass-approvals-and-sandbox",
-      "--json",
-      "-o",
-      outputFile,
-      "--skip-git-repo-check",
-      scenario.prompt,
-    ]],
+    [
+      CODEX_JS,
+      ...[
+        "-p",
+        CODEX_PROFILE,
+        "exec",
+        ...codexProviderOverrides(baseUrl, model),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--json",
+        "-o",
+        outputFile,
+        "--skip-git-repo-check",
+        scenario.prompt,
+      ],
+    ],
     {
       cwd,
       env: {
@@ -1846,7 +1924,7 @@ if (process.argv[1]?.replace(/\\/g, "/").endsWith("run-codex-cli.ts")) {
     })
     .catch((error: unknown) => {
       process.stderr.write(
-        `run-codex-cli failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+        `run-codex-cli failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
       );
       process.exit(1);
     });

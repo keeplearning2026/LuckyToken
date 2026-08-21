@@ -5,6 +5,8 @@ import test from "node:test";
 
 import ts from "typescript";
 
+import { findStaticDependencyViolations } from "./static-dependency-graph.mjs";
+
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 async function exists(target) {
@@ -89,17 +91,26 @@ test("the model-serving Core seam has no Electron or Control Plane dependency", 
   ];
   const futureCore = path.join(repositoryRoot, "packages", "core", "src");
 
-  for (const entry of await importsUnder([...currentCoreSeams, futureCore])) {
-    assert.notEqual(
-      entry.specifier,
-      "electron",
-      `${display(entry.file)} must not depend on Electron`,
-    );
-    assert.ok(
-      !entry.specifier.startsWith("@luckytoken/application-control-plane"),
-      `${display(entry.file)} must not depend on the Application Control Plane`,
-    );
-  }
+  const entries = (
+    await Promise.all(
+      [...currentCoreSeams, futureCore].map((target) => sourceFiles(target)),
+    )
+  ).flat();
+  const violations = await findStaticDependencyViolations({
+    repositoryRoot,
+    entries,
+    forbidden: ({ specifier, resolved }) =>
+      specifier === "electron" ||
+      specifier.startsWith("@luckytoken/application-control-plane") ||
+      (resolved !== undefined &&
+        display(resolved).startsWith("packages/application-control-plane/")),
+  });
+
+  assert.deepEqual(
+    violations,
+    [],
+    violations.map((entry) => entry.chain.join(" -> ")).join("\n"),
+  );
 });
 
 test("the target renderer cannot import Node, Electron, Control Plane, or Core internals", async () => {

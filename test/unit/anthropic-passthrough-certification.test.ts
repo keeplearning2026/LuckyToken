@@ -7,11 +7,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
+import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
 } from "../../src/protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
+import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
 
 /**
  * Ticket 11 certification supplement: behavior the earlier passthrough
@@ -64,7 +66,15 @@ function dependencies(
     routerDefaults: {},
     now: () => 1,
     ...extra,
-    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
+    ...(passthroughFetch === undefined
+      ? {}
+      : {
+          providerNativeLane: createAnthropicProviderNativeLane({
+            models,
+            resolveRequestModel: identityRequestModelResolver,
+            fetch: passthroughFetch,
+          }),
+        }),
   };
   const anthropic = createAnthropicMessagesHandler(options);
   return {

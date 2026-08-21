@@ -105,7 +105,7 @@ describe("credential management through the Control Plane", () => {
       createRequestId: () => `credential-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(1);
+    const hello = await client.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }
@@ -208,7 +208,7 @@ describe("credential management through the Control Plane", () => {
       createRequestId: () => `credential-race-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await secondClient.hello(1);
+    const hello = await secondClient.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }
@@ -403,7 +403,7 @@ describe("credential management through the Control Plane", () => {
       createRequestId: () => `credential-unavailable-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(1);
+    const hello = await client.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }

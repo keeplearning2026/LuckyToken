@@ -61,7 +61,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     const events: StatusEvent[] = [];
     await client.subscribe((event) => events.push(event));
 
@@ -136,7 +136,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     const states: string[] = [];
     await client.subscribe((event) => states.push(event.snapshot.modelDataPlane));
 
@@ -193,7 +193,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     await expect(client.executeRuntimeCommand("restart")).resolves.toMatchObject({
       outcome: "conflict",
@@ -238,7 +238,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.executeRuntimeCommand("start");
 
@@ -293,7 +293,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await client.executeRuntimeCommand("start");
     await expect(client.executeRuntimeCommand("stop")).resolves.toMatchObject({
       outcome: "failed",
@@ -364,7 +364,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       createRequestId: () => `runtime-request-${++nextRequest}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     await client.executeRuntimeCommand("start");
     const origin = activeServer?.origin;

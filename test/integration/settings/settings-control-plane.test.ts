@@ -110,7 +110,10 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       runtime: createLuckyTokenRuntime({
         clientProtocols: [anthropic, responses],
       }),
-      registry,
+      isProtocolEnabled: (protocolId) =>
+        registry.query([`protocols.${protocolId}.enabled`])[
+          `protocols.${protocolId}.enabled`
+        ]?.value !== false,
       protocolRoutes: [
         { id: "anthropic-messages", method: "POST", pathname: "/v1/messages" },
         { id: "openai-responses", method: "POST", pathname: "/v1/responses" },
@@ -154,7 +157,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       createRequestId: () => `settings-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(1);
+    await client.hello(2);
     return { host, registry, client, endpoint };
   }
 

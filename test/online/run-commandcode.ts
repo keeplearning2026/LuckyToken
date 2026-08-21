@@ -14,7 +14,7 @@ import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   type ConfiguredLuckyTokenDataPlane,
-} from "../../src/composition.js";
+} from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import {
   createCapturingCommandCodeFetch,
@@ -390,12 +390,6 @@ function latencySummary(values: readonly number[]): Record<string, number> {
   };
 }
 
-function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
-  composition.deepCaptureStore.close();
-  composition.requestLedger.close();
-  composition.diagnosticsStore.close();
-}
-
 export async function runCommandCodeOnlineSuite(
   args: readonly string[],
 ): Promise<void> {
@@ -420,9 +414,7 @@ export async function runCommandCodeOnlineSuite(
         clientProtocols: {
           "anthropic-messages": {},
         },
-        providerPackages: {
-          "@luckytoken/provider-commandcode-private": {},
-        },
+        providerPackages: {},
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,
@@ -468,7 +460,7 @@ export async function runCommandCodeOnlineSuite(
     );
     await server.close();
     server = undefined;
-    closeDataPlaneStores(composition);
+    await composition.close();
     composition = undefined;
 
     const capture = createCapturingCommandCodeFetch(globalThis.fetch);
@@ -518,7 +510,7 @@ export async function runCommandCodeOnlineSuite(
     if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
   } finally {
     await server?.close();
-    if (composition !== undefined) closeDataPlaneStores(composition);
+    await composition?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }

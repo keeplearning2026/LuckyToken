@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 
 /**
  * Ticket 12 secret hygiene: credential values that enter the authority

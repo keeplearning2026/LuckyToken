@@ -1,13 +1,8 @@
-import type {
-  FetchFunction,
-  Model,
-  Models,
-} from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import {
   resolveRequestIdentity,
-  type RequestIdentity,
 } from "../../request-identity.js";
 import {
   createNoopInvocationDiagnosticsFactory,
@@ -50,8 +45,6 @@ import {
 } from "../../public-model-seam.js";
 import {
   composeOptions,
-  identityRequestModelResolver,
-  type RequestModelResolver,
   type RouterOptionDefaults,
 } from "./options.js";
 import { InvalidRequest, UnsupportedFeature } from "./failures.js";
@@ -80,13 +73,7 @@ import {
   mapUpstreamFailureFact,
   requestIdFromFact,
 } from "./failure-rendering.js";
-import {
-  isAnthropicNativePassthroughModel,
-  passthroughAnthropicRequest,
-  passthroughRequestHeaders,
-  projectAnthropicPassthroughBody,
-  type PassthroughAnthropicResult,
-} from "./passthrough.js";
+import type { AnthropicProviderNativeLane } from "./native-lane-contract.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
@@ -102,11 +89,9 @@ const requestIds = new WeakMap<Request, string>();
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly createSessionId?: () => string;
-  readonly onRequestIdentity?: (identity: RequestIdentity) => void;
   readonly configuration?: AnthropicConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
-  /** Narrow transport dependency used only by native wire passthrough. */
-  readonly passthroughFetch?: FetchFunction;
+  readonly providerNativeLane?: AnthropicProviderNativeLane;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
   /** Backend-lifetime Public Model source. When absent, direct handler tests
@@ -133,13 +118,6 @@ export interface AnthropicMessagesHandlerOptions {
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
   /**
-   * Ticket 10: narrow Pi-typed request-local model derivation: the
-   * composition root wires the Provider/request-composition implementation.
-   * Defaults to identity so direct handler tests and handlers without a
-   * wired resolver pass the catalog model through unchanged.
-   */
-  readonly resolveRequestModel?: RequestModelResolver;
-  /**
    * Ticket 20: the neutral Pi execution operation. The composition root
    * binds the Provider usage-semantics resolver into the operation
    * (`createExecutionOperation`); the handler never names or carries
@@ -152,19 +130,17 @@ export interface AnthropicMessagesHandlerOptions {
 interface AnthropicMessagesDependencies {
   readonly models: Models;
   readonly createSessionId: () => string;
-  readonly onRequestIdentity: ((identity: RequestIdentity) => void) | undefined;
   readonly configuration: AnthropicConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
-  readonly passthroughFetch: FetchFunction;
+  readonly providerNativeLane: AnthropicProviderNativeLane | undefined;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
   readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
-  readonly resolveRequestModel: RequestModelResolver;
   readonly executeOperation: ExecutionOperation;
 }
 
@@ -310,7 +286,6 @@ async function handleAnthropicMessages(
       request.headers,
       dependencies.createSessionId,
     );
-    dependencies.onRequestIdentity?.(requestIdentity);
     ledger.authorized({
       effectiveSessionId: requestIdentity.effectiveSessionId,
       ...(requestIdentity.clientSessionId === undefined
@@ -387,17 +362,43 @@ async function handleAnthropicMessages(
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
       dependencies.publicModels === undefined ? undefined : resolution.alias;
-    if (isAnthropicNativePassthroughModel(model)) {
-      return passthroughBranch(
-        dependencies,
-        dependencies.passthroughFetch,
-        request,
+    if (dependencies.providerNativeLane?.claims(model) === true) {
+      const native = await dependencies.providerNativeLane.execute({
         model,
         rawBody,
-        diagnostics,
-        ledger,
-        projectAlias,
-      );
+        request,
+        ...(projectAlias === undefined ? {} : { alias: projectAlias }),
+        requestId: ledger.requestId,
+        onExecutionStart: () => ledger.executing(),
+      });
+      if (native.outcome === "success") {
+        ledger.terminal("success", {
+          clientHttpStatus: native.response.status,
+        });
+      } else {
+        ledger.terminal("failed", {
+          clientHttpStatus: native.response.status,
+        });
+        if (native.diagnostic?.error !== undefined) {
+          ledger.fail({
+            classification: "runtime-failure",
+            error: native.diagnostic.error,
+          });
+        }
+        await diagnostics.fail({
+          classification: "runtime-failure",
+          stage: "native-passthrough",
+          clientStatus:
+            native.diagnostic?.upstreamStatus ?? native.response.status,
+          ...(native.diagnostic?.safeRequestId === undefined
+            ? {}
+            : { safeIds: { requestId: native.diagnostic.safeRequestId } }),
+          ...(native.diagnostic?.error === undefined
+            ? {}
+            : { error: native.diagnostic.error }),
+        });
+      }
+      return native.response;
     }
     const validatedRequest = validateAnthropicSourceRequest(body);
     assertAnthropicModelAwareValidity(
@@ -646,182 +647,6 @@ async function handleAnthropicMessagesWithDiagnostics(
   }
 }
 
-/**
- * Passthrough branch: forward the client's raw Anthropic request verbatim to
- * the upstream endpoint and return its response unchanged (buffered Atomic).
- *
- * Owns the full passthrough lifecycle: upstream auth resolution, forwarding,
- * and verbatim response return (status + headers + body) for both success
- * and upstream HTTP failure. The client always sees the upstream response
- * as-is; this direct transport is deliberately separate from conversion.
- */
-async function passthroughBranch(
-  dependencies: AnthropicMessagesDependencies,
-  fetchImpl: FetchFunction,
-  request: Request,
-  model: Model<string>,
-  rawBody: string,
-  diagnostics: InvocationDiagnostics,
-  ledger: RequestLedgerEntry,
-  alias: string | undefined,
-): Promise<Response> {
-  const auth = await raceWithRequestSignal(
-    dependencies.models.getAuth(model),
-    request.signal,
-  );
-  const apiKey = auth?.auth.apiKey;
-  const composedHeaders = auth?.auth.headers;
-  const hasHeaderAuth =
-    composedHeaders !== undefined &&
-    Object.entries(composedHeaders).some(([name, value]) => {
-      const lower = name.toLowerCase();
-      return (
-        (lower === "authorization" ||
-          lower === "x-api-key" ||
-          lower === "cf-aig-authorization") &&
-        value !== undefined &&
-        value !== null &&
-        value.trim().length > 0
-      );
-    });
-  if (apiKey === undefined && !hasHeaderAuth) {
-    ledger.terminal("failed", { clientHttpStatus: 502 });
-    return toResponse(
-      renderAnthropicError(
-        502,
-        "api_error",
-        `Provider is not configured: ${model.provider}`,
-        ledger.requestId,
-      ),
-    );
-  }
-  let upstream: PassthroughAnthropicResult;
-  try {
-    ledger.executing();
-    upstream = await raceWithRequestSignal(
-      passthroughAnthropicRequest({
-        model: dependencies.resolveRequestModel(model, auth),
-        rawBody,
-        apiKey,
-        signal: request.signal,
-        fetch: fetchImpl,
-        upstreamHeaders: passthroughRequestHeaders(request),
-        ...(auth?.auth.headers === undefined
-          ? {}
-          : { composedHeaders: auth.auth.headers }),
-      }),
-      request.signal,
-    );
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "kind" in error &&
-      (error.kind === "AnthropicPassthroughBodyReadError" ||
-        error.kind === "AnthropicPassthroughTransportError")
-    ) {
-      // Pre-commit upstream failure (body-read or transport): no upstream
-      // response byte ever committed to the client, so this is a legal
-      // non-streaming Anthropic error (upstream failure), never a raw
-      // exception. The client sees fixed actionable text — the raw cause
-      // may name the endpoint or the canonical target and goes only to
-      // the sanitized diagnostics journal.
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error });
-      await diagnostics.fail({
-        classification: "runtime-failure",
-        stage: "native-passthrough",
-        clientStatus: 502,
-        error,
-      });
-      return toResponse(
-        renderAnthropicError(
-          502,
-          "api_error",
-          error.kind === "AnthropicPassthroughTransportError"
-            ? "Upstream provider request failed"
-            : "Upstream provider response could not be read",
-          ledger.requestId,
-        ),
-      );
-    }
-    throw error;
-  }
-  request.signal.throwIfAborted();
-  if (upstream.status >= 400 && alias === undefined) {
-    // Legacy handler seam: upstream error responses pass through verbatim.
-    ledger.terminal("failed", { clientHttpStatus: upstream.status });
-    await diagnostics.fail({
-      classification: "runtime-failure",
-      stage: "native-passthrough",
-      clientStatus: upstream.status,
-      ...(upstream.headers["request-id"] === undefined
-        ? {}
-        : { safeIds: { requestId: upstream.headers["request-id"] } }),
-    });
-  }
-  if (upstream.status >= 400 && alias !== undefined) {
-    // Alias mode never forwards upstream error bytes: arbitrary upstream
-    // error text or headers could name the canonical target. The client
-    // receives a legal fixed value-free error instead.
-    ledger.terminal("failed", { clientHttpStatus: 502 });
-    await diagnostics.fail({
-      classification: "runtime-failure",
-      stage: "native-passthrough",
-      clientStatus: upstream.status,
-      ...(upstream.headers["request-id"] === undefined
-        ? {}
-        : { safeIds: { requestId: upstream.headers["request-id"] } }),
-    });
-    return toResponse(
-      renderAnthropicError(
-        502,
-        "api_error",
-        "Upstream provider failed",
-        ledger.requestId,
-      ),
-    );
-  }
-  // Ticket 15 symmetry: a successful upstream response must expose the
-  // requested alias, never the canonical model id. The buffered body is
-  // projected before any byte is committed; an unprojectable shape fails
-  // safely (no upstream bytes, no canonical identity).
-  let body = upstream.body;
-  if (alias !== undefined) {
-    const projected = projectAnthropicPassthroughBody(
-      body,
-      upstream.headers["content-type"] ?? "",
-      alias,
-    );
-    if ("error" in projected) {
-      // The detailed projection reason is value-free and useful for
-      // diagnostics; the client sees only the fixed safe envelope.
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error: projected.error });
-      await diagnostics.fail({
-        classification: "runtime-failure",
-        stage: "native-passthrough",
-        clientStatus: 502,
-        error: new Error(projected.error),
-      });
-      return toResponse(
-        renderAnthropicError(
-          502,
-          "api_error",
-          "Upstream response could not be projected safely",
-        ),
-      );
-    }
-    body = projected.body;
-  }
-  if (upstream.status < 400) {
-    ledger.terminal("success", { clientHttpStatus: upstream.status });
-  }
-  return new Response(body, {
-    status: upstream.status,
-    headers: { ...upstream.headers },
-  });
-}
-
 export function createAnthropicMessagesHandler(
   options: AnthropicMessagesHandlerOptions,
 ): ClientProtocolHandler {
@@ -848,7 +673,6 @@ export function createAnthropicMessagesHandler(
   const dependencies: AnthropicMessagesDependencies = Object.freeze({
     models: options.models,
     createSessionId: options.createSessionId ?? randomUUID,
-    onRequestIdentity: options.onRequestIdentity,
     configuration:
       options.configuration === undefined
         ? parseAnthropicConfiguration()
@@ -857,14 +681,13 @@ export function createAnthropicMessagesHandler(
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
     requestLedger: options.requestLedger ?? createNoopRequestLedger(),
     deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
-    passthroughFetch: options.passthroughFetch ?? globalThis.fetch,
+    providerNativeLane: options.providerNativeLane,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,
-    resolveRequestModel: options.resolveRequestModel ?? identityRequestModelResolver,
     executeOperation: options.executeOperation ?? execute,
   });
   return Object.freeze({

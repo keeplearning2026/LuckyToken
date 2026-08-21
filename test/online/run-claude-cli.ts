@@ -24,7 +24,7 @@ import {
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
-} from "../../src/composition.js";
+} from "../support/configured-data-plane.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
@@ -166,6 +166,7 @@ function parseClaudeArguments(
 interface CapturedRequest {
   readonly marker: string;
   readonly url: string;
+  readonly requestHeaders: Readonly<Record<string, string>>;
   readonly body: unknown;
 }
 
@@ -391,7 +392,19 @@ function captureRuntime(
       } catch {
         // Keep the raw body so a malformed real-client request remains visible.
       }
-      captures.push(Object.freeze({ marker: marker(), url: request.url, body }));
+      const requestHeaders = Object.fromEntries(
+        [...request.headers.entries()].map(([name, value]) => [
+          name,
+          /^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/iu.test(
+            name,
+          ) || /(?:^|-)account-id$|(?:^|-)api-key$|(?:^|-)auth-token$/iu.test(name)
+            ? "[REDACTED]"
+            : value,
+        ]),
+      );
+      captures.push(
+        Object.freeze({ marker: marker(), url: request.url, requestHeaders, body }),
+      );
       return runtime.handle(request);
     },
   });
@@ -732,10 +745,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       clientProtocols: {
         "anthropic-messages": {},
       },
-      providerPackages:
-        providerId === "commandcode-private"
-          ? { "@luckytoken/provider-commandcode-private": {} }
-          : {},
+      providerPackages: {},
       pi: { directory: "pi" },
       limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
     }),
@@ -981,6 +991,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     if (matrix.some((entry) => entry.status === "fail")) process.exitCode = 1;
   } finally {
     await server.close();
+    await composition.close();
   }
 }
 

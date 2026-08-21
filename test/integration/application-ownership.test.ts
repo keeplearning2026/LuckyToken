@@ -172,7 +172,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
   it("projects the owner identity through status snapshots and events", async () => {
     const host = await startOwnedHost({});
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
     const events: StatusEvent[] = [];
     await client.subscribe((event) => events.push(event));
 
@@ -193,7 +193,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.executeApplicationCommand({
       command: "attach",
@@ -233,7 +233,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
 
     await expect(
       client.executeApplicationCommand({
@@ -281,7 +281,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.executeApplicationCommand({
       command: "quit",
@@ -364,7 +364,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
     await client.executeRuntimeCommand("start");
     const origin = activeServer?.origin;
     if (origin === undefined) throw new Error("Data Plane did not start");
@@ -450,7 +450,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
     await client.executeRuntimeCommand("start");
     const origin = activeServer?.origin;
     if (origin === undefined) throw new Error("Data Plane did not start");
@@ -493,7 +493,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
 
     await expect(
       client.executeApplicationCommand({
@@ -553,7 +553,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       },
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
 
     await expect(
       client.executeApplicationCommand({
@@ -593,7 +593,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
       applicationCommandHandler: async () => ({ outcome: "attached" }),
     });
     const client = await connectControlPlane(host.endpoint, clientDependencies);
-    await client.hello(1);
+    await client.hello(2);
     await client.executeApplicationCommand({ command: "attach" });
     await client.executeRuntimeCommand("start");
     const origin = activeServer?.origin;
@@ -603,7 +603,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     await client.close();
 
     const second = await connectControlPlane(host.endpoint, clientDependencies);
-    await second.hello(1);
+    await second.hello(2);
     await expect(second.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
     });

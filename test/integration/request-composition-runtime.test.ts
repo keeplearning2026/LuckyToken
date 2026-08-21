@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createConfiguredPiModels } from "../../src/composition.js";
+import { createConfiguredPiModels } from "../support/configured-data-plane.js";
 
 /**
  * Ticket 10 data plane seam: models.json apply + effective catalog query for

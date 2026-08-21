@@ -51,7 +51,7 @@
       "offlineResult": "CERTIFIED",
       "tests": [
         "test/unit/anthropic-passthrough-certification.test.ts",
-        "test/unit/anthropic-passthrough-header-matrix.test.ts",
+        "test/integration/anthropic-provider-native.test.ts",
         "test/integration/passthrough-routing.test.ts"
       ]
     },
@@ -204,7 +204,7 @@
     {
       "dimension": "request-identity-credential-and-lane-isolation",
       "tests": [
-        "test/unit/request-identity.test.ts",
+        "test/unit/live-client-token-authority.test.ts",
         "test/unit/codex-local-auth.test.ts",
         "test/integration/credential-request-resolution.test.ts",
         "test/integration/codex-native-responses.test.ts",

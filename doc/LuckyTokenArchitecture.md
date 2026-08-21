@@ -726,9 +726,8 @@ rendering。它不拥有 Provider 选择之外的任何 upstream 语义。
 interface AnthropicMessagesHandlerOptions {
   models: Models;
   createSessionId?: () => string;
-  onRequestIdentity?: (identity: RequestIdentity) => void;
   configuration?: AnthropicConfiguration;
-  passthroughFetch?: FetchFunction;
+  providerNativeLane?: AnthropicProviderNativeLane;
   modelValidityPolicy?: AnthropicModelValidityPolicy;
   createMessageId?: () => string;
   publicModels?: PublicModelSource;
@@ -736,7 +735,6 @@ interface AnthropicMessagesHandlerOptions {
   deepCapture?: DeepCaptureAuthority;
   maxRequestBytes: number;
   routerDefaults?: RouterOptionDefaults;
-  resolveRequestModel?: RequestModelResolver;
   executeOperation?: ExecutionOperation;
 }
 
@@ -1377,24 +1375,24 @@ Config loader 可以解析未来 protocol ID，但当前 concrete composition �
 
 > **小白理解：** Composition 是把“已经各自拥有语义的模块”接起来的工位。它知道哪些 Client Protocol、Provider、native transport 与 authority 要被注入，但不在这里重新解释协议。
 
-当前有两个主要构造层次：
+当前 production 有两个主要构造层次：
 
 ```ts
-createConfiguredPiModels(options)
-  → Pi Models + Provider/Credential runtime facts
+createProviderRuntime(options)
+  → Backend-lifetime Pi Models + Provider/Credential/Catalog facts
 
 createConfiguredLuckyTokenDataPlane(options)
-  → LuckyTokenRuntime + request observation identities
+  → LuckyTokenRuntime + certification + idempotent close
 ```
 
-### `createConfiguredPiModels()`
+### `createProviderRuntime()`
 
 这一层只组装 Pi/Provider 侧：准备 CredentialStore，按 Pi builtins、`models.json`、bundled product Providers 与 external user Provider Packages 的当前契约构造模型集合。CommandCode Private 是 bundled product Provider，会自动进入 runtime；用户不得在 `providerPackages` 重复配置它。Core/Client Protocol 不 import 它的私有实现。
 
 | 输入 | 输出/行为 |
 | --- | --- |
 | `piDirectory` / `modelsJsonPath` | 定位 `auth.json` 与 LuckyToken-owned models catalog |
-| optional `CredentialStore` | 测试/嵌入方可替换 production file store |
+| optional `CredentialStore` | 测试可替换 production file store；同一 store 同时交给 Models 与 Credential Authority |
 | Provider package configuration | package-private conversion/request/response config |
 | bound `fetch` / host capabilities | 交给需要 network/runtime capability 的 Provider |
 
@@ -1424,7 +1422,7 @@ Semantic Conversion
 
 三条 lane 可以共享 request-edge identity/observation 等最小 infrastructure facts，但不共享 credential authority、native executor、transport 或 semantic-conversion state。选定 lane 后失败不得 fall through 到另一 lane。
 
-完整 `LuckyTokenCliConfig` 在 composition 时被拆成窄 constructor facts，之后不作为 per-request mutable bag 传播。Provider failure 只通过 trusted neutral diagnostics 跨越 execution boundary；native lane 以原始 client wire 为 authority，只做 endpoint/auth/header 等 preservation 所需变化。
+Data Plane 只接收 `DataPlaneConfiguration`、`Models`、Public Model source、ledger/capture、protocol gate、`scrubSensitiveText` 与 lane-specific optional seams。完整 `ProviderRuntime`、credential representation、Catalog 和 persistence store configuration 都留在 Backend Application。Provider failure 只通过 trusted neutral diagnostics 跨越 execution boundary；native lane 以原始 client wire 为 authority，只做 endpoint/auth/header 等 preservation 所需变化。
 
 当前 production runtime certification 只认证 provider-neutral Core；CommandCode package 与 distribution certification 位于测试/分发边界，分别证明 package contract、动态加载、协议冻结与授权的线上证据。
 
@@ -1461,7 +1459,7 @@ identity、credential 或 transport shortcut 冒充 production authority coverag
 
 ## 6.7 Process CLI — `src/cli.ts`
 
-> **小白理解：** CLI 只是进程入口，不再自己组装整套 Backend。`serve` 负责请求“启动或附着当前用户的 LuckyToken Backend”；`control ...` 连接已经运行的 Control Plane；`login/logout` 管理 Provider 凭证。
+> **小白理解：** CLI 只是进程入口，不再自己组装整套 Backend。`serve` 负责请求“启动或附着当前用户的 LuckyToken Backend”；`control ...` 连接已经运行的 Control Plane，并通过 Backend authority 管理 Provider 凭证。
 
 Top-level CLI 是 adapter/shell，不是 Backend composition root：
 
@@ -1469,14 +1467,14 @@ Top-level CLI 是 adapter/shell，不是 Backend composition root：
 | --- | --- | --- |
 | `serve --config ...` | `startLuckyTokenApplication()` | 取得/附着 current-user Backend authority；运行或附着 Backend |
 | `control ... --descriptor ...` | `ControlPlaneClient` | 查询/修改运行中 Backend 的 typed management state |
-| `login [provider] --config ...` | configured Pi Models → `Models.login()` | Provider-owned login flow；credential 写入 Pi `auth.json` |
-| `logout [provider] --config ...` | configured Pi Models → `Models.logout()` | 删除对应 Provider credential |
+| `control auth login ...` | running Backend Control Plane | Provider-owned login flow；由 Backend-lifetime Models 写入 credential |
+| `control credentials login/logout ...` | running Backend Control Plane | 由唯一 Credential Authority 修改 `auth.json` |
 
 `serve` 不接受自定义 descriptor。生产 singleton 固定使用 `~/.luckytoken/instance.sqlite`，matching discovery 固定发布到 `~/.luckytoken/control-plane.json`；只有 `control ...` 客户端命令把 `--descriptor` 当作连接导航参数。integration tests 若需要隔离实例，应通过独立 HOME 或内部 composition dependency 隔离，而不是改变生产 instance domain。
 
-Login UI 枚举 `models.getProviders()` 和每个 `Provider.auth`：如果 Provider 提供 OAuth
-则可显示 subscription/account；如果提供 `apiKey.login` 则显示 API-key 选项。CLI
-只实现通用 prompt/notify shell，不硬编码 CommandCode key prompt。
+Auth CLI 从运行中 Backend 的 typed Control Plane projection 读取 Provider login options；
+它只实现通用 prompt/notify shell，不在独立进程中创建第二套 Models 或 credential owner，
+也不硬编码 CommandCode key prompt。
 
 Serve 获得 `RunningLuckyTokenApplication` 后只等待 process signal 或 application-owned exit。SIGINT/SIGTERM 调用 Backend Application 的 graceful shutdown seam；具体 Data Plane drain、Control Plane/publication、stores 与 `InstanceLease` 的关闭顺序由 `application.ts` 拥有，CLI 不重复实现。
 

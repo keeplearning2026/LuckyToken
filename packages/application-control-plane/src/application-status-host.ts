@@ -25,8 +25,6 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import {
-  type RequestIdentitiesQueryHandler,
-  type RequestIdentityRecord,
 } from "./contracts.js";
 import {
   type AuthCommandHandler,
@@ -80,7 +78,6 @@ import {
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
   decodePublicModelsCommandResult,
-  decodeRequestIdentityRecord,
   decodeRuntimeCommandExecution,
   decodeSettingsCommandResult,
   incompatibleHello,
@@ -108,10 +105,6 @@ export interface StartControlPlaneOptions {
   /** Owner identity merged into every snapshot (Ticket 05). */
   readonly ownership?: ApplicationOwnership;
 
-  /** Optional request identity query handler (Ticket 17 identity seam):
-   *  serves the recent authorized request identities used by the Requests
-   *  surface and Ticket 18's ledger. */
-  readonly requestIdentitiesHandler?: RequestIdentitiesQueryHandler;
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
   /** Optional Credential command handler (Ticket 12): serves the versioned
@@ -554,48 +547,6 @@ export async function startApplicationStatusHost(
                 result: diagnostics.query(normalizeDiagnosticQuery(query)),
               });
             }
-          }
-        } else if (request.type === "get_request_identities") {
-          if (options.requestIdentitiesHandler === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            let records: RequestIdentityRecord[];
-            try {
-              const result = await options.requestIdentitiesHandler();
-              // Strict per-record validation at the wire boundary: a record
-              // that ever carries the internal effective session identity
-              // (or any unknown key) is rejected instead of projected.
-              records = result.records
-                .map((record) => decodeRequestIdentityRecord(record))
-                .filter(
-                  (record): record is NonNullable<typeof record> =>
-                    record !== undefined,
-                );
-              if (records.length !== result.records.length) {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-            } catch {
-              await sendError(
-                state.connection,
-                request.requestId,
-                "invalid_request",
-              );
-              continue;
-            }
-            await writeFrame(state.connection, {
-              type: "request_identities_result",
-              requestId: request.requestId,
-              result: { records },
-            });
           }
         } else if (request.type === "diagnostics_subscribe") {
           if (diagnostics === undefined) {

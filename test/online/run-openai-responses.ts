@@ -33,7 +33,7 @@ import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
   type ConfiguredLuckyTokenDataPlane,
-} from "../../src/composition.js";
+} from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
@@ -150,6 +150,7 @@ interface OnlineSummary {
   successfulChain: number;
   successfulRestartRecovery: number;
   confirmedCancellations: number;
+  markerRetries: number;
   failures: Record<string, number>;
   latenciesMs: number[];
 }
@@ -231,7 +232,13 @@ function validateResponsesResult(
   }
   const text = responsesText(result);
   if (text.length === 0) throw new Error("online_empty_content");
-  if (!text.includes(marker)) throw new Error("online_request_isolation");
+  const foreignMarker = (text.match(/\bLT_RESP_[A-Z0-9_]+\b/gu) ?? []).find(
+    (candidate) => candidate !== marker,
+  );
+  if (foreignMarker !== undefined) {
+    throw new Error("online_cross_request_isolation");
+  }
+  if (!text.includes(marker)) throw new Error("online_expected_marker_missing");
 }
 
 async function postResponses(
@@ -407,18 +414,35 @@ async function runJsonJob(
   const startedAt = performance.now();
   summary.attemptedRequests += 1;
   try {
-    const result = await postResponses(
-      origin,
-      token,
-      {
-        model: model,
-        input: promptFor(marker),
-        max_output_tokens: SUCCESS_MAX_TOKENS,
-        reasoning: { effort: "high" },
-      },
-      requestSignal(totalSignal),
-    );
-    validateResponsesResult(result, marker);
+    let result: ResponsesResult | undefined;
+    for (let attempt = 1; attempt <= 2 && result === undefined; attempt += 1) {
+      const candidate = await postResponses(
+        origin,
+        token,
+        {
+          model: model,
+          input: promptFor(marker),
+          max_output_tokens: SUCCESS_MAX_TOKENS,
+          reasoning: { effort: "high" },
+        },
+        requestSignal(totalSignal),
+      );
+      try {
+        validateResponsesResult(candidate, marker);
+        result = candidate;
+      } catch (error) {
+        if (
+          attempt === 1 &&
+          error instanceof Error &&
+          error.message === "online_expected_marker_missing"
+        ) {
+          summary.markerRetries += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (result === undefined) throw new Error("online_expected_marker_missing");
     if (!responsesHasReasoning(result)) {
       throw new Error("online_missing_thinking");
     }
@@ -644,12 +668,6 @@ function createCapturingFetch(base: FetchFunction): {
   };
 }
 
-function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
-  composition.deepCaptureStore.close();
-  composition.requestLedger.close();
-  composition.diagnosticsStore.close();
-}
-
 export async function runOpenAIResponsesOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
@@ -678,10 +696,7 @@ export async function runOpenAIResponsesOnlineSuite(
             stateFile: "state/openai-responses.json",
           },
         },
-        providerPackages:
-          providerId === "commandcode-private"
-            ? { "@luckytoken/provider-commandcode-private": {} }
-            : {},
+        providerPackages: {},
         pi: { directory: "pi" },
         limits: {
           maxRequestBytes: 1_048_576,
@@ -786,6 +801,7 @@ export async function runOpenAIResponsesOnlineSuite(
       successfulChain: 0,
       successfulRestartRecovery: 0,
       confirmedCancellations: 0,
+      markerRetries: 0,
       failures: {},
       latenciesMs: [],
     };
@@ -821,7 +837,7 @@ export async function runOpenAIResponsesOnlineSuite(
       concurrency,
     );
     await hangingServer.close();
-    closeDataPlaneStores(hangingComposition);
+    await hangingComposition.close();
 
     const pressureJobs = createOnlineTestPlan().filter(
       (job) => job.kind !== "cancel-recovery",
@@ -844,7 +860,7 @@ export async function runOpenAIResponsesOnlineSuite(
     // ---- Conformance: capture upstream requests ----
     await server.close();
     server = undefined;
-    closeDataPlaneStores(composition);
+    await composition.close();
     composition = undefined;
     const capture = createCapturingFetch(globalThis.fetch);
     composition = await createConfiguredLuckyTokenDataPlane({
@@ -1030,7 +1046,7 @@ export async function runOpenAIResponsesOnlineSuite(
     // state file, and reference turn1's response id.
     await server.close();
     server = undefined;
-    closeDataPlaneStores(composition);
+    await composition.close();
     composition = undefined;
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
@@ -1070,6 +1086,7 @@ export async function runOpenAIResponsesOnlineSuite(
       successfulChain: summary.successfulChain,
       successfulRestartRecovery: summary.successfulRestartRecovery,
       confirmedCancellations: summary.confirmedCancellations,
+      markerRetries: summary.markerRetries,
       failures: summary.failures,
       latencyMs: latencySummary(summary.latenciesMs),
     };
@@ -1077,7 +1094,7 @@ export async function runOpenAIResponsesOnlineSuite(
     if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
   } finally {
     await server?.close();
-    if (composition !== undefined) closeDataPlaneStores(composition);
+    await composition?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }

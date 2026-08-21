@@ -37,7 +37,7 @@ function fakeClient(initial: StatusSnapshot) {
     }),
     hello: vi.fn(async () => ({
       type: "compatible" as const,
-      contractVersion: 1,
+      contractVersion: 2,
       application: { id: "luckytoken", version: "test" },
     })),
     getStatus: vi.fn(async () => initial),

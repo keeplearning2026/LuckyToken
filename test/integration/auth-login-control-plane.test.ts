@@ -167,7 +167,7 @@ describe("Provider-owned auth login through the Control Plane", () => {
       createRequestId: () => `auth-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(1);
+    const hello = await client.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }
@@ -665,7 +665,7 @@ describe("Provider-owned auth login through the Control Plane", () => {
       createRequestId: () => `auth-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await fresh.hello(1);
+    const hello = await fresh.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }

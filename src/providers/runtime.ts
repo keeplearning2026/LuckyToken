@@ -72,11 +72,6 @@ export interface ProviderRuntime {
   readonly models: Models;
   readonly credentialAuthority: LiveCredentialAuthority;
   readonly catalog: CatalogRuntimeHandle;
-  /** Every non-Pi Provider identity introduced by product assembly:
-   *  bundled LuckyToken Packages plus external user Packages. Used by the
-   *  shared model-discovery surface. This is a fact projection, not a
-   *  duplicate Provider registry. */
-  readonly externalProviderIds: readonly string[];
   providerSource(providerId: string): ProviderSource;
 }
 
@@ -166,14 +161,15 @@ export async function createProviderRuntime(
   );
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
+  const credentialStore =
+    options.credentials ??
+    createFileCredentialStore(join(options.piDirectory, "auth.json"));
 
   // The ONE Pi Models collection for the Backend lifetime: login and every
   // later Data Plane serving instance share this object graph (Spec §3.4,
   // §6).
   const mutableModels = createModels({
-    credentials:
-      options.credentials ??
-      createFileCredentialStore(join(options.piDirectory, "auth.json")),
+    credentials: credentialStore,
     authContext,
     ...(options.modelsStore === undefined
       ? {}
@@ -194,7 +190,7 @@ export async function createProviderRuntime(
   for (const entry of bundledProviderPackages) {
     bundled[entry.specifier] = entry.configuration;
   }
-  const bundledLoaded = await loadProviderPackages({
+  await loadProviderPackages({
     models: mutableModels,
     providerPackages: bundled,
     host: Object.freeze({
@@ -221,10 +217,6 @@ export async function createProviderRuntime(
       : { importModule: options.importModule }),
   });
 
-  const externalProviderIds: readonly string[] = Object.freeze([
-    ...bundledLoaded.providerIds,
-    ...userLoaded.providerIds,
-  ]);
   const modelsJsonProviderIdSet: ReadonlySet<string> = Object.freeze(
     new Set(modelsJsonProviderIds),
   );
@@ -267,9 +259,6 @@ export async function createProviderRuntime(
 
   // Credential Authority over the same store the Models use (Spec §10.1):
   // one auth.json, one authority, for the whole Backend lifetime.
-  const credentialStore =
-    options.credentials ??
-    createFileCredentialStore(join(options.piDirectory, "auth.json"));
   const credentialAuthority = await createLiveCredentialAuthority({
     store: credentialStore,
     path: join(options.piDirectory, "auth.json"),
@@ -304,7 +293,6 @@ export async function createProviderRuntime(
   return Object.freeze({
     models: served,
     credentialAuthority,
-    externalProviderIds,
     catalog: Object.freeze({
       models: served,
       capture: () => served.capture(),

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import {
   createRuntimeDiagnosticsStoreFactory,
   parseRuntimeDiagnosticsConfiguration,
@@ -66,7 +66,7 @@ async function serveFixture(options: {
       clientProtocols: {
         "anthropic-messages": {},
       },
-      providerPackages: { "@luckytoken/provider-commandcode-private": {} },
+      providerPackages: {},
       pi: { directory: "pi" },
       ...(options.captureEnabled
         ? { deepDiagnostics: { enabled: true } }
@@ -301,7 +301,7 @@ describe("Persistence failure never changes an otherwise valid model response (T
         clientProtocols: {
           "anthropic-messages": {},
         },
-        providerPackages: { "@luckytoken/provider-commandcode-private": {} },
+        providerPackages: {},
         pi: { directory: "pi" },
       }),
       "utf8",

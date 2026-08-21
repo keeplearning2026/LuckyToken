@@ -22,7 +22,7 @@ import type { RecoveryProjection } from "./backup-contract.js";
 import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
 import type { AttentionProjection } from "./attention-contract.js";
 
-export const controlPlaneVersion = 1 as const;
+export const controlPlaneVersion = 2 as const;
 
 export interface ApplicationIdentity {
   readonly id: "luckytoken";
@@ -847,55 +847,6 @@ export interface StatusEvent {
   readonly snapshot: StatusSnapshot;
 }
 
-/**
- * Request identity ledger seam (Ticket 17, Ticket 18 handoff): the public
- * projection carries only the optional client-provided session identity and
- * the canonical project context. The internal effective session identity is
- * not a field of this contract, so no ledger, wire decoder, or renderer can
- * substitute it for the client's id.
- */
-export interface RequestIdentityRecord {
-  readonly id: number;
-  readonly time: number;
-  readonly protocolId: string;
-  readonly clientSessionId?: string;
-}
-
-/** Observation input carries only the optional client-provided session
- * identity. Project context and the internal effective session identity are
- * not part of this public contract. */
-export interface RequestIdentityFact {
-  readonly clientSessionId?: string;
-}
-
-export interface RequestIdentitiesQueryResult {
-  readonly records: readonly RequestIdentityRecord[];
-}
-
-export type RequestIdentitiesQueryHandler =
-  () => Promise<RequestIdentitiesQueryResult>;
-
-/** Public renderer projection: the client identity is always a displayable
- *  string and a missing one renders as `-`. The effective session identity
- *  has no field here, so it can never be projected as the client's id. */
-export interface RequestIdentityProjection {
-  readonly id: number;
-  readonly time: number;
-  readonly protocolId: string;
-  readonly clientSessionId: string;
-}
-
-export function projectRequestIdentity(
-  record: RequestIdentityRecord,
-): RequestIdentityProjection {
-  return Object.freeze({
-    id: record.id,
-    time: record.time,
-    protocolId: record.protocolId,
-    clientSessionId: record.clientSessionId ?? "-",
-  });
-}
-
 export interface ControlPlaneEndpoint {
   readonly address: string;
   readonly capability: string;
@@ -1069,12 +1020,12 @@ export type HelloResult =
   | {
       readonly type: "compatible";
       readonly application: ApplicationIdentity;
-      readonly contractVersion: 1;
+      readonly contractVersion: typeof controlPlaneVersion;
     }
   | {
       readonly type: "incompatible";
       readonly requestedVersion: number;
-      readonly supportedVersions: readonly [1];
+      readonly supportedVersions: readonly [typeof controlPlaneVersion];
     };
 
 export interface ControlPlaneDisconnect {
@@ -1240,7 +1191,6 @@ export interface ControlPlaneClient {
    *  pending or the response is invalid. */
   respondAuthInteraction(response: AuthInteractionResponse): Promise<void>;
 
-  getRequestIdentities(): Promise<RequestIdentitiesQueryResult>;
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
   executePublicModelsCommand(

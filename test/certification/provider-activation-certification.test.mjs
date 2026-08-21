@@ -45,7 +45,7 @@ function display(file) {
  * defaults, or CommandCode-as-user-configuration behavior.
  */
 
-test("production serving consumes the Backend-owned Provider Runtime instead of creating a second Pi Models composition", async () => {
+test("production serving receives narrow Provider capabilities and cannot create Provider composition", async () => {
   const composition = await readFile(
     path.join(repositoryRoot, "src", "composition.ts"),
     "utf8",
@@ -54,28 +54,41 @@ test("production serving consumes the Backend-owned Provider Runtime instead of 
     path.join(repositoryRoot, "src", "application.ts"),
     "utf8",
   );
-  const supervisor = await readFile(
-    path.join(repositoryRoot, "src", "runtime-supervisor.ts"),
-    "utf8",
+  assert.ok(
+    !/\bProviderRuntime\b|\bproviderRuntime\b/u.test(composition),
+    "Data Plane composition must not know the broad ProviderRuntime",
   );
-
-  // The Data Plane composition must receive the injected Models through
-  // the Provider Runtime seam — the serving composition never calls the
-  // Provider creation entry points itself.
+  for (const forbiddenFactory of [
+    "createModels",
+    "registerLuckyTokenProviders",
+    "loadProviderPackages",
+    "createLiveCredentialAuthority",
+    "createCatalogSnapshotModels",
+  ]) {
+    assert.ok(
+      !new RegExp(`\\b${forbiddenFactory}\\b`, "u").test(composition),
+      `Data Plane composition must not reference ${forbiddenFactory}`,
+    );
+  }
+  assert.match(composition, /readonly models:\s*Models/u);
   assert.match(
     composition,
-    /providerRuntime\.models/u,
-    "Data Plane composition must consume providerRuntime.models",
-  );
-  assert.match(
-    composition,
-    /providerRuntime\.credentialAuthority/u,
-    "Data Plane composition must consume providerRuntime.credentialAuthority",
+    /readonly scrubSensitiveText:\s*\(value:\s*string\)\s*=>\s*string/u,
   );
   assert.match(
     application,
     /createProviderRuntime\(/u,
     "Backend Application must own the Provider Runtime factory call",
+  );
+  assert.match(
+    application,
+    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?models:\s*providerRuntime\.models/u,
+    "Backend Application must project Models into the Data Plane",
+  );
+  assert.match(
+    application,
+    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?scrubSensitiveText/u,
+    "Backend Application must assemble the narrow scrub capability",
   );
   assert.match(
     application,
@@ -110,8 +123,12 @@ test("no optional normal-state Auth slots or Provider-config-derived readiness r
   // optional slot populated by Data Plane startup.
   assert.match(
     application,
-    /createAuthLoginControlPlaneHandler\(\{[\s\S]*?models: \(\) => providerRuntime\?\.models/u,
-    "Auth handler must close over the Backend-lifetime Provider Runtime",
+    /createAuthLoginControlPlaneHandler\(\{[\s\S]*?models: \(\) => providerRuntime\.models/u,
+    "Auth handler must use the non-optional Backend-lifetime Provider Runtime",
+  );
+  assert.ok(
+    !/let\s+(?:credentialAuthority|providerRuntime)\s*:/u.test(application),
+    "Backend-lifetime Provider owners must not be optional normal-state slots",
   );
   assert.ok(
     !/\bauthModels\b/u.test(application),

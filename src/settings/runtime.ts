@@ -1,6 +1,4 @@
 import type { LuckyTokenRuntime } from "../runtime.js";
-import type { SettingsRegistry } from "./catalog.js";
-
 export interface RegisteredProtocolRoute {
   readonly id: string;
   readonly method: string;
@@ -9,7 +7,7 @@ export interface RegisteredProtocolRoute {
 
 export interface ProtocolAwareRuntimeOptions {
   readonly runtime: LuckyTokenRuntime;
-  readonly registry: SettingsRegistry;
+  readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly protocolRoutes: readonly RegisteredProtocolRoute[];
 }
 
@@ -33,10 +31,7 @@ export function createProtocolAwareRuntime(
           candidate.pathname === pathname,
       );
       if (route !== undefined) {
-        const enabled = options.registry.query([
-          `protocols.${route.id}.enabled`,
-        ])[`protocols.${route.id}.enabled`];
-        if (enabled !== undefined && enabled.value === false) {
+        if (!options.isProtocolEnabled(route.id)) {
           return new Response(null, { status: 404 });
         }
       }

@@ -1,6 +1,7 @@
 import {
   InMemoryCredentialStore,
   type FetchFunction,
+  type Models,
 } from "@earendil-works/pi-ai";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,11 +10,9 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
-import {
-  COMMANDCODE_PROVIDER_PACKAGE,
-  commandCodeProviderImportModule,
-} from "../support/commandcode-provider-package.js";
+import { createConfiguredLuckyTokenDataPlane as createProductionDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
+import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
 
 function commandCodeText(text: string): Response {
   return new Response(
@@ -71,13 +70,50 @@ describe("configured serving composition", () => {
         clientProtocols: {
           "anthropic-messages": {},
         },
-        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
+        providerPackages: {},
         pi: { directory: "pi" },
       }),
       "utf8",
     );
     return { configPath, piDirectory };
   }
+
+  it("keeps the production Data Plane interface to runtime, certification, and close", async () => {
+    const { configPath } = await writeConfiguration();
+    const config = await loadLuckyTokenCliConfig(configPath);
+    const models = {
+      getProviders: () => [],
+      getModels: () => [],
+    } as unknown as Models;
+    const publicModels = {
+      requestSnapshot: async () => ({
+        version: 0,
+        endpoint: { host: "127.0.0.1", port: 0 },
+        providers: [],
+        resolve: () => undefined,
+        publishedModels: () => [],
+      }),
+    };
+    const composition = await createProductionDataPlane({
+      configuration: config,
+      models,
+      publicModels,
+      requestLedger: {} as never,
+      deepCapture: {} as never,
+      isProtocolEnabled: () => true,
+      scrubSensitiveText: (value) => value,
+      fetch: async () => new Response(),
+    });
+
+    expect(Object.keys(composition).sort()).toEqual([
+      "certification",
+      "close",
+      "runtime",
+    ]);
+    const first = composition.close();
+    expect(composition.close()).toBe(first);
+    await first;
+  });
 
   it("registers the packaged CommandCode Provider hidden behind one Client Protocol", async () => {
     const upstreamRequests: Request[] = [];
@@ -117,14 +153,11 @@ describe("configured serving composition", () => {
       "deepCapture",
       "deepCaptureStore",
       "diagnosticsStore",
-      "requestIdentities",
       "requestLedger",
       "runtime",
       "userConfiguredProviderIds",
     ]);
-    expect(composition.userConfiguredProviderIds).toEqual([
-      "commandcode-private",
-    ]);
+    expect(composition.userConfiguredProviderIds).toEqual([]);
     expect(Object.keys(composition.runtime).sort()).toEqual([
       "handle",
       "routes",
@@ -306,10 +339,7 @@ describe("configured serving composition", () => {
       fetch: async () => commandCodeText("unused"),
     });
     compositions.push(composition);
-    expect(composition.userConfiguredProviderIds).toEqual([
-      "my-anthropic",
-      "commandcode-private",
-    ]);
+    expect(composition.userConfiguredProviderIds).toEqual(["my-anthropic"]);
   });
 
   it("keeps the data plane running when models.json is invalid and reports the skip", async () => {
@@ -331,9 +361,7 @@ describe("configured serving composition", () => {
 
     // The invalid file never bricks the gateway: only the packaged provider
     // is registered and the skip is reported instead of thrown.
-    expect(composition.userConfiguredProviderIds).toEqual([
-      "commandcode-private",
-    ]);
+    expect(composition.userConfiguredProviderIds).toEqual([]);
     expect(invalid).toHaveLength(1);
     const response = await composition.runtime.handle(
       new Request("http://luckytoken.test/v1/models"),
@@ -361,7 +389,7 @@ describe("configured serving composition", () => {
             stateFile: "state/openai-responses.json",
           },
         },
-        providerPackages: { [COMMANDCODE_PROVIDER_PACKAGE]: {} },
+        providerPackages: {},
         pi: { directory: "pi" },
       }),
       "utf8",

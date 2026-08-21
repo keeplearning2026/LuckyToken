@@ -26,7 +26,7 @@ import {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
 import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
 import {
@@ -317,7 +317,7 @@ describe("secret canary hygiene across public surfaces", () => {
       createRequestId: () => "canary-status-request-1",
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(1);
+    const hello = await client.hello(2);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }

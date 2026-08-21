@@ -155,7 +155,6 @@ export function createCommandCodeServingTestComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     createSessionId,
-    passthroughFetch: options.fetch,
     ...(options.anthropicModelValidityPolicy === undefined
       ? {}
       : { modelValidityPolicy: options.anthropicModelValidityPolicy }),

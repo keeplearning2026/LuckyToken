@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 /**
@@ -113,7 +113,10 @@ async function main(): Promise<void> {
   const client = new Anthropic({
     apiKey: "unused-local-sdk-key",
     baseURL: server.origin,
-    maxRetries: 0,
+    // Event coverage verifies the accepted lifecycle vocabulary, not the
+    // availability of one external dispatch. Retry transient upstream 5xx
+    // responses while keeping every event assertion unchanged.
+    maxRetries: 2,
     timeout: 120_000,
   });
 
@@ -173,6 +176,7 @@ async function main(): Promise<void> {
     console.log(`Total upstream events: ${seen.length} types.`);
   } finally {
     await server.close();
+    await composition.close();
   }
 }
 

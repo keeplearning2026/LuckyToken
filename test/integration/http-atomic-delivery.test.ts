@@ -12,6 +12,7 @@ import {
   HttpRequestAbortedError,
   type HttpBoundaryDependencies,
 } from "../../src/http.js";
+import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
@@ -201,6 +202,11 @@ describe("atomic HTTP failure delivery", () => {
       } as unknown as Models;
       const anthropic = createAnthropicMessagesHandler({
         models,
+        providerNativeLane: createAnthropicProviderNativeLane({
+          models,
+          resolveRequestModel: (value) => value,
+          fetch: globalThis.fetch,
+        }),
         modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         createMessageId: () => "msg_client",
         maxRequestBytes: 1_000_000,

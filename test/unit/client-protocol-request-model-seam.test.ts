@@ -10,6 +10,11 @@ import {
 } from "../../src/protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
+  identityRequestModelResolver,
+  type RequestModelResolver,
+} from "../../src/protocols/anthropic/options.js";
+import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import {
   createOpenAIResponsesHandler,
   type OpenAIResponsesHandlerOptions,
 } from "../../src/protocols/openai-responses/handler.js";
@@ -104,7 +109,7 @@ describe("Client Protocol request-model seam", () => {
   describe("Anthropic handler", () => {
     function anthropicDependencies(
       models: Models,
-      extra: Partial<AnthropicMessagesHandlerOptions> = {},
+      requestModelResolver: RequestModelResolver,
       passthroughFetch?: FetchFunction,
     ): HttpBoundaryDependencies {
       const options: AnthropicMessagesHandlerOptions = {
@@ -114,8 +119,15 @@ describe("Client Protocol request-model seam", () => {
         maxRequestBytes: 1_000_000,
         routerDefaults: {},
         now: () => 1,
-        ...extra,
-        ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
+        ...(passthroughFetch === undefined
+          ? {}
+          : {
+              providerNativeLane: createAnthropicProviderNativeLane({
+                models,
+                resolveRequestModel: requestModelResolver,
+                fetch: passthroughFetch,
+              }),
+            }),
       };
       const anthropic = createAnthropicMessagesHandler(options);
       return {
@@ -146,7 +158,7 @@ describe("Client Protocol request-model seam", () => {
       const capture = captureFetch();
       const dependencies = anthropicDependencies(
         passthroughModels(model, cloudflareAuth()),
-        {},
+        identityRequestModelResolver,
         capture.passthroughFetch,
       );
       const response = await handleHttpRequest(dependencies, anthropicRequest());
@@ -161,7 +173,7 @@ describe("Client Protocol request-model seam", () => {
       const capture = captureFetch();
       const dependencies = anthropicDependencies(
         passthroughModels(model, cloudflareAuth()),
-        { resolveRequestModel },
+        resolveRequestModel,
         capture.passthroughFetch,
       );
       const response = await handleHttpRequest(dependencies, anthropicRequest());

@@ -40,7 +40,10 @@ function enabledRuntime(
 ) {
   return createProtocolAwareRuntime({
     runtime: createLuckyTokenRuntime({ clientProtocols: [...protocols, models] }),
-    registry,
+    isProtocolEnabled: (protocolId) =>
+      registry.query([`protocols.${protocolId}.enabled`])[
+        `protocols.${protocolId}.enabled`
+      ]?.value !== false,
     protocolRoutes: [
       { id: "anthropic-messages", method: "POST", pathname: "/v1/messages" },
       { id: "openai-responses", method: "POST", pathname: "/v1/responses" },

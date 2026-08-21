@@ -15,6 +15,8 @@ import {
   type AnthropicMessagesHandlerOptions,
 } from "../../src/protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
+import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
+import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 
 function anthropicModel(): Model<string> {
   return {
@@ -96,7 +98,15 @@ function dependencies(
     maxRequestBytes: 1_000_000,
     routerDefaults: {},
     now: () => 1,
-    ...(passthroughFetch === undefined ? {} : { passthroughFetch }),
+    ...(passthroughFetch === undefined
+      ? {}
+      : {
+          providerNativeLane: createAnthropicProviderNativeLane({
+            models,
+            resolveRequestModel: identityRequestModelResolver,
+            fetch: passthroughFetch,
+          }),
+        }),
   };
   const anthropic = createAnthropicMessagesHandler(options);
   return {

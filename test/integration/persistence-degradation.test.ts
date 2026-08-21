@@ -376,7 +376,7 @@ describe("Audit-unavailable projection on the Control Plane seam (Ticket 23)", (
       createRequestId: () => `t23-proj-${Date.now()}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(1);
+    await client.hello(2);
     await host.publishStatus({
       modelDataPlane: "stopped",
       provider: "unconfigured",
@@ -435,7 +435,7 @@ describe("Audit-unavailable projection on the Control Plane seam (Ticket 23)", (
       createRequestId: () => `t23-badproj-${Date.now()}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(1);
+    await client.hello(2);
     await host.publishStatus({
       modelDataPlane: "stopped",
       provider: "unconfigured",

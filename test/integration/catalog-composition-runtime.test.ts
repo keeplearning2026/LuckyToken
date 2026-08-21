@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Provider } from "@earendil-works/pi-ai";
 
-import { createConfiguredPiModels } from "../../src/composition.js";
+import { createConfiguredPiModels } from "../support/configured-data-plane.js";
 import { createCatalogCacheStore } from "../../src/providers/catalog-cache.js";
 
 /**

@@ -5,7 +5,7 @@ import {
   renderSseFrame,
   sseFramePayload,
   type SseFrameLine,
-} from "../sse-lines.js";
+} from "../protocols/sse-lines.js";
 
 export interface PassthroughAnthropicRequestOptions {
   readonly model: Model<string>;

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 
 function anthropicJsonResponse(text: string): Response {
   return new Response(
@@ -180,10 +180,11 @@ describe("models.json custom provider registration", () => {
     );
 
     expect(response.status).toBe(200);
-    // Passthrough: the upstream Anthropic response is forwarded verbatim.
+    // Native preservation projects only the public model identity back to
+    // the alias captured for this request.
     await expect(response.json()).resolves.toMatchObject({
       id: "msg_upstream",
-      model: "claude-sonnet",
+      model: "my-anthropic/claude-sonnet",
       content: [{ type: "text", text: "hello from custom gateway" }],
     });
     expect(upstreamRequests).toHaveLength(1);

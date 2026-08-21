@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 
 import {
   resolveRequestIdentity,
-  type RequestIdentity,
 } from "../../request-identity.js";
 import {
   createNoopInvocationDiagnosticsFactory,
@@ -93,7 +92,6 @@ export interface OpenAIResponsesHandlerOptions {
   readonly localNativeLane?: LocalResponsesLane;
   readonly providerNativeLane?: ProviderResponsesLane;
   readonly createSessionId?: () => string;
-  readonly onRequestIdentity?: (identity: RequestIdentity) => void;
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly stateFile: string;
@@ -141,7 +139,6 @@ interface OpenAIResponsesDependencies {
   readonly localNativeLane: LocalResponsesLane | undefined;
   readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly createSessionId: () => string;
-  readonly onRequestIdentity: ((identity: RequestIdentity) => void) | undefined;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly invocationDiagnostics: InvocationDiagnosticsFactory;
   readonly requestLedger: RequestLedger;
@@ -275,7 +272,6 @@ async function handleOpenAIResponses(
       request.headers,
       dependencies.createSessionId,
     );
-    dependencies.onRequestIdentity?.(requestIdentity);
     ledger.authorized({
       effectiveSessionId: requestIdentity.effectiveSessionId,
       ...(requestIdentity.clientSessionId === undefined
@@ -703,7 +699,6 @@ export function createOpenAIResponsesHandler(
     localNativeLane: options.localNativeLane,
     providerNativeLane: options.providerNativeLane,
     createSessionId: options.createSessionId ?? randomUUID,
-    onRequestIdentity: options.onRequestIdentity,
     configuration,
     invocationDiagnostics:
       options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),

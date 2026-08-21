@@ -119,7 +119,7 @@ describe("Request Ledger page seam (Ticket 19)", () => {
       createRequestId: () => `ticket-19-client-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     return client;
   }
 
@@ -220,7 +220,7 @@ describe("Request Ledger page seam (Ticket 19)", () => {
       createRequestId: () => `ticket-19-client-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(client.getRequestLedger(undefined)).rejects.toThrow(
       "unknown_command",
     );

@@ -35,6 +35,8 @@ import { createOpenAIResponsesServingTestComposition } from "../support/openai-r
 import {
   createAnthropicMessagesHandler,
 } from "../../src/protocols/anthropic/handler.js";
+import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
+import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import { handleHttpRequest } from "../../src/http.js";
 
 /**
@@ -189,7 +191,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       createRequestId: () => `cp-request-${++requestCounter}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     return {
       runtime,
       store,
@@ -521,7 +523,11 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
     const handler = createAnthropicMessagesHandler({
       models,
       maxRequestBytes: 1_000_000,
-      passthroughFetch,
+      providerNativeLane: createAnthropicProviderNativeLane({
+        models,
+        resolveRequestModel: identityRequestModelResolver,
+        fetch: passthroughFetch,
+      }),
       requestLedger: store,
       now: () => 1_786_400_000_000,
     });
@@ -896,7 +902,13 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
         getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
       } as unknown as Models,
       maxRequestBytes: 1_000_000,
-      passthroughFetch,
+      providerNativeLane: createAnthropicProviderNativeLane({
+        models: {
+          getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
+        } as Pick<Models, "getAuth">,
+        resolveRequestModel: identityRequestModelResolver,
+        fetch: passthroughFetch,
+      }),
       requestLedger: passthroughStore,
       now: () => 1_786_400_000_000,
     });

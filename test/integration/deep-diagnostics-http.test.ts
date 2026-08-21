@@ -263,7 +263,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
       createRequestId: () => `cp-request-${++requestCounter}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     return {
       runtime,
       store,
@@ -989,7 +989,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
       createRequestId: () => `cp-request-${++requestCounter}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(
       client.getCapture({ requestId: "10000000-0000-4000-8000-000000000099" }),
     ).rejects.toThrow(/unknown_command/u);
@@ -1011,7 +1011,7 @@ describe("Deep Diagnostics capture through the real Data Plane and Control Plane
       createRequestId: () => `cp-request-${++requestCounter}`,
       pipeConnector: transport,
     });
-    await wiredClient.hello(1);
+    await wiredClient.hello(2);
     const statusEvents: unknown[] = [];
     await wiredClient.subscribe((event) => statusEvents.push(event));
     await wiredClient.subscribeCapture(() => undefined);

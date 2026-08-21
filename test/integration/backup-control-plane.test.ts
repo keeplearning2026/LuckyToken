@@ -67,7 +67,7 @@ describe("Ticket 24 backup command through the Control Plane", () => {
       createRequestId: () => `request-${seen.length + 1}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(
       client.executeBackup({
         mode: "full_sensitive",
@@ -113,7 +113,7 @@ describe("Ticket 24 backup command through the Control Plane", () => {
       createRequestId: () => "recovery-request",
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     const snapshot = await client.getStatus();
     expect(snapshot.modelDataPlane).toBe("stopped");
     expect(snapshot.recovery?.issues[0]).toEqual({

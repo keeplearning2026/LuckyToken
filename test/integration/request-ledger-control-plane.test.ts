@@ -109,7 +109,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-ledger-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     // A status subscriber must never receive ledger events.
     const statusEvents: unknown[] = [];
@@ -161,7 +161,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-ledger-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     runRequest(store, "openai-responses");
     const query = await client.getRequestLedger(undefined);
@@ -196,7 +196,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-first-${++nextId}`,
       pipeConnector: transport,
     });
-    await first.hello(1);
+    await first.hello(2);
     const page = await first.getRequestLedger({ limit: 2 });
     expect(page.records.map((record) => record.id)).toEqual([4, 3]);
     expect(page.hasMore).toBe(true);
@@ -209,7 +209,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-second-${++nextId}`,
       pipeConnector: transport,
     });
-    await second.hello(1);
+    await second.hello(2);
     const rest = await second.getRequestLedger({ afterId: oldestSeen, limit: 10 });
     expect(rest.records.map((record) => record.id)).toEqual([
       oldestSeen - 1,
@@ -233,7 +233,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-unowned-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(client.getRequestLedger(undefined)).rejects.toThrow(
       "unknown_command",
     );
@@ -258,7 +258,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-owned-${++nextId}`,
       pipeConnector: transport,
     });
-    await ledgerClient.hello(1);
+    await ledgerClient.hello(2);
     await expect(
       ledgerClient.getRequestLedger({ afterId: -5 } as never),
     ).rejects.toThrow("invalid_request");
@@ -288,7 +288,7 @@ describe("Control Plane Request Ledger surface (Ticket 18)", () => {
       createRequestId: () => `cp-mixed-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     const statusEvents: unknown[] = [];
     await client.subscribe((event) => statusEvents.push(event));
     await host.publishStatus({

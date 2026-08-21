@@ -28,7 +28,7 @@ describe("Control Plane client-token removal contract", () => {
         pipeConnector: transport,
       });
       try {
-        await client.hello(1);
+        await client.hello(2);
         expect(Object.keys(client)).not.toContain("executeClientTokenCommand");
       } finally {
         await client.close();

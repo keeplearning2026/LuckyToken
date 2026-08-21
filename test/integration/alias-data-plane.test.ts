@@ -13,7 +13,8 @@ describe("Public Model data-plane architecture", () => {
       source("../../src/application.ts"),
     ]);
 
-    expect(composition).toContain("publicModelAuthority");
+    expect(composition).toContain("publicModels: PublicModelSource");
+    expect(composition).not.toContain("createPublicModelAuthority");
     expect(application).toContain("createPublicModelAuthority");
     expect(composition).not.toContain("aliasAuthority");
     expect(composition).not.toContain("AliasRegistryAuthority");

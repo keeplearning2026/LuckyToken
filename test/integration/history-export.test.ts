@@ -220,7 +220,7 @@ describe("History export workflow through the Control Plane (Ticket 23)", () => 
       createRequestId: () => `t23-export-${++nextId}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await controlPlaneClient.hello(1);
+    await controlPlaneClient.hello(2);
     return controlPlaneClient;
   }
 
@@ -835,7 +835,7 @@ describe("History export authority-level fault and budget seams (Ticket 23)", ()
         createRequestId: () => `t23-count-fault-${++nextId}`,
         pipeConnector: createNodePipeTransport(),
       });
-      await controlPlaneClient.hello(1);
+      await controlPlaneClient.hello(2);
 
       const query = await controlPlaneClient.queryHistory();
 
@@ -873,7 +873,7 @@ describe("History export authority-level fault and budget seams (Ticket 23)", ()
         createRequestId: () => `t23-legacy-${++nextId}`,
         pipeConnector: createNodePipeTransport(),
       });
-      await controlPlaneClient.hello(1);
+      await controlPlaneClient.hello(2);
       await expect(
         controlPlaneClient.queryHistory(),
       ).rejects.toThrow(/unknown_command/);

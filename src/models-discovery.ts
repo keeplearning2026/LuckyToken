@@ -7,7 +7,7 @@ import { renderResponsesModelsList } from "./protocols/openai-responses/models.j
 export interface ModelsDiscoveryHandlerOptions {
   readonly models: Models;
   /** External Provider Package IDs; Pi builtins and models.json stay hidden. */
-  readonly providerIds: readonly string[];
+  readonly providerIds?: readonly string[];
   /** Runtime publication authority. When wired, this is the only source of
    * selectors rendered by /v1/models. */
   readonly publicModels?: PublicModelSource;
@@ -57,7 +57,7 @@ export function createModelsDiscoveryHandler(
       const list = renderResponsesModelsList(
         options.models,
         created,
-        new Set(options.providerIds),
+        new Set(options.providerIds ?? []),
       );
       return new Response(JSON.stringify(list), {
         status: 200,

@@ -168,7 +168,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.getAnalytics({
       version: 1,
@@ -227,7 +227,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-options-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.getAnalytics({
       version: 1,
@@ -263,7 +263,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-session-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const result = await client.getAnalytics({
       version: 1,
@@ -300,7 +300,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-bad-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     // Unknown top-level key, version !== 1, empty range.
     const analytics = client as unknown as {
@@ -340,7 +340,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-none-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(
       client.getAnalytics({ version: 1, command: "summary", from: 0, to: 1 }),
     ).rejects.toThrow("unknown_command");
@@ -374,7 +374,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       createRequestId: () => `cp-analytics-cost-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     // The strict wire decoder rejects the frame before the client ever sees
     // it: the response is malformed/absent, never a cost-bearing result.
     await expect(

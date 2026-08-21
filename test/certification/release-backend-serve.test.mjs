@@ -163,10 +163,10 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     }
     assert.ok(client !== undefined, `connect failed: ${String(lastError)}`);
     try {
-      const hello = await client.hello(1);
+      const hello = await client.hello(2);
       assert.equal(hello.type, "compatible");
       assert.equal(hello.application.version, "0.1.0");
-      assert.equal(hello.contractVersion, 1);
+      assert.equal(hello.contractVersion, 2);
 
       let status;
       for (let attempt = 0; attempt < 200; attempt += 1) {

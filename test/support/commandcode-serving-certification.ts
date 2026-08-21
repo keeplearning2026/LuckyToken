@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options
 import type { CommandCodeCompatibilityPolicy } from "@luckytoken/provider-commandcode-private";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:09894deeffe78ba7ce9a0fda414394ca56506858a302acddae08627ebe78ecbc";
+  "sha256:c011be9172891ab2b4c923ca256bc4868b7efe9a9027bd3fde47d7d0a6d08124";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";

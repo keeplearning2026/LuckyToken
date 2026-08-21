@@ -1,27 +1,15 @@
 #!/usr/bin/env node
 
-import type {
-  AuthEvent,
-  AuthInteraction,
-  AuthPrompt,
-  AuthType,
-  Models,
-  Provider,
-} from "@earendil-works/pi-ai";
-import { stdin, stdout } from "node:process";
+import { stdout } from "node:process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
 import { startLuckyTokenApplication } from "./application.js";
-import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import { createControlPlaneDiscovery } from "./control-plane-discovery.js";
 import { runCredentialCli } from "./credentials/cli.js";
 import { runAuthCli } from "./credentials/auth-cli.js";
-import { createConfiguredPiModels } from "./composition.js";
 import {
   connectControlPlane,
   controlPlaneVersion,
@@ -46,8 +34,6 @@ const HELP = `LuckyToken
 
 Usage:
   luckytoken --config <path>
-  luckytoken login [provider] --config <path>
-  luckytoken logout [provider] --config <path>
   luckytoken control status --descriptor <path>
   luckytoken control <start|stop|restart> --descriptor <path>
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
@@ -63,8 +49,6 @@ Usage:
 
 Commands:
   serve    Start the local Client Protocol service (default)
-  login    Authenticate a Provider through Pi Models
-  logout   Remove a Provider credential through Pi Models
   control status  Read the local Control Plane status snapshot
   control start|stop|restart  Manage the model gateway through the Control Plane
   control auto-start status|enable|disable  Query or change Windows login auto-start
@@ -131,24 +115,12 @@ control history commands:
   acknowledge               Silence persistence urgency without claiming recovery
 `;
 
-type ParsedCliArguments =
-  | {
-      readonly command: "serve";
-      readonly configPath: string;
-      readonly ownerKind: "cli" | "desktop";
-      readonly desktopExe?: string;
-      readonly createFirstRunConfig: boolean;
-    }
-  | {
-      readonly command: "login" | "logout";
-      readonly configPath: string;
-      readonly providerId?: string;
-    };
-
-interface LoginChoice {
-  readonly provider: Provider;
-  readonly type: AuthType;
-  readonly label: string;
+interface ParsedCliArguments {
+  readonly command: "serve";
+  readonly configPath: string;
+  readonly ownerKind: "cli" | "desktop";
+  readonly desktopExe?: string;
+  readonly createFirstRunConfig: boolean;
 }
 
 function parseArguments(
@@ -204,236 +176,20 @@ function parseArguments(
   }
   if (configPath === undefined) throw new Error("--config <path> is required");
   const first = positional[0];
-  const command: "serve" | "login" | "logout" =
-    first === undefined || first === "serve"
-      ? "serve"
-      : first === "login" || first === "logout"
-        ? first
-        : (() => {
-            throw new Error(`Unknown command: ${first}`);
-          })();
-  const providerId = command === "serve" ? undefined : positional[1];
-  const expectedPositionals =
-    command === "serve" && first === "serve" ? 1 : command === "serve" ? 0 : 2;
+  if (first !== undefined && first !== "serve") {
+    throw new Error(`Unknown command: ${first}`);
+  }
+  const expectedPositionals = first === "serve" ? 1 : 0;
   if (positional.length > expectedPositionals) {
-    throw new Error(`Too many arguments for ${command}`);
-  }
-  if (command === "serve") {
-    return {
-      command,
-      configPath,
-      ownerKind,
-      createFirstRunConfig,
-      ...(desktopExe === undefined ? {} : { desktopExe }),
-    };
+    throw new Error("Too many arguments for serve");
   }
   return {
-    command,
+    command: "serve",
     configPath,
-    ...(providerId === undefined ? {} : { providerId }),
+    ownerKind,
+    createFirstRunConfig,
+    ...(desktopExe === undefined ? {} : { desktopExe }),
   };
-}
-
-class PromptOutput extends Writable {
-  muted = false;
-
-  override _write(
-    chunk: Buffer | string,
-    encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    if (!this.muted) stdout.write(chunk, encoding);
-    callback();
-  }
-}
-
-function printAuthEvent(event: AuthEvent): void {
-  switch (event.type) {
-    case "auth_url":
-      stdout.write(`Open this URL in a browser:\n${event.url}\n`);
-      if (event.instructions) stdout.write(`${event.instructions}\n`);
-      return;
-    case "device_code":
-      stdout.write(
-        `Open ${event.verificationUri} and enter code ${event.userCode}\n`,
-      );
-      return;
-    case "info":
-    case "progress":
-      stdout.write(`${event.message}\n`);
-  }
-}
-
-function createTerminalInteraction(): {
-  readonly interaction: AuthInteraction;
-  close(): void;
-} {
-  const promptOutput = new PromptOutput();
-  const terminal = stdin.isTTY === true && stdout.isTTY === true;
-  const readline = createInterface({
-    input: stdin,
-    output: promptOutput,
-    terminal,
-  });
-  const question = (text: string, signal: AbortSignal | undefined) =>
-    signal === undefined
-      ? readline.question(text)
-      : readline.question(text, { signal });
-  const ask = async (prompt: AuthPrompt): Promise<string> => {
-    prompt.signal?.throwIfAborted();
-    if (prompt.type === "select") {
-      stdout.write(`${prompt.message}\n`);
-      prompt.options.forEach((option, index) => {
-        stdout.write(
-          `  ${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}\n`,
-        );
-      });
-      const answer = await question(
-        `Select 1-${prompt.options.length}: `,
-        prompt.signal,
-      );
-      const selection = Number.parseInt(answer.trim(), 10) - 1;
-      const option = prompt.options[selection];
-      if (option === undefined) throw new Error("Invalid selection");
-      return option.id;
-    }
-    const description = `${prompt.message}${prompt.placeholder ? ` (${prompt.placeholder})` : ""}: `;
-    if (prompt.type !== "secret") {
-      return question(description, prompt.signal);
-    }
-    stdout.write(description);
-    promptOutput.muted = terminal;
-    try {
-      return await question("", prompt.signal);
-    } finally {
-      promptOutput.muted = false;
-      if (terminal) stdout.write("\n");
-    }
-  };
-  return {
-    interaction: {
-      prompt: ask,
-      notify: printAuthEvent,
-    },
-    close: () => readline.close(),
-  };
-}
-
-function loginChoices(models: Models, providerId?: string): LoginChoice[] {
-  const choices: LoginChoice[] = [];
-  for (const provider of models.getProviders()) {
-    if (providerId !== undefined && provider.id !== providerId) continue;
-    if (provider.auth.oauth !== undefined) {
-      const oauth = provider.auth.oauth;
-      choices.push({
-        provider,
-        type: "oauth",
-        label:
-          oauth.loginLabel ??
-          (oauth.isSubscription === true
-            ? "Use a subscription"
-            : "Use an account"),
-      });
-    }
-    if (provider.auth.apiKey?.login !== undefined) {
-      choices.push({ provider, type: "api_key", label: "Use an API key" });
-    }
-  }
-  return choices;
-}
-
-async function chooseLogin(
-  models: Models,
-  interaction: AuthInteraction,
-  providerId?: string,
-): Promise<LoginChoice> {
-  const choices = loginChoices(models, providerId);
-  if (choices.length === 0) {
-    throw new Error(
-      providerId === undefined
-        ? "No Provider exposes an interactive Pi login method"
-        : `Provider ${providerId} does not expose an interactive Pi login method`,
-    );
-  }
-  if (choices.length === 1) return choices[0] as LoginChoice;
-  const selection = await interaction.prompt({
-    type: "select",
-    message:
-      providerId === undefined
-        ? "Select a Provider login"
-        : "Select a login method",
-    options: choices.map((choice, index) => ({
-      id: String(index),
-      label:
-        providerId === undefined
-          ? `${choice.provider.name} — ${choice.label}`
-          : choice.label,
-    })),
-  });
-  const choice = choices[Number.parseInt(selection, 10)];
-  if (choice === undefined) throw new Error("Invalid login selection");
-  return choice;
-}
-
-async function runLogin(
-  models: Models,
-  providerId: string | undefined,
-): Promise<void> {
-  const terminalInteraction = createTerminalInteraction();
-  try {
-    const choice = await chooseLogin(
-      models,
-      terminalInteraction.interaction,
-      providerId,
-    );
-    await models.login(
-      choice.provider.id,
-      choice.type,
-      terminalInteraction.interaction,
-    );
-    stdout.write(
-      `Authenticated ${choice.provider.name} using ${choice.label}.\n`,
-    );
-  } finally {
-    terminalInteraction.close();
-  }
-}
-
-async function runLogout(
-  models: Models,
-  providerId: string | undefined,
-): Promise<void> {
-  const providers = models
-    .getProviders()
-    .filter(
-      (provider) => providerId === undefined || provider.id === providerId,
-    );
-  if (providers.length === 0) {
-    throw new Error(
-      providerId === undefined
-        ? "No Provider is configured"
-        : `Unknown Provider: ${providerId}`,
-    );
-  }
-  let provider = providers[0] as Provider;
-  if (providers.length > 1) {
-    const terminalInteraction = createTerminalInteraction();
-    try {
-      const selection = await terminalInteraction.interaction.prompt({
-        type: "select",
-        message: "Select a Provider credential to remove",
-        options: providers.map((entry, index) => ({
-          id: String(index),
-          label: entry.name,
-        })),
-      });
-      provider = providers[Number.parseInt(selection, 10)] as Provider;
-    } finally {
-      terminalInteraction.close();
-    }
-  }
-  await models.logout(provider.id);
-  stdout.write(`Stored credential removed for ${provider.name}.\n`);
 }
 
 function backendBuildIdFromEnvironment(): string | undefined {
@@ -1151,30 +907,13 @@ export async function runLuckyTokenCli(
     stdout.write(HELP);
     return;
   }
-  if (parsed.command === "serve") {
-    await runServe(
-      parsed.configPath,
-      parsed.ownerKind,
-      parsed.desktopExe,
-      parsed.createFirstRunConfig,
-      backendBuildIdFromEnvironment(),
-    );
-    return;
-  }
-  const config = await loadLuckyTokenCliConfig(parsed.configPath);
-  const configured = await createConfiguredPiModels({
-    piDirectory: config.pi.directory,
-    ...(config.pi.modelsJson === undefined
-      ? {}
-      : { modelsJsonPath: config.pi.modelsJson }),
-    providerPackages: config.providerPackages,
-    fetch: globalThis.fetch,
-  });
-  if (parsed.command === "login") {
-    await runLogin(configured.models, parsed.providerId);
-  } else {
-    await runLogout(configured.models, parsed.providerId);
-  }
+  await runServe(
+    parsed.configPath,
+    parsed.ownerKind,
+    parsed.desktopExe,
+    parsed.createFirstRunConfig,
+    backendBuildIdFromEnvironment(),
+  );
 }
 
 if (

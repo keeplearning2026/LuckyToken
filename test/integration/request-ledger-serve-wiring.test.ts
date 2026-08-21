@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import {
   createRequestLedgerStoreFactory,
   parseRequestLedgerConfiguration,
@@ -81,7 +81,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
         clientProtocols: {
           "anthropic-messages": {},
         },
-        providerPackages: { "@luckytoken/provider-commandcode-private": {} },
+        providerPackages: {},
         pi: { directory: "pi" },
       }),
       "utf8",
@@ -272,7 +272,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
         clientProtocols: {
           "anthropic-messages": {},
         },
-        providerPackages: { "@luckytoken/provider-commandcode-private": {} },
+        providerPackages: {},
         pi: { directory: "pi" },
       }),
       "utf8",

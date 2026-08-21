@@ -1,7 +1,7 @@
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { createConfiguredPiModels } from "../../src/composition.js";
+import { createConfiguredPiModels } from "../support/configured-data-plane.js";
 
 describe("configured Provider Package runtime", () => {
   it("starts without a Provider credential and fails only at invocation", async () => {
@@ -10,9 +10,7 @@ describe("configured Provider Package runtime", () => {
       piDirectory: ".unused-in-memory-pi",
       credentials: new InMemoryCredentialStore(),
       fetch,
-      providerPackages: {
-        "@luckytoken/provider-commandcode-private": {},
-      },
+      providerPackages: {},
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000007",
     });

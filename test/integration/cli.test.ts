@@ -21,7 +21,6 @@ import {
   type RunningControlPlane,
 } from "@luckytoken/application-control-plane/control-plane";
 
-import { createFileCredentialStore } from "../../src/index.js";
 import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "../../src/settings/control-plane.js";
@@ -146,6 +145,24 @@ describe("LuckyToken CLI", () => {
     expect(result.stdout).toContain("Control-command discovery descriptor");
     expect(result.stderr).not.toContain("Error");
   }, 30_000);
+
+  it.each(["login", "logout"])(
+    "rejects retired top-level %s in favor of the running Backend Control Plane",
+    async (command) => {
+      const child = startCli([
+        command,
+        "fixture-provider",
+        "--config",
+        "unused-config.json",
+      ]);
+      children.push(child);
+      const result = await captureChild(child).result;
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(`Unknown command: ${command}`);
+    },
+    30_000,
+  );
 
   it("rejects a serve descriptor override so singleton and discovery stay in one current-user domain", async () => {
     const child = startCli([
@@ -1042,74 +1059,6 @@ describe("LuckyToken CLI", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("Rotated the global client token");
   }, 30_000);
 
-  it("logs in and out through a configured Provider Package without leaking the key", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-e2e-"));
-    directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
-    const piDirectory = join(stateDirectory, "pi");
-    await mkdir(piDirectory, { recursive: true });
-    const configPath = join(stateDirectory, "config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
-        server: { port: 0 },
-        clientProtocols: {
-          "anthropic-messages": {},
-        },
-        providerPackages: {
-          "@luckytoken/provider-commandcode-private": {},
-        },
-        pi: { directory: "pi" },
-      }),
-      "utf8",
-    );
-
-    const login = startCli([
-      "login",
-      "commandcode-private",
-      "--config",
-      configPath,
-    ]);
-    children.push(login);
-    const loginCapture = captureChild(login);
-    login.stdin.end("stored-provider-secret\n");
-    const loginResult = await loginCapture.result;
-    expect(loginResult.code).toBe(0);
-    expect(loginResult.stdout).toContain("Authenticated CommandCode Private");
-    expect(`${loginResult.stdout}\n${loginResult.stderr}`).not.toContain(
-      "stored-provider-secret",
-    );
-
-    await expect(
-      createFileCredentialStore(join(piDirectory, "auth.json")).read(
-        "commandcode-private",
-      ),
-    ).resolves.toEqual({ type: "api_key", key: "stored-provider-secret" });
-
-    const logout = startCli([
-      "logout",
-      "commandcode-private",
-      "--config",
-      configPath,
-    ]);
-    children.push(logout);
-    const logoutCapture = captureChild(logout);
-    const logoutResult = await logoutCapture.result;
-    expect(logoutResult.code).toBe(0);
-    // Ticket 12: logout reports the exact stored-credential removal message.
-    expect(logoutResult.stdout).toContain(
-      "Stored credential removed for CommandCode Private",
-    );
-    expect(`${logoutResult.stdout}\n${logoutResult.stderr}`).not.toContain(
-      "stored-provider-secret",
-    );
-    await expect(
-      createFileCredentialStore(join(piDirectory, "auth.json")).read(
-        "commandcode-private",
-      ),
-    ).resolves.toBeUndefined();
-  }, 30_000);
 });
 
 describe("LuckyToken CLI removed directory-token scopes", () => {

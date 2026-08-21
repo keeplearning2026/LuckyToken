@@ -163,7 +163,7 @@ describe("History deletion through the Control Plane (Ticket 23)", () => {
           createRequestId: () => `t23-delete-${++nextId}`,
           pipeConnector: createNodePipeTransport(),
         });
-        await controlPlaneClient.hello(1);
+        await controlPlaneClient.hello(2);
         return controlPlaneClient;
       },
     };
@@ -329,7 +329,7 @@ describe("History deletion through the Control Plane (Ticket 23)", () => {
       createRequestId: () => `t23-partial-${++nextId}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await controlPlaneClient.hello(1);
+    await controlPlaneClient.hello(2);
     const gate = await controlPlaneClient.executeHistoryDelete({ range: "all" });
     expect(gate.outcome).toBe("confirmation_required");
     if (gate.outcome !== "confirmation_required") return;

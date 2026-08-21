@@ -9,23 +9,25 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
 const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 const REQUEST_TIMEOUT_MS = 180_000;
 
 function words(count: number, prefix: string): string {
-  return Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`).join(
-    " ",
-  );
+  return Array.from(
+    { length: count },
+    (_, index) => `${prefix}${index + 1}`,
+  ).join(" ");
 }
 
 function usageRow(label: string, usage: Anthropic.Messages.Usage): string {
   const cacheRead = usage.cache_read_input_tokens ?? 0;
   const cacheWrite = usage.cache_creation_input_tokens ?? 0;
   const input = usage.input_tokens ?? 0;
-  const cacheRate = input === 0 ? 0 : Math.round((cacheRead / input) * 1000) / 10;
+  const cacheRate =
+    input === 0 ? 0 : Math.round((cacheRead / input) * 1000) / 10;
   return `${label}: input=${input} cache_read=${cacheRead} cache_write=${cacheWrite} cacheRate=${cacheRate}% output=${usage.output_tokens}`;
 }
 
@@ -51,9 +53,13 @@ function createCapturingFetch(upstream: FetchFunction): {
 }
 
 async function main(): Promise<void> {
-  const commandCodeApiKey = (await readFile("CommandcodeAPIKey.txt", "utf8")).trim();
+  const commandCodeApiKey = (
+    await readFile("CommandcodeAPIKey.txt", "utf8")
+  ).trim();
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-cache-probe-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
+  let composition:
+    Awaited<ReturnType<typeof createConfiguredLuckyTokenDataPlane>> | undefined;
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -76,13 +82,13 @@ async function main(): Promise<void> {
       "utf8",
     );
     const credentials = new InMemoryCredentialStore();
-    await credentials.modify(
-      "commandcode-private",
-      async () => ({ type: "api_key", key: commandCodeApiKey }),
-    );
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: commandCodeApiKey,
+    }));
     const capture = createCapturingFetch(globalThis.fetch);
     const config = await loadLuckyTokenCliConfig(configPath);
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,
@@ -134,6 +140,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await server?.close();
+    await composition?.close();
     await rm(directory, { recursive: true, force: true });
   }
 }

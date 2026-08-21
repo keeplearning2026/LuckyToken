@@ -304,10 +304,14 @@ It receives only the facts/operations it actually needs, principally:
 
 ```ts
 models: Models
-providerCredentialScrub: (value: string) => string
+scrubSensitiveText: (value: string) => string
 ```
 
-If implementation proves another Provider-domain operation is required, add the smallest explicit dependency rather than passing the whole runtime.
+`scrubSensitiveText` is an observation/redaction operation assembled by Backend
+Application from the credential owners. It exposes neither credential
+representation nor lookup, resolution, or transport behavior. If implementation
+proves another Provider-domain operation is required, add the smallest explicit
+dependency rather than passing the whole runtime.
 
 ## 5.5 No compatibility path for old CommandCode package configuration
 
@@ -1127,16 +1131,20 @@ Conceptually:
 
 ```ts
 interface ConfiguredLuckyTokenDataPlaneOptions {
-  readonly config: LuckyTokenCliConfig;
+  readonly configuration: DataPlaneConfiguration;
   readonly models: Models;
-  readonly providerCredentialScrub: (value: string) => string;
-  // existing Data Plane-specific dependencies:
-  // diagnostics, request ledger, capture, settings,
-  // aliases, client tokens, Codex native seams, etc.
+  readonly publicModels: PublicModelSource;
+  readonly requestLedger: RequestLedger;
+  readonly deepCapture: DeepCaptureAuthority;
+  readonly isProtocolEnabled: (protocolId: string) => boolean;
+  readonly scrubSensitiveText: (value: string) => string;
+  readonly fetch: FetchFunction;
+  // optional Data Plane-specific Codex native and deterministic test seams
 }
 ```
 
-Do not pass the whole Provider Runtime when only these facts are required.
+Do not pass the whole Provider Runtime, Settings Registry, credential authority,
+Catalog, or persistence-store configuration when only these facts are required.
 
 ## 13.3 Data Plane must not create Providers
 
@@ -1158,7 +1166,7 @@ A stop/start/restart of the Runtime Supervisor creates a new HTTP/protocol servi
 
 ```text
 providerRuntime.models
-providerRuntime credential scrub function
+Backend-assembled scrubSensitiveText operation
 ```
 
 The Provider Runtime object identity must remain unchanged across Data Plane restarts.

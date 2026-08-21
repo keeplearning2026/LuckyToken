@@ -89,7 +89,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     store.append({
       level: "info",
@@ -147,7 +147,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-mixed-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     const statusEvents: unknown[] = [];
     const diagnosticsEvents: unknown[] = [];
     await client.subscribe((event) => statusEvents.push(event));
@@ -182,7 +182,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-unowned-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
     await expect(client.getDiagnostics(undefined)).rejects.toThrow(
       "unknown_command",
     );
@@ -208,7 +208,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-wire-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const bounded = await client.getDiagnostics({ limit: 2 });
     expect(bounded.records).toHaveLength(2);
@@ -261,7 +261,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-scrub-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     store.append({
       level: "warning",
@@ -299,7 +299,7 @@ describe("Control Plane diagnostics surface (Ticket 07)", () => {
       createRequestId: () => `diag-mixed-request-${++nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(1);
+    await client.hello(2);
 
     const secretCanaries = {
       cookieJunk: "canary-cp-mixed-cookie-a1b2",
