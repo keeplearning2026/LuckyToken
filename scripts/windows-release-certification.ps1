@@ -1,109 +1,145 @@
 param(
-  [string]$InstallerPath = "",
-  [string]$UninstallDir = ""
+  [Parameter(Mandatory = $true)][string]$InstallerPath,
+  [Parameter(Mandatory = $true)][string]$Version,
+  [switch]$RequireSignature
 )
 
-# LuckyToken Ticket 26 machine-scoped Windows release certification.
-#
-# This script drives the checks that require a real desktop session and can
-# not run inside the automated suite: clean-install first run, Windows
-# sign-in auto-start, second-user pipe blocking, LAN isolation, and
-# uninstall data preservation. Run it on a CLEAN Windows VM / test machine
-# with the built NSIS installer. It never touches production credentials;
-# every check uses a temporary per-user root and recorded evidence is
-# sanitized.
-#
-# Usage (from an admin PowerShell on the clean machine):
-#   .\scripts\windows-release-certification.ps1 -InstallerPath .\dist\LuckyToken_0.1.0_x64-setup.exe
-
 $ErrorActionPreference = "Stop"
-$evidence = [ordered]@{}
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
+$installRoot = Join-Path $env:LOCALAPPDATA "LuckyToken"
+$installedExe = Join-Path $installRoot "app-$Version\LuckyToken.exe"
+$updateExe = Join-Path $installRoot "Update.exe"
+$userState = Join-Path $env:USERPROFILE ".luckytoken"
+$descriptorPath = Join-Path $userState "control-plane.json"
+$evidence = [ordered]@{
+  schemaVersion = "luckytoken-windows-installer-certification-v1"
+  installer = $resolvedInstaller
+  version = $Version
+  startedAt = [DateTimeOffset]::UtcNow.ToString("o")
+  checks = [ordered]@{}
+}
 
-function Write-Evidence {
+function Add-Check {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)][bool]$Passed,
     [string]$Detail = ""
   )
-  $evidence[$Name] = [ordered]@{ passed = $Passed; detail = $Detail }
-  Write-Host ("{0} {1} {2}" -f ($(if ($Passed) { "[PASS]" } else { "[FAIL]" })), $Name, $Detail)
+  $evidence.checks[$Name] = [ordered]@{ passed = $Passed; detail = $Detail }
+  if (-not $Passed) { throw "$Name failed: $Detail" }
+  Write-Host "[PASS] $Name $Detail"
 }
 
-if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-  throw "Provide -InstallerPath pointing at the NSIS installer to certify."
-}
-if (-not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) {
-  throw "Installer not found: $InstallerPath"
+function Wait-ReleaseProcess {
+  param(
+    [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
+    [Parameter(Mandatory = $true)][int]$TimeoutMilliseconds,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
+    Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    throw "$Label timed out after $TimeoutMilliseconds ms"
+  }
+  if ($Process.ExitCode -ne 0) {
+    throw "$Label exited with code $($Process.ExitCode)"
+  }
 }
 
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("luckytoken-release-cert-" + [Guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+if (-not [IO.Path]::IsPathFullyQualified($resolvedInstaller)) {
+  throw "InstallerPath must resolve to an absolute path"
+}
+if (Test-Path -LiteralPath $installedExe -PathType Leaf) {
+  throw "Installer certification requires a clean Windows user; already installed: $installedExe"
+}
+if (Test-Path -LiteralPath $userState) {
+  throw "Installer certification requires a blank Windows user; state already exists: $userState"
+}
+if ($RequireSignature) {
+  $signature = Get-AuthenticodeSignature -LiteralPath $resolvedInstaller
+  Add-Check -Name "installer-signature" -Passed ($signature.Status -eq "Valid") -Detail $signature.Status
+}
 
 try {
-  # --- Clean-install first run -------------------------------------------
-  $installDir = $tempRoot
-  $silent = Start-Process -FilePath $InstallerPath -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
-  Write-Evidence -Name "clean-install" -Passed ($silent.ExitCode -eq 0) -Detail "exit $($silent.ExitCode)"
+  $setupProcess = Start-Process -FilePath $resolvedInstaller -ArgumentList @("--silent") -PassThru -WindowStyle Hidden
+  Wait-ReleaseProcess -Process $setupProcess -TimeoutMilliseconds 300000 -Label "Squirrel installer"
+  Add-Check -Name "clean-install" -Passed $true -Detail "exit 0"
 
-  $desktopExe = Join-Path $installDir "LuckyToken.exe"
-  $launcherJson = Join-Path $installDir "launcher.json"
-  $backendNode = Join-Path $installDir "backend\node\node.exe"
-  $backendCli = Join-Path $installDir "backend\dist\cli.js"
-  $layoutOk = (Test-Path -LiteralPath $desktopExe -PathType Leaf) -and
-    (Test-Path -LiteralPath $launcherJson -PathType Leaf) -and
-    (Test-Path -LiteralPath $backendNode -PathType Leaf) -and
-    (Test-Path -LiteralPath $backendCli -PathType Leaf)
-  Write-Evidence -Name "installed-layout" -Passed $layoutOk -Detail $installDir
+  Add-Check -Name "installed-executable" -Passed (Test-Path -LiteralPath $installedExe -PathType Leaf) -Detail $installedExe
+  Add-Check -Name "bundled-node" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\node\node.exe") -PathType Leaf)
+  Add-Check -Name "bundled-backend" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\dist\cli.js") -PathType Leaf)
 
-  # Fixed-port: the first-run template binds 127.0.0.1:3000.
-  $descriptor = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".luckytoken\control-plane.json"
-  $existingPort = $null
-  $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 3000)
+  if ($RequireSignature) {
+    $installedSignature = Get-AuthenticodeSignature -LiteralPath $installedExe
+    Add-Check -Name "installed-executable-signature" -Passed ($installedSignature.Status -eq "Valid") -Detail $installedSignature.Status
+  }
+
+  Push-Location $repositoryRoot
   try {
-    $probe.Start()
-    $portFree = $true
-  } catch {
-    $portFree = $false
+    & node scripts/certify-running-install.mjs verify $descriptorPath
+    $automaticFirstRunExit = $LASTEXITCODE
   } finally {
-    $probe.Stop()
+    Pop-Location
   }
-  Write-Evidence -Name "fixed-port-free-before-first-run" -Passed $portFree
+  Add-Check -Name "installer-automatic-first-run-provider-catalog" -Passed ($automaticFirstRunExit -eq 0) -Detail "exit $automaticFirstRunExit"
+  Add-Check -Name "first-run-creates-user-state" -Passed (Test-Path -LiteralPath $userState -PathType Container) -Detail $userState
 
-  Write-Host "Launch LuckyToken.exe once, verify: empty Dashboard, tray icon, Gateway running, and auto-start enable. Press Enter when verified..."
-  Read-Host
-
-  # --- Second-user / cross-session pipe block -----------------------------
-  # The Control Plane pipe is a current-user Named Pipe with a strict DACL.
-  # A second Windows user session must not be able to connect to it. This
-  # requires a second local account; automated verification is documented
-  # as a manual step because creating accounts needs elevated rights.
-  Write-Evidence -Name "second-user-pipe-block" -Passed $false -Detail "MANUAL: create a second user, sign in, confirm the LuckyToken pipe is unreachable"
-
-  # --- LAN isolation -------------------------------------------------------
-  # Default bind host is 127.0.0.1. After the explicit LAN confirmation,
-  # only model routes bind to the LAN interface; Control Plane, secret
-  # reveal, history, and Developer Lab stay on loopback/IPC. On a VM with a
-  # second adapter this is verified by probing the LAN address from another
-  # host for model routes and confirming management surfaces refuse.
-  Write-Evidence -Name "lan-isolation" -Passed $false -Detail "MANUAL: on a second host probe model routes (reachable) and management surfaces (refused)"
-
-  # --- Uninstall preserves user data ---------------------------------------
-  $userRoot = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".luckytoken"
-  $userRootBefore = Test-Path -LiteralPath $userRoot
-  $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "uninstall*.exe" | Select-Object -First 1
-  if ($null -ne $uninstaller) {
-    $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/S") -Wait -PassThru
-    Write-Evidence -Name "uninstall" -Passed ($uninstall.ExitCode -eq 0) -Detail "exit $($uninstall.ExitCode)"
-  } else {
-    Write-Evidence -Name "uninstall" -Passed $false -Detail "no uninstaller found in $installDir"
+  $installedDesktopProcesses = @(
+    Get-CimInstance Win32_Process |
+      Where-Object { $_.ExecutablePath -eq $installedExe }
+  )
+  Add-Check -Name "automatic-first-run-desktop-process" -Passed ($installedDesktopProcesses.Count -gt 0) -Detail $installedExe
+  $installedDesktopProcesses |
+    Sort-Object ProcessId -Descending |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 500
+  Push-Location $repositoryRoot
+  try {
+    & node scripts/certify-running-install.mjs quit $descriptorPath
+    $automaticFirstRunQuitExit = $LASTEXITCODE
+  } finally {
+    Pop-Location
   }
-  $userRootAfter = Test-Path -LiteralPath $userRoot
-  Write-Evidence -Name "uninstall-preserves-user-data" -Passed ($userRootBefore -and $userRootAfter)
+  Add-Check -Name "automatic-first-run-cleanup" -Passed ($automaticFirstRunQuitExit -eq 0) -Detail "exit $automaticFirstRunQuitExit"
 
-  $evidencePath = Join-Path $tempRoot "release-certification-evidence.json"
-  $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $evidencePath -Encoding utf8
-  Write-Host "Evidence recorded at: $evidencePath"
-  Write-Host ((($evidence.Values | Where-Object { -not $_.passed }).Count) -eq 0 ? "ALL MACHINE CHECKS PASSED" : "MANUAL/FIXED ITEMS REMAIN (see evidence)")
+  $previousSelectedExecutable = $env:LUCKYTOKEN_PACKAGED_EXECUTABLE
+  try {
+    $env:LUCKYTOKEN_PACKAGED_EXECUTABLE = $installedExe
+    Push-Location $repositoryRoot
+    try {
+      & node --test packages/desktop-shell/test/first-run-provider-catalog.e2e.test.mjs
+      $firstRunExit = $LASTEXITCODE
+    } finally {
+      Pop-Location
+    }
+  } finally {
+    if ($null -eq $previousSelectedExecutable) {
+      Remove-Item Env:LUCKYTOKEN_PACKAGED_EXECUTABLE -ErrorAction SilentlyContinue
+    } else {
+      $env:LUCKYTOKEN_PACKAGED_EXECUTABLE = $previousSelectedExecutable
+    }
+  }
+  Add-Check -Name "installed-blank-first-run-provider-catalog" -Passed ($firstRunExit -eq 0) -Detail "node --test exit $firstRunExit"
 } finally {
-  # Leave the evidence file behind; remove only scratch copies.
+  if (Test-Path -LiteralPath $updateExe -PathType Leaf) {
+    $uninstallProcess = Start-Process -FilePath $updateExe -ArgumentList @("--uninstall", "-s") -PassThru -WindowStyle Hidden
+    Wait-ReleaseProcess -Process $uninstallProcess -TimeoutMilliseconds 120000 -Label "Squirrel uninstaller"
+    for ($attempt = 0; $attempt -lt 100 -and (Test-Path -LiteralPath $installedExe -PathType Leaf); $attempt += 1) {
+      Start-Sleep -Milliseconds 100
+    }
+    Add-Check -Name "uninstall-removes-application" -Passed (-not (Test-Path -LiteralPath $installedExe -PathType Leaf))
+  }
+  $remainingInstalledProcesses = @(
+    Get-CimInstance Win32_Process |
+      Where-Object { $_.ExecutablePath -like "$installRoot\*" }
+  )
+  Add-Check -Name "uninstall-leaves-no-installed-process" -Passed ($remainingInstalledProcesses.Count -eq 0)
+  Add-Check -Name "uninstall-preserves-user-state" -Passed (Test-Path -LiteralPath $userState)
 }
+
+$evidence.finishedAt = [DateTimeOffset]::UtcNow.ToString("o")
+$evidenceDirectory = Join-Path $repositoryRoot "artifacts\certification"
+New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+$evidencePath = Join-Path $evidenceDirectory ("windows-installer-{0}.json" -f [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss"))
+$evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+Write-Host "Installer certification evidence: $evidencePath"

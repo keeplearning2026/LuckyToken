@@ -5,9 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
-  readdir,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
@@ -24,6 +22,7 @@ import {
   createNodePipeTransport,
   parseControlPlaneDescriptor,
 } from "@luckytoken/application-control-plane/control-plane";
+import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 const execFileAsync = promisify(execFile);
 const desktopRoot = resolve(import.meta.dirname, "..");
@@ -125,31 +124,6 @@ async function startLocalAnthropicUpstream() {
         server.close((error) => (error === undefined ? resolvePromise() : reject(error))),
       ),
   };
-}
-
-async function latestPackagedExecutable() {
-  const outputRoot = join(desktopRoot, ".electron-out");
-  const entries = await readdir(outputRoot, { withFileTypes: true });
-  const candidates = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const executable = join(
-      outputRoot,
-      entry.name,
-      "LuckyToken-win32-x64",
-      "LuckyToken.exe",
-    );
-    try {
-      const metadata = await stat(executable);
-      candidates.push({ executable, mtimeMs: metadata.mtimeMs });
-    } catch {
-      // Ignore partial/other-platform outputs.
-    }
-  }
-  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  const latest = candidates[0];
-  if (latest === undefined) throw new Error("no packaged LuckyToken executable found");
-  return latest.executable;
 }
 
 async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
@@ -501,7 +475,7 @@ test(
   "release product golden journey reaches first successful request and survives tray-only use",
   { skip: process.platform !== "win32", timeout: 120_000 },
   async () => {
-    const executablePath = await latestPackagedExecutable();
+    const executablePath = await resolvePackagedExecutable(desktopRoot);
     const upstream = await startLocalAnthropicUpstream();
     const home = await mkdtemp(join(tmpdir(), "luckytoken-product-golden-"));
     const dataPlanePort = await freePort();

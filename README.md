@@ -22,6 +22,38 @@ npm run test:distribution
 npm run build
 ```
 
+## Windows release
+
+Windows has one release authority: a per-user Squirrel.Windows
+`LuckyToken-Setup.exe`. The portable ZIP is not a Windows release artifact.
+
+Build and fully certify an unsigned local candidate:
+
+```powershell
+npm run release:candidate
+```
+
+This command runs the source gates, builds once, binds every packaged E2E to
+that exact EXE, verifies an isolated blank first run shows the built-in
+Provider catalog, and then writes the installer, update files, SHA-256 values,
+build identity, and certification manifest under
+`artifacts/release-candidates/`.
+
+An official release additionally requires a clean worktree and Authenticode
+signing. Supply the certificate through environment variables; never commit
+the certificate or password:
+
+```powershell
+$env:LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE = "C:\secure\luckytoken.pfx"
+$env:LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD = "<secret>"
+npm run release:windows
+```
+
+The official command runs in a blank Windows user and fails closed unless the
+installer and installed EXE have valid signatures and the complete real
+install/automatic-first-run/uninstall certification succeeds.
+See `doc/release/WindowsReleaseProcess.md` for the release contract.
+
 The integration suite uses an injected fixture `fetch` implementation. It does
 not call the real CommandCode service or read `CommandcodeAPIKey.txt`.
 

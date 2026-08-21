@@ -8,6 +8,7 @@ CommandcodeAPIKey.txt
 .luckytoken/
 **/auth.json
 .online-artifacts/
+/artifacts/
 .temp/
 temp/
 .task/

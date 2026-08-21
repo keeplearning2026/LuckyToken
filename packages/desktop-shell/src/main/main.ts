@@ -9,6 +9,7 @@ import {
   shell,
   Tray,
 } from "electron";
+import squirrelStartup from "electron-squirrel-startup";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -322,7 +323,9 @@ function createTray(actions: { readonly open: () => void; readonly quit: () => v
   updateTray(controlPlaneSession.trayHealth());
 }
 
-void startElectronDesktopLifecycle({
+app.setAppUserModelId("com.squirrel.LuckyToken.LuckyToken");
+
+if (!squirrelStartup) void startElectronDesktopLifecycle({
   buildId: currentDesktopBuildId,
   requestSingleInstanceLock: (activation) =>
     app.requestSingleInstanceLock(activation),
@@ -355,7 +358,7 @@ void startElectronDesktopLifecycle({
 
 // Closing the last management window intentionally leaves Electron Main and
 // the tray running. Explicit product Quit is a separate tray action.
-app.on("will-quit", () => {
+if (!squirrelStartup) app.on("will-quit", () => {
   void Promise.allSettled([
     desktopIpcBridge.dispose(),
     backendConnection.dispose(),

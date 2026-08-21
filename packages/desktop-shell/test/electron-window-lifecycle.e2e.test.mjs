@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ import {
   createNodePipeTransport,
   parseControlPlaneDescriptor,
 } from "@luckytoken/application-control-plane/control-plane";
+import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 const desktopRoot = resolve(import.meta.dirname, "..");
 
@@ -32,26 +33,6 @@ async function freePort() {
     server.close((error) => (error === undefined ? resolvePromise() : reject(error)));
   });
   return port;
-}
-
-async function latestPackagedExecutable() {
-  const outputRoot = join(desktopRoot, ".electron-out");
-  const entries = await readdir(outputRoot, { withFileTypes: true });
-  const candidates = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const executable = join(outputRoot, entry.name, "LuckyToken-win32-x64", "LuckyToken.exe");
-    try {
-      const metadata = await stat(executable);
-      candidates.push({ executable, mtimeMs: metadata.mtimeMs });
-    } catch {
-      // Ignore partial/other-platform package outputs.
-    }
-  }
-  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  const latest = candidates[0];
-  if (latest === undefined) throw new Error("no packaged LuckyToken executable found");
-  return latest.executable;
 }
 
 async function writeConfig(home, port) {
@@ -248,7 +229,7 @@ test(
   "packaged Electron destroys and reconstructs the renderer while Backend stays authoritative",
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
-    const executablePath = await latestPackagedExecutable();
+    const executablePath = await resolvePackagedExecutable(desktopRoot);
     const home = await mkdtemp(join(tmpdir(), "luckytoken-electron-e2e-"));
     const port = await freePort();
     const descriptorPath = await writeConfig(home, port);
@@ -355,7 +336,7 @@ test(
   "a desktop-owned Backend retires after its Electron owner is forcibly terminated",
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
-    const executablePath = await latestPackagedExecutable();
+    const executablePath = await resolvePackagedExecutable(desktopRoot);
     const home = await mkdtemp(join(tmpdir(), "luckytoken-electron-owner-lease-"));
     const port = await freePort();
     const descriptorPath = await writeConfig(home, port);
@@ -449,7 +430,7 @@ test(
   "a repository packaged build is never blocked by a product-domain legacy shell",
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
-    const repositoryExecutable = await latestPackagedExecutable();
+    const repositoryExecutable = await resolvePackagedExecutable(desktopRoot);
     const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-instance-domain-"));
     const installedDirectory = join(root, "installed", "LuckyToken-win32-x64");
     await cp(dirname(repositoryExecutable), installedDirectory, { recursive: true });
@@ -601,7 +582,7 @@ test(
   "a newly launched packaged shell path replaces a stale primary without restarting the Backend",
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
-    const sourceExecutable = await latestPackagedExecutable();
+    const sourceExecutable = await resolvePackagedExecutable(desktopRoot);
     const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-handoff-"));
     const primaryDirectory = join(root, "primary");
     const replacementDirectory = join(root, "replacement");

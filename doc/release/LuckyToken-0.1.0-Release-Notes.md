@@ -36,6 +36,6 @@ The management UI is organized around user tasks rather than internal subsystems
 
 The default release certification is deterministic and offline with respect to third-party AI services. Real CommandCode/Anthropic/OpenAI account or API-key verification remains a separate, explicitly authorized online run with Provider/version provenance. The offline golden journey must not be interpreted as evidence that a third-party production account is currently reachable.
 
-## Packaging limitation
+## Windows distribution
 
-The current Electron release path is packaged and exercised as a real Windows executable through Electron Forge. External distribution still requires the final installer/signing policy to be selected and certified; code signing is not silently bypassed.
+Windows is distributed through one per-user Squirrel.Windows `LuckyToken-Setup.exe`; the old portable ZIP is not a second Windows release authority. Release certification binds all packaged product tests to the exact EXE produced by the same Make invocation, then installs that exact Setup.exe and verifies a blank first run starts the Backend and exposes the built-in Provider catalog before uninstalling it. The release manifest records the source commit, Backend build identity, SHA-256 values, signing state, and certification outcomes. An unsigned or dirty candidate is explicitly non-promotable; official release fails closed without valid Authenticode signatures.
