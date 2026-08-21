@@ -53,6 +53,7 @@ export {
   formatTokenCount,
   formatTokensPerSecond,
   projectRequestLedger,
+  projectRequestLedgerDetail,
 } from "@luckytoken/application-control-plane/ledger-projection";
 
 export type DesktopBackendState =

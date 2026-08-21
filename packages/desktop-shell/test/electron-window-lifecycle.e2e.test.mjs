@@ -557,7 +557,7 @@ test(
       const page = await openWindow(current);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Overview" }).waitFor();
-      await page.getByText("Router running", { exact: true }).waitFor();
+      await page.getByText("Running", { exact: true }).waitFor();
       await page.close();
       await waitForNoWindows(current);
 

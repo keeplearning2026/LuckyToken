@@ -114,12 +114,18 @@ describe("Overview analytics", () => {
     );
     expect(cards).toEqual([
       "Requests12",
-      "Input1,200",
+      "Input1.2K",
       "Cache read340",
       "Output560",
-      "Token speed28.5 tokens/s",
+      "Token speed28.5 t/s",
       "Success75.0%",
     ]);
+
+    await act(async () => {
+      const filters = container.querySelector('button[aria-label="Show request filters"]');
+      if (!(filters instanceof HTMLButtonElement)) throw new Error("request filter control missing");
+      filters.click();
+    });
 
     const from = container.querySelector('input[aria-label="From time"]');
     const to = container.querySelector('input[aria-label="To time"]');

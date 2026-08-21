@@ -1,4 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  ChartNoAxesColumnIncreasing,
+  LoaderCircle,
+  Play,
+  RefreshCw,
+  Square,
+  Wifi,
+} from "lucide-react";
 
 import type {
   DesktopBackendState,
@@ -11,14 +20,26 @@ import { ProvidersPage } from "../providers/ProvidersPage.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
 import { useActiveRequests } from "./useActiveRequests.js";
+import codexMark from "../assets/codex.png";
 
 export interface AppProps {
   readonly api: LuckyTokenDesktopApi;
 }
 
 function runtimeLabel(status: StatusSnapshot | undefined): string {
-  if (status === undefined) return "Router unavailable";
-  return `Router ${status.modelDataPlane}`;
+  if (status === undefined) return "Unavailable";
+  switch (status.modelDataPlane) {
+    case "running":
+      return "Running";
+    case "starting":
+      return "Starting";
+    case "stopping":
+      return "Stopping";
+    case "stopped":
+      return "Stopped";
+    case "failed":
+      return "Attention";
+  }
 }
 
 function runtimeAction(status: StatusSnapshot | undefined): RuntimeCommand | undefined {
@@ -154,6 +175,7 @@ export function App({ api }: AppProps) {
             aria-current={page === entry.id ? "page" : undefined}
             className={`color-nav-button ${entry.tone}${page === entry.id ? " active" : ""}`}
             onClick={() => setPage(entry.id)}
+            title={entry.label}
           >
             <span className="color-nav-line" aria-hidden="true" />
             <span className="sr-only">{entry.label}</span>
@@ -164,9 +186,10 @@ export function App({ api }: AppProps) {
       <header className="product-header">
         <h1>{pageTitle}</h1>
         <div className="runtime-header-status" aria-label="Router status">
-          <div className="runtime-endpoint-stack">
+          <div className="toolbar-group endpoint-group">
             {editingPort && endpoint !== undefined ? (
               <div className="runtime-endpoint-editor">
+                <Wifi size={17} strokeWidth={1.9} aria-hidden="true" />
                 <span>{endpoint.host}:</span>
                 <input
                   aria-label="LuckyToken port"
@@ -194,49 +217,66 @@ export function App({ api }: AppProps) {
                   setEditingPort(true);
                 }}
               >
+                <Wifi size={17} strokeWidth={1.9} aria-hidden="true" />
                 {endpointText}
               </button>
             )}
-            <div className="codex-icon-row" aria-label="Codex integration controls">
-              <button
-                type="button"
-                className={`icon-button codex-toggle${codex?.desiredEnabled ? " active" : ""}`}
-                aria-label={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
-                aria-pressed={codex?.desiredEnabled ?? false}
-                disabled={codexPending || codex === undefined}
-                onClick={() => void toggleCodex()}
-                title={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
-              >
-                <span aria-hidden="true">◇</span>
-              </button>
-              <button
-                type="button"
-                className={`icon-button codex-sync${codex?.needsSync ? " dirty" : ""}`}
-                aria-label="Sync Codex"
-                disabled={codexPending || codex?.desiredEnabled !== true}
-                onClick={() => void syncCodex()}
-                title="Sync Codex"
-              >
-                <span aria-hidden="true">↻</span>
-              </button>
-            </div>
           </div>
-          <span className="runtime-state">
-            <span className={`runtime-status-dot ${status?.modelDataPlane ?? "unavailable"}`} aria-hidden="true" />
+
+          <div className="toolbar-group codex-controls" aria-label="Codex integration controls">
+            <img className="codex-mark" src={codexMark} alt="" aria-hidden="true" />
+            <button
+              type="button"
+              role="switch"
+              className={`codex-toggle${codex?.desiredEnabled ? " active" : ""}`}
+              aria-label={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
+              aria-checked={codex?.desiredEnabled ?? false}
+              disabled={codexPending || codex === undefined}
+              onClick={() => void toggleCodex()}
+              title={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
+            >
+              <span className="codex-toggle-thumb" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={`toolbar-icon-button codex-sync${codex?.needsSync ? " dirty" : ""}`}
+              aria-label="Sync Codex"
+              disabled={codexPending || codex?.desiredEnabled !== true}
+              onClick={() => void syncCodex()}
+              title={codex?.needsSync ? "Sync Codex changes" : "Codex is synchronized"}
+            >
+              <RefreshCw size={18} strokeWidth={1.8} aria-hidden="true" />
+              {codex?.needsSync ? <span className="sync-needed" aria-hidden="true" /> : null}
+            </button>
+          </div>
+
+          <span className="toolbar-group runtime-state" title={`LuckyToken is ${runtimeLabel(status).toLowerCase()}`}>
+            <Activity className={status?.modelDataPlane ?? "unavailable"} size={18} strokeWidth={1.9} aria-hidden="true" />
             {runtimeLabel(status)}
           </span>
-          <span className="runtime-active">
-            Active requests <strong className="active-request-count">{activeRequests}</strong>
+
+          <span className="toolbar-group runtime-active" title={`${activeRequests} active requests`} aria-label={`${activeRequests} active requests`}>
+            <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} aria-hidden="true" />
+            <strong className="active-request-count">{activeRequests}</strong>
           </span>
+
           <button
-            className="runtime-toggle"
+            className={`toolbar-group runtime-toggle ${action ?? "unavailable"}`}
             type="button"
             disabled={action === undefined || runtimePending}
             onClick={() => void executeRuntime()}
+            aria-label={runtimePending
+              ? action === "stop" ? "Stopping LuckyToken" : "Starting LuckyToken"
+              : action === "stop" ? "Stop LuckyToken" : "Start LuckyToken"}
+            title={action === "stop" ? "Stop LuckyToken" : "Start LuckyToken"}
           >
-            {runtimePending
-              ? action === "stop" ? "Stopping…" : "Starting…"
-              : action === "stop" ? "Stop" : "Start"}
+            {runtimePending ? (
+              <LoaderCircle className="spinning" size={19} strokeWidth={2} aria-hidden="true" />
+            ) : action === "stop" ? (
+              <Square size={18} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <Play size={19} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
+            )}
           </button>
         </div>
       </header>

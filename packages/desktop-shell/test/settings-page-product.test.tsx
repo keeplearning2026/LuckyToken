@@ -43,18 +43,6 @@ async function render(api: ReturnType<typeof createFakeDesktopApi>): Promise<voi
   });
 }
 
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    "value",
-  )?.set;
-  if (setter === undefined) throw new Error("textarea value setter missing");
-  act(() => {
-    setter.call(textarea, value);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 const settingsResult = () => ({
   outcome: "ok" as const,
   settings: {
@@ -68,15 +56,6 @@ const settingsResult = () => ({
       value: false,
     },
   },
-});
-
-const modelsState = (revision: number) => ({
-  revision,
-  path: "models.json",
-  present: true,
-  valid: true,
-  raw: "{\n  \"providers\": {}\n}\n",
-  providers: {},
 });
 
 describe("Settings product slice", () => {
@@ -115,27 +94,18 @@ describe("Settings product slice", () => {
     expect(container.querySelector('input[aria-label="Gateway port"]')).toBeNull();
   });
 
-  it("keeps models.json as a startup-only routing draft with no raw Alias editor", async () => {
-    const executeModels = vi
-      .fn()
-      .mockResolvedValueOnce({ outcome: "ok", state: modelsState(7) })
-      .mockResolvedValueOnce({ outcome: "ok", state: modelsState(8) });
+  it("does not expose raw models.json editing in Settings", async () => {
+    const executeModels = vi.fn();
     await render(createFakeDesktopApi({ control: { executeModels } }));
-    await click("Routing");
 
-    expect(container.querySelector('textarea[aria-label="Alias mappings"]')).toBeNull();
-    expect(container.textContent).toContain("models.json is read when the Backend starts");
-
-    const modelDraft = container.querySelector('textarea[aria-label="Raw model configuration"]');
-    if (!(modelDraft instanceof HTMLTextAreaElement)) throw new Error("Model draft missing");
-    setTextareaValue(modelDraft, '{"providers":{}}');
-    await click("Save models");
-    expect(executeModels).toHaveBeenLastCalledWith({
-      command: "write_raw",
-      revision: 7,
-      content: '{"providers":{}}',
-    });
-    expect(container.textContent).toContain("Restart LuckyToken to apply");
+    expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual([
+      "General",
+      "Data",
+      "Advanced",
+    ]);
+    expect(container.textContent).not.toContain("Routing");
+    expect(container.querySelector('textarea[aria-label="Raw model configuration"]')).toBeNull();
+    expect(executeModels).not.toHaveBeenCalled();
   });
 
   it("keeps irreversible data actions behind Backend confirmation gates", async () => {

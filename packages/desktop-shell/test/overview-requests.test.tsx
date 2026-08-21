@@ -16,6 +16,8 @@ import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 
 let container: HTMLDivElement;
 let root: Root;
+let storageValues: Map<string, string>;
+let originalLocalStorageDescriptor: PropertyDescriptor | undefined;
 
 const status: StatusSnapshot = {
   sequence: 1,
@@ -115,11 +117,29 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  storageValues = new Map();
+  originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      get length() { return storageValues.size; },
+      clear: () => storageValues.clear(),
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      key: (index: number) => [...storageValues.keys()][index] ?? null,
+      removeItem: (key: string) => storageValues.delete(key),
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+    } satisfies Storage,
+  });
 });
 
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  if (originalLocalStorageDescriptor === undefined) {
+    Reflect.deleteProperty(window, "localStorage");
+  } else {
+    Object.defineProperty(window, "localStorage", originalLocalStorageDescriptor);
+  }
   vi.useRealTimers();
 });
 
@@ -131,11 +151,18 @@ async function flush(): Promise<void> {
 }
 
 describe("Overview request table", () => {
-  it("renders the 13 projected columns including cache Hit, masks sessions, paginates with afterId, and merges live records", async () => {
+  it("renders every request field, expands diagnostics, paginates with afterId, and merges live records", async () => {
     const first = record(10, {
       outcome: "failed",
       clientHttpStatus: 503,
       externalAlias: "external-sonnet",
+      facts: {
+        failure: {
+          classification: "upstream-failure",
+          stage: "provider-request",
+          messageHash: "safe-message-hash",
+        },
+      },
     });
     const second = recordWithoutSession(9);
     const third = record(8);
@@ -179,6 +206,7 @@ describe("Overview request table", () => {
       "Model",
       "Status",
     ]);
+    expect(container.querySelectorAll('[role="separator"][aria-orientation="vertical"]')).toHaveLength(12);
 
     const row = container.querySelector(`tr[data-request-id="${first.requestId}"]`);
     expect(row?.textContent).toContain("20000000");
@@ -193,11 +221,24 @@ describe("Overview request table", () => {
     expect(row?.textContent).toContain("20.0%");
     expect(row?.textContent).toContain("100");
     expect(row?.textContent).toContain("50.0 tokens/s");
-    expect(row?.textContent).toContain("2.0 s");
     expect(row?.textContent).toContain("external-sonnet");
+    expect(row?.textContent).toContain("2.0 s");
     expect(row?.textContent).toContain("Server error");
     expect(row?.querySelector("td.overview-col-request-id")?.textContent).toBe(first.requestId.slice(0, 8));
     expect(container.querySelector(`tr[data-request-id="${second.requestId}"]`)?.textContent).toContain("-");
+
+    await act(async () => {
+      const details = container.querySelector(
+        `button[aria-label="Show details for request ${first.requestId}"]`,
+      );
+      if (!(details instanceof HTMLButtonElement)) throw new Error("request details control missing");
+      details.click();
+    });
+    expect(container.textContent).toContain("Diagnosis");
+    expect(container.textContent).toContain("Cause");
+    expect(container.textContent).toContain("Suggested action");
+    expect(container.textContent).toContain("upstream-failure");
+    expect(container.textContent).toContain("provider-request");
 
     await act(async () => {
       const loadMore = [...container.querySelectorAll("button")].find(
@@ -235,5 +276,71 @@ describe("Overview request table", () => {
     await act(async () => root.render(<App api={api} />));
     await flush();
     expect(container.textContent).toContain("No requests");
+  });
+
+  it("resizes every column accessibly and restores the saved width after remount", async () => {
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+        onBackendState: () => () => undefined,
+        getAnalytics: async (query) => analytics(query),
+        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        onRequestLedger: () => () => undefined,
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    const resizeStartTime = container.querySelector(
+      '[role="separator"][aria-label="Resize Start time column"]',
+    );
+    if (!(resizeStartTime instanceof HTMLElement)) throw new Error("Start time resize handle missing");
+    expect(resizeStartTime.getAttribute("aria-valuenow")).toBe("224");
+
+    await act(async () => {
+      resizeStartTime.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowRight",
+      }));
+    });
+    await flush();
+    expect(resizeStartTime.getAttribute("aria-valuenow")).toBe("232");
+    expect(
+      container.querySelector('col[data-request-column="startTime"]')?.getAttribute("style"),
+    ).toContain("232px");
+
+    const resizeProtocol = container.querySelector(
+      '[role="separator"][aria-label="Resize Protocol column"]',
+    );
+    if (!(resizeProtocol instanceof HTMLElement)) throw new Error("Protocol resize handle missing");
+    await act(async () => {
+      resizeProtocol.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        clientX: 100,
+      }));
+      window.dispatchEvent(new MouseEvent("mousemove", { clientX: 130 }));
+      window.dispatchEvent(new MouseEvent("mouseup"));
+    });
+    expect(resizeProtocol.getAttribute("aria-valuenow")).toBe("200");
+
+    await act(async () => root.unmount());
+    container.replaceChildren();
+    root = createRoot(container);
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    const restoredHandle = container.querySelector(
+      '[role="separator"][aria-label="Resize Start time column"]',
+    );
+    expect(restoredHandle?.getAttribute("aria-valuenow")).toBe("232");
+    expect(container.querySelector(
+      '[role="separator"][aria-label="Resize Protocol column"]',
+    )?.getAttribute("aria-valuenow")).toBe("200");
+
+    await act(async () => {
+      restoredHandle?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    expect(restoredHandle?.getAttribute("aria-valuenow")).toBe("224");
   });
 });

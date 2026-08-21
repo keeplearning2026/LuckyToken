@@ -507,7 +507,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             </span>
             <button
               type="button"
-              className="runtime-toggle"
+              className="provider-publish-toggle"
               aria-label={`${providerOn ? "Hide" : "Publish"} ${provider.name}`}
               title="Hidden providers are removed from discovery, but a known model alias remains directly callable."
               aria-pressed={providerOn}
@@ -807,7 +807,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                       </span>
                       <button
                         type="button"
-                        className="runtime-toggle"
+                        className="provider-publish-toggle"
                         aria-label={`${row.on ? "Hide" : "Publish"} ${row.modelName}`}
                         title="Hidden models are removed from discovery, but a known alias remains directly callable."
                         aria-pressed={row.on}

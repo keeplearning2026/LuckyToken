@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, SlidersHorizontal } from "lucide-react";
 
 import {
   formatPercent,
   formatTimestamp,
   formatTokenCount,
   formatTokensPerSecond,
-  projectRequestLedger,
+  projectRequestLedgerDetail,
   type AnalyticsFilter,
   type AnalyticsOptionsResult,
   type AnalyticsSummary,
@@ -14,6 +15,16 @@ import {
   type RequestLedgerQuery,
   type RequestLedgerRecord,
 } from "../../shared/desktop-api.js";
+import {
+  clampRequestColumnWidth,
+  DEFAULT_REQUEST_COLUMN_WIDTHS,
+  getRequestColumnStorage,
+  loadRequestColumnWidths,
+  REQUEST_COLUMN_DEFINITIONS,
+  saveRequestColumnWidths,
+  totalRequestColumnWidth,
+  type RequestColumnId,
+} from "./request-column-widths.js";
 
 const REQUEST_PAGE_SIZE = 50;
 
@@ -103,22 +114,53 @@ function statusTone(status: PrimaryStatus): string {
   }
 }
 
+function compactTokenCount(tokens: number): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(tokens);
+}
+
 function shortCodeDisplay(value: string): React.JSX.Element | string {
   if (value === "-") return "-";
   return <span title={value}>{value.slice(0, 8)}</span>;
 }
 
+function suggestedAction(status: PrimaryStatus): string {
+  switch (status) {
+    case "Success":
+      return "No action is needed.";
+    case "Running":
+      return "Wait for the request to finish.";
+    case "Auth rejected":
+      return "Reconnect the provider, then retry the request.";
+    case "Unknown model":
+    case "Model unavailable":
+      return "Choose a published, available model and retry.";
+    case "Client error":
+      return "Review the request parameters and protocol, then retry.";
+    case "Server error":
+      return "Check provider availability and retry after a short delay.";
+    case "Aborted":
+      return "Retry only if the cancellation was not intentional.";
+    case "Interrupted":
+      return "Confirm LuckyToken is running, then retry the request.";
+    case "Failed":
+      return "Open Advanced diagnostics for more context, then retry.";
+  }
+}
+
 function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefined }) {
   const cards = [
     ["Requests", summary === undefined ? "-" : formatTokenCount(summary.totalRequests)],
-    ["Input", summary === undefined ? "-" : formatTokenCount(summary.inputTokens)],
-    ["Cache read", summary === undefined ? "-" : formatTokenCount(summary.cacheReadTokens)],
-    ["Output", summary === undefined ? "-" : formatTokenCount(summary.outputTokens)],
+    ["Input", summary === undefined ? "-" : compactTokenCount(summary.inputTokens)],
+    ["Cache read", summary === undefined ? "-" : compactTokenCount(summary.cacheReadTokens)],
+    ["Output", summary === undefined ? "-" : compactTokenCount(summary.outputTokens)],
     [
       "Token speed",
       summary?.outputTokensPerSecond === undefined
         ? "-"
-        : formatTokensPerSecond(summary.outputTokensPerSecond),
+        : formatTokensPerSecond(summary.outputTokensPerSecond).replace(" tokens/s", " t/s"),
     ],
     ["Success", summary === undefined ? "-" : formatPercent(summary.successRate)],
   ] as const;
@@ -173,10 +215,28 @@ export function OverviewPage({
   const [records, setRecords] = useState<readonly RequestLedgerRecord[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [expandedRequestId, setExpandedRequestId] = useState<string>();
+  const [columnWidths, setColumnWidths] = useState(() =>
+    loadRequestColumnWidths(getRequestColumnStorage()),
+  );
+  const columnResize = useRef<{
+    readonly id: RequestColumnId;
+    readonly pointerId: number;
+    readonly startX: number;
+    readonly startWidth: number;
+  } | undefined>(undefined);
+  const mouseResizeCleanup = useRef<(() => void) | undefined>(undefined);
 
   const validRange = filters.from < filters.to;
   const summaryFilters = useMemo(() => analyticsFilter(filters), [filters]);
   const requestQuery = useMemo(() => ledgerQuery(filters), [filters]);
+
+  useEffect(() => {
+    saveRequestColumnWidths(getRequestColumnStorage(), columnWidths);
+  }, [columnWidths]);
+
+  useEffect(() => () => mouseResizeCleanup.current?.(), []);
 
   useEffect(() => {
     if (!validRange || !backendAvailable) {
@@ -279,11 +339,91 @@ export function OverviewPage({
     setFilters((current) => ({ ...current, [key]: value }));
   };
 
+  const setColumnWidth = (id: RequestColumnId, width: number): void => {
+    setColumnWidths((current) => ({
+      ...current,
+      [id]: clampRequestColumnWidth(id, width),
+    }));
+  };
+
+  const beginColumnResize = (
+    event: React.PointerEvent<HTMLSpanElement>,
+    id: RequestColumnId,
+  ): void => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    columnResize.current = {
+      id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: columnWidths[id],
+    };
+  };
+
+  const beginMouseColumnResize = (
+    event: React.MouseEvent<HTMLSpanElement>,
+    id: RequestColumnId,
+  ): void => {
+    event.preventDefault();
+    mouseResizeCleanup.current?.();
+    const startX = event.clientX;
+    const startWidth = columnWidths[id];
+    const move = (moveEvent: MouseEvent): void => {
+      setColumnWidth(id, startWidth + moveEvent.clientX - startX);
+    };
+    const finish = (): void => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", finish);
+      mouseResizeCleanup.current = undefined;
+    };
+    mouseResizeCleanup.current = finish;
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", finish);
+  };
+
+  const moveColumnResize = (event: React.PointerEvent<HTMLSpanElement>): void => {
+    const resize = columnResize.current;
+    if (resize === undefined || resize.pointerId !== event.pointerId) return;
+    setColumnWidth(resize.id, resize.startWidth + event.clientX - resize.startX);
+  };
+
+  const endColumnResize = (event: React.PointerEvent<HTMLSpanElement>): void => {
+    const resize = columnResize.current;
+    if (resize === undefined || resize.pointerId !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    columnResize.current = undefined;
+  };
+
+  const resizeColumnWithKeyboard = (
+    event: React.KeyboardEvent<HTMLSpanElement>,
+    id: RequestColumnId,
+  ): void => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    setColumnWidth(id, columnWidths[id] + direction * (event.shiftKey ? 32 : 8));
+  };
+
   return (
     <div className="overview-page">
       <SummaryCards summary={summary} />
 
-      <section className="overview-filters" aria-label="Request filters">
+      <section className="overview-requests" aria-label="Requests">
+        <div className="overview-requests-toolbar">
+          <h2>Requests</h2>
+          <button
+            type="button"
+            className={`overview-filter-toggle${filtersOpen ? " active" : ""}`}
+            aria-label={filtersOpen ? "Hide request filters" : "Show request filters"}
+            aria-expanded={filtersOpen}
+            title={filtersOpen ? "Hide request filters" : "Show request filters"}
+            onClick={() => setFiltersOpen((current) => !current)}
+          >
+            <SlidersHorizontal size={17} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </div>
+
+        {filtersOpen ? <div className="overview-filters" aria-label="Request filters">
         <label className="overview-filter-field overview-filter-time">
           <span>From</span>
           <input
@@ -311,25 +451,47 @@ export function OverviewPage({
         <FilterSelect label="Protocol" value={filters.protocol} values={options?.protocols ?? []} allLabel="All protocols" onChange={(value) => updateFilter("protocol", value)} />
         <FilterSelect label="Session" value={filters.session} values={options?.sessions ?? []} allLabel="All sessions" onChange={(value) => updateFilter("session", value)} />
         <FilterSelect label="Model" value={filters.model} values={options?.models ?? []} allLabel="All models" onChange={(value) => updateFilter("model", value)} />
-      </section>
+        </div> : null}
 
-      <section className="overview-requests" aria-label="Requests">
         <div className="overview-table-scroll">
-          <table className="overview-request-table">
+          <table
+            className="overview-request-table"
+            style={{ width: totalRequestColumnWidth(columnWidths) }}
+          >
+            <colgroup>
+              {REQUEST_COLUMN_DEFINITIONS.map((column) => (
+                <col
+                  key={column.id}
+                  data-request-column={column.id}
+                  style={{ width: columnWidths[column.id] }}
+                />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th className="overview-col-compact">Start time</th>
-                <th className="overview-col-compact">Session</th>
-                <th className="overview-col-compact">Request ID</th>
-                <th className="overview-col-compact">Protocol</th>
-                <th className="overview-col-compact">Input</th>
-                <th className="overview-col-compact">Cache read</th>
-                <th className="overview-col-compact">Hit</th>
-                <th className="overview-col-compact">Output</th>
-                <th className="overview-col-compact">Token speed</th>
-                <th className="overview-col-compact">Time</th>
-                <th className="overview-col-model">Model</th>
-                <th className="overview-col-compact">Status</th>
+                {REQUEST_COLUMN_DEFINITIONS.map((column) => (
+                  <th key={column.id} data-request-column-header={column.id}>
+                    {column.label}
+                    <span
+                      className="column-resize-handle"
+                      role="separator"
+                      tabIndex={0}
+                      aria-label={`Resize ${column.label} column`}
+                      aria-orientation="vertical"
+                      aria-valuemin={column.minWidth}
+                      aria-valuemax={column.maxWidth}
+                      aria-valuenow={columnWidths[column.id]}
+                      title="Drag to resize · Double-click to reset"
+                      onPointerDown={(event) => beginColumnResize(event, column.id)}
+                      onMouseDown={(event) => beginMouseColumnResize(event, column.id)}
+                      onPointerMove={moveColumnResize}
+                      onPointerUp={endColumnResize}
+                      onPointerCancel={endColumnResize}
+                      onDoubleClick={() => setColumnWidth(column.id, DEFAULT_REQUEST_COLUMN_WIDTHS[column.id])}
+                      onKeyDown={(event) => resizeColumnWithKeyboard(event, column.id)}
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -338,22 +500,65 @@ export function OverviewPage({
                   <td className="overview-empty" colSpan={12}>No requests</td>
                 </tr>
               ) : records.map((record) => {
-                const row = projectRequestLedger(record);
+                const row = projectRequestLedgerDetail(record);
+                const expanded = expandedRequestId === row.requestId;
+                const cause = row.failure === undefined
+                  ? "No sanitized failure classification was recorded."
+                  : row.failure.stage === undefined
+                    ? row.failure.classification
+                    : `${row.failure.classification} during ${row.failure.stage}`;
                 return (
-                  <tr key={row.id} data-request-id={row.requestId}>
-                    <td className="overview-col-compact">{formatTimestamp(row.acceptedAt)}</td>
-                    <td className="overview-col-compact">{shortCodeDisplay(row.clientSessionId)}</td>
-                    <td className="overview-col-compact overview-col-request-id"><code title={row.requestId}>{row.requestId.slice(0, 8)}</code></td>
-                    <td className="overview-col-compact">{row.protocolId}</td>
-                    <td className="overview-col-compact">{row.usage.input}</td>
-                    <td className="overview-col-compact">{row.usage.cacheRead}</td>
-                    <td className="overview-col-compact">{row.usage.cacheHitRate ?? "-"}</td>
-                    <td className="overview-col-compact">{row.usage.output}</td>
-                    <td className="overview-col-compact" title={row.speedUnavailableReason}>{row.speed}</td>
-                    <td className="overview-col-compact">{row.duration}</td>
-                    <td className="overview-col-model" title={row.alias === "-" ? undefined : row.alias}>{row.alias}</td>
-                    <td className="overview-col-compact"><span className={`overview-status-badge ${statusTone(row.status)}`}>{row.status}</span></td>
-                  </tr>
+                  <Fragment key={row.id}>
+                    <tr key={row.id} data-request-id={row.requestId} className={expanded ? "expanded" : undefined}>
+                      <td className="overview-col-time">
+                        <button
+                          type="button"
+                          className="request-disclosure"
+                          aria-label={`${expanded ? "Hide" : "Show"} details for request ${row.requestId}`}
+                          aria-expanded={expanded}
+                          title={`${expanded ? "Hide" : "Show"} request details`}
+                          onClick={() => setExpandedRequestId(expanded ? undefined : row.requestId)}
+                        >
+                          {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+                          <span>{formatTimestamp(row.acceptedAt)}</span>
+                        </button>
+                      </td>
+                      <td className="overview-col-compact">{shortCodeDisplay(row.clientSessionId)}</td>
+                      <td className="overview-col-compact overview-col-request-id"><code title={row.requestId}>{row.requestId.slice(0, 8)}</code></td>
+                      <td className="overview-col-protocol" title={row.protocolName}>{row.protocolId}</td>
+                      <td className="overview-col-compact">{row.usage.input}</td>
+                      <td className="overview-col-compact">{row.usage.cacheRead}</td>
+                      <td className="overview-col-compact">{row.usage.cacheHitRate ?? "-"}</td>
+                      <td className="overview-col-compact">{row.usage.output}</td>
+                      <td className="overview-col-speed" title={row.speedUnavailableReason}>{row.speed}</td>
+                      <td className="overview-col-compact">{row.duration}</td>
+                      <td className="overview-col-model" title={row.alias === "-" ? row.realModelId : row.alias}>{row.alias === "-" ? row.realModelId : row.alias}</td>
+                      <td className="overview-col-compact"><span className={`overview-status ${statusTone(row.status)}`}><span aria-hidden="true" />{row.status}</span></td>
+                    </tr>
+                    {expanded ? (
+                      <tr key={`${row.id}-details`} className="overview-detail-row">
+                        <td colSpan={12}>
+                          <div className="request-diagnosis-panel">
+                            <section>
+                              <strong>Diagnosis</strong>
+                              <p>{row.status}{row.clientHttpStatus === undefined ? "" : ` · HTTP ${row.clientHttpStatus}`}</p>
+                              <span>{row.phaseLabel} · Request {row.requestId.slice(0, 8)}</span>
+                            </section>
+                            <section>
+                              <strong>Cause</strong>
+                              <p>{cause}</p>
+                              <span>{row.attemptCount} attempt{row.attemptCount === 1 ? "" : "s"} recorded</span>
+                            </section>
+                            <section>
+                              <strong>Suggested action</strong>
+                              <p>{suggestedAction(row.status)}</p>
+                              <span>{row.providerId === "-" ? row.protocolName : row.providerId}</span>
+                            </section>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>

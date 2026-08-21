@@ -133,8 +133,8 @@ describe("desktop command-router shell", () => {
     expect(container.querySelectorAll(".color-nav-button")).toHaveLength(3);
     expect(container.querySelector("h1")?.textContent).toBe("Overview");
     expect(container.textContent).toContain("127.0.0.1:4317");
-    expect(container.textContent).toContain("Router running");
-    expect(container.textContent).toContain("Active requests");
+    expect(container.textContent).toContain("Running");
+    expect(container.querySelector(".runtime-endpoint svg")).not.toBeNull();
     expect(container.textContent).toContain("2");
 
     await act(async () => {
@@ -159,9 +159,7 @@ describe("desktop command-router shell", () => {
     expect(container.querySelector("h1")?.textContent).toBe("Overview");
 
     await act(async () => {
-      const stop = [...container.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Stop",
-      );
+      const stop = container.querySelector('button[aria-label="Stop LuckyToken"]');
       if (!(stop instanceof HTMLButtonElement)) throw new Error("Stop control missing");
       stop.click();
     });
@@ -177,13 +175,12 @@ describe("desktop command-router shell", () => {
       }
     });
     await flush();
-    expect(container.textContent).toContain("Router stopped");
+    expect(container.textContent).toContain("Stopped");
 
     act(() => {
       const record = ledgerRecord(3, "running");
       for (const listener of ledgerListeners) listener({ type: "request_ledger", record });
     });
-    expect(container.textContent).toContain("Active requests");
     expect(container.querySelector(".active-request-count")?.textContent).toBe("3");
 
     act(() => {
@@ -197,7 +194,7 @@ describe("desktop command-router shell", () => {
         listener({ revision: 3, kind: "unavailable" });
       }
     });
-    expect(container.textContent).toContain("Router unavailable");
+    expect(container.textContent).toContain("Unavailable");
     expect(container.querySelector<HTMLButtonElement>(".runtime-toggle")?.disabled).toBe(true);
 
     runningRecords = [];
@@ -286,7 +283,7 @@ describe("desktop command-router shell", () => {
     expect(getRequestLedger).toHaveBeenCalledTimes(ledgerQueries);
     expect(onRequestLedger).toHaveBeenCalledTimes(ledgerSubscriptions);
     expect(getAnalytics).toHaveBeenCalledTimes(analyticsQueries);
-    expect(container.textContent).toContain("Router stopped");
+    expect(container.textContent).toContain("Stopped");
   });
 
   it("edits only the port value and exposes icon-only Codex enable/sync controls with dirty highlighting", async () => {
@@ -413,9 +410,11 @@ describe("desktop command-router shell", () => {
     const sync = container.querySelector('button[aria-label="Sync Codex"]');
     expect(toggle).toBeInstanceOf(HTMLButtonElement);
     expect(sync).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle?.getAttribute("role")).toBe("switch");
+    expect(container.querySelector(".codex-mark")).toBeInstanceOf(HTMLImageElement);
     expect(sync?.classList.contains("dirty")).toBe(true);
-    expect(toggle?.textContent).toBe("◇");
-    expect(sync?.textContent).toBe("↻");
+    expect(toggle?.textContent).toBe("");
+    expect(sync?.querySelector("svg")).not.toBeNull();
 
     await act(async () => {
       (sync as HTMLButtonElement).click();

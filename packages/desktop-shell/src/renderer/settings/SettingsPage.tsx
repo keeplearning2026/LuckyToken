@@ -4,13 +4,11 @@ import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
-import { RoutingSettings } from "./RoutingSettings.js";
 
-type SettingsSection = "general" | "routing" | "data" | "advanced";
+type SettingsSection = "general" | "data" | "advanced";
 
 const sections: ReadonlyArray<Readonly<{ id: SettingsSection; label: string }>> = Object.freeze([
   { id: "general", label: "General" },
-  { id: "routing", label: "Routing" },
   { id: "data", label: "Data" },
   { id: "advanced", label: "Advanced" },
 ]);
@@ -43,8 +41,6 @@ export function SettingsPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       </div>
       {section === "general" ? (
         <GeneralSettings api={api} />
-      ) : section === "routing" ? (
-        <RoutingSettings api={api} />
       ) : section === "data" ? (
         <DataSettings api={api} />
       ) : (
