@@ -6,22 +6,22 @@
     {
       "id": "shared-architecture-policy",
       "path": "doc/Protocols/Protocol Conversion Architecture and Policy.md",
-      "sha256": "sha256:a213d29c489937379b3e9e9bfb2752c39219d64aa20a2aa791aeb552c9166028"
+      "sha256": "sha256:d88e13de9ee72cc2ce5c5b49539d8e3c4767d6be705b8864d784fa9a65d367c8"
     },
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:3e839b9592481de4be66fb48048fa671fd938d0653b49a3e632505c7b947830e"
+      "sha256": "sha256:9f9505daa55f15f75a48ecaed40f589a4515b68c04884e74af5ecd36cbe02da1"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:eaf678fb91c4aa1384b9354b6a1aaef05b0a13935ddc3b1a3f588a3d8b53cfb3"
+      "sha256": "sha256:f6297b3e8228235f7f2e474928a635454756951eb8e52a8e8fb6c852134653c6"
     },
     {
       "id": "pi-commandcode-conversion",
       "path": "doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
-      "sha256": "sha256:2b03b4c3f1ff540a6c34f7223fc877552d6de3014b14a3ef4ae0800e73a1f5ad"
+      "sha256": "sha256:220ca801959ce1086df928a553c48662c8a4e5165aa0094431a9d75151a25346"
     }
   ],
   "profiles": [
@@ -202,11 +202,13 @@
       ]
     },
     {
-      "dimension": "per-client-protocol-auth-isolation",
+      "dimension": "request-identity-credential-and-lane-isolation",
       "tests": [
-        "test/unit/client-token-file.test.ts",
-        "test/integration/client-auth-http.test.ts",
-        "test/integration/configured-composition.test.ts"
+        "test/unit/request-identity.test.ts",
+        "test/unit/codex-local-auth.test.ts",
+        "test/integration/credential-request-resolution.test.ts",
+        "test/integration/codex-native-responses.test.ts",
+        "test/integration/provider-execution-boundary.test.ts"
       ]
     }
   ],

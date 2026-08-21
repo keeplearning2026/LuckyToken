@@ -1,7 +1,8 @@
 # ADR 0004: TypeScript-only Electron desktop and replaceable product shell
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-08-18
+- Implementation update: 2026-08-20 (`e6f56dd`)
 - Supersedes: ADR 0001 desktop-shell decision and ADR 0003 Tauri tray/window implementation
 - Refines: ADR 0002 desktop-adapter portion only; the Backend Runtime Supervisor and Control Plane lifecycle authority remain accepted
 - Specification: `doc/Spec/LuckyTokenElectronArchitectureSpec.md`
@@ -57,7 +58,9 @@ Core has no Electron, desktop, local-management-transport, or OS dependency.
 
 Application composition/lifecycle is extracted from CLI orchestration behind one Backend Application seam. It owns the Core runtime, Data Plane supervisor, persistent authorities, Control Plane host, discovery, ownership, and graceful shutdown.
 
-The CLI becomes an adapter rather than the application composition root.
+Backend singleton ownership is now a separate `InstanceAuthority`: production holds a dedicated `~/.luckytoken/instance.sqlite` `BEGIN IMMEDIATE` transaction for the complete Backend lifetime. Control Plane discovery is a separate `DiscoveryPublication`; descriptor existence has no singleton or liveness meaning. The `InstanceLease` is released only after the other Backend-lifetime resources have stopped or closed.
+
+The CLI becomes an adapter rather than the application composition root. `serve` uses the fixed current-user Backend/discovery domain; custom descriptor paths are client-side `control ...` navigation only.
 
 ### Application Control Plane
 
@@ -75,8 +78,10 @@ Electron Main owns only desktop lifecycle and OS integration:
 
 - single desktop instance;
 - tray;
-- Backend process supervision/attachment;
-- Control Plane connection lifecycle;
+- `DesktopBackendConnection` discovery/attach/recovery lifecycle;
+- narrow `BackendLauncher` process creation and startup-exit diagnostics;
+- one-endpoint `ControlPlaneSession` lifecycle;
+- `DesktopOwnerLease` for desktop-owned Backend retention authority;
 - BrowserWindow create/show/focus/destroy;
 - notification, auto-start, dialogs, and safe external URL opening;
 - typed IPC handlers.
@@ -121,7 +126,7 @@ close UI
 
 Reopening creates a new renderer which queries fresh authoritative state through the Control Plane.
 
-Explicit LuckyToken shutdown remains ownership-aware and goes through the Application Control Plane graceful-shutdown contract; Electron does not directly kill a Backend merely because it spawned it.
+Explicit LuckyToken shutdown remains ownership-aware and goes through the Application Control Plane graceful-shutdown contract; Electron does not directly kill a Backend merely because it spawned it. `ownership.owner.kind = "desktop"` is not sufficient authority for Product Quit: the current shell must also hold the active logical `DesktopOwnerLease`. A shell that recovers onto another desktop build becomes a viewer and must neither replace, reclaim, respawn, nor quit that Backend.
 
 ### No compatibility layer
 
@@ -172,3 +177,6 @@ The migration is not complete until tests prove:
 7. reopening reconstructs fresh state.
 8. first successful request is covered by product E2E.
 9. Tauri/Rust production code and build dependencies are removed.
+10. Backend singleton authority is independent from Control Plane discovery and survives event-loop stalls without a stale timeout.
+11. Desktop session loss re-runs discovery instead of retrying one captured endpoint indefinitely.
+12. foreign-build viewer shells cannot reclaim, respawn, or Product-Quit the authoritative Backend.

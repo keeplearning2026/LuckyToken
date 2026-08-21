@@ -1,10 +1,10 @@
 # LuckyToken 实现架构说明
 
 **文档性质：** 当前实现的维护者地图（implementation architecture map）<br>
-**对应代码：** `src/` Core 与 `packages/` Provider Package 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
-**源码基线：** commit `41007a5`（2026-08-14，CommandCode Provider Package）<br>
+**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
+**源码基线：** commit `e6f56dd`（2026-08-20，Backend InstanceAuthority + Desktop connection lifecycle）<br>
 **架构规范：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)<br>
-**Desktop 目标架构：** [LuckyToken Electron Product Architecture Specification](./Spec/LuckyTokenElectronArchitectureSpec.md)（已接受目标，尚未实现；本文仍描述当前实现）<br>
+**Desktop 架构：** [LuckyToken Electron Product Architecture Specification](./Spec/LuckyTokenElectronArchitectureSpec.md)（已实现；Windows packaged lifecycle 已认证，macOS/Linux 仍待真实平台认证）<br>
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
 本文回答六个问题：LuckyToken 最终提供什么功能；一次请求如何完成；系统由哪些
@@ -20,7 +20,7 @@
 1. 项目总功能与边界；
 2. 总体模块图与完整流程；
 3. Transport 与 Runtime；
-4. Client Auth 与本地 token；
+4. Credential 与管理安全 authority；
 5. Anthropic Messages Client Protocol；
 6. Pi Runtime、配置、Composition 与 CLI；
 7. CommandCode Private Provider；
@@ -87,9 +87,11 @@ flowchart LR
 
 LuckyToken 当前是一个本地模型协议桥接服务。它在 loopback TCP 上提供 Anthropic
 Messages 与 OpenAI Responses endpoints，让 Claude Code、Codex CLI 等 Agent 使用
-各协议独立的本地 token 调用服务；服务把请求转换为 Pi AI runtime contract，再由
-注册到 Pi `Models` 的 Provider 调用真实上游，最后把 Pi 结果重新渲染为对应协议的
-JSON 或 Atomic SSE。`GET /v1/models` 还提供已加载 external Providers 的模型发现。
+本地 Data Plane 固定为 loopback，不需要 LuckyToken 自己的 per-protocol client token。
+每个请求先按明确 contract 选择 Local Native、Provider Native 或 Semantic Conversion lane；
+只有 Semantic Conversion 把 Client semantics 转成 Pi AI runtime contract，再由注册到 Pi
+`Models` 的 Provider 调用真实上游并渲染回 Client Protocol。`GET /v1/models` 提供当前
+published model discovery。
 
 > **小白理解：** Agent 连接的是你电脑上的本地地址，但真正回答问题的是远端模型。
 > LuckyToken 像中间服务台：Agent 不需要知道远端供应商的专用格式，远端供应商也不
@@ -105,19 +107,23 @@ Claude Code / Codex CLI
 Node HTTP adapter
         │ WHATWG Request / Response
         ▼
-Runtime route selection
+Runtime route/profile selection
         │
-        ▼
-selected Client Protocol handler + its own Auth
-        │ Model + Context + ModelsSimpleStreamOptions
-        ▼
-Pi Models / Pi AI IR
-        │ Pi Provider contract
-        ▼
-CommandCode Private Provider
-        │ HTTP + JSONL
-        ▼
-https://api.commandcode.ai/alpha/generate
+        ├── Local Native Preservation ───────→ compatible local upstream
+        │
+        ├── Provider Native Preservation ────→ provider-native upstream
+        │
+        └── Semantic Conversion
+              │ selected Client Protocol handler
+              │ Model + Context + ModelsSimpleStreamOptions
+              ▼
+           Pi Models / Pi AI IR
+              │ Pi Provider contract
+              ▼
+           CommandCode Private / other Pi Provider
+              │
+              ▼
+           Provider Wire upstream
 ```
 
 反向结果路径是：
@@ -142,9 +148,8 @@ WHATWG Response → Node ServerResponse → Agent
 
 - 启动本地 Anthropic `/v1/messages`、OpenAI Responses `/v1/responses` 与
   model discovery `/v1/models` routes；
-- 使用每个 Client Protocol 独立的 global/project token 认证本地 Agent；
-- 把 project token 绑定的唯一绝对目录投影为 Pi
-  `Options.metadata.projectDir`；
+- Data Plane 固定为 loopback-only，不维护 LuckyToken global/project client-token；
+- Codex Local Native 请求只接受与当前 Codex `auth.json` access token 匹配的 request Bearer，并把该 credential 限定在 Local Native lane；
 - 通过 Pi `Provider.auth` 接口执行 Provider login/logout，并把 credential 保存到
   Pi-owned `auth.json`；
 - CommandCode Private Provider 作为私有 workspace package 从 `node_modules` 加载
@@ -184,37 +189,35 @@ WHATWG Response → Node ServerResponse → Agent
 - 把 Client Protocol 请求直接转换为 CommandCode 请求的旁路；
 - 在 LuckyToken 中重新实现一套与 Pi 平行的通用 LLM IR。
 
-以后增加新的 Client Protocol 时，应新增独立 route、handler、Auth snapshot、token
-file、conversion tests 和一个 composition binding；不得修改现有 handler，也不得
-修改 concrete Provider 来识别新 Client 术语。
+以后增加新的 Client Protocol 时，应新增独立 route/profile、handler、conversion tests
+和 composition binding；如果支持 native preservation，还必须新增明确的 lane eligibility
+contract。不得修改 existing Provider 来识别新 Client 术语，也不得重新引入 per-protocol
+LuckyToken token file。
 
-## 1.3 第一原则：Pi 是唯一共享语义边界
+## 1.3 第一原则：三条 lane 独立；Pi 只做共享语义转换边界
 
-> **小白理解：** 两侧翻译员不直接研究对方的语言。左边各 Client Protocol 只负责
-> “自己的 wire → 标准中间稿”，右边只负责“标准中间稿 → CommandCode”。这样以后换掉任意
-> 一边，另一边不用跟着重写。
-
-系统的核心不是“Anthropic 转 CommandCode”，而是两条互相独立的转换：
+> **小白理解：** 需要“翻译语言”时才进入 Pi；如果 client/upstream 本来就是兼容
+> wire，就保持原始表达直通，不强行翻译。三条路彼此独立，不能为了复用代码把它们
+> 合成一个万能 executor。
 
 ```text
-Client Wire ↔ Client Protocol adapter ↔ Pi
-Pi ↔ Provider adapter ↔ Upstream Wire
+Local Native Preservation
+Provider Native Preservation
+Semantic Conversion: Client Wire ↔ Client Protocol ↔ Pi ↔ Provider ↔ Upstream Wire
 ```
 
 因此：
 
-- Anthropic 模块可以依赖 Pi types，但不能 import、命名或判断
-  `commandcode-private`；
-- CommandCode Provider 可以依赖 Pi types，但不能 import、命名或判断
-  Anthropic/OpenAI Responses；
-- Runtime 只认识 `Request`、`Response` 与 `ClientProtocolHandler`；
-- composition root 可以同时看见 concrete handler 与 Provider，但只负责构造、
-  注入和认证，不做协议转换；
-- `sessionId`、`projectDir?`、`AbortSignal` 是窄 invocation facts，不是第二套通用
-  request DTO。
+- Anthropic/OpenAI conversion 模块可以依赖 Pi types，但不能 import、命名或判断 concrete Provider；
+- CommandCode Provider 可以依赖 Pi types，但不能 import、命名或判断 Client Protocol；
+- Local Native 与 Provider Native 不进入 Pi AI IR，也不共享 credential/transport/executor authority；
+- native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；
+- `sessionId`、`AbortSignal` 等可以作为窄 infrastructure/request facts，但不会形成第二套通用 request DTO；
+- composition root 可以看见各 lane seam 并进行选择/注入，但不做跨侧语义转换；
+- lane 一旦开始执行，failure 不得 fallback 到另一个 lane。
 
-这条边界使两侧可以分别扩展：增加 Client Protocol 不要求修改 Provider；增加
-Provider 不要求修改 Client Protocol。
+这使 Client Protocol、Provider 和 native integration 可以分别扩展，而不把另一侧的
+vocabulary 拉进自己的 module。
 
 ---
 
@@ -222,21 +225,22 @@ Provider 不要求修改 Client Protocol。
 
 ## 2.0 小白导读：一次请求要经过哪些岗位
 
-LuckyToken 不是一个什么都做的巨大模块，而像一条有明确岗位的流水线：门卫检查
-身份，分拣员选择窗口，翻译员整理内容，Pi 负责统一中间格式，Provider 联系供应商，
-最后由原来的翻译员包装回复。
+LuckyToken 不是一个什么都做的巨大模块，而像一条先分流、再由各 lane 自己完成任务的流水线。HTTP/Runtime 先确定 route/profile 与 eligible lane；只有 Semantic Conversion 才进入 Client Protocol → Pi → Provider 翻译链。
 
 ```mermaid
 flowchart LR
-    Gate["门卫<br/>HTTP + Auth"] --> Desk["分拣窗口<br/>Runtime"]
-    Desk --> Translator["客户端翻译<br/>Anthropic"]
-    Translator --> Standard["标准中间稿<br/>Pi"]
-    Standard --> Buyer["供应商适配<br/>Provider"]
-    Buyer --> Supplier["外部模型"]
+    Edge["HTTP request edge"] --> Desk["route/profile + lane selection"]
+    Desk --> Local["Local Native"]
+    Desk --> Native["Provider Native"]
+    Desk --> Translator["Semantic Client Protocol"]
+    Translator --> Standard["Pi AI IR"]
+    Standard --> Buyer["Pi Provider"]
+    Local --> Supplier["compatible upstream"]
+    Native --> Supplier
+    Buyer --> Supplier
 ```
 
-每个岗位只拿到完成任务必需的信息。例如门卫会看到门票，但模型不会；Provider 会
-看到项目目录这个事实，但不会看到本地 token 文件。
+每个岗位只拿到完成任务必需的信息。例如 request-identity authority 只建立 session identity；Local Native credential 只进入 Local Native transport；Provider credential 只进入 Pi/Provider auth。没有一个通用 Auth/project object 在三条 lane 之间传播。
 
 ## 2.1 五组生产模块
 
@@ -247,31 +251,39 @@ flowchart LR
 | 模块组 | 主要目录/文件 | 负责什么 | 明确不负责什么 |
 | --- | --- | --- | --- |
 | Transport/Runtime | `server.ts`, `runtime.ts`, `http.ts` | TCP、Node/Web 类型适配、route、取消、timeout、response delivery | Anthropic 字段、Pi message、Provider 配置 |
-| Client Auth | `auth.ts`, `client-auth/` | inbound credential 解析、token authority、session/project fact | Client Wire、Pi credential、Provider auth |
+| Credential/security authorities | `credentials/`, `integrations/codex/local-auth.ts`, Application Control Plane capability | Provider credential mutation/status、Codex Local Native request credential、management capability authentication | Client/Provider semantic conversion |
 | Anthropic adapter | `protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
 | Pi integration/composition | `pi/`, `composition.ts`, `cli-config.ts`, `cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
-| CommandCode Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode、project snapshot、HTTP attempts、JSONL lifecycle | Anthropic/OpenAI 响应格式与 Core 注册策略 |
+| CommandCode Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode、fixed runtime compatibility config、HTTP attempts、JSONL lifecycle | Anthropic/OpenAI 响应格式与 Core 注册策略 |
+
+上表是 model-serving 语义模块，不包含产品生命周期。当前产品另外有三组 lifecycle 模块：
+
+- `src/application.ts`：Backend Application composition/lifecycle authority；
+- `src/instance-authority.ts` + `src/control-plane-discovery.ts`：分别拥有 Backend singleton authority 与 Control Plane discovery publication；
+- `packages/desktop-shell/src/main/`：Electron Main 的 `DesktopBackendConnection`、`BackendLauncher`、`ControlPlaneSession` 与 `DesktopOwnerLease`。
+
+这些模块不改变 Client Wire ↔ Pi ↔ Provider 的语义边界；它们只负责进程、管理连接、ownership 与关闭顺序。
 
 静态依赖方向如下。箭头表示“调用或持有”，不是数据在 wire 上的方向：
 
 ```mermaid
 flowchart LR
-    CLI["CLI / composition root"] --> Server["Node HTTP server"]
-    CLI --> Runtime["LuckyToken Runtime"]
-    CLI --> AH["Anthropic handler"]
-    CLI --> Auth["handler-bound Auth"]
-    CLI --> Models["Pi Models"]
-    CLI --> CCP["CommandCode Provider"]
+    APP["Backend Application"] --> Server["Node HTTP server"]
+    APP --> Runtime["LuckyToken Runtime"]
+    APP --> AH["Anthropic/Responses handlers"]
+    APP --> Identity["Request Identity"]
+    APP --> Models["Pi Models"]
+    APP --> CCP["CommandCode Provider"]
+    APP --> Native["Native lane seams"]
 
     Server --> Runtime
     Runtime --> AH
-    AH --> Auth
+    AH --> Identity
     AH --> Models
     Models --> CCP
-    CCP --> Upstream["CommandCode upstream"]
-
-    TokenFile["Anthropic token file"] --> Authority["immutable token authority"]
-    Authority --> Auth
+    Runtime --> Native
+    CCP --> Upstream["Provider upstream"]
+    Native --> Upstream
     PiAuth["Pi auth.json"] --> Models
 ```
 
@@ -279,43 +291,85 @@ flowchart LR
 `CommandCode Provider → Anthropic renderer`。二者唯一相遇的位置是 Pi public
 contract 和启动期 composition/certification。
 
-## 2.2 进程启动流程
+## 2.2 进程启动与恢复流程
 
-> **小白理解：** 启动阶段类似开店前准备：读取地址和规则、准备每个窗口的门票名单、
-> 载入可用模型、登录供应商、把员工安排到岗位。开门营业后，每位顾客的请求不再携带
-> 整份配置文件到处传递。
+> **小白理解：** 现在 LuckyToken 有两个长期生命周期：Backend 负责“服务本身活多久”，Electron Main 负责“桌面如何找到、连接并管理这个 Backend”。两边通过 Control Plane discovery/IPC 相遇，但 Desktop 不拥有 Backend 的业务状态。
 
-CLI serve 路径只在启动期读取完整配置：
+### Backend lifecycle
+
+生产 Backend 启动先取得 current-user singleton authority，再构造管理能力；Control Plane 真正监听成功之后才发布 discovery descriptor，最后才启动 Data Plane：
 
 ```text
---config path
-  → loadLuckyTokenCliConfig()
-  → frozen LuckyTokenCliConfig
-       ├── server host/port
-       ├── protocol id → authFile
-       ├── pi.directory
-       └── request limits
-
-createConfiguredLuckyTokenComposition(config)
-  ├── load selected protocol token file once
-  │    └── immutable ClientTokenAuthority
-  ├── construct Pi Models with CredentialStore(pi/auth.json)
-  ├── register Pi builtins, then models.json providers
-  ├── import configured Provider Packages from node_modules
-  ├── validate/stage every Provider and atomically register them
-  ├── leave Provider credential checks to the Pi invocation path
-  ├── certify provider-neutral Core composition facts
-  ├── construct generic Auth
-  ├── construct Anthropic handler(models, auth)
-  └── construct Runtime([handler])
-
-startLuckyTokenHttpServer(runtime, host, port)
-  └── print actual http://host:port/v1/messages
+startLuckyTokenApplication()
+  ↓
+InstanceAuthority.acquire()
+  └── ~/.luckytoken/instance.sqlite
+      BEGIN IMMEDIATE
+      connection lifetime == InstanceLease lifetime
+  ↓
+load/validate config
+  ↓
+construct Backend-lifetime authorities
+  ├── Provider Runtime / credential authority
+  ├── Models / Catalog / Public Models
+  ├── diagnostics / request ledger / history / backup
+  └── settings / Codex integration
+  ↓
+start Application Control Plane
+  ↓
+DiscoveryPublication.publish(endpoint)
+============================== Management Ready
+  ↓
+DataPlaneRuntimeSupervisor.start()
+============================== Running / Degraded
 ```
 
-完整配置对象不会进入每次请求。Server 只得到 host/port/runtime；Auth 只得到
-token lookup closure；Anthropic handler 只得到 `Models`、`Auth` 和自己的 limits；
-Provider 只得到自己的 model、transport、project capability 与 clock/ID capability。
+`instance.sqlite` 只是 OS/SQLite lock carrier，文件存在本身没有语义；它不删除、不 heartbeat、不靠 PID 或 stale timeout。`control-plane.json` 只是当前 endpoint/capability 的 discoverability publication，也不代表 Backend 存活。
+
+如果另一个 Backend candidate 无法取得 `InstanceAuthority`，它只会尝试 discovery + Control Plane attach；如果原 owner 在 publication 前退出，candidate 会重新 acquire，而不是依赖 descriptor stale repair。
+
+关闭顺序反向收敛，并保证 `InstanceLease` 最后释放：
+
+```text
+stop/drain Data Plane
+→ stop timers/subscriptions and restore integration-owned state
+→ close DiscoveryPublication
+→ close Control Plane
+→ dispose/flush Backend-lifetime authorities and stores
+→ InstanceLease.close()
+```
+
+因此新 Backend 不能在旧 Backend 仍 flush/close shared state 时提前成为 authority。
+
+### Desktop connection lifecycle
+
+Electron Main 不再使用 `BackendSupervisor`。它只启动一个 deep `DesktopBackendConnection`：
+
+```text
+DesktopBackendConnection.start()
+  ↓
+Discovery.read()
+  ↓
+connect + hello
+  ├── usable Backend → attach
+  ├── stale desktop build on initial start → acknowledged graceful replace
+  └── CLI-owned Backend → preserve + attach
+  ↓
+DesktopOwnerLease.bind()   # only for a Backend this shell is allowed to own
+```
+
+如果没有 usable publication，`BackendLauncher` 只负责 spawn bundled Backend 并提供 `pid + exited` 启动诊断；Management Ready 仍由 discovery + Control Plane 判断。多个 benign spawn attempt 可以同时发生，最终 correctness 由 Backend `InstanceAuthority` 仲裁。
+
+session 丢失后不再循环重试旧 endpoint：
+
+```text
+session unavailable
+→ discard old endpoint assumption
+→ fresh discovery
+→ reconnect existing Backend or launch a candidate
+```
+
+如果 recovery 发现另一个 desktop build 已经成为 authority，旧 shell 只作为 viewer attach：它停止 desktop-owner lease，不得反向替换新 Backend，也不得在之后断线时重新 spawn Backend。Product Quit 只有当前 shell 真正持有 active DesktopOwnerLease 时才可以关闭 desktop-owned Backend。
 
 ## 2.3 单次请求流程
 
@@ -334,15 +388,16 @@ Provider 只得到自己的 model、transport、project capability 与 clock/ID 
    → one ClientProtocolHandler
 
 3. anthropic/handler.ts
-   Headers → AuthResult
+   Headers → RequestIdentity
    raw JSON → validated Anthropic request
    model selector → Pi Model
    request semantics → Pi Context + protocol options
 
-4. anthropic/options.ts
+4. protocols/options.ts
    protocol options
-   + Auth sessionId/projectDir?
+   + RequestIdentity.effectiveSessionId
    + HTTP AbortSignal
+   + bounded infrastructure facts
    → ModelsSimpleStreamOptions
 
 5. execution.ts / Pi Models
@@ -376,11 +431,11 @@ flowchart LR
 | 信息 | 产生位置 | 最远传播位置 | 死亡点 |
 | --- | --- | --- | --- |
 | Node socket / `IncomingMessage` | Node HTTP server | `server.ts` | Web `Request` 建立、response 完成或连接关闭 |
-| raw client token | Anthropic request headers | generic `Auth.resolve()` | `AuthResult` 建立后 |
-| global/project token 分类 | file-backed authority | authority lookup closure | 输出 `{ projectDir? }` 后 |
-| token file JSON/path | startup/Client Auth capability | composition binding | immutable authority 建立后 |
-| `sessionId` | Auth | Pi `Options.sessionId` / Provider invocation | Provider 不再需要 logical request identity |
-| `projectDir` | project token authority | Pi `Options.metadata.projectDir` / interested Provider | Provider project representation 建立后 |
+| Codex request Bearer | Local Native request headers | `CodexLocalCredentialAuthority` → Local Native transport | request-local forward auth 建立并完成 native transport 后 |
+| Codex `auth.json` access token | Codex credential authority | constant-time comparison / bounded scrub memory | 不进入 Pi/Provider credential state |
+| Provider credential raw value | Pi `CredentialStore` / `LiveCredentialAuthority` | Provider auth resolution / request composition | request-local Provider auth 建立后；management projection 永不返回 secret |
+| Control Plane capability | Backend discovery publication | trusted Main/CLI Control Plane handshake | authenticated management session 关闭后 |
+| `sessionId` / request identity | request identity authority | interested execution/diagnostics consumers | request terminal 后 |
 | Anthropic raw JSON | Anthropic handler | validation | validated source state 建立后 |
 | Anthropic render state | Anthropic conversion | Anthropic renderer | response bytes 建立后 |
 | Pi `Context` / `Options` | Anthropic adapter/options composer | Pi Models/Provider | Pi invocation terminal 后 |
@@ -489,9 +544,9 @@ Runtime 不知道：
 
 ```text
 Anthropic request schema
-Auth file path or token scope
-Pi Context / Model
-CommandCode Provider
+request credential stores / Control Plane capability
+Pi Context / Model semantics
+CommandCode Provider internals
 Node socket / port
 ```
 
@@ -518,11 +573,11 @@ interface ClientProtocolHandler {
 | 输出 | handler 的 WHATWG `Response`、404、generic 500，或 abort error |
 | Request-local state | composite `AbortController`、writable/delivered flags、timeout timer、signal listeners |
 | 谁使用它 | `runtime.ts` |
-| 它使用谁 | 被选中的 `ClientProtocolHandler`；不使用 Auth、Pi 或 Provider |
+| 它使用谁 | 被选中的 `ClientProtocolHandler`；不使用 request-identity/credential authority、Pi 或 concrete Provider |
 
-选择顺序是先 route，后进入 handler。未来 `/v1/responses` 的 token 不可能在
-Runtime 中被误送进 Anthropic Auth，因为 Runtime 先用 `POST + pathname` 选择一个
-具体 handler，而 Auth 已经封装在该 handler 内。
+选择顺序是先 route/profile，后进入 handler 或明确 native lane seam。Runtime 不解释
+credential，也不会把某条 lane 的 credential authority 传播给另一条 lane；session
+identity normalization 与 lane-specific auth 都在更窄的 owning seam 中完成。
 
 失败语义：
 
@@ -557,191 +612,81 @@ flowchart LR
 
 ---
 
-# 4. Client Auth 与本地 Client Token 模块
+# 4. Credential 与管理安全 authority
 
-## 4.0 小白导读：门卡、访客编号与项目房间
+## 4.0 小白导读：现在有三种完全不同的“钥匙”
 
-Client Auth 可以想成酒店门禁。Agent 带着门卡来访问 LuckyToken；门卫验证门卡后，
-只告诉后续模块“允许进入、这次访客编号是什么、是否绑定某个项目房间”。后续模块
-不会拿到门卡原文或门卡名单。
-
-```mermaid
-flowchart LR
-    Agent["Agent 出示本地 token"] --> Guard["Auth 门卫"]
-    Keys["该协议自己的 token 文件"] --> Guard
-    Guard -->|"无效"| Deny["401 拒绝"]
-    Guard -->|"global"| Global["允许<br/>无项目目录"]
-    Guard -->|"project"| Project["允许<br/>附带唯一 projectDir"]
-    Global --> Pi["交给后续 Pi 流程"]
-    Project --> Pi
-```
-
-这里的门卡只负责“Agent 进入 LuckyToken”。LuckyToken 登录外部 CommandCode 的 API
-key 是另一套供应商凭证，保存在另一个文件中，不能混在一起。
-
-本组认证的是“Agent 是否可以调用 LuckyToken”，不是 LuckyToken 如何登录
-CommandCode。两类 credential 分别落在不同文件、不同 runtime contract 中。
-
-## 4.1 Generic inbound Auth — `src/auth.ts`
-
-> **小白理解：** 通用 Auth 像统一门卫工作手册：从请求中取门卡、查询是否有效、
-> 给本次访问分配一个 sessionId。它不关心这是 Anthropic 还是未来 OpenAI 窗口，
-> 因为每个窗口在开门前已经拿到了自己的独立门卡名单。
-
-```ts
-interface Auth {
-  resolve(headers: ReadonlyHeaders): Promise<AuthResult>;
-}
-
-type AuthResult =
-  | { authorized: false }
-  | { authorized: true; sessionId: string; projectDir?: string };
-
-interface AuthDependencies {
-  authorizeToken(token: string): AuthorizedClient | undefined | Promise<...>;
-  createFallbackSessionId(): string;
-}
-```
-
-| 项目 | 内容 |
-| --- | --- |
-| 功能 | 从 headers 提取一种 client credential；调用注入的 authority；规范化 session identity；只返回窄请求事实 |
-| 输入 | 只读 headers view |
-| 输出 | denied，或 `{ authorized, sessionId, projectDir? }` |
-| 持有状态 | bound token-authorize function 和 fallback-ID generator；无 token store、无 protocol ID |
-| 配套文件 | 无；文件由具体 authority capability 拥有 |
-| 谁使用它 | 当前是 Anthropic handler；未来每个 Client Protocol handler 应得到自己的 `Auth` instance |
-| 它使用谁 | 注入的 `authorizeToken` 和 ID generator |
-
-Credential 支持 `Authorization: Bearer ...` 与官方 Anthropic SDK 使用的
-`x-api-key`。两者同时存在且值不一致时直接 denied。Session header precedence 是
-`x-session-id` 高于 `x-client-request-id`；只接受 UUID-shaped identity，否则生成
-request-local fallback UUID。
-
-Auth 完成后不输出 raw token、header source、global/project 分类或 file path。
-Global authority 返回空 `AuthorizedClient`，最终 `AuthResult` 没有 `projectDir`；
-project authority 只返回唯一绑定的 `projectDir`。
-
-## 4.2 File-backed token authority/admin store — `src/client-auth/file-token-store.ts`
-
-> **小白理解：** 同一个文件提供“保安查卡”和“管理员改卡”两种服务，但两种权限
-> 分开。营业中的保安只能查，不能增删；CLI 管理员可以增删轮换，但不能直接改变已经
-> 启动的保安手中快照，所以修改后要重启。
-
-这个文件在同一个 capability owner 内提供两个刻意分开的窄接口：
-
-```ts
-loadFileClientTokenAuthority(path): Promise<ClientTokenAuthority>
-
-interface ClientTokenAuthority {
-  authorize(token: string): AuthorizedClient | undefined;
-}
-
-createFileClientTokenStore(options): FileClientTokenStore
-
-interface FileClientTokenStore {
-  create(scope, token?): Promise<string>;
-  rotate(scope, token?): Promise<string>;
-  remove(scope): Promise<boolean>;
-  list(): Promise<readonly ClientTokenScope[]>;
-}
-```
-
-Live authority 由 Backend lifetime owner 创建并通过 composition 绑定给具体 Client
-Protocol；Settings/CLI 通过 typed Control Plane 管理 scope mutation，Renderer 不读取
-文件。Data Plane stop/start/restart 复用同一个 authority，因此 reveal/rotate 与请求
-授权始终指向同一份实时状态。
-
-持久文件严格为：
-
-```json
-{
-  "schemaVersion": "luckytoken-client-auth-v2",
-  "global": null,
-  "projects": {
-    "D:\\absolute\\normalized\\project": "project-token"
-  },
-  "revision": 0,
-  "globalDeleted": false
-}
-```
-
-| 项目 | 内容 |
-| --- | --- |
-| 文件 owner | Client Auth file capability |
-| 文件选择者 | composition root 用 config 中的 protocol ID 把某个文件绑定到某个 handler |
-| 文件内没有什么 | protocol ID、Anthropic/OpenAI 字段、Pi state、Provider credential |
-| runtime representation | Backend-lifetime live token → `AuthorizedClient` lookup；文件 JSON 和 path 不传播 |
-| administrative representation | global/project `ClientTokenScope`；`list()` 只返回 masked metadata，`reveal()` 是显式 secret operation |
-| token 规则 | 非空、无 whitespace、同一文件内不得绑定多个 scope；自动 token 为 256-bit random base64url |
-| project 规则 | key 必须是已经 normalized 的绝对路径 |
-| 权限 | 创建目录请求 0700、文件请求 0600（最终效果受 OS 能力影响） |
-
-缺失文件会在 protocol 启用时生成当前 v2 global token。废弃的
-`luckytoken-client-auth-v1` 不迁移、不复用旧 token，而是视为未初始化并由当前
-authority 原子生成新的 v2 文件/token。坏 JSON、未知未来 schema、未知字段、重复
-token、relative/aliased project path 仍 fail closed。
-
-Mutation 使用 file revision CAS + lock + atomic replace 并 hot-apply 到 live authority；
-request path 本身不读文件。不同 Client Protocol 文件不跨读、不跨查 token。正常
-用户通过 Settings 查看/复制/rotate global token，不需要管理这些文件。
-
-## 4.3 Client token CLI capability — `src/client-auth/cli.ts`
-
-> **小白理解：** 这是门卡管理柜台。`create` 发新卡，`rotate` 换卡，`remove` 注销，
-> `list` 只列出有哪些卡位而不显示卡号。它一次只管理用户明确指定的协议文件，不会
-> 搜索其他协议的门卡。
-
-| 项目 | 内容 |
-| --- | --- |
-| 功能 | parse `client-token create/rotate/remove/list`；把 scope mutation 委托给 store；格式化安全输出 |
-| 输入 | CLI args；注入的 `resolveAuthFile(configPath, protocolId)` |
-| 输出 | success/error text；仅自动生成 token 时打印 token value |
-| 配套文件 | 被 resolver 选中的一个 protocol token file |
-| 谁使用它 | top-level `cli.ts` |
-| 它使用谁 | `FileClientTokenStore`、project directory `stat()` |
-
-`client-auth/cli.ts` 不 import 完整 application config loader。Top-level CLI 解析配置并
-只把 `authFile` 这个窄事实返回给它。Project create 要求目录当时存在且确实为目录；
-relative project 参数按 CLI 当前 working directory 解析为绝对路径。Mutation 成功后
-明确提示 restart required。
-
-## 4.4 每协议隔离的装配关系
-
-> **小白理解：** 可以把 Anthropic 和未来 OpenAI 看成两扇不同的门。即使某张卡能
-> 打开 OpenAI 门，也不能用来打开 Anthropic 门。只有启动时的总装配人员知道哪份
-> 门卡名单交给哪扇门，普通请求处理过程不再讨论协议名称。
-
-```mermaid
-flowchart LR
-    AC["Anthropic token 文件"] --> AA["Anthropic Auth"]
-    AA --> AH["/v1/messages"]
-    OC["未来 OpenAI token 文件"] --> OA["未来 OpenAI Auth"]
-    OA --> OH["/v1/responses"]
-    AC -. "不共享" .-> OC
-    AA -. "不互查" .-> OA
-```
+LuckyToken 不再给本地 Agent 发一套 global/project client token。当前安全相关 credential 分成三个独立生命周期：
 
 ```text
-.luckytoken/config.json
-  clientProtocols[protocolId].authFile
-        │                    startup only
-        ▼
-composition root
-        │ loads exactly one file for one installed handler
-        ▼
-ClientTokenAuthority.authorize(token)
-        │
-        ▼
-generic Auth.resolve(headers)
-        │
-        ▼
-handler-local AuthResult { sessionId, projectDir? }
+1. Local Native Codex request credential
+   Codex request Bearer
+   → 只在 Local Native lane 验证/转发
+
+2. Provider credential
+   ~/.luckytoken/pi/auth.json 或 Provider/环境配置
+   → Provider Runtime / Pi Models 使用
+
+3. Control Plane capability
+   control-plane.json 中的随机 capability
+   → 只认证本机 management IPC
 ```
 
-Anthropic token 即使在另一个协议文件中有效，只要没有存在于 Anthropic handler
-绑定的 authority，就必须得到 401。Runtime、Pi 与 Provider 都不进行跨协议 token
-搜索。
+三类 credential 不互相转换，也不会进入 Pi AI IR 作为模型语义。
+
+## 4.1 Data Plane request edge
+
+Model Data Plane 固定绑定 loopback 地址。Anthropic/OpenAI Responses 的普通 semantic-conversion request 不需要 LuckyToken 自己的 client-token 文件，也没有 `client-token` CLI。
+
+这并不表示所有 incoming credential 都被忽略：native preservation lane 可以把 client wire 上的 credential 当作该 lane 自己的 transport/auth fact，但它不能被提升成全局 LuckyToken credential。
+
+## 4.2 Codex Local Native credential authority — `src/integrations/codex/local-auth.ts`
+
+Local Native Codex lane 使用一个非常窄的 authority：
+
+```ts
+interface CodexLocalCredentialAuthority {
+  resolveForwardAuth(headers: ReadonlyHeaders): Promise<CodexForwardAuth | undefined>;
+  scrub(value: string): string;
+}
+```
+
+它读取当前 Codex `auth.json` 的 access token，只接受 request 中 Bearer 与该当前 token 常量时间相等的请求，然后返回 request-local forward auth。credential 不会进入 Pi Models、Provider credential store 或其他 native lane。
+
+该 authority 还维护有界 known-value scrub snapshot，供 diagnostics/redaction 消除当前和最近的 Codex token；读取失败只是 Local Native auth unavailable，不会让整个 Backend startup 失败。
+
+## 4.3 Provider credential authority — `src/credentials/authority.ts`
+
+Provider credential 由 Backend-lifetime `LiveCredentialAuthority` 与 Pi `CredentialStore` 拥有。生产文件是 `config.pi.directory/auth.json`，默认即 `~/.luckytoken/pi/auth.json`。
+
+主要 contract：
+
+```text
+Control Plane / CLI login|logout|import
+        ↓
+LiveCredentialAuthority
+        ↓ revision + per-slot CAS
+CredentialStore
+        ↓
+auth.json
+        ↓
+Pi Models / Provider Runtime
+```
+
+所有 mutation 都经过 revision/CAS；外部文件修改会被重新观察成新 revision，stale UI/CLI write 不能覆盖新值。Control Plane status 只暴露 stored/environment/models-json/expired/unavailable 等结构性事实，不返回 secret、环境变量名、command 文本或原始 credential object。
+
+Provider login 既可以是 API key，也可以由 Provider 自己声明 account/subscription/OAuth interaction；CLI/Desktop 只实现 typed interaction shell，不硬编码具体 Provider 登录语义。
+
+## 4.4 Application Control Plane capability
+
+Control Plane 的 `capability` 是 management-plane authorization，不是 Data Plane API key。它与 opaque local IPC `address` 一起出现在 current-user discovery descriptor 中：
+
+```text
+~/.luckytoken/control-plane.json
+{ address, capability }
+```
+
+只有 Backend、Electron Main 与 CLI control client 可以看到它；preload/renderer 不得到 address/capability。descriptor 是 discovery publication，不是 singleton lock，也不是 liveness 证明。
 
 ---
 
@@ -780,12 +725,19 @@ rendering。它不拥有 Provider 选择之外的任何 upstream 语义。
 ```ts
 interface AnthropicMessagesHandlerOptions {
   models: Models;
-  auth: Auth;
+  createSessionId?: () => string;
+  onRequestIdentity?: (identity: RequestIdentity) => void;
+  configuration?: AnthropicConfiguration;
+  passthroughFetch?: FetchFunction;
   modelValidityPolicy?: AnthropicModelValidityPolicy;
   createMessageId?: () => string;
-  maxRequestBytes?: number;
+  publicModels?: PublicModelSource;
+  requestLedger?: RequestLedger;
+  deepCapture?: DeepCaptureAuthority;
+  maxRequestBytes: number;
   routerDefaults?: RouterOptionDefaults;
-  now?: () => number;
+  resolveRequestModel?: RequestModelResolver;
+  executeOperation?: ExecutionOperation;
 }
 
 createAnthropicMessagesHandler(options): ClientProtocolHandler
@@ -801,19 +753,19 @@ handle   = Request → Promise<Response>
 
 | 项目 | 内容 |
 | --- | --- |
-| 功能 | 按固定顺序编排 Anthropic request 的 Auth、profile、body、model、conversion、Pi execution 和 rendering |
-| 输入 | WHATWG `Request`；构造期注入的 `Models`、独立 `Auth`、policy/limits/clock/ID capabilities |
+| 功能 | 按固定顺序编排 Anthropic request 的 request identity、profile/body/model、lane selection、conversion、Pi execution 和 rendering |
+| 输入 | WHATWG `Request`；构造期注入的 `Models`、Public Model source、policy/limits/identity/observation capabilities 与 native passthrough fetch |
 | 输出 | Anthropic JSON/SSE `Response`；连接级 abort 继续向外抛 |
 | 持有状态 | frozen dependency snapshot；无跨请求 message/session store |
-| 配套文件 | 无直接文件 I/O；token/model/credential 文件已在 composition 阶段变成窄 runtime capabilities |
+| 配套文件 | 无直接 credential 文件 I/O；Provider credential 与 Local Native credential 由 owning authority 处理 |
 | 谁使用它 | Runtime route table |
-| 它使用谁 | 本目录所有 parsing/conversion/rendering 模块；generic Auth、model resolution、execution、Pi Models |
+| 它使用谁 | 本目录 parsing/conversion/rendering、Request Identity、Public Model resolution、execution、Pi Models 与 narrow native passthrough seam |
 
 固定处理顺序是：
 
 ```text
 Content-Type check
-→ handler-bound Auth.resolve(headers)
+→ resolve RequestIdentity(headers)
 → Anthropic source profile
 → bounded raw-body read + JSON parse
 → model-independent request validation
@@ -827,7 +779,7 @@ Content-Type check
 → JSON or Atomic SSE bytes
 ```
 
-这个顺序很重要：authorization 不参与 Anthropic source-validity judgment；model-aware
+这个顺序很重要：request identity/credential concerns 不参与 Anthropic source-validity judgment；model-aware
 检查在确定性 conversion 之前完成；renderer 只接收 committed
 `AssistantMessage`，不会把 partial Pi stream 暴露成客户端成功。
 
@@ -996,14 +948,15 @@ Pi `Model` 和 source profile。Provider 不参与这一步。
 
 ## 5.6 Pi options composition — `options.ts`
 
-> **小白理解：** 一次任务的控制信息来自几个不同岗位：客户决定最大输出和温度，
-> Auth 决定会话与项目目录，网络层提供取消信号。这里像一个有固定格子的汇总单，
-> 每个岗位只能填写自己负责的格子，不能覆盖别人的信息。
+> **小白理解：** 一次任务的控制信息来自几个不同岗位：Client Protocol 决定模型可见
+> controls，Request Identity 提供 session identity，HTTP 提供取消信号，runtime policy
+> 只能提供自己明确拥有的 infrastructure facts。这里像固定格子的汇总单，各 owner 不能
+> 越权覆盖其他人的字段。
 
 ```ts
 composeOptions(
   protocolOptions,
-  { sessionId, signal, projectDir? },
+  { sessionId, signal, ...infrastructureFacts },
   routerDefaults,
 ): ModelsSimpleStreamOptions
 ```
@@ -1013,13 +966,14 @@ composeOptions(
 | Fact owner | 输入字段 | Pi carrier |
 | --- | --- | --- |
 | Anthropic protocol | `maxTokens`, `temperature?`, `reasoning?`, `metadata.user_id?` | 对应 Pi option |
-| Auth | `sessionId`, `projectDir?` | `sessionId`, `metadata.projectDir?` |
+| Request Identity | `effectiveSessionId` | `sessionId` |
 | HTTP lifecycle | `AbortSignal` | `signal` |
-| Router | 当前必须为空的 classified defaults | 当前不产生 option |
+| Runtime/composition infrastructure | typed headers/env/transport/timeout/retry callbacks when explicitly owned | matching Pi infrastructure option |
+| Router | classified semantic defaults only when explicitly defined | matching Pi semantic option |
 
-它使用 closed-world allowlist 防止某一 owner 覆盖另一 owner 的字段。特别是 Anthropic
-request 不能制造 `projectDir`，Router defaults 不能覆盖 `user_id/projectDir`。输出
-建立后，各输入来源分类结束，只剩 Pi options fields。
+它使用 closed-world allowlist 防止某一 owner 覆盖另一 owner 的字段。特别是 request identity
+或 credential authority 不能制造 arbitrary metadata；Router defaults 也不能覆盖 Client
+Protocol 已拥有的 `metadata.user_id`。输出建立后，各输入来源分类结束，只剩 Pi options fields。
 
 Anthropic protocol 现在拥有的 Pi option keys 为：`maxTokens`、`temperature`、
 `reasoning`、`metadata`（其下仅 `user_id`）。`reasoning` 来自
@@ -1349,15 +1303,15 @@ lock 序列化 OAuth refresh、login write 与 logout delete。`list()` 只输�
 和 credential type，不输出 secret。
 
 这里使用 lock 是 Pi credential contract 的需要：运行时并发请求可能同时触发 OAuth
-refresh。它与非并发管理的 Client token file 是两个不同 capability，不能因为都叫
-“auth JSON”就共享实现。
+refresh。它与 Codex Local Native request credential、Control Plane capability 是三个不同
+capability，不能因为都属于“认证信息”就共享 authority 或生命周期。
 
 ## 6.4 Main deployment config — `src/cli-config.ts`
 
-> **小白理解：** `.luckytoken/config.json` 是部署地址簿：服务监听哪里、每种客户协议去
-> 哪个门卡文件、Pi 文件夹在哪里、请求限额多大。它只负责“东西放哪里、服务怎么开”，
-> 不存模型业务语义或密钥。相对路径都以这份文件的位置为起点，所以从别的目录启动
-> 也不会悄悄读错文件。
+> **小白理解：** `.luckytoken/config.json` 是部署地址簿：Data Plane 端口、各 Client
+> Protocol 的 conversion/state policy、Provider package 配置、Pi 文件夹和请求限额。
+> 它不保存 LuckyToken client token，也不承担 Backend singleton/discovery；后两者固定由
+> current-user application state root 派生。
 
 ```ts
 loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
@@ -1367,24 +1321,31 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
 
 ```json
 {
-  "server": { "host": "127.0.0.1", "port": 3000 },
+  "schemaVersion": "luckytoken-config-v1",
+  "server": { "port": 3000 },
   "clientProtocols": {
     "anthropic-messages": {
-      "authFile": "client-auth/anthropic-messages.json"
+      "conversion": {
+        "request": {
+          "unknownContent": "error",
+          "unresolvedToolCall": "xrepair",
+          "localCacheControl": "ignore"
+        },
+        "response": { "unknownPiContent": "error" }
+      }
     },
     "openai-responses": {
-      "authFile": "client-auth/openai-responses.json",
       "stateFile": "state/openai-responses.json",
       "conversion": {
-        "response": { "storeFalse": "honor" }
+        "request": {
+          "privilegedMessages": "first",
+          "unknownInputItem": "error",
+          "orphanToolOutput": "error",
+          "unresolvedToolCall": "xrepair",
+          "futureReasoningEffort": "max"
+        },
+        "response": { "unknownPiContent": "error", "storeFalse": "honor" }
       }
-    }
-  },
-  "providerPackages": {
-    "@luckytoken/provider-commandcode-private": {
-      "conversion": {},
-      "request": {},
-      "response": {}
     }
   },
   "pi": { "directory": "pi" },
@@ -1397,94 +1358,75 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
 
 | 项目 | 内容 |
 | --- | --- |
-| 功能 | 验证 deployment location/binding/limits；把所有 relative path 按 config 所在目录解析；返回 frozen snapshot |
+| 功能 | 验证 deployment location/protocol policy/limits；把 relative path 按 config 所在目录解析；返回 frozen snapshot |
 | 输入 | 必须显式提供的 config path |
-| 输出 | host/port、protocol-specific config、package root→opaque config、Pi directory/modelsJson、limits |
+| 输出 | loopback Data Plane port、protocol-specific conversion/state config、external user package root→opaque config、Pi directory/modelsJson、limits |
 | 谁使用它 | top-level CLI；composition 接收已验证 snapshot |
 | 它使用谁 | Node path/file/stat |
 
-未知字段、错误类型、非法 port/limit、空 protocol map、重复 lexical/physical auth
-file 都失败。Protocol map 使用 null-prototype object，并由 consumer 做 own-property
-lookup，避免 `__proto__`/inherited-name 污染。
+未知字段、错误类型、非法 port/limit、空 protocol map 都失败。Protocol map 使用
+null-prototype object，并由 consumer 做 own-property lookup，避免
+`__proto__`/inherited-name 污染。
 
 Config loader 可以解析未来 protocol ID，但当前 concrete composition 会拒绝
 “configured but not installed”的 protocol。Provider Package specifier 只允许 npm 根包名
 或 scoped 根包名；相对/绝对路径、URL、Node builtin 与 package subpath 都失败。
 旧 `providerAdapters.commandcode-private` 配置不保留兼容分支，直接报错。
 
-## 6.5 Pi/Provider composition — `src/composition.ts`
+## 6.5 Pi/Provider 与 Data Plane composition — `src/composition.ts`
 
-> **小白理解：** Composition 是唯一看得见整张装配图的工位。它读取地址簿和目录，
-> 分别造出 Auth、Pi、Provider、协议窗口与 Runtime，再把窄接口接好。装配完成后，
-> 完整配置对象不会跟着每个请求到处旅行。
+> **小白理解：** Composition 是把“已经各自拥有语义的模块”接起来的工位。它知道哪些 Client Protocol、Provider、native transport 与 authority 要被注入，但不在这里重新解释协议。
 
-提供两个层次的构造接口：
+当前有两个主要构造层次：
 
 ```ts
 createConfiguredPiModels(options)
-  → { models: Pi.Models, externalProviderIds: readonly string[] }
+  → Pi Models + Provider/Credential runtime facts
 
-createConfiguredLuckyTokenComposition(options)
-  → { runtime: LuckyTokenRuntime, certification: ServingCertificationManifest }
+createConfiguredLuckyTokenDataPlane(options)
+  → LuckyTokenRuntime + request observation identities
 ```
 
 ### `createConfiguredPiModels()`
 
-> **小白理解：** 这一层只组装 Pi 的“模型侧”：读取模型目录、准备 Provider 凭证柜、
-> 这一层只组装 Pi 的“模型侧”：准备 Provider 凭证柜，按 Pi builtins、
-> `models.json`、外部 Provider Packages 的固定顺序登记。结果对外只是普通的 Pi
-> `Models`，上层看不见 CommandCode 的私有实现。
+这一层只组装 Pi/Provider 侧：准备 CredentialStore，按 Pi builtins、`models.json`、bundled product Providers 与 external user Provider Packages 的当前契约构造模型集合。CommandCode Private 是 bundled product Provider，会自动进入 runtime；用户不得在 `providerPackages` 重复配置它。Core/Client Protocol 不 import 它的私有实现。
 
 | 输入 | 输出/行为 |
 | --- | --- |
-| `piDirectory` / `modelsJson` | 定位 `auth.json` 与可选用户自定义 Pi Provider 目录 |
-| optional `CredentialStore` | 测试/嵌入方可替换 file store |
-| `providerPackages` | package 根名 → package-private raw configuration |
-| required bound `fetch` | 通过最小 host capability 交给 external Provider；不使用 ambient fallback |
-| ID/clock | 通过同一最小 host capability 交给 external Provider |
+| `piDirectory` / `modelsJsonPath` | 定位 `auth.json` 与 LuckyToken-owned models catalog |
+| optional `CredentialStore` | 测试/嵌入方可替换 production file store |
+| Provider package configuration | package-private conversion/request/response config |
+| bound `fetch` / host capabilities | 交给需要 network/runtime capability 的 Provider |
 
-**CommandCode 是通过 Pi Provider 契约加载的私有 workspace package。** 模型数据（默认
-`deepseek/deepseek-v4-flash`）、固定上游地址（`https://api.commandcode.ai`）、
-auth（API key login）都封装在 `@luckytoken/provider-commandcode-private` 内。
-Core 不 import 或 special-case 该实现；`package-loader.ts` 只认 Provider Package
-Contract 和固定 `providerPackage` 导出。配置 package 根名后不需要 `models.json`，
-`login` 填 API key 即可 serve。
+缺少 Provider credential 不阻止 Backend composition；login/auth status 与真实 invocation 由 Provider Runtime / Pi credential path 处理。
 
-Loader 先导入、验证并暂存同批全部 package，随后对 Pi builtins、`models.json` 和同批
-Provider 做 ID 冲突检查，全部成功后才调用 `models.setProvider()`，因此失败不会留下
-半注册状态。package 缺失、固定导出缺失、契约版本不匹配、同步/异步 factory 失败、
-非法 Pi Provider 或 ID 冲突都使启动失败。缺少 API key 不阻止装配或 `serve`；真实
-调用时由 Pi credential/auth 路径报告。`serve`、`login`、`logout` 走同一加载路径，
-`client-token` 只解析配置而不动态 import package。
+### `createConfiguredLuckyTokenDataPlane()`
 
-### `createConfiguredLuckyTokenComposition()`
-
-> **小白理解：** 这一层再组装完整服务：为已安装的 Client Protocol 建立各自独立的
-> Auth 和 handler，把 handler 交给 Runtime。它知道“哪些零件要接在一起”，却不
-> 参与任何一边的翻译规则。
-
-它是当前 concrete serving composition，唯一同时知道 installed Client Protocol 和
-installed Provider 的位置。职责严格限定为：
+Data Plane composition 同时能看见三条独立 lane 的窄 seam，但不能把它们合并成一个 generic executor：
 
 ```text
-protocol id → authFile → immutable authority → Auth → handler
-catalog → Pi builtins → models.json → package loader → external Providers → Pi Models
-handler list → Runtime
-provider-neutral bound facts → Core serving certification
+Local Native Preservation
+  compatible Client Wire
+  → local model recognition + CodexLocalCredentialAuthority
+  → local native transport
+
+Provider Native Preservation
+  compatible Client Wire
+  → resolved Pi Model + Models credential resolution
+  → provider-native transport
+
+Semantic Conversion
+  Client Wire
+  → Client Protocol adapter
+  → Pi AI IR / Pi Provider
+  → Provider Wire
 ```
 
-它不做 Anthropic↔Pi 或 Pi↔CommandCode conversion。完整 `LuckyTokenCliConfig` 在
-这里被拆成窄 constructor facts，之后不进入 Runtime request path。
+三条 lane 可以共享 request-edge identity/observation 等最小 infrastructure facts，但不共享 credential authority、native executor、transport 或 semantic-conversion state。选定 lane 后失败不得 fall through 到另一 lane。
 
-`createConfiguredLuckyTokenComposition()` 不创建或传递 HTTP observer。它把 bound
-fetch 交给 concrete Provider，并另以 handler-private `passthroughFetch` 绑定 native
-wire forwarding。Conversion invocation 不接收 composition 注入的 custom fetch；
-Provider failure 只通过 trusted neutral Pi diagnostics 跨越 execution boundary。
-`createConfiguredPiModels()` 不把 infrastructure 对象作为公共返回值泄漏。
+完整 `LuckyTokenCliConfig` 在 composition 时被拆成窄 constructor facts，之后不作为 per-request mutable bag 传播。Provider failure 只通过 trusted neutral diagnostics 跨越 execution boundary；native lane 以原始 client wire 为 authority，只做 endpoint/auth/header 等 preservation 所需变化。
 
-当前 production composition 的运行时 certification 只认证 provider-neutral Core。
-CommandCode Provider Package 与整套 distribution 的 certification 位于测试/分发边界；
-它们验证 package 契约、动态加载、协议冻结测试与真实线上证据，不能拿 Core 认证替代。
+当前 production runtime certification 只认证 provider-neutral Core；CommandCode package 与 distribution certification 位于测试/分发边界，分别证明 package contract、动态加载、协议冻结与授权的线上证据。
 
 ## 6.6 Serving certification — Core 与 Distribution 分离
 
@@ -1514,53 +1456,53 @@ identity 与 conformance hash。
 | 它使用谁 | provider-neutral composition facts；CommandCode-specific facts只存在于测试/分发认证 |
 
 Certification 可以看见左右两侧是为了证明一个具体 serving route，但不能进行协议
-转换。Injected test Auth 不会被错误标记为 file-snapshot isolation；只有真实
-handler-bound file authority 才带对应 coverage fact。
+转换。测试替身只有在覆盖同一 owning seam/contract 时才可计入证据；不能用 test-only
+identity、credential 或 transport shortcut 冒充 production authority coverage。
 
 ## 6.7 Process CLI — `src/cli.ts`
 
-> **小白理解：** CLI 是用户面对的前台。`serve` 开门营业，`login/logout` 管理
-> LuckyToken 去 Provider 的身份，`client-token` 管理 Agent 进入某个 Client Protocol
-> 的门卡。前台只把命令转交给对应部门，不自己读写协议内容。
+> **小白理解：** CLI 只是进程入口，不再自己组装整套 Backend。`serve` 负责请求“启动或附着当前用户的 LuckyToken Backend”；`control ...` 连接已经运行的 Control Plane；`login/logout` 管理 Provider 凭证。
 
-Top-level CLI 是进程 composition root/shell，不是业务 Manager：
+Top-level CLI 是 adapter/shell，不是 Backend composition root：
 
 | 命令 | 使用模块 | 产生的外部效果 |
 | --- | --- | --- |
-| `serve --config ...` | config loader → full composition → HTTP server | listener；SIGINT/SIGTERM graceful shutdown |
+| `serve --config ...` | `startLuckyTokenApplication()` | 取得/附着 current-user Backend authority；运行或附着 Backend |
+| `control ... --descriptor ...` | `ControlPlaneClient` | 查询/修改运行中 Backend 的 typed management state |
 | `login [provider] --config ...` | configured Pi Models → `Models.login()` | Provider-owned login flow；credential 写入 Pi `auth.json` |
 | `logout [provider] --config ...` | configured Pi Models → `Models.logout()` | 删除对应 Provider credential |
-| `client-token ...` | narrow auth-file resolver → client-token CLI | 修改一个 Client Protocol token file；要求重启 |
+
+`serve` 不接受自定义 descriptor。生产 singleton 固定使用 `~/.luckytoken/instance.sqlite`，matching discovery 固定发布到 `~/.luckytoken/control-plane.json`；只有 `control ...` 客户端命令把 `--descriptor` 当作连接导航参数。integration tests 若需要隔离实例，应通过独立 HOME 或内部 composition dependency 隔离，而不是改变生产 instance domain。
 
 Login UI 枚举 `models.getProviders()` 和每个 `Provider.auth`：如果 Provider 提供 OAuth
 则可显示 subscription/account；如果提供 `apiKey.login` 则显示 API-key 选项。CLI
-只实现通用 prompt/notify shell，不硬编码 CommandCode key prompt。当前
-CommandCode Provider 只注册 API-key login，因此实际只出现该选项。
+只实现通用 prompt/notify shell，不硬编码 CommandCode key prompt。
 
-Serve 时 CLI 构造一个 process shutdown controller；signal 同时进入 Runtime
-lifecycle 和 HTTP server close，确保停止接受请求、abort 上游工作并关闭 socket。
+Serve 获得 `RunningLuckyTokenApplication` 后只等待 process signal 或 application-owned exit。SIGINT/SIGTERM 调用 Backend Application 的 graceful shutdown seam；具体 Data Plane drain、Control Plane/publication、stores 与 `InstanceLease` 的关闭顺序由 `application.ts` 拥有，CLI 不重复实现。
 
 ## 6.8 Pi 文件与 ownership 关系
 
-> **小白理解：** Pi 文件柜里现在只有一只抽屉：`auth.json`（供应商凭证）。模型和
-> Provider 的静态资料内置在 LuckyToken 代码里，不需要配置文件。
+> **小白理解：** Pi 目录保存 Provider credential 与动态 catalog cache；LuckyToken 的
+> `models.json`/`public-models.json` 仍由 LuckyToken application state root 单独拥有。
 
 ```mermaid
 flowchart TB
-    D[".luckytoken/pi/（同一个文件柜）"] --> A["auth.json\nProvider 凭证\n由 Pi CredentialStore 管理"]
-    A --> P["Pi Models 认证流程"]
+    D[".luckytoken/pi/"] --> A["auth.json\nProvider credential"]
+    D --> C["models-catalog-cache.json\n动态 catalog cache"]
+    A --> P["Pi Models / Credential Authority"]
+    C --> R["Catalog Refresh Controller"]
 ```
 
 ```text
 .luckytoken/pi/
-└── auth.json
-    owner: Pi CredentialStore contract implementation
-    semantics: mutable Provider credentials keyed by Provider ID
-    readers/writers: Pi Models login/logout/getAuth/refresh
+├── auth.json
+│   owner: Pi CredentialStore / LiveCredentialAuthority
+└── models-catalog-cache.json
+    owner: Backend Catalog cache store
 ```
 
-Provider model definition 不能包含本地 Client Protocol token；Client Auth 模块
-也不能读取 Pi directory。
+Provider credential 不得泄漏到 Client Protocol semantic state；Codex Local Native
+credential authority 也不读写这个 Pi directory。
 
 ---
 
@@ -1575,8 +1517,8 @@ Pi 给出的已经是统一任务单，但 CommandCode 有自己的网址、认�
 ```mermaid
 flowchart LR
     PI["Pi 统一任务单"] --> CV["转换并封存\nCommandCode 请求"]
-    CV --> PJ["按需读取\n项目目录快照"]
-    PJ --> HTTP["发送、超时、重试"]
+    CV --> CFG["构造 fixed empty\nServerConfig"]
+    CFG --> HTTP["发送、超时、重试"]
     HTTP --> JL["逐行收取 JSONL\n按 ID 拼装"]
     JL --> OK["完整结束后提交"]
     OK --> OUT["Pi 标准结果与事件"]
@@ -1599,11 +1541,12 @@ OpenAI Responses。
 
 ```ts
 interface CommandCodePrivateProviderOptions {
+  configuration?: CommandCodeConfiguration;
   apiKey?: string;
   fetch?: FetchFunction;
-  model: Model<"commandcode-private">;
+  model?: Model<string>;
+  models?: readonly Model<string>[];
   now: () => number;
-  projectSnapshot: ProjectSnapshot;
   compatibility?: CommandCodeCompatibilityPolicy;
   createSessionId?: () => string;
   traceContext?: CommandCodeTraceContextCapability;
@@ -1624,20 +1567,20 @@ Model.api     = commandcode-private
 
 CommandCode 是 Pi 内置风格 Provider 实现（对齐 `deepseekProvider()` 形态），但由
 独立 Provider Package 交付：
-`createCommandCodePrivateProvider()` 自带固定上游地址
-`https://api.commandcode.ai` 和内置默认模型，`auth.apiKey.login` 让用户只填
-API key 即可使用。用户无需 `models.json`，只需在 `providerPackages` 声明已安装包；测试通过
-`LUCKYTOKEN_COMMANDCODE_BASE_URL` 环境变量指向 fixture 上游。
+`createCommandCodePrivateProvider()` 由 package-owned configuration/model catalog
+建立 CommandCode endpoint 与模型能力，`auth.apiKey.login` 让用户只填 API key 即可使用。
+生产 bundled package 不需要用户在 `models.json` 中重建 CommandCode 模型；测试通过
+Provider factory/configuration dependency 注入 fixture upstream，而不是 ambient 环境开关。
 
 | 项目 | 内容 |
 | --- | --- |
 | 功能 | 实现 Pi Provider auth/model/stream contract；编排 request preparation、attempt、semantic commit、Pi replay |
 | 输入 | Pi `Model + Context + SimpleStreamOptions`；构造期 bound dependencies |
 | 输出 | Pi `AssistantMessageEventStream` |
-| 持有状态 | frozen model、compatibility、project/trace capabilities、stream functions；无 conversation store |
-| 配套文件 | 自己不直接读取文件；model/credential/project facts 都从相邻 capability 注入 |
+| 持有状态 | frozen model/catalog、compatibility、trace/transport capabilities、stream functions；无 conversation store |
+| 配套文件 | 自己不直接读取业务文件；Provider credential 由 Pi auth path 注入，runtime compatibility config 固定构造 |
 | 谁使用它 | Pi `MutableModels.setProvider()` 后由 Pi `Models` dispatch |
-| 它使用谁 | project、attempts、assembler、semantic、lossless JSON 模块；Pi provider helpers |
+| 它使用谁 | fixed config helper、attempts、assembler、semantic、lossless JSON；Pi provider helpers |
 
 Provider auth 通过 Pi `Provider.auth.apiKey` 暴露：
 
@@ -1722,44 +1665,48 @@ params
 Pi reasoning level 只在 selected model 支持时映射为 CommandCode
 `low|medium|high|xhigh|max`。Pi deferred execution 当前明确不支持。
 
-## 7.3 Project capability — `project.ts`
+## 7.3 Fixed runtime compatibility config — `project.ts`
 
-> **小白理解：** Project capability 是一个受控的“项目资料员”。只有项目门卡认证后
-> 产生的目录才会到达这里，资料员才读取该目录的顶层结构和 Git 概况。全局门卡不会
-> 凭空猜测当前目录；指定目录读取失败也不能偷偷退化成全局请求。
+> **小白理解：** 当前 CommandCode Private 不再读取 LuckyToken/Pi 的项目目录，也不扫描
+> filesystem/Git。上游 wire 仍要求一个 `config` object，所以 Provider 只构造协议要求的
+> fixed empty representation；它是兼容性字段，不是 LuckyToken 的 workspace model。
 
 ```ts
-interface ProjectSnapshot {
-  snapshot({ projectDir, signal }): Promise<ServerConfig>;
-}
+createEmptyServerConfig(): ServerConfig
+```
 
-classifyProjectDir(options.metadata): string | undefined
-createNodeProjectSnapshot(): ProjectSnapshot
+固定结果：
+
+```text
+workingDir     = ""
+date           = ""
+environment    = ""
+structure      = []
+isGitRepo      = false
+currentBranch  = ""
+mainBranch     = ""
+gitStatus      = ""
+recentCommits  = []
 ```
 
 | 项目 | 内容 |
 | --- | --- |
-| 功能 | 把已经由 Auth 建立并通过 Pi metadata 传来的 projectDir 转成 CommandCode `ServerConfig` |
-| 输入 | 唯一 project fact `projectDir` + request signal |
-| 输出 | workingDir/date/platform/top-level structure/git facts |
-| 持有状态 | 无跨请求 cache；每次 invocation 建立一次 snapshot |
-| 配套文件 | 只读 project directory 与其 Git metadata；不写项目文件 |
+| 功能 | 构造当前 CommandCode wire 所需的 fixed empty `ServerConfig` |
+| 输入 | 无 request project fact |
+| 输出 | fresh mutable cloneable `ServerConfig` |
+| 持有状态 | 无 |
+| filesystem/Git | 不读取；`process.cwd()` 也不是 project identity |
 | 谁使用它 | `prepareCommandCodeRequest()` |
-| 它使用谁 | injected directory/Git/date/platform capabilities；Node factory 使用 `readdir` 和 `git` subprocess |
 
-Global client token 不产生 `projectDir`，Provider 使用严格 empty `ServerConfig` 且不发
-`x-project-slug`。Project token 产生唯一目录；Provider snapshot failure/目录不可读
-不能把请求降级为 global。`process.cwd()` 绝不作为隐式 project identity。
-
-Project snapshot 只列出非隐藏且未排除的 top-level entries，并采集 branch/status/最近
-commit。`x-project-slug = slugify(projectDir) || "root"` 是 Provider-owned wire
-derivation；Auth/Pi 不知道这个 header。
+`x-project-slug` 当前不生成。若未来真实 upstream requirement 重新需要 workspace/project
+state，必须先在 Provider/Protocol contract 中证明 source、ownership、failure 与 lifecycle，
+不能从 ambient cwd、generic Pi metadata 或旧 token 设计恢复隐式 project flow。
 
 ## 7.4 Request preparation/authority closure — `provider.ts`
 
-> **小白理解：** 这里像正式封箱：先确定模型、会话、项目资料和网络地址，再生成完整
-> 订单并重新验货，最后把它冻结。即使扩展回调参与修改载荷，也不能偷换已经确认的
-> 模型或项目。一次逻辑任务只封箱一次，重试时仍发送同一份权威订单。
+> **小白理解：** 这里像正式封箱：先确定模型、逻辑 session、fixed compatibility config
+> 和网络地址，再生成完整订单并重新验货，最后把它冻结。即使扩展回调参与修改载荷，
+> 也不能偷换已经确认的模型/session。一次逻辑任务只封箱一次，重试仍发送同一权威订单。
 
 ```ts
 prepareCommandCodeRequest(model, context, options, dependencies)
@@ -1770,8 +1717,8 @@ prepareCommandCodeRequest(model, context, options, dependencies)
 
 ```text
 snapshot invoked model
-→ resolve sessionId / logical trace / projectDir
-→ resolve project snapshot once
+→ resolve sessionId / logical trace
+→ create fixed empty ServerConfig
 → build authoritative headers/body
 → optional Pi onPayload callback
 → JSON serialize
@@ -1780,7 +1727,7 @@ snapshot invoked model
 ```
 
 `validateCommandCodeRequest()` 在 callback 和 serialization 之后重新检查 model ID、
-session、project config、permission、image/reasoning capabilities、message/tool lifecycle
+session、fixed config、permission、image/reasoning capabilities、message/tool lifecycle
 和 closed-world fields。因此 callback 可以参与 Pi-defined payload transform，但不能
 偷偷改写 Provider authority。
 
@@ -1958,14 +1905,14 @@ conversion 共用，防止 `JSON.stringify` 静默改变 semantic value。
 ## 7.10 Provider 内部关系
 
 > **小白理解：** 下图是一张供应商部门内部流程图。Pi 只连接最外层 Provider 接口；
-> 项目读取、重试、JSONL 拼装和语义转换都是 CommandCode 模块自己的内部岗位，不会
-> 散落到 Runtime、Auth 或 Anthropic 模块中。
+> fixed runtime config、重试、JSONL 拼装和语义转换都是 CommandCode 模块自己的内部岗位，
+> 不会散落到 Runtime、Request Identity 或 Anthropic 模块中。
 
 ```mermaid
 flowchart TD
     Models["Pi Models"] --> Provider["Provider factory / stream"]
     Provider --> Prep["request preparation"]
-    Prep --> Project["project.ts snapshot"]
+    Prep --> Config["project.ts fixed empty ServerConfig"]
     Prep --> Convert["Pi→CommandCode conversion"]
     Prep --> Validate["request authority validation"]
     Validate --> Attempts["attempts.ts"]
@@ -1987,74 +1934,91 @@ flowchart TD
 ## 8.0 小白导读：不同资料放进不同抽屉
 
 这一章回答两个实际问题：磁盘上每个文件是谁的、改动何时生效；其他程序又能通过
-哪些正式入口使用 LuckyToken。项目没有把所有资料塞进一个万能 JSON，因为地址簿、
-客户门卡、模型目录和供应商密钥的主人与变化速度都不同。
+哪些正式入口使用 LuckyToken。Singleton lock、Control Plane discovery、Provider
+credential、model/publication state、protocol session state 与 diagnostics 都有不同 owner，
+所以不能合并成一个“万能状态文件”。
 
 ```mermaid
 flowchart LR
-    OP["操作者"] --> CFG["config.json\n部署地址簿"]
-    CT["client-token CLI"] --> CA["Client Protocol 门卡文件"]
-    PI["Pi login / refresh"] --> PA["auth.json\nProvider 凭证"]
-    RESP["Responses handler"] --> STATE["state/openai-responses.json\n会话展开状态"]
-    DIAG["Invocation diagnostics"] --> LOGS["logs/failed-requests\n失败证据"]
-    APP["其他 Node 程序"] --> API["Package public API\nAuth / Runtime / Server 等"]
+    APP["Backend Application"] --> IA["instance.sqlite\nInstanceAuthority"]
+    APP --> DISC["control-plane.json\nDiscoveryPublication"]
+    OP["操作者 / Control Plane"] --> CFG["config/models/settings/public-models"]
+    PI["Provider login / refresh"] --> PA["pi/auth.json\nProvider credential"]
+    RESP["Responses handler"] --> STATE["state/openai-responses.json\nbounded session state"]
+    OBS["Backend observation"] --> LEDGER["request-ledger / diagnostics / capture"]
 ```
 
 ## 8.1 运行目录文件地图
 
 > **小白理解：** 文件树就是一张文件柜标签图。“owner”表示哪个模块有权解释和修改
-> 这份资料，“runtime form”表示启动后它变成什么。除了动态 Provider 凭证外，大多数
-> 文件只在启动时读取一次，所以手工修改后需要重启才能生效。
+> 这份资料。特别注意：`instance.sqlite` 和 `control-plane.json` 都不是业务数据库，前者只承载
+> OS/SQLite singleton lock，后者只承载 management discovery。
 
 ```text
 .luckytoken/
 ├── config.json
 │   owner: deployment config loader
-│   writer: operator
-│   readers: CLI startup/client-token resolver
-│   lifetime: one startup snapshot
+│   lifetime: startup snapshot
 │
-├── client-auth/
-│   owner: per-Client-Protocol Auth file capability
-│   writer: client-token CLI
-│   reader: startup authority loader
-│   runtime form: one immutable authorize(token) closure per protocol
-│   │
-│   ├── anthropic-messages.json
-│   └── openai-responses.json
+├── instance.sqlite
+│   owner: InstanceAuthority only
+│   semantics: lock carrier; file existence means nothing
+│
+├── control-plane.json
+│   owner: DiscoveryPublication
+│   semantics: current local IPC address + capability hint
+│
+├── models.json
+│   owner: ModelsJsonAuthority
+│
+├── public-models.json
+│   owner: PublicModelAuthority
+│   semantics: endpoint + Provider/model enable/rename state
+│
+├── settings.json
+│   owner: SettingsRegistry/FileSettingsStore
+│
+├── integrations/codex/
+│   ├── integration-state.json
+│   └── model-catalog.json
+│       owner: CodexIntegrationAuthority
 │
 ├── state/
-│   └── openai-responses.json
-│       owner: OpenAI Responses session-state capability
-│       writer/reader: serving-time atomic snapshot lifecycle
-│       runtime form: bounded previous_response_id authority
+│   ├── openai-responses.json
+│   │   owner: Responses session-state capability
+│   ├── diagnostics/diagnostics.sqlite3
+│   │   owner: RuntimeDiagnosticsStore
+│   ├── request-ledger/ledger.sqlite3
+│   │   owner: RequestLedgerStore
+│   └── deep-diagnostics/capture.sqlite3
+│       owner: DeepCaptureStore
 │
-├── logs/
-│   └── failed-requests/*.json
-│       owner: invocation diagnostics capability
-│       writer: final request-failure journal
-│       runtime form: bounded/redacted per-request evidence
+├── logs/failed-requests/*.json
+│   owner: invocation diagnostics failure journal
 │
 └── pi/
-    └── auth.json
-        owner: Pi CredentialStore implementation
-        writer/reader: Pi Models login/logout/getAuth/refresh
-        runtime form: effective Provider auth applied by Pi Models
+    ├── auth.json
+    │   owner: Pi CredentialStore / LiveCredentialAuthority
+    └── models-catalog-cache.json
+        owner: Backend Catalog cache store
 ```
 
 这些文件没有统一成一个“大配置文件”，因为它们的 semantic owner、mutation
 frequency、secret level 和 lifetime 不同：
 
-| 文件 | 静态/动态 | 是否 secret | 是否 serving 期间读取 | 变化生效 |
-| --- | --- | --- | --- | --- |
-| `config.json` | 静态 deployment | 否 | 否 | 重启 |
-| protocol token file | 低频管理 | 是 | 否 | 重启后新 snapshot |
-| Responses state snapshot | 动态协议状态 | 含会话内容 | 是 | 内存 commit；持久化异步/关闭时 flush |
-| failure journal | 动态诊断证据 | safe/full policy 决定 | 只写 | 每个最终失败请求 |
-| `auth.json` | 动态 Pi credential | 是 | 由 Pi auth operations 读取 | login/logout/refresh contract |
+| 文件 | 静态/动态 | 是否 secret | 运行时语义 |
+| --- | --- | --- | --- |
+| `config.json` | 静态 deployment | 否 | Backend startup config snapshot |
+| `instance.sqlite` | Backend lifetime | 否 | `BEGIN IMMEDIATE` singleton authority；永不按文件存在与否判断 owner |
+| `control-plane.json` | Backend lifetime publication | capability 为敏感 management fact | discoverability only；不是 liveness |
+| `models.json` | 管理态 | 可能引用 credential source，但不应含明文状态投影 | Provider/model composition authority |
+| `public-models.json` | 管理态 | 否 | Public Model on/off、rename、endpoint；debounced persistence + shutdown flush |
+| Responses state snapshot | 动态协议状态 | 含会话内容 | bounded `previous_response_id` state |
+| Request Ledger / Diagnostics / Capture SQLite | 动态 observation state | 经过各自 redaction/sensitivity policy | Backend-owned persistence |
+| `pi/auth.json` | 动态 Provider credential | 是 | Provider login/logout/refresh/CAS authority |
 
-所有 `.luckytoken/`、任意 `auth.json`、`CommandcodeAPIKey.txt` 和
-`.online-artifacts/` 都被 `.gitignore` 排除。
+`instance.sqlite` 必须保持 InstanceAuthority 私有：backup、support bundle、generic scanner 或其他
+module 不应打开/复制/删除它。生产 backup 使用显式 allowlist，不扫描整个 `.luckytoken/`。
 
 ## 8.2 测试专用 secret/evidence 文件
 
@@ -2076,16 +2040,18 @@ conversation store 或全量 request logging subsystem。
 
 ## 8.3 Package/public module seams
 
-> **小白理解：** Public seam 可以理解成正式对外开放的插口。其他 Node 程序可以只
-> 选择 Auth、Runtime、HTTP Server，或单独选择 Anthropic handler、CommandCode
-> Provider 来自行装配；CLI 内部的总装配细节没有全部变成公共承诺。
+> **小白理解：** Public seam 可以理解成正式对外开放的插口。Backend Application、
+> Desktop lifecycle 与 concrete composition 大多是 product-internal；根包只导出少量
+>可复用 runtime/diagnostics/credential/server 能力。
 
-根导出 `luckytoken`：
+根导出 `luckytoken` 当前包括：
 
 ```text
-createAuth + Auth types
+resolveRequestIdentity + request identity types
+createRuntimeDiagnosticsStoreFactory + diagnostics types/redaction helpers
 createLuckyTokenRuntime + Runtime types
 createFileCredentialStore
+createCredentialAuthorityStore / createLiveCredentialAuthority
 startLuckyTokenHttpServer + server types
 ```
 
@@ -2096,31 +2062,17 @@ createAnthropicMessagesHandler
 AnthropicMessagesHandlerOptions
 defaultAnthropicModelValidityPolicy
 AnthropicModelValidityPolicy
+FinalAssistantPrefillValidity
 ```
 
-私有包 `@luckytoken/provider-commandcode-private` 的根入口只导出固定
-`providerPackage`、现有直接 Pi Provider factory 与 options 类型、必要的
-`ProjectSnapshot` 类型。LuckyToken 根包不再导出 CommandCode subpath。
+私有包 `@luckytoken/provider-commandcode-private` 通过标准 Provider Package contract 进入
+Pi Provider runtime；LuckyToken 根包不导出它的 concrete conversion implementation。
+`@luckytoken/provider-contract` 只暴露 Provider package/diagnostics contract。
 
-私有包 `@luckytoken/provider-contract` 只暴露 `/package` 与 `/diagnostics`；前者定义
-加载契约，后者保证 Core 与 Provider 共享同一个 trusted diagnostics 运行时实例。
-
-`cli.ts`、`cli-config.ts`、`composition.ts` 和 client-token administrative store 当前是
-application-internal seams，不在 package root exports。`package.json` 目前
-`private:true`，所以这里的“public”表示 build/package boundary，而不是已经发布到 npm
-的稳定兼容承诺。
-
-程序化最小装配接口是：
-
-```ts
-const auth = createAuth(...);
-const handler = createAnthropicMessagesHandler({ models, auth });
-const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-const server = await startLuckyTokenHttpServer({ runtime });
-```
-
-这个接口允许替换 Provider、Auth authority 或 HTTP host，而不需要使用 CLI concrete
-composition。
+`application.ts`、`cli.ts`、`cli-config.ts`、`composition.ts`、InstanceAuthority、Control
+Plane discovery 和 Electron Main lifecycle 都是 product composition seams，不属于根
+package API。`package.json` 当前 `private:true`，所以这里的“public”指 build/package
+boundary，而不是已经发布到 npm 的长期兼容承诺。
 
 ---
 
@@ -2134,10 +2086,14 @@ composition。
 
 ```mermaid
 flowchart TB
-    CORE["Core / 进程\n接线与网络"] --> CP["Client Protocol\n理解客户格式"]
-    CORE --> PI["Pi integration\n统一模型接口"]
-    PI --> PV["Private Provider\n理解供应商格式"]
-    AUTH["Client Auth\n本地门卡"] --> CP
+    APP["Backend Application\ncomposition + lifecycle"] --> CORE["Core / Data Plane"]
+    APP --> CPCTL["Application Control Plane"]
+    APP --> IA["InstanceAuthority"]
+    DESK["Electron Main\nDesktopBackendConnection"] --> CPCTL
+    CORE --> CP["Client Protocol"]
+    CORE --> PI["Pi integration"]
+    PI --> PV["Provider"]
+    SEC["Credential/security authorities"] --> CORE
     CP -. "只通过 Pi 合同" .-> PI
     PI -. "只通过 Pi 合同" .-> PV
 ```
@@ -2145,28 +2101,34 @@ flowchart TB
 本章用于快速回答“某个文件左右上下连接谁”。“上游 caller”表示谁调用/构造它，
 “下游 dependency”表示它直接使用谁；不是 Client/Provider wire 的上下游含义。
 
-## 9.1 Core、进程与 Client Auth
+## 9.1 Core、Backend lifecycle 与进程
 
-> **小白理解：** 这组模块负责“服务怎么开、请求怎么进、门卡怎么查、对象怎么组装”。
-> 它们不应该理解 Anthropic 内容块或 CommandCode JSONL；如果在这里看到具体协议的
-> 字段转换，通常就是边界开始混乱的信号。
+> **小白理解：** 这组模块负责“谁可以成为 Backend、Backend 怎么开/关、请求怎么进入、
+> Desktop 怎么重新找到 Backend”。它们不应该重新实现 Anthropic/Responses/Provider
+> conversion；如果 lifecycle 模块开始理解具体模型内容，边界就错了。
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
-| `src/index.ts` | package root re-exports | programmatic consumer | Auth、Runtime、CredentialStore、Server | `test/unit/public-api.test.ts` |
-| `src/server.ts` | `startLuckyTokenHttpServer()` → running server | CLI/programmatic/tests | Node HTTP/stream、`LuckyTokenRuntime` | `local-http-server`, `http-atomic-delivery`, CLI integration |
-| `src/runtime.ts` | `createLuckyTokenRuntime()` → `handle(Request)` | composition/programmatic | `http.ts` | Client protocol boundary/integration tests |
-| `src/http.ts` | `ClientProtocolHandler`, `handleHttpRequest()` | Runtime | selected handler、AbortSignal/timer | HTTP auth/lifecycle/atomic delivery tests |
-| `src/auth.ts` | `createAuth()` → `Auth.resolve()` | handler composition | injected token authority/ID generator | `test/unit/auth.test.ts`, HTTP auth integration |
-| `src/model-resolution.ts` | selector → Pi `Model` | Client Protocol handler | Pi `Models.getModels()` | model-resolution unit/failure integration |
-| `src/execution.ts` | Pi stream → committed `AssistantMessage` | Client Protocol handler | Pi `Models.streamSimple()` | `test/unit/execution.test.ts`, Pi runtime fidelity |
-| `src/cli-config.ts` | config file → frozen deployment facts | top-level CLI | Node file/path/stat | `test/unit/cli-config.test.ts` |
-| `src/composition.ts` | Pi Models/runtime/certification | CLI/tests | all concrete constructors, no conversion | configured-composition/serving certification tests |
-| `src/core-serving-certification.ts` | provider-neutral facts → frozen Core manifest | composition | protocol/provider IDs、limits | configured-composition tests |
-| `test/support/commandcode-serving-certification.ts` | Provider/Distribution facts → conformance manifest | certification tests | package/policy/evidence identities | unit/integration/certification sync tests |
-| `src/cli.ts` | serve/login/logout/client-token process shell | `npm start` | config、composition、Pi Models、server、client-token CLI | `test/integration/cli.test.ts` |
-| `src/client-auth/file-token-store.ts` | immutable authority；admin store | composition；client-token CLI | Node file/crypto/path | client-token unit + real HTTP Auth integration |
-| `src/client-auth/cli.ts` | token CLI args → one file mutation | top-level CLI | narrow auth-file resolver、token store、directory stat | CLI integration |
+| `src/index.ts` | package root re-exports | programmatic consumer | Runtime、diagnostics、Credential Authority、Server | public API tests |
+| `src/application.ts` | `startLuckyTokenApplication()` → running/attached Backend | CLI / packaged Backend entry | InstanceAuthority、management authorities、Control Plane、Data Plane supervisor | Backend Application integration + ownership E2E |
+| `src/instance-authority.ts` | `acquire()` → `InstanceLease` | Backend Application | dedicated `node:sqlite` connection | real-process SQLite certification + integration |
+| `src/control-plane-discovery.ts` | `read()` / `publish()` → `DiscoveryPublication` | Backend Application / trusted clients | current-user descriptor file | discovery ownership tests |
+| `src/runtime-supervisor.ts` | Data Plane start/stop/restart/quit | Backend Application Control Plane | Data Plane listener factory | runtime supervisor + lifecycle tests |
+| `src/server.ts` | `startLuckyTokenHttpServer()` → running server | Data Plane composition/tests | Node HTTP/stream、`LuckyTokenRuntime` | local-http-server / atomic delivery |
+| `src/runtime.ts` | `createLuckyTokenRuntime()` → `handle(Request)` | composition/programmatic | `http.ts` | Client Protocol boundary tests |
+| `src/http.ts` | `ClientProtocolHandler`, `handleHttpRequest()` | Runtime | selected handler、AbortSignal/timer | HTTP lifecycle/atomic delivery tests |
+| `src/request-identity.ts` | request headers → bounded request/session identity facts | handlers/runtime observation | crypto/headers only | request identity tests |
+| `src/model-resolution.ts` | selector → Pi `Model` / lane selection facts | Client Protocol handler | Public Model / Pi Models seams | model-resolution tests |
+| `src/execution.ts` | Pi stream → committed `AssistantMessage` | semantic Client Protocol handlers | Pi event stream | execution + provider-boundary tests |
+| `src/cli-config.ts` | config file → frozen deployment facts | Backend/CLI composition | Node file/path | cli-config tests |
+| `src/composition.ts` | Pi Models + three-lane Data Plane runtime | Backend Application/tests | concrete lane constructors/authorities | composition/certification tests |
+| `src/credentials/authority.ts` | `LiveCredentialAuthority` | Backend Application / Control Plane | Pi CredentialStore | credential Control Plane tests |
+| `src/core-serving-certification.ts` | provider-neutral facts → frozen Core manifest | composition | protocol/provider IDs、limits | certification tests |
+| `src/cli.ts` | serve/control/login/logout process shell | `npm start` | Backend Application、ControlPlaneClient、Pi Models | CLI integration |
+| `packages/desktop-shell/src/main/desktop-backend-connection.ts` | `start()` / `dispose()` | Electron Main | discovery、launcher、session、desktop lease | connection lifecycle tests + packaged E2E |
+| `packages/desktop-shell/src/main/electron-backend-launcher.ts` | `launch()` → `SpawnedBackend` | DesktopBackendConnection | Node child process only | launcher tests + packaged E2E |
+| `packages/desktop-shell/src/main/control-plane-session.ts` | one-endpoint typed Control Plane session | DesktopBackendConnection / Main IPC | `ControlPlaneClient` | session tests |
+| `packages/desktop-shell/src/main/desktop-owner-lease.ts` | claim/renew/isBound | DesktopBackendConnection / Product Quit | application commands | lease + product lifecycle tests |
 
 ## 9.2 Pi integration
 
@@ -2194,7 +2156,7 @@ flowchart TB
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
 | `protocols/anthropic/index.ts` | Anthropic subpath exports | programmatic consumer | handler、representability | public API tests/build |
-| `handler.ts` | factory → `POST /v1/messages` handler；conversion 不注入 fetch，native 分支只用 `passthroughFetch` | composition/programmatic | Auth、profile、request、model、options、execution、renderers | ingress order、minimal text、thinking/TCP integration |
+| `handler.ts` | factory → `POST /v1/messages` handler；conversion 不注入 fetch，native 分支只用 `passthroughFetch` | composition/programmatic | Request Identity、Public Model resolution、profile/request/options/execution/renderers、lane-specific native seam | ingress order、minimal text、thinking/TCP integration |
 | `failures.ts` | `InvalidRequest`, `UnsupportedFeature` | all Anthropic validators | none | ingress/error integration |
 | `profile.ts` | headers → source profile | handler | failure types | Anthropic ingress tests + protocol sync |
 | `request.ts` | unknown body → validated state → Pi invocation | handler | tools + Pi types | conversation/tool-turn/ingress tests |
@@ -2220,8 +2182,8 @@ flowchart TB
 | `packages/provider-commandcode-private/src/models.ts` | **33 个模型的唯一权威目录**（id/context/模态/价格/推理档位，来自官方 1.9.0 分析）；`thinkingLevelMap` 生成 | provider factory | `constants.ts`、Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
 | `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
 | `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
-| `packages/provider-commandcode-private/src/provider.ts` | factory、Pi→wire conversion、request preparation | Provider Package entry | project、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
-| `project.ts` | `ProjectSnapshot` → `ServerConfig` | Provider preparation | directory/Git/date/platform capabilities | project unit/provider integration/online project scope |
+| `packages/provider-commandcode-private/src/provider.ts` | factory、Pi→wire conversion、request preparation | Provider Package entry | fixed config helper、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
+| `project.ts` | `createEmptyServerConfig()` | Provider preparation | none | provider/project-compatibility tests |
 | `attempts.ts` | prepared request → committed `CommandCodeResult` | Provider stream | fetch/timers/assembler | attempt controls、decoder、retry/cancel integration |
 | `assembler.ts` | JSONL lines + EOF → ordered result or typed error | attempts | no other business module | assembler/response lifecycle tests |
 | `semantic.ts` | committed result → Pi message/event replay | Provider stream | Pi types/pricing、lossless JSON | semantic/replay/thinking tests |
@@ -2292,8 +2254,8 @@ wire evidence。
 ## 10.2 Semantic coverage ownership
 
 > **小白理解：** 每类故障都有明确负责的测试。例如拼错 JSONL 由 Provider 拼装测试
-> 抓，客户端断线由 HTTP 测试抓，项目目录是否真的到达外部请求由在线测试抓。这样
-> 一次失败能指出哪个部门出问题，而不是只留下“端到端失败”。
+> 抓，客户端断线由 HTTP/Desktop recovery 测试抓，credential/lane 隔离由 owning
+> authority 测试抓。这样一次失败能指出哪个部门出问题，而不是只留下“端到端失败”。
 
 Immutable serving conformance record 把当前 route 分成这些维度：
 
@@ -2308,28 +2270,31 @@ serving readiness and isolation
 real loopback HTTP boundary
 Pi config/credential/CLI
 real Provider online conformance
-per-Client-Protocol Auth isolation
+request identity + credential/lane isolation
 ```
 
 这样失败能定位到 owning boundary，而不是只有一个“端到端失败”。例如：
 
 - malformed JSONL/unknown event/EOF fault 由 deterministic assembler tests 拥有；
 - socket disconnect/server shutdown 由 HTTP integration 拥有；
-- Auth snapshot rotation/restart 由 real TCP official SDK test 拥有；
-- global/project facts 到真实 Provider request 的传播由 online conformance 拥有；
+- request identity precedence/fallback 由 request-identity 与真实 handler/HTTP tests 拥有；
+- Local Native credential 与 Provider credential isolation 由各自 authority/native-lane tests 拥有；
+- current CommandCode request 明确验证不存在 projectDir/project-slug propagation；
 - healthy upstream 无法稳定制造的 protocol fault 不伪造成 online case。
 
 ## 10.3 Online 测试的数据路径与当前证据
 
-> **小白理解：** 在线测试走的就是用户实际路径：官方 Anthropic SDK 连接本地端口，
-> 穿过正式 Runtime、Auth、Pi 和 Provider，最后访问真实 CommandCode。捕获器只坐在
+> **小白理解：** 在线测试走的就是用户实际路径：官方 Client 连接本地端口，穿过
+> production Runtime、request identity 与选定 lane；Semantic Conversion 场景继续经过
+> Client Protocol/Pi/Provider，native 场景则验证自己的 preservation transport。捕获器只坐在
 > 最外侧网络出口复印证据，不替换 LuckyToken 内部模块。
 
 ```text
 official Anthropic SDK / Codex CLI / Claude Code
 → real loopback TCP
-→ production Runtime/Auth/Client Protocol/Pi
-→ installed CommandCode Provider (registered at startup by the generic loader)
+→ production Runtime / Request Identity / selected lane
+→ Client Protocol + Pi when Semantic Conversion is selected
+→ installed CommandCode Provider when that Provider is selected
 → capturing fetch wrapper
 → real https://api.commandcode.ai
 ```
@@ -2368,8 +2333,9 @@ npm run test:online-codex -- 3
 npm run test:online-claude -- 3
 ```
 
-涉及协议、Pi revision、Provider model/endpoint、Auth policy 或 serving boundary 的修改
-还必须更新对应 conformance record/hash，不能只让普通 unit tests 变绿。
+涉及协议、Pi revision、Provider model/endpoint、request identity、credential authority、
+lane eligibility 或 serving boundary 的修改，还必须更新对应 conformance record/hash，
+不能只让普通 unit tests 变绿。
 
 ---
 
@@ -2401,18 +2367,18 @@ flowchart LR
 
 | 原则 | 当前实现证据 | 结论 |
 | --- | --- | --- |
-| Pi 是唯一左右语义边界 | Anthropic/Responses 与 CommandCode package 零互相 import；共同语义类型只来自 Pi | 符合 |
-| High cohesion / low coupling | 两个 Client Protocol、Client Auth、Pi config/credential、Provider Package 各自拥有行为+状态+测试 | 符合 |
-| Capability cohesion | token schema/mutation/authority 在一个模块；Provider JSONL state 全在 Provider 目录 | 符合 |
-| Small contracts | Runtime 只有 `handle(Request)`；handler 只有 method/path/handle；Auth 只有 `resolve(headers)` | 符合 |
-| Information lifecycle | raw token/file JSON/Client Wire/Provider JSONL 都有明确死亡点；只传播窄 Pi facts | 符合 |
+| Pi 是 Semantic Conversion 的唯一共享语义边界 | Anthropic/Responses conversion 与 CommandCode package 零互相 import；native lanes bypass Pi IR 且不共享 credential/transport authority | 符合 |
+| High cohesion / low coupling | Client Protocol、三条 Data Plane lane、Backend lifecycle、Desktop connection、Provider credential 各自有独立 owner/test | 符合 |
+| Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Local credential、Provider JSONL state 分模块拥有 | 符合 |
+| Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
+| Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
 | 模型单一权威来源 | CommandCode 33 个模型只存在于 `models.ts`（官方 1.9.0 数据）；无运行时端点拉取、无第二份模型清单 | 符合 |
 | `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
 | Tool identity | 两侧转换都保留 call ID/name/correlation；不按位置猜测 | 符合 |
 | Cancellation | socket→HTTP→Pi→Provider→fetch/reader/retry 全链传播；commit 前仍 authoritative | 符合 |
-| Configuration ownership | deployment、Client Auth、Pi model、Pi credential 分文件分 owner | 符合 |
+| Configuration ownership | deployment、InstanceAuthority、Discovery、models/public-models、Pi credential、diagnostics 各自分 owner | 符合 |
 | No unnecessary Manager/IR | 没有 service locator、Provider registry wrapper、universal request DTO 或第二 IR | 符合 |
 
 ## 11.2 Composition root 为什么可以看见两侧
@@ -2428,7 +2394,7 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
 判断它是否越界的标准是：
 
 ```text
-允许：create A, create B, inject Pi Models, bind Auth, certify facts
+允许：create A, create B, inject Pi Models/authorities, select narrow lane seams, certify facts
 禁止：if Anthropic field X then emit CommandCode field Y
 ```
 
@@ -2451,10 +2417,10 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
    也不提供插件市场。新增 Provider 应实现同一个 package seam，让通用 loader 返回
    标准 Pi Provider，而不是把 `composition.ts` 扩成 provider-specific switch。
 
-3. **Client token mutation 按非并发 administrative operation 设计。** 没有 watcher/
-   lock；运行 snapshot 不热更新。当前写入是该 capability 内的直接文件写，进程在写入
-   中途崩溃可能留下损坏文件，但下一次启动会 fail closed。若产品需要 crash-atomic
-   durability，应只在 `file-token-store.ts` 内增加原子替换，不改变 Auth/Runtime。
+3. **Backend singleton 使用 dedicated SQLite lock carrier。** `instance.sqlite` 永久存在且
+   必须保持 InstanceAuthority 私有；它不是业务数据库、backup source 或 liveness marker。
+   Windows 已做 real-process certification；macOS/Linux 在真实 host 上通过同一组 lock/crash
+   invariants 前不得宣称平台认证。
 
 4. **Provider factory 的程序化 seam 允许 global fetch fallback。** Certified CLI
    composition 总是 bound fetch 并认证 `globalFetchFallback=prohibited`。其他嵌入方如果
@@ -2465,9 +2431,10 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
    降为普通工具并产生 degradation notice，但不宣称 strict 生效。Image 是否可用仍取决于
    selected model capability；不能把字段到达 Pi 当成具体 Provider 已执行该能力的证据。
 
-6. **Pi CredentialStore 的 file lock 不能被复制到所有 JSON 文件。** 它解决的是
-   concurrent OAuth refresh/login/logout；Client token CLI 没有同样并发需求。是否加锁
-   必须由 capability 自己的真实 lifecycle 决定。
+6. **Persistence locking 必须由 capability 的真实并发模型决定。** Pi CredentialStore 的
+   file lock 解决 concurrent OAuth refresh/login/logout；InstanceAuthority 的 SQLite
+   transaction lock 解决 process-lifetime singleton。两者都不能被机械复制到其他 JSON/
+   SQLite 文件；Public Models 等其他 authority 按自己的 CAS/debounce/flush lifecycle 处理。
 
 7. **Recognized 与 future-unknown 必须分开处理。** 已识别 Anthropic 字段按冻结方法
    direct map、omit+notice/degrade 或 fail；例如 `top_p` 与 thinking budget 进入 Pi，
@@ -2512,10 +2479,10 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
 
 ```mermaid
 flowchart TB
-    NEWCP["新增 Client Protocol"] --> CPI["实现 Client Wire ↔ Pi"]
-    CPI --> BIND["Composition 增加独立 Auth + handler 接线"]
-    NEWPV["新增 Provider"] --> PVI["实现 Pi ↔ Provider Wire"]
-    PVI --> REG["通过 Pi setProvider 注册"]
+    NEWCP["新增 Client Protocol"] --> CPI["实现 Client Wire ↔ Pi 或明确 native preservation eligibility"]
+    CPI --> BIND["Composition 增加独立 handler/lane seam"]
+    NEWPV["新增 Provider"] --> PVI["实现 Pi ↔ Provider Wire 或明确 Provider Native transport contract"]
+    PVI --> REG["通过 Pi/Provider Runtime 注册"]
     BIND -. "不修改 Provider 翻译" .-> PVI
     REG -. "不修改 Client Protocol 翻译" .-> CPI
 ```
@@ -2523,32 +2490,30 @@ flowchart TB
 ## 12.1 增加新的 Client Protocol
 
 > **小白理解：** 新 Client Protocol 应当像新开一扇独立服务门：有自己的路由、解析、
-> 返回格式、门卡文件和测试，只在中间使用相同 Pi 插座。它不能借用已有协议的
-> 门卡或让 Runtime 把协议名称塞进通用 Auth。
+> 返回格式和测试；如果需要 semantic conversion，只通过 Pi 这个共享语义插座。如果某些
+> request 能 native preservation，也必须由明确 capability contract 决定，不能靠 payload 猜测。
 
-现有 OpenAI Responses 实现是可复用的结构模板；新增另一协议时应新增平行目录：
+现有 Anthropic / OpenAI Responses 实现是结构参考；新增协议应新增平行目录：
 
 ```text
 src/protocols/<new-client-protocol>/
   profile/request/options/response/stream/handler...
 
-.luckytoken/client-auth/<new-client-protocol>.json
-
 composition binding:
-  protocol ID → its auth file → its Auth → its handler
+  route/profile → handler
+  optional explicit native eligibility → one lane-specific seam
 
 tests:
-  new Client wire ↔ Pi + route/Auth isolation + SDK/TCP
+  new Client wire ↔ Pi + route isolation + native/semantic boundary + SDK/TCP
 ```
 
 不得修改：
 
 ```text
-concrete Provider conversion
-existing Client Protocol parser/renderer/token files
-generic Auth.resolve signature
-Runtime to pass a protocol ID into Auth
-Pi public contracts
+concrete Provider conversion merely to recognize the new Client Protocol
+existing Client Protocol parser/renderer
+Runtime into a universal protocol DTO
+Pi public contracts merely to carry client-specific convenience fields
 ```
 
 Runtime 只需多注册一个独立 method/path handler。
@@ -2569,11 +2534,12 @@ Provider.getModels()
 ```
 
 将它包装为根入口固定导出 `providerPackage` 的 workspace/npm 包，依赖
-`@luckytoken/provider-contract/package`，并在 `providerPackages` 中以 npm 根包名配置。
-通用 loader 会完成版本/Provider 验证、冲突预检和 Pi 注册；无需修改 composition 或
-增加 provider-specific 分支。静态 model config、credential method、request/response
-conversion、retry/cancel/online conformance 仍由新包独立拥有和测试。不得修改
-Anthropic/OpenAI adapters 来识别该 Provider。
+`@luckytoken/provider-contract/package`。若它属于产品内置能力，应加入 bundled Provider
+metadata，由 Backend 自动装配；若它是用户外部扩展，才通过 `providerPackages` 以 npm 根
+包名配置。通用 loader/runtime 会完成版本/Provider 验证、冲突预检和 Pi 注册；无需修改
+Client Protocol 或增加 provider-specific routing 分支。静态 model config、credential
+method、request/response conversion、retry/cancel/online conformance 仍由新包独立拥有和
+测试。不得修改 Anthropic/OpenAI adapters 来识别该 Provider。
 
 ## 12.3 增加更多 CommandCode models
 
@@ -2600,16 +2566,15 @@ invocation 中已 resolved 的 `Model`。
 
 ## 12.5 替换文件存储
 
-> **小白理解：** 存储方式可以从 JSON 换成数据库或其他介质，但对相邻模块展示的
-> 小接口应保持不变。换 Client Token 存储不该动 Provider 登录，换 Provider 凭证
-> 存储不该动 Client Auth；这样更换一个抽屉不会污染整间办公室。
+> **小白理解：** 存储方式可以从 JSON 换成数据库或其他介质，但 authority 的小接口和
+> 生命周期不能顺便改掉。Provider credential、Public Models、diagnostics、discovery 与
+> singleton lock carrier 都是不同抽屉。
 
-- 替换 Client token persistence：保持 `ClientTokenAuthority` 与
-  `FileClientTokenStore` 等价窄 seam，只改该 capability 和 composition binding；
-- 替换 Pi credential persistence：实现 Pi `CredentialStore`，不改 Provider login 或
-  Client Auth；
-- 替换 deployment config format：仍然在 composition 前结束完整 config lifecycle，
-  下游只接收窄 constructor facts。
+- 替换 Pi credential persistence：实现同等 `CredentialStore`/CAS 语义，不改 Provider login 或 Client Protocol；
+- 替换 Public Model/settings/history storage：保持各 authority 的 revision/flush/ownership contract；
+- 替换 Control Plane discovery storage：只改变 publication/read adapter，绝不能重新承担 singleton/liveness；
+- 替换 `InstanceAuthority` primitive：必须重新通过 process contention、event-loop suspension、crash release、same-process multi-connection 与 real-platform certification；不能退回 stale timeout/PID probing；
+- 替换 deployment config format：仍然在 composition 前结束完整 config lifecycle，下游只接收窄 constructor facts。
 
 ---
 
@@ -2638,15 +2603,16 @@ flowchart TB
 > 怎样进入和认证，然后看两次翻译与中间 Pi 接口，最后用规范和测试核对。不要只盯着
 > 某个代码片段猜整条链路。
 
-1. `src/cli.ts` 与 `src/composition.ts`：对象如何构造；
-2. `src/server.ts` → `runtime.ts` → `http.ts`：请求如何进入/取消；
-3. `src/auth.ts` 与 `src/client-auth/file-token-store.ts`：谁被授权、产生什么窄事实；
-4. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
-5. Pi `Models.streamSimple()` public contract；
-6. `src/providers/package-loader.ts` → `@luckytoken/provider-commandcode-private` →
+1. `src/application.ts` → `instance-authority.ts` / `control-plane-discovery.ts`：Backend 如何取得 authority、启动和关闭；
+2. `packages/desktop-shell/src/main/desktop-backend-connection.ts`：Desktop 如何 discovery/attach/recover；
+3. `src/server.ts` → `runtime.ts` → `http.ts`：Data Plane request 如何进入/取消；
+4. `src/credentials/authority.ts` 与 `src/integrations/codex/local-auth.ts`：Provider credential 与 Local Native credential 如何保持隔离；
+5. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
+6. Pi `Models.streamSimple()` public contract；
+7. `src/providers/package-loader.ts` → `@luckytoken/provider-commandcode-private` →
    `provider.ts` → project/attempts/assembler/semantic；
-7. 对应 Protocol/Conversion Spec；
-8. owning unit/integration test、serving conformance record，以及深度在线证据
+8. 对应 Protocol/Conversion Spec；
+9. owning unit/integration test、serving conformance record，以及深度在线证据
    （`test/online/deep-online.ts`、`test/online/event-coverage.ts`）——后者证明
    真实上游上"Anthropic 只转换指定字段、CommandCode 只有指定 event 进 content"。
 

@@ -63,7 +63,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
   const userRoot = join(directory, "home");
   await mkdir(join(userRoot, ".luckytoken", "pi"), { recursive: true });
   const configPath = join(userRoot, ".luckytoken", "config.json");
-  const descriptorPath = join(directory, "control-plane.json");
+  const descriptorPath = join(userRoot, ".luckytoken", "control-plane.json");
   const port = await freePort();
   await writeFile(
     configPath,
@@ -116,14 +116,12 @@ test("the assembled release backend serves as a desktop-owned instance from the 
         "serve",
         "--config",
         configPath,
-        "--descriptor",
-        descriptorPath,
         "--owner",
         "desktop",
       ],
       {
         cwd: backendRoot,
-        env: { ...process.env, USERPROFILE: userRoot },
+        env: { ...process.env, USERPROFILE: userRoot, HOME: userRoot },
         maxBuffer: 8 * 1024 * 1024,
       },
     );

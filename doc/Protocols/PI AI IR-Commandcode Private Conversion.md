@@ -33,41 +33,39 @@ It does not own Client error envelopes, Client session state, or Client conversi
 
 ## 2. Configuration
 
-Suggested configuration:
+CommandCode Private is a bundled LuckyToken product Provider. Production users MUST NOT add `@luckytoken/provider-commandcode-private` to `config.providerPackages`; the product runtime supplies its bundled package configuration internally and rejects that reserved specifier in user configuration.
+
+The package-owned configuration schema below remains relevant to direct Provider construction, characterization, and the bundled product metadata that selects defaults:
 
 ```json
 {
-  "providerPackages": {
-    "@luckytoken/provider-commandcode-private": {
-      "conversion": {
-        "request": {
-          "syntheticMissingToolResultOutputType": "text"
-        },
-        "response": {
-          "pauseTurn": "stop",
-          "unknownEvent": "error"
-        }
-      },
-      "request": {
-        "transport": {
-          "timeoutMs": 30000,
-          "maxRetries": 0,
-          "maxRetryDelayMs": 10000
-        }
-      },
-      "response": {
-        "errorCapture": {
-          "bodyReadTimeoutMs": 5000,
-          "maxBodyBytes": 65536,
-          "maxClientMessageChars": 4096
-        }
-      }
+  "conversion": {
+    "request": {
+      "syntheticMissingToolResultOutputType": "text"
+    },
+    "response": {
+      "pauseTurn": "stop",
+      "unknownEvent": "error"
+    }
+  },
+  "request": {
+    "transport": {
+      "timeoutMs": 30000,
+      "maxRetries": 0,
+      "maxRetryDelayMs": 10000
+    }
+  },
+  "response": {
+    "errorCapture": {
+      "bodyReadTimeoutMs": 5000,
+      "maxBodyBytes": 65536,
+      "maxClientMessageChars": 4096
     }
   }
 }
 ```
 
-The numbers above illustrate ownership, not universal frozen defaults. Implementation defaults MUST be derived from the existing Provider/runtime contract, documented, range-validated at startup, snapshotted, and immutable per process.
+The numbers above illustrate package-owned policy shape, not user-facing LuckyToken deployment configuration. Implementation defaults MUST be derived from the existing Provider/runtime contract, documented, range-validated at startup, snapshotted, and immutable per process.
 
 Frozen semantic defaults:
 
@@ -113,7 +111,7 @@ Built-in catalog defaults and conversion contract are separate. A caller-provide
 
 ### 4.2 Provider-authoritative headers
 
-Provider-owned headers include authorization, content type, session/project authority, OSS/permission compatibility, and trace headers. Caller `options.headers` cannot override them.
+Provider-owned headers include authorization, content type, session authority, OSS/permission compatibility, and trace headers. Reserved historical authority names such as `x-project-slug` also cannot be supplied through caller `options.headers`, even though the current conversion does not emit a project slug. Caller `options.headers` cannot override Provider authority fields.
 
 The adapter:
 
@@ -136,16 +134,25 @@ The request is a closed-world object. Only certified fields are emitted.
 - Pi session identity maps consistently to all CommandCode representations that require the same logical UUID, such as body thread ID and `x-session-id`.
 - Model selector strings belong to the Client side and never enter this Provider conversion.
 
-### 5.2 projectDir/project slug
+### 5.2 Fixed runtime compatibility config
 
-`options.metadata.projectDir` is deployment context, not model-visible content.
+The current Provider does **not** derive project/workspace state from `options.metadata` or any ambient working directory. `options.metadata.projectDir` is not a supported carrier and `x-project-slug` is not emitted.
 
-- absent, empty, or non-string metadata → no project slug/header;
-- a non-empty string is normalized by the Provider's project capability;
-- if normalization of a non-empty value yields no slug, the documented root fallback may apply;
-- project files, git output, and directory metadata never enter Pi history.
+The top-level CommandCode `config` field is always constructed from the Provider-owned fixed empty `ServerConfig`:
 
-The implementation MUST match this exact contract; old claims that all missing/invalid values become root are incorrect.
+```text
+workingDir     = ""
+date           = ""
+environment    = ""
+structure      = []
+isGitRepo      = false
+currentBranch  = ""
+mainBranch     = ""
+gitStatus      = ""
+recentCommits  = []
+```
+
+No project filesystem, Git output, directory metadata, `process.cwd()`, or Client/Router project fact participates in request conversion. If a future upstream contract requires real workspace state, that is a new Provider/Protocol requirement and must not be reintroduced through generic Pi metadata by inference.
 
 ### 5.3 max tokens and temperature
 
@@ -169,7 +176,7 @@ Do not describe clamp as a CommandCode default. It is Pi/model compatibility nor
 
 ### 5.5 Other options
 
-Map target-backed options such as timeout/retry, signal, callbacks, session/project context, telemetry, fetch, and safe headers according to their runtime ownership.
+Map target-backed options such as timeout/retry, signal, callbacks, session identity, telemetry, fetch, and safe headers according to their runtime ownership.
 
 Drop Pi options with no CommandCode wire counterpart, including generic samplingParams, cacheRetention, metadata, transport hints, websocket settings, environment overrides, and thinkingBudgets. They are auxiliary facts already presented to a target with no field.
 

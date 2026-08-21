@@ -1,15 +1,54 @@
 # Protocol Conversion Architecture and Policy
 
 Status: **Frozen design**  
-Scope: LuckyToken Client Protocol adapters, Pi runtime boundary, Provider adapters, native passthrough, configuration, notices, failures, and failure logs.
+Scope: LuckyToken Client Protocol adapters, three independent Data Plane lanes, Pi semantic-conversion boundary, Provider adapters, native preservation, configuration, notices, failures, and failure logs.
 
 This document is normative. The protocol-specific conversion documents refine it but MUST NOT contradict it.
 
-## 1. Two execution profiles
+## 1. Exactly three independent execution lanes
 
-LuckyToken supports two deliberately different profiles.
+LuckyToken has exactly three peer Data Plane execution contracts. They may share only minimum request-edge/lifecycle facts such as request identity, cancellation, timing, and observation; they do not share credential authority, native executor/transport, or semantic-conversion state.
 
-### 1.1 Conversion profile
+### 1.1 Local Native Preservation
+
+```text
+Compatible Client wire
+→ explicit local model/capability recognition
+→ local credential authority
+→ local native request construction/transport
+→ protocol-compatible upstream wire
+```
+
+This lane deliberately does not enter Pi. Its model eligibility, credential source, headers, endpoint construction, transport, and response handling are local-integration-owned.
+
+Requirements:
+
+1. Eligibility comes from an explicit local model/capability contract, never fuzzy name similarity or payload resemblance.
+2. Raw compatible Client wire remains authoritative for model-visible fields; unrelated fields are not reconstructed through a semantic DTO.
+3. Local credentials never become Pi/Provider credentials. A request credential may be forwarded only after the Local Native credential authority has validated/derived the lane's request-local forward auth.
+4. Hop-by-hop headers, stale content length/encoding, cookies, and unrelated credentials are not forwarded merely because the wire protocol matches.
+5. Failure after this lane begins does not fall through to Provider Native or Semantic Conversion.
+
+### 1.2 Provider Native Preservation
+
+```text
+Compatible Client wire
+→ resolved Pi Model
+→ Pi Models credential/auth resolution
+→ explicit (provider, api/protocol) native transport contract
+→ protocol-compatible provider wire
+```
+
+This lane also bypasses Pi AI IR and Pi Provider semantic execution. It may use Pi model/catalog/auth facts because those are the authoritative Provider identity/credential source, but it must not reuse Local Native credentials/transports or Client↔Pi conversion code.
+
+Requirements:
+
+1. Eligibility is established by an explicit Provider/protocol transport contract or equivalent model capability; Provider-name similarity is insufficient.
+2. Raw Client wire remains authoritative for model-visible fields. Only boundary-required model identity projection, credential/auth transport, safe header filtering, encoding, and endpoint construction may alter the wire representation.
+3. Provider credentials remain owned by Pi Models/Provider auth resolution and never become Local Native credentials or Pi AI IR content.
+4. Failure after this lane begins does not fall through to Local Native or Semantic Conversion.
+
+### 1.3 Semantic Conversion
 
 ```text
 Client wire
@@ -19,41 +58,28 @@ Pi Context / AssistantMessage / Tool / ToolCall / ToolResult / Usage
 Provider wire
 ```
 
-Pi is the only shared semantic boundary for this profile.
+Pi is the only shared semantic boundary for this lane.
 
 - A Client adapter knows only its Client wire and Pi public contracts.
 - A Provider adapter knows only Pi public contracts and its Provider wire.
-- Runtime selects, authenticates, composes, executes, and renders. It does not translate concrete protocol semantics.
-- A Client adapter cannot inspect Provider identity, Provider configuration, or Provider wire fields.
+- Runtime/composition selects and connects the two sides but does not translate concrete cross-side semantics.
+- A Client adapter cannot inspect concrete Provider implementation/configuration/wire fields merely to drive conversion.
 - A Provider adapter cannot inspect Anthropic, Responses, or another Client protocol.
 - No shared protocol DTO or second semantic IR may bypass Pi.
-- A conversion handler MUST NOT inject a custom `fetch` to observe Provider
-  traffic. The selected Provider owns its transport and may expose failure facts
-  only through trusted protocol-neutral Pi diagnostics.
+- A conversion handler MUST NOT inject a custom `fetch` to observe Provider traffic. The selected Provider owns its transport and may expose failure facts only through trusted protocol-neutral Pi diagnostics.
 
-### 1.2 Native passthrough profile
+### 1.4 Shared native-preservation rules
 
-If the inbound and outbound wire protocols are compatible, LuckyToken MAY select a native passthrough profile.
+The two native lanes are separate architectures, not two adapters behind one generic native executor. Similar wire code may remain duplicated when sharing it would couple credential ownership or lifecycle.
 
-```text
-Client wire ↔ protocol-compatible upstream wire
-```
+Both native lanes:
 
-This path deliberately does not enter Pi and is not a protocol conversion.
-
-Requirements:
-
-1. Selection is based on declared wire-protocol compatibility, not on scattered checks for a concrete Provider name.
-2. Each Client Protocol independently decides whether and how it supports native passthrough. One Client Protocol's compatibility table, defaults, implementation, or release timing imposes no requirement on another.
-3. Passthrough and conversion use separate conformance tests, metrics, notices, and documentation.
-4. Passthrough success is not evidence that Pi conversion is complete.
-5. Passthrough preserves protocol semantics, body, status, cancellation, and approved end-to-end headers as far as the transport permits.
-6. Hop-by-hop headers, credentials, cookies, stale content length/encoding, and unsafe cross-boundary headers are never forwarded merely because the protocol matches.
-7. URL construction preserves the configured base path unless the upstream contract explicitly defines an absolute endpoint.
-8. A body-read or stream failure is rendered according to the same native protocol if no bytes have committed; after commit it follows that protocol's streaming failure lifecycle.
-9. Passthrough uses a separately bound, narrow `passthroughFetch` transport. It
-   is never reused as a conversion observer and does not establish facts for a
-   Pi execution.
+1. use separate conformance tests/metrics/documentation from Semantic Conversion;
+2. do not treat native success as evidence that Pi conversion is complete;
+3. preserve body/status/cancellation/protocol semantics as far as the owning transport contract permits;
+4. render pre-commit failures in the same native protocol and follow that protocol's streaming failure lifecycle after commit;
+5. use narrow lane-owned transports that are never reused as conversion observers or as evidence for a Pi execution;
+6. must route to Semantic Conversion **before execution begins** when serving the request requires semantic reinterpretation, invented defaults, cross-protocol repair, or an uncertain mapping.
 
 ## 2. Conversion priorities
 
@@ -160,42 +186,27 @@ There is no global `error | ignore | xrepair` switch.
 {
   "clientProtocols": {
     "anthropic-messages": {
-      "authFile": "...",
       "conversion": {
         "request": {},
         "response": {}
-      },
-      "request": {},
-      "response": {}
+      }
     },
     "openai-responses": {
-      "authFile": "...",
       "stateFile": "...",
       "conversion": {
         "request": {},
         "response": {}
-      },
-      "request": {},
-      "response": {}
+      }
     }
   },
   "providerPackages": {
-    "@luckytoken/provider-commandcode-private": {
-      "conversion": {
-        "request": {},
-        "response": {}
-      },
-      "request": {
-        "transport": {}
-      },
-      "response": {
-        "errorCapture": {}
-      }
-    }
+    "some-external-user-provider-package": {}
   },
   "failureLogging": {}
 }
 ```
+
+`providerPackages` is only for explicit external/user Provider Packages. Bundled product Providers such as `@luckytoken/provider-commandcode-private` are product composition and MUST NOT be repeated there.
 
 Rules:
 
@@ -280,9 +291,7 @@ Rules:
 - Authorization, Cookie, Set-Cookie, proxy credentials, and hop-by-hop headers are never forwarded and cannot be enabled by configuration;
 - failures before SSE commit return the Client protocol's non-streaming error response;
 - failures after commit follow that protocol's streaming failure lifecycle.
-- native passthrough failure fidelity belongs to the separate passthrough
-  profile and its narrow transport; it is not a fallback acquisition path for
-  conversion.
+- native failure fidelity belongs to the already-selected Local Native or Provider Native lane and its narrow transport; it is not a fallback acquisition path for Semantic Conversion.
 
 ## 9. Per-failure request journal
 

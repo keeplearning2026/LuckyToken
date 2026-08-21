@@ -127,7 +127,7 @@ test("the conformance record covers the complete serving route with real tests",
       "local-loopback-http-boundary",
       "pi-configuration-credential-cli",
       "real-provider-online-conformance",
-      "per-client-protocol-auth-isolation",
+      "request-identity-credential-and-lane-isolation",
     ],
   );
 
@@ -189,8 +189,8 @@ test("binds the installed Pi runtime and every governing specification revision"
   for (const [document, documentMarker, manifestMarker] of [
     [
       core,
-      "# LuckyToken Core Architecture Specification v5.9",
-      "LuckyToken Core Architecture Specification v5.9",
+      "# LuckyToken Core Architecture Specification v6.0",
+      "LuckyToken Core Architecture Specification v6.0",
     ],
     [
       policy,

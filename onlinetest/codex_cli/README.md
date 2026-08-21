@@ -18,8 +18,9 @@ runs the real Codex CLI against `/v1/responses`. Test child processes use
 `--dangerously-bypass-approvals-and-sandbox` only inside per-scenario temporary
 working directories.
 
-The generated LuckyToken configuration declares
-`providerPackages["@luckytoken/provider-commandcode-private"]`. The server
-therefore exercises the generic Provider Package loader and resolves the
-installed package from `node_modules`; it does not use a static Core import.
-The certified run is 20 scenarios × 3 batches = 60/60 with Codex CLI `0.147.0`.
+This online harness intentionally constructs the CommandCode package through the
+generic Provider Package test path so it can characterize that boundary directly.
+That is **test-only composition**: production LuckyToken treats
+`@luckytoken/provider-commandcode-private` as a bundled reserved product Provider
+and rejects it in user `providerPackages`. The certified run is 20 scenarios ×
+3 batches = 60/60 with Codex CLI `0.147.0`.

@@ -31,28 +31,6 @@
       }
     }
   },
-  "providerPackages": {
-    "@luckytoken/provider-commandcode-private": {
-      "conversion": {
-        "request": { "syntheticMissingToolResultOutputType": "text" },
-        "response": { "pauseTurn": "stop", "unknownEvent": "error" }
-      },
-      "request": {
-        "transport": {
-          "timeoutMs": null,
-          "maxRetries": 0,
-          "maxRetryDelayMs": 60000
-        }
-      },
-      "response": {
-        "errorCapture": {
-          "bodyReadTimeoutMs": 5000,
-          "maxBodyBytes": 65536,
-          "maxClientMessageChars": 4096
-        }
-      }
-    }
-  },
   "failureLogging": {
     "directory": "logs/failed-requests",
     "detail": "safe",

@@ -396,12 +396,11 @@ Pi `errorMessage` or exception text. It returns the fixed generic Anthropic
 upstream error: HTTP 502, `api_error`, and `Upstream provider failed`, without
 Provider-derived headers or identifiers.
 
-## 12. Native Anthropic passthrough
+## 12. Provider Native Anthropic preservation
 
-Native passthrough is supported and useful. It is not this conversion method.
-The handler binds it to a narrow `passthroughFetch` dependency that is used only
-for native wire forwarding. Conversion never receives that fetch as a Pi option,
-and passthrough observations never supply conversion failure facts.
+The current Anthropic native path is **Provider Native Preservation**, not Local Native and not this conversion method. Eligibility comes from the resolved Pi Model's declared `api === "anthropic-messages"`; Provider credential/auth resolution supplies the Provider-facing auth facts, and the handler binds a narrow `passthroughFetch` used only by this Provider Native lane.
+
+The raw Anthropic body remains authoritative except for boundary-required model selector projection; Provider/composed headers own upstream auth while only an approved client header set is forwarded. Conversion never receives the native fetch through Pi options, and Provider Native transport outcomes never supply Semantic Conversion failure facts.
 
 It MUST have separate certification for:
 
@@ -419,8 +418,8 @@ It MUST have separate certification for:
 
 The earlier implementation-gap list was closed by the frozen Tickets 05–10 and
 is no longer a statement of current behavior. Ticket 28 binds this document by
-content hash and certifies the Anthropic conversion profile separately from
-native passthrough. Owning tests cover mixed content/result order, system
+content hash and certifies the Anthropic Semantic Conversion profile separately from
+Provider Native preservation. Owning tests cover mixed content/result order, system
 compatibility, prefill degradation, thinking budgets and cache controls,
 redacted/missing-signature behavior, empty content, JSON/SSE usage, and
 request-local failure isolation.
@@ -428,5 +427,5 @@ request-local failure isolation.
 Real-upstream execution remains separate evidence from deterministic conversion
 tests. The 2026-08-14 distribution record is `online-passed`: the Anthropic
 route completed 60/60 real CommandCode cases and Claude Code completed 51/51
-(17 scenarios × 3) through the installed Provider Package. Native Anthropic
-passthrough is a separate profile and is not claimed by that CommandCode matrix.
+(17 scenarios × 3) through the installed Provider Package. Anthropic Provider
+Native preservation is a separate profile and is not claimed by that CommandCode matrix.

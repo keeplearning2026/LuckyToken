@@ -1,7 +1,10 @@
 # LuckyToken Provider Activation Specification v1.0
 
-**Status:** ACCEPTED IMPLEMENTATION SPECIFICATION  
-**Date:** 2026-08-17  
+**Status:** IMPLEMENTED / ACCEPTED IMPLEMENTATION SPECIFICATION
+
+**Date:** 2026-08-17
+
+**Implementation note (2026-08-20):** The Provider Activation work described here is implemented. Statements below that describe the pre-implementation "current product" are historical baseline/context; current runtime authority is defined by the Core/Electron specifications and source.
 **Scope:** Provider discovery, Provider authentication, catalog availability, Backend/Data Plane lifecycle ownership, CommandCode Private product bundling, Provider product UI, and release certification  
 **Related specifications:**
 
@@ -11,11 +14,13 @@
 
 This specification fixes the current product-level Provider activation gap without changing LuckyToken protocol semantics.
 
-The existing Core boundary remains authoritative:
+For the **Semantic Conversion lane**, the existing Pi boundary remains authoritative:
 
 ```text
 Client Wire ↔ Client Protocol adapter ↔ Pi AI IR ↔ Pi Provider ↔ Upstream Wire
 ```
+
+Current LuckyToken also has independent Local Native and Provider Native preservation lanes; this Provider Activation specification does not redefine those lane contracts.
 
 The problem addressed here is not protocol conversion. The current Electron product can start, render pages, and expose typed management APIs, but Provider discovery/authentication is coupled to the HTTP Data Plane lifetime. In a fresh or failed/stopped Gateway state the user therefore cannot reliably discover or log in to Providers. In addition, the shipped `@luckytoken/provider-commandcode-private` package is installed in the release Backend but is not part of the default product Provider composition.
 

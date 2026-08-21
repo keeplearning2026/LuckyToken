@@ -25,16 +25,18 @@ npm run build
 The integration suite uses an injected fixture `fetch` implementation. It does
 not call the real CommandCode service or read `CommandcodeAPIKey.txt`.
 
-## Local service configuration, client tokens, and Pi login
+## Local service configuration, Backend lifecycle, and Provider login
 
-LuckyToken keeps deployment configuration and Pi runtime state separate:
+LuckyToken keeps Backend lifecycle state, deployment configuration, and Provider
+credentials as separate authorities:
 
 ```text
 .luckytoken/
-├── config.json                         # listener, protocol auth-file paths, Pi directory, limits
-├── client-auth/
-│   ├── anthropic-messages.json         # Anthropic global/project local tokens
-│   └── openai-responses.json           # OpenAI Responses global/project local tokens
+├── config.json                         # listener, protocol conversion, Pi directory, limits
+├── instance.sqlite                    # Backend singleton lock carrier only
+├── control-plane.json                 # current Control Plane discovery publication
+├── models.json                        # LuckyToken-owned Provider/model catalog configuration
+├── public-models.json                 # persisted Public Model enable/rename/endpoint state
 ├── state/
 │   ├── openai-responses.json           # durable Responses session history snapshot
 │   ├── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
@@ -43,12 +45,18 @@ LuckyToken keeps deployment configuration and Pi runtime state separate:
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
 
-Each Client Protocol handler has its own Auth file and immutable startup Auth
-snapshot. Runtime selects the handler by HTTP method/path; Auth files contain
-only global/project token scopes and do not identify or inspect another Client
-Protocol. Pi `Models`, through its injected `CredentialStore`, is the only
-runtime owner of Pi `auth.json`. The complete `.luckytoken/` directory and
-every `auth.json` are ignored by Git.
+`instance.sqlite` contains no product state. The Backend holds a long-lived
+SQLite `BEGIN IMMEDIATE` transaction on that dedicated file for the entire
+Backend lifetime; the file is never deleted to signal ownership. In contrast,
+`control-plane.json` is only a discovery hint for the current management
+endpoint and capability. Descriptor existence is not liveness and no descriptor
+lock participates in singleton correctness.
+
+The model Data Plane is loopback-only and LuckyToken does not maintain a
+separate global/project client-token authority. Provider credentials remain
+owned by Pi/Provider credential authorities, while Local Native Codex requests
+preserve the Codex request credential on that native lane. The complete
+`.luckytoken/` directory and every `auth.json` are ignored by Git.
 
 ## Globally Controlled Deep Diagnostics Capture
 
@@ -108,32 +116,23 @@ value. The same sanitized committed records are the only ones reachable
 through the Control Plane diagnostics query/typed-event surface (`get
 _diagnostics`, `diagnostics_subscribe`) and any fallback output.
 
-The CommandCode Private Provider is installed as the private workspace package
-`@luckytoken/provider-commandcode-private` and loaded from `node_modules`
-through the standard Pi Provider contract. Configure it under
-`providerPackages`; no `models.json` entry is needed. Users authenticate with
-`login` (API key only) and are then ready to serve.
+The CommandCode Private Provider is shipped as the bundled product package
+`@luckytoken/provider-commandcode-private` and is registered automatically
+through the standard Pi Provider contract. Users must **not** add this package
+to `providerPackages`; that key is reserved for explicit external/user Provider
+Packages, and configuring the bundled CommandCode specifier there is rejected.
+No `models.json` entry is required for CommandCode Private. Users authenticate
+through the Provider login/credential flow and are then ready to serve.
 
-```json
-{
-  "providerPackages": {
-    "@luckytoken/provider-commandcode-private": {
-      "conversion": {},
-      "request": {},
-      "response": {}
-    }
-  }
-}
-```
-
-Only npm root package names (including scoped root names) are accepted. Package
-import, contract/export validation, factory construction, and Provider ID
-collision checks all complete before external Providers are registered. Pi
-built-ins are registered first, then `models.json`, then external packages.
-`serve`, `login`, and `logout` use this same loader; `client-token` only parses
-configuration. The legacy `providerAdapters.commandcode-private` key is an
-error. A missing Provider API key does not block `serve`; the standard Pi auth
-path reports it when a model is invoked.
+Only npm root package names (including scoped root names) are accepted for
+user `providerPackages`. Package import, contract/export validation, factory
+construction, and Provider ID collision checks complete before external
+Providers are registered. Product composition registers Pi built-ins,
+`models.json` Providers, the bundled CommandCode Provider, and then explicit
+external/user packages according to the owning runtime contract. The legacy
+`providerAdapters.commandcode-private` key is an error. A missing Provider API
+key does not block Backend startup; Provider auth state is managed through the
+standard Pi/Control Plane credential path.
 
 Create local files from the committed placeholders:
 
@@ -144,31 +143,10 @@ Copy-Item luckytoken.config.example.json .luckytoken\config.json
 
 The shipped configuration enables both Anthropic Messages and OpenAI Responses
 on one listener. A custom configuration can omit `openai-responses`; when it is
-listed, its `stateFile`
-(default `state/openai-responses.json` relative to the config directory)
-persists the `previous_response_id` conversation history across restarts, so
-Codex clients can continue an incremental session even after LuckyToken
-restarts. Create its token file with the same `client-token` command:
-
-```powershell
-npm start -- client-token create openai-responses --global --config .luckytoken/config.json
-```
-
-Create an Anthropic protocol-global token, or bind one token to one project
-directory. Omit `--token` to generate and print a new opaque token:
-
-```powershell
-npm start -- client-token create anthropic-messages --global --config .luckytoken/config.json
-npm start -- client-token create anthropic-messages --project D:\project\Example --config .luckytoken/config.json
-npm start -- client-token create anthropic-messages --project D:\project\Example --token chosen-token --config .luckytoken/config.json
-```
-
-A global token authorizes only the selected Client Protocol and produces no
-project fact. A project token produces exactly its bound absolute `projectDir`,
-which is mechanically projected to Pi `Options.metadata.projectDir`. Token file
-mutation is a non-concurrent administrative operation. Use `client-token list`,
-`rotate`, or `remove` with the same protocol and scope, then restart LuckyToken
-to load the new Auth snapshot.
+listed, its `stateFile` (default `state/openai-responses.json` relative to the
+config directory) persists bounded `previous_response_id` session state across
+restarts. No LuckyToken client-token file or `client-token` CLI setup is
+required.
 
 Authenticate CommandCode through Pi. The CLI discovers the available methods
 from `Provider.auth`; CommandCode currently advertises only API-key login, not
@@ -183,14 +161,20 @@ is required. The canonical Provider model remains `deepseek/deepseek-v4-flash`,
 while LuckyToken exposes its default external Model name as
 `commandcode-private/deepseek-deepseek-v4-flash`.
 
-Start the local listener:
+Start the local Backend:
 
 ```powershell
 npm start -- --config .luckytoken/config.json
 ```
 
-While that background application remains active, inspect or manage the model
-gateway through the same Control Plane used by the desktop Dashboard:
+`serve` always participates in the current-user Backend instance domain. It
+does not accept a custom Control Plane descriptor path: singleton authority is
+fixed at `~/.luckytoken/instance.sqlite`, and the matching discovery publication
+is fixed at `~/.luckytoken/control-plane.json`. This keeps singleton ownership
+and discovery in the same domain.
+
+While that Backend remains active, inspect or manage the model gateway through
+the same versioned Control Plane used by Electron Main:
 
 ```powershell
 npm start -- control status --descriptor .luckytoken/control-plane.json
@@ -228,9 +212,9 @@ LuckyToken POST http://127.0.0.1:3000/v1/responses
 ```
 
 Configure an Agent that supports a custom Anthropic base URL with
-`http://127.0.0.1:3000` and the global/project token created for
-`anthropic-messages`. That local token authenticates the Agent to LuckyToken;
-it is unrelated to the CommandCode Provider credential.
+`http://127.0.0.1:3000`. LuckyToken does not require a separate local
+client-token credential for the loopback Data Plane. Provider authentication is
+managed independently through the Provider/Pi credential authority.
 
 Remove the stored Provider credential with:
 
@@ -241,101 +225,54 @@ npm start -- logout commandcode-private --config .luckytoken/config.json
 `SIGINT` and `SIGTERM` stop new connections, abort active requests, and wait for
 the listener to close.
 
-## Using the OpenAI Responses endpoint from the Codex CLI
+## Codex integration
 
-Codex CLI can route through LuckyToken's `POST /v1/responses` endpoint
-(`wire_api = "responses"`) so the local CommandCode provider serves the Codex
-client. The integration is a Codex-side configuration that coexists with any
-existing provider (e.g. opencodex): default `codex` runs unchanged, and
-`codex -p luckytoken` switches to the local bridge.
+LuckyToken now manages Codex integration as a Backend-owned capability rather
+than asking the user to maintain a separate Codex provider/profile and a
+LuckyToken client token. The Electron UI exposes Enable/Disable and Sync
+operations through the Application Control Plane.
 
-### One-time Codex setup (user home, not this repo)
-
-Three files under `~/.codex/`:
-
-1. `config.toml` — defines the provider (the `[model_providers.luckytoken]`
-   table). It points at the local base URL, selects the Responses wire API,
-   and reads the client token from an environment variable so the existing
-   `auth.json` is untouched:
-
-   ```toml
-   [model_providers.luckytoken]
-   name = "LuckyToken"
-   base_url = "http://127.0.0.1:3000/v1"
-   wire_api = "responses"
-   requires_openai_auth = true
-   env_key = "LUCKYTOKEN_API_KEY"
-   ```
-
-2. `luckytoken.config.toml` — an isolated Codex profile that selects the
-   provider and pins the model, so the default config stays unchanged:
-
-   ```toml
-   model_provider = "luckytoken"
-   model = "commandcode-private/deepseek-deepseek-v4-flash"
-   model_catalog_json = "C:\\Users\\huich\\.codex\\luckytoken-catalog.json"
-   ```
-
-3. `luckytoken-catalog.json` — model metadata (context window, reasoning
-   levels, tool capabilities). Without a catalog entry Codex falls back to
-   generic metadata and warns; the catalog makes the model fully usable.
-
-   Note: `model_catalog_json` is a root-level Codex field, not a per-provider
-   field (`--strict-config` rejects it inside `[model_providers]`), which is
-   why the profile carries it instead of the provider table.
-
-### Daily use
-
-```powershell
-# 1. Start the local service (port 3000)
-cd D:\project\LuckyToken
-npm start -- --config .luckytoken/config.json
-
-# 2. Provide the client token for this terminal (or persist with setx)
-$env:LUCKYTOKEN_API_KEY = "<your openai-responses global token>"
-
-# 3. Run Codex through LuckyToken (interactive)
-codex -p luckytoken
-
-# or one-shot
-codex exec -p luckytoken "your prompt"
-```
-
-The session header shows `provider: luckytoken` and
-`model: commandcode-private/deepseek-deepseek-v4-flash` when the profile is
-active. Plain `codex` (no `-p`) keeps using the default provider.
-
-### How it works
+When enabled, the Backend owns the managed root routing keys in Codex
+`config.toml`:
 
 ```text
-Codex CLI
-   │  Responses wire (incremental + previous_response_id, store:false)
-   ▼
-LuckyToken POST /v1/responses   (Bearer: LUCKYTOKEN_API_KEY)
-   │  expand previous_response_id from the durable snapshot
-   │  convert wire → Pi IR
-   ▼
-CommandCode Private Provider Package (real upstream)
+model_provider
+openai_base_url
+model_catalog_json
 ```
 
-- Codex sends incremental turns with `previous_response_id`; LuckyToken
-  expands them from the on-disk session snapshot and the Provider sees the
-  full history.
-- Codex's tool shapes are normalized by the adapter: OpenAI-hosted tools
-  (`web_search`, `image_generation`) are skipped, freeform `custom` tools are
-  exposed as single-input functions, `namespace` groups are flattened, and
-  non-object tool `parameters` are wrapped in a JSON Schema object.
-- Persist the token with `setx LUCKYTOKEN_API_KEY "<token>"` so every new
-  terminal is ready; otherwise set it per terminal as shown above.
+The active target uses Codex's built-in `openai` Responses provider, points
+`openai_base_url` at LuckyToken's loopback `/v1` endpoint, and writes a generated
+model catalog under LuckyToken's Codex-integration state directory. LuckyToken
+stores the previous root values as a preimage and restores them on disable or
+Backend shutdown. If those root keys drift while integration is enabled, the
+state is reported as drift/conflict instead of guessing or overwriting
+silently.
 
-### Troubleshooting
+The generated catalog combines Codex-native models with the currently published
+LuckyToken Public Models. Native Codex requests use the Local Native
+Preservation lane and preserve the Codex request bearer; published external
+models use the appropriate Provider Native or Semantic Conversion lane. There
+is no `LUCKYTOKEN_API_KEY` setup and no LuckyToken `client-token` command.
 
-| Symptom | Cause | Fix |
+Typical desktop use is:
+
+```text
+start LuckyToken Desktop
+→ Providers: authenticate/enable the Providers and Models you want
+→ enable Codex integration
+→ Sync Codex when the UI reports that the generated catalog is stale
+→ use Codex normally with the published LuckyToken model names
+```
+
+Troubleshooting:
+
+| Symptom | Meaning | Action |
 |---|---|---|
-| `Connection refused` | local service not running | `npm start -- --config .luckytoken/config.json` |
-| `401 authentication_error` | token env var missing | `$env:LUCKYTOKEN_API_KEY = "<token>"` |
-| header shows `provider: openai` | profile not selected | add `-p luckytoken` |
-| `Unknown model ... fallback metadata` | catalog not loaded | check `luckytoken-catalog.json` path in the profile |
+| Codex integration says `native` | LuckyToken has not taken ownership of Codex root routing keys | Enable integration |
+| state is `drifted` | Codex routing keys changed after LuckyToken applied them | Review the external change, then Sync or Disable |
+| state is `conflict` | duplicate/invalid root routing keys prevent safe management | fix `config.toml`, then retry |
+| published model missing | Public Model/Provider state is not currently publishable | authenticate/enable it in Providers and Sync Codex |
 
 ## Explicit online verification
 

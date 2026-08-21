@@ -541,31 +541,59 @@ The following do not block the primary conversation when no Pi target exists:
 
 They MUST NOT be represented as having taken effect in the Response object.
 
-## 15. Native Responses passthrough
+## 15. Native Responses preservation
 
-If an upstream declares compatible OpenAI Responses wire support, LuckyToken may use native passthrough. It preserves handles, hosted tools, conversation/prompt state, background jobs, and future fields without forcing them through Pi.
+OpenAI Responses currently has **two distinct native lanes**. Both preserve Responses-wire semantics without forcing the request through Pi AI IR, but their model/credential authority is intentionally different.
 
-The handler binds passthrough to a narrow `passthroughFetch` dependency used only
-by this native profile. Conversion does not receive that fetch through Pi
-options, and passthrough transport outcomes are not conversion failure facts.
+### 15.1 Local Native Responses
 
-Passthrough requirements:
+The handler checks the raw model selector against the explicit local Responses lane **before** Public Model/Pi Model resolution or `previous_response_id` expansion:
 
-- explicit protocol-compatibility selection, not concrete Provider-name branching;
-- independent auth/authority rules;
-- safe path and header construction;
+```text
+raw Responses body + selector
+→ LocalResponsesLane.claims(selector)
+→ local model registry/capability
+→ CodexLocalCredentialAuthority
+→ local native Responses transport
+```
+
+Current production implementation is the Codex Local Native integration. The request bearer is accepted only when the local credential authority validates it against the current Codex credential source; the resulting forward auth is request-local to this lane. No Pi Model, Pi CredentialStore, Provider Native sender, or semantic conversion state participates.
+
+### 15.2 Provider Native Responses
+
+If Local Native does not claim the selector, the handler resolves the published alias to a Pi `Model`. An explicit Provider Responses transport contract may then claim that model/operation:
+
+```text
+raw Responses body
+→ Public Model / Pi Model resolution
+→ ProviderResponsesLane.claims(model, operation)
+→ Pi Models auth resolution
+→ provider-native Responses sender
+```
+
+This lane preserves the raw Responses body as the model-visible authority while applying only boundary-required model identity projection, Provider auth/header rules, endpoint construction, response alias projection, and safe response handling. It does not execute Pi Client↔Provider semantic conversion.
+
+### 15.3 Shared native requirements
+
+Both native lanes preserve handles, hosted tools, conversation/prompt state, background jobs, and future wire fields without inventing Pi representations. They require:
+
+- explicit lane-specific compatibility/capability selection;
+- independent credential authority and transport ownership;
+- safe path/header construction and no unrelated credential propagation;
 - status/body/SSE lifecycle fidelity;
-- no unsafe header propagation;
 - cancellation and body-read failure handling;
-- independent tests from conversion mode;
-- one failure journal on final failure.
+- independent tests from Semantic Conversion;
+- one failure journal on final failure;
+- no reuse of native transport outcomes as Semantic Conversion failure facts.
+
+If serving the request requires semantic reinterpretation or cross-protocol repair, native selection must fail **before execution** and the request may use Semantic Conversion only through its normal eligibility path.
 
 ## 16. Certification status
 
 The earlier implementation-gap list was closed by frozen Tickets 12–18 and is
 no longer a statement of current behavior. Ticket 28 binds this document by
-content hash and certifies the Responses conversion profile separately from
-native passthrough. Owning tests cover privileged prompt delivery, option
+content hash and certifies the Responses Semantic Conversion profile separately from
+native preservation. Owning tests cover privileged prompt delivery, option
 mapping, all closed-world item/tool families, argument errors, images/files,
 reasoning-only history, previous-response hit/miss/store policies, response
 identity/usage, and completed/incomplete/failed SSE contracts.
@@ -575,5 +603,5 @@ a time, developer prompt delivery, effective tools/options, Lark grammar
 handling, `store:false=honor`, and message/tool correlation through the public
 route. The 2026-08-14 distribution record is `online-passed`: the Responses
 route completed 60/60 real CommandCode cases and Codex CLI completed 60/60
-(20 scenarios × 3) through the installed Provider Package. Native Responses
-passthrough remains a separately certified profile.
+(20 scenarios × 3) through the installed Provider Package. Local Native and
+Provider Native Responses preservation remain independently owned/certified paths.

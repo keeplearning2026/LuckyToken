@@ -1,6 +1,6 @@
-# LuckyToken Core Architecture Specification v5.9
+# LuckyToken Core Architecture Specification v6.0
 
-**Status:** FROZEN — External Provider Package Composition
+**Status:** FROZEN — Independent Data-Plane Lanes, Request Identity, and Credential Isolation
 
 本文件描述 LuckyToken 的 Core Architecture。
 
@@ -87,10 +87,10 @@ HTTP Boundary
     ├───────────────────────────────┐
     │                               │
     ▼                               ▼
-Client Protocol                    Auth
-├── validated state               ├── authorized?
-├── model selector                ├── sessionId
-└── renderState                   └── projectDir?
+Client Protocol                    Request Identity
+├── validated state               ├── effectiveSessionId
+├── model selector                └── clientSessionId?
+└── renderState
     │
     ▼
 resolveModel(models, selector)
@@ -108,7 +108,7 @@ Client → Pi conversion      │
 └── protocol controls       │
                             │
 protocol controls ──────────┐
-sessionId / projectDir? ────┤
+effectiveSessionId ─────────┤
 AbortSignal ────────────────┤
 Router defaults ────────────┘
              │
@@ -939,7 +939,7 @@ Ownership closure 与 dependency closure 是两个不同问题。
 一个 module 可以公开很小的 operation：
 
 ```text
-headers → AuthResult
+headers → RequestIdentity
 ```
 
 但 module 本身仍可能依赖：
@@ -982,12 +982,14 @@ module 完成 responsibility 所直接需要、但 authoritative lifecycle 不�
 例如：
 
 ```text
-Auth
-├── authorization policy/configuration
-└── credential/project lookup capability
+Request Identity
+└── fallback identity generation capability
+
+Local Native Credential Authority
+└── local credential source / constant-time comparison capability
 
 CommandCode Provider
-├── Project Snapshot capability
+├── fixed ServerConfig factory
 └── Trace Context generation capability
 ```
 
@@ -1136,24 +1138,19 @@ Dependency closure 是递归的。
 
 ```text
 CommandCode Provider
-└── Project Snapshot capability
+└── Trace Context generation capability
 
-Project Snapshot implementation
-├── filesystem
-├── Git
-└── clock/date
+Trace Context implementation
+└── crypto/random-byte primitive
 ```
 
 不要求：
 
 ```text
 CommandCode Provider
-├── filesystem
-├── Git executable
-├── wall clock
-├── cwd
-├── environment reader
-├── random source
+├── crypto module
+├── OS random device
+├── telemetry library internals
 └── every other transitive primitive
 ```
 
@@ -1210,11 +1207,8 @@ fact 穿越 adjacent contract 时使用的 representation。
 例如：
 
 ```text
-sessionId
+RequestIdentity.effectiveSessionId
 → Options.sessionId
-
-projectDir
-→ Options.metadata.projectDir
 ```
 
 Carrier 是 representation，不是 module。
@@ -1234,39 +1228,39 @@ Carrier 是 representation，不是 module。
 例如：
 
 ```text
-projectDir
+sessionId
 
 Producer
-└── Auth
+└── RequestIdentity authority
 
 Carrier
-└── Options.metadata.projectDir
+└── Options.sessionId
 
 Semantic Consumer
-└── CommandCode Provider
+└── Provider that maps session identity to its own request/session wire
 
 Transparent Transit
 ├── composeOptions
 └── Models
 
 Death Point
-└── Provider derives the request-local CommandCode project representation
+└── Provider/request execution no longer needs the logical session identity
 ```
 
 因此不能因为 `Models` 接收整个 `Options` 就推出：
 
 ```text
-Models understands project semantics
+Models understands every request-identity semantic
 ```
 
 同一个 `Options` 对不同 field 可以产生不同 classification：
 
 ```text
 Options.signal
-→ Models is a semantic consumer
+→ Models/execution are semantic consumers for cancellation
 
-Options.metadata.projectDir
-→ Models is transparent transit
+Options.sessionId
+→ Models may be transparent transit to a Provider that consumes session identity
 ```
 
 > **Semantic-consumer classification is per fact / per field, not per container object.**
@@ -1347,10 +1341,10 @@ known producer
 +
 known semantic consumer
 +
-matching Pi Provider metadata semantics
+matching Pi/client contract semantics
 ```
 
-`projectDir` 是这种 narrow field；`metadata` 本身不是 generic LuckyToken context。
+例如 Client Protocol 明确接受的 `metadata.user_id` 可以由该 Protocol owner 转成 allowlisted Pi metadata；`metadata` 本身不是 generic LuckyToken context，也不能被 credential/request-identity authority 当作信息走私通道。
 
 ### Whole Request Object
 
@@ -1379,10 +1373,10 @@ config
 
 > **Concept Primer — 本章先建立生命周期视角**
 >
-> - **Long-Lived Runtime**：进程启动后持续存在、被多个 request 复用的 runtime state，例如 LuckyToken `Auth`、`Models`、registered `Provider`、Provider-side credential/store capability。
+> - **Long-Lived Runtime**：进程启动后持续存在、被多个 request 复用的 runtime state，例如 `Models`、registered `Provider`、Provider credential authority、InstanceAuthority/Control Plane 等 Backend-lifetime capability。
 > - **Request-Local Lifecycle**：只属于一次 HTTP request 的 information 和 mutable state，从 request 进入系统开始，到 response 完成、失败或取消时结束。
 > - **HTTP Boundary**：LuckyToken 与 HTTP transport 相接的 boundary。它 owns method/path、raw body/headers、route selection、request `AbortSignal`、connection state 和 final response write。
-> - **Sibling Information Sources**：多个 fact 同时属于一个 request，但 ownership 不同。例如 Client Protocol input、Auth input、HTTP lifecycle 是 siblings，不应该因为同属一次 request 就塞进一个 generic request object。
+> - **Sibling Information Sources**：多个 fact 同时属于一个 request，但 ownership 不同。例如 Client Protocol input、request identity、lane-specific credential、HTTP lifecycle 是 siblings，不应该因为同属一次 request 就塞进一个 generic request object。
 > - **Representation Transition**：information 从一种 authoritative representation 转成下一 owner 需要的 representation。
 > - **Death Point**：一个旧 representation 从 architecture 角度不再应该被后续 unrelated boundary 理解或依赖的时刻。它不要求立即物理释放 memory。
 
@@ -1394,15 +1388,44 @@ LuckyToken Core
 └── Request-Local Lifecycle
 ```
 
-Provider execution 不是第三条 peer flow，而是一次 request 内 Pi execution 的一部分：
+Data Plane request execution 现在有且只有三条独立 architectural lane：
 
 ```text
-Request
+1. Local Native Preservation
+   Compatible Client Wire
+   → explicit local model/capability recognition
+   → Local credential authority
+   → local native transport
+   → Compatible Upstream Wire
+
+2. Provider Native Preservation
+   Compatible Client Wire
+   → resolved Pi Model
+   → Pi Models credential/auth resolution
+   → provider-native transport contract
+   → Compatible Upstream Wire
+
+3. Semantic Conversion
+   Client Wire
+   → Client Protocol adapter
+   → Pi AI IR / Pi invocation
+   → Pi Provider
+   → Provider Wire
+```
+
+三条 lane 共享的只能是 request-edge identity、observation、cancellation 等不改变 model-visible semantics 的最小 infrastructure facts；它们不共享 credential authority、native target/executor/transport 或 semantic conversion state。选定 lane 并开始 execution 后，failure 不得 fall through 到另一个 lane。
+
+在 Semantic Conversion lane 内，Provider execution 仍然是一次 Pi execution 的内部阶段：
+
+```text
+Semantic Conversion request
 └── Pi execution
     └── Models
         └── Provider
             └── Upstream
 ```
+
+Native preservation lane 以 raw compatible client wire 为 authority，不通过 Pi AI IR，也不允许为了“统一”而重建/正规化无关 model-visible fields。
 
 本章描述 whole-system information flow。Detailed Client conversion、composition、execution semantics 与 concrete Provider behavior 由对应章节拥有。
 
@@ -1446,7 +1469,8 @@ Deployment / Router Configuration
         Startup Composition Root
                 │
         ├── create Client Protocol implementations
-        │   └── bind one Auth authority per handler
+        ├── bind request-identity authority
+        ├── bind explicit Local/Provider Native lane seams
         ├── prepare Provider sources
         │   ├── Pi built-ins
         │   ├── models.json
@@ -1532,11 +1556,11 @@ without a partially registered external batch.
 它不 owns：
 
 ```text
-Auth policy semantics
+request-identity semantics
+lane-specific credential semantics
 Client conversational semantics
 Pi Context semantics
 Provider wire conversion
-projectDir interpretation
 request business state
 ```
 
@@ -1554,7 +1578,7 @@ Architecture 只要求 dependency source 可见，不要求 DI framework。
 普通 implementation 可以很直接：
 
 ```text
-auth = createAuth(...)
+requestIdentity = bindRequestIdentityAuthority(...)
 models = createModels(optionalCustomStores)
 providers = createProviders(...)
 
@@ -1562,13 +1586,15 @@ for provider in providers:
   models.setProvider(provider)
 
 protocols = createProtocols(...)
+nativeLanes = bindExplicitNativeLaneSeams(...)
 policy = loadRouterPolicy(...)
 
 handleRequest(
   request,
-  auth,
+  requestIdentity,
   models,
   protocols,
+  nativeLanes,
   policy
 )
 ```
@@ -1576,9 +1602,10 @@ handleRequest(
 关键 long-lived runtime objects：
 
 ```text
-LuckyToken Runtime
+LuckyToken Data Plane Runtime
 ├── Client Protocol implementations
-│   └── handler-bound Auth instances
+├── request-identity authority
+├── explicit Local/Provider Native lane seams
 ├── Router policy/defaults
 ├── HTTP runtime
 └── Pi Models
@@ -1595,12 +1622,16 @@ deployment-provided custom implementations
 
 它们不应被 architecture diagram 错写成 LuckyToken 永远必须单独 construction 的 sibling runtime modules。
 
-这里的两个 auth concern 必须保持分离：
+这里的 credential/identity concern 必须保持分离：
 
 ```text
-LuckyToken Auth
-→ inbound client → LuckyToken authorization
-→ normalized request-local sessionId / projectDir?
+Request Identity
+→ inbound session headers
+→ effectiveSessionId / clientSessionId?
+
+Local Native credential authority
+→ selected native request credential
+→ request-local native forward auth
 
 Pi Models / Provider auth
 → LuckyToken → selected upstream authentication
@@ -1806,7 +1837,8 @@ HTTP Boundary 不需要 `HttpManager`、`RequestManager` 或 global connection r
 HTTP Request
 │
 ├── Client Protocol input
-├── Auth input
+├── Request Identity input
+├── optional lane-specific credential input
 └── HTTP lifecycle
 ```
 
@@ -1830,20 +1862,18 @@ validated Client state ─────┤
                     Context    controls
 
 
-Auth(headers)
-├── sessionId
-└── projectDir?
+RequestIdentity(headers)
+└── effectiveSessionId
 
 HTTP Boundary
 └── AbortSignal
 
-Router Policy
-└── defaults
+Router / Infrastructure Policy
+└── defaults and bounded infrastructure facts
 
 
 controls ───────────────┐
-sessionId ──────────────┤
-projectDir? ────────────┤
+effectiveSessionId ─────┤
 AbortSignal ────────────┤
 defaults ───────────────┘
           │
@@ -1952,13 +1982,13 @@ model-aware representability
 
 ---
 
-### Auth / HTTP / Router sibling facts
+### Request Identity / HTTP / Router sibling facts
 
-Auth 建立：
+Request Identity authority 建立：
 
 ```text
-sessionId
-projectDir?
+effectiveSessionId
+clientSessionId?   # only when actually supplied by the client
 ```
 
 HTTP Boundary 建立：
@@ -1988,11 +2018,11 @@ RuntimeContext
 ```text
 protocol controls
 +
-Auth facts
+RequestIdentity.effectiveSessionId
 +
 HTTP AbortSignal
 +
-Router invocation defaults
+Router/infrastructure invocation facts
         │
         ▼
 composeOptions(...)
@@ -2008,8 +2038,7 @@ ModelsSimpleStreamOptions
 ```text
 Model
 Context
-sessionId
-projectDir
+effectiveSessionId
 AbortSignal
 ```
 
@@ -2017,7 +2046,7 @@ AbortSignal
 
 `Context` 已由 Client Protocol conversion 建立。
 
-`sessionId` / `projectDir?` 由 Auth 建立。
+`effectiveSessionId` 由 Request Identity authority 建立；credential authority 不负责生成 invocation identity。
 
 `AbortSignal` 由 HTTP Boundary 拥有。
 
@@ -2171,7 +2200,7 @@ Representation 应在 next authoritative representation 建立后结束 architec
 | Information | Architectural death point |
 | --- | --- |
 | Raw HTTP request body | selected Client Protocol 完成 parsing |
-| Raw HTTP authorization material | Auth completes |
+| Lane-specific raw request credential | selected credential authority/transport derives request-local auth or rejects it |
 | Model selector / lookup candidates | `Model<Api>` resolved |
 | Client Protocol parser state | validated Client state established |
 | Full validated Client conversation representation | successful conversion to `Context` |
@@ -2212,14 +2241,16 @@ Composition Root
 ├── Models
 │   └── Providers
 ├── Client Protocol implementations
-│   └── independently bound Auth snapshots
+├── explicit native lane seams
+├── request-identity authority
 └── Router / HTTP policy
 
 
 ONE REQUEST
 
 Selected Client Protocol ──► Model / Context / controls
-Its bound Auth ─────────────► sessionId / projectDir?
+Request Identity ───────────► effectiveSessionId
+optional selected native credential authority ─► native forward auth only
 HTTP ─────────────► AbortSignal
 Router ───────────► defaults
                          │
@@ -2711,7 +2742,7 @@ ModelsStore
 
 用于 model-state storage contract。当前 Pi runtime 在调用方未提供 custom store 时使用 in-memory `ModelsStore` implementation。
 
-这些都是 Provider-side runtime infrastructure，不是 conversational state，也不等于 LuckyToken inbound `Auth` 的 private storage/policy。
+这些都是 Provider-side runtime infrastructure，不是 conversational state，也不等于 Request Identity、Local Native Codex credential 或 Control Plane capability 的 private state/policy。
 
 概念上：
 
@@ -3413,7 +3444,7 @@ Request
 │
 ├── Before Pi execution
 │   ├── Client Protocol failure
-│   ├── Auth denial
+│   ├── lane-specific credential denial, when applicable
 │   ├── model resolution failure
 │   ├── representability failure
 │   └── composition failure
@@ -3465,8 +3496,8 @@ Pre-execution failure 继续由 detecting boundary 拥有它的 semantic classif
 Client Protocol validation failure
 → Client Protocol-owned semantics
 
-Auth denial
-→ Auth-owned semantics
+lane-specific credential denial
+→ selected credential authority / native lane-owned semantics
 
 model resolution failure
 → Model Resolution-owned semantics
@@ -3675,10 +3706,11 @@ Client Protocol
 ├── protocol-owned invocation-control projection
 └── protocol-owned render state
 
-Auth Boundary
-├── access decision
-├── sessionId
-└── projectDir?
+Request Identity
+└── effectiveSessionId
+
+optional selected native credential authority
+└── native forward auth or denial (native lane only)
 
 HTTP Boundary
 └── AbortSignal
@@ -3705,9 +3737,9 @@ validated Client state + Model
 → protocol.toPi(...)
 
 protocol controls
-+ Auth facts
++ RequestIdentity.effectiveSessionId
 + HTTP AbortSignal
-+ Router defaults
++ Router/infrastructure facts
 → composeOptions(...)
 ```
 
@@ -3735,19 +3767,20 @@ ProviderExecutionContext
 Natural dependency order：
 
 ```text
-1. HTTP route selects Client Protocol
-2. Client Protocol parses and source-validates
-3. Auth establishes authorization + request identity facts
-4. external selector resolves through Models → Model<Api>
+1. HTTP route/profile selects the applicable Client Protocol or explicit native lane
+2. Client Protocol parses and source-validates when semantic conversion is selected
+3. Request identity normalizes session facts; any native credential authority stays lane-local
+4. external selector resolves through the owning model/alias authority → Model<Api> when Pi execution is needed
 5. Client Protocol performs model-aware Pi conversion
 6. composeOptions(...) creates ModelsSimpleStreamOptions
 7. Execution invokes Models.streamSimple(...)
 ```
 
-步骤 3 与前面的 source parsing 可以在 implementation 中按安全/efficiency requirement 排序，只要：
+步骤 2–4 可以在 implementation 中按安全/efficiency requirement 排序，只要：
 
 ```text
-Auth owns Auth semantics
+Request Identity owns session identity normalization
+lane-specific credential authority owns its credential semantics
 Client Protocol owns protocol validity
 Model Resolution owns selector resolution
 ```
@@ -3766,9 +3799,9 @@ Bound Dependencies
 
 Inputs
 - protocol-derived Pi controls
-- Auth sessionId
-- Auth projectDir?
+- RequestIdentity.effectiveSessionId
 - HTTP AbortSignal
+- bounded infrastructure facts explicitly owned by composition/runtime policy
 
 Result
 - ModelsSimpleStreamOptions
@@ -3781,7 +3814,7 @@ Temporary State
 
 Must Not Access
 - raw HTTP body
-- raw Auth credential material
+- raw lane-specific credential material
 - Client conversational representation
 - Provider implementation
 - filesystem/Git
@@ -3793,8 +3826,7 @@ Must Not Access
 它可能写入：
 
 ```text
-sessionId → Options.sessionId
-projectDir? → Options.metadata.projectDir
+effectiveSessionId → Options.sessionId
 signal → Options.signal
 ```
 
@@ -3838,9 +3870,9 @@ Temporary State
 
 Must Not Access
 - Client message semantics
-- Auth
+- lane-specific credential authority state
 - Provider wire
-- request project/session facts
+- request-identity internals beyond the selector input actually required
 ```
 
 Model Resolution 可以是普通 function/operation；Architecture 不要求 `ModelResolver` service。
@@ -3918,205 +3950,81 @@ Resolved model capability 随后可以被 Client Protocol 用于 model-aware rep
 
 ---
 
-## 6.3 Auth Boundary
+## 6.3 Request Edge Identity 与 Credential Boundaries
 
-### Module Contract
-
-```text
-Responsibility
-- authorize inbound LuckyToken requests
-- normalize request identity facts
-
-Bound Dependencies
-- authorization policy/configuration
-- credential/project lookup capability
-- session resolution policy
-- fallback identity generation capability
-
-Owned State
-Runtime:
-- private mutable auth lookup/index/cache state only when Auth owns its lifecycle
-- bound policy/configuration references remain Bound Dependencies
-
-Request-Local:
-- no hidden retained state required;
-  parsing/lookup intermediates belong to the operation
-
-Operations
-
-resolve
-  Inputs
-  - ReadonlyHeaders
-
-  Result
-  - denied
-  - or:
-    - sessionId
-    - projectDir?
-
-  Effects
-  - may consult/update Auth-owned lookup/cache state according to Auth policy
-
-  Temporary State
-  - credential/session parsing
-  - lookup/intermediate normalization state
-
-Must Not Access
-- Model
-- Context
-- Pi Options
-- Pi Provider credential store
-- concrete Provider implementation
-- CommandCode wire representation
-```
-
-这些 dependencies 表达 capability，不要求建立对应 manager/class。
-
-例如：
+LuckyToken 不再保留一个全局或 per-Client-Protocol 的 client-token Auth boundary。当前 request edge 把四类事实严格分开：
 
 ```text
-credential/project lookup capability
+Request identity
+  → normalize session headers only
+
+Local Native credential
+  → validate/preserve the selected native lane's request credential
+
+Provider credential
+  → Pi Models / Provider Runtime credential resolution
+
+Control Plane capability
+  → management IPC authentication only
 ```
 
-可以由 Auth 内部很小的 function/data structure 实现。
-
-
-LuckyToken 保留一个始终存在的 `Auth` boundary。
-
-它不是 Provider authentication，也不是 Client Protocol conversion。它位于 request edge，只消费 inbound HTTP headers，并把 header-level credential/session representations 归一化成固定的 request-local contract。
-
-Auth 不负责判断 Client Protocol。HTTP Boundary 先按 method/path 选择
-`ClientProtocolHandler`，每个 handler 在 composition 时绑定自己的通用
-`Auth` instance：
-
-```text
-POST /v1/messages
-→ Anthropic handler
-→ handler-bound Auth snapshot
-
-POST /v1/responses
-→ OpenAI Responses handler
-→ independently bound Auth snapshot
-```
-
-Anthropic 与 OpenAI Responses 不共享 token authority，也不导入、枚举或调用
-对方。通用 Auth contract 不增加 protocol ID、pathname 或 Client Wire 类型。
-只有 composition root 知道 auth file 与 concrete handler 的绑定关系。
-
-Per-request contract 概念上是：
+### Request Identity Contract
 
 ```ts
-interface AuthInput {
-  headers: ReadonlyHeaders
+interface RequestIdentity {
+  effectiveSessionId: string
+  clientSessionId?: string
 }
 
-type AuthResult =
-  | {
-      authorized: false
-    }
-  | {
-      authorized: true
-      sessionId: string
-      projectDir?: string
-    }
+resolveRequestIdentity(headers: ReadonlyHeaders): RequestIdentity
 ```
 
-这里的 `ReadonlyHeaders` 只表示 framework 提供的只读 inbound header view；Architecture 不冻结具体 HTTP library 类型。
-
-Auth 内部可以拥有：
+`resolveRequestIdentity()` 不做 authorization，也不读取 credential store。它只按固定 precedence 读取 known session headers：
 
 ```text
-credential extraction
-token validation
-token → project binding lookup
-session-header registry / precedence
-structured session-header parsing
-request-local ID fallback generation
-other Router-owned access policy
+x-session-id
+→ x-client-request-id
+→ x-session-affinity
 ```
 
-当 deployment 选择 current file-backed Auth capability 时，每个 configured
-Client Protocol 拥有一个独立的 Backend-lifetime live authority；其 Auth-owned
-token file 只保存 optional global token 与 `projectDir → token` bindings，不重复
-保存 protocol marker。Global/project 分类只在 file-backed authority 内存在：
+只接受 UUID-shaped value；没有 usable client identity 时生成 fresh request-local UUID。`clientSessionId` 只是“确实来自 client”的窄 fact，`effectiveSessionId` 始终存在。
+
+Request identity 不产生 `projectDir`，也不拥有 token/project lookup state。
+
+### Local Native Credential Boundary
+
+Native preservation lane 可以拥有自己的 credential authority，但 credential 不能被提升为 LuckyToken-wide Auth contract。当前 Codex Local Native authority：
 
 ```text
-Auth-owned token file (current schema: luckytoken-client-auth-v2)
-→ Backend-lifetime live authority
-→ Data Plane binds the authority to one handler
-→ generic Auth.authorizeToken(token)
-→ AuthorizedClient { projectDir? }
+request Authorization: Bearer <token>
+        ↓
+CodexLocalCredentialAuthority
+        ↓ compare with current Codex auth.json access token
+CodexForwardAuth | unavailable
+        ↓
+Local Native transport only
 ```
 
-Token mutation 通过 typed Control Plane/CLI authority 进行 CAS + atomic replace，
-并 hot-apply 到运行中的 handler；request path 本身仍没有 filesystem I/O。正常
-产品 UI 在 Settings 中 reveal/copy/rotate 当前 global token，用户不需要编辑
-Auth-owned 文件。`luckytoken-client-auth-v1` 是废弃的 disposable client-access
-state：当前 build 不迁移、不复用旧 token；启动时将其视为未初始化并生成新的
-v2 authority/token。未知未来 schema 或损坏文件仍 fail closed。
+该 credential 不进入 Pi AI IR、Pi CredentialStore 或 Provider Native/Semantic Conversion lane。authority 还可以维护 bounded known-value scrub state 用于 diagnostics redaction；读取 Codex credential 失败只使 Local Native auth unavailable，不应使整个 Backend startup 失败。
 
-Generic Core 冻结的是 per-handler authority isolation、窄 Auth contract 与上述
-information lifecycle；exact JSON fields、CLI spelling 与 filesystem mutation
-mechanics 属于 file-backed Auth capability 自己的 implementation contract。
+### Provider Credential Boundary
 
-但这些全部是 Auth implementation details。外部不会知道：
+Provider authentication 继续由 Backend-lifetime credential authority、Pi `CredentialStore`、Pi `Models` 与具体 Provider contract 拥有。Control Plane/CLI 可以执行 typed login/logout/import，但 management projection 只能暴露 bounded structural status，不能返回 credential value、环境变量名、command text、Authorization header 或 raw credential object。
+
+### Control Plane Capability Boundary
+
+Control Plane `capability` 是 management-plane authorization。它与 opaque local IPC address 通过 current-user discovery descriptor 发布，只允许 trusted Backend/Main/CLI 使用；Renderer 不得到 address/capability。它既不是 Data Plane credential，也不是 Backend singleton authority。
+
+### Frozen Isolation Rules
 
 ```text
-global token
-project token
-which session header matched
-whether the session ID was client supplied or generated
-token/project lookup representation
+request identity ≠ authorization
+Local Native credential ≠ Provider credential
+Provider credential ≠ Control Plane capability
+Control Plane capability ≠ singleton authority
 ```
 
-Auth 只暴露最终事实：
-
-```text
-authorized / denied
-sessionId
-projectDir?
-```
-
-`sessionId` 是成功请求的 normalized logical session identity。Auth 应按明确、可测试的 known-source precedence 解析 client session information；没有 usable client session identity 时，生成 fresh request-local fallback ID。Architecture 只冻结“必须存在 request-local fallback identity”，不冻结 UUID version。Current CommandCode-compatible implementation 可以使用 UUID v4 以匹配 source-backed Router producer behavior；exact generator、header registry 与 precedence 保持 Auth-internal。
-
-`projectDir?` 表示 Auth 最终确认的 request-local project directory。缺失只表示没有 project binding fact；外部不区分其内部原因。
-
-Auth 不知道：
-
-```text
-Pi Context
-Pi Provider implementation
-CommandCode headers
-x-project-slug
-CommandCode config schema
-Provider credentials
-```
-
-Auth 与 Provider Auth 仍然是两种独立语义：
-
-```text
-Auth
-= client 是否允许使用 LuckyToken
-  + normalize header-derived request facts
-
-Provider Auth
-= LuckyToken 如何认证到 selected upstream
-```
-
-Provider authentication 继续由 Pi `Models` / Provider runtime owns。
-
-Auth 完成后，以下 temporary representations 应结束 lifecycle：
-
-```text
-raw client credential
-token classification
-token/project lookup state
-token file schema / path
-Client Protocol configuration key
-session header aliases / parsing state
-```
-
-后续只传播 normalized facts，不传播 Auth business model。
+任何 credential representation 都不得仅为方便而进入 Pi AI IR。Semantic Conversion lane 的 Pi semantic state 与 native/management credentials 保持正交。
 
 ---
 
@@ -4136,53 +4044,29 @@ of ModelsSimpleStreamOptions semantics
           │
 HTTP-owned AbortSignal
           │
-Auth-owned normalized request facts
-├── sessionId
-└── projectDir?
+RequestIdentity.effectiveSessionId
           │
-applicable Router invocation policy
+applicable Router/infrastructure invocation facts
           │
           ▼
 composed ModelsSimpleStreamOptions
 ```
 
-### Auth-Derived Pi Fields
+### Request-Identity-Derived Pi Field
 
 Current frozen mapping is：
 
 ```text
-Auth.sessionId
+RequestIdentity.effectiveSessionId
         ↓
 Options.sessionId
-
-Auth.projectDir?
-        ↓
-Options.metadata.projectDir?
 ```
 
-`sessionId` 使用 Pi 已有的 session carrier。`metadata.projectDir` 使用 Pi request metadata 作为 Provider-consumable request fact。它不带 concrete Provider namespace：
+`sessionId` 使用 Pi 已有的 session carrier。没有 Auth-derived `projectDir` projection；request identity 与 credential authority 都不能发明 Provider-consumable project metadata。
 
-```text
-metadata.projectDir
-```
+Protocol-owned metadata（例如明确被 Client Protocol contract 接受的 `metadata.user_id`）仍由该 Client Protocol 自己转换，并受 `ClientPiOptions` allowlist 约束；它不是 request identity 或 credential authority 的输出。
 
-而不是：
-
-```text
-metadata.commandCode.projectDir
-metadata.auth.projectDir
-```
-
-原因是 `projectDir` 本身只是当前 request 可用的 project fact；selected Provider 自己决定理解、使用或忽略它。
-
-这不是 generic arbitrary-metadata policy。Frozen allowlisted Auth → Pi projection 当前只有：
-
-```text
-sessionId
-projectDir?
-```
-
-Auth 不直接构造 Pi `Options`；`composeOptions(...)` 只做 mechanical projection。
+`resolveRequestIdentity()` 不直接构造 Pi `Options`；`composeOptions(...)` 只做 mechanical composition，并保持 protocol semantic options 与 infrastructure facts 分离。
 
 ### Protocol-Derived Controls 不是 Intermediate IR
 
@@ -4375,12 +4259,13 @@ sessionId
 
 Name/shape 相似不能证明 semantic equivalence。
 
-Current source/Pi evidence 已经关闭两个具体映射：
+Current source/Pi evidence 已经关闭一个 request-identity mapping：
 
 ```text
 normalized session identity → Options.sessionId
-normalized project directory → Options.metadata.projectDir
 ```
+
+Protocol-owned metadata 只能按各 Client Protocol 的明确 allowlist 进入 Pi（例如受支持的 `metadata.user_id`）；credential/request-identity authority 不产生 generic metadata。
 
 除此之外仍不得把 `metadata`、`headers` 或其他 Pi options 当作 generic state bag。
 
@@ -4462,7 +4347,7 @@ request assembly 可以在 Pi execution 开始前失败。
 例如：
 
 ```text
-Auth denied
+lane-specific credential denial (when a native lane requires it)
 model resolution failure
 Client Protocol validation failure
 Pi representability failure
@@ -4500,9 +4385,9 @@ Temporary state 随后结束 lifecycle：
 ```text
 external model selector
 model lookup candidates
-raw client authorization material
-authorization lookup state
-AuthResult after sessionId/projectDir projection
+raw lane-specific credential material
+credential validation/intermediate state
+request-identity header parsing state
 full Client parsing / validation state
 representability scratch state
 temporary Options merge state
@@ -4646,7 +4531,8 @@ Temporary State
 
 Must Not Access
 - raw HTTP request
-- LuckyToken Auth
+- request-identity implementation details
+- lane-specific raw credential authority state
 - Client Protocol internal state
 - concrete Provider implementation
 - upstream wire/events
@@ -4688,7 +4574,7 @@ AssistantMessageEventStream
 ```text
 PRE-PI
 ├── source validation
-├── Auth
+├── request identity / optional lane credential validation
 ├── Model resolution
 ├── Pi representability
 └── Options composition
@@ -5371,7 +5257,8 @@ Client Protocol parsing
 Client Protocol validity
 Client → Pi representability
 external model selector resolution
-Auth
+request-identity normalization
+Local Native credential authority
 generic Execution outcome
 Client response rendering
 ```
@@ -5450,7 +5337,8 @@ optional provider operations
   as supported by the concrete Provider contract
 
 Must Not Access
-- LuckyToken inbound Auth implementation
+- request-identity implementation internals
+- Local Native credential authority / raw client credential material
 - raw Client Protocol representation
 - Client renderer state
 - generic whole-request context
@@ -5548,7 +5436,7 @@ Provider-specific state 不向前泄漏到：
 
 ```text
 Client Protocol
-Auth Boundary
+Request Identity / Local Native credential authorities
 Model Resolution
 composeOptions / request assembly
 ```
@@ -5932,8 +5820,8 @@ Provider Boundary 只 owns 这段 upstream-specific transition。
 > - **CommandCode Private Protocol**：LuckyToken 当前基于 observed behavior 推断出的 private `/alpha/generate` wire protocol。它是 observed private contract，不是 CommandCode product 的 universal protocol。
 > - **CommandCode Private Provider**：实现这个 Private Protocol 的 concrete Pi `Provider` integration。
 > - **Generation Semantics**：来自 Pi `Model + Context + Options`、直接影响 model generation 的 information。
-> - **Runtime / Project Facts**：Private Protocol request 中与 generation conversation 不同的一支，例如 `config`、`permissionMode`、`threadId` 等。
-> - **Logical Thread Identity**：同时映射到 body `threadId` 与 header `x-session-id` 的一个 authoritative logical identity。Current integration 已冻结为 Auth-normalized `sessionId` → Pi `Options.sessionId` → Provider wire mapping。
+> - **Runtime Compatibility Facts**：Private Protocol request 中与 generation conversation 不同的一支，例如 fixed `config`、`permissionMode`、`threadId` 等。
+> - **Logical Thread Identity**：同时映射到 body `threadId` 与 header `x-session-id` 的一个 authoritative logical identity。Current integration 已冻结为 RequestIdentity-derived `Options.sessionId` → Provider wire mapping；Provider 在缺失/无效时才生成 request-local fallback session ID。
 > - **Semantic Terminal vs Transport Sentinel**：`finish/error` 决定 Private Protocol semantic outcome；`[DONE]` 只表示 transport framing，不等于 success。
 > - **Incremental Tool Input**：`tool-input-start/delta/end` 形成的 temporary partial serialized input。
 > - **Authoritative Tool Completion**：只有后续 `tool-call` event 才建立 completed invocation。
@@ -5966,7 +5854,6 @@ Boundary：
 Model<Api> + Context + Options
                      │
                      │ Options.sessionId
-                     │ Options.metadata.projectDir?
                      ▼
           CommandCode Private Provider
                      │
@@ -5997,14 +5884,13 @@ Generic Provider ownership 已在 Chapter 8 定义。
 ```text
 Responsibility
 - own Pi ↔ CommandCode Private conversion
-- derive CommandCode request-local project representation
+- construct the fixed CommandCode runtime-compatibility representation
 - execute the Private upstream lifecycle
 - convert it back to Pi stream semantics
 
 Bound Dependencies
 - stable CommandCode endpoint/provider configuration
 - CommandCode compatibility / permission policy
-- Project Snapshot capability
 - Trace Context generation capability
 - upstream transport implementation/configuration when not supplied through Pi invocation
 
@@ -6027,14 +5913,13 @@ streamSimple
     - effective auth material
     - signal
     - sessionId
-    - metadata.projectDir?
     - invocation controls
 
   Result
   - AssistantMessageEventStream
 
   Effects
-  - derive project snapshot / project slug when applicable
+  - construct fixed empty server config required by current compatibility contract
   - generate per-upstream-request trace context
   - build and send CommandCode Private request
   - consume Private event lifecycle
@@ -6042,23 +5927,20 @@ streamSimple
 
   Temporary State
   - CommandCode request representation
-  - project snapshot result
+  - cloned fixed server-config representation
   - trace context value
   - transport/parser state
   - keyed partial tool state
   - terminal state
 
 Must Not Access
-- LuckyToken Auth implementation
+- request-identity implementation internals
+- Local Native credential authority
 - raw inbound client headers
 - Client Protocol representation
 - HTTP response object
 - generic RequestContext/ApplicationContext
 ```
-
-`Project Snapshot capability` 的 implementation 可以继续使用小函数。
-
-它后面的 filesystem / Git / clock/date dependencies 属于该 capability 的 recursive closure；不要求把所有 primitives 提升成 CommandCode Provider 顶层 dependency。
 
 `Trace Context generation capability` owns one narrow responsibility：
 
@@ -6086,8 +5968,8 @@ Observed `CommandCodeRequest` 有两个天然不同的 wire branch：
 
 ```text
 CommandCodeRequest
-├── Runtime / Project Context
-│   ├── config
+├── Runtime Compatibility Context
+│   ├── fixed config
 │   ├── memory
 │   ├── taste
 │   ├── skills
@@ -6106,8 +5988,7 @@ Model<Api>
 Context
 +
 Options
-├── sessionId
-└── metadata.projectDir?
+└── sessionId
 +
 Provider-lifetime configuration / policy
         │
@@ -6147,85 +6028,48 @@ Core Architecture 不规定某个 wire parameter 具体由 `Model`、`Context`�
 
 Field-level source selection is a conversion concern, not an architecture ownership concern.
 
-### Runtime / Project Context
+### Runtime Compatibility Context
 
-Current runtime/project source 已关闭：
+Current source-backed runtime source 已关闭：
 
 ```text
 Options.sessionId
-        └── threadId
-
-Options.metadata.projectDir?
-        ├── project-bound config source
-        └── x-project-slug source
+        └── threadId + x-session-id
 
 Provider policy/configuration
+        ├── fixed empty server config
         ├── memory / taste / skills current compatibility values
         └── permissionMode
 
-Project Snapshot capability
-        └── request-time project/runtime snapshot
-            ├── date
-            ├── filesystem view
-            └── Git-derived state
+Trace Context capability
+        └── request-local traceparent
 ```
 
-这些 facts 不进入 Pi conversational `Context`。
+这些 facts 不进入 Pi conversational `Context`，也不从 filesystem/Git/project metadata 动态派生。
 
 Exact `CommandCodeRequest` schema 属于 CommandCode Private Protocol Spec；exact Pi ↔ CommandCode mapping 属于 Conversion Spec。
 
 ---
 
-## 9.2 Runtime / Project Facts
+## 9.2 Runtime Compatibility Facts
 
 ### `config`
 
-`config` 是 request-time project/runtime snapshot。Current source-backed compatibility producer establishes two project-context modes：
+Current implementation no longer derives workspace/project state from Pi metadata. The Provider always constructs the fixed empty `ServerConfig` required by the current CommandCode compatibility contract:
 
 ```text
-Options.metadata.projectDir exists
-        ↓
-project-bound
-        ↓
-Provider uses projectDir as project root
-        ↓
-request-time filesystem / Git snapshot
-
-Options.metadata.projectDir absent
-        ↓
-project-less
-        ↓
-current compatibility producer project-less config
-        ↓
-no filesystem/Git scan
+workingDir     = ""
+date           = ""
+environment    = ""
+structure      = []
+isGitRepo      = false
+currentBranch  = ""
+mainBranch     = ""
+gitStatus      = ""
+recentCommits  = []
 ```
 
-因此 authoritative project source 是：
-
-```text
-Auth
-  ↓
-projectDir?
-  ↓
-Options.metadata.projectDir?
-  ↓
-CommandCode Private Provider
-```
-
-Provider owns project snapshot derivation because only the Provider understands the CommandCode `config` representation and compatibility behavior. Exact field-generation rules，例如 top-level structure filtering、Git commands、UTC date formatting 与 project-less empty values，继续由 CommandCode Protocol / Provider implementation specification owns，而不是复制成 Generic Core rules。
-
-如果 `projectDir` 已存在但 Provider 无法完成 required project inspection/request construction，该 request 必须失败；不能 silent downgrade 成 project-less request，因为那会改变已经建立的 request fact。Since failure occurs after `Models.streamSimple(...)` enters Pi execution, it is surfaced through the Pi error lifecycle.
-
-`config` 的存在不支持新建：
-
-```text
-ProjectManager
-WorkspaceManager
-GitService
-CodingAgentRuntime
-```
-
-ordinary Provider-local functions are sufficient.
+This is Provider-owned wire compatibility state, not a Generic Core project concept. Current request construction performs no project filesystem scan, Git inspection, project slug derivation, or `projectDir` lookup. If upstream compatibility later requires real workspace state, the Provider/Protocol specification must first prove the new source, ownership, failure semantics, and lifecycle before any such capability is introduced.
 
 ### `memory`, `taste`, `skills`
 
@@ -6245,42 +6089,12 @@ Its presence does not justify a LuckyToken-wide permission subsystem.
 
 ---
 
-## 9.3 Thread and Project Identity
+## 9.3 Thread Identity
 
-### Thread Identity
-
-Current source-backed CommandCode producer policy已经证明：
+Current implementation keeps one authoritative logical session identity for the CommandCode request:
 
 ```text
-valid client session identity
-→ use that identity
-
-otherwise
-→ use Router request ID
-```
-
-并保持 invariant：
-
-```text
-body.threadId
-=
-header.x-session-id
-```
-
-LuckyToken 将 client/session source normalization 封装在 Auth 中。Auth 成功时始终产生一个 normalized：
-
-```text
-sessionId: string
-```
-
-信息流被冻结为：
-
-```text
-inbound headers
-        ↓
-      Auth
-        ↓
-normalized sessionId
+RequestIdentity.effectiveSessionId
         ↓
 Options.sessionId
         ↓
@@ -6289,53 +6103,17 @@ CommandCode Private Provider
         └── header.x-session-id
 ```
 
-Cross-request continuity 只来自 client 重复提供同一个 recognized session identity。没有 usable client session 时，fallback ID 只属于该 inbound request。Architecture 不要求特定 UUID version；Current CommandCode-compatible implementation 可以使用 UUID v4 以匹配 source-backed Router producer behavior。
-
-Client Protocol conversion 不创建 thread identity；它也不知道 header aliases。
-
-### Project Identity
-
-Auth 对外不暴露 token classification，只输出 optional：
+The Provider validates `Options.sessionId` as UUID-shaped; if the Pi invocation does not supply a valid session ID, the Provider creates one request-local fallback session ID through its injected generator. In all cases:
 
 ```text
-projectDir?
+body.threadId
+=
+header.x-session-id
 ```
 
-`composeOptions(...)` 将它投影到：
+Cross-request continuity exists only when callers repeatedly supply the same recognized session identity. Client Protocol conversion does not invent thread identity and does not need to know the Provider's `x-session-id` header representation.
 
-```text
-Options.metadata.projectDir?
-```
-
-CommandCode Private Provider 从同一个 projectDir 同时 derive：
-
-```text
-projectDir
-├── project-bound config snapshot
-└── x-project-slug
-```
-
-没有 `projectDir` 时：
-
-```text
-project-less config
-+
-omit x-project-slug
-```
-
-`x-project-slug` 仍然只在 Provider transport boundary 创建。Exact `project_root_to_cc_slug(...)` algorithm 是 CommandCode Protocol / Provider conversion detail，不在 Generic Core 中传播。
-
-这里不保留第二个长期 authoritative `projectSlug` fact：
-
-```text
-projectDir
-= request-local authoritative project fact
-
-x-project-slug
-= late Provider wire representation
-```
-
-Other Providers 可以看到 `Options.metadata.projectDir`，但它们没有义务理解或使用它。
+There is no current project-identity flow in this integration. `Options.metadata.projectDir`, project slug derivation, and project-bound config snapshots are not part of the current source or Provider contract.
 
 ---
 
@@ -6357,11 +6135,10 @@ Private Protocol transport headers
 Pi Model ────────────────────────────────┐
 Pi Context ──────────────────────────────┤
 Pi Options                               │
-├── sessionId ───────────────────────────┤
-└── metadata.projectDir? ────────────────┤
+└── sessionId ───────────────────────────┤
 Provider auth/config/policy ─────────────┤
-Project Snapshot capability ──────────────┤
-Trace Context generation capability ──────┤
+Fixed empty ServerConfig factory ────────┤
+Trace Context generation capability ─────┤
                                         ▼
                                CommandCodeRequest
                                         │
@@ -6375,7 +6152,6 @@ Trace Context generation capability ──────┤
                               Provider-owned headers
                                         │
                                         ├── x-session-id
-                                        ├── x-project-slug?
                                         ├── traceparent
                                         └── other Private headers
                                         │
@@ -6388,15 +6164,14 @@ CommandCode-specific representations，例如：
 ```text
 threadId
 x-session-id
-x-project-slug
-config wire object
+fixed config wire object
 traceparent
 Private version/client headers
 ```
 
 全部在 Provider boundary late-create。
 
-Upstream CommandCode API credential 仍由 Pi Provider authentication path 解决，与 inbound LuckyToken Auth credential 完全分离。
+Upstream CommandCode API credential 仍由 Pi Provider authentication path 解决；它与 Request Identity、Local Native Codex credential 和 Control Plane capability 完全分离。
 
 Provider request object 是 temporary transport state，不是 new LuckyToken canonical request。
 
@@ -6718,11 +6493,10 @@ CommandCode Private request scope includes：
 
 ```text
 Invocation Facts
-├── sessionId
-└── projectDir?
+└── sessionId
 
 Provider-Owned Temporary State
-├── request-time project snapshot
+├── fixed ServerConfig clone
 ├── CommandCodeRequest representation
 ├── Provider-owned outbound headers / trace context
 ├── transport / parser state
@@ -6732,9 +6506,7 @@ Provider-Owned Temporary State
 └── terminal state
 ```
 
-`sessionId` 与 `projectDir?` 只是 Provider operation scope 中可见的 invocation facts。
-
-它们由上游 boundary 建立，Provider 是 semantic consumer；Provider 暂时持有这些值，不会因此取得它们的 semantic ownership。
+`sessionId` 是 Provider operation scope 中可见的 invocation fact。它由 request-identity / Pi option composition 上游建立；Provider 消费它并建立 late wire representations，但不会因此取得 request identity 的 semantic ownership。
 
 即：
 
@@ -6761,10 +6533,10 @@ request-local state 结束 lifecycle。
 
 | Information | Architectural death point |
 | --- | --- |
-| Auth session-header/token parsing state | AuthResult established |
-| `projectDir?` / `sessionId` source representation | composed Pi `Options` established |
-| runtime/project snapshot | upstream request no longer needs it |
-| `threadId` / `x-session-id` / `x-project-slug` | Provider wire mapping no longer needs them |
+| request-identity header parsing state | `RequestIdentity` established |
+| `effectiveSessionId` source representation | composed Pi `Options` established |
+| fixed ServerConfig clone | upstream request no longer needs it |
+| `threadId` / `x-session-id` | Provider wire mapping no longer needs them |
 | `CommandCodeRequest` | transport no longer needs it |
 | raw Private event | converted into Provider-local or Pi state |
 | text/reasoning partial state | content completion or request terminal |
@@ -6806,9 +6578,9 @@ Architecture Spec — this chapter
 Current Architecture 已经关闭：
 
 ```text
-runtime/project source
+fixed runtime-compatibility config source
 logical thread source/lifetime/carrier
-project fact carrier
+absence of any current projectDir/project-slug flow
 ```
 
 仍未冻结的 exact details，例如：
@@ -6829,15 +6601,12 @@ future permission-mode product semantics
                   inbound headers
                        │
                        ▼
-                      Auth
-               ┌───────┴────────┐
-               ▼                ▼
-          sessionId         projectDir?
-               │                │
-               ▼                ▼
-       Options.sessionId   Options.metadata.projectDir?
-               │                │
-               └───────┬────────┘
+               Request Identity
+                       │
+               effectiveSessionId
+                       │
+                       ▼
+               Options.sessionId
                        │
 Model + Context + Options
                        │
@@ -6846,8 +6615,8 @@ Model + Context + Options
                        │
           ┌────────────┴────────────┐
           │                         │
-   Pi generation mapping    runtime/project derivation
-          │                         │
+   Pi generation mapping    fixed runtime compatibility
+          │                  config / policy / trace
           └────────────┬────────────┘
                        ▼
              CommandCodeRequest
@@ -6872,7 +6641,7 @@ Model + Context + Options
 
 本章只定义 CommandCode Private integration 相对于 Generic Core 的 architecture delta。
 
-删除这个 concrete integration 不应该要求修改 Generic Core 的 Client/Pi/Provider boundaries；`metadata.projectDir` 作为 request metadata fact 可以被其他 Provider忽略。
+删除这个 concrete integration 不应该要求修改 Generic Core 的 Client/Pi/Provider boundaries；当前 CommandCode integration 不要求任何 Generic Core project identity/project metadata concept。
 
 # 10. Resolved Integration Decision Index — 已关闭决策索引
 
@@ -6880,14 +6649,14 @@ Model + Context + Options
 >
 > Authoritative architecture definitions remain in the owning chapters below. 本章只提供 resolved-decision index 与 reopen rule，避免同一事实在多个章节重复维护。
 
-Current source basis 包括新的 CommandCode `/alpha/generate` source-backed protocol document、current Pi `ModelsSimpleStreamOptions` contract，以及 LuckyToken 已冻结的 Auth boundary。
+Current source basis 包括 CommandCode `/alpha/generate` source-backed protocol document、current Pi `ModelsSimpleStreamOptions` contract，以及 LuckyToken 已冻结的 request-identity / credential isolation boundaries。
 
 | Resolved decision | Authoritative architecture section |
 | --- | --- |
-| LuckyToken Auth 固定 input/output、业务隐藏、session/project normalization ownership | §6.3 |
-| `sessionId` / `projectDir?` 如何进入 Pi invocation | §6.4 |
-| CommandCode runtime/project facts 的 Provider ownership | §9.2 |
-| `Options.sessionId → threadId / x-session-id` 与 `metadata.projectDir? → project-derived wire state` | §9.3 |
+| Request Identity 与三类 credential/capability 的隔离 | §6.3 |
+| `effectiveSessionId` 如何进入 Pi invocation | §6.4 |
+| CommandCode fixed runtime-compatibility facts 的 Provider ownership | §9.2 |
+| `Options.sessionId → threadId / x-session-id`，且当前没有 project identity flow | §9.3 |
 | CommandCode request construction ownership | §9.4 |
 | CommandCode stream / terminal lifecycle ownership | §9.5 |
 | CommandCode keyed partial tool state 与 authoritative completion | §9.6 |
@@ -6899,17 +6668,14 @@ Resolved facts 的当前 shape 可以导航性地概括为：
 inbound headers
         │
         ▼
-      Auth
+Request Identity
         │
-        ├── authorized?
-        ├── sessionId
-        └── projectDir?
+        └── effectiveSessionId
                 │
                 ▼
       composeOptions(...)
                 │
-                ├── Options.sessionId
-                └── Options.metadata.projectDir?
+                └── Options.sessionId
                 │
                 ▼
               Models
@@ -6927,14 +6693,13 @@ CommandCode Provider
 ├── body.threadId
 └── header.x-session-id
 
-Options.metadata.projectDir?
+fixed Provider compatibility state
         ↓
 CommandCode Provider
-├── project-bound request state when present
-└── project-less request state when absent
+└── empty ServerConfig + permission/trace facts
 ```
 
-Exact header-source registry、fallback-ID generator、`project_root_to_cc_slug(...)`、`config` field algorithms、model routing、finish-reason conversion、usage conversion、message/tool field mapping 仍属于 Auth implementation / Protocol / Conversion Specs，而不是本章新增的 architecture truth。
+Exact session-header registry、fallback-ID generator、fixed `config` wire fields、model routing、finish-reason conversion、usage conversion、message/tool field mapping 仍属于 Request Identity / Protocol / Conversion Specs，而不是本章新增的 architecture truth。
 
 ## 10.1 Reopen Rule
 
@@ -6942,9 +6707,9 @@ Once v5.5 is frozen, architecture contract 只在新的 evidence 或 demonstrate
 
 ```text
 Pi sessionId no longer expresses the required logical session semantics
-project identity cannot be carried as projectDir and derived safely by Provider
-Pi metadata no longer provides the required Provider-visible request carrier
-current Auth fixed output cannot express a demonstrated request-edge fact
+a demonstrated native/request credential can no longer stay within its lane-specific authority
+a concrete Provider proves a new request-local fact that Pi cannot represent without semantic loss
+request identity can no longer be normalized without crossing credential/protocol ownership
 request cancellation cannot be made correct within current Execution boundary
 a new capability changes the atomic downstream commit model
 Pi public diagnostic contract cannot preserve a newly demonstrated safe
@@ -7000,7 +6765,8 @@ Deployment / Router Configuration
         Startup Composition Root
                 │
         ├── Client Protocol implementations
-        │   └── bind one Auth authority per handler
+        ├── request-identity authority
+        ├── explicit native lane seams
         ├── Provider sources
         │   ├── Pi built-ins
         │   ├── models.json
@@ -7055,19 +6821,18 @@ validate npm root specifier
 ```
 
 Relative/absolute paths, URLs, Node builtins, and package subpaths are rejected.
-`serve`, `login`, and `logout` use the same configured Pi-model construction
-path. `client-token` parses deployment configuration to find Client Auth files
-but does not dynamically import Provider Packages. A missing upstream API key
-does not block `serve`; Pi Provider credential resolution reports it on the
-first real invocation.
+`serve`, `login`, and `logout` use the same configured Pi-model construction path. A missing upstream API key does not block Backend startup; Pi/Provider credential resolution reports it when auth status or a real invocation requires it.
 
 Normal request 依赖已经 constructed/bound 的 runtime objects，不依赖 startup parsing state，也不通过 service locator 重新发现 dependency。
 
-两个 auth concern 保持分离：
+request identity 与 credential concerns 保持分离：
 
 ```text
-LuckyToken Auth
-→ inbound client authorization / session-project fact normalization
+Request Identity
+→ inbound session headers → effectiveSessionId
+
+Local Native credential authority
+→ selected native request credential only
 
 Pi Models / Provider auth
 → LuckyToken-to-upstream credential resolution and request preparation
@@ -7093,20 +6858,18 @@ validated Client state ─────┤
                     Context    controls
 
 
-Auth(headers)
-├── sessionId
-└── projectDir?
+RequestIdentity(headers)
+└── effectiveSessionId
 
 HTTP Boundary
 └── AbortSignal
 
-Router Policy
+Router / Infrastructure Policy
 └── defaults
 
 
 controls ───────────────┐
-sessionId ──────────────┤
-projectDir? ────────────┤
+effectiveSessionId ─────┤
 AbortSignal ────────────┤
 defaults ───────────────┘
           │
@@ -7187,10 +6950,11 @@ Summary：
 | --- | --- | --- | --- | --- |
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
 | **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
-| **Auth** | auth policy/config; credential/project lookup capability; session-resolution policy; fallback identity capability | Auth-owned mutable lookup/index/cache state only if any | `resolve(headers)` | Model; Context; Pi Options; Provider wire |
+| **Request Identity** | known session-header registry; fallback identity generator | none beyond optional bounded request-id helpers | `resolveRequestIdentity(headers)` | Model; Context; Provider credentials/wire |
+| **Local Native Credential Authority** | local credential source + constant-time comparison/scrub capability | bounded known secret values for redaction when required | resolve request-local native forward auth | Pi AI IR; Provider credential store; unrelated native lanes |
 | **Provider Package Loader** | versioned Package Contract; dynamic import capability; narrow host capabilities; Pi `MutableModels` | staged external Providers only during startup | `loadProviderPackages` | Client wire; Provider-native wire; package-private configuration semantics |
-| **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | inbound Auth; Client wire; generic whole-request object |
-| **CommandCode Private Provider** | endpoint/config; compatibility policy; Project Snapshot; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object |
+| **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | request-identity internals; Local Native credential authority; Client wire; generic whole-request object |
+| **CommandCode Private Provider** | endpoint/config; compatibility policy; fixed ServerConfig factory; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object; project filesystem/Git state |
 
 Bound configuration/policy may be retained by a module but is not repeated under `Owned State`.
 
@@ -7212,7 +6976,7 @@ Summary：
 | Operation | Bound Dependencies | Inputs | Result | Effects |
 | --- | --- | --- | --- | --- |
 | **Model Resolution** | Models | external selector | `Model<Api>` or failure | none required |
-| **`composeOptions`** | Router defaults/policy when bound | protocol controls; sessionId; projectDir?; AbortSignal | `ModelsSimpleStreamOptions` | none |
+| **`composeOptions`** | Router/infrastructure defaults when bound | protocol controls; effectiveSessionId; AbortSignal; bounded infrastructure facts | `ModelsSimpleStreamOptions` | none |
 | **`execute`** | Models | Model + Context + Options | committed success or aborted/error failure | consume Pi stream; commit one atomic outcome |
 
 
@@ -7273,8 +7037,7 @@ Neither export defines Provider wire types or a new common IR.
 | **protocol-visible model echo fact**, if required | Client Protocol parse | protocol-owned `renderState` | same Client Protocol renderer | request orchestration | rendering completes |
 | **`Model<Api>`** | Model Resolution | direct argument | Client model-aware conversion; **Pi Models**; Provider | request orchestration; Execution | Pi invocation terminal |
 | **`Context`** | Client Protocol conversion | Pi `Context` direct argument | concrete Provider/API conversion | request orchestration; Execution; Models | Pi invocation terminal |
-| **`sessionId`** | Auth | `Options.sessionId` | session-aware Provider | `composeOptions`; Models | Provider no longer requires logical request identity |
-| **`projectDir`** | Auth | `Options.metadata.projectDir` | CommandCode Private Provider | `composeOptions`; Models | Provider derives request-local CommandCode project representation |
+| **`sessionId`** | Request Identity authority | `Options.sessionId` | session-aware Provider | `composeOptions`; Models | Provider no longer requires logical request identity |
 | **`AbortSignal`** | HTTP Boundary | `Options.signal` | Execution; Pi Models auth/setup; Provider/transport | `composeOptions` | request execution/cancellation lifecycle ends |
 | **protocol render state** | Client Protocol | orchestration-local narrow state | same Client Protocol renderer | request orchestration | success/failure rendering completes |
 | **committed successful AssistantMessage** | Execution success commit | direct result | Client Protocol renderer | request orchestration | rendering completes |
@@ -7321,10 +7084,13 @@ lifetime
 
 ```text
 Options.signal
-→ Models is semantic consumer
+→ Models/execution are semantic consumers for cancellation
 
-Options.metadata.projectDir
-→ Models is transparent transit
+Options.sessionId
+→ Models may be transparent transit to a session-aware Provider
+
+Options.metadata.user_id
+→ only the Client Protocol / downstream consumer defined by the protocol contract may own that semantic
 ```
 
 `Model<Api>` 同样是 structured carrier，但在 architecture-level map 中可以整体标记 `Models` 为 semantic consumer，因为 current Pi runtime 明确读取其中的 runtime-relevant fields：
@@ -7387,7 +7153,7 @@ Request
 │
 ├── Before Pi execution
 │   ├── Client Protocol failure
-│   ├── Auth denial
+│   ├── lane-specific credential denial, when applicable
 │   ├── model resolution failure
 │   ├── representability failure
 │   └── options composition failure
@@ -7466,15 +7232,14 @@ Request:
          │                                │
          ▼                                ▼
    Model + Context                     Options
-                                  ├── sessionId
-                                  └── metadata.projectDir?
+                                      └── sessionId
          │                                │
          └───────────────┬────────────────┘
                          ▼
              CommandCode Private Provider
                          │
              Bound Dependencies:
-          Project Snapshot capability
+          fixed ServerConfig factory
        Trace Context generation capability
                          │
                          ▼
@@ -7500,28 +7265,7 @@ Request:
 
 CommandCode Private vocabulary 不进入 Generic Core。
 
-The package root additionally exposes the existing direct Pi Provider factory
-and its option/policy types plus the necessary `ProjectSnapshot` type. Those
-exports support direct Pi integration and characterization; production Core
-uses only the fixed `providerPackage` export through the generic loader.
-
-`projectDir` 的 flow 是：
-
-```text
-Auth establishes projectDir
-        │
-        ▼
-Options.metadata.projectDir
-        │
-        │ transparent through Models
-        ▼
-CommandCode Private Provider
-        │
-        ▼
-request-local CommandCode project representation
-```
-
-只有 Auth 与 CommandCode Provider 理解这个 fact 的 project semantics。
+The package root additionally exposes the existing direct Pi Provider factory and its option/policy types. Production Core uses the fixed `providerPackage` export through the generic loader; no project snapshot/project identity type is exported because current Provider request construction uses a fixed empty ServerConfig and no project metadata flow.
 
 ---
 
@@ -7553,7 +7297,9 @@ v5.5 的 dependency-semantics corrections 不把 conversion rules 搬进 Archite
 
 ---
 
-### v5.6 Frozen Status
+### Historical v5.6 Frozen Status (superseded)
+
+The following block records the former per-handler Auth design. v6.0 removes that LuckyToken client-token/Auth boundary; keep this block only as architectural history.
 
 ```text
 LuckyToken Core Architecture v5.6
@@ -7674,7 +7420,7 @@ Required cross-boundary behavior change:
 none for Pi or Providers.
 ```
 
-### v5.8 Frozen Status
+### Historical v5.8 Frozen Status (superseded baseline)
 
 ```text
 LuckyToken Core Architecture v5.8
@@ -7694,7 +7440,7 @@ v5.8 的 correction 不改变 Pi 作为唯一 conversion semantic boundary。它
 Client-side transport observation，让 detecting Provider 拥有 failure acquisition，
 并让每个 Client Protocol 只负责把 trusted neutral fact 映射为自己的 wire error。
 
-### v5.9 Frozen Status
+### Historical v5.9 Frozen Status (superseded baseline)
 
 ```text
 LuckyToken Core Architecture v5.9
@@ -7715,6 +7461,35 @@ LuckyToken Core Architecture v5.9
 
 v5.9 changes delivery and startup composition, not conversion semantics. Every
 external package still returns the standard Pi `Provider`; Pi AI IR remains the
-only shared semantic boundary. CommandCode request/response mappings, defaults,
-wire shape, diagnostics, tool-call relationships, and atomic stream behavior
-remain frozen.
+only shared semantic boundary **for semantic-conversion requests**. CommandCode
+request/response mappings, defaults, wire shape, diagnostics, tool-call
+relationships, and atomic stream behavior remain historical v5.9 evidence.
+
+### v6.0 Frozen Status — Current
+
+```text
+LuckyToken Core Architecture v6.0
+        │
+        ├── exactly three independent Data Plane lanes
+        │      ├── Local Native Preservation
+        │      ├── Provider Native Preservation
+        │      └── Semantic Conversion through Pi AI IR
+        │
+        ├── request-edge facts are split by authority
+        │      ├── Request Identity → effectiveSessionId
+        │      ├── Local Native credential → local native lane only
+        │      ├── Provider credential → Pi/Provider auth only
+        │      └── Control Plane capability → management plane only
+        │
+        ├── no LuckyToken global/project client-token boundary
+        ├── no projectDir / project-slug fact flow in current Core
+        ├── CommandCode Private uses fixed empty ServerConfig
+        ├── native lanes preserve compatible raw client wire
+        └── lane failure never falls through to another lane
+```
+
+v6.0 preserves the v5.x boundary discipline that remains valid—small contracts,
+Pi as the semantic-conversion boundary, Provider-owned upstream conversion,
+atomic semantic-conversion completion, cancellation precedence, trusted neutral
+diagnostics, and package-delivered external Providers—while superseding the
+former per-handler client-token/Auth and CommandCode projectDir designs.

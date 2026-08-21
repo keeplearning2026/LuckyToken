@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options
 import type { CommandCodeCompatibilityPolicy } from "@luckytoken/provider-commandcode-private";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:11de519006651c4eb2e58d873e7cc5a0e1d29ee74e5045e170f2047fb6c0fdc0";
+  "sha256:5cbf6ceca2273bb05510b10e71d3bcd5e56c8c6cde6f44502d7b509ee3985300";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -277,7 +277,7 @@ export function certifyServingComposition(
     failures,
     identity: {
       core: {
-        specification: "LuckyToken Core Architecture Specification v5.9",
+        specification: "LuckyToken Core Architecture Specification v6.0",
         servingComposition: "luckytoken-full-route-serving-composition-v3",
       },
       conversions: {

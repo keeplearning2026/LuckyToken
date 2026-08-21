@@ -5,11 +5,34 @@ Version: **1.0 frozen design**
 Reference date: **2026-08-13**
 Owner: LuckyToken OpenAI Responses Client Protocol adapter
 
-This document defines the Client wire, local state, rendering, passthrough profile, and ownership boundary for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
+This document defines the Client wire, local state, rendering, Local Native / Provider Native preservation seams, Semantic Conversion boundary, and ownership rules for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
 
-## 1. Profiles
+## 1. Execution lanes
 
-### 1.1 Conversion
+### 1.1 Local Native Preservation
+
+```text
+Responses request + raw model selector
+→ explicit local model/capability claim
+→ Local credential authority
+→ local native Responses transport
+```
+
+The current production local lane is Codex Local Native. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The raw Responses request remains model-visible authority. A request bearer is usable only after the Local Native credential authority validates/derives the request-local forward auth.
+
+### 1.2 Provider Native Preservation
+
+```text
+Responses request
+→ Public Model / Pi Model resolution
+→ explicit Provider Responses transport claim
+→ Pi Models credential/auth resolution
+→ provider-native Responses transport
+```
+
+This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, and response alias projection.
+
+### 1.3 Semantic Conversion
 
 ```text
 Responses request
@@ -20,23 +43,24 @@ Responses request
 → Responses JSON or atomic SSE
 ```
 
-The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. It never inspects a concrete Provider protocol.
+The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. It never inspects a concrete Provider protocol merely to change conversion semantics.
 
-### 1.2 Native passthrough
+Lane selection is capability/contract driven. Local Native, Provider Native, and Semantic Conversion have separate credential/transport authority; once a lane begins execution, failure does not fall through to another lane.
 
-If the selected upstream declares compatible OpenAI Responses wire support, LuckyToken may use native passthrough. It does not enter Pi and is certified independently. It is the preferred path for native handles, hosted tools, background jobs, and new Responses fields that cannot yet pass through Pi.
-
-Profile selection is a declared protocol compatibility decision, not a scattered concrete Provider-name condition.
-
-## 2. Endpoint and authentication
+## 2. Endpoint, request identity, and credential ownership
 
 ```text
 POST /v1/responses
 Content-Type: application/json
-Authorization: Client Protocol-specific LuckyToken credential
 ```
 
-The Responses handler has its own immutable Auth authority. Raw credentials terminate after authorization. Only the generic authorized facts allowed by the architecture may continue into Pi.
+LuckyToken does not maintain a Responses-specific global/project client token. Request identity is normalized independently from credential authority and produces only `effectiveSessionId` / optional `clientSessionId` facts.
+
+Credential handling depends on the selected lane:
+
+- Local Native may consume the inbound `Authorization: Bearer ...` only through its local credential authority; that request-local forward auth never becomes Pi/Provider auth.
+- Provider Native uses Backend/Pi Models Provider credential resolution; it does not reuse the Local Native request bearer as a Provider credential.
+- Semantic Conversion likewise uses Pi/Provider auth on the upstream side and does not place incoming credential material into Pi AI IR.
 
 Request size and request lifetime are bounded by configured Client handler limits. Cancellation aborts state expansion/resolution/execution and does not write a closed response.
 
@@ -61,7 +85,7 @@ The complete exact/degrade/drop/error matrix is normative in the conversion docu
 - LuckyToken conversion requires a resolvable model selector.
 - `max_output_tokens`, when present, is positive.
 - `conversation` and `previous_response_id` cannot coexist.
-- `background:true` is unsupported in Core conversion v1; native passthrough may support it.
+- `background:true` is unsupported in Core conversion v1; an eligible native preservation lane may support it.
 - a known malformed item is not treated as a future unknown item.
 - unknown discriminators use adapter-local `error|ignore`, default error.
 
@@ -136,7 +160,7 @@ Core conversion refuses any handle whose model-visible meaning cannot be recover
 | input_image file_id/remote URL | trusted image resolver→Pi bytes, otherwise error |
 | generic non-image input_file | drop/record; no Pi FileContent |
 
-Resolvers belong to this Client adapter and never borrow a Provider credential. Native passthrough may preserve same-authority handles without conversion.
+Resolvers belong to this Client adapter and never borrow a Provider credential. An eligible native preservation lane may preserve same-authority handles without conversion because the compatible upstream remains their authority.
 
 ## 8. Local response state
 
@@ -247,7 +271,7 @@ Status:
 
 The converted path always generates a LuckyToken-owned high-entropy response
 ID; Pi/Provider response identity is not exposed as Client continuation
-identity. Native passthrough preserves upstream IDs unchanged. `model` always
+identity. Native preservation preserves upstream IDs unchanged. `model` always
 echoes the Client selector and does not expose a concrete Provider response
 model.
 
@@ -293,28 +317,29 @@ HTTP 502 `api_error` response and does not expose Pi `errorMessage`.
 
 Every final failed request submits Responses-local structured facts to the protocol-neutral per-request failure journal. The generic sink does not know Responses conversion policy, and the Responses adapter does not read another protocol's log facts.
 
-## 12. Native passthrough conformance
+## 12. Native preservation conformance
 
-Native Responses passthrough must independently test:
+Local Native and Provider Native must be certified independently where their authority differs, while sharing only protocol-side Responses fidelity assertions.
 
+Required coverage includes:
+
+- lane eligibility/claim behavior;
 - exact target endpoint/base path behavior;
-- model/selector rewrite policy;
-- authorization isolation;
+- model/selector projection policy;
+- Local Native vs Provider credential isolation;
 - handle, hosted tool, store/background and future-field fidelity;
 - status/body/headers;
 - completed/incomplete/failed SSE lifecycle;
 - retry/cancellation/body failure;
 - transport header safety;
-- failure logging.
+- failure logging;
+- proof that native outcomes are not reused as Semantic Conversion failure facts.
 
-Its transport is the separately bound narrow `passthroughFetch`; that dependency
-is not shared with conversion or used to acquire Pi failure facts.
-
-It must never be used to claim coverage for Responses↔Pi conversion.
+Native coverage must never be used to claim completeness for Responses↔Pi conversion.
 
 ## 13. Configuration and composition
 
-The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds Auth, state store, resolvers, notices, execution, and rendering without copying Responses business rules into Runtime.
+The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds request identity, local/provider native lane seams, state store, resolvers, notices, semantic execution, and rendering without copying Responses business rules into Runtime.
 
 ## 14. Evidence note
 
