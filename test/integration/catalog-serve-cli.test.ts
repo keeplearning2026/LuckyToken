@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,9 +34,24 @@ function captureChild(child: ChildProcessWithoutNullStreams): {
 }
 
 function startCli(args: readonly string[]): ChildProcessWithoutNullStreams {
+  const configIndex = args.indexOf("--config");
+  const configPath = configIndex < 0 ? undefined : args[configIndex + 1];
+  const configDirectory = configPath === undefined ? undefined : dirname(configPath);
+  const fixtureHome =
+    configDirectory === undefined
+      ? undefined
+      : basename(configDirectory) === ".luckytoken"
+        ? dirname(configDirectory)
+        : configDirectory;
   return spawn(process.execPath, [tsxCli, "src/cli.ts", ...args], {
     cwd: process.cwd(),
-    env: { ...process.env, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      ...(fixtureHome === undefined
+        ? {}
+        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
+      NO_COLOR: "1",
+    },
     stdio: "pipe",
   });
 }
@@ -102,13 +117,8 @@ describe("catalog serve wiring", () => {
       }),
       "utf8",
     );
-    const descriptorPath = join(stateDirectory, "control-plane.json");
-    const serve = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const descriptorPath = join(root, ".luckytoken", "control-plane.json");
+    const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serveCapture = captureChild(serve);
 

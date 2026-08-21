@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -59,10 +59,22 @@ function startCli(
   const command = bridgeSignal
     ? [tsxCli, "test/fixtures/cli-signal-bridge.ts"]
     : [tsxCli, "src/cli.ts", ...args];
+  const configIndex = args.indexOf("--config");
+  const configPath = configIndex < 0 ? undefined : args[configIndex + 1];
+  const configDirectory = configPath === undefined ? undefined : dirname(configPath);
+  const fixtureHome =
+    configDirectory === undefined
+      ? undefined
+      : basename(configDirectory) === ".luckytoken"
+        ? dirname(configDirectory)
+        : configDirectory;
   return spawn(process.execPath, command, {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...(fixtureHome === undefined
+        ? {}
+        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
       ...(bridgeSignal
         ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
         : {}),
@@ -220,20 +232,12 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
   it("attaches a second launch to the active instance instead of starting another Data Plane", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const first = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const first = startCli(["--config", configPath], true);
     children.push(first);
     const firstCapture = captureChild(first);
     await waitForDescriptor(descriptorPath);
 
-    const second = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const second = startCli(["--config", configPath]);
     children.push(second);
     const secondResult = await captureChild(second).result;
 
@@ -260,12 +264,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
   it("refuses a non-owner quit without explicit acknowledgement and keeps the headless owner alive", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -308,12 +307,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
 
   it("an acknowledged quit drains the active set and exits the owner process", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -346,12 +340,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     const { configPath, descriptorPath } = await writeServeState({
       settings: { "application.quitDrainTimeoutMs": 300 },
     });
-    const serve = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -510,12 +499,7 @@ ${exit.stderr}`).toContain("timed out");
 
   it("reads the effective Windows login auto-start status from the real serve", async () => {
     const { configPath, descriptorPath } = await writeServeState();
-    const serve = startCli([
-      "--config",
-      configPath,
-      "--descriptor",
-      descriptorPath,
-    ]);
+    const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serving = captureChild(serve);
     await waitForDescriptor(descriptorPath);
@@ -562,8 +546,6 @@ ${exit.stderr}`).toContain("timed out");
     const serve = startCli([
       "--config",
       configPath,
-      "--descriptor",
-      descriptorPath,
       "--owner",
       "desktop",
     ]);
@@ -627,8 +609,6 @@ ${exit.stderr}`).toContain("timed out");
     const serve = startCli([
       "--config",
       configPath,
-      "--descriptor",
-      descriptorPath,
       "--owner",
       "desktop",
       "--desktop-exe",
@@ -676,8 +656,6 @@ ${exit.stderr}`).toContain("timed out");
     const second = startCli([
       "--config",
       configPath,
-      "--descriptor",
-      descriptorPath,
       "--owner",
       "desktop",
       "--desktop-exe",

@@ -69,6 +69,7 @@ describe("Main ControlPlaneSession", () => {
     expect(session.state()).toEqual({ kind: "ready", status: status(1, "stopped") });
     expect(session.trayHealth()).toBe("stopped");
     expect(session.client()).toBe(first.client);
+    expect(session.application()).toEqual({ id: "luckytoken", version: "test" });
 
     first.emit(status(2, "running"));
     expect(session.state()).toEqual({ kind: "ready", status: status(2, "running") });
@@ -91,6 +92,7 @@ describe("Main ControlPlaneSession", () => {
     await session.connect(endpoint);
     first.lose();
     await vi.waitFor(() => expect(session.state().kind).toBe("unavailable"));
+    expect(() => session.application()).toThrow("LuckyToken Control Plane is unavailable");
 
     const reconnect = session.reconnect(endpoint);
     expect(session.state().kind).toBe("reconnecting");

@@ -33,6 +33,9 @@ export interface TrayActions {
 
 export interface ProductQuitDependencies {
   readonly backendOwnerKind: () => "cli" | "desktop" | undefined;
+  /** True only while this Electron shell holds the active logical desktop
+   * owner lease for the currently connected desktop-owned Backend. */
+  readonly ownsDesktopBackend: () => boolean;
   readonly requestBackendQuit: () => Promise<{
     readonly outcome: string;
   }>;
@@ -51,6 +54,12 @@ export async function quitLuckyTokenProduct(
   if (ownerKind === "cli") {
     // An attached headless/CLI Backend has an independent legitimate owner.
     // Tray Quit closes only this Electron shell and never steals ownership.
+    dependencies.quitDesktop();
+    return true;
+  }
+  if (ownerKind === "desktop" && !dependencies.ownsDesktopBackend()) {
+    // A shell that recovered onto a different desktop build is only a viewer.
+    // It must never use the other shell's Backend ownership to perform Product Quit.
     dependencies.quitDesktop();
     return true;
   }

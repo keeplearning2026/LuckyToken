@@ -51,6 +51,7 @@ describe("desktop owner lease client", () => {
     });
 
     await client.bind(cliOwnership);
+    expect(client.isBound()).toBe(false);
     expect(execute).not.toHaveBeenCalled();
     expect(schedule).not.toHaveBeenCalled();
   });
@@ -73,6 +74,7 @@ describe("desktop owner lease client", () => {
     });
 
     await client.bind(desktopOwnership);
+    expect(client.isBound()).toBe(true);
     expect(execute).toHaveBeenNthCalledWith(1, {
       command: "desktop_owner",
       action: "claim",
@@ -116,6 +118,7 @@ describe("desktop owner lease client", () => {
     await client.bind(desktopOwnership);
     tick?.();
     await vi.waitFor(() => expect(onFailure).toHaveBeenCalledTimes(1));
+    expect(client.isBound()).toBe(false);
     expect(clear).toHaveBeenCalled();
   });
 });

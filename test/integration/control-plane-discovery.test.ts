@@ -1,19 +1,38 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
+  createControlPlaneDiscovery,
   parseControlPlaneDescriptor,
-  publishControlPlaneDescriptor,
-  readControlPlaneDescriptor,
-  type ControlPlaneDescriptorLease,
 } from "../../src/control-plane-discovery.js";
 
-describe("Control Plane discovery ownership", () => {
-  const directories: string[] = [];
+async function fixture() {
+  const directory = await mkdtemp(join(tmpdir(), "luckytoken-discovery-"));
+  return {
+    path: join(directory, "control-plane.json"),
+    discovery: createControlPlaneDiscovery({
+      path: join(directory, "control-plane.json"),
+      createTemporaryId: (() => {
+        let next = 0;
+        return () => String(++next);
+      })(),
+    }),
+  };
+}
 
+const firstEndpoint = Object.freeze({
+  address: "\\\\.\\pipe\\luckytoken-first-owner",
+  capability: "first-owner-capability-012345678901234567890",
+});
+const secondEndpoint = Object.freeze({
+  address: "\\\\.\\pipe\\luckytoken-second-owner",
+  capability: "second-owner-capability-01234567890123456789",
+});
+
+describe("Control Plane discovery publication", () => {
   it("rejects the removed pipeName descriptor contract", () => {
     expect(() =>
       parseControlPlaneDescriptor({
@@ -23,63 +42,40 @@ describe("Control Plane discovery ownership", () => {
     ).toThrow("Invalid Control Plane descriptor");
   });
 
-  afterEach(async () => {
-    await Promise.all(
-      directories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
-    );
+  it("treats an absent descriptor as normal discovery state", async () => {
+    const { discovery } = await fixture();
+    await expect(discovery.read()).resolves.toBeUndefined();
   });
 
-  it("does not overwrite or remove another live descriptor lease", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-discovery-"));
-    directories.push(directory);
-    const path = join(directory, "control-plane.json");
-    const firstEndpoint = {
-      address: "\\\\.\\pipe\\luckytoken-first-owner",
-      capability: "first-owner-capability-012345678901234567890",
-    };
-    const secondEndpoint = {
-      address: "\\\\.\\pipe\\luckytoken-second-owner",
-      capability: "second-owner-capability-01234567890123456789",
-    };
-    const first = await publishControlPlaneDescriptor({
-      path,
-      endpoint: firstEndpoint,
-      createTemporaryId: () => "first",
-    });
-    let second: ControlPlaneDescriptorLease | undefined;
-
+  it("publishes and withdraws one endpoint without assigning liveness semantics to the file", async () => {
+    const { path, discovery } = await fixture();
+    const publication = await discovery.publish(firstEndpoint);
     try {
-      const secondFailure = await publishControlPlaneDescriptor({
-        path,
-        endpoint: secondEndpoint,
-        createTemporaryId: () => "second",
-      }).then(
-        (lease) => {
-          second = lease;
-          return undefined;
-        },
-        (error: unknown) => error,
-      );
-
-      expect(secondFailure).toMatchObject({
-        code: "CONTROL_PLANE_DESCRIPTOR_OWNED",
-      });
-      expect(String(secondFailure)).not.toContain(secondEndpoint.capability);
-      await expect(readControlPlaneDescriptor(path)).resolves.toEqual(
-        firstEndpoint,
-      );
-      expect(await readFile(path, "utf8")).not.toContain(
-        secondEndpoint.capability,
-      );
+      await expect(discovery.read()).resolves.toEqual(firstEndpoint);
+      expect(await readFile(path, "utf8")).toBe(JSON.stringify(firstEndpoint));
     } finally {
-      await second?.close();
-      await first.close();
+      await publication.close();
     }
+    await expect(discovery.read()).resolves.toBeUndefined();
+  });
 
-    await expect(readFile(path, "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+  it("lets a new publication replace stale descriptor content and stale close cannot remove it", async () => {
+    const { discovery } = await fixture();
+    const first = await discovery.publish(firstEndpoint);
+    const second = await discovery.publish(secondEndpoint);
+    try {
+      await expect(discovery.read()).resolves.toEqual(secondEndpoint);
+      await first.close();
+      await expect(discovery.read()).resolves.toEqual(secondEndpoint);
+    } finally {
+      await second.close();
+    }
+    await expect(discovery.read()).resolves.toBeUndefined();
+  });
+
+  it("fails explicitly when a present descriptor is malformed", async () => {
+    const { path, discovery } = await fixture();
+    await writeFile(path, "{not-json", "utf8");
+    await expect(discovery.read()).rejects.toThrow("Failed to read Control Plane descriptor");
   });
 });

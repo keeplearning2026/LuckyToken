@@ -31,10 +31,10 @@ import {
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
 import { createConfiguredLuckyTokenDataPlane } from "./composition.js";
 import {
-  ControlPlaneDescriptorOwnedError,
-  publishControlPlaneDescriptor,
-  readControlPlaneDescriptor,
+  createControlPlaneDiscovery,
   resolveControlPlaneDescriptorPath,
+  type ControlPlaneDiscovery,
+  type DiscoveryPublication,
 } from "./control-plane-discovery.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createCredentialControlPlaneHandler } from "./credentials/control-plane.js";
@@ -52,6 +52,13 @@ import {
 } from "./desktop-owner-lease.js";
 import { createFirstRunConfig } from "./first-run-config.js";
 import { createHistoryAuthority } from "./history/index.js";
+import {
+  createInstanceAuthority,
+  InstanceAuthorityOwnedError,
+  resolveBackendInstanceDatabasePath,
+  type InstanceAuthority,
+  type InstanceLease,
+} from "./instance-authority.js";
 import { createModelsJsonAuthority } from "./models-config/authority.js";
 import { createModelsControlPlaneHandler } from "./models-config/control-plane.js";
 import { createPublicModelAuthority } from "./public-models/authority.js";
@@ -145,6 +152,9 @@ export interface StartLuckyTokenApplicationOptions {
   readonly buildId?: string;
   readonly createFirstRunConfig?: boolean;
   readonly events?: LuckyTokenApplicationEvents;
+  /** Internal composition dependency used by integration tests. Production
+   * derives one authority from LuckyToken-owned current-user application state. */
+  readonly instanceAuthority?: InstanceAuthority;
 }
 
 function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint {
@@ -158,40 +168,72 @@ function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint 
   });
 }
 
-async function attachToActiveInstance(
-  descriptorPath: string,
+async function tryAttachToActiveInstance(
+  discovery: ControlPlaneDiscovery,
   events: LuckyTokenApplicationEvents | undefined,
-): Promise<ApplicationOwnership | undefined> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+): Promise<{ readonly ownership: ApplicationOwnership | undefined } | undefined> {
+  const endpoint = await discovery.read();
+  if (endpoint === undefined) return undefined;
+  const client = await connectControlPlane(endpoint, {
+    createRequestId: randomUUID,
+    pipeConnector: createNodePipeTransport(),
+  });
+  try {
+    const hello = await client.hello(controlPlaneVersion);
+    if (hello.type === "incompatible") {
+      throw new Error(
+        "the active instance speaks an incompatible Control Plane contract",
+      );
+    }
+    const result = await client.executeApplicationCommand({ command: "attach" });
+    const ownership = result.snapshot.ownership;
+    events?.onAttached?.(ownership);
+    return Object.freeze({ ownership });
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+async function acquireInstanceAuthorityOrAttach(options: {
+  readonly authority: InstanceAuthority;
+  readonly discovery: ControlPlaneDiscovery;
+  readonly events: LuckyTokenApplicationEvents | undefined;
+}): Promise<
+  | { readonly kind: "acquired"; readonly lease: InstanceLease }
+  | { readonly kind: "attached"; readonly ownership: ApplicationOwnership | undefined }
+> {
+  let lastAttachError: unknown;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
-      const endpoint = await readControlPlaneDescriptor(descriptorPath);
-      const client = await connectControlPlane(endpoint, {
-        createRequestId: randomUUID,
-        pipeConnector: createNodePipeTransport(),
+      return Object.freeze({
+        kind: "acquired" as const,
+        lease: await options.authority.acquire(),
       });
-      try {
-        const hello = await client.hello(controlPlaneVersion);
-        if (hello.type === "incompatible") {
-          throw new Error(
-            "the active instance speaks an incompatible Control Plane contract",
-          );
-        }
-        const result = await client.executeApplicationCommand({ command: "attach" });
-        const ownership = result.snapshot.ownership;
-        events?.onAttached?.(ownership);
-        return ownership;
-      } finally {
-        await client.close().catch(() => undefined);
+    } catch (error) {
+      if (!(error instanceof InstanceAuthorityOwnedError)) throw error;
+    }
+
+    try {
+      const attached = await tryAttachToActiveInstance(
+        options.discovery,
+        options.events,
+      );
+      if (attached !== undefined) {
+        return Object.freeze({
+          kind: "attached" as const,
+          ownership: attached.ownership,
+        });
       }
     } catch (error) {
-      lastError = error;
-      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50));
+      lastAttachError = error;
     }
+
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50));
   }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Failed to attach to the active LuckyToken instance");
+
+  throw lastAttachError instanceof Error
+    ? lastAttachError
+    : new Error("Active LuckyToken Backend is not management-ready yet");
 }
 
 function createAutoStartRegistrar(options: {
@@ -258,36 +300,17 @@ function createLifecycle(options: {
 async function startRecoveryApplication(options: {
   readonly configPath: string;
   readonly issues: readonly CompatibilityIssue[];
-  readonly descriptorOverride?: string;
+  readonly descriptorPath: string;
+  readonly discovery: ControlPlaneDiscovery;
+  readonly instanceLease: InstanceLease;
   readonly backupCommandHandler?: BackupCommandHandler;
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
   readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
 }): Promise<StartLuckyTokenApplicationResult> {
-  const descriptorPath = resolveControlPlaneDescriptorPath({
-    homeDirectory: homedir(),
-    ...(options.descriptorOverride === undefined
-      ? {}
-      : { overridePath: options.descriptorOverride }),
-  });
-  await mkdir(dirname(descriptorPath), { recursive: true });
-  const endpoint = endpointForCurrentUser(dirname(descriptorPath));
-  let descriptor: Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
-
-  try {
-    descriptor = await publishControlPlaneDescriptor({
-      path: descriptorPath,
-      endpoint,
-      createTemporaryId: randomUUID,
-    });
-  } catch (error) {
-    if (error instanceof ControlPlaneDescriptorOwnedError) {
-      const ownership = await attachToActiveInstance(descriptorPath, options.events);
-      return { kind: "attached", ...(ownership === undefined ? {} : { ownership }) };
-    }
-    throw error;
-  }
+  const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
+  let publication: DiscoveryPublication | undefined;
 
   const ownership: ApplicationOwnership = Object.freeze({
     owner: {
@@ -349,17 +372,23 @@ async function startRecoveryApplication(options: {
     pipeServerFactory: controlPipe.pipeServerFactory,
     access: controlPipe.access,
   });
+  try {
+    publication = await options.discovery.publish(endpoint);
+  } catch (error) {
+    await controlPlane.close().catch(() => undefined);
+    throw error;
+  }
 
   const cleanup = async (): Promise<void> => {
     if (desktopOwnerLeaseTimer !== undefined) {
       clearInterval(desktopOwnerLeaseTimer);
       desktopOwnerLeaseTimer = undefined;
     }
-    const results = await Promise.allSettled([
-      descriptor?.close() ?? Promise.resolve(),
-      controlPlane.close(),
-    ]);
-    if (results.some((result) => result.status === "rejected")) {
+    const failures: unknown[] = [];
+    await publication?.close().catch((error: unknown) => failures.push(error));
+    await controlPlane.close().catch((error: unknown) => failures.push(error));
+    await options.instanceLease.close().catch((error: unknown) => failures.push(error));
+    if (failures.length > 0) {
       throw new Error("LuckyToken recovery Control Plane cleanup failed");
     }
   };
@@ -389,23 +418,18 @@ async function startRecoveryApplication(options: {
 async function startNormalApplication(options: {
   readonly configPath: string;
   readonly config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
-  readonly descriptorOverride?: string;
+  readonly descriptorPath: string;
+  readonly discovery: ControlPlaneDiscovery;
+  readonly instanceLease: InstanceLease;
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
   readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
 }): Promise<StartLuckyTokenApplicationResult> {
   const { config } = options;
-  const descriptorPath = resolveControlPlaneDescriptorPath({
-    homeDirectory: homedir(),
-    ...(options.descriptorOverride === undefined
-      ? {}
-      : { overridePath: options.descriptorOverride }),
-  });
-  await mkdir(dirname(descriptorPath), { recursive: true });
-  const endpoint = endpointForCurrentUser(dirname(descriptorPath));
+  const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
 
-  let descriptor: Awaited<ReturnType<typeof publishControlPlaneDescriptor>> | undefined;
+  let publication: DiscoveryPublication | undefined;
   let supervisor: Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>> | undefined;
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
   let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
@@ -417,24 +441,64 @@ async function startNormalApplication(options: {
   let lifecycle: ControlledLuckyTokenApplication | undefined;
   let desktopOwnerLease: DesktopOwnerLeaseAuthority | undefined;
   let desktopOwnerLeaseTimer: ReturnType<typeof setInterval> | undefined;
+  let catalogControllerForCleanup:
+    | ReturnType<typeof createCatalogRefreshController>
+    | undefined;
+  let publicModelAuthorityForCleanup:
+    | ReturnType<typeof createPublicModelAuthority>
+    | undefined;
+  let restoreCodexForCleanup: (() => Promise<void>) | undefined;
+  let publicModelReconcileChain: Promise<void> = Promise.resolve();
   let lastPublishedStatus: ApplicationStatus = Object.freeze({
     modelDataPlane: "stopped",
     provider: "unconfigured",
   });
 
-  try {
-    descriptor = await publishControlPlaneDescriptor({
-      path: descriptorPath,
-      endpoint,
-      createTemporaryId: randomUUID,
-    });
-  } catch (error) {
-    if (error instanceof ControlPlaneDescriptorOwnedError) {
-      const ownership = await attachToActiveInstance(descriptorPath, options.events);
-      return { kind: "attached", ...(ownership === undefined ? {} : { ownership }) };
+  const closeOwnedResources = async (): Promise<readonly unknown[]> => {
+    const failures: unknown[] = [];
+    if (attentionRefreshTimer !== undefined) {
+      clearInterval(attentionRefreshTimer);
+      attentionRefreshTimer = undefined;
     }
-    throw error;
-  }
+    if (desktopOwnerLeaseTimer !== undefined) {
+      clearInterval(desktopOwnerLeaseTimer);
+      desktopOwnerLeaseTimer = undefined;
+    }
+    try {
+      attentionLedgerSubscription?.unsubscribe();
+    } catch (error) {
+      failures.push(error);
+    }
+    attentionLedgerSubscription = undefined;
+    await restoreCodexForCleanup?.().catch((error: unknown) => failures.push(error));
+    if (supervisor !== undefined) {
+      await supervisor
+        .execute(
+          "stop",
+          (status) => controlPlane?.publishStatus(status) ?? Promise.resolve(),
+        )
+        .catch((error: unknown) => failures.push(error));
+    }
+    await publication?.close().catch((error: unknown) => failures.push(error));
+    await controlPlane?.close().catch((error: unknown) => failures.push(error));
+    await catalogControllerForCleanup
+      ?.dispose()
+      .catch((error: unknown) => failures.push(error));
+    await publicModelReconcileChain.catch((error: unknown) => failures.push(error));
+    await publicModelAuthorityForCleanup
+      ?.flush()
+      .catch((error: unknown) => failures.push(error));
+    const storageResults = await Promise.allSettled([
+      diagnosticsStore?.close() ?? Promise.resolve(),
+      requestLedgerStore?.close() ?? Promise.resolve(),
+      deepCaptureStore?.close() ?? Promise.resolve(),
+    ]);
+    for (const result of storageResults) {
+      if (result.status === "rejected") failures.push(result.reason);
+    }
+    await options.instanceLease.close().catch((error: unknown) => failures.push(error));
+    return Object.freeze(failures);
+  };
 
   const ownership: ApplicationOwnership = Object.freeze({
     owner: {
@@ -525,7 +589,7 @@ async function startNormalApplication(options: {
         port: config.server.port,
       },
     });
-    let publicModelReconcileChain: Promise<void> = Promise.resolve();
+    publicModelAuthorityForCleanup = publicModelAuthority;
     const reconcilePublicModels = (
       snapshot: Parameters<typeof publicModelRuntimeFacts>[0],
     ): Promise<void> => {
@@ -622,6 +686,7 @@ async function startNormalApplication(options: {
         controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
       },
     });
+    catalogControllerForCleanup = catalogController;
     // Provider Activation (Spec v1.0 §6, §11.2): the Backend-lifetime
     // Provider Runtime is created BEFORE the Data Plane Supervisor and
     // before the Control Plane starts. Provider discovery, credentials,
@@ -704,6 +769,7 @@ async function startNormalApplication(options: {
     const restoreCodexBeforeShutdown = async (): Promise<void> => {
       await codexIntegrationAuthority.reconcile("shutdown");
     };
+    restoreCodexForCleanup = restoreCodexBeforeShutdown;
     // Backend startup is the one automatic Codex apply point. Data Plane
     // listener restarts (for example after a port edit) never resync Codex.
     await codexIntegrationAuthority.reconcile("startup");
@@ -901,35 +967,8 @@ async function startNormalApplication(options: {
 
     const cleanup = async (): Promise<void> => {
       cleanupPromise ??= (async () => {
-        if (attentionRefreshTimer !== undefined) {
-          clearInterval(attentionRefreshTimer);
-          attentionRefreshTimer = undefined;
-        }
-        if (desktopOwnerLeaseTimer !== undefined) {
-          clearInterval(desktopOwnerLeaseTimer);
-          desktopOwnerLeaseTimer = undefined;
-        }
-        attentionLedgerSubscription?.unsubscribe();
-        attentionLedgerSubscription = undefined;
-        await restoreCodexBeforeShutdown();
-        await publicModelAuthority.flush();
-        if (supervisor !== undefined) {
-          await supervisor
-            .execute(
-              "stop",
-              (status) => controlPlane?.publishStatus(status) ?? Promise.resolve(),
-            )
-            .catch(() => undefined);
-        }
-        await catalogController.dispose();
-        const results = await Promise.allSettled([
-          descriptor?.close() ?? Promise.resolve(),
-          controlPlane?.close() ?? Promise.resolve(),
-          diagnosticsStore?.close() ?? Promise.resolve(),
-          requestLedgerStore?.close() ?? Promise.resolve(),
-          deepCaptureStore?.close() ?? Promise.resolve(),
-        ]);
-        if (results.some((result) => result.status === "rejected")) {
+        const failures = await closeOwnedResources();
+        if (failures.length > 0) {
           throw new Error("LuckyToken application resource cleanup failed");
         }
       })();
@@ -1090,6 +1129,7 @@ async function startNormalApplication(options: {
       access: controlPipe.access,
       diagnostics: ownedDiagnosticsStore,
     });
+    publication = await options.discovery.publish(endpoint);
 
     attentionLedgerSubscription = ownedLedgerStore.subscribe((event) => {
       if (
@@ -1149,13 +1189,7 @@ async function startNormalApplication(options: {
     }
     return { kind: "running", application: lifecycle };
   } catch (error) {
-    await Promise.allSettled([
-      descriptor?.close() ?? Promise.resolve(),
-      controlPlane?.close() ?? Promise.resolve(),
-      diagnosticsStore?.close() ?? Promise.resolve(),
-      requestLedgerStore?.close() ?? Promise.resolve(),
-      deepCaptureStore?.close() ?? Promise.resolve(),
-    ]);
+    await closeOwnedResources();
     throw error;
   }
 }
@@ -1165,59 +1199,96 @@ export async function startLuckyTokenApplication(
 ): Promise<StartLuckyTokenApplicationResult> {
   const ownerKind = options.ownerKind ?? "cli";
   const configPath = resolve(options.configPath);
-  if (options.createFirstRunConfig === true) {
-    await createFirstRunConfig(configPath);
-  }
-
-  let config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
-  try {
-    config = await loadLuckyTokenCliConfig(configPath);
-  } catch (error) {
-    return startRecoveryApplication({
-      configPath,
-      issues: [configCompatibilityIssue(configPath, error)],
-      ...(options.descriptorOverride === undefined
-        ? {}
-        : { descriptorOverride: options.descriptorOverride }),
-      ownerKind,
-      ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
-      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
-      ...(options.events === undefined ? {} : { events: options.events }),
-    });
-  }
-
-  const compatibilityIssues = await inspectOwnedCompatibility(config);
-  if (compatibilityIssues.length > 0) {
-    const recoveryBackupAuthority = createConfiguredBackupAuthority({
-      configPath,
-      config,
-      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
-      snapshots: recoveryBackupSnapshots(config),
-    });
-    return startRecoveryApplication({
-      configPath,
-      issues: compatibilityIssues,
-      ...(options.descriptorOverride === undefined
-        ? {}
-        : { descriptorOverride: options.descriptorOverride }),
-      backupCommandHandler: (command, signal) =>
-        recoveryBackupAuthority.handle(command, signal),
-      ownerKind,
-      ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
-      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
-      ...(options.events === undefined ? {} : { events: options.events }),
-    });
-  }
-
-  return startNormalApplication({
-    configPath,
-    config,
+  const descriptorPath = resolveControlPlaneDescriptorPath({
+    homeDirectory: homedir(),
     ...(options.descriptorOverride === undefined
       ? {}
-      : { descriptorOverride: options.descriptorOverride }),
-    ownerKind,
-    ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
-    ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
-    ...(options.events === undefined ? {} : { events: options.events }),
+      : { overridePath: options.descriptorOverride }),
   });
+  await mkdir(dirname(descriptorPath), { recursive: true });
+  const discovery = createControlPlaneDiscovery({
+    path: descriptorPath,
+    createTemporaryId: randomUUID,
+  });
+  const instanceAuthority =
+    options.instanceAuthority ??
+    createInstanceAuthority({
+      path: resolveBackendInstanceDatabasePath({ homeDirectory: homedir() }),
+    });
+
+  const arbitration = await acquireInstanceAuthorityOrAttach({
+    authority: instanceAuthority,
+    discovery,
+    events: options.events,
+  });
+  if (arbitration.kind === "attached") {
+    return {
+      kind: "attached",
+      ...(arbitration.ownership === undefined
+        ? {}
+        : { ownership: arbitration.ownership }),
+    };
+  }
+  const instanceLease = arbitration.lease;
+
+  try {
+    if (options.createFirstRunConfig === true) {
+      await createFirstRunConfig(configPath);
+    }
+
+    let config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
+    try {
+      config = await loadLuckyTokenCliConfig(configPath);
+    } catch (error) {
+      return await startRecoveryApplication({
+        configPath,
+        issues: [configCompatibilityIssue(configPath, error)],
+        descriptorPath,
+        discovery,
+        instanceLease,
+        ownerKind,
+        ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+        ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+        ...(options.events === undefined ? {} : { events: options.events }),
+      });
+    }
+
+    const compatibilityIssues = await inspectOwnedCompatibility(config);
+    if (compatibilityIssues.length > 0) {
+      const recoveryBackupAuthority = createConfiguredBackupAuthority({
+        configPath,
+        config,
+        applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
+        snapshots: recoveryBackupSnapshots(config),
+      });
+      return await startRecoveryApplication({
+        configPath,
+        issues: compatibilityIssues,
+        descriptorPath,
+        discovery,
+        instanceLease,
+        backupCommandHandler: (command, signal) =>
+          recoveryBackupAuthority.handle(command, signal),
+        ownerKind,
+        ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+        ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+        ...(options.events === undefined ? {} : { events: options.events }),
+      });
+    }
+
+    return await startNormalApplication({
+      configPath,
+      config,
+      descriptorPath,
+      discovery,
+      instanceLease,
+      ownerKind,
+      ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
+      ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+      ...(options.events === undefined ? {} : { events: options.events }),
+    });
+  } catch (error) {
+    await instanceLease.close().catch(() => undefined);
+    throw error;
+  }
 }

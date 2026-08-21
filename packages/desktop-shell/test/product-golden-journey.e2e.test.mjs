@@ -179,9 +179,20 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
   );
 
   await writeFile(
-    join(stateRoot, "model-aliases.json"),
+    join(stateRoot, "public-models.json"),
     `${JSON.stringify(
-      { aliases: { [TEST_ALIAS]: `anthropic/${TEST_MODEL}` } },
+      {
+        schemaVersion: 1,
+        endpoint: { host: "127.0.0.1", port: dataPlanePort },
+        providers: {
+          anthropic: {
+            enabled: true,
+            models: {
+              [TEST_ALIAS]: { target: TEST_MODEL, enabled: true },
+            },
+          },
+        },
+      },
       null,
       2,
     )}\n`,
@@ -193,10 +204,9 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
     `${JSON.stringify(
       {
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: dataPlanePort },
+        server: { port: dataPlanePort },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
             conversion: {
               request: {
                 unknownContent: "error",
@@ -207,7 +217,6 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
             },
           },
           "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
             stateFile: "state/openai-responses.json",
             conversion: {
               request: {
@@ -361,8 +370,6 @@ function spawnReleaseBackend(fixture, environment) {
       "serve",
       "--config",
       fixture.configPath,
-      "--descriptor",
-      fixture.descriptorPath,
       "--owner",
       "cli",
     ],

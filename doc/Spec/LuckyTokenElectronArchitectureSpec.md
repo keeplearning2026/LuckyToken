@@ -338,13 +338,62 @@ It composes and owns long-lived application capabilities:
 - diagnostics and deep capture stores;
 - persistence degradation/recovery;
 - backup/history authorities;
+- Backend `InstanceAuthority` / `InstanceLease` for current-user singleton ownership;
 - Application Control Plane host;
-- local discovery descriptor;
+- `DiscoveryPublication` for the current Control Plane endpoint;
 - application ownership and graceful shutdown.
 
 It is a composition root, not a second protocol layer.
 
-## 4.2 Target external seam
+## 4.2 Backend instance authority
+
+Backend singleton correctness is Backend-owned and is independent from Control Plane discovery.
+
+The production authority is a dedicated LuckyToken-owned local SQLite lock carrier:
+
+```text
+~/.luckytoken/instance.sqlite
+```
+
+The file's existence has no ownership or liveness meaning. `InstanceAuthority.acquire()` holds a `BEGIN IMMEDIATE` transaction through one private `DatabaseSync` connection for the complete Backend lifetime. The `InstanceLease` is the final Backend-lifetime resource released during teardown.
+
+```ts
+export interface InstanceAuthority {
+  acquire(): Promise<InstanceLease>;
+}
+
+export interface InstanceLease {
+  close(): Promise<void>;
+}
+```
+
+The authority has no stale timeout, heartbeat, PID probing, steal operation, owner metadata, or file deletion. Its lock carrier must remain on LuckyToken-owned local filesystem storage and must not be reused as a business database, backup source, diagnostics source, or generic file-scanning target. Production Backend discovery belongs to that same current-user application domain (`~/.luckytoken/control-plane.json`) and is not a configurable `serve` argument; only management clients may accept an explicit descriptor path for navigation.
+
+The same SQLite primitive certification must run on every supported release platform. Windows is certified by the repository's real-process certification and packaged-product tests. macOS and Linux remain structurally supported but are not certified until the same process contention, event-loop suspension, crash-release, normal-release, concurrent-contender, and same-process multi-connection cases run on real hosts for those platforms.
+
+A Backend that cannot acquire the authority is not allowed to become an application authority. It waits for the active owner's discovery publication and attaches through the Control Plane instead. Arbitration remains live across owner turnover: if the owning process disappears before publishing a usable Control Plane, the contender retries `InstanceAuthority.acquire()` and may become the new Backend authority only after the previous process-lifetime lock is gone.
+
+Backend startup ordering is:
+
+```text
+acquire InstanceLease
+    ↓
+load/validate configuration
+    ↓
+construct management authorities
+    ↓
+start Control Plane listener
+    ↓
+publish DiscoveryPublication
+============================ Management Ready
+    ↓
+start Data Plane / background work
+============================ Running or Degraded
+```
+
+Teardown keeps the `InstanceLease` until all other Backend-lifetime resources have stopped or closed.
+
+## 4.3 Target external seam
 
 The target application interface is intentionally small:
 
@@ -376,7 +425,7 @@ Names may change during TDD, but the interface must retain these properties:
 4. internal authorities are not broadly exposed;
 5. Electron does not call this interface in-process — the desktop starts the Backend process and then uses Control Plane.
 
-## 4.3 Current source consolidation
+## 4.4 Current source consolidation
 
 Current `src/cli.ts::runServe()` contains substantial application composition and should not remain the product composition root.
 
@@ -394,12 +443,12 @@ connect Control Plane client
 render CLI result
 ```
 
-## 4.4 Backend tests
+## 4.5 Backend tests
 
 Backend Application integration tests verify:
 
 - boot and cleanup;
-- one authoritative instance;
+- one authoritative instance through `InstanceAuthority` rather than descriptor ownership;
 - recovery-only boot;
 - Data Plane supervisor lifecycle;
 - Control Plane remains alive while Data Plane is stopped/failed;
@@ -566,8 +615,8 @@ Electron Main owns only desktop/OS lifecycle:
 - single desktop instance;
 - tray lifetime and menu;
 - create/show/focus/destroy management window;
-- Backend process supervision;
-- Control Plane connection/reconnection;
+- Backend process launch for a missing Backend;
+- Backend discovery/Control Plane connection recovery;
 - OS notifications;
 - OS auto-start registration for the desktop product;
 - file/directory/save dialogs;
@@ -590,37 +639,57 @@ Electron Main must not implement:
 
 If a feature needs one of those behaviors, Main invokes the Control Plane.
 
-## 7.3 Backend supervisor seam
+## 7.3 Desktop Backend connection seam
 
-The desktop supervisor owns process facts only:
+Electron Main owns one deep `DesktopBackendConnection` module for the complete Backend connection lifecycle:
 
 ```ts
-export interface BackendSupervisor {
-  ensureRunning(): Promise<BackendAttachment>;
-  current(): BackendAttachment | undefined;
+export interface DesktopBackendConnection {
+  start(): Promise<void>;
   dispose(): Promise<void>;
 }
 ```
 
-`BackendAttachment` contains only facts required to attach/recover, such as ownership/discovery state. It does not expose Core instances.
+Its implementation composes four narrow collaborators:
 
-The supervisor may:
+```text
+ControlPlaneDiscovery
+BackendLauncher
+ControlPlaneSession
+DesktopOwnerLease
+```
 
-- discover an already-running Backend;
-- spawn the bundled Backend when none exists;
-- wait for Control Plane readiness;
-- record whether this desktop started the process.
+The module owns discovery, build/owner policy, attach, launch-on-absence, startup early-exit observation, session-loss rediscovery, and single-flight recovery. A lost session invalidates the previous endpoint assumption; recovery reads discovery again and may reconnect to the same or a new endpoint.
 
-It must never kill a foreign/headless owner directly. Shutdown goes through the Application Control Plane ownership contract.
+`BackendLauncher` is deliberately narrower than the old supervisor concept:
+
+```ts
+export interface BackendLauncher {
+  launch(): Promise<SpawnedBackend>;
+}
+
+export interface SpawnedBackend {
+  readonly pid: number;
+  readonly exited: Promise<ProcessExit>;
+  release(): void;
+}
+```
+
+The launcher knows only process construction/launch facts. It does not read discovery, decide readiness, inspect ownership, implement build replacement, or own Backend liveness. The child PID and `exited` promise are startup diagnostic facts only; after a Control Plane session is established the child observation is released.
+
+Concurrent benign launch attempts are allowed. Backend singleton correctness is enforced by Backend `InstanceAuthority`, never by Desktop race avoidance.
+
+The connection module must never kill a foreign/headless owner directly. On an explicit initial desktop start, a stale desktop-owned Backend build is replaced only through an acknowledged graceful Control Plane quit; a CLI-owned Backend is preserved and attached even when its build identity differs. After a shell has already established a session, recovery must never roll the product backward: if fresh discovery finds a different desktop build, the recovering shell attaches only as a viewer, relinquishes its desktop-owner lease activity, and neither quits nor claims ownership of the newly authoritative Backend. That viewer state is terminal for automatic recovery in the current shell: if the authoritative foreign-build Backend later disconnects or quits, the viewer must not launch or resurrect another Backend.
 
 ## 7.4 Control Plane session seam
 
 Main contains one `ControlPlaneSession` module that wraps the existing TypeScript `ControlPlaneClient` lifecycle:
 
 ```text
-connect
-reconnect
+connect to one endpoint
+reconnect to one endpoint
 current connection status
+compatible ApplicationIdentity from hello
 execute typed operations
 subscribe typed events
 disconnect
@@ -888,10 +957,12 @@ One fact has one authoritative owner at each lifecycle stage.
 | Settings | Backend settings authority | registered safe projections / commands |
 | Request Ledger | Backend ledger store | bounded query/events |
 | Diagnostics | Backend diagnostics store | sanitized query/events |
+| Backend singleton ownership | Backend `InstanceAuthority` / `InstanceLease` | acquired/already-owned result only |
 | Application ownership | Backend Application | ownership projection |
+| Control Plane publication | Backend `DiscoveryPublication` | endpoint discovery hint only |
 | Control Plane capability | Backend discovery + trusted Control Plane client | never renderer |
 | Local IPC address | discovery/transport adapter | trusted Main/CLI only |
-| Backend child-process handle | Electron Main BackendSupervisor | never renderer |
+| Backend child-process handle | Electron Main `BackendLauncher` during startup only | never renderer |
 | Tray icon/menu/window handles | Electron Main | never Backend/Core |
 | Auto-start registration | Electron platform adapter | boolean state/operation |
 | UI navigation/drafts | Renderer feature | no Backend projection |
@@ -913,11 +984,15 @@ acquire desktop single-instance ownership
     ↓
 create tray
     ↓
-BackendSupervisor.ensureRunning()
-    ├─ active Backend found → attach
-    └─ none found → spawn bundled Backend
+DesktopBackendConnection.start()
     ↓
-connect Application Control Plane
+read current Control Plane discovery
+    ├─ usable Backend found → connect/hello/attach
+    └─ none usable → launch bundled Backend candidate
+                         ↓
+                  Backend InstanceAuthority arbitrates
+    ↓
+connect Application Control Plane session
     ↓
 project minimal tray health
 ```
@@ -1141,7 +1216,7 @@ Explicit tray product quit is ownership-aware.
 
 Electron must not terminate a Backend process directly merely because it has a child-process handle.
 
-For a desktop-owned Backend:
+For a desktop-owned Backend whose active logical DesktopOwnerLease is held by this shell:
 
 ```text
 Quit LuckyToken
@@ -1154,6 +1229,8 @@ Backend closes authorities/descriptor
     ↓
 Electron Main exits
 ```
+
+`ownership.owner.kind = "desktop"` is only a Backend ownership projection; it is not sufficient authority for a shell to perform Product Quit. A shell that recovered onto another desktop build as a viewer, or whose logical lease was superseded, must never use the other shell's desktop-owned Backend as its own quit target. Tray Quit in that state exits only the local Electron shell.
 
 For a CLI-owned Backend:
 
@@ -1484,7 +1561,8 @@ Implement only:
 
 - single instance;
 - tray;
-- BackendSupervisor;
+- DesktopBackendConnection;
+- BackendLauncher;
 - ControlPlaneSession;
 - BrowserWindow lifecycle;
 - typed preload bridge;
@@ -1567,9 +1645,15 @@ Renderer crash
 → Electron desktop concern
 → Backend continues serving
 
-Local IPC disconnect
-→ Control Plane/Main connection concern
-→ renderer shows reconnecting/unavailable state when open
+Local IPC/session disconnect
+→ current Control Plane session becomes unavailable
+→ DesktopBackendConnection discards the old endpoint assumption and re-runs discovery
+→ renderer shows reconnecting/unavailable state while recovery is in progress
+
+Backend process exits before Management Ready
+→ BackendLauncher `exited` startup diagnostic
+→ DesktopBackendConnection performs one fresh discovery check
+→ fail startup only when no usable authoritative Backend publication exists
 ```
 
 Renderer must not infer domain failures from raw strings or combinations of unrelated fields.

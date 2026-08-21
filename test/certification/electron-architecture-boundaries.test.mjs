@@ -277,6 +277,17 @@ test("desktop release blocks orphaned desktop-owned Backends with a logical owne
     ),
     "utf8",
   );
+  const backendConnection = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "src",
+      "main",
+      "desktop-backend-connection.ts",
+    ),
+    "utf8",
+  );
   const main = await readFile(
     path.join(repositoryRoot, "packages", "desktop-shell", "src", "main", "main.ts"),
     "utf8",
@@ -296,7 +307,16 @@ test("desktop release blocks orphaned desktop-owned Backends with a logical owne
   assert.match(backendLease, /leaseId/u, "Backend liveness must use a logical lease instead of a parent PID");
   assert.match(mainLease, /command: "desktop_owner"/u, "Electron Main must claim and renew the typed owner lease");
   assert.match(lifecycle, /ownerKind === "cli"/u, "Tray Quit must detach locally from a CLI-owned Backend");
-  assert.match(main, /desktopOwnerLease\.bind/u, "Main must bind the lease after Control Plane connect/reconnect");
+  assert.match(
+    backendConnection,
+    /desktopOwnerLease\.bind/u,
+    "DesktopBackendConnection must bind the lease after a usable Control Plane session is established",
+  );
+  assert.match(
+    main,
+    /ownsDesktopBackend: \(\) => desktopOwnerLease\.isBound\(\)/u,
+    "Product Quit must require this shell's active DesktopOwnerLease rather than trusting Backend owner kind alone",
+  );
   assert.match(lifecycleE2e, /forcibly terminated/u, "packaged lifecycle E2E must exercise abnormal Electron owner death");
   assert.match(lifecycleE2e, /Backend process remained alive after owner lease expiry/u, "packaged E2E must prove the Backend PID exits after lease expiry");
 });
@@ -306,14 +326,25 @@ test("desktop release carries an exact Backend build identity and replacement se
     path.join(repositoryRoot, "scripts", "assemble-release-backend.mjs"),
     "utf8",
   );
-  const supervisor = await readFile(
+  const backendConnection = await readFile(
     path.join(
       repositoryRoot,
       "packages",
       "desktop-shell",
       "src",
       "main",
-      "electron-backend-supervisor.ts",
+      "desktop-backend-connection.ts",
+    ),
+    "utf8",
+  );
+  const session = await readFile(
+    path.join(
+      repositoryRoot,
+      "packages",
+      "desktop-shell",
+      "src",
+      "main",
+      "control-plane-session.ts",
     ),
     "utf8",
   );
@@ -329,8 +360,26 @@ test("desktop release carries an exact Backend build identity and replacement se
   );
 
   assert.match(assembly, /build-id\.txt/u, "release assembly must emit the Backend build identity");
-  assert.match(supervisor, /hello\.application\.buildId/u, "desktop must compare the running Backend build identity");
-  assert.match(supervisor, /owner\.kind === "desktop"/u, "only desktop-owned stale Backends may be replaced automatically");
+  assert.match(
+    session,
+    /currentApplication = hello\.application/u,
+    "ControlPlaneSession must retain the compatible Backend identity from hello",
+  );
+  assert.match(
+    backendConnection,
+    /application\.buildId !== expectedBuildId/u,
+    "DesktopBackendConnection must compare the running Backend build identity",
+  );
+  assert.match(
+    backendConnection,
+    /status\.ownership\?\.owner\.kind === "desktop"/u,
+    "only desktop-owned stale Backends may be replaced automatically",
+  );
+  assert.match(
+    backendConnection,
+    /foreignDesktopBuild && !reconnecting/u,
+    "recovery must not roll back a newer desktop-owned Backend build",
+  );
   assert.match(lifecycleE2e, /repository build must replace a stale desktop-owned Backend build/u, "packaged E2E must prove stale Backend replacement");
 });
 

@@ -7,7 +7,7 @@ import {
   validateReleaseLayout,
 } from "../../scripts/release-layout.mjs";
 
-test("launcher.json contract is stable and resolvable by the Electron backend supervisor", () => {
+test("launcher.json contract is stable and resolvable by the Electron BackendLauncher", () => {
   assert.deepEqual(launcherConfig(), {
     backendNodeExecutable: "backend/node/node.exe",
     backendCliScript: "backend/dist/cli.js",

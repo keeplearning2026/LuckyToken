@@ -15,6 +15,7 @@ export interface DesktopOwnerLeaseClientDependencies {
 
 export interface DesktopOwnerLeaseClient {
   bind(ownership: ApplicationOwnership | undefined): Promise<void>;
+  isBound(): boolean;
   dispose(): void;
 }
 
@@ -98,6 +99,7 @@ export function createDesktopOwnerLeaseClient(
         timer.unref();
       }
     },
+    isBound: () => timer !== undefined,
     dispose: stop,
   });
 }

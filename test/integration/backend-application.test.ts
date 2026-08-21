@@ -12,13 +12,35 @@ import {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
-  startLuckyTokenApplication,
+  startLuckyTokenApplication as startProductionLuckyTokenApplication,
   type RunningLuckyTokenApplication,
+  type StartLuckyTokenApplicationOptions,
 } from "../../src/application.js";
-import { readControlPlaneDescriptor } from "../../src/control-plane-discovery.js";
+import {
+  createInstanceAuthority,
+  InstanceAuthorityOwnedError,
+} from "../../src/instance-authority.js";
+import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.js";
 
 const roots: string[] = [];
 const applications: RunningLuckyTokenApplication[] = [];
+
+async function readControlPlaneDescriptor(path: string) {
+  const endpoint = await createControlPlaneDiscovery({ path }).read();
+  if (endpoint === undefined) throw new Error("Expected Control Plane descriptor");
+  return endpoint;
+}
+
+function startLuckyTokenApplication(
+  options: Omit<StartLuckyTokenApplicationOptions, "instanceAuthority">,
+) {
+  return startProductionLuckyTokenApplication({
+    ...options,
+    instanceAuthority: createInstanceAuthority({
+      path: join(dirname(options.configPath), "instance.sqlite"),
+    }),
+  });
+}
 
 afterEach(async () => {
   await Promise.allSettled(applications.splice(0).map((application) => application.close()));
@@ -172,6 +194,57 @@ describe("Backend Application public lifecycle seam", () => {
     });
   });
 
+  it("releases the Backend InstanceLease only after discovery and the Data Plane are gone", async () => {
+    const { configPath, descriptorPath, port } = await fixture();
+    let releaseObservation:
+      | { readonly discoveryAbsent: boolean; readonly dataPlanePortAvailable: boolean }
+      | undefined;
+
+    const started = await startProductionLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+      instanceAuthority: {
+        async acquire() {
+          return {
+            async close() {
+              const discoveryAbsent =
+                (await createControlPlaneDiscovery({ path: descriptorPath }).read()) ===
+                undefined;
+              const server = createServer();
+              let dataPlanePortAvailable = false;
+              try {
+                await new Promise<void>((resolve, reject) => {
+                  server.once("error", reject);
+                  server.listen(port, "127.0.0.1", resolve);
+                });
+                dataPlanePortAvailable = true;
+              } finally {
+                if (server.listening) {
+                  await new Promise<void>((resolve, reject) => {
+                    server.close((error) =>
+                      error === undefined ? resolve() : reject(error),
+                    );
+                  });
+                }
+              }
+              releaseObservation = { discoveryAbsent, dataPlanePortAvailable };
+            },
+          };
+        },
+      },
+    });
+    expect(started.kind).toBe("running");
+    if (started.kind !== "running") return;
+
+    await started.application.close();
+
+    expect(releaseObservation).toEqual({
+      discoveryAbsent: true,
+      dataPlanePortAvailable: true,
+    });
+  });
+
   it("does not let a desktop lease take ownership of a CLI-owned Backend", async () => {
     const { configPath, descriptorPath } = await fixture();
     const started = await startLuckyTokenApplication({
@@ -233,6 +306,32 @@ describe("Backend Application public lifecycle seam", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("retries InstanceAuthority when a previous owner disappears before publishing discovery", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const realAuthority = createInstanceAuthority({
+      path: join(dirname(configPath), "instance-retry.sqlite"),
+    });
+    let attempts = 0;
+
+    const started = await startProductionLuckyTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+      instanceAuthority: {
+        async acquire() {
+          attempts += 1;
+          if (attempts === 1) throw new InstanceAuthorityOwnedError();
+          return realAuthority.acquire();
+        },
+      },
+    });
+
+    expect(started.kind).toBe("running");
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    if (started.kind !== "running") return;
+    applications.push(started.application);
   });
 
   it("attaches a second start attempt to the active application", async () => {

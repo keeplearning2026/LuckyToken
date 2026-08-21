@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -66,10 +66,22 @@ function startCli(
   const command = bridgeSignal
     ? [tsxCli, "test/fixtures/cli-signal-bridge.ts"]
     : [tsxCli, "src/cli.ts", ...args];
+  const configIndex = args.indexOf("--config");
+  const configPath = configIndex < 0 ? undefined : args[configIndex + 1];
+  const configDirectory = configPath === undefined ? undefined : dirname(configPath);
+  const fixtureHome =
+    configDirectory === undefined
+      ? undefined
+      : basename(configDirectory) === ".luckytoken"
+        ? dirname(configDirectory)
+        : configDirectory;
   return spawn(process.execPath, command, {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...(fixtureHome === undefined
+        ? {}
+        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
       ...extraEnv,
       ...(bridgeSignal
         ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
@@ -131,7 +143,22 @@ describe("LuckyToken CLI", () => {
     expect(result.stdout).toContain("logout");
     expect(result.stdout).not.toContain("client-token");
     expect(result.stdout).toContain("control history");
+    expect(result.stdout).toContain("Control-command discovery descriptor");
     expect(result.stderr).not.toContain("Error");
+  }, 30_000);
+
+  it("rejects a serve descriptor override so singleton and discovery stay in one current-user domain", async () => {
+    const child = startCli([
+      "--config",
+      "unused-config.json",
+      "--descriptor",
+      "other-control-plane.json",
+    ]);
+    children.push(child);
+    const result = await captureChild(child).result;
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown option: --descriptor");
   }, 30_000);
 
   it("reads the discovery descriptor and prints status without its capability", async () => {
@@ -624,10 +651,7 @@ describe("LuckyToken CLI", () => {
     });
     await writeFile(configPath, original, "utf8");
     const descriptorPath = join(stateDirectory, "control-plane.json");
-    const serve = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const serve = startCli(["--config", configPath], true);
     children.push(serve);
     const serving = captureChild(serve);
 
@@ -709,10 +733,7 @@ describe("LuckyToken CLI", () => {
     );
     const descriptorPath = join(stateDirectory, "control-plane.json");
     const destinationPath = join(directory, "ordinary-recovery-backup.json");
-    const serve = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const serve = startCli(["--config", configPath], true);
     children.push(serve);
     const serving = captureChild(serve);
     await expect
@@ -784,10 +805,7 @@ describe("LuckyToken CLI", () => {
       );
       const descriptorPath = join(stateDirectory, "control-plane.json");
       await writeFile(descriptorPath, "stale-descriptor", "utf8");
-      const serve = startCli(
-        ["--config", configPath, "--descriptor", descriptorPath],
-        true,
-      );
+      const serve = startCli(["--config", configPath], true);
       children.push(serve);
       const serveCapture = captureChild(serve);
 
@@ -895,11 +913,7 @@ describe("LuckyToken CLI", () => {
       }),
       "utf8",
     );
-    const descriptorPath = join(stateDirectory, "control-plane.json");
-    const serve = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const serve = startCli(["--config", configPath], true);
     children.push(serve);
     const serveCapture = captureChild(serve);
     // The bundled package is a reserved product identity: explicit user
@@ -962,10 +976,7 @@ describe("LuckyToken CLI", () => {
     const descriptorPath = join(stateDirectory, "control-plane.json");
     await writeFile(descriptorPath, "stale-descriptor", "utf8");
 
-    const child = startCli(
-      ["--config", configPath, "--descriptor", descriptorPath],
-      true,
-    );
+    const child = startCli(["--config", configPath], true);
     children.push(child);
     const serving = captureChild(child);
     await expect

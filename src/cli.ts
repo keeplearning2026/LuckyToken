@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 
 import { startLuckyTokenApplication } from "./application.js";
 import { loadLuckyTokenCliConfig } from "./cli-config.js";
-import { readControlPlaneDescriptor } from "./control-plane-discovery.js";
+import { createControlPlaneDiscovery } from "./control-plane-discovery.js";
 import { runCredentialCli } from "./credentials/cli.js";
 import { runAuthCli } from "./credentials/auth-cli.js";
 import { createConfiguredPiModels } from "./composition.js";
@@ -33,6 +33,14 @@ import {
   type RuntimeCommand,
   type SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
+
+async function readControlPlaneDescriptor(path: string) {
+  const endpoint = await createControlPlaneDiscovery({ path }).read();
+  if (endpoint === undefined) {
+    throw new Error("Failed to read Control Plane descriptor");
+  }
+  return endpoint;
+}
 
 const HELP = `LuckyToken
 
@@ -72,7 +80,7 @@ Commands:
 Options:
   --config <path>  Strict LuckyToken JSON configuration
   --owner <kind>   Ownership identity for serve: cli (default) or desktop
-  --descriptor <path>  Current-user Control Plane discovery descriptor
+  --descriptor <path>  Control-command discovery descriptor
   --help           Show this help
 
 control models commands:
@@ -127,7 +135,6 @@ type ParsedCliArguments =
   | {
       readonly command: "serve";
       readonly configPath: string;
-      readonly descriptorPath?: string;
       readonly ownerKind: "cli" | "desktop";
       readonly desktopExe?: string;
       readonly createFirstRunConfig: boolean;
@@ -149,7 +156,6 @@ function parseArguments(
 ): ParsedCliArguments | undefined {
   if (args.includes("--help")) return undefined;
   let configPath: string | undefined;
-  let descriptorPath: string | undefined;
   let ownerKind: "cli" | "desktop" = "cli";
   let desktopExe: string | undefined;
   let createFirstRunConfig = false;
@@ -164,18 +170,6 @@ function parseArguments(
         throw new Error("--config requires a path");
       }
       configPath = value;
-      index += 1;
-      continue;
-    }
-    if (argument === "--descriptor") {
-      if (descriptorPath !== undefined) {
-        throw new Error("--descriptor may be provided once");
-      }
-      const value = args[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error("--descriptor requires a path");
-      }
-      descriptorPath = value;
       index += 1;
       continue;
     }
@@ -219,9 +213,6 @@ function parseArguments(
             throw new Error(`Unknown command: ${first}`);
           })();
   const providerId = command === "serve" ? undefined : positional[1];
-  if (command !== "serve" && descriptorPath !== undefined) {
-    throw new Error("--descriptor is only valid for serve or control status");
-  }
   const expectedPositionals =
     command === "serve" && first === "serve" ? 1 : command === "serve" ? 0 : 2;
   if (positional.length > expectedPositionals) {
@@ -233,7 +224,6 @@ function parseArguments(
       configPath,
       ownerKind,
       createFirstRunConfig,
-      ...(descriptorPath === undefined ? {} : { descriptorPath }),
       ...(desktopExe === undefined ? {} : { desktopExe }),
     };
   }
@@ -457,7 +447,6 @@ function backendBuildIdFromEnvironment(): string | undefined {
 
 async function runServe(
   configPath: string,
-  descriptorOverride?: string,
   ownerKind: "cli" | "desktop" = "cli",
   desktopExe?: string,
   createFirstRunConfig = false,
@@ -465,9 +454,6 @@ async function runServe(
 ): Promise<void> {
   const started = await startLuckyTokenApplication({
     configPath,
-    ...(descriptorOverride === undefined
-      ? {}
-      : { descriptorOverride }),
     ownerKind,
     ...(desktopExe === undefined ? {} : { desktopExe }),
     ...(buildId === undefined ? {} : { buildId }),
@@ -1168,7 +1154,6 @@ export async function runLuckyTokenCli(
   if (parsed.command === "serve") {
     await runServe(
       parsed.configPath,
-      parsed.descriptorPath,
       parsed.ownerKind,
       parsed.desktopExe,
       parsed.createFirstRunConfig,

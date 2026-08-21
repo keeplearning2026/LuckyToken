@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 
@@ -14,13 +14,32 @@ import {
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import {
-  startLuckyTokenApplication,
+  startLuckyTokenApplication as startProductionLuckyTokenApplication,
   type RunningLuckyTokenApplication,
+  type StartLuckyTokenApplicationOptions,
 } from "../../src/application.js";
-import { readControlPlaneDescriptor } from "../../src/control-plane-discovery.js";
+import { createInstanceAuthority } from "../../src/instance-authority.js";
+import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.js";
 
 const roots: string[] = [];
 const applications: RunningLuckyTokenApplication[] = [];
+
+async function readControlPlaneDescriptor(path: string) {
+  const endpoint = await createControlPlaneDiscovery({ path }).read();
+  if (endpoint === undefined) throw new Error("Expected Control Plane descriptor");
+  return endpoint;
+}
+
+function startLuckyTokenApplication(
+  options: Omit<StartLuckyTokenApplicationOptions, "instanceAuthority">,
+) {
+  return startProductionLuckyTokenApplication({
+    ...options,
+    instanceAuthority: createInstanceAuthority({
+      path: join(dirname(options.configPath), "instance.sqlite"),
+    }),
+  });
+}
 
 afterEach(async () => {
   await Promise.allSettled(

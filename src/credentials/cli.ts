@@ -10,7 +10,15 @@ import {
   type CredentialCommandResult,
 } from "@luckytoken/application-control-plane/control-plane";
 
-import { readControlPlaneDescriptor } from "../control-plane-discovery.js";
+import { createControlPlaneDiscovery } from "../control-plane-discovery.js";
+
+async function readControlPlaneDescriptor(path: string) {
+  const endpoint = await createControlPlaneDiscovery({ path }).read();
+  if (endpoint === undefined) {
+    throw new Error("Failed to read Control Plane descriptor");
+  }
+  return endpoint;
+}
 
 /**
  * CLI Credential commands (Ticket 12).

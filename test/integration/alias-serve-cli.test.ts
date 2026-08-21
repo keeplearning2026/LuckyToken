@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,10 +30,34 @@ function captureChild(child: ChildProcessWithoutNullStreams): Promise<ChildResul
   });
 }
 
-function startCli(args: readonly string[]): ChildProcessWithoutNullStreams {
-  return spawn(process.execPath, [tsxCli, "src/cli.ts", ...args], {
+function startCli(
+  args: readonly string[],
+  bridgeSignal = false,
+): ChildProcessWithoutNullStreams {
+  const configIndex = args.indexOf("--config");
+  const configPath = configIndex < 0 ? undefined : args[configIndex + 1];
+  const configDirectory = configPath === undefined ? undefined : dirname(configPath);
+  const fixtureHome =
+    configDirectory === undefined
+      ? undefined
+      : basename(configDirectory) === ".luckytoken"
+        ? dirname(configDirectory)
+        : configDirectory;
+  const command = bridgeSignal
+    ? [tsxCli, "test/fixtures/cli-signal-bridge.ts"]
+    : [tsxCli, "src/cli.ts", ...args];
+  return spawn(process.execPath, command, {
     cwd: process.cwd(),
-    env: { ...process.env, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      ...(fixtureHome === undefined
+        ? {}
+        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
+      ...(bridgeSignal
+        ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
+        : {}),
+      NO_COLOR: "1",
+    },
     stdio: "pipe",
   });
 }
@@ -90,9 +114,10 @@ describe("Public Model serve wiring", () => {
       }),
       "utf8",
     );
-    const descriptorPath = join(stateDirectory, "control-plane.json");
-    const serve = startCli(["--config", configPath, "--descriptor", descriptorPath]);
+    const descriptorPath = join(root, ".luckytoken", "control-plane.json");
+    const serve = startCli(["--config", configPath], true);
     children.push(serve);
+    const serving = captureChild(serve);
 
     await expect
       .poll(async () => {
@@ -148,22 +173,20 @@ describe("Public Model serve wiring", () => {
       state: { endpoint: { host: "127.0.0.1", port: nextPort } },
     });
 
-    await expect
-      .poll(async () => {
-        try {
-          const persisted = JSON.parse(await readFile(join(root, "public-models.json"), "utf8")) as {
-            endpoint?: { port?: number };
-          };
-          return persisted.endpoint?.port;
-        } catch {
-          return undefined;
-        }
-      }, { timeout: 5_000, interval: 50 })
-      .toBe(nextPort);
-
     const retired = startCli(["control", "aliases", "query", "--descriptor", descriptorPath]);
     children.push(retired);
     const retiredResult = await captureChild(retired);
     expect(retiredResult.code).not.toBe(0);
+
+    // Persistence is debounced while running. Trigger the real graceful
+    // application shutdown so PublicModelAuthority.flush() defines the
+    // deterministic durability boundary instead of a wall-clock timeout.
+    serve.stdin.end("stop\n");
+    const serveResult = await serving;
+    expect(serveResult.code).toBe(0);
+    const persisted = JSON.parse(
+      await readFile(join(root, "public-models.json"), "utf8"),
+    ) as { endpoint?: { port?: number } };
+    expect(persisted.endpoint?.port).toBe(nextPort);
   });
 });

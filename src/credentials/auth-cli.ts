@@ -11,7 +11,7 @@ import {
   type AuthInteractionEvent,
 } from "@luckytoken/application-control-plane/control-plane";
 
-import { readControlPlaneDescriptor } from "../control-plane-discovery.js";
+import { createControlPlaneDiscovery } from "../control-plane-discovery.js";
 
 /**
  * CLI Provider-auth commands (Ticket 13).
@@ -24,6 +24,14 @@ import { readControlPlaneDescriptor } from "../control-plane-discovery.js";
  * outcome (success / cancelled / failed) is reported. Output never
  * contains credential or code values.
  */
+
+async function readControlPlaneDescriptor(path: string) {
+  const endpoint = await createControlPlaneDiscovery({ path }).read();
+  if (endpoint === undefined) {
+    throw new Error("Failed to read Control Plane descriptor");
+  }
+  return endpoint;
+}
 
 const AUTH_HELP = `LuckyToken control auth
 

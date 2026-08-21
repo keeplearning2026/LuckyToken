@@ -183,10 +183,9 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
     `${JSON.stringify(
       {
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port: dataPlanePort },
+        server: { port: dataPlanePort },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
             conversion: {
               request: {
                 unknownContent: "error",
@@ -197,7 +196,6 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
             },
           },
           "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
             stateFile: "state/openai-responses.json",
             conversion: {
               request: {
@@ -481,15 +479,36 @@ test(
         .filter({ has: page.getByRole("heading", { name: "Anthropic", exact: true }) });
       await reopenedAnthropicCard.waitFor();
 
-      // 7. The internal alias file stores the Provider-namespaced model name;
-      // the user never needed to construct that string.
-      const aliasFile = JSON.parse(
-        await readFile(join(fixture.stateRoot, "model-aliases.json"), "utf8"),
+      // 7. The authoritative Public Models file stores the Provider-namespaced
+      // model name; the user never needed to construct that string.
+      let publicModels;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        try {
+          publicModels = JSON.parse(
+            await readFile(join(fixture.stateRoot, "public-models.json"), "utf8"),
+          );
+          if (
+            publicModels.providers?.["commandcode-private"]?.models?.[
+              COMMANDCODE_CUSTOM_ALIAS
+            ] !== undefined
+          ) {
+            break;
+          }
+        } catch {
+          // PublicModelAuthority persists with a short debounce; retry until
+          // the authoritative document reaches disk.
+        }
+        await delay(25);
+      }
+      assert.deepEqual(
+        publicModels?.providers?.["commandcode-private"]?.models?.[
+          COMMANDCODE_CUSTOM_ALIAS
+        ],
+        {
+          target: "deepseek/deepseek-v4-flash",
+          enabled: true,
+        },
       );
-      assert.deepEqual(aliasFile.aliases[COMMANDCODE_CUSTOM_ALIAS], {
-        provider: "commandcode-private",
-        model: "deepseek/deepseek-v4-flash",
-      });
 
       // 8. Start the Data Plane, log in to the deterministic Anthropic
       // Provider, and rename its model through the same Models card.

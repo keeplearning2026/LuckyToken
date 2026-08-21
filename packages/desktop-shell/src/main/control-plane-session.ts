@@ -2,6 +2,7 @@ import {
   connectControlPlane,
   controlPlaneVersion,
   createNodePipeTransport,
+  type ApplicationIdentity,
   type ControlPlaneClient,
   type ControlPlaneEndpoint,
   type StatusSnapshot,
@@ -25,6 +26,7 @@ export interface ControlPlaneSession {
   connect(endpoint: ControlPlaneEndpoint): Promise<StatusSnapshot>;
   reconnect(endpoint: ControlPlaneEndpoint): Promise<StatusSnapshot>;
   client(): ControlPlaneClient;
+  application(): ApplicationIdentity;
   state(): MainControlPlaneState;
   trayHealth(): TrayHealth;
   subscribeState(listener: (state: MainControlPlaneState) => void): () => void;
@@ -53,6 +55,7 @@ export function createControlPlaneSession(
 ): ControlPlaneSession {
   let currentState: MainControlPlaneState = Object.freeze({ kind: "idle" });
   let currentClient: ControlPlaneClient | undefined;
+  let currentApplication: ApplicationIdentity | undefined;
   let unsubscribeStatus: (() => Promise<void>) | undefined;
   let generation = 0;
   const listeners = new Set<(state: MainControlPlaneState) => void>();
@@ -67,6 +70,7 @@ export function createControlPlaneSession(
     unsubscribeStatus = undefined;
     const client = currentClient;
     currentClient = undefined;
+    currentApplication = undefined;
     await unsubscribe?.().catch(() => undefined);
     await client?.close().catch(() => undefined);
   };
@@ -85,6 +89,7 @@ export function createControlPlaneSession(
       if (hello.type !== "compatible") {
         throw new Error("LuckyToken Control Plane version is incompatible");
       }
+      currentApplication = hello.application;
       let latest: StatusSnapshot | undefined;
       unsubscribeStatus = await client.subscribe((event) => {
         if (myGeneration !== generation) return;
@@ -103,6 +108,7 @@ export function createControlPlaneSession(
       void client.disconnected.then((disconnect) => {
         if (myGeneration !== generation || disconnect.reason === "closed") return;
         currentClient = undefined;
+        currentApplication = undefined;
         unsubscribeStatus = undefined;
         publish(Object.freeze({ kind: "unavailable" }));
       });
@@ -124,6 +130,12 @@ export function createControlPlaneSession(
         throw new Error("LuckyToken Control Plane is unavailable");
       }
       return currentClient;
+    },
+    application(): ApplicationIdentity {
+      if (currentApplication === undefined || currentState.kind !== "ready") {
+        throw new Error("LuckyToken Control Plane is unavailable");
+      }
+      return currentApplication;
     },
     state: () => currentState,
     trayHealth: () => deriveTrayHealth(currentState),

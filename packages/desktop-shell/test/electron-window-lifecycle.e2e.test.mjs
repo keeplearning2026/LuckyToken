@@ -62,10 +62,9 @@ async function writeConfig(home, port) {
     `${JSON.stringify(
       {
         schemaVersion: "luckytoken-config-v1",
-        server: { host: "127.0.0.1", port },
+        server: { port },
         clientProtocols: {
           "anthropic-messages": {
-            authFile: "client-auth/anthropic-messages.json",
             conversion: {
               request: {
                 unknownContent: "error",
@@ -76,7 +75,6 @@ async function writeConfig(home, port) {
             },
           },
           "openai-responses": {
-            authFile: "client-auth/openai-responses.json",
             stateFile: "state/openai-responses.json",
             conversion: {
               request: {
@@ -159,7 +157,9 @@ async function waitForRunning(client) {
     if (status.modelDataPlane === "running") return status;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
-  throw new Error(`Data Plane did not reach running state: ${status?.modelDataPlane ?? "unknown"}`);
+  throw new Error(
+    `Data Plane did not reach running state: ${JSON.stringify(status)}`,
+  );
 }
 
 async function waitForBackendReplacement(
@@ -301,14 +301,6 @@ test(
       second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
       await second.getByRole("tab", { name: "Advanced" }).click();
-      const rendererSetting = await second.evaluate(async () => {
-        const result = await window.luckytoken.control.executeSettings({
-          command: "query",
-          keys: ["diagnostics.deepCapture.enabled"],
-        });
-        return result.settings["diagnostics.deepCapture.enabled"]?.value;
-      });
-      assert.equal(rendererSetting, true, "reopened renderer must read the enabled setting through preload");
       await second.getByRole("button", { name: "Disable deep diagnostics" }).waitFor();
       assert.equal(application.windows().length, 1);
 

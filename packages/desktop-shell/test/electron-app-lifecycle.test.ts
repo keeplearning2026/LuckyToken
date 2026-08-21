@@ -215,6 +215,7 @@ describe("Electron desktop lifecycle seam", () => {
     await expect(
       quitLuckyTokenProduct({
         backendOwnerKind: () => "desktop",
+        ownsDesktopBackend: () => true,
         requestBackendQuit: async () => ({ outcome: "drained" }),
         quitDesktop,
         onFailure,
@@ -227,6 +228,7 @@ describe("Electron desktop lifecycle seam", () => {
     await expect(
       quitLuckyTokenProduct({
         backendOwnerKind: () => "desktop",
+        ownsDesktopBackend: () => true,
         requestBackendQuit: async () => ({ outcome: "conflict" }),
         quitDesktop,
         onFailure,
@@ -236,12 +238,28 @@ describe("Electron desktop lifecycle seam", () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
+  it("never lets a viewer shell quit a desktop-owned Backend whose lease it does not hold", async () => {
+    const quitDesktop = vi.fn();
+    const requestBackendQuit = vi.fn(async () => ({ outcome: "drained" }));
+    await expect(
+      quitLuckyTokenProduct({
+        backendOwnerKind: () => "desktop",
+        ownsDesktopBackend: () => false,
+        requestBackendQuit,
+        quitDesktop,
+      }),
+    ).resolves.toBe(true);
+    expect(quitDesktop).toHaveBeenCalledTimes(1);
+    expect(requestBackendQuit).not.toHaveBeenCalled();
+  });
+
   it("quits only the Electron shell when attached to a CLI-owned Backend", async () => {
     const quitDesktop = vi.fn();
     const requestBackendQuit = vi.fn(async () => ({ outcome: "drained" }));
     await expect(
       quitLuckyTokenProduct({
         backendOwnerKind: () => "cli",
+        ownsDesktopBackend: () => false,
         requestBackendQuit,
         quitDesktop,
       }),
@@ -256,6 +274,7 @@ describe("Electron desktop lifecycle seam", () => {
     await expect(
       quitLuckyTokenProduct({
         backendOwnerKind: () => undefined,
+        ownsDesktopBackend: () => false,
         requestBackendQuit: async () => ({ outcome: "drained" }),
         quitDesktop,
         onFailure,
@@ -271,6 +290,7 @@ describe("Electron desktop lifecycle seam", () => {
     await expect(
       quitLuckyTokenProduct({
         backendOwnerKind: () => "desktop",
+        ownsDesktopBackend: () => true,
         requestBackendQuit: async () => {
           throw new Error("Control Plane unavailable");
         },

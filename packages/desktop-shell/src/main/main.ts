@@ -19,7 +19,7 @@ import {
   quitLuckyTokenProduct,
   startElectronDesktopLifecycle,
 } from "./electron-app-lifecycle.js";
-import { createElectronBackendSupervisor } from "./electron-backend-supervisor.js";
+import { createElectronBackendConnection } from "./electron-backend-connection.js";
 import { createDesktopOwnerLeaseClient } from "./desktop-owner-lease.js";
 import {
   createMainControlPlaneSession,
@@ -41,20 +41,22 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let trayActions: { readonly open: () => void; readonly quit: () => void } | undefined;
-let reconnectTask: Promise<void> | undefined;
 let productQuitTask: Promise<boolean> | undefined;
-const backendSupervisor = createElectronBackendSupervisor({
-  resourcesPath: process.resourcesPath,
-  desktopExecutable: process.execPath,
-  packaged: app.isPackaged,
-  developmentRoot: process.cwd(),
-});
 const controlPlaneSession = createMainControlPlaneSession();
 const desktopOwnerLease = createDesktopOwnerLeaseClient({
   leaseId: randomUUID(),
   renewIntervalMs: 5_000,
   execute: (command) => controlPlaneSession.client().executeApplicationCommand(command),
   onFailure: () => updateTray("attention"),
+});
+const backendConnection = createElectronBackendConnection({
+  resourcesPath: process.resourcesPath,
+  desktopExecutable: process.execPath,
+  packaged: app.isPackaged,
+  developmentRoot: process.cwd(),
+  session: controlPlaneSession,
+  desktopOwnerLease,
+  onRecoveryFailure: () => updateTray("attention"),
 });
 
 /**
@@ -282,6 +284,7 @@ function requestProductQuit(): void {
       const state = controlPlaneSession.state();
       return state.kind === "ready" ? state.status.ownership?.owner.kind : undefined;
     },
+    ownsDesktopBackend: () => desktopOwnerLease.isBound(),
     requestBackendQuit: () =>
       controlPlaneSession.client().executeApplicationCommand({
         command: "quit",
@@ -329,28 +332,12 @@ void startElectronDesktopLifecycle({
   whenReady: async () => {
     await app.whenReady();
     reconcileDesktopLoginItem();
-    const attachment = await backendSupervisor.ensureRunning();
-    const initialStatus = await controlPlaneSession.connect(attachment.endpoint);
-    await desktopOwnerLease.bind(initialStatus.ownership);
+    await backendConnection.start();
     controlPlaneSession.subscribeState((state) => {
       updateTray(controlPlaneSession.trayHealth());
       if (state.kind === "ready" && mainWindow !== undefined && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(desktopIpcChannels.statusEvent, state.status);
       }
-      if (state.kind !== "unavailable" || reconnectTask !== undefined) return;
-      reconnectTask = (async () => {
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          try {
-            const status = await controlPlaneSession.reconnect(attachment.endpoint);
-            await desktopOwnerLease.bind(status.ownership);
-            return;
-          } catch {
-            await new Promise<void>((resolve) => setTimeout(resolve, 250));
-          }
-        }
-      })().finally(() => {
-        reconnectTask = undefined;
-      });
     });
   },
   onSecondInstance: (listener) =>
@@ -367,10 +354,8 @@ void startElectronDesktopLifecycle({
 // Closing the last management window intentionally leaves Electron Main and
 // the tray running. Explicit product Quit is a separate tray action.
 app.on("will-quit", () => {
-  desktopOwnerLease.dispose();
   void Promise.allSettled([
     desktopIpcBridge.dispose(),
-    controlPlaneSession.dispose(),
-    backendSupervisor.dispose(),
+    backendConnection.dispose(),
   ]);
 });
