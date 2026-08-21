@@ -2,7 +2,7 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 
 import type { ExecutionOperation } from "../../execution.js";
 import { createNoopInvocationDiagnosticsFactory } from "../../invocation-diagnostics/index.js";
-import { resolveRequestIdentity } from "../../request-identity.js";
+import type { RequestIdentity } from "../../request-identity.js";
 import { createNoopRequestLedger } from "../../request-ledger/handler-seam.js";
 import type { RouterOptionDefaults } from "../options.js";
 import type { OpenAIResponsesConfiguration } from "./configuration.js";
@@ -26,7 +26,7 @@ export interface SemanticCompactOptions {
   readonly models: Models;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly sessionState: ResponseSessionState;
-  readonly createSessionId: () => string;
+  readonly requestIdentity: RequestIdentity;
   readonly createResponseId: () => string;
   readonly executeOperation?: ExecutionOperation;
   readonly routerDefaults: RouterOptionDefaults;
@@ -150,10 +150,7 @@ export async function executeSemanticCompact(
     request: options.request,
     body: internalBody,
     model: options.model,
-    requestIdentity: resolveRequestIdentity(
-      options.request.headers,
-      options.createSessionId,
-    ),
+    requestIdentity: options.requestIdentity,
     models: options.models,
     configuration: options.configuration,
     sessionState: options.sessionState,

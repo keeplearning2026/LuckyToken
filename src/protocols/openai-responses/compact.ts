@@ -7,6 +7,7 @@ import {
 } from "../../public-model-seam.js";
 import type { ClientProtocolHandler } from "../../http.js";
 import type { ProviderResponsesLane } from "../../provider-native-responses/contract.js";
+import { resolveRequestIdentity } from "../../request-identity.js";
 import type { LocalResponsesCompactLane } from "./compact-contract.js";
 import {
   bindOpenAIResponsesConfiguration,
@@ -161,6 +162,10 @@ export function createOpenAIResponsesCompactHandler(
         if (contentType !== "application/json") {
           return jsonError(415, "Content-Type must be application/json");
         }
+        const requestIdentity = resolveRequestIdentity(
+          request.headers,
+          createSessionId,
+        );
         const decoded = await readResponsesRequestBody(request, options.maxRequestBytes);
         if (!isRecord(decoded.json)) return jsonError(400, "Invalid compaction request body");
         const body = decoded.json;
@@ -207,7 +212,7 @@ export function createOpenAIResponsesCompactHandler(
           models: options.models,
           configuration,
           sessionState,
-          createSessionId,
+          requestIdentity,
           createResponseId,
           ...(options.executeOperation === undefined
             ? {}

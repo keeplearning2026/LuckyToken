@@ -63,6 +63,9 @@ function summaryMessage(target: Model<string>, text: string): AssistantMessage {
 
 describe("OpenAI Responses compact three-lane routing", () => {
   it("lets Local Native claim compact without resolving Pi Models or falling through", async () => {
+    const createSessionId = vi.fn(
+      () => "00000000-0000-4000-8000-000000000201",
+    );
     const local = {
       claims: vi.fn((selector: string) => selector === "gpt-native"),
       execute: vi.fn(async () => new Response("local-compact", { status: 502 })),
@@ -75,6 +78,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     const handler = createOpenAIResponsesCompactHandler({
       models,
       localNativeLane: local,
+      createSessionId,
       stateFile: "unused-compact-local.json",
       maxRequestBytes: 1024,
     });
@@ -84,9 +88,13 @@ describe("OpenAI Responses compact three-lane routing", () => {
     expect(response.status).toBe(502);
     await expect(response.text()).resolves.toBe("local-compact");
     expect(local.execute).toHaveBeenCalledOnce();
+    expect(createSessionId).toHaveBeenCalledOnce();
   });
 
   it("lets Provider Native claim the resolved model without entering Semantic execution", async () => {
+    const createSessionId = vi.fn(
+      () => "00000000-0000-4000-8000-000000000202",
+    );
     const target = model("openai", "gpt-5", "openai-responses");
     const models = { getModels: () => [target] } as unknown as Models;
     const executeOperation = vi.fn(async () => {
@@ -104,6 +112,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     const handler = createOpenAIResponsesCompactHandler({
       models,
       providerNativeLane: provider,
+      createSessionId,
       executeOperation,
       stateFile: "unused-compact-provider.json",
       maxRequestBytes: 1024,
@@ -115,6 +124,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     expect(provider.claims).toHaveBeenCalledWith(target, "compact");
     expect(provider.execute).toHaveBeenCalledOnce();
     expect(executeOperation).not.toHaveBeenCalled();
+    expect(createSessionId).toHaveBeenCalledOnce();
   });
 
   it("projects Provider Native compact success model identity losslessly back to the requested alias", async () => {
@@ -254,11 +264,14 @@ describe("OpenAI Responses compact three-lane routing", () => {
   });
 
   it("runs synthetic compact directly through the Semantic executor and retains recent user turns", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000203";
+    const createSessionId = vi.fn(() => sessionId);
     const target = model("semantic", "summary-model");
     const models = { getModels: () => [target] } as unknown as Models;
-    const executeOperation = vi.fn(async (_models, selected, context) => {
+    const executeOperation = vi.fn(async (_models, selected, context, options) => {
       expect(selected).toBe(target);
       expect(JSON.stringify(context)).toContain(CODEX_COMPACT_PROMPT);
+      expect(options.sessionId).toBe(sessionId);
       return summaryMessage(target, "SUMMARY BODY");
     });
     const handler = createOpenAIResponsesCompactHandler({
@@ -266,6 +279,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
       executeOperation,
       stateFile: "unused-compact-semantic.json",
       maxRequestBytes: 1024 * 1024,
+      createSessionId,
       createResponseId: () => "resp_summary",
       now: () => 1,
     });
@@ -280,6 +294,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
 
     expect(response.status).toBe(200);
     expect(executeOperation).toHaveBeenCalledOnce();
+    expect(createSessionId).toHaveBeenCalledOnce();
     const body = (await response.json()) as { output: Array<Record<string, unknown>> };
     expect(body.output).toHaveLength(3);
     expect(JSON.stringify(body.output[0])).toContain("FIRST");

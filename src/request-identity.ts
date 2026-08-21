@@ -11,6 +11,9 @@ export interface RequestIdentity {
 
 const SESSION_HEADER_PRECEDENCE = [
   "x-session-id",
+  "x-claude-code-session-id",
+  "session-id",
+  "thread-id",
   "x-client-request-id",
   "x-session-affinity",
 ] as const;

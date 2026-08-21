@@ -3983,11 +3983,16 @@ resolveRequestIdentity(headers: ReadonlyHeaders): RequestIdentity
 
 ```text
 x-session-id
+→ x-claude-code-session-id
+→ session-id
+→ thread-id
 → x-client-request-id
 → x-session-affinity
 ```
 
 只接受 UUID-shaped value；没有 usable client identity 时生成 fresh request-local UUID。`clientSessionId` 只是“确实来自 client”的窄 fact，`effectiveSessionId` 始终存在。
+
+每个 model-serving Client Protocol HTTP handler 在完成基本 request-content 检查后、选择 Local Native / Provider Native / Semantic Conversion lane 前建立一次 Request Identity。`POST /v1/responses/compact` 遵循相同入口顺序；Semantic Compact 消费已经建立的 identity，不重复解析或生成。
 
 Request identity 不产生 `projectDir`，也不拥有 token/project lookup state。
 
