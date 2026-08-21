@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 import type { LuckyTokenCliConfig } from "../cli-config.js";
 import { stripJsonComments } from "../providers/models-json-schema.js";
+import { PI_COMPATIBILITY_BASELINE } from "../providers/pi-baseline.js";
 import {
   createBackupAuthority,
   type BackupAuthority,
@@ -36,7 +37,7 @@ export function configuredBackupFiles(
       id: "models",
       path: config.pi.modelsJson,
       contract: "pi-models-json",
-      version: "0.84.1",
+      version: PI_COMPATIBILITY_BASELINE.version,
       category: "configuration",
       optional: true,
       parseJson: (text: string) => JSON.parse(stripJsonComments(text)),

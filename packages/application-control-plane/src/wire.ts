@@ -1365,12 +1365,9 @@ function decodeEffectiveCatalog(
     !isRecord(value) ||
     value.schemaVersion !== "luckytoken-effective-catalog-v1" ||
     !isRecord(value.baseline) ||
-    typeof value.baseline.package !== "string" ||
-    value.baseline.package.length === 0 ||
-    typeof value.baseline.version !== "string" ||
-    value.baseline.version.length === 0 ||
-    typeof value.baseline.schema !== "string" ||
-    value.baseline.schema.length === 0 ||
+    value.baseline.package !== "@earendil-works/pi-coding-agent" ||
+    value.baseline.version !== "0.84.2" ||
+    value.baseline.schema !== "pi-coding-agent-0.84.2-models-json-schema" ||
     !Array.isArray(value.providers) ||
     !Array.isArray(value.compositionErrors)
   ) {
@@ -1401,9 +1398,9 @@ function decodeEffectiveCatalog(
     schemaVersion: "luckytoken-effective-catalog-v1",
     baseline: Object.freeze({
       package: value.baseline.package as "@earendil-works/pi-coding-agent",
-      version: value.baseline.version as "0.84.1",
+      version: value.baseline.version as "0.84.2",
       schema: value.baseline
-        .schema as "pi-coding-agent-0.84.1-models-json-schema",
+        .schema as "pi-coding-agent-0.84.2-models-json-schema",
     }),
     providers: Object.freeze(providers),
     compositionErrors: Object.freeze(compositionErrors),

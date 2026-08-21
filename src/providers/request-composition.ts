@@ -2,7 +2,7 @@
  * Request-time Provider-facing composition: auth resolution, headers and
  * authHeader, mirroring the pinned Pi implementation
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` and
- * `model-runtime.ts` in @earendil-works/pi-coding-agent 0.84.1).
+ * `model-runtime.ts` in @earendil-works/pi-coding-agent 0.84.2).
  *
  * Ownership: this is the single Provider-facing invocation boundary for
  * models.json auth/header facts. Client Protocol adapters, the Pi semantic

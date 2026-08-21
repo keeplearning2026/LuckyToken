@@ -506,6 +506,11 @@ function convertContent(
           `Pi content[${index}] tool identity must be non-empty strings`,
         );
       }
+      if (raw.namespace !== undefined) {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}].namespace cannot be represented by Anthropic Messages`,
+        );
+      }
       projected.push({
         id: raw.id,
         caller: { type: "direct" },

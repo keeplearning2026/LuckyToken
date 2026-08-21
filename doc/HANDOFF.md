@@ -106,7 +106,7 @@ Client Wire ↔ Client Protocol ↔ Pi public contracts ↔ Provider ↔ Provide
   暴露策略（`DISCOVERED_PROVIDERS = {"commandcode-private"}`）。
 - 每个 Client Protocol 有独立 Auth 实例 + 独立 token 文件（AGENTS.md 硬约束）；
   只有 `sessionId`/`projectDir` 能进入 Pi option composition。
-- `pi-agent/` 整棵树不可修改；`@earendil-works/pi-ai@0.84.1` 是生产依赖。
+- `pi-agent/` 整棵树不可修改；`@earendil-works/pi-ai@0.84.2` 是生产依赖。
 - 认证隔离已被测试锁定：anthropic token 打 `/v1/responses` → 401，反之亦然。
 
 ## 4. 工作区与敏感资料

@@ -14,8 +14,8 @@ import type { EffectiveCatalogBaseline } from "@luckytoken/application-control-p
 export const PI_COMPATIBILITY_BASELINE: EffectiveCatalogBaseline =
   Object.freeze({
     package: "@earendil-works/pi-coding-agent",
-    version: "0.84.1",
-    schema: "pi-coding-agent-0.84.1-models-json-schema",
+    version: "0.84.2",
+    schema: "pi-coding-agent-0.84.2-models-json-schema",
   });
 
 /** Pinned Pi source locations that define the baseline behavior. */

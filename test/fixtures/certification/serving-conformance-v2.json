@@ -11,17 +11,17 @@
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:9f9505daa55f15f75a48ecaed40f589a4515b68c04884e74af5ecd36cbe02da1"
+      "sha256": "sha256:bb22dc2b61f5a6d6ba16beccb4520596b4b3460c3d16fb5c78d8dae934a045fa"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:f6297b3e8228235f7f2e474928a635454756951eb8e52a8e8fb6c852134653c6"
+      "sha256": "sha256:1a6f761fc6b3aebb59e17c9903e5384e15469104e25b1d5b729e6cfb72783b68"
     },
     {
       "id": "pi-commandcode-conversion",
       "path": "doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
-      "sha256": "sha256:220ca801959ce1086df928a553c48662c8a4e5165aa0094431a9d75151a25346"
+      "sha256": "sha256:5736e3db24256a68c88e8c6c665fbd4b095d131189d14e636c547a42862de710"
     }
   ],
   "profiles": [
@@ -198,7 +198,7 @@
         "test/online/run-openai-responses.ts",
         "test/online/run-codex-cli.ts",
         "test/online/run-claude-cli.ts",
-        "test/fixtures/certification/online-validation-2026-08-14.json"
+        "test/fixtures/certification/online-validation-2026-08-21.json"
       ]
     },
     {
@@ -223,20 +223,26 @@
   "onlineEvidence": {
     "status": "ONLINE_PASSED",
     "attempted": true,
-    "executedAt": "2026-08-14",
-    "repositoryRevision": "22ed328a5b6d00189d6086c580c4d288246b8e39",
-    "summaryArtifact": "test/fixtures/certification/online-validation-2026-08-14.json",
+    "executedAt": "2026-08-21",
+    "repositoryState": "working-tree",
+    "repositoryBaseRevision": "fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575",
+    "implementationFingerprint": "sha256:43dee9669dc779533674b5ed2b6c7bf7b41a597c04f7209f7c67ebf364d56c44",
+    "runtime": {
+      "package": "@earendil-works/pi-ai",
+      "version": "0.84.2",
+      "integrity": "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig=="
+    },
+    "summaryArtifact": "test/fixtures/certification/online-validation-2026-08-21.json",
     "toolVersions": {
-      "codexCli": "0.147.0",
-      "claudeCode": "2.1.210"
+      "codexCli": "0.149.0",
+      "claudeCode": "2.1.237"
     },
     "runs": [
       {
-        "profiles": ["anthropic-conversion", "commandcode-provider"],
+        "profiles": ["commandcode-provider"],
         "command": "npx tsx test/online/pi-commandcode-ir-probe.ts",
         "passed": 23,
-        "attempted": 23,
-        "artifactPath": "test/fixtures/certification/online-validation-2026-08-14.json"
+        "attempted": 23
       },
       {
         "profiles": ["anthropic-conversion", "commandcode-provider"],
@@ -249,22 +255,31 @@
         "profiles": ["responses-conversion", "commandcode-provider"],
         "command": "npm run test:online-responses",
         "passed": 60,
-        "attempted": 60,
-        "artifactPath": "test/fixtures/certification/online-validation-2026-08-14.json"
+        "attempted": 60
       },
       {
         "profiles": ["responses-conversion", "commandcode-provider"],
-        "command": "npm run test:online-codex -- 3",
+        "command": "npm run test:online-codex -- 1",
+        "invocations": 3,
         "passed": 60,
         "attempted": 60,
-        "artifactPath": "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-Uqe3iv/artifacts"
+        "artifactPaths": [
+          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-lSZXCi/artifacts",
+          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-RtwFLx/artifacts",
+          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-IDxAwD/artifacts"
+        ]
       },
       {
         "profiles": ["anthropic-conversion", "commandcode-provider"],
-        "command": "npm run test:online-claude -- 3",
+        "command": "npm run test:online-claude -- 1",
+        "invocations": 3,
         "passed": 51,
         "attempted": 51,
-        "artifactPath": "onlinetest/claude/.runs/1786734390723-cb546e6e"
+        "artifactPaths": [
+          "onlinetest/claude/.runs/1787301576383-896dbaf0",
+          "onlinetest/claude/.runs/1787301717374-b72f1afd",
+          "onlinetest/claude/.runs/1787301849994-bdd91cca"
+        ]
       }
     ],
     "gaps": []

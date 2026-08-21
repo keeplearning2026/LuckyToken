@@ -37,25 +37,27 @@ const derived: UsageComponentSource = "derived";
 const defaulted: UsageComponentSource = "defaulted";
 
 /**
- * Vendored adapter file anchors. Line ranges were verified against the
- * vendored `pi-agent/` copy at commit `d6148e3` (v0.84.1).
+ * Vendored adapter file anchors. Line ranges were re-audited against the
+ * vendored `pi-agent/` copy at upstream tag `v0.84.2` (`914cf1472`).
+ * Mistral moved from its generated SDK to native HTTP in this release; the
+ * canonical prompt/cache/output usage partition below remains unchanged.
  */
 const ANTHROPIC_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/anthropic-messages.ts:574-586,715-741";
+  "pi-agent/packages/ai/src/api/anthropic-messages.ts:593-600,734-757";
 const OPENAI_COMPLETIONS_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/openai-completions.ts:1374-1409";
+  "pi-agent/packages/ai/src/api/openai-completions.ts:1385-1406";
 const OPENAI_RESPONSES_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/openai-responses-shared.ts:533-557";
+  "pi-agent/packages/ai/src/api/openai-responses-shared.ts:556-574";
 const BEDROCK_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/bedrock-converse-stream.ts:589-601";
+  "pi-agent/packages/ai/src/api/bedrock-converse-stream.ts:596-600";
 const GOOGLE_GENAI_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/google-generative-ai.ts:225-245";
+  "pi-agent/packages/ai/src/api/google-generative-ai.ts:224-239";
 const GOOGLE_VERTEX_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/google-vertex.ts:243-263";
+  "pi-agent/packages/ai/src/api/google-vertex.ts:241-256";
 const MISTRAL_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/api/mistral-conversations.ts:279-298,339-349";
+  "pi-agent/packages/ai/src/api/mistral-conversations.ts:532-601";
 const FAUX_USAGE_EVIDENCE =
-  "pi-agent/packages/ai/src/providers/faux.ts:229-263";
+  "pi-agent/packages/ai/src/providers/faux.ts:237-263";
 const COMMANDCODE_USAGE_EVIDENCE =
   "packages/provider-commandcode-private/src/semantic.ts:150-270";
 

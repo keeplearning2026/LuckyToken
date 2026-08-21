@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "luckytoken-provider-distribution-online-evidence-v2",
+  "executedAt": "2026-08-21",
+  "repositoryState": "working-tree",
+  "repositoryBaseRevision": "fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575",
+  "implementationFingerprint": {
+    "algorithm": "sha256(sorted path + file sha256 for upgrade/runtime/online-harness files)",
+    "sha256": "43dee9669dc779533674b5ed2b6c7bf7b41a597c04f7209f7c67ebf364d56c44"
+  },
+  "runtime": {
+    "package": "@earendil-works/pi-ai",
+    "version": "0.84.2",
+    "integrity": "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig=="
+  },
+  "toolVersions": {
+    "codexCli": "0.149.0",
+    "claudeCode": "2.1.237"
+  },
+  "result": "ONLINE_PASSED",
+  "totals": {
+    "passed": 254,
+    "attempted": 254
+  },
+  "runs": [
+    {
+      "command": "npx tsx test/online/pi-commandcode-ir-probe.ts",
+      "profiles": ["commandcode-provider"],
+      "passed": 23,
+      "attempted": 23,
+      "details": {
+        "coverage": "Pi IR request controls, history/thinking, tools/results, stream lifecycle, retry, cancellation, usage, failure facts and response identity"
+      }
+    },
+    {
+      "command": "npm run test:online",
+      "profiles": ["anthropic-conversion", "commandcode-provider"],
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "json": 36,
+        "sse": 14,
+        "recoveries": 5,
+        "cancellations": 5,
+        "conformanceCases": 10,
+        "conformanceProviderRequests": 15,
+        "failures": 0
+      },
+      "artifactPath": ".online-artifacts/commandcode-conformance-samples.json"
+    },
+    {
+      "command": "npm run test:online-responses",
+      "profiles": ["responses-conversion", "commandcode-provider"],
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "json": 36,
+        "sse": 14,
+        "chain": 1,
+        "restartRecovery": 1,
+        "cancellations": 5,
+        "failures": 0
+      }
+    },
+    {
+      "command": "npm run test:online-codex -- 1",
+      "invocations": 3,
+      "profiles": ["responses-conversion", "commandcode-provider"],
+      "passed": 60,
+      "attempted": 60,
+      "details": {
+        "scenariosPerInvocation": 20,
+        "successfulInvocations": 3,
+        "restartRecovery": "fresh composition/runtime on the same persisted Responses state",
+        "missingOutputTokensDetails": 0,
+        "orphanToolOutputs": 0,
+        "failures": 0
+      },
+      "artifactPaths": [
+        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-lSZXCi/artifacts",
+        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-RtwFLx/artifacts",
+        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-IDxAwD/artifacts"
+      ]
+    },
+    {
+      "command": "npm run test:online-claude -- 1",
+      "invocations": 3,
+      "profiles": ["anthropic-conversion", "commandcode-provider"],
+      "passed": 51,
+      "attempted": 51,
+      "details": {
+        "scenariosPerInvocation": 17,
+        "successfulInvocations": 3,
+        "failures": 0
+      },
+      "artifactPaths": [
+        "onlinetest/claude/.runs/1787301576383-896dbaf0",
+        "onlinetest/claude/.runs/1787301717374-b72f1afd",
+        "onlinetest/claude/.runs/1787301849994-bdd91cca"
+      ]
+    }
+  ],
+  "harnessCorrections": [
+    {
+      "area": "Anthropic/Responses reasoning assertions",
+      "change": "Online cases that require thinking now explicitly request high reasoning effort instead of assuming reasoning appears for every ordinary request."
+    },
+    {
+      "area": "SQLite-backed online composition lifecycle",
+      "change": "Online runners now close diagnostics, request-ledger and deep-capture stores before deleting temporary state instead of sleeping and swallowing EBUSY cleanup failures."
+    },
+    {
+      "area": "Responses/Codex restart recovery",
+      "change": "Restart coverage now closes the old composition resources and creates a fresh composition/runtime against the same persisted Responses state before the continuation turn."
+    },
+    {
+      "area": "Real CLI prompt determinism",
+      "change": "Codex/Claude directed tool prompts name the actually advertised tools and prohibit unrelated planning, delegation and artifact inspection while retaining the original tool/result assertions."
+    }
+  ],
+  "transientAttempts": [
+    {
+      "suite": "Anthropic online conformance",
+      "failure": "online_conformance_missing_thinking",
+      "diagnosis": "The case asserted thinking without explicitly requesting reasoning; the harness was corrected to make the requirement part of the request."
+    },
+    {
+      "suite": "Responses online pressure",
+      "failure": "online_missing_thinking",
+      "diagnosis": "Ten JSON jobs required reasoning while sending no reasoning request; the harness now sends reasoning.effort=high only where reasoning is asserted."
+    },
+    {
+      "suite": "Codex CLI",
+      "failure": "intermittent marker/tool terminal divergence and codex_exec_timeout",
+      "diagnosis": "Captured requests retained full history/tool definitions. Targeted unchanged reruns passed; final evidence counts only three complete 20/20 batches using the corrected final runner."
+    },
+    {
+      "suite": "Codex CLI tool file write",
+      "failure": "codex_exec_timeout after successful command_execution",
+      "diagnosis": "The file was written correctly and the tool event completed; the client/model failed to emit the final marker before timeout. Targeted rerun passed and failed batches are excluded from the 60/60 total."
+    }
+  ]
+}

@@ -25,6 +25,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "0.84.1"
+    "@earendil-works/pi-ai": "0.84.2"
   }
 }

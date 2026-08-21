@@ -154,6 +154,26 @@ function buildRenderState(
   });
 }
 
+function assertProviderRepresentableHistory(
+  invocation: ResponsesInvocation,
+): void {
+  for (const message of invocation.context.messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.content) {
+      if (block.type === "toolCall" && block.namespace !== undefined) {
+        // Namespace declarations that Pi can execute are flattened by the
+        // Responses adapter before this seam. A namespace that survives on a
+        // historical ToolCall has no certified Provider replay identity in
+        // LuckyToken Core v1; letting Pi adapters silently omit it could call
+        // a different tool.
+        throw new InvalidRequest(
+          "Namespaced tool-call history requires a matching namespace tool declaration",
+        );
+      }
+    }
+  }
+}
+
 function composeInvocationOptions(
   invocation: ResponsesInvocation,
   infrastructure: {
@@ -205,6 +225,7 @@ export async function executeSemanticResponses(
       options.now(),
       options.configuration.conversion.request,
     );
+    assertProviderRepresentableHistory(invocation);
     for (const notice of invocation.notices) {
       options.diagnostics.notice(notice);
       options.ledger.notice(notice);

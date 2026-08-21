@@ -474,7 +474,6 @@ describe("schema-complete Anthropic JSON response", () => {
           name: "tool",
           arguments: {},
           thoughtSignature: "opaque-thought",
-          namespace: "internal-namespace",
         } as AssistantMessage["content"][number],
       ],
     }) as AssistantMessage & { endTurn?: boolean };
@@ -517,12 +516,32 @@ describe("schema-complete Anthropic JSON response", () => {
       "internal-model",
       "opaque-text",
       "opaque-thought",
-      "internal-namespace",
       "secret",
     ]) {
       expect(wire).not.toContain(internal);
     }
     expect(JSON.parse(wire)).toEqual(target);
+  });
+
+  it("rejects a Pi 0.84.2 ToolCall namespace that Anthropic cannot represent", () => {
+    expect(() =>
+      convertAssistantMessageToAnthropic(
+        message({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_ns",
+              name: "read",
+              namespace: "crm",
+              arguments: {},
+            },
+          ],
+        }),
+        "client-selector",
+        "client-owned-id",
+      ),
+    ).toThrow(/namespace/i);
   });
 
   it("projects redacted thinking as redacted_thinking in content order", () => {

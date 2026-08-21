@@ -64,6 +64,7 @@ import {
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
+  type ConfiguredLuckyTokenDataPlane,
 } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
@@ -962,20 +963,26 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "tool_shell",
       prompt:
-        "Use the shell_command tool to run: echo TOOL_SHELL_OK. " +
-        "Then reply with exactly the tool output. Do not explain.",
+        "Use the exec_command tool exactly once to run: echo TOOL_SHELL_OK. " +
+        "Do not plan, spawn sub-agents, inspect artifacts, or use any other tool. " +
+        "After the command completes, immediately reply with exactly its output.",
       expectedText: "TOOL_SHELL_OK",
       requiredItemType: "command_execution",
     }),
     Object.freeze({
       id: "tool_apply_patch",
       prompt:
-        "Use the apply_patch tool to create codex_cli_probe.txt containing exactly " +
-        "TOOL_APPLY_PATCH_OK. Then reply with exactly: TOOL_APPLY_PATCH_OK. " +
-        "Do not explain.",
+        "Create codex_cli_probe.txt containing exactly TOOL_APPLY_PATCH_OK. " +
+        "Use apply_patch if that tool is actually available in this Codex session; " +
+        "otherwise use exactly one shell/exec command to create the file. " +
+        "Do not call update_plan, spawn sub-agents, search for tool examples, inspect " +
+        "test artifacts, or use unrelated tools. After the file is created, immediately " +
+        "reply with exactly: TOOL_APPLY_PATCH_OK.",
       expectedText: "TOOL_APPLY_PATCH_OK",
-      // The model may create the file with apply_patch (file_change) or by
-      // shell command (command_execution); both prove the tool round-trip.
+      // Codex tool availability is client-version/platform dependent. When
+      // apply_patch is advertised this becomes file_change; otherwise the
+      // Windows CLI falls back to one command_execution. Both are observable
+      // real-client file-write tool round-trips.
       requiredItemTypes: ["file_change", "command_execution"],
       expectedFile: {
         path: "codex_cli_probe.txt",
@@ -985,9 +992,10 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "tool_shell_error",
       prompt:
-        "Use shell_command to run a command that writes EXPECTED_TOOL_FAILURE " +
-        "to stderr and exits with code 7. The failure is expected. Then reply " +
-        "with exactly: TOOL_ERROR_RECOVERED_OK. Do not retry or explain.",
+        "Use exec_command exactly once to run a command that writes EXPECTED_TOOL_FAILURE " +
+        "to stderr and exits with code 7. The failure is expected: do not retry, plan, " +
+        "spawn sub-agents, inspect artifacts, or use another tool. Then immediately reply " +
+        "with exactly: TOOL_ERROR_RECOVERED_OK.",
       expectedText: "TOOL_ERROR_RECOVERED_OK",
       requiredItemType: "command_execution",
       requireFailedCommand: true,
@@ -995,17 +1003,19 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "tool_unicode",
       prompt:
-        "Use shell_command to output exactly UNICODE_汉字_🙂_OK. " +
-        "Then reply with exactly: UNICODE_汉字_🙂_OK. Do not explain.",
+        "Use exec_command exactly once to output exactly UNICODE_汉字_🙂_OK. " +
+        "Do not plan, spawn sub-agents, inspect artifacts, or use another tool. " +
+        "Then immediately reply with exactly: UNICODE_汉字_🙂_OK.",
       expectedText: "UNICODE_汉字_🙂_OK",
       requiredItemType: "command_execution",
     }),
     Object.freeze({
       id: "parallel_shell_tools",
       prompt:
-        "In one tool round, call shell_command twice: one command outputs " +
-        "PARALLEL_A_OK and the other outputs PARALLEL_B_OK. After both finish, " +
-        "reply with exactly: PARALLEL_TOOLS_OK. Do not explain.",
+        "In one tool round, call exec_command exactly twice in parallel: one command " +
+        "outputs PARALLEL_A_OK and the other outputs PARALLEL_B_OK. Do not plan, spawn " +
+        "sub-agents, inspect artifacts, or use other tools. After both finish, immediately " +
+        "reply with exactly: PARALLEL_TOOLS_OK.",
       expectedText: "PARALLEL_TOOLS_OK",
       requiredItemType: "command_execution",
       minimumRequiredItems: 2,
@@ -1015,8 +1025,9 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "multi_turn_chain",
       prompt:
-        "This is a multi-turn chain. Turn 1: reply with exactly: MULTI_TURN_1_OK. " +
-        "Do not use tools, do not explain. Also memorize this token: MT_MEMORY_SEED.",
+        "This is a multi-turn chain. Memorize MT_MEMORY_SEED. For turn 1, immediately " +
+        "reply with exactly: MULTI_TURN_1_OK. Do not plan, use tools, spawn sub-agents, " +
+        "inspect artifacts, or explain.",
       expectedText: "MULTI_TURN_1_OK",
       special: "multi_turn",
       turns: 3,
@@ -1026,9 +1037,10 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "multi_turn_tool",
       prompt:
-        "This is a multi-turn tool session. Turn 1: use the shell_command tool " +
-        "to create multi_turn_probe.txt containing exactly: MULTI_TURN_TOOL_1. " +
-        "Then reply with exactly: MULTI_TURN_TOOL_1_OK. Do not explain.",
+        "This is a multi-turn tool session. For turn 1, use exec_command exactly once " +
+        "to create multi_turn_probe.txt containing exactly MULTI_TURN_TOOL_1. Do not " +
+        "plan, spawn sub-agents, inspect artifacts, or use another tool. After the command " +
+        "completes, immediately reply with exactly: MULTI_TURN_TOOL_1_OK.",
       expectedText: "MULTI_TURN_TOOL_1_OK",
       requiredItemType: "command_execution",
       special: "multi_turn",
@@ -1039,8 +1051,9 @@ function directedScenarios(): readonly Scenario[] {
     Object.freeze({
       id: "restart_recovery",
       prompt:
-        "This is a restart-recovery probe. Reply with exactly: RESTART_RECOVERY_OK. " +
-        "Do not use tools, do not explain.",
+        "This is a restart-recovery probe. Immediately reply with exactly: " +
+        "RESTART_RECOVERY_OK. Do not plan, use tools, spawn sub-agents, inspect " +
+        "artifacts, or explain.",
       expectedText: "RESTART_RECOVERY_OK",
       special: "restart",
     }),
@@ -1068,10 +1081,12 @@ function randomScenarios(count: number): readonly Scenario[] {
   ];
   const toolTemplates = [
     (marker: string) =>
-      `Use the shell_command tool to run: echo ${marker}. Then reply with exactly the output.`,
+      `Use the exec_command tool exactly once to run: echo ${marker}. Do not plan, delegate, ` +
+      `inspect artifacts, or use another tool. Then immediately reply with exactly the output.`,
     (marker: string) =>
-      `Use the apply_patch tool to write ${marker} to probe.txt, ` +
-      `then reply with exactly ${marker}.`,
+      `Write ${marker} to probe.txt. Use apply_patch only if it is actually advertised; ` +
+      `otherwise use exactly one exec_command. Do not plan, delegate, inspect artifacts, ` +
+      `or search for examples. Then immediately reply with exactly ${marker}.`,
   ];
   const scenarios: Scenario[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -1246,6 +1261,12 @@ async function assertCapturedCustomToolRoundTrip(
   }
 }
 
+function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
+  composition.deepCaptureStore.close();
+  composition.requestLedger.close();
+  composition.diagnosticsStore.close();
+}
+
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
@@ -1347,7 +1368,7 @@ export async function runCodexCliOnlineSuite(
           modelId: aliasTarget.model,
         });
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
-  const composition = await createConfiguredLuckyTokenDataPlane({
+  let composition = await createConfiguredLuckyTokenDataPlane({
     config,
     credentials,
     fetch: upstreamLogger.fetch,
@@ -1363,7 +1384,7 @@ export async function runCodexCliOnlineSuite(
   console.error("[codex-suite] composition ready");
   // Capture every real Codex request for later reuse as golden samples.
   let currentMarker: string | undefined;
-  const runtime = createCapturingRuntime(
+  let runtime = createCapturingRuntime(
     composition.runtime,
     artifactDir,
     () => currentMarker,
@@ -1458,10 +1479,26 @@ export async function runCodexCliOnlineSuite(
             stateFile,
             async () => {
               await server.close();
-              // Give the OS a moment to release the old listener before we
-              // bind a fresh one (avoids transient ECONNREFUSED windows).
-              await new Promise<void>((resolvePromise) =>
-                setTimeout(resolvePromise, 500),
+              closeDataPlaneStores(composition);
+              composition = await createConfiguredLuckyTokenDataPlane({
+                config,
+                credentials,
+                fetch: upstreamLogger.fetch,
+                ...(publicModelAuthority === undefined
+                  ? {}
+                  : { publicModelAuthority }),
+              });
+              if (publicModelAuthority !== undefined) {
+                await reconcileOnlinePublicModels(
+                  publicModelAuthority,
+                  composition.catalog.models,
+                  providerId,
+                );
+              }
+              runtime = createCapturingRuntime(
+                composition.runtime,
+                artifactDir,
+                () => currentMarker,
               );
               server = await startLuckyTokenHttpServer({
                 runtime,
@@ -1583,6 +1620,7 @@ export async function runCodexCliOnlineSuite(
   } finally {
     await upstreamLogger.flush();
     await server.close();
+    closeDataPlaneStores(composition);
   }
 }
 
@@ -1621,13 +1659,17 @@ async function runMultiTurnSession(
       // depend on replayed history.
       prompt =
         turn === 2
-          ? "Continue. Recall what you did in turn 1 and reply with exactly: " +
-            "MULTI_TURN_2_OK. Do not use tools unless already using them."
+          ? "Continue. Recall turn 1 and immediately reply with exactly: " +
+            "MULTI_TURN_2_OK. Do not plan, spawn sub-agents, inspect artifacts, or use " +
+            "tools unless this is the dedicated multi-turn tool scenario."
           : scenario.id === "multi_turn_chain"
-            ? "Continue. Reply with exactly the token you memorized in turn 1 " +
-              "(it was MT_MEMORY_SEED). Do not use tools, do not explain."
-            : "Continue. Recall the whole conversation and reply with exactly: " +
-              "MULTI_TURN_3_OK. Do not use tools unless already using them.";
+            ? "Continue. The first turn contained a seed token that is not repeated in this " +
+              "prompt. Read it from the earlier conversation and immediately output only that " +
+              "exact seed token. Do not plan, use tools, spawn sub-agents, inspect artifacts, " +
+              "guess, or explain."
+            : "Continue. Recall the whole conversation and immediately reply with exactly: " +
+              "MULTI_TURN_3_OK. Do not plan, spawn sub-agents, inspect artifacts, or use " +
+              "tools unless this is the dedicated multi-turn tool scenario.";
     }
     const result = await runCodexExec(
       prompt,

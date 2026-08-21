@@ -32,6 +32,7 @@ import {
 import {
   createConfiguredLuckyTokenDataPlane,
   createConfiguredPiModels,
+  type ConfiguredLuckyTokenDataPlane,
 } from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
@@ -413,6 +414,7 @@ async function runJsonJob(
         model: model,
         input: promptFor(marker),
         max_output_tokens: SUCCESS_MAX_TOKENS,
+        reasoning: { effort: "high" },
       },
       requestSignal(totalSignal),
     );
@@ -642,6 +644,12 @@ function createCapturingFetch(base: FetchFunction): {
   };
 }
 
+function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
+  composition.deepCaptureStore.close();
+  composition.requestLedger.close();
+  composition.diagnosticsStore.close();
+}
+
 export async function runOpenAIResponsesOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
@@ -652,6 +660,7 @@ export async function runOpenAIResponsesOnlineSuite(
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-online-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
+  let composition: ConfiguredLuckyTokenDataPlane | undefined;
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -727,7 +736,7 @@ export async function runOpenAIResponsesOnlineSuite(
             providerId: aliasTarget.provider,
             modelId: aliasTarget.model,
           });
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
@@ -812,6 +821,7 @@ export async function runOpenAIResponsesOnlineSuite(
       concurrency,
     );
     await hangingServer.close();
+    closeDataPlaneStores(hangingComposition);
 
     const pressureJobs = createOnlineTestPlan().filter(
       (job) => job.kind !== "cancel-recovery",
@@ -832,16 +842,19 @@ export async function runOpenAIResponsesOnlineSuite(
     );
 
     // ---- Conformance: capture upstream requests ----
+    await server.close();
+    server = undefined;
+    closeDataPlaneStores(composition);
+    composition = undefined;
     const capture = createCapturingFetch(globalThis.fetch);
-    const conformanceComposition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
-    await server.close();
     server = await startLuckyTokenHttpServer({
-      runtime: conformanceComposition.runtime,
+      runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,
     });
@@ -1017,14 +1030,16 @@ export async function runOpenAIResponsesOnlineSuite(
     // state file, and reference turn1's response id.
     await server.close();
     server = undefined;
-    const restartComposition = await createConfiguredLuckyTokenDataPlane({
+    closeDataPlaneStores(composition);
+    composition = undefined;
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
     server = await startLuckyTokenHttpServer({
-      runtime: restartComposition.runtime,
+      runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,
     });
@@ -1062,14 +1077,8 @@ export async function runOpenAIResponsesOnlineSuite(
     if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
   } finally {
     await server?.close();
-    // A SQLite store may need a moment to release its handle after the
-    // server closes; EBUSY here is a cleanup race, never a protocol failure.
-    await new Promise<void>((resolvePromise) =>
-      setTimeout(resolvePromise, 500),
-    );
-    await rm(directory, { recursive: true, force: true }).catch(
-      () => undefined,
-    );
+    if (composition !== undefined) closeDataPlaneStores(composition);
+    await rm(directory, { recursive: true, force: true });
   }
 }
 

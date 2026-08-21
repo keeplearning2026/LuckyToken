@@ -1,4 +1,4 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -42,6 +42,82 @@ describe("OpenAI Responses three-lane routing", () => {
     await expect(response.text()).resolves.toBe("local-upstream");
     expect(claims).toHaveBeenCalledWith("local-model");
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unmatched namespace-bearing history before Pi Provider execution", async () => {
+    const model: Model<string> = {
+      id: "claude-test",
+      name: "claude-test",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://anthropic.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 100,
+    };
+    const models = {
+      getModels: () => [model],
+    } as unknown as Models;
+    const executeOperation = vi.fn(async (): Promise<AssistantMessage> => ({
+      role: "assistant",
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: [{ type: "text", text: "unexpected" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    }));
+    const handler = createOpenAIResponsesHandler({
+      models,
+      executeOperation,
+      stateFile: "unused-namespace-representability.json",
+      maxRequestBytes: 4096,
+      now: () => 1,
+      createResponseId: () => "resp_test",
+    });
+
+    const response = await handler.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "anthropic/claude-test",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "read",
+              namespace: "crm",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_1",
+              output: "ok",
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: expect.stringContaining("namespace"),
+      },
+    });
+    expect(executeOperation).not.toHaveBeenCalled();
   });
 
   it("lets a claiming Provider Native lane own the resolved model without entering Pi execution", async () => {

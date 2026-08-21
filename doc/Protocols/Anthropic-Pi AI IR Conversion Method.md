@@ -303,7 +303,7 @@ An explicitly request-wide retention control, when the Anthropic profile provide
 | `stop_sequence` | null/default; Pi has no source fact |
 | `usage` | §9.4 |
 
-`responseModel`, diagnostics, rawStopReason, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field.
+`responseModel`, diagnostics, rawStopReason, `endTurn`, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field. Pi 0.84.2 `AssistantMessage.endTurn` is diagnostic-only here and does not alter Anthropic stop-reason rendering.
 
 ### 9.2 Content projection
 
@@ -312,7 +312,8 @@ An explicitly request-wide retention control, when the Anthropic profile provide
 | TextContent | text block | Preserve text; citations default null/empty. |
 | ordinary ThinkingContent | thinking block | Preserve text. Use thinkingSignature; if absent, synthesize empty string and emit notice. |
 | redacted ThinkingContent | redacted_thinking | Preserve opaque thinkingSignature as `data`. Missing usable opaque data is a conversion failure. |
-| ToolCall | tool_use | Preserve ID/name; arguments must be a lossless JSON object. |
+| ToolCall without namespace | tool_use | Preserve ID/name; arguments must be a lossless JSON object. |
+| ToolCall with Pi 0.84.2 `namespace` | none | Conversion failure: Anthropic Messages has no namespace slot, and silently dropping a tool-identity qualifier is not fidelity-safe. |
 | known Pi auxiliary content with no target | none | Drop and document. |
 | future Pi content | policy | `unknownPiContent`, default error. Ignore emits notice. |
 

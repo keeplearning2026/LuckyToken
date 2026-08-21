@@ -255,10 +255,19 @@ describe("Provider execution boundary", () => {
         client === "anthropic" ? anthropicRequest() : responsesRequest(),
       );
       expect(response.status).toBe(502);
-      const body = JSON.stringify(await response.json());
-      expect(body).toContain("Upstream provider failed");
-      expect(body).not.toContain(diagnostic);
-      expect(body).not.toContain("401");
+      const body = (await response.json()) as {
+        error?: { type?: string; message?: string };
+        request_id?: string;
+      };
+      expect(body.error).toMatchObject({
+        type: "api_error",
+        message: "Upstream provider failed",
+      });
+      expect(JSON.stringify(body)).not.toContain(diagnostic);
+      // The upstream status must not leak through the error payload. The
+      // unrelated request_id is an opaque UUID and may legitimately contain
+      // the digit sequence "401" by chance.
+      expect(JSON.stringify(body.error)).not.toContain("401");
     },
   );
 

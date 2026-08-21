@@ -1,12 +1,13 @@
 # Pi AI IR Protocol
 
-**Version:** 0.9.2  
+**Version:** 0.10.0
 **Status:** Frozen
 
-**Reference Repository:** `keeplearning2026/LuckyToken`  
-**Reference Commit:** `eb3c46d6ce28cb87147bb0d05645ebae28524713`  
-**Reference Package:** `@earendil-works/pi-ai` `0.84.1`  
-**Reference Date:** `2026-08-09`
+**Reference Repository:** `earendil-works/pi`
+**Reference Commit:** `914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
+**Vendored LuckyToken Snapshot:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
+**Reference Package:** `@earendil-works/pi-ai` `0.84.2`
+**Reference Date:** `2026-08-14`
 
 **Reference Module:** `pi-agent/packages/ai`
 
@@ -4866,17 +4867,20 @@ No additional authority vocabulary is introduced by this index.
 This protocol version is pinned to:
 
 ```text
-Repository:
-keeplearning2026/LuckyToken
+Upstream Repository:
+earendil-works/pi
 
-Commit:
-eb3c46d6ce28cb87147bb0d05645ebae28524713
+Upstream Commit / Tag:
+914cf1472e715297caa30db4b9535d534a9eb718 / v0.84.2
+
+Vendored LuckyToken Snapshot:
+fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575
 
 Package:
-@earendil-works/pi-ai 0.84.1
+@earendil-works/pi-ai 0.84.2
 
 Reference Date:
-2026-08-09
+2026-08-14
 ```
 
 **Package identity source:**
@@ -4892,10 +4896,10 @@ name:
 @earendil-works/pi-ai
 
 version:
-0.84.1
+0.84.2
 ```
 
-The pinned commit defines the meaning of this protocol version.
+The pinned upstream commit/tag defines the Pi source meaning of this protocol version; the vendored LuckyToken snapshot identifies the local evidence copy used by this repository.
 
 Future source changes do not retroactively modify this extraction.
 

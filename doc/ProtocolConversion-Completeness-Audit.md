@@ -132,7 +132,7 @@
 | C-12 | onPayload replacement 不会重新校验 | **证伪** | `provider.ts:835-848,417-649` stringify→parse 后执行 closed-world authority/shape revalidation。旧详细文档反写。 |
 | C-13 | projectDir 缺失/空/非字符串都变 root slug | **证伪** | `project.ts:60-67` 对这些返回 undefined，省略 x-project-slug；仅非空值 slugify 后为空才 root。 |
 | C-14 | max_tokens 固定 64000 | **证伪（已由 Ticket 20 修正）** | request conversion 使用 `options.maxTokens ?? model.maxTokens`。安装版 Pi 的 `Model.maxTokens` 必填；CommandCode catalog 优先采用模型明确的 `maxOutputTokens`，否则采用官方 CLI request default 64000。因此 wire `max_tokens` 必填，但并非对所有模型无条件固定 64000。 |
-| C-15 | installed Pi ToolCall 有 namespace | **证伪** | 权威安装版 0.84.1 `types.d.ts:246-252` 无 namespace；vendored 较新源码有，但不可当运行时合同。 |
+| C-15 | installed Pi ToolCall 有 namespace | **已由 0.84.2 基线升级改写** | 历史 0.84.1 安装版无 namespace；当前权威运行时 0.84.2 的 `ToolCall.namespace?: string` 已成为正式 Pi IR 合同。Pi `Tool` 仍无 namespace，因此声明侧可逆 flatten 仍然需要。 |
 
 ### 3.4 错误、连锁影响与架构
 

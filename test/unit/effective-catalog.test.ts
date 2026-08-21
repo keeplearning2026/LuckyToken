@@ -7,8 +7,8 @@ import { composeEffectiveCatalog } from "../../src/providers/effective-compositi
  * Ticket 09 public seam: the effective catalog projection.
  *
  * Expected literals are derived from the repository-pinned Pi baseline
- * (`@earendil-works/pi-coding-agent` 0.84.1 / `@earendil-works/pi-ai`
- * 0.84.1): built-in provider/model facts below are pinned catalog data, and
+ * (`@earendil-works/pi-coding-agent` 0.84.2 / `@earendil-works/pi-ai`
+ * 0.84.2): built-in provider/model facts below are pinned catalog data, and
  * the malformed-case messages are the pinned Pi wording. No Pi internal
  * object is imported anywhere in this file.
  */
@@ -19,8 +19,8 @@ describe("effective catalog composition", () => {
     expect(catalog.schemaVersion).toBe("luckytoken-effective-catalog-v1");
     expect(catalog.baseline).toEqual({
       package: "@earendil-works/pi-coding-agent",
-      version: "0.84.1",
-      schema: "pi-coding-agent-0.84.1-models-json-schema",
+      version: "0.84.2",
+      schema: "pi-coding-agent-0.84.2-models-json-schema",
     });
     expect(catalog.baseline).toEqual(PI_COMPATIBILITY_BASELINE);
     expect(catalog.compositionErrors).toEqual([]);
@@ -43,6 +43,10 @@ describe("effective catalog composition", () => {
       maxTokens: 8192,
       layer: "builtin",
       compat: { supportsStrictMode: true },
+    });
+    expect(openai?.models.find((model) => model.id === "gpt-5.4")?.compat).toMatchObject({
+      supportsAdditionalTools: true,
+      supportsToolSearch: true,
     });
 
     const anthropic = catalog.providers.find(

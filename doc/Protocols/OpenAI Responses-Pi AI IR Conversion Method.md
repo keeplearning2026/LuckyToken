@@ -288,7 +288,11 @@ Do not drop grammar when Pi can carry it.
 
 ### 8.3 Namespace
 
-The installed Pi 0.84.1 Tool/ToolCall has no namespace field. Namespace flattening is an explicit compatibility transform, not exact mapping. It must use a reversible adapter-owned naming scheme, detect collisions, and retain reverse metadata in request-local render state. An unresolvable collision is an error.
+Pi 0.84.2 distinguishes the declaration and call contracts: Pi `Tool` still has no namespace field, while Pi `ToolCall` has optional `namespace`. Namespace tool declarations therefore continue to use the reversible adapter-owned `<namespace>.<child>` flattening scheme with collision detection and request-local reverse metadata.
+
+For historical call items, if a wire `namespace + name` pair matches a flattened declaration owned by this request, the Pi ToolCall uses that flattened name and omits `namespace` so `Context.tools`, ToolCall, and ToolResult share one canonical identity. If no matching flattened declaration exists, the Client Wire → Pi IR conversion preserves the wire namespace in Pi `ToolCall.namespace` rather than erasing a representable Pi 0.84.2 fact, but Core v1 then rejects that surviving namespace before Pi Provider execution. LuckyToken has no certified Provider replay identity for such unmatched namespaced history, and allowing a Provider adapter to omit it could change tool identity.
+
+On Pi → Responses rendering, request-local reverse metadata restores a flattened declaration identity. A direct Pi `ToolCall.namespace` returned by a Pi Provider is emitted when no reverse entry exists. If both are present they must agree on namespace; disagreement is an outbound fidelity failure rather than an arbitrary precedence rule.
 
 ### 8.4 Execution ownership
 
@@ -305,7 +309,7 @@ Classification is by who executes the tool, not by a concrete Provider/tool name
 |---|---|
 | function | Pi Tool: name/description/parameters/strict mapping. |
 | custom | Pi Tool with freeform compatibility schema; Lark/regex grammar maps to constrainedSampling. |
-| namespace | Reversible adapter-local flattening with collision detection; installed Pi has no namespace field. |
+| namespace | Pi `Tool` declarations use reversible adapter-local flattening with collision detection. A matching historical call uses the same flattened identity; an unmatched namespace is preserved at the Client Wire → Pi IR boundary but is rejected before Provider execution in Core v1. Pi Provider responses may still return `ToolCall.namespace`, which the Responses renderer preserves. |
 | local_shell | Client/BYOT Pi Tool with documented action schema. |
 | shell | Client/BYOT Pi Tool with documented action schema. |
 | apply_patch | Client/BYOT Pi Tool with documented operation schema. |
@@ -444,7 +448,8 @@ Echo **effective normalized state**, not raw caller intent:
 
 - Pi text → assistant message/output_text content.
 - Pi reasoning → reasoning item summary/content; verified Responses signature may restore encrypted_content.
-- Pi ToolCall → function/custom call using request-local reversible family metadata.
+- Pi ToolCall → function/custom call using request-local reversible family metadata and, where no flattened declaration owns the identity, the Pi 0.84.2 `ToolCall.namespace` field.
+- Pi `AssistantMessage.endTurn` is diagnostic-only and has no standard Responses wire field in this profile; it does not change status or stop-reason rendering.
 - Unknown Pi content follows `unknownPiContent`, default error. Ignore emits notice.
 - Redacted/opaque content is never guessed into a Responses family without verified provenance.
 

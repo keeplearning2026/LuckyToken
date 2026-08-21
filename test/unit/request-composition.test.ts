@@ -35,7 +35,7 @@ import type { ModelsJsonProviderConfig } from "../../src/providers/models-json.j
  *
  * Mirrors the pinned Pi request composition
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` +
- * `model-runtime.ts` in @earendil-works/pi-coding-agent 0.84.1): stored
+ * `model-runtime.ts` in @earendil-works/pi-coding-agent 0.84.2): stored
  * credential, then configured models.json key (literal/env/!command,
  * resolved per request), then built-in/inherited auth; provider headers
  * merge into the auth result; authHeader adds `Authorization: Bearer` only

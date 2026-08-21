@@ -554,6 +554,90 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       expect(tool?.parameters).toEqual({ type: "object", properties: {} });
     });
 
+    it("canonicalizes a namespaced historical call to the flattened declared Pi tool identity", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          tools: [
+            {
+              type: "namespace",
+              name: "crm",
+              tools: [
+                {
+                  type: "function",
+                  name: "read",
+                  parameters: { type: "object", properties: {} },
+                },
+              ],
+            },
+          ],
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "read",
+              namespace: "crm",
+              arguments: "{}",
+              status: "completed",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_1",
+              output: "ok",
+              status: "completed",
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant?.content).toContainEqual({
+        type: "toolCall",
+        id: "call_1",
+        name: "crm.read",
+        arguments: {},
+      });
+    });
+
+    it("preserves a namespaced historical call in Pi when no flattened declaration exists", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_2",
+              name: "lookup",
+              namespace: "dynamic_tools",
+              arguments: "{}",
+              status: "completed",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_2",
+              output: "ok",
+              status: "completed",
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const assistant = invocation.context.messages.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant?.content).toContainEqual({
+        type: "toolCall",
+        id: "call_2",
+        name: "lookup",
+        namespace: "dynamic_tools",
+        arguments: {},
+      });
+    });
+
     it("supports custom children inside a namespace", () => {
       const invocation = convertResponsesRequest(
         {
@@ -1553,6 +1637,129 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         toolCallId: "c1",
         content: [{ type: "text", text: "real" }],
       });
+    });
+  });
+
+  describe("Pi 0.84.2 ToolCall namespace output", () => {
+    it("renders a Pi function ToolCall namespace directly to Responses", () => {
+      const response = convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_ns",
+              name: "lookup",
+              namespace: "dynamic_tools",
+              arguments: { value: "x" },
+            },
+          ],
+        }),
+        { clientModel: "m", stream: false },
+        "resp_ns",
+        1,
+        undefined,
+      );
+      expect(response.output).toEqual([
+        {
+          type: "function_call",
+          id: "fc_resp_ns_0",
+          call_id: "call_ns",
+          name: "lookup",
+          namespace: "dynamic_tools",
+          arguments: '{"value":"x"}',
+          status: "completed",
+        },
+      ]);
+    });
+
+    it("preserves a Pi namespace on a known freeform tool", () => {
+      const response = convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_custom_ns",
+              name: "query",
+              namespace: "dynamic_tools",
+              arguments: { input: "raw" },
+            },
+          ],
+        }),
+        {
+          clientModel: "m",
+          stream: false,
+          freeformToolNames: new Set(["query"]),
+        },
+        "resp_custom_ns",
+        1,
+        undefined,
+      );
+      expect(response.output).toEqual([
+        {
+          type: "custom_tool_call",
+          id: "ctc_resp_custom_ns_0",
+          call_id: "call_custom_ns",
+          name: "query",
+          namespace: "dynamic_tools",
+          input: "raw",
+          status: "completed",
+        },
+      ]);
+    });
+
+    it("fails when Pi namespace conflicts with request-local reverse metadata", () => {
+      expect(() =>
+        convertAssistantMessageToResponses(
+          assistantMessage({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_conflict",
+                name: "crm.read",
+                namespace: "finance",
+                arguments: {},
+              },
+            ],
+          }),
+          {
+            clientModel: "m",
+            stream: false,
+            namespaceReverse: {
+              "crm.read": { namespace: "crm", child: "read" },
+            },
+          },
+          "resp_conflict",
+          1,
+          undefined,
+        ),
+      ).toThrow(/namespace.*conflict/i);
+    });
+
+    it("rejects malformed Pi namespace values at the renderer seam", () => {
+      const malformed = assistantMessage({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bad_ns",
+            name: "lookup",
+            namespace: 42,
+            arguments: {},
+          } as unknown as AssistantMessage["content"][number],
+        ],
+      });
+      expect(() =>
+        convertAssistantMessageToResponses(
+          malformed,
+          { clientModel: "m", stream: false },
+          "resp_bad_ns",
+          1,
+          undefined,
+        ),
+      ).toThrow(/namespace.*non-empty string/i);
     });
   });
 

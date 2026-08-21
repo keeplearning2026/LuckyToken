@@ -72,7 +72,7 @@ describe("Ticket 24 backup authority", () => {
           id: "models",
           path: modelsPath,
           contract: "pi-models-json",
-          version: "0.84.1",
+          version: "0.84.2",
           category: "configuration",
         },
         {
@@ -143,7 +143,7 @@ describe("Ticket 24 backup authority", () => {
       sensitive: false,
       entries: [
         { id: "configuration", contract: "luckytoken-config", version: 1 },
-        { id: "models", contract: "pi-models-json", version: "0.84.1" },
+        { id: "models", contract: "pi-models-json", version: "0.84.2" },
         { id: "aliases", contract: "luckytoken-model-aliases", version: 1 },
         { id: "settings", contract: "luckytoken-settings", version: 1 },
       ],

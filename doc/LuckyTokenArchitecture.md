@@ -1,7 +1,7 @@
 # LuckyToken 实现架构说明
 
 **文档性质：** 当前实现的维护者地图（implementation architecture map）<br>
-**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.1<br>
+**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.2<br>
 **源码基线：** commit `e6f56dd`（2026-08-20，Backend InstanceAuthority + Desktop connection lifecycle）<br>
 **架构规范：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)<br>
 **Desktop 架构：** [LuckyToken Electron Product Architecture Specification](./Spec/LuckyTokenElectronArchitectureSpec.md)（已实现；Windows packaged lifecycle 已认证，macOS/Linux 仍待真实平台认证）<br>
@@ -1162,7 +1162,7 @@ Composition 可以理解为“开门前装配员”：它读取文件、造好�
 Token，但它自己不做协议翻译。
 
 Pi 是 LuckyToken 的共享 runtime/IR contract，但 Pi Agent 不是 LuckyToken 的应用
-架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.84.1`；仓库中的
+架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.84.2`；仓库中的
 `pi-agent/packages/ai` 用于 source review/reference，不被 LuckyToken-specific 代码
 修改。LuckyToken-owned 模块只补上文件加载、credential persistence、Provider
 construction 和 CLI shell。

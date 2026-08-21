@@ -96,7 +96,7 @@ describe("Provider Native Responses contract", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     };
-    const rawBody = '{\n  "model": "my-responses/gpt-5",\n  "future_number": 9007199254740993,\n  "negative_zero": -0,\n  "future_field": {"opaque":true}\n}';
+    const rawBody = '{\n  "model": "my-responses/gpt-5",\n  "input": [{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","namespace":"dynamic_tools"}]}],\n  "future_number": 9007199254740993,\n  "negative_zero": -0,\n  "future_field": {"opaque":true}\n}';
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch),
@@ -157,7 +157,8 @@ describe("Provider Native Responses contract", () => {
     const model = responsesModel();
     const sse =
       'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
-      'data: {"type":"response.completed","sequence_number":1,"response":{"status":"completed"}}\n\n' +
+      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","namespace":"dynamic_tools","arguments":"{}"}}\n\n' +
+      'data: {"type":"response.completed","sequence_number":2,"response":{"status":"completed"}}\n\n' +
       "data: [DONE]\n\n";
     const fetch: FetchFunction = async () =>
       new Response(sse, {

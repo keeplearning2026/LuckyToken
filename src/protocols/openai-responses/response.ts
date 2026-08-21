@@ -521,12 +521,31 @@ function convertOutput(
         "Pi toolCall.arguments did not serialize",
       );
     }
-    // A namespace-flattened name reverses to the SDK shape: the child name
-    // plus a namespace field, so the client can map the call back to the
-    // original namespace tool.
+    const rawNamespace = raw.namespace;
+    if (
+      rawNamespace !== undefined &&
+      (typeof rawNamespace !== "string" || rawNamespace.length === 0)
+    ) {
+      throw new OutboundResponseFidelityFailure(
+        "Pi toolCall.namespace must be a non-empty string when present",
+      );
+    }
+    // A namespace-flattened declaration reverses to the SDK child identity.
+    // Pi 0.84.2 can also carry a namespace directly on ToolCall. When both
+    // authorities are present they must agree; choosing one would silently
+    // rewrite tool identity.
     const reverse = namespaceReverse[name];
+    if (
+      reverse !== undefined &&
+      rawNamespace !== undefined &&
+      reverse.namespace !== rawNamespace
+    ) {
+      throw new OutboundResponseFidelityFailure(
+        "Pi toolCall.namespace conflicts with request namespace metadata",
+      );
+    }
     const outputName = reverse?.child ?? name;
-    const namespace = reverse?.namespace;
+    const namespace = reverse?.namespace ?? rawNamespace;
     if (freeformToolNames.has(name)) {
       // Freeform custom tools (e.g. apply_patch) must round-trip as
       // `custom_tool_call` with a raw `input` string, not as a JSON

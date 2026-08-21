@@ -29,7 +29,7 @@ import type {
  *
  * The semantics mirror the repository-pinned Pi implementation
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` in
- * `@earendil-works/pi-coding-agent` 0.84.1):
+ * `@earendil-works/pi-coding-agent` 0.84.2):
  *
  * - a custom Provider is created with the pinned required fields and
  *   defaults (`modelFromJson`): name falls back to id, reasoning to false,

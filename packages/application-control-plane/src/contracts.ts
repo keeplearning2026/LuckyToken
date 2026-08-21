@@ -161,8 +161,8 @@ export interface ModelsFileState {
  */
 export interface EffectiveCatalogBaseline {
   readonly package: "@earendil-works/pi-coding-agent";
-  readonly version: "0.84.1";
-  readonly schema: "pi-coding-agent-0.84.1-models-json-schema";
+  readonly version: "0.84.2";
+  readonly schema: "pi-coding-agent-0.84.2-models-json-schema";
 }
 
 /** Source layer of an effective Provider entry. */

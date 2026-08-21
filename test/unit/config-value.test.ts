@@ -7,7 +7,7 @@ import { createConfigValueResolver } from "../../src/providers/config-value.js";
  *
  * Mirrors the pinned Pi implementation
  * (`pi-agent/packages/coding-agent/src/core/resolve-config-value.ts` in
- * `@earendil-works/pi-coding-agent` 0.84.1): literal values, `$VAR` /
+ * `@earendil-works/pi-coding-agent` 0.84.2): literal values, `$VAR` /
  * `${VAR}` environment references, `$$`/`$!` escapes, and `!command` shell
  * commands, resolved UNCACHED at every request. Env and command sources are
  * injected adapters — the test suite never executes real shell commands.

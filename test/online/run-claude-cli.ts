@@ -219,22 +219,24 @@ function scenarios(): readonly ClaudeScenario[] {
     Object.freeze({
       id: "tool_bash",
       prompt: (marker: string) =>
-        `Use the Bash tool to run: echo ${marker}. Then reply with exactly: ${marker}.`,
+        `Use the Bash tool exactly once to run: echo ${marker}. Do not plan, delegate, ` +
+        `inspect unrelated files, or use another tool. Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Bash",
     }),
     Object.freeze({
       id: "tool_write",
       prompt: (marker: string) =>
-        `Use the Write tool to create claude_probe.txt containing exactly ${marker}. ` +
-        `Then reply with exactly: ${marker}.`,
+        `Use only the Write tool to create claude_probe.txt containing exactly ${marker}. ` +
+        `Do not plan, delegate, inspect unrelated files, or use another tool. ` +
+        `Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Write",
       expectedFile: Object.freeze({ path: "claude_probe.txt", content: "__MARKER__" }),
     }),
     Object.freeze({
       id: "multi_turn",
       prompt: (marker: string) =>
-        `Remember the seed ${marker}_SEED. Reply with exactly: ${marker}_TURN1. ` +
-        "Do not use tools or explain.",
+        `Remember the seed ${marker}_SEED. Immediately reply with exactly: ${marker}_TURN1. ` +
+        "Do not plan, delegate, use tools, inspect unrelated files, or explain.",
       special: "multi_turn",
     }),
     Object.freeze({
@@ -253,7 +255,8 @@ function scenarios(): readonly ClaudeScenario[] {
     Object.freeze({
       id: "tool_read",
       prompt: (marker: string) =>
-        `Use the Read tool to read read_probe.txt, then reply with exactly its content: ${marker}.`,
+        `Use only the Read tool to read read_probe.txt. Do not plan, delegate, inspect ` +
+        `anything else, or use another tool. Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Read",
       initialFiles: Object.freeze([
         Object.freeze({ path: "read_probe.txt", content: "__MARKER__\n" }),
@@ -262,8 +265,9 @@ function scenarios(): readonly ClaudeScenario[] {
     Object.freeze({
       id: "tool_edit",
       prompt: (marker: string) =>
-        `Use the Edit tool to replace BEFORE in edit_probe.txt with ${marker}. ` +
-        `Then reply with exactly: ${marker}.`,
+        `Use only the Edit tool to replace BEFORE in edit_probe.txt with ${marker}. ` +
+        `Do not plan, delegate, inspect unrelated files, or use another tool. ` +
+        `Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Edit",
       initialFiles: Object.freeze([
         Object.freeze({ path: "edit_probe.txt", content: "BEFORE\n" }),
@@ -273,8 +277,9 @@ function scenarios(): readonly ClaudeScenario[] {
     Object.freeze({
       id: "tool_grep",
       prompt: (marker: string) =>
-        `Use the Grep tool to search for ${marker} in grep_probe.txt. ` +
-        `Then reply with exactly: ${marker}. Do not use Bash.`,
+        `Use only the Grep tool to search for ${marker} in grep_probe.txt. ` +
+        `Do not plan, delegate, inspect unrelated files, or use Bash/another tool. ` +
+        `Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Grep",
       initialFiles: Object.freeze([
         Object.freeze({ path: "grep_probe.txt", content: "prefix __MARKER__ suffix\n" }),
@@ -283,8 +288,9 @@ function scenarios(): readonly ClaudeScenario[] {
     Object.freeze({
       id: "tool_glob",
       prompt: (marker: string) =>
-        `Use the Glob tool with pattern **/glob_probe.txt. After it finds the file, ` +
-        `reply with exactly: ${marker}. Do not use Bash.`,
+        `Use only the Glob tool with pattern **/glob_probe.txt. Do not plan, delegate, ` +
+        `inspect unrelated files, or use Bash/another tool. After it finds the file, ` +
+        `immediately reply with exactly: ${marker}.`,
       expectedTool: "Glob",
       initialFiles: Object.freeze([
         Object.freeze({ path: "glob_probe.txt", content: "__MARKER__\n" }),
@@ -295,15 +301,17 @@ function scenarios(): readonly ClaudeScenario[] {
       prompt: (marker: string) =>
         "Use the Bash tool once to run " +
         '`powershell -NoProfile -Command "Write-Error EXPECTED_TOOL_FAILURE; exit 7"`. ' +
-        `The failure is expected; do not retry. Then reply with exactly: ${marker}.`,
+        `The failure is expected; do not retry, plan, delegate, inspect unrelated files, ` +
+        `or use another tool. Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Bash",
       expectedToolError: true,
     }),
     Object.freeze({
       id: "tool_unicode",
       prompt: (marker: string) =>
-        "Use the Bash tool to run `printf 'UNICODE_汉字_🙂_OK\\n'`. " +
-        `Then reply with exactly: ${marker}.`,
+        "Use the Bash tool exactly once to run `printf 'UNICODE_汉字_🙂_OK\\n'`. " +
+        `Do not plan, delegate, inspect unrelated files, or use another tool. ` +
+        `Then immediately reply with exactly: ${marker}.`,
       expectedTool: "Bash",
       expectedToolResultText: "UNICODE_汉字_🙂_OK",
     }),
@@ -312,7 +320,8 @@ function scenarios(): readonly ClaudeScenario[] {
       prompt: (marker: string) =>
         "In one assistant response, issue two separate Bash tool calls in parallel. " +
         "The first must run `printf 'PARALLEL_A_OK\\n'`; the second must run " +
-        "`printf 'PARALLEL_B_OK\\n'`. Do not combine the commands. After both results, " +
+        "`printf 'PARALLEL_B_OK\\n'`. Do not combine the commands, plan, delegate, inspect " +
+        "unrelated files, or use another tool. After both results, immediately " +
         `reply with exactly: ${marker}.`,
       expectedTool: "Bash",
       minimumParallelToolUses: 2,

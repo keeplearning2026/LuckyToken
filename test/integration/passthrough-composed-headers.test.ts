@@ -394,7 +394,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      anthropicRequest(clientToken, "cloudflare-ai-gateway/claude-3-5-haiku"),
+      anthropicRequest(clientToken, "cloudflare-ai-gateway/claude-haiku-4-5"),
     );
     expect(response.status).toBe(200);
     expect(upstreamRequests).toHaveLength(1);

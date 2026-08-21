@@ -100,15 +100,15 @@ describe("serving composition certification", () => {
         },
         pi: {
           evidence: {
-            protocol: "Pi AI IR Protocol v0.9.2",
-            referenceCommit: "eb3c46d6ce28cb87147bb0d05645ebae28524713",
-            protocolBlobSha: "a3dc09b846f2e49f73480d5e33c63aa009ff9a51",
+            protocol: "Pi AI IR Protocol v0.10.0",
+            referenceCommit: "914cf1472e715297caa30db4b9535d534a9eb718",
+            protocolBlobSha: "ebf2e9ef043d7351a38fd69909bf367f0f103884",
           },
           runtime: {
             package: "@earendil-works/pi-ai",
-            version: "0.84.1",
+            version: "0.84.2",
             integrity:
-              "sha512-wMsAdJMxuNri08vLqTyYVI201DQQezGhPSTkzYsHdw5dYX3rCNwEmSvpaAwhi7ELKI/2tE/CEgSWg/6iRxSgdQ==",
+              "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig==",
           },
         },
         commandCode: {

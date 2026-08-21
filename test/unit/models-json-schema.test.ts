@@ -1,8 +1,36 @@
 import { describe, expect, it } from "vitest";
 
-import { ModelConfig } from "../../src/providers/models-json-schema.js";
+import {
+  ModelConfig,
+  type ModelsJsonProvider,
+} from "../../src/providers/models-json-schema.js";
+
+const PI_0_84_2_RESPONSES_COMPAT: NonNullable<ModelsJsonProvider["compat"]> = {
+  supportsAdditionalTools: true,
+};
 
 describe("ModelConfig (extracted from Pi coding-agent)", () => {
+  it("exposes the Pi 0.84.2 Responses additional-tools compat field", () => {
+    const config = ModelConfig.parse(
+      JSON.stringify({
+        providers: {
+          p: {
+            api: "openai-responses",
+            compat: PI_0_84_2_RESPONSES_COMPAT,
+            models: [{ id: "m", compat: PI_0_84_2_RESPONSES_COMPAT }],
+          },
+        },
+      }),
+    );
+    expect(config.getError()).toBeUndefined();
+    expect(config.getProvider("p")?.compat).toMatchObject({
+      supportsAdditionalTools: true,
+    });
+    expect(config.getProvider("p")?.models?.[0]?.compat).toMatchObject({
+      supportsAdditionalTools: true,
+    });
+  });
+
   it("parses a provider with the full Pi schema", async () => {
     const config = ModelConfig.parse(
       JSON.stringify({

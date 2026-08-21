@@ -430,6 +430,7 @@ export async function runOnlineConformance(
     model: modelId,
     max_tokens: 512,
     temperature: 0,
+    output_config: { effort: "high" },
     metadata: { user_id: "luckytoken-online-conformance" },
     system: "Preserve the user's requested exact marker.",
     messages: [
@@ -472,6 +473,7 @@ export async function runOnlineConformance(
   const sseRequest = {
     model: modelId,
     max_tokens: 512,
+    output_config: { effort: "high" as const },
     messages: [{ role: "user" as const, content: `Reply with exactly ${sseMarker}.` }],
   };
   const sseStart = captures.length;

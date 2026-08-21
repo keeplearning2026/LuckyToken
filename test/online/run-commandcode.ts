@@ -11,7 +11,10 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../../src/composition.js";
+import {
+  createConfiguredLuckyTokenDataPlane,
+  type ConfiguredLuckyTokenDataPlane,
+} from "../../src/composition.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import {
   createCapturingCommandCodeFetch,
@@ -387,6 +390,12 @@ function latencySummary(values: readonly number[]): Record<string, number> {
   };
 }
 
+function closeDataPlaneStores(composition: ConfiguredLuckyTokenDataPlane): void {
+  composition.deepCaptureStore.close();
+  composition.requestLedger.close();
+  composition.diagnosticsStore.close();
+}
+
 export async function runCommandCodeOnlineSuite(
   args: readonly string[],
 ): Promise<void> {
@@ -396,6 +405,7 @@ export async function runCommandCodeOnlineSuite(
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-online-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
+  let composition: ConfiguredLuckyTokenDataPlane | undefined;
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -428,7 +438,7 @@ export async function runCommandCodeOnlineSuite(
     );
     const config = await loadLuckyTokenCliConfig(configPath);
     const dispatchObserver = createDispatchObserver(globalThis.fetch);
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: dispatchObserver.fetch,
@@ -458,15 +468,17 @@ export async function runCommandCodeOnlineSuite(
     );
     await server.close();
     server = undefined;
+    closeDataPlaneStores(composition);
+    composition = undefined;
 
     const capture = createCapturingCommandCodeFetch(globalThis.fetch);
-    const conformanceComposition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredLuckyTokenDataPlane({
       config,
       credentials,
       fetch: capture.fetch,
     });
     server = await startLuckyTokenHttpServer({
-      runtime: conformanceComposition.runtime,
+      runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,
     });
@@ -506,6 +518,7 @@ export async function runCommandCodeOnlineSuite(
     if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
   } finally {
     await server?.close();
+    if (composition !== undefined) closeDataPlaneStores(composition);
     await rm(directory, { recursive: true, force: true });
   }
 }

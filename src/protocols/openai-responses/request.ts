@@ -942,6 +942,7 @@ function convertMessages(
   policy: ResponseRequestConversionPolicy,
   notices: ConversionNotice[],
   executableNames?: ReadonlySet<string>,
+  namespaceReverse?: Readonly<Record<string, { namespace: string; child: string }>>,
 ): Message[] {
   const messages: Message[] = [];
   const pendingReasoning: ThinkingContent[] = [];
@@ -1381,7 +1382,7 @@ function convertMessages(
         // call maps to its deterministic Responses-owned family name so the
         // structured ToolCall/ToolResult round-trip. Other families require
         // a name.
-        const name =
+        const rawName =
           (type === "computer_call" ||
             type === "local_shell_call" ||
             type === "shell_call" ||
@@ -1395,6 +1396,22 @@ function convertMessages(
                   ? "shell"
                   : "apply_patch"
             : nonEmptyString(rawItem.name, "function_call.name");
+        const wireNamespace =
+          (type === "function_call" || type === "custom_tool_call") &&
+          rawItem.namespace !== undefined
+            ? nonEmptyString(rawItem.namespace, `${type}.namespace`)
+            : undefined;
+        const flattenedName =
+          wireNamespace === undefined
+            ? undefined
+            : `${wireNamespace}${NAMESPACE_SEPARATOR}${rawName}`;
+        const declaredNamespace =
+          flattenedName === undefined ? undefined : namespaceReverse?.[flattenedName];
+        const name =
+          declaredNamespace?.namespace === wireNamespace &&
+          declaredNamespace?.child === rawName
+            ? flattenedName!
+            : rawName;
         // An mcp_call with an error string is a failed tool invocation; the
         // correlated result must carry isError so the error semantics are
         // never lost.
@@ -1440,6 +1457,9 @@ function convertMessages(
           id: callId,
           name,
           arguments: argumentsJson,
+          ...(wireNamespace !== undefined && name === rawName
+            ? { namespace: wireNamespace }
+            : {}),
         };
         // Find or create the assistant container.
         const last = messages.at(-1);
@@ -2287,6 +2307,7 @@ export function convertResponsesRequest(
     policy,
     notices,
     executableNames,
+    namespaceReverse,
   );
   return buildInvocation(
     value,
@@ -2360,6 +2381,7 @@ export async function convertResponsesRequestAsync(
     policy,
     notices,
     executableNames,
+    namespaceReverse,
   );
   return buildInvocation(
     value,

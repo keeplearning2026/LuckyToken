@@ -90,6 +90,11 @@ test("certifies five named profiles and records complete online evidence", async
   }
   assert.equal(record.onlineEvidence.status, "ONLINE_PASSED");
   assert.equal(record.onlineEvidence.attempted, true);
+  assert.equal(record.onlineEvidence.executedAt, "2026-08-21");
+  assert.equal(record.onlineEvidence.repositoryState, "working-tree");
+  assert.equal(record.onlineEvidence.runtime?.package, "@earendil-works/pi-ai");
+  assert.equal(record.onlineEvidence.runtime?.version, "0.84.2");
+  assert.match(record.onlineEvidence.implementationFingerprint, /^sha256:[a-f0-9]{64}$/u);
   assert.deepEqual(record.onlineEvidence.gaps, []);
   assert.deepEqual(
     record.onlineEvidence.runs.map(({ command, passed, attempted }) => [
@@ -101,14 +106,24 @@ test("certifies five named profiles and records complete online evidence", async
       ["npx tsx test/online/pi-commandcode-ir-probe.ts", 23, 23],
       ["npm run test:online", 60, 60],
       ["npm run test:online-responses", 60, 60],
-      ["npm run test:online-codex -- 3", 60, 60],
-      ["npm run test:online-claude -- 3", 51, 51],
+      ["npm run test:online-codex -- 1", 60, 60],
+      ["npm run test:online-claude -- 1", 51, 51],
     ],
   );
   const summary = JSON.parse(
     await readFile(new URL(record.onlineEvidence.summaryArtifact, repositoryRoot), "utf8"),
   );
   assert.equal(summary.result, "ONLINE_PASSED");
+  assert.equal(summary.schemaVersion, "luckytoken-provider-distribution-online-evidence-v2");
+  assert.equal(summary.runtime?.version, "0.84.2");
+  assert.equal(summary.totals?.passed, 254);
+  assert.equal(summary.totals?.attempted, 254);
+  assert.equal(
+    `sha256:${summary.implementationFingerprint?.sha256}`,
+    record.onlineEvidence.implementationFingerprint,
+  );
+  assert.equal(record.onlineEvidence.runs[3]?.invocations, 3);
+  assert.equal(record.onlineEvidence.runs[4]?.invocations, 3);
   assert.equal(summary.runs.length, 5);
 });
 
@@ -178,11 +193,11 @@ test("binds the installed Pi runtime and every governing specification revision"
   const lock = JSON.parse(lockText);
   const piLock = lock.packages["node_modules/@earendil-works/pi-ai"];
 
-  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.84.1");
-  assert.equal(piLock.version, "0.84.1");
+  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.84.2");
+  assert.equal(piLock.version, "0.84.2");
   assert.equal(
     piLock.integrity,
-    "sha512-wMsAdJMxuNri08vLqTyYVI201DQQezGhPSTkzYsHdw5dYX3rCNwEmSvpaAwhi7ELKI/2tE/CEgSWg/6iRxSgdQ==",
+    "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig==",
   );
   assert.ok(source.includes(piLock.integrity));
 

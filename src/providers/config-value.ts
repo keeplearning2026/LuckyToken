@@ -4,7 +4,7 @@
  *
  * Mirrors the pinned Pi implementation
  * (`pi-agent/packages/coding-agent/src/core/resolve-config-value.ts` in
- * `@earendil-works/pi-coding-agent` 0.84.1) with two deliberate local
+ * `@earendil-works/pi-coding-agent` 0.84.2) with two deliberate local
  * adaptations:
  *
  * - resolution is always UNCACHED: the pinned request path resolves API keys

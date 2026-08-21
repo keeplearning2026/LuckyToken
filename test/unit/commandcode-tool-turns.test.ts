@@ -239,7 +239,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
       "non-JSON value",
     );
     expect(
-      convertCall({ ...toolCall("ns", "tool", {}), namespace: "foreign" } as ToolCall),
+      convertCall({ ...toolCall("ns", "tool", {}), namespace: "foreign" }),
     ).toThrow("namespace");
     expect(
       convertCall(

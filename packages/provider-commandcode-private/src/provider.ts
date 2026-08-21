@@ -202,8 +202,7 @@ function convertCommandCodeMessageHistory(
       if (block.type === "thinking") {
         return { type: "reasoning" as const, text: block.thinking };
       }
-      const extended = block as typeof block & { namespace?: unknown };
-      if (extended.namespace !== undefined) {
+      if (block.namespace !== undefined) {
         throw new Error("CommandCode cannot map a ToolCall namespace");
       }
       if (seenCallIds.has(block.id)) {
