@@ -70,6 +70,7 @@ export interface CodexIntegrationAuthorityOptions {
   readonly buildCatalog: (
     nativeEntries: readonly CodexNativeCatalogEntry[],
   ) => Promise<CodexCatalogBuildResult>;
+  readonly validateCatalog: (content: string) => Promise<void>;
   readonly restoreTarget?: () => CodexRestoreTarget;
 }
 
@@ -503,6 +504,20 @@ export function createCodexIntegrationAuthority(
       ...nativeSnapshot.warnings,
       ...catalog.warnings,
     ]);
+    try {
+      await options.validateCatalog(catalog.content);
+    } catch (error) {
+      const detail =
+        error instanceof Error && error.message.length > 0
+          ? ` ${error.message}`
+          : "";
+      return project(state, {
+        observedState: "unavailable",
+        warnings,
+        message:
+          `The LuckyToken model catalog failed installed Codex validation. No Codex files were changed.${detail}`,
+      });
+    }
     const committedBeforeApply: IntegrationState = {
       ...state,
       modelCount: catalog.modelCount,

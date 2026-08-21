@@ -79,16 +79,17 @@ function escapeCmdCommand(command: string): string {
   return command.replace(CMD_META, "^$1");
 }
 
-/** Platform-safe invocation of the machine-readable Codex bundled-catalog command. */
-export function codexDebugModelsInvocation(
+/** Platform-safe invocation of a Codex CLI command. */
+export function codexCliInvocation(
   command: string,
+  args: readonly string[],
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): CodexDebugModelsInvocation {
   if (platform !== "win32" || !/\.(?:cmd|bat)$/iu.test(command)) {
     return Object.freeze({
       file: command,
-      args: Object.freeze([...DEBUG_MODEL_ARGS]),
+      args: Object.freeze([...args]),
       options: Object.freeze({}),
     });
   }
@@ -96,13 +97,22 @@ export function codexDebugModelsInvocation(
   const doubleEscape = NPM_CMD_SHIM.test(command);
   const commandLine = [
     escapeCmdCommand(command),
-    ...DEBUG_MODEL_ARGS.map((argument) => escapeCmdArg(argument, doubleEscape)),
+    ...args.map((argument) => escapeCmdArg(argument, doubleEscape)),
   ].join(" ");
   return Object.freeze({
     file: envValue(env, "ComSpec")?.trim() || "cmd.exe",
     args: Object.freeze(["/d", "/s", "/c", `"${commandLine}"`]),
     options: Object.freeze({ windowsVerbatimArguments: true }),
   });
+}
+
+/** Platform-safe invocation of the machine-readable Codex bundled-catalog command. */
+export function codexDebugModelsInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): CodexDebugModelsInvocation {
+  return codexCliInvocation(command, DEBUG_MODEL_ARGS, platform, env);
 }
 
 async function isFile(path: string): Promise<boolean> {
@@ -162,7 +172,7 @@ async function windowsPathCommands(env: NodeJS.ProcessEnv): Promise<readonly str
   return Object.freeze(candidates);
 }
 
-async function discoverCodexCommands(
+export async function discoverCodexCommands(
   options: CreateCodexNativeCatalogSourceOptions,
 ): Promise<readonly string[]> {
   const platform = options.platform ?? process.platform;

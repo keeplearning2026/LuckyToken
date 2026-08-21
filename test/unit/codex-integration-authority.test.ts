@@ -40,6 +40,7 @@ async function fixture(options: {
   nativeEntries?: readonly CodexNativeCatalogEntry[];
   nativeCatalogUnavailable?: boolean;
   routedSlug?: string;
+  validateCatalog?: (content: string) => Promise<void>;
   restoreTarget?: {
     readonly modelProvider: string | null;
     readonly openaiBaseUrl: string | null;
@@ -75,6 +76,7 @@ async function fixture(options: {
       options.nativeCatalogUnavailable ? "unavailable" : "bundled",
     ),
     buildCatalog,
+    validateCatalog: options.validateCatalog ?? (async () => undefined),
     restoreTarget: () =>
       options.restoreTarget ?? {
         modelProvider: null,
@@ -123,6 +125,7 @@ describe("Codex integration authority", () => {
         modelCount: native.length,
         warnings: [],
       }),
+      validateCatalog: async () => undefined,
     });
 
     const started = await authority.reconcile("startup");
@@ -453,6 +456,7 @@ describe("Codex integration authority", () => {
         modelCount: native.length,
         warnings: [],
       }),
+      validateCatalog: async () => undefined,
     });
     await authority.reconcile("enable");
     expect(authority.nativeModels.has("gpt-a")).toBe(true);
@@ -501,6 +505,33 @@ describe("Codex integration authority", () => {
     expect(fx.authority.nativeModels.has("anything")).toBe(false);
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(original);
     await expect(readFile(result.catalogPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves the published catalog and config unchanged when installed CLI validation fails", async () => {
+    const fx = await fixture({
+      validateCatalog: async () => {
+        throw new Error("parser rejected candidate");
+      },
+    });
+    const configPath = join(fx.codexHome, "config.toml");
+    const catalogPath = join(
+      fx.codexHome,
+      "luckytoken-model-catalog.json",
+    );
+    const originalConfig = await readFile(configPath, "utf8");
+    const originalCatalog = '{"models":[{"slug":"previous"}]}\n';
+    await writeFile(catalogPath, originalCatalog, "utf8");
+
+    const result = await fx.authority.reconcile("enable");
+
+    expect(result).toMatchObject({
+      desiredEnabled: false,
+      observedState: "unavailable",
+      message:
+        "The LuckyToken model catalog failed installed Codex validation. No Codex files were changed. parser rejected candidate",
+    });
+    expect(await readFile(configPath, "utf8")).toBe(originalConfig);
+    expect(await readFile(catalogPath, "utf8")).toBe(originalCatalog);
   });
 
   it("preserves hash characters in configured TOML restore values", async () => {

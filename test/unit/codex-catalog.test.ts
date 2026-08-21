@@ -1,4 +1,8 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type {
+  Model,
+  Models,
+  ThinkingLevelMap,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { buildCodexCatalog } from "../../src/integrations/codex/catalog.js";
@@ -7,6 +11,7 @@ function model(input: {
   provider: string;
   id: string;
   reasoning?: boolean;
+  thinkingLevelMap?: ThinkingLevelMap;
   modalities?: Array<"text" | "image">;
   contextWindow?: number;
 }): Model<string> {
@@ -17,6 +22,9 @@ function model(input: {
     provider: input.provider,
     baseUrl: "https://provider.test",
     reasoning: input.reasoning ?? false,
+    ...(input.thinkingLevelMap === undefined
+      ? {}
+      : { thinkingLevelMap: input.thinkingLevelMap }),
     input: input.modalities ?? ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: input.contextWindow ?? 128_000,
@@ -38,10 +46,19 @@ describe("Codex catalog projection", () => {
       display_name: "Codex Native Marketing Name",
       visibility: "hide",
       supported_in_api: false,
+      priority: 400,
       prefer_websockets: true,
       context_window: 999_999,
       model_messages: { instructions_template: "Native-only template" },
-      base_instructions: "You are Codex, an agentic coding assistant.",
+      base_instructions: "You are Codex, an agent based on GPT-5.6.",
+      supported_reasoning_levels: [
+        { effort: "low", description: "Native low" },
+        { effort: "medium", description: "Native medium" },
+        { effort: "high", description: "Native high" },
+        { effort: "xhigh", description: "Native xhigh" },
+        { effort: "max", description: "Native max" },
+        { effort: "ultra", description: "Native ultra" },
+      ],
     };
 
     const result = buildCodexCatalog({
@@ -62,7 +79,16 @@ describe("Codex catalog projection", () => {
       display_name: "anthropic/claude-opus",
       context_window: 180_000,
       input_modalities: ["text", "image"],
-      base_instructions: "You are Codex, an agentic coding assistant.",
+      base_instructions: "You are Codex, a coding agent powered by the selected model.",
+      supported_reasoning_levels: [
+        { effort: "low", description: "Native low" },
+        { effort: "medium", description: "Native medium" },
+        { effort: "high", description: "Native high" },
+      ],
+      support_verbosity: false,
+      supports_parallel_tool_calls: false,
+      supports_image_detail_original: false,
+      priority: 401,
     });
     expect(result.modelCount).toBe(2);
   });
@@ -110,6 +136,119 @@ describe("Codex catalog projection", () => {
 
     expect(result.modelCount).toBe(1);
     expect(result.content).toContain("anthropic/claude-opus");
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[0]).toMatchObject({
+      supported_reasoning_levels: [],
+      base_instructions: "You are Codex, a coding agent powered by the selected model.",
+    });
+  });
+
+  it("advertises only efforts supported by both Pi model facts and the installed Codex vocabulary", () => {
+    const routed = model({
+      provider: "commandcode-private",
+      id: "deepseek/deepseek-v4-flash",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [
+        {
+          slug: "gpt-native",
+          base_instructions: "Native instructions",
+          supported_reasoning_levels: [
+            { effort: "low", description: "Native low" },
+            { effort: "medium", description: "Native medium" },
+            { effort: "high", description: "Native high" },
+            { effort: "xhigh", description: "Native xhigh" },
+            { effort: "max", description: "Native max" },
+            { effort: "ultra", description: "Native ultra" },
+          ],
+        },
+      ],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "commandcode-private/deepseek-v4-flash",
+          target: {
+            providerId: "commandcode-private",
+            modelId: "deepseek/deepseek-v4-flash",
+          },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[1]?.supported_reasoning_levels).toEqual([
+      { effort: "high", description: "Native high" },
+      { effort: "max", description: "Native max" },
+    ]);
+    expect(parsed.models[1]).not.toHaveProperty("default_reasoning_level");
+  });
+
+  it("emits the complete parser-required field set for a non-reasoning routed model", () => {
+    const routed = model({ provider: "provider", id: "plain" });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "provider/plain",
+          target: { providerId: "provider", modelId: "plain" },
+        },
+      ],
+    });
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    const entry = parsed.models[0] as Record<string, unknown>;
+    for (const required of [
+      "slug",
+      "display_name",
+      "supported_reasoning_levels",
+      "shell_type",
+      "visibility",
+      "supported_in_api",
+      "priority",
+      "base_instructions",
+      "support_verbosity",
+      "truncation_policy",
+      "experimental_supported_tools",
+    ]) {
+      expect(entry).toHaveProperty(required);
+    }
+    expect(entry.supported_reasoning_levels).toEqual([]);
+  });
+
+  it("warns instead of inventing a reasoning level when Codex vocabulary is unavailable", () => {
+    const routed = model({ provider: "provider", id: "reasoning", reasoning: true });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "provider/reasoning",
+          target: { providerId: "provider", modelId: "reasoning" },
+        },
+      ],
+    });
+
+    expect(result.warnings.join("\n")).toContain("do not overlap");
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[0]?.supported_reasoning_levels).toEqual([]);
   });
 
   it("lets a native Codex slug win over a colliding injected alias", () => {

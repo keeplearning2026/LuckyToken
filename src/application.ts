@@ -102,6 +102,10 @@ import { resolveCodexHome } from "./integrations/codex/home.js";
 import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
 import { createCodexNativeCatalogSource } from "./integrations/codex/native-catalog-source.js";
 import { buildCodexCatalog } from "./integrations/codex/catalog.js";
+import {
+  createCodexCatalogValidator,
+  type CodexCatalogValidator,
+} from "./integrations/codex/catalog-validator.js";
 import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
 import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
 
@@ -155,6 +159,9 @@ export interface StartLuckyTokenApplicationOptions {
   /** Internal composition dependency used by integration tests. Production
    * derives one authority from LuckyToken-owned current-user application state. */
   readonly instanceAuthority?: InstanceAuthority;
+  /** Internal process-boundary test seam. Production always validates with
+   * an installed Codex CLI before publishing integration files. */
+  readonly codexCatalogValidator?: CodexCatalogValidator;
 }
 
 function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint {
@@ -425,6 +432,7 @@ async function startNormalApplication(options: {
   readonly desktopExe?: string;
   readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
+  readonly codexCatalogValidator?: CodexCatalogValidator;
 }): Promise<StartLuckyTokenApplicationResult> {
   const { config } = options;
   const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
@@ -752,6 +760,9 @@ async function startNormalApplication(options: {
       },
       generation: () => publicModelAuthority.snapshot().version,
       nativeCatalog: createCodexNativeCatalogSource({ codexHome }),
+      validateCatalog:
+        options.codexCatalogValidator?.validate ??
+        createCodexCatalogValidator({ codexHome }).validate,
       buildCatalog: async (nativeCatalogEntries) => {
         return buildCodexCatalog({
           nativeCatalogEntries,
@@ -1310,6 +1321,9 @@ export async function startLuckyTokenApplication(
       ...(options.desktopExe === undefined ? {} : { desktopExe: options.desktopExe }),
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ...(options.events === undefined ? {} : { events: options.events }),
+      ...(options.codexCatalogValidator === undefined
+        ? {}
+        : { codexCatalogValidator: options.codexCatalogValidator }),
     });
   } catch (error) {
     await instanceLease.close().catch(() => undefined);

@@ -36,6 +36,9 @@ function startLuckyTokenApplication(
 ) {
   return startProductionLuckyTokenApplication({
     ...options,
+    codexCatalogValidator: {
+      validate: async () => undefined,
+    },
     instanceAuthority: createInstanceAuthority({
       path: join(dirname(options.configPath), "instance.sqlite"),
     }),

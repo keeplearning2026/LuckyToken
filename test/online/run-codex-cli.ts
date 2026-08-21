@@ -48,6 +48,7 @@ import {
   type AuthInteraction,
   type AuthPrompt,
   type FetchFunction,
+  type Models,
 } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -57,6 +58,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { buildCodexCatalog } from "../../src/integrations/codex/catalog.js";
+import { createCodexCatalogValidator } from "../../src/integrations/codex/catalog-validator.js";
+import { createCodexIntegrationAuthority } from "../../src/integrations/codex/integration.js";
+import { createCodexNativeCatalogSource } from "../../src/integrations/codex/native-catalog-source.js";
 import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
@@ -81,6 +86,7 @@ const CODEX_EXEC_TIMEOUT_MS = 90_000;
 const CODEX_PROFILE = "luckytoken";
 const CODEX_PROMPT_ENV_KEY = "LUCKYTOKEN_API_KEY";
 const CODEX_HOME_ENV_KEY = "CODEX_HOME";
+const CODEX_INJECTED_CONFIG_ENV_KEY = "LUCKYTOKEN_CODEX_INJECTED_CONFIG";
 // `codex` on Windows is a .ps1/.cmd shim; spawn the underlying Node entry
 // directly to avoid shell-resolution EPERM/EINVAL.
 const CODEX_JS = join(
@@ -106,6 +112,7 @@ interface OnlineArguments {
   readonly batches: number;
   /** Optional scenario-id filter for targeted reruns (e.g. `tool_shell`). */
   readonly onlyScenario: string | undefined;
+  readonly injectedConfig: boolean;
 }
 
 /**
@@ -152,8 +159,13 @@ function parseArguments(args: readonly string[]): OnlineArguments {
   let alias: string | undefined;
   let batches = 1;
   let onlyScenario: string | undefined;
+  let injectedConfig = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
+    if (argument === "--injected-config") {
+      injectedConfig = true;
+      continue;
+    }
     if (argument === "--scenario") {
       const value = args[index + 1]?.trim();
       if (!value) throw new Error("--scenario requires a scenario id");
@@ -209,7 +221,15 @@ function parseArguments(args: readonly string[]): OnlineArguments {
     }
     throw new Error(`Unknown codex online option: ${argument}`);
   }
-  return { providerId, model, apiKeyFile, alias, batches, onlyScenario };
+  return {
+    providerId,
+    model,
+    apiKeyFile,
+    alias,
+    batches,
+    onlyScenario,
+    injectedConfig,
+  };
 }
 
 const ARTIFACT_REDACTED = "<redacted>";
@@ -355,12 +375,99 @@ function codexProviderOverrides(
   ]);
 }
 
+function codexRoutingArguments(
+  extraEnv: Record<string, string>,
+  baseUrl: string,
+  model: string,
+): Readonly<{
+  beforeCommand: readonly string[];
+  afterCommand: readonly string[];
+}> {
+  if (extraEnv[CODEX_INJECTED_CONFIG_ENV_KEY] === "1") {
+    return Object.freeze({
+      beforeCommand: Object.freeze(["-m", model]),
+      afterCommand: Object.freeze([]),
+    });
+  }
+  return Object.freeze({
+    beforeCommand: Object.freeze(["-p", CODEX_PROFILE]),
+    afterCommand: codexProviderOverrides(baseUrl, model),
+  });
+}
+
+interface PreparedCodexHome {
+  readonly path: string;
+  restore(): Promise<void>;
+}
+
 async function prepareIsolatedCodexHome(
   directory: string,
   baseUrl: string,
   model: string,
   modelsList?: { data?: Array<{ id?: string }> },
-): Promise<string> {
+  injected?: Readonly<{
+    models: Pick<Models, "getModels">;
+    target: { readonly provider: string; readonly model: string };
+  }>,
+): Promise<PreparedCodexHome> {
+  const codexHome = join(directory, "codex-home");
+  await mkdir(codexHome, { recursive: true });
+  if (injected !== undefined) {
+    const originalConfig = 'model = "unrelated-fixture"\n[features]\nunified_exec = true\n';
+    await writeFile(join(codexHome, "config.toml"), originalConfig, "utf8");
+    const authority = createCodexIntegrationAuthority({
+      codexHome,
+      stateDirectory: join(directory, "codex-integration-state"),
+      endpoint: () => baseUrl,
+      nativeCatalog: createCodexNativeCatalogSource({ codexHome }),
+      validateCatalog: createCodexCatalogValidator({ codexHome }).validate,
+      buildCatalog: async (nativeCatalogEntries) =>
+        buildCodexCatalog({
+          nativeCatalogEntries,
+          models: injected.models,
+          aliases: [
+            {
+              alias: model,
+              target: {
+                providerId: injected.target.provider,
+                modelId: injected.target.model,
+              },
+            },
+          ],
+        }),
+      restoreTarget: () => ({
+        modelProvider: null,
+        openaiBaseUrl: null,
+        modelCatalogJson: null,
+      }),
+    });
+    const enabled = await authority.reconcile("enable");
+    if (enabled.observedState !== "managed") {
+      throw new Error(`codex_injected_config_enable_failed: ${enabled.message ?? "unknown"}`);
+    }
+    return Object.freeze({
+      path: codexHome,
+      restore: async () => {
+        const restored = await authority.reconcile("disable");
+        if (restored.observedState !== "native") {
+          throw new Error(`codex_injected_config_restore_failed: ${restored.message ?? "unknown"}`);
+        }
+        const restoredConfig = await readFile(
+          join(codexHome, "config.toml"),
+          "utf8",
+        );
+        if (
+          !restoredConfig.startsWith(originalConfig) ||
+          /^\s*(?:model_provider|openai_base_url|model_catalog_json)\s*=/mu.test(
+            restoredConfig.split(/^\s*\[/mu, 1)[0] ?? "",
+          )
+        ) {
+          throw new Error("codex_injected_config_restore_mismatch");
+        }
+      },
+    });
+  }
+
   const inheritedCodexHome = process.env[CODEX_HOME_ENV_KEY]?.trim();
   // Prefer the explicitly generated catalog from the self-hosted endpoint;
   // fall back to the user's ~/.codex/luckytoken-catalog.json when the model
@@ -423,8 +530,6 @@ async function prepareIsolatedCodexHome(
     }
   }
 
-  const codexHome = join(directory, "codex-home");
-  await mkdir(codexHome, { recursive: true });
   const catalogPath = join(codexHome, "luckytoken-catalog.json");
   await writeFile(
     catalogPath,
@@ -455,7 +560,7 @@ async function prepareIsolatedCodexHome(
     ].join("\n"),
     "utf8",
   );
-  return codexHome;
+  return Object.freeze({ path: codexHome, restore: async () => undefined });
 }
 
 interface CodexExecResult {
@@ -577,22 +682,24 @@ async function runCodexExec(
   totalSignal: AbortSignal,
   extraEnv: Record<string, string> = {},
   mode: "new" | "resume" = "new",
+  extraArgs: readonly string[] = [],
 ): Promise<CodexExecResult> {
   const codexHome = extraEnv[CODEX_HOME_ENV_KEY];
   if (codexHome === undefined) throw new Error("codex_home_missing");
   const outputFile = join(artifactDir, `${marker}.final.md`);
   const stdoutFile = join(artifactDir, `${marker}.events.jsonl`);
   const stderrFile = join(artifactDir, `${marker}.stderr.log`);
+  const routing = codexRoutingArguments(extraEnv, baseUrl, model);
 
   const args =
     mode === "resume"
       ? [
-          "-p",
-          CODEX_PROFILE,
+          ...routing.beforeCommand,
           "exec",
           "resume",
           "--last",
-          ...codexProviderOverrides(baseUrl, model),
+          ...routing.afterCommand,
+          ...extraArgs,
           "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
@@ -601,10 +708,10 @@ async function runCodexExec(
           prompt,
         ]
       : [
-          "-p",
-          CODEX_PROFILE,
+          ...routing.beforeCommand,
           "exec",
-          ...codexProviderOverrides(baseUrl, model),
+          ...routing.afterCommand,
+          ...extraArgs,
           "--dangerously-bypass-approvals-and-sandbox",
           "--json",
           "-o",
@@ -618,6 +725,7 @@ async function runCodexExec(
     env: {
       ...process.env,
       [CODEX_PROMPT_ENV_KEY]: token,
+      OPENAI_API_KEY: token,
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -974,6 +1082,7 @@ interface Scenario {
   readonly expectedFile?: Readonly<{ path: string; content: string }>;
   /** Extra Codex flags for this scenario (e.g. tool usage). */
   readonly extraArgs?: readonly string[];
+  readonly imageInput?: boolean;
   /**
    * Special orchestration:
    *  - "multi_turn": run the prompt as a multi-turn session (first turn
@@ -1033,6 +1142,15 @@ function directedScenarios(): readonly Scenario[] {
         "Think step by step, then reply with exactly: REASONING_OK. " +
         "Do not use tools, do not explain.",
       expectedText: "REASONING_OK",
+      extraArgs: Object.freeze(["-c", 'model_reasoning_effort="high"']),
+    }),
+    Object.freeze({
+      id: "image_input",
+      prompt:
+        "Inspect the attached image, then reply with exactly: IMAGE_INPUT_OK. " +
+        "Do not use tools, do not explain.",
+      expectedText: "IMAGE_INPUT_OK",
+      imageInput: true,
     }),
     Object.freeze({
       id: "long_text",
@@ -1337,8 +1455,22 @@ async function assertCapturedCustomToolRoundTrip(
 export async function runCodexCliOnlineSuite(
   args: readonly string[] = [],
 ): Promise<void> {
-  const { providerId, model, apiKeyFile, alias, batches, onlyScenario } =
-    parseArguments(args);
+  const {
+    providerId,
+    model,
+    apiKeyFile,
+    alias,
+    batches,
+    onlyScenario,
+    injectedConfig,
+  } = parseArguments(args);
+  const aliasSegments = alias?.split("/") ?? [];
+  if (
+    injectedConfig &&
+    (aliasSegments.length !== 2 || aliasSegments.some((segment) => segment.length === 0))
+  ) {
+    throw new Error("--injected-config requires a provider/model public alias");
+  }
   const selector = alias ?? model;
   const apiKey = (
     await readFile(
@@ -1482,14 +1614,23 @@ export async function runCodexCliOnlineSuite(
   if (!modelsList.data?.some((entry) => entry.id === selector)) {
     throw new Error("codex_models_discovery_missing");
   }
-  const codexHome = await prepareIsolatedCodexHome(
+  const preparedCodexHome = await prepareIsolatedCodexHome(
     directory,
     codexBaseUrl,
     selector,
     modelsList,
+    injectedConfig
+      ? {
+          models: preLogin.models,
+          target: aliasTarget,
+        }
+      : undefined,
   );
   const codexEnvironment = Object.freeze({
-    [CODEX_HOME_ENV_KEY]: codexHome,
+    [CODEX_HOME_ENV_KEY]: preparedCodexHome.path,
+    ...(injectedConfig
+      ? { [CODEX_INJECTED_CONFIG_ENV_KEY]: "1" }
+      : {}),
   });
   console.error(`[codex-suite] server listening at ${codexBaseUrl}`);
 
@@ -1592,6 +1733,20 @@ export async function runCodexCliOnlineSuite(
             totalSignal,
           );
         } else {
+          const imagePath = join(sessionDir, "catalog-probe.png");
+          if (scenario.imageInput === true) {
+            await writeFile(
+              imagePath,
+              Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                "base64",
+              ),
+            );
+          }
+          const extraArgs = Object.freeze([
+            ...(scenario.extraArgs ?? []),
+            ...(scenario.imageInput === true ? ["-i", imagePath] : []),
+          ]);
           const result = await runCodexExec(
             scenario.prompt,
             responsesToken,
@@ -1602,6 +1757,8 @@ export async function runCodexCliOnlineSuite(
             marker,
             requestSignal(totalSignal),
             codexEnvironment,
+            "new",
+            extraArgs,
           );
           assertCodexResult(
             result,
@@ -1697,9 +1854,13 @@ export async function runCodexCliOnlineSuite(
       );
     }
   } finally {
-    await upstreamLogger.flush();
-    await server.close();
-    await composition.close();
+    try {
+      await preparedCodexHome.restore();
+    } finally {
+      await upstreamLogger.flush();
+      await server.close();
+      await composition.close();
+    }
   }
 }
 
@@ -1858,15 +2019,15 @@ async function runCancellationScenario(
   const codexHome = codexEnvironment[CODEX_HOME_ENV_KEY];
   if (codexHome === undefined) throw new Error("codex_home_missing");
   const outputFile = join(artifactDir, `${marker}_cancel.final.md`);
+  const routing = codexRoutingArguments(codexEnvironment, baseUrl, model);
   const child = spawn(
     process.execPath,
     [
       CODEX_JS,
       ...[
-        "-p",
-        CODEX_PROFILE,
+        ...routing.beforeCommand,
         "exec",
-        ...codexProviderOverrides(baseUrl, model),
+        ...routing.afterCommand,
         "--dangerously-bypass-approvals-and-sandbox",
         "--json",
         "-o",
@@ -1880,6 +2041,7 @@ async function runCancellationScenario(
       env: {
         ...process.env,
         [CODEX_PROMPT_ENV_KEY]: token,
+        OPENAI_API_KEY: token,
         ...codexEnvironment,
       },
       stdio: ["ignore", "pipe", "pipe"],
