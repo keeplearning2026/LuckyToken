@@ -95,13 +95,13 @@ export interface StatusSnapshot extends ApplicationStatus {
  *  validated. Restart-required settings also report the effective value. */
 export interface RegisteredSetting {
   readonly key: string;
-  readonly type: "boolean" | "number" | "string";
-  readonly default: boolean | number | string;
+  readonly type: "boolean" | "number" | "string" | "nullable-string";
+  readonly default: boolean | number | string | null;
   readonly validation: unknown;
   readonly sensitivity: "public" | "secret";
   readonly applyMode: "hot-apply" | "restart-required";
-  readonly value: boolean | number | string;
-  readonly effective?: boolean | number | string;
+  readonly value: boolean | number | string | null;
+  readonly effective?: boolean | number | string | null;
 }
 
 /**

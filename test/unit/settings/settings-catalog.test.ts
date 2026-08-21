@@ -25,6 +25,9 @@ describe("authoritative registered settings catalog", () => {
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
       "application.quitDrainTimeoutMs",
+      "integrations.codex.preimage.modelProvider",
+      "integrations.codex.preimage.openaiBaseUrl",
+      "integrations.codex.preimage.modelCatalogJson",
     ]);
 
     const anthropic = byKey.get("protocols.anthropic-messages.enabled");
@@ -56,6 +59,25 @@ describe("authoritative registered settings catalog", () => {
     expect(registry.validate("application.quitDrainTimeoutMs", 750)).toMatchObject({
       valid: true,
     });
+
+    for (const key of [
+      "integrations.codex.preimage.modelProvider",
+      "integrations.codex.preimage.openaiBaseUrl",
+      "integrations.codex.preimage.modelCatalogJson",
+    ]) {
+      expect(byKey.get(key)).toMatchObject({
+        key,
+        type: "nullable-string",
+        default: null,
+        validation: { type: "nullable-string" },
+        sensitivity: "public",
+        applyMode: "hot-apply",
+        value: null,
+      });
+      expect(registry.validate(key, null)).toMatchObject({ valid: true });
+      expect(registry.validate(key, "configured-value")).toMatchObject({ valid: true });
+      expect(registry.validate(key, "")).toMatchObject({ valid: false });
+    }
   });
 
   it("never exposes unregistered fields or ambient internal variables", () => {

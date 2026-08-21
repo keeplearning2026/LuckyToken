@@ -8,7 +8,7 @@ import type {
   CodexNativeCatalogSource,
 } from "./native-catalog-source.js";
 
-const STATE_SCHEMA = "luckytoken-codex-integration-v2" as const;
+const STATE_SCHEMA = "luckytoken-codex-integration-v3" as const;
 
 const ROOT_KEYS = [
   "model_provider",
@@ -70,18 +70,21 @@ export interface CodexIntegrationAuthorityOptions {
   readonly buildCatalog: (
     nativeEntries: readonly CodexNativeCatalogEntry[],
   ) => Promise<CodexCatalogBuildResult>;
+  readonly restoreTarget?: () => CodexRestoreTarget;
 }
 
-interface RootValues {
+export interface CodexRestoreTarget {
   readonly modelProvider: string | null;
   readonly openaiBaseUrl: string | null;
   readonly modelCatalogJson: string | null;
 }
 
+type RootValues = CodexRestoreTarget;
+
 interface IntegrationState {
   readonly schemaVersion: typeof STATE_SCHEMA;
   readonly desiredEnabled: boolean;
-  readonly preimage?: RootValues;
+  readonly managed: boolean;
   readonly modelCount?: number;
   readonly warnings?: readonly string[];
   readonly appliedGeneration?: number;
@@ -300,19 +303,11 @@ async function atomicWriteIfChanged(path: string, content: string): Promise<bool
 }
 
 function emptyState(): IntegrationState {
-  return { schemaVersion: STATE_SCHEMA, desiredEnabled: false };
+  return { schemaVersion: STATE_SCHEMA, desiredEnabled: false, managed: false };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStoredRootValues(value: unknown): value is RootValues {
-  if (!isRecord(value)) return false;
-  return ROOT_KEYS.every((key) => {
-    const stored = value[propertyForKey(key)];
-    return stored === null || typeof stored === "string";
-  });
 }
 
 function invalidState(): never {
@@ -330,13 +325,27 @@ async function readState(path: string): Promise<IntegrationState> {
     return invalidState();
   }
   if (!isRecord(parsed)) return invalidState();
-  // Obsolete schemas have no compatibility contract; ignore them rather than
-  // interpreting their fields as v2 restore authority.
+  if (
+    parsed.schemaVersion === "luckytoken-codex-integration-v1" ||
+    parsed.schemaVersion === "luckytoken-codex-integration-v2"
+  ) {
+    if (typeof parsed.desiredEnabled !== "boolean") return invalidState();
+    const managed =
+      parsed.schemaVersion === "luckytoken-codex-integration-v2"
+        ? parsed.preimage !== undefined
+        : parsed.originalConfigBase64 !== undefined ||
+          parsed.injectedConfigSha256 !== undefined ||
+          parsed.managedBaseUrl !== undefined ||
+          parsed.managedCatalogPath !== undefined;
+    return Object.freeze({
+      schemaVersion: STATE_SCHEMA,
+      desiredEnabled: parsed.desiredEnabled,
+      managed,
+    });
+  }
   if (parsed.schemaVersion !== STATE_SCHEMA) return emptyState();
   if (typeof parsed.desiredEnabled !== "boolean") return invalidState();
-
-  const preimage = parsed.preimage;
-  if (preimage !== undefined && !isStoredRootValues(preimage)) return invalidState();
+  if (typeof parsed.managed !== "boolean") return invalidState();
   const modelCount = parsed.modelCount;
   if (
     modelCount !== undefined &&
@@ -362,7 +371,7 @@ async function readState(path: string): Promise<IntegrationState> {
   return Object.freeze({
     schemaVersion: STATE_SCHEMA,
     desiredEnabled: parsed.desiredEnabled,
-    ...(preimage === undefined ? {} : { preimage }),
+    managed: parsed.managed,
     ...(modelCount === undefined ? {} : { modelCount: modelCount as number }),
     ...(warnings === undefined ? {} : { warnings: Object.freeze([...warnings]) }),
     ...(appliedGeneration === undefined
@@ -384,7 +393,7 @@ export function createCodexIntegrationAuthority(
 ): CodexIntegrationAuthority {
   const configPath = join(options.codexHome, "config.toml");
   const statePath = join(options.stateDirectory, "integration-state.json");
-  const catalogPath = join(options.stateDirectory, "model-catalog.json");
+  const catalogPath = join(options.codexHome, "luckytoken-model-catalog.json");
   let currentNativeIds: ReadonlySet<string> = new Set<string>();
   let operationQueue = Promise.resolve();
 
@@ -419,13 +428,12 @@ export function createCodexIntegrationAuthority(
         observedState = "conflict";
         message = error;
       } else if (
-        state.preimage !== undefined &&
-        state.desiredEnabled &&
+        state.managed &&
         endpoint !== undefined &&
         sameRoot(inspection.values, activeTarget(endpoint, catalogPath))
       ) {
         observedState = "managed";
-      } else if (state.preimage !== undefined) {
+      } else if (state.managed) {
         observedState = "drifted";
       } else {
         observedState = "native";
@@ -448,7 +456,8 @@ export function createCodexIntegrationAuthority(
         ? {}
         : { appliedGeneration: state.appliedGeneration }),
       needsSync:
-        state.desiredEnabled && state.appliedGeneration !== desiredGeneration,
+        state.desiredEnabled &&
+        (!state.managed || state.appliedGeneration !== desiredGeneration),
       ...(message === undefined ? {} : { message }),
       ...override,
     });
@@ -468,7 +477,6 @@ export function createCodexIntegrationAuthority(
     const syncGeneration = options.generation?.() ?? 0;
     const endpoint = options.endpoint();
     if (endpoint === undefined) {
-      currentNativeIds = new Set<string>();
       return project(state, {
         observedState: "unavailable",
         message: "LuckyToken Data Plane endpoint is unavailable.",
@@ -477,44 +485,35 @@ export function createCodexIntegrationAuthority(
 
     const initialConfig = await readOptional(configPath);
     if (initialConfig === undefined) {
-      currentNativeIds = new Set<string>();
       return project(state, {
         observedState: "unavailable",
         message: "Codex config.toml was not found.",
       });
     }
-    let working = state;
-    if (working.preimage === undefined) {
-      const initialInspection = inspectRoot(initialConfig);
-      const initialError = rootError(initialInspection);
-      if (initialError !== undefined) {
-        currentNativeIds = new Set<string>();
-        return project(state, { observedState: "conflict", message: initialError });
-      }
-      working = { ...working, preimage: initialInspection.values };
-      await writeState(working);
-    }
-
     const nativeSnapshot = await options.nativeCatalog.load();
+    if (nativeSnapshot.source === "unavailable") {
+      return project(state, {
+        observedState: "unavailable",
+        warnings: nativeSnapshot.warnings,
+        message: "The Codex model catalog could not be read. No Codex files were changed.",
+      });
+    }
     const catalog = await options.buildCatalog(nativeSnapshot.entries);
     const warnings = Object.freeze([
       ...nativeSnapshot.warnings,
       ...catalog.warnings,
     ]);
     const committedBeforeApply: IntegrationState = {
-      ...working,
+      ...state,
       modelCount: catalog.modelCount,
       warnings,
     };
-    // Persist restore authority before mutating Codex-facing files. The
-    // applied generation is committed only after the full projection verifies.
     await writeState(committedBeforeApply);
     await atomicWrite(catalogPath, catalog.content);
 
     const currentConfig = await readOptional(configPath);
     if (currentConfig === undefined) {
-      currentNativeIds = new Set<string>();
-      return project(working, {
+      return project(state, {
         observedState: "unavailable",
         message: "Codex config.toml was not found.",
       });
@@ -525,8 +524,7 @@ export function createCodexIntegrationAuthority(
 
     const verified = await readOptional(configPath);
     if (verified === undefined) {
-      currentNativeIds = new Set<string>();
-      return project(working, {
+      return project(state, {
         observedState: "unavailable",
         message: "Codex config.toml was not found after integration update.",
       });
@@ -534,8 +532,7 @@ export function createCodexIntegrationAuthority(
     const verifiedInspection = inspectRoot(verified);
     const verifiedError = rootError(verifiedInspection);
     if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, desired)) {
-      currentNativeIds = new Set<string>();
-      return project(working, {
+      return project(state, {
         observedState: "conflict",
         message: verifiedError ?? "Codex config.toml did not converge to the LuckyToken routing target.",
       });
@@ -544,6 +541,7 @@ export function createCodexIntegrationAuthority(
     currentNativeIds = new Set(nativeSnapshot.entries.map((entry) => entry.slug));
     const committed: IntegrationState = {
       ...committedBeforeApply,
+      managed: true,
       appliedGeneration: syncGeneration,
     };
     await writeState(committed);
@@ -554,9 +552,8 @@ export function createCodexIntegrationAuthority(
   };
 
   const restore = async (state: IntegrationState): Promise<CodexIntegrationProjection> => {
-    currentNativeIds = new Set<string>();
-    if (state.preimage === undefined) {
-      await rm(catalogPath, { force: true }).catch(() => undefined);
+    if (!state.managed) {
+      currentNativeIds = new Set<string>();
       return project(state);
     }
 
@@ -567,7 +564,12 @@ export function createCodexIntegrationAuthority(
         message: "Codex config.toml was not found while restoring the integration.",
       });
     }
-    const restoredConfig = convergeRoot(currentConfig, state.preimage);
+    const restoreTarget = options.restoreTarget?.() ?? {
+      modelProvider: null,
+      openaiBaseUrl: null,
+      modelCatalogJson: null,
+    };
+    const restoredConfig = convergeRoot(currentConfig, restoreTarget);
     const configChanged = restoredConfig !== currentConfig;
     if (configChanged) await atomicWrite(configPath, restoredConfig);
 
@@ -580,19 +582,19 @@ export function createCodexIntegrationAuthority(
     }
     const verifiedInspection = inspectRoot(verified);
     const verifiedError = rootError(verifiedInspection);
-    if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, state.preimage)) {
+    if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, restoreTarget)) {
       return project(state, {
         observedState: "conflict",
         message: verifiedError ?? "Codex config.toml did not converge to the restore target.",
       });
     }
 
-    await rm(catalogPath, { force: true });
     const restoredState: IntegrationState = {
-      schemaVersion: STATE_SCHEMA,
-      desiredEnabled: state.desiredEnabled,
+      ...state,
+      managed: false,
     };
     await writeState(restoredState);
+    currentNativeIds = new Set<string>();
     return project(restoredState, {
       observedState: "native",
       restartRequired: configChanged,
@@ -605,16 +607,24 @@ export function createCodexIntegrationAuthority(
     let state = await readState(statePath);
     switch (action) {
       case "enable":
-        state = await setDesired(state, true);
-        return activate(state);
+        {
+          const activated = await activate(state);
+          if (activated.observedState !== "managed") return activated;
+          state = await setDesired(await readState(statePath), true);
+          return project(state, { restartRequired: activated.restartRequired });
+        }
       case "disable":
-        state = await setDesired(state, false);
-        return restore(state);
+        {
+          const restored = await restore(state);
+          if (state.managed && restored.observedState !== "native") return restored;
+          state = await setDesired(await readState(statePath), false);
+          return project(state, { restartRequired: restored.restartRequired });
+        }
       case "startup":
       case "sync":
         return state.desiredEnabled ? activate(state) : restore(state);
       case "shutdown": {
-        const restorationRequired = state.preimage !== undefined;
+        const restorationRequired = state.managed;
         const restored = await restore(state);
         if (restorationRequired && restored.observedState !== "native") {
           throw new Error(

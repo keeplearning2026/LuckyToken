@@ -358,7 +358,7 @@ describe("Backend Application public lifecycle seam", () => {
     }
   });
 
-  it("owns Codex integration across Enable, application exit restore, and the next startup", async () => {
+  it("restores Codex from persisted desktop settings across application restarts", async () => {
     const { configPath, descriptorPath } = await fixture();
     const codexHome = join(dirname(configPath), "codex-home");
     await mkdir(codexHome, { recursive: true });
@@ -396,6 +396,16 @@ describe("Backend Application public lifecycle seam", () => {
       });
       try {
         await client.hello(controlPlaneVersion);
+        await client.executeSettingsCommand({
+          command: "set",
+          key: "integrations.codex.preimage.openaiBaseUrl",
+          value: "https://restore.example/v1",
+        });
+        await client.executeSettingsCommand({
+          command: "set",
+          key: "integrations.codex.preimage.modelCatalogJson",
+          value: "C:/restore/catalog.json",
+        });
         const enabled = await client.executeCodexIntegrationCommand({
           command: "set_enabled",
           enabled: true,
@@ -414,7 +424,11 @@ describe("Backend Application public lifecycle seam", () => {
       expect(injected).toContain("model_catalog_json = ");
 
       await first.application.close();
-      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+      const firstRestore = await readFile(join(codexHome, "config.toml"), "utf8");
+      expect(firstRestore).not.toContain("model_provider");
+      expect(firstRestore).toContain('openai_base_url = "https://restore.example/v1"');
+      expect(firstRestore).toContain('model_catalog_json = "C:/restore/catalog.json"');
+      expect(firstRestore).toContain('model = "before-model"');
 
       const second = await startLuckyTokenApplication({
         configPath,
@@ -431,7 +445,10 @@ describe("Backend Application public lifecycle seam", () => {
       expect(reinjected).toContain("model_catalog_json = ");
 
       await second.application.close();
-      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+      const secondRestore = await readFile(join(codexHome, "config.toml"), "utf8");
+      expect(secondRestore).not.toContain("model_provider");
+      expect(secondRestore).toContain('openai_base_url = "https://restore.example/v1"');
+      expect(secondRestore).toContain('model_catalog_json = "C:/restore/catalog.json"');
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -473,6 +490,11 @@ describe("Backend Application public lifecycle seam", () => {
       });
       try {
         await client.hello(controlPlaneVersion);
+        await client.executeSettingsCommand({
+          command: "set",
+          key: "integrations.codex.preimage.openaiBaseUrl",
+          value: "https://before.example/v1",
+        });
         await client.executeCodexIntegrationCommand({ command: "set_enabled", enabled: true });
         await rm(join(codexHome, "config.toml"), { force: true });
 
@@ -491,6 +513,65 @@ describe("Backend Application public lifecycle seam", () => {
       await writeFile(join(codexHome, "config.toml"), "", "utf8");
       await started.application.close();
       expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    }
+  });
+
+  it("refuses manual Codex sync while the Data Plane is stopped", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const codexHome = join(dirname(configPath), "codex-home-stopped-sync");
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, "config.toml"), 'model = "before"\n', "utf8");
+    await writeFile(
+      join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-native" }] })}\n`,
+      "utf8",
+    );
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+
+    try {
+      const started = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        await client.executeCodexIntegrationCommand({
+          command: "set_enabled",
+          enabled: true,
+        });
+        await client.executeRuntimeCommand("stop");
+        const external = 'model_provider = "external"\nmodel = "keep"\n';
+        await writeFile(join(codexHome, "config.toml"), external, "utf8");
+
+        const synced = await client.executeCodexIntegrationCommand({ command: "sync" });
+
+        expect(synced.state).toMatchObject({
+          desiredEnabled: true,
+          observedState: "unavailable",
+          message: "Start the Data Plane before syncing Codex. No Codex files were changed.",
+        });
+        expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(external);
+      } finally {
+        await client.close();
+      }
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -529,5 +610,146 @@ describe("Backend Application public lifecycle seam", () => {
     await expect(started.application.exited).resolves.toEqual({
       reason: "drained",
     });
+  });
+
+  it("does not auto-inject Codex when Data Plane startup fails", async () => {
+    const { configPath, descriptorPath, port } = await fixture();
+    const root = dirname(configPath);
+    const codexHome = join(root, "codex-home-start-failure");
+    const stateDirectory = join(root, "integrations", "codex");
+    const originalCodexConfig = 'openai_base_url = "https://before.example/v1"\n';
+    await mkdir(codexHome, { recursive: true });
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(codexHome, "config.toml"), originalCodexConfig, "utf8");
+    await writeFile(
+      join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-native" }] })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(stateDirectory, "integration-state.json"),
+      `${JSON.stringify({
+        schemaVersion: "luckytoken-codex-integration-v3",
+        desiredEnabled: true,
+        managed: false,
+      })}\n`,
+      "utf8",
+    );
+
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(port, "127.0.0.1", resolve);
+    });
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+
+    try {
+      const started = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        await expect(client.getStatus()).resolves.toMatchObject({ modelDataPlane: "failed" });
+      } finally {
+        await client.close();
+      }
+
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(
+        originalCodexConfig,
+      );
+      await expect(
+        readFile(join(codexHome, "luckytoken-model-catalog.json"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    }
+  });
+
+  it("restores managed Codex residue when Data Plane startup fails", async () => {
+    const { configPath, descriptorPath, port } = await fixture();
+    const root = dirname(configPath);
+    const codexHome = join(root, "codex-home-managed-start-failure");
+    const stateDirectory = join(root, "integrations", "codex");
+    await mkdir(codexHome, { recursive: true });
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      join(codexHome, "config.toml"),
+      [
+        'model_provider = "openai"',
+        `openai_base_url = "http://127.0.0.1:${port}/v1"`,
+        `model_catalog_json = "${join(codexHome, "luckytoken-model-catalog.json").replaceAll("\\", "\\\\")}"`,
+        'model = "keep-me"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-native" }] })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(stateDirectory, "integration-state.json"),
+      `${JSON.stringify({
+        schemaVersion: "luckytoken-codex-integration-v3",
+        desiredEnabled: true,
+        managed: true,
+        appliedGeneration: 0,
+      })}\n`,
+      "utf8",
+    );
+
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(port, "127.0.0.1", resolve);
+    });
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+
+    try {
+      const started = await startLuckyTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(
+        'model = "keep-me"\n',
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+      else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    }
   });
 });

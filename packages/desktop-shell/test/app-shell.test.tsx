@@ -286,7 +286,7 @@ describe("desktop command-router shell", () => {
     expect(container.textContent).toContain("Stopped");
   });
 
-  it("edits only the port value and exposes icon-only Codex enable/sync controls with dirty highlighting", async () => {
+  it("edits only the port value and reports when Codex sync needs a restart", async () => {
     let publicState = {
       outcome: "ok" as const,
       state: {
@@ -301,9 +301,9 @@ describe("desktop command-router shell", () => {
       observedState: "managed" as const,
       codexHome: "C:\\Users\\test\\.codex",
       configPath: "C:\\Users\\test\\.codex\\config.toml",
-      catalogPath: "C:\\LuckyToken\\model-catalog.json",
+      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
       endpoint: "http://127.0.0.1:4317/v1",
-      warnings: [],
+      warnings: [] as string[],
       restartRequired: false,
       desiredGeneration: 8,
       appliedGeneration: 7,
@@ -334,6 +334,8 @@ describe("desktop command-router shell", () => {
           ...codexState,
           appliedGeneration: codexState.desiredGeneration,
           needsSync: false,
+          restartRequired: true,
+          warnings: ["A malformed native Codex model entry was skipped."],
         };
       }
       return { state: codexState };
@@ -423,5 +425,136 @@ describe("desktop command-router shell", () => {
     });
     expect(executeCodexIntegration).toHaveBeenCalledWith({ command: "sync" });
     expect(container.querySelector('button[aria-label="Sync Codex"]')?.classList.contains("dirty")).toBe(false);
+    expect(container.textContent).toContain(
+      "Codex synced. Restart Codex to load the updated model catalog.",
+    );
+    expect(container.textContent).toContain(
+      "A malformed native Codex model entry was skipped.",
+    );
+  });
+
+  it("shows a visible failure when the Codex sync request rejects", async () => {
+    const codexState = {
+      desiredEnabled: true,
+      observedState: "managed" as const,
+      codexHome: "C:\\Users\\test\\.codex",
+      configPath: "C:\\Users\\test\\.codex\\config.toml",
+      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
+      endpoint: "http://127.0.0.1:4317/v1",
+      warnings: [],
+      restartRequired: false,
+      desiredGeneration: 1,
+      appliedGeneration: 1,
+      needsSync: false,
+    };
+    const executeCodexIntegration = vi.fn(async (command) => {
+      if (command.command === "sync") throw new Error("transport closed");
+      return { state: codexState };
+    });
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: () => () => undefined,
+        executeCodexIntegration,
+        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        onRequestLedger: () => () => undefined,
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    const sync = container.querySelector('button[aria-label="Sync Codex"]');
+    if (!(sync instanceof HTMLButtonElement)) throw new Error("sync button missing");
+    await act(async () => {
+      sync.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain(
+      "Codex sync failed. No Codex files were changed.",
+    );
+    expect(sync.disabled).toBe(false);
+  });
+
+  it("shows the Codex authority message returned by the initial query", async () => {
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: () => () => undefined,
+        executeCodexIntegration: async () => ({
+          state: {
+            desiredEnabled: false,
+            observedState: "unavailable",
+            codexHome: "C:\\Users\\test\\.codex",
+            configPath: "C:\\Users\\test\\.codex\\config.toml",
+            catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
+            endpoint: "http://127.0.0.1:4317/v1",
+            warnings: [],
+            restartRequired: false,
+            desiredGeneration: 1,
+            needsSync: false,
+            message: "Codex config.toml was not found.",
+          },
+        }),
+        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        onRequestLedger: () => () => undefined,
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    expect(container.textContent).toContain("Codex config.toml was not found.");
+  });
+
+  it("reports that Codex must restart after the integration is restored", async () => {
+    let codexState = {
+      desiredEnabled: true,
+      observedState: "managed" as "managed" | "native",
+      codexHome: "C:\\Users\\test\\.codex",
+      configPath: "C:\\Users\\test\\.codex\\config.toml",
+      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
+      endpoint: "http://127.0.0.1:4317/v1",
+      warnings: [],
+      restartRequired: false,
+      desiredGeneration: 1,
+      appliedGeneration: 1,
+      needsSync: false,
+    };
+    const executeCodexIntegration = vi.fn(async (command) => {
+      if (command.command === "set_enabled" && !command.enabled) {
+        codexState = {
+          ...codexState,
+          desiredEnabled: false,
+          observedState: "native",
+          restartRequired: true,
+        };
+      }
+      return { state: codexState };
+    });
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: () => () => undefined,
+        executeCodexIntegration,
+        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        onRequestLedger: () => () => undefined,
+      },
+    });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    const toggle = container.querySelector('button[aria-label="Disable Codex integration"]');
+    if (!(toggle instanceof HTMLButtonElement)) throw new Error("Codex toggle missing");
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain(
+      "Codex configuration restored. Restart Codex to apply the change.",
+    );
   });
 });

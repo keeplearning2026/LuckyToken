@@ -55,6 +55,23 @@ const settingsResult = () => ({
       applyMode: "hot-apply" as const,
       value: false,
     },
+    ...Object.fromEntries(
+      ["modelProvider", "openaiBaseUrl", "modelCatalogJson"].map((field) => {
+        const key = `integrations.codex.preimage.${field}`;
+        return [
+          key,
+          {
+            key,
+            type: "nullable-string" as const,
+            default: null,
+            validation: { type: "nullable-string" },
+            sensitivity: "public" as const,
+            applyMode: "hot-apply" as const,
+            value: null,
+          },
+        ];
+      }),
+    ),
   },
 });
 
@@ -184,6 +201,78 @@ describe("Settings product slice", () => {
 
     expect(container.textContent).toContain("Recent diagnostics are temporarily unavailable.");
     expect(container.textContent).toContain("Disable deep diagnostics");
+  });
+
+  it("shows blank Codex restore inputs with the delete-on-empty contract", async () => {
+    await render(
+      createFakeDesktopApi({
+        control: {
+          executeSettings: async () => settingsResult(),
+          getDiagnostics: async () => ({ records: [], hasMore: false }),
+        },
+      }),
+    );
+    await click("Advanced");
+
+    const labels = ["model_provider", "openai_base_url", "model_catalog_json"];
+    for (const label of labels) {
+      const input = container.querySelector(`input[aria-label="${label} restore value"]`);
+      expect(input).toBeInstanceOf(HTMLInputElement);
+      expect((input as HTMLInputElement).value).toBe("");
+    }
+    expect(container.textContent).toContain(
+      "Leave a field blank to remove it from Codex config.toml when the integration is turned off.",
+    );
+    expect(container.textContent).toContain(
+      "While enabled, LuckyToken replaces these three root fields in Codex config.toml.",
+    );
+  });
+
+  it("saves blank Codex restore inputs as null and trims configured values", async () => {
+    const executeSettings = vi.fn(async () => ({
+      ...settingsResult(),
+      outcome: "applied" as const,
+    }));
+    await render(
+      createFakeDesktopApi({
+        control: {
+          executeSettings,
+          getDiagnostics: async () => ({ records: [], hasMore: false }),
+        },
+      }),
+    );
+    await click("Advanced");
+    const catalog = container.querySelector(
+      'input[aria-label="model_catalog_json restore value"]',
+    );
+    if (!(catalog instanceof HTMLInputElement)) throw new Error("catalog restore input missing");
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      if (setValue === undefined) throw new Error("native input setter missing");
+      setValue.call(catalog, "  C:/restore/catalog.json  ");
+      catalog.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    await click("Save Codex restore values");
+
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "integrations.codex.preimage.modelProvider",
+      value: null,
+    });
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "integrations.codex.preimage.openaiBaseUrl",
+      value: null,
+    });
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "integrations.codex.preimage.modelCatalogJson",
+      value: "C:/restore/catalog.json",
+    });
   });
 
   it("keeps deep diagnostics and diagnostic query behind typed Backend capabilities", async () => {

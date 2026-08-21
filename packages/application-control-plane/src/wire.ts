@@ -473,25 +473,33 @@ export function decodeApplicationStatus(
 function decodeRegisteredSetting(
   value: unknown,
 ): RegisteredSetting | undefined {
+  const isSettingValue = (
+    candidate: unknown,
+  ): candidate is boolean | number | string | null =>
+    candidate === null ||
+    typeof candidate === "boolean" ||
+    typeof candidate === "number" ||
+    typeof candidate === "string";
   if (
     !isRecord(value) ||
     typeof value.key !== "string" ||
     (value.type !== "boolean" &&
       value.type !== "number" &&
-      value.type !== "string") ||
-    (typeof value.default !== "boolean" &&
-      typeof value.default !== "number" &&
-      typeof value.default !== "string") ||
+      value.type !== "string" &&
+      value.type !== "nullable-string") ||
+    !isSettingValue(value.default) ||
     (value.sensitivity !== "public" && value.sensitivity !== "secret") ||
     (value.applyMode !== "hot-apply" &&
       value.applyMode !== "restart-required") ||
-    (typeof value.value !== "boolean" &&
-      typeof value.value !== "number" &&
+    !isSettingValue(value.value) ||
+    (value.type === "nullable-string" &&
+      value.value !== null &&
       typeof value.value !== "string")
   ) {
     return undefined;
   }
   const effective =
+    value.effective === null ||
     typeof value.effective === "boolean" ||
     typeof value.effective === "number" ||
     typeof value.effective === "string"

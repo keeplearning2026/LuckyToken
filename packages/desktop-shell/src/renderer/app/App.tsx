@@ -63,6 +63,7 @@ export function App({ api }: AppProps) {
   const [editingPort, setEditingPort] = useState(false);
   const [portDraft, setPortDraft] = useState("");
   const [codexPending, setCodexPending] = useState(false);
+  const [codexNotice, setCodexNotice] = useState<string>();
   const latestRevision = useRef(-1);
 
   useEffect(() => {
@@ -80,7 +81,9 @@ export function App({ api }: AppProps) {
       );
       void api.control.executeCodexIntegration({ command: "query" }).then(
         (result) => {
-          if (active) setCodex(result.state);
+          if (!active) return;
+          setCodex(result.state);
+          if (result.state.message !== undefined) setCodexNotice(result.state.message);
         },
         () => undefined,
       );
@@ -122,7 +125,10 @@ export function App({ api }: AppProps) {
     const codexResult = await api.control
       .executeCodexIntegration({ command: "query" })
       .catch(() => undefined);
-    if (codexResult !== undefined) setCodex(codexResult.state);
+    if (codexResult !== undefined) {
+      setCodex(codexResult.state);
+      if (codexResult.state.message !== undefined) setCodexNotice(codexResult.state.message);
+    }
   };
 
   const commitPort = (): void => {
@@ -134,13 +140,27 @@ export function App({ api }: AppProps) {
 
   const toggleCodex = async (): Promise<void> => {
     if (codexPending) return;
+    const enabling = !(codex?.desiredEnabled ?? false);
     setCodexPending(true);
     try {
       const result = await api.control.executeCodexIntegration({
         command: "set_enabled",
-        enabled: !(codex?.desiredEnabled ?? false),
+        enabled: enabling,
       });
       setCodex(result.state);
+      setCodexNotice(
+        result.state.restartRequired
+          ? enabling
+            ? "Codex synced. Restart Codex to load the updated model catalog."
+            : "Codex configuration restored. Restart Codex to apply the change."
+          : result.state.message,
+      );
+    } catch {
+      setCodexNotice(
+        enabling
+          ? "Codex sync failed. No Codex files were changed."
+          : "Codex configuration could not be restored. The integration remains enabled.",
+      );
     } finally {
       setCodexPending(false);
     }
@@ -152,6 +172,13 @@ export function App({ api }: AppProps) {
     try {
       const result = await api.control.executeCodexIntegration({ command: "sync" });
       setCodex(result.state);
+      setCodexNotice(
+        result.state.restartRequired
+          ? "Codex synced. Restart Codex to load the updated model catalog."
+          : result.state.message,
+      );
+    } catch {
+      setCodexNotice("Codex sync failed. No Codex files were changed.");
     } finally {
       setCodexPending(false);
     }
@@ -282,6 +309,18 @@ export function App({ api }: AppProps) {
       </header>
 
       <main className="product-content">
+        {codexNotice === undefined ? null : (
+          <div className="codex-notice" role="status" aria-live="polite">
+            {codexNotice}
+          </div>
+        )}
+        {codex === undefined || codex.warnings.length === 0 ? null : (
+          <ul className="codex-warnings" aria-label="Codex integration warnings">
+            {codex.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        )}
         {page === "overview" ? (
           <OverviewPage api={api} backendAvailable={backendAvailable} />
         ) : page === "providers" ? (

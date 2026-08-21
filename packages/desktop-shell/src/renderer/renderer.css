@@ -73,6 +73,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .product-content { min-width: 0; min-height: 0; overflow: auto; padding: 30px 3.1vw 44px; }
+.codex-notice, .codex-warnings { max-width: 1680px; margin: 0 auto 12px; border-radius: 10px; background: #fff4df; color: #805718; padding: 10px 13px; font-size: 13px; line-height: 1.45; }
+.codex-warnings { list-style-position: inside; }
+.codex-warnings li + li { margin-top: 4px; }
 .eyebrow { margin: 0; color: var(--text-tertiary); font-size: 10px; font-weight: 750; letter-spacing: .13em; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
@@ -153,6 +156,8 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .settings-section h3 { margin: 5px 0 6px; font-size: 18px; }
 .settings-copy p:not(.eyebrow) { margin: 4px 0; color: var(--text-secondary); line-height: 1.5; }
 .settings-section textarea { width: 100%; resize: vertical; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); color: var(--text); padding: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+.codex-restore-field { display: grid; gap: 6px; max-width: 720px; color: var(--text-secondary); font-size: 13px; }
+.codex-restore-field input { width: 100%; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--text); padding: 9px 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .field-row { display: grid; gap: 6px; max-width: 320px; color: var(--text-secondary); }
 .field-row input { border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--text); padding: 9px 10px; }
 .setting-state { margin: 0; color: #3f7455; font-size: 13px; }
@@ -233,3 +238,4 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 :root[data-theme="dark"] .badge.good { background: #203c2a; color: #96d5aa; }
 :root[data-theme="dark"] .badge.warning { background: #3c301e; color: #e6bd78; }
 :root[data-theme="dark"] .error-text { color: #e68d85 !important; }
+:root[data-theme="dark"] .codex-notice, :root[data-theme="dark"] .codex-warnings { background: #3c301e; color: #e6bd78; }

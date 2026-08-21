@@ -768,14 +768,27 @@ async function startNormalApplication(options: {
             })),
         });
       },
+      restoreTarget: () => {
+        const configured = settingsRegistry.query([
+          "integrations.codex.preimage.modelProvider",
+          "integrations.codex.preimage.openaiBaseUrl",
+          "integrations.codex.preimage.modelCatalogJson",
+        ]);
+        const value = (key: string): string | null => {
+          const candidate = configured[key]?.value;
+          return typeof candidate === "string" ? candidate : null;
+        };
+        return Object.freeze({
+          modelProvider: value("integrations.codex.preimage.modelProvider"),
+          openaiBaseUrl: value("integrations.codex.preimage.openaiBaseUrl"),
+          modelCatalogJson: value("integrations.codex.preimage.modelCatalogJson"),
+        });
+      },
     });
     const restoreCodexBeforeShutdown = async (): Promise<void> => {
       await codexIntegrationAuthority.reconcile("shutdown");
     };
     restoreCodexForCleanup = restoreCodexBeforeShutdown;
-    // Backend startup is the one automatic Codex apply point. Data Plane
-    // listener restarts (for example after a port edit) never resync Codex.
-    await codexIntegrationAuthority.reconcile("startup");
 
     const historyAuthority = createHistoryAuthority({
       sources: {
@@ -1062,6 +1075,20 @@ async function startNormalApplication(options: {
       },
       publicModelsCommandHandler,
       codexIntegrationCommandHandler: async (command) => {
+        const injectsCodex =
+          command.command === "sync" ||
+          (command.command === "set_enabled" && command.enabled);
+        if (injectsCodex && lastPublishedStatus.modelDataPlane !== "running") {
+          const current = await codexIntegrationAuthority.query();
+          return {
+            state: Object.freeze({
+              ...current,
+              observedState: "unavailable" as const,
+              message:
+                "Start the Data Plane before syncing Codex. No Codex files were changed.",
+            }),
+          };
+        }
         const state =
           command.command === "query"
             ? await codexIntegrationAuthority.query()
@@ -1151,6 +1178,11 @@ async function startNormalApplication(options: {
     attentionRefreshTimer.unref();
 
     await supervisor.execute("start", publish);
+    // Backend startup is the one automatic Codex apply point. Data Plane
+    // listener restarts (for example after a port edit) never resync Codex.
+    if (lastPublishedStatus.modelDataPlane === "running") {
+      await codexIntegrationAuthority.reconcile("startup");
+    }
     lifecycle = createLifecycle({
       ownership,
       cleanup,

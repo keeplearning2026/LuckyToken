@@ -172,6 +172,9 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.openai-responses.enabled",
       "diagnostics.deepCapture.enabled",
       "application.quitDrainTimeoutMs",
+      "integrations.codex.preimage.modelProvider",
+      "integrations.codex.preimage.openaiBaseUrl",
+      "integrations.codex.preimage.modelCatalogJson",
     ]);
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({
       type: "boolean",
@@ -214,6 +217,49 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         "protocols.anthropic-messages.enabled"
       ],
     ).toMatchObject({ value: false });
+  });
+
+  it("publishes nullable Codex restore targets as null by default", async () => {
+    const { client } = await startSettingsControlPlane({});
+
+    const result = await client.executeSettingsCommand({
+      command: "query",
+      keys: [
+        "integrations.codex.preimage.modelProvider",
+        "integrations.codex.preimage.openaiBaseUrl",
+        "integrations.codex.preimage.modelCatalogJson",
+      ],
+    });
+
+    expect(result.settings).toEqual({
+      "integrations.codex.preimage.modelProvider": {
+        key: "integrations.codex.preimage.modelProvider",
+        type: "nullable-string",
+        default: null,
+        validation: { type: "nullable-string" },
+        sensitivity: "public",
+        applyMode: "hot-apply",
+        value: null,
+      },
+      "integrations.codex.preimage.openaiBaseUrl": {
+        key: "integrations.codex.preimage.openaiBaseUrl",
+        type: "nullable-string",
+        default: null,
+        validation: { type: "nullable-string" },
+        sensitivity: "public",
+        applyMode: "hot-apply",
+        value: null,
+      },
+      "integrations.codex.preimage.modelCatalogJson": {
+        key: "integrations.codex.preimage.modelCatalogJson",
+        type: "nullable-string",
+        default: null,
+        validation: { type: "nullable-string" },
+        sensitivity: "public",
+        applyMode: "hot-apply",
+        value: null,
+      },
+    });
   });
 
   it("returns a typed storage failure and keeps the old Control Plane projection", async () => {

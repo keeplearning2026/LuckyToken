@@ -6,6 +6,12 @@ type SettingsResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["execut
 type Setting = SettingsResult["settings"][string];
 type DiagnosticResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["getDiagnostics"]>>;
 
+const codexRestoreFields = Object.freeze([
+  { key: "integrations.codex.preimage.modelProvider", label: "model_provider" },
+  { key: "integrations.codex.preimage.openaiBaseUrl", label: "openai_base_url" },
+  { key: "integrations.codex.preimage.modelCatalogJson", label: "model_catalog_json" },
+]);
+
 export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [deepCapture, setDeepCapture] = useState<Setting>();
   const [diagnostics, setDiagnostics] = useState<DiagnosticResult>();
@@ -13,18 +19,32 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
   const [diagnosticsUnavailable, setDiagnosticsUnavailable] = useState(false);
   const [storageNotice, setStorageNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [codexRestoreDraft, setCodexRestoreDraft] = useState<Readonly<Record<string, string>>>({});
 
   useEffect(() => {
     let active = true;
     void api.control
       .executeSettings({
         command: "query",
-        keys: ["diagnostics.deepCapture.enabled"],
+        keys: [
+          "diagnostics.deepCapture.enabled",
+          ...codexRestoreFields.map((field) => field.key),
+        ],
       })
       .then(
         (settings) => {
           if (!active) return;
           setDeepCapture(settings.settings["diagnostics.deepCapture.enabled"]);
+          setCodexRestoreDraft(
+            Object.freeze(
+              Object.fromEntries(
+                codexRestoreFields.map((field) => {
+                  const value = settings.settings[field.key]?.value;
+                  return [field.key, typeof value === "string" ? value : ""];
+                }),
+              ),
+            ),
+          );
           setDeepCaptureUnavailable(false);
         },
         () => {
@@ -68,6 +88,29 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
     }
   };
 
+  const saveCodexRestoreValues = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      for (const field of codexRestoreFields) {
+        const trimmed = (codexRestoreDraft[field.key] ?? "").trim();
+        const result = await api.control.executeSettings({
+          command: "set",
+          key: field.key,
+          value: trimmed.length === 0 ? null : trimmed,
+        });
+        if (result.outcome === "storage_failure" || result.outcome === "invalid_value") {
+          setStorageNotice(result.error ?? "Codex restore values could not be saved.");
+          return;
+        }
+      }
+      setStorageNotice(undefined);
+    } catch {
+      setStorageNotice("Codex restore values could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const enabled = deepCapture?.value === true;
 
   return (
@@ -83,6 +126,39 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
         </div>
         <button type="button" disabled={deepCapture === undefined || busy} onClick={() => void toggleDeepCapture()}>
           {busy ? "Updating…" : enabled ? "Disable deep diagnostics" : "Enable deep diagnostics"}
+        </button>
+      </div>
+
+      <div className="page-card settings-section">
+        <div className="settings-copy">
+          <p className="eyebrow">CODEX</p>
+          <h3>Codex restore values</h3>
+          <p>
+            While enabled, LuckyToken replaces these three root fields in Codex config.toml.
+          </p>
+          <p>
+            Leave a field blank to remove it from Codex config.toml when the integration is turned off.
+          </p>
+        </div>
+        {codexRestoreFields.map((field) => (
+          <label className="codex-restore-field" key={field.key}>
+            <span>{field.label}</span>
+            <input
+              type="text"
+              aria-label={`${field.label} restore value`}
+              value={codexRestoreDraft[field.key] ?? ""}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setCodexRestoreDraft((current) => ({
+                  ...current,
+                  [field.key]: value,
+                }));
+              }}
+            />
+          </label>
+        ))}
+        <button type="button" disabled={busy} onClick={() => void saveCodexRestoreValues()}>
+          {busy ? "Saving…" : "Save Codex restore values"}
         </button>
       </div>
 

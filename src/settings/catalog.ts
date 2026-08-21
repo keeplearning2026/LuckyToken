@@ -8,7 +8,7 @@
  * settings must declare `secret` and would never be rendered verbatim.
  */
 
-export type SettingType = "boolean" | "number" | "string";
+export type SettingType = "boolean" | "number" | "string" | "nullable-string";
 
 export type SettingSensitivity = "public" | "secret";
 
@@ -16,22 +16,25 @@ export type SettingApplyMode = "hot-apply" | "restart-required";
 
 export type SettingValidation =
   | { readonly type: "boolean" }
-  | { readonly type: "integer"; readonly minimum: number; readonly maximum: number };
+  | { readonly type: "integer"; readonly minimum: number; readonly maximum: number }
+  | { readonly type: "nullable-string" };
+
+type SettingScalar = boolean | number | string | null;
 
 export interface SettingValue {
-  readonly value: boolean | number | string;
+  readonly value: SettingScalar;
 }
 
 export interface RegisteredSetting extends SettingValue {
   readonly key: string;
   readonly type: SettingType;
-  readonly default: boolean | number | string;
+  readonly default: SettingScalar;
   readonly validation: SettingValidation;
   readonly sensitivity: SettingSensitivity;
   readonly applyMode: SettingApplyMode;
   /** Present only for restart-required settings: the value currently in
    *  effect on the Data Plane listener. */
-  readonly effective?: boolean | number | string;
+  readonly effective?: SettingScalar;
 }
 
 export interface SettingsSnapshot {
@@ -82,7 +85,7 @@ export interface SettingsRegistryOptions {
 interface SettingDefinition {
   readonly key: string;
   readonly type: SettingType;
-  readonly default: boolean | number | string;
+  readonly default: SettingScalar;
   readonly validation: SettingValidation;
   readonly sensitivity: SettingSensitivity;
   readonly applyMode: SettingApplyMode;
@@ -92,6 +95,15 @@ function validateValue(
   definition: SettingDefinition,
   value: unknown,
 ): { readonly valid: boolean; readonly error?: string } {
+  if (definition.type === "nullable-string") {
+    if (value !== null && (typeof value !== "string" || value.length === 0)) {
+      return {
+        valid: false,
+        error: `${definition.key} must be null or a non-empty string`,
+      };
+    }
+    return { valid: true };
+  }
   if (typeof value !== definition.type) {
     return {
       valid: false,
@@ -116,9 +128,11 @@ function validateValue(
 
 function settingFromDefinition(
   definition: SettingDefinition,
-  current: boolean | number | string | undefined,
-  effective: boolean | number | string | undefined,
+  current: SettingScalar | undefined,
+  effective: SettingScalar | undefined,
 ): RegisteredSetting {
+  const value = current === undefined ? definition.default : current;
+  const effectiveValue = effective === undefined ? value : effective;
   return Object.freeze({
     key: definition.key,
     type: definition.type,
@@ -126,10 +140,10 @@ function settingFromDefinition(
     validation: Object.freeze({ ...definition.validation }),
     sensitivity: definition.sensitivity,
     applyMode: definition.applyMode,
-    value: current ?? definition.default,
+    value,
     ...(definition.applyMode === "restart-required"
       ? {
-          effective: effective ?? current ?? definition.default,
+          effective: effectiveValue,
         }
       : {}),
   });
@@ -172,6 +186,20 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     sensitivity: "public",
     applyMode: "hot-apply",
   }),
+  ...[
+    "modelProvider",
+    "openaiBaseUrl",
+    "modelCatalogJson",
+  ].map((field) =>
+    Object.freeze({
+      key: `integrations.codex.preimage.${field}`,
+      type: "nullable-string" as const,
+      default: null,
+      validation: Object.freeze({ type: "nullable-string" as const }),
+      sensitivity: "public" as const,
+      applyMode: "hot-apply" as const,
+    }),
+  ),
 ]);
 
 const allKeys = Object.freeze(definitions.map((definition) => definition.key));
@@ -183,12 +211,12 @@ export function createSettingsRegistry(
   const definitionsByKey = new Map(
     definitions.map((definition) => [definition.key, definition]),
   );
-  const persisted = new Map<string, boolean | number | string>();
-  const pending = new Map<string, boolean | number | string>();
+  const persisted = new Map<string, SettingScalar>();
+  const pending = new Map<string, SettingScalar>();
   // Effective values start at the declared defaults: before any restart a
   // restart-required setting is in effect with its default, never with a
   // pending value.
-  const effective = new Map<string, boolean | number | string>(
+  const effective = new Map<string, SettingScalar>(
     definitions.map((definition) => [definition.key, definition.default]),
   );
   let loaded = false;
@@ -207,7 +235,7 @@ export function createSettingsRegistry(
       if (definition === undefined) continue;
       result[key] = settingFromDefinition(
         definition,
-        pending.get(key) ?? effective.get(key),
+        pending.has(key) ? pending.get(key) : effective.get(key),
         effective.get(key),
       );
     }
@@ -218,7 +246,7 @@ export function createSettingsRegistry(
     Object.freeze({ settings: currentSettings(allKeys) });
 
   const persistedDocument = (
-    candidate?: readonly [string, boolean | number | string],
+    candidate?: readonly [string, SettingScalar],
   ): Readonly<Record<string, unknown>> => {
     const raw: Record<string, unknown> = Object.create(null);
     for (const [persistedKey, persistedValue] of persisted) {
@@ -236,17 +264,17 @@ export function createSettingsRegistry(
         const definition = definitionsFor(key);
         if (definition === undefined) continue;
         if (!validateValue(definition, value).valid) continue;
-        pending.set(key, value as boolean | number | string);
-        effective.set(key, value as boolean | number | string);
-        persisted.set(key, value as boolean | number | string);
+        pending.set(key, value as SettingScalar);
+        effective.set(key, value as SettingScalar);
+        persisted.set(key, value as SettingScalar);
       }
       for (const [key, value] of Object.entries(options.initial ?? {})) {
         const definition = definitionsFor(key);
         if (definition === undefined || persisted.has(key)) continue;
         if (!validateValue(definition, value).valid) continue;
-        pending.set(key, value as boolean | number | string);
-        effective.set(key, value as boolean | number | string);
-        persisted.set(key, value as boolean | number | string);
+        pending.set(key, value as SettingScalar);
+        effective.set(key, value as SettingScalar);
+        persisted.set(key, value as SettingScalar);
       }
       loaded = true;
     })().catch((error: unknown) => {
@@ -272,7 +300,9 @@ export function createSettingsRegistry(
         definitions.map((definition) =>
           settingFromDefinition(
             definition,
-            pending.get(definition.key) ?? effective.get(definition.key),
+            pending.has(definition.key)
+              ? pending.get(definition.key)
+              : effective.get(definition.key),
             effective.get(definition.key),
           ),
         ),
@@ -317,7 +347,7 @@ export function createSettingsRegistry(
             settings: currentSettings(allKeys),
           };
         }
-        const typed = value as boolean | number | string;
+        const typed = value as SettingScalar;
         try {
           await store.save(persistedDocument([key, typed]));
         } catch {
