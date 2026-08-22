@@ -1,5 +1,10 @@
+const path = require("node:path");
+
 const certificateFile = process.env.LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE;
 const certificatePassword = process.env.LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD;
+
+const iconDirectory = path.resolve(__dirname, "assets");
+const iconBase = path.join(iconDirectory, "icon");
 
 if ((certificateFile === undefined) !== (certificatePassword === undefined)) {
   throw new Error(
@@ -13,7 +18,13 @@ module.exports = {
     asar: true,
     name: "LuckyToken",
     executableName: "LuckyToken",
-    extraResource: ["backend"],
+    icon: iconBase,
+    extraResource: [
+      "backend",
+      path.join(iconDirectory, "icon.png"),
+      path.join(iconDirectory, "tray-icon.png"),
+      path.join(iconDirectory, "tray-icon@2x.png"),
+    ],
   },
   makers: [
     {
@@ -25,6 +36,7 @@ module.exports = {
         description: "Local AI model gateway and desktop management application.",
         exe: "LuckyToken.exe",
         setupExe: "LuckyToken-Setup.exe",
+        setupIcon: `${iconBase}.ico`,
         noMsi: true,
         ...(certificateFile === undefined
           ? {}

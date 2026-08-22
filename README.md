@@ -1,5 +1,17 @@
 # LuckyToken
 
+LuckyToken is a local Provider and model gateway for AI agents. It gives users
+one place to manage their Provider access: local Codex models and Codex-native
+authentication, as well as Pi's built-in and user-configured Providers, model
+catalogs, and credential profiles. Credentials remain owned by their respective
+authorities and are never collapsed into shared global authentication.
+
+LuckyToken publishes the selected models through loopback endpoints compatible
+with the OpenAI Responses and Anthropic Messages protocols. Any Agent that
+supports either protocol can connect to LuckyToken and directly use models from
+the managed Providers without implementing a separate integration for every
+upstream service.
+
 LuckyToken requires Node.js 22.19 or newer. The root project pins the Pi public
 runtime contract used by the production path; the checked-in `pi-agent/` tree
 is reference material.

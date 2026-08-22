@@ -22,6 +22,7 @@ import {
 } from "./electron-app-lifecycle.js";
 import { createElectronBackendConnection } from "./electron-backend-connection.js";
 import { createDesktopOwnerLeaseClient } from "./desktop-owner-lease.js";
+import { resolveDesktopIconPaths } from "./desktop-icons.js";
 import {
   createMainControlPlaneSession,
   type TrayHealth,
@@ -44,6 +45,11 @@ let tray: Tray | undefined;
 let trayActions: { readonly open: () => void; readonly quit: () => void } | undefined;
 let productQuitTask: Promise<boolean> | undefined;
 const controlPlaneSession = createMainControlPlaneSession();
+const desktopIcons = resolveDesktopIconPaths({
+  packaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  appPath: app.getAppPath(),
+});
 const desktopOwnerLease = createDesktopOwnerLeaseClient({
   leaseId: randomUUID(),
   renewIntervalMs: 5_000,
@@ -226,6 +232,7 @@ function openManagementWindow(): void {
     height: 720,
     minWidth: 760,
     minHeight: 520,
+    icon: desktopIcons.window,
     ...createSecureManagementWindowOptions(join(__dirname, "preload.js")),
   });
   mainWindow = window;
@@ -315,9 +322,10 @@ function reconcileDesktopLoginItem(): void {
 function createTray(actions: { readonly open: () => void; readonly quit: () => void }): void {
   if (tray !== undefined) return;
   trayActions = actions;
-  const icon = nativeImage.createFromDataURL(
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-  );
+  const icon = nativeImage.createFromPath(desktopIcons.tray);
+  if (icon.isEmpty()) {
+    throw new Error(`LuckyToken tray icon is missing or invalid: ${desktopIcons.tray}`);
+  }
   tray = new Tray(icon);
   tray.on("double-click", actions.open);
   updateTray(controlPlaneSession.trayHealth());

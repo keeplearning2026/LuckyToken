@@ -99,6 +99,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
         [
           'import assert from "node:assert/strict";',
           'const contract = await import("@luckytoken/provider-contract/package");',
+          'const catalog = await import("@luckytoken/commandcode-model-catalog");',
           'const privateProviderModule = await import("@luckytoken/provider-commandcode-private");',
           'const goatProviderModule = await import("@luckytoken/provider-commandcode-goat");',
           'const luckytoken = await import("luckytoken");',
@@ -112,8 +113,8 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
           "const goatProvider = goatProviderModule.providerPackage.createProvider(input);",
           'assert.equal(privateProvider.id, "commandcode-private");',
           'assert.equal(goatProvider.id, "commandcode-goat");',
-          "assert.equal(privateProvider.getModels().length, 33);",
-          "assert.equal(goatProvider.getModels().length, 33);",
+          "assert.deepEqual(privateProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.map(({ id }) => id));",
+          "assert.deepEqual(goatProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.filter(({ minimumPlan }) => minimumPlan === \"go\" || minimumPlan === \"goat\").map(({ id }) => id));",
           'assert.equal(typeof luckytoken.createLuckyTokenRuntime, "function");',
         ].join("\n"),
       ],

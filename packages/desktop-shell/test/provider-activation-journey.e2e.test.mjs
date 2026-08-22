@@ -411,7 +411,12 @@ test(
         .waitFor();
       const modelRow = commandCodeModels
         .locator("li.provider-model-row")
-        .filter({ hasText: "deepseek/deepseek-v4-flash" });
+        .filter({
+          has: page.getByText(
+            "Original model: deepseek/deepseek-v4-flash",
+            { exact: true },
+          ),
+        });
       await modelRow.waitFor();
 
       // 5. Rename edits only the model-name suffix. The Provider namespace
@@ -495,6 +500,7 @@ test(
         {
           target: "deepseek/deepseek-v4-flash",
           enabled: true,
+          favorite: false,
         },
       );
 
@@ -506,6 +512,9 @@ test(
       const anthropicLogin = page.getByRole("dialog", {
         name: "Anthropic sign in",
       });
+      await anthropicLogin.getByLabel("Profile name").fill("Packaged Anthropic");
+      await anthropicLogin.getByLabel("Use this Profile for new requests").check();
+      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
       const anthropicSecret = anthropicLogin.locator('input[type="password"]');
       await anthropicSecret.waitFor();
       await anthropicSecret.fill(TEST_PROVIDER_KEY);

@@ -5,6 +5,7 @@ packages/desktop-shell/.vite/
 packages/desktop-shell/.electron-out/
 packages/desktop-shell/out/
 CommandcodeAPIKey.txt
+OpenCodeAPIkey.txt
 .luckytoken/
 **/auth.json
 .online-artifacts/
