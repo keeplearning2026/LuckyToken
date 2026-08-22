@@ -48,6 +48,9 @@ async function executeWithAuth(
       upstream.body,
       upstream.headers["content-type"] ?? "",
       "openai-codex-responses",
+      upstream.status >= 200 && upstream.status < 300 && input.streamRequested
+        ? "event-stream"
+        : "json",
     );
     if (usage !== undefined) input.ledger.terminalUsage(usage);
     input.ledger.terminal(upstream.status >= 400 ? "failed" : "success", {

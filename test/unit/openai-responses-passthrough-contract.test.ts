@@ -153,6 +153,55 @@ describe("Provider Native Responses contract", () => {
     });
   });
 
+  it("records streamed usage when a successful Provider Native upstream omits Content-Type", async () => {
+    const model = responsesModel();
+    const recorded = createRecordingRequestLedger();
+    const terminal = JSON.stringify({
+      type: "response.completed",
+      response: {
+        status: "completed",
+        model: "gpt-5",
+        usage: {
+          input_tokens: 20,
+          input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+          output_tokens: 7,
+          output_tokens_details: { reasoning_tokens: 2 },
+          total_tokens: 27,
+        },
+      },
+    });
+    const upstreamBody = `event: response.completed\ndata: ${terminal}\n\n`;
+    const fetch: FetchFunction = async () =>
+      new Response(new TextEncoder().encode(upstreamBody), { status: 200 });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
+      request(
+        JSON.stringify({
+          model: "my-responses/gpt-5",
+          input: "hi",
+          stream: true,
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBeNull();
+    await expect(response.text()).resolves.toBe(upstreamBody);
+    expect(recorded.terminalUsage).toEqual([
+      expect.objectContaining({
+        api: "openai-responses",
+        completeness: "complete",
+        input: 12,
+        cacheRead: 5,
+        cacheWrite: 3,
+        output: 7,
+        reasoning: 2,
+        normalizedTotal: 27,
+      }),
+    ]);
+  });
+
   it("returns upstream SSE bytes unchanged when no alias projection is required", async () => {
     const model = responsesModel();
     const sse =

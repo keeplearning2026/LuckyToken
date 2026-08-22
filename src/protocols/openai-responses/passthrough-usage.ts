@@ -167,10 +167,16 @@ export function extractResponsesPassthroughUsage(
   body: Uint8Array,
   contentType: string,
   api: string,
+  missingContentTypeBodyKind: "json" | "event-stream" = "json",
 ): NormalizedTerminalUsage | undefined {
   const text = new TextDecoder().decode(body);
   let response: Record<string, unknown> | undefined;
-  if (contentType.toLowerCase().includes("text/event-stream")) {
+  const normalizedContentType = contentType.trim().toLowerCase();
+  if (
+    normalizedContentType.includes("text/event-stream") ||
+    (normalizedContentType.length === 0 &&
+      missingContentTypeBodyKind === "event-stream")
+  ) {
     response = terminalSseResponse(text);
   } else {
     try {

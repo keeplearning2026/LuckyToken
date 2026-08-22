@@ -82,7 +82,7 @@ function commandCodeText(text: string): Response {
   );
 }
 
-function request(model: string, token: string): Request {
+function request(model: string, token: string, stream = false): Request {
   return new Request("http://luckytoken.test/v1/responses", {
     method: "POST",
     headers: {
@@ -91,7 +91,7 @@ function request(model: string, token: string): Request {
       "x-client-request-id": "00000000-0000-4000-8000-000000000777",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model, input: "hello" }),
+    body: JSON.stringify({ model, input: "hello", ...(stream ? { stream: true } : {}) }),
   });
 }
 
@@ -174,6 +174,49 @@ describe("Codex-native Responses routing", () => {
       reasoning: 1,
       normalizedTotal: 14,
     });
+  });
+
+  it("records streamed usage when the successful Codex upstream omits Content-Type", async () => {
+    const recorded = createRecordingRequestLedger();
+    const terminal = JSON.stringify({
+      type: "response.completed",
+      response: {
+        status: "completed",
+        model: "gpt-native",
+        usage: {
+          input_tokens: 11,
+          input_tokens_details: { cached_tokens: 3 },
+          output_tokens: 7,
+          output_tokens_details: { reasoning_tokens: 2 },
+          total_tokens: 18,
+        },
+      },
+    });
+    const upstreamBody = `event: response.completed\ndata: ${terminal}\n\n`;
+    const { runtime } = await start({
+      requestLedger: recorded.ledger,
+      fetch: async () =>
+        new Response(new TextEncoder().encode(upstreamBody), { status: 200 }),
+    });
+
+    const response = await runtime.handle(
+      request("gpt-native", "codex-token", true),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBeNull();
+    await expect(response.text()).resolves.toBe(upstreamBody);
+    expect(recorded.terminalUsage).toEqual([
+      expect.objectContaining({
+        api: "openai-codex-responses",
+        completeness: "complete",
+        input: 8,
+        cacheRead: 3,
+        output: 7,
+        reasoning: 2,
+        normalizedTotal: 18,
+      }),
+    ]);
   });
 
   it("accepts the zstd-compressed request bodies emitted by native Codex", async () => {

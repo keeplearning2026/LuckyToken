@@ -82,6 +82,7 @@ export interface LocalResponsesLane {
     readonly request: Request;
     readonly rawBody: string;
     readonly selector: string;
+    readonly streamRequested: boolean;
     readonly diagnostics: InvocationDiagnostics;
     readonly ledger: RequestLedgerEntry;
   }): Promise<Response>;
@@ -303,12 +304,14 @@ async function handleOpenAIResponses(
     // state expansion: a model declared Responses-wire-compatible forwards
     // the raw request verbatim to the upstream endpoint, never through Pi.
     const selector = extractResponsesModelSelector(body);
+    const streamRequested = (body as { readonly stream?: unknown }).stream === true;
     diagnostics.checkpoint({ stage: "model-resolution", selector });
     if (dependencies.localNativeLane?.claims(selector) === true) {
       return dependencies.localNativeLane.execute({
         request,
         rawBody,
         selector,
+        streamRequested,
         diagnostics,
         ledger,
       });
@@ -358,6 +361,7 @@ async function handleOpenAIResponses(
         request,
         model,
         rawBody,
+        streamRequested,
         requestIdentity.effectiveSessionId,
         diagnostics,
         ledger,
@@ -566,6 +570,7 @@ async function providerNativeBranch(
   request: Request,
   model: Model<string>,
   rawBody: string,
+  streamRequested: boolean,
   sessionId: string,
   diagnostics: InvocationDiagnostics,
   ledger: RequestLedgerEntry,
@@ -606,6 +611,9 @@ async function providerNativeBranch(
     upstream.body,
     upstream.headers["content-type"] ?? "",
     model.api,
+    upstream.status >= 200 && upstream.status < 300 && streamRequested
+      ? "event-stream"
+      : "json",
   );
   if (terminalUsage !== undefined) ledger.terminalUsage(terminalUsage);
   if (upstream.status >= 400 && alias === undefined) {
