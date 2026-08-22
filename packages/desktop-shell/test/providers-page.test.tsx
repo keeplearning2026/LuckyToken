@@ -133,9 +133,10 @@ const publicModelsState = (overrides: Record<string, unknown> = {}) => ({
       {
         providerId: "example",
         on: true,
+        favorite: false,
         models: [
-          { alias: "example/model-a", target: "model-a", on: true },
-          { alias: "example/flash", target: "model-b", on: false },
+          { alias: "example/model-a", target: "model-a", on: true, favorite: false },
+          { alias: "example/flash", target: "model-b", on: false, favorite: false },
         ],
       },
     ],
@@ -598,9 +599,10 @@ describe("Providers product slice", () => {
           {
             providerId: "example",
             on: false,
+            favorite: false,
             models: [
-              { alias: "example/model-a", target: "model-a", on: true },
-              { alias: "example/flash", target: "model-b", on: false },
+              { alias: "example/model-a", target: "model-a", on: true, favorite: false },
+              { alias: "example/flash", target: "model-b", on: false, favorite: false },
             ],
           },
         ],
@@ -656,7 +658,26 @@ describe("Providers product slice", () => {
 
     const turnOffProvider = container.querySelector('button[aria-label="Hide Example AI"]');
     await act(async () => (turnOffProvider as HTMLButtonElement).click());
+    const favoriteProvider = container.querySelector('button[aria-label="Favorite Example AI"]');
+    expect(favoriteProvider).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => (favoriteProvider as HTMLButtonElement).click());
+    expect(executePublicModels).toHaveBeenLastCalledWith({
+      command: "set_provider_favorite",
+      revision: 2,
+      providerId: "example",
+      favorite: true,
+    });
     await click("Models 2");
+    const favoriteModel = container.querySelector('button[aria-label="Favorite model-a"]');
+    expect(favoriteModel).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => (favoriteModel as HTMLButtonElement).click());
+    expect(executePublicModels).toHaveBeenLastCalledWith({
+      command: "set_model_favorite",
+      revision: 2,
+      providerId: "example",
+      modelId: "model-a",
+      favorite: true,
+    });
     const modelSwitch = container.querySelector('button[aria-label="Hide model-a"]');
     expect(modelSwitch).toBeInstanceOf(HTMLButtonElement);
     await act(async () => (modelSwitch as HTMLButtonElement).click());

@@ -10,8 +10,8 @@ import type {
   BackupResult,
   CatalogCommand,
   CatalogCommandResult,
-  CodexIntegrationCommand,
-  CodexIntegrationCommandResult,
+  AgentIntegrationsCommand,
+  AgentIntegrationsCommandResult,
   CredentialCommand,
   CredentialCommandResult,
   HistoryAcknowledgeResult,
@@ -38,6 +38,8 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 export type {
+  AgentIntegrationId,
+  AgentInjectionScope,
   AnalyticsFilter,
   AnalyticsOptionsResult,
   AnalyticsSummary,
@@ -83,9 +85,9 @@ export interface DesktopControlPlaneApi {
   executeModels(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalog(command: CatalogCommand): Promise<CatalogCommandResult>;
   executePublicModels(command: PublicModelsCommand): Promise<PublicModelsCommandResult>;
-  executeCodexIntegration(
-    command: CodexIntegrationCommand,
-  ): Promise<CodexIntegrationCommandResult>;
+  executeAgentIntegrations(
+    command: AgentIntegrationsCommand,
+  ): Promise<AgentIntegrationsCommandResult>;
 
   getRequestLedger(query?: RequestLedgerQuery): Promise<RequestLedgerQueryResult>;
   onRequestLedger(listener: (event: RequestLedgerEvent) => void): () => void;

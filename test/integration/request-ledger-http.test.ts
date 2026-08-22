@@ -974,6 +974,7 @@ function snapshotResolving(
     providers: [],
     resolve: (alias: string) => mappings[alias],
     publishedModels: () => [],
+    favoriteModels: () => [],
   };
 }
 

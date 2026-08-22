@@ -17,7 +17,7 @@ type InvokeResults = {
   [desktopIpcChannels.models]: ReturnType<DesktopControlPlaneApi["executeModels"]>;
   [desktopIpcChannels.catalog]: ReturnType<DesktopControlPlaneApi["executeCatalog"]>;
   [desktopIpcChannels.publicModels]: ReturnType<DesktopControlPlaneApi["executePublicModels"]>;
-  [desktopIpcChannels.codex]: ReturnType<DesktopControlPlaneApi["executeCodexIntegration"]>;
+  [desktopIpcChannels.agentIntegrations]: ReturnType<DesktopControlPlaneApi["executeAgentIntegrations"]>;
   [desktopIpcChannels.ledgerGet]: ReturnType<DesktopControlPlaneApi["getRequestLedger"]>;
   [desktopIpcChannels.ledgerSubscribe]: Promise<void>;
   [desktopIpcChannels.ledgerUnsubscribe]: Promise<void>;
@@ -79,7 +79,8 @@ const control: DesktopControlPlaneApi = {
   executeModels: (command) => invoke(desktopIpcChannels.models, command),
   executeCatalog: (command) => invoke(desktopIpcChannels.catalog, command),
   executePublicModels: (command) => invoke(desktopIpcChannels.publicModels, command),
-  executeCodexIntegration: (command) => invoke(desktopIpcChannels.codex, command),
+  executeAgentIntegrations: (command) =>
+    invoke(desktopIpcChannels.agentIntegrations, command),
   getRequestLedger: (query) => invoke(desktopIpcChannels.ledgerGet, query),
   onRequestLedger(listener) {
     const stop = onEvent(desktopIpcChannels.ledgerEvent, listener);

@@ -14,10 +14,14 @@ import {
   type ApplicationStatus,
   type CatalogCommand,
   type CatalogCommandResult,
-  type CodexIntegrationCommand,
-  type CodexIntegrationCommandResult,
-  type CodexIntegrationObservedState,
-  type CodexIntegrationProjection,
+  type AgentIntegrationEffectProjection,
+  type AgentIntegrationId,
+  type AgentIntegrationObservedState,
+  type AgentIntegrationOperationResult,
+  type AgentIntegrationProjection,
+  type AgentIntegrationsCommand,
+  type AgentIntegrationsCommandResult,
+  type AgentIntegrationsState,
   type CatalogModelAvailability,
   type CatalogModelProjection,
   type CatalogProviderProjection,
@@ -239,9 +243,9 @@ export type ClientRequest =
       readonly command: PublicModelsCommand;
     }
   | {
-      readonly type: "codex_integration_command";
+      readonly type: "agent_integrations_command";
       readonly requestId: string;
-      readonly command: CodexIntegrationCommand;
+      readonly command: AgentIntegrationsCommand;
     }
   | { readonly type: "subscribe"; readonly requestId: string }
   | { readonly type: "unsubscribe"; readonly requestId: string };
@@ -351,9 +355,9 @@ export type ServerMessage =
       readonly result: PublicModelsCommandResult;
     }
   | {
-      readonly type: "codex_integration_command_result";
+      readonly type: "agent_integrations_command_result";
       readonly requestId: string;
-      readonly result: CodexIntegrationCommandResult;
+      readonly result: AgentIntegrationsCommandResult;
     }
   | { readonly type: "subscribed"; readonly requestId: string }
   | { readonly type: "unsubscribed"; readonly requestId: string }
@@ -832,97 +836,145 @@ export function decodeCatalogCommandResult(
   });
 }
 
-export function decodeCodexIntegrationCommand(
-  value: unknown,
-): CodexIntegrationCommand | undefined {
-  if (!isRecord(value) || typeof value.command !== "string") return undefined;
-  if (value.command === "query") return { command: "query" };
-  if (value.command === "sync") return { command: "sync" };
-  if (value.command === "set_enabled" && typeof value.enabled === "boolean") {
-    return { command: "set_enabled", enabled: value.enabled };
-  }
-  return undefined;
-}
-
-const codexObservedStates: ReadonlySet<string> = new Set([
+const agentIntegrationIds: ReadonlySet<string> = new Set(["codex", "pi"]);
+const agentInjectionScopes: ReadonlySet<string> = new Set(["favorite", "full"]);
+const agentObservedStates: ReadonlySet<string> = new Set([
   "native",
   "managed",
-  "drifted",
   "conflict",
   "unavailable",
 ]);
 
-export function decodeCodexIntegrationProjection(
+export function decodeAgentIntegrationsCommand(
   value: unknown,
-): CodexIntegrationProjection | undefined {
+): AgentIntegrationsCommand | undefined {
+  if (!isRecord(value) || typeof value.command !== "string") return undefined;
+  if (value.command === "query") return { command: "query" };
+  if (value.command === "sync") return { command: "sync" };
+  if (
+    value.command === "set_enabled" &&
+    typeof value.agentId === "string" &&
+    agentIntegrationIds.has(value.agentId) &&
+    typeof value.enabled === "boolean"
+  ) {
+    return {
+      command: "set_enabled",
+      agentId: value.agentId as AgentIntegrationId,
+      enabled: value.enabled,
+    };
+  }
+  if (
+    value.command === "set_scope" &&
+    typeof value.agentId === "string" &&
+    agentIntegrationIds.has(value.agentId) &&
+    typeof value.scope === "string" &&
+    agentInjectionScopes.has(value.scope)
+  ) {
+    return {
+      command: "set_scope",
+      agentId: value.agentId as AgentIntegrationId,
+      scope: value.scope as "favorite" | "full",
+    };
+  }
+  return undefined;
+}
+
+export function decodeAgentIntegrationProjection(
+  value: unknown,
+): AgentIntegrationProjection | undefined {
   if (
     !isRecord(value) ||
-    typeof value.desiredEnabled !== "boolean" ||
-    typeof value.observedState !== "string" ||
-    !codexObservedStates.has(value.observedState) ||
-    typeof value.codexHome !== "string" ||
-    value.codexHome.length === 0 ||
-    typeof value.configPath !== "string" ||
-    value.configPath.length === 0 ||
-    typeof value.catalogPath !== "string" ||
-    value.catalogPath.length === 0 ||
-    typeof value.restartRequired !== "boolean" ||
-    typeof value.desiredGeneration !== "number" ||
-    !Number.isSafeInteger(value.desiredGeneration) ||
-    value.desiredGeneration < 0 ||
-    typeof value.needsSync !== "boolean" ||
-    !Array.isArray(value.warnings) ||
-    value.warnings.some((warning) => typeof warning !== "string")
+    typeof value.agentId !== "string" ||
+    !agentIntegrationIds.has(value.agentId) ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.scope !== "string" ||
+    !agentInjectionScopes.has(value.scope) ||
+    typeof value.modelCount !== "number" ||
+    !Number.isSafeInteger(value.modelCount) ||
+    value.modelCount < 0 ||
+    typeof value.needsSync !== "boolean"
   ) {
-    return undefined;
-  }
-  if (value.endpoint !== undefined && typeof value.endpoint !== "string") {
-    return undefined;
-  }
-  if (
-    value.modelCount !== undefined &&
-    (typeof value.modelCount !== "number" ||
-      !Number.isSafeInteger(value.modelCount) ||
-      value.modelCount < 0)
-  ) {
-    return undefined;
-  }
-  if (
-    value.appliedGeneration !== undefined &&
-    (typeof value.appliedGeneration !== "number" ||
-      !Number.isSafeInteger(value.appliedGeneration) ||
-      value.appliedGeneration < 0)
-  ) {
-    return undefined;
-  }
-  if (value.message !== undefined && typeof value.message !== "string") {
     return undefined;
   }
   return Object.freeze({
-    desiredEnabled: value.desiredEnabled,
-    observedState: value.observedState as CodexIntegrationObservedState,
-    codexHome: value.codexHome,
-    configPath: value.configPath,
-    catalogPath: value.catalogPath,
-    ...(value.endpoint === undefined ? {} : { endpoint: value.endpoint }),
-    ...(value.modelCount === undefined ? {} : { modelCount: value.modelCount }),
-    warnings: Object.freeze([...(value.warnings as string[])]),
-    restartRequired: value.restartRequired,
-    desiredGeneration: value.desiredGeneration,
-    ...(value.appliedGeneration === undefined
-      ? {}
-      : { appliedGeneration: value.appliedGeneration }),
+    agentId: value.agentId as AgentIntegrationId,
+    enabled: value.enabled,
+    scope: value.scope as "favorite" | "full",
+    modelCount: value.modelCount,
     needsSync: value.needsSync,
+  });
+}
+
+function decodeAgentIntegrationEffect(
+  value: unknown,
+): AgentIntegrationEffectProjection | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.observedState !== "string" ||
+    !agentObservedStates.has(value.observedState) ||
+    typeof value.modelCount !== "number" ||
+    !Number.isSafeInteger(value.modelCount) ||
+    value.modelCount < 0 ||
+    !Array.isArray(value.warnings) ||
+    value.warnings.some((warning) => typeof warning !== "string") ||
+    typeof value.changed !== "boolean" ||
+    (value.message !== undefined && typeof value.message !== "string")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    observedState: value.observedState as AgentIntegrationObservedState,
+    modelCount: value.modelCount,
+    warnings: Object.freeze([...(value.warnings as string[])]),
+    changed: value.changed,
     ...(value.message === undefined ? {} : { message: value.message }),
   });
 }
 
-export function decodeCodexIntegrationCommandResult(
+export function decodeAgentIntegrationsCommandResult(
   value: unknown,
-): CodexIntegrationCommandResult | undefined {
-  if (!isRecord(value)) return undefined;
-  const state = decodeCodexIntegrationProjection(value.state);
-  return state === undefined ? undefined : Object.freeze({ state });
+): AgentIntegrationsCommandResult | undefined {
+  if (
+    !isRecord(value) ||
+    (value.outcome !== "ok" && value.outcome !== "partial" && value.outcome !== "failed") ||
+    !isRecord(value.state) ||
+    !Array.isArray(value.state.agents) ||
+    !Array.isArray(value.results)
+  ) {
+    return undefined;
+  }
+  const agents = value.state.agents.map(decodeAgentIntegrationProjection);
+  if (agents.some((agent) => agent === undefined)) return undefined;
+  const seenAgents = new Set(agents.map((agent) => agent!.agentId));
+  if (seenAgents.size !== agents.length) return undefined;
+  const results: AgentIntegrationOperationResult[] = [];
+  for (const entry of value.results) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.agentId !== "string" ||
+      !agentIntegrationIds.has(entry.agentId) ||
+      (entry.outcome !== "ok" && entry.outcome !== "failed")
+    ) {
+      return undefined;
+    }
+    const effect = entry.effect === undefined
+      ? undefined
+      : decodeAgentIntegrationEffect(entry.effect);
+    if (entry.effect !== undefined && effect === undefined) return undefined;
+    results.push(Object.freeze({
+      agentId: entry.agentId as AgentIntegrationId,
+      outcome: entry.outcome,
+      ...(effect === undefined ? {} : { effect }),
+    }));
+  }
+  const state: AgentIntegrationsState = Object.freeze({
+    agents: Object.freeze(agents as AgentIntegrationProjection[]),
+  });
+  return Object.freeze({
+    outcome: value.outcome,
+    state,
+    results: Object.freeze(results),
+  });
 }
 
 export function decodePublicModelsCommand(
@@ -982,6 +1034,39 @@ export function decodePublicModelsCommand(
       on: value.on,
     };
   }
+  if (value.command === "set_provider_favorite") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.favorite !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      command: "set_provider_favorite",
+      revision,
+      providerId: value.providerId,
+      favorite: value.favorite,
+    };
+  }
+  if (value.command === "set_model_favorite") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.modelId !== "string" ||
+      value.modelId.length === 0 ||
+      typeof value.favorite !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      command: "set_model_favorite",
+      revision,
+      providerId: value.providerId,
+      modelId: value.modelId,
+      favorite: value.favorite,
+    };
+  }
   if (
     (value.command === "rename_model" ||
       value.command === "restore_model_name") &&
@@ -1038,6 +1123,7 @@ function decodePublicModelsState(value: unknown): PublicModelsState | undefined 
       typeof provider.providerId !== "string" ||
       provider.providerId.length === 0 ||
       typeof provider.on !== "boolean" ||
+      typeof provider.favorite !== "boolean" ||
       !Array.isArray(provider.models)
     ) {
       return undefined;
@@ -1049,7 +1135,8 @@ function decodePublicModelsState(value: unknown): PublicModelsState | undefined 
         model.alias.length === 0 ||
         typeof model.target !== "string" ||
         model.target.length === 0 ||
-        typeof model.on !== "boolean"
+        typeof model.on !== "boolean" ||
+        typeof model.favorite !== "boolean"
       ) {
         return undefined;
       }
@@ -1057,15 +1144,22 @@ function decodePublicModelsState(value: unknown): PublicModelsState | undefined 
         alias: model.alias,
         target: model.target,
         on: model.on,
+        favorite: model.favorite,
       });
     });
     if (models.some((model) => model === undefined)) return undefined;
     return Object.freeze({
       providerId: provider.providerId,
       on: provider.on,
+      favorite: provider.favorite,
       models: Object.freeze(
         models.filter(
-          (model): model is { readonly alias: string; readonly target: string; readonly on: boolean } =>
+          (model): model is {
+            readonly alias: string;
+            readonly target: string;
+            readonly on: boolean;
+            readonly favorite: boolean;
+          } =>
             model !== undefined,
         ),
       ),
@@ -1084,10 +1178,12 @@ function decodePublicModelsState(value: unknown): PublicModelsState | undefined 
         (provider): provider is {
           readonly providerId: string;
           readonly on: boolean;
+          readonly favorite: boolean;
           readonly models: readonly {
             readonly alias: string;
             readonly target: string;
             readonly on: boolean;
+            readonly favorite: boolean;
           }[];
         } => provider !== undefined,
       ),
@@ -1103,6 +1199,7 @@ export function decodePublicModelsCommandResult(
     (value.outcome !== "ok" &&
       value.outcome !== "conflict" &&
       value.outcome !== "invalid" &&
+      value.outcome !== "limit_exceeded" &&
       value.outcome !== "unavailable" &&
       value.outcome !== "storage_failure")
   ) {
@@ -2625,15 +2722,15 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
-  if (value.type === "codex_integration_command") {
-    const command = decodeCodexIntegrationCommand(value.command);
+  if (value.type === "agent_integrations_command") {
+    const command = decodeAgentIntegrationsCommand(value.command);
     if (command === undefined) {
       return { type: "invalid", requestId, code: "invalid_request" };
     }
     return {
       type: "valid",
       request: {
-        type: "codex_integration_command",
+        type: "agent_integrations_command",
         requestId,
         command,
       },
@@ -3197,11 +3294,11 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "public_models_command_result", requestId, result };
   }
-  if (value.type === "codex_integration_command_result") {
-    const result = decodeCodexIntegrationCommandResult(value.result);
+  if (value.type === "agent_integrations_command_result") {
+    const result = decodeAgentIntegrationsCommandResult(value.result);
     return result === undefined
       ? undefined
-      : { type: "codex_integration_command_result", requestId, result };
+      : { type: "agent_integrations_command_result", requestId, result };
   }
   if (value.type === "subscribed" || value.type === "unsubscribed") {
     return { type: value.type, requestId };

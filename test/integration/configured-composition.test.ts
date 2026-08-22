@@ -92,6 +92,7 @@ describe("configured serving composition", () => {
         providers: [],
         resolve: () => undefined,
         publishedModels: () => [],
+        favoriteModels: () => [],
       }),
     };
     const composition = await createProductionDataPlane({

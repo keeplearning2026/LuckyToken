@@ -26,11 +26,16 @@ export {
   type CatalogRefreshTrigger,
   type CatalogSnapshotProjection,
   type CatalogStatusProjection,
-  type CodexIntegrationCommand,
-  type CodexIntegrationCommandHandler,
-  type CodexIntegrationCommandResult,
-  type CodexIntegrationObservedState,
-  type CodexIntegrationProjection,
+  type AgentIntegrationEffectProjection,
+  type AgentIntegrationId,
+  type AgentIntegrationObservedState,
+  type AgentIntegrationOperationResult,
+  type AgentIntegrationProjection,
+  type AgentInjectionScope,
+  type AgentIntegrationsCommand,
+  type AgentIntegrationsCommandHandler,
+  type AgentIntegrationsCommandResult,
+  type AgentIntegrationsState,
   type CredentialCommand,
   type CredentialCommandHandler,
   type CredentialCommandOutcome,
@@ -235,7 +240,7 @@ export {
   protocolDisplayName,
 } from "./contracts.js";
 export { decodeRequestLedgerEvent, decodeRequestLedgerQuery, decodeRequestLedgerRecord, decodeRequestLedgerResult } from "./wire-ledger.js";
-export { decodeCodexIntegrationCommandResult } from "./wire.js";
+export { decodeAgentIntegrationsCommandResult } from "./wire.js";
 export {
   decodeAuthCommandResult,
   decodeAuthOptionsProjection,

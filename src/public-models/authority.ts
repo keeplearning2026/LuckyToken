@@ -35,10 +35,12 @@ export interface PublicModelRuntimeFacts {
 interface StoredPublicModel {
   readonly target: string;
   readonly enabled: boolean;
+  readonly favorite: boolean;
 }
 
 interface StoredPublicProvider {
   readonly enabled: boolean;
+  readonly favorite: boolean;
   readonly models: Readonly<Record<string, StoredPublicModel>>;
 }
 
@@ -48,7 +50,7 @@ export interface PublicModelEndpoint {
 }
 
 interface PublicModelsDocument {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly endpoint: PublicModelEndpoint;
   readonly providers: Readonly<Record<string, StoredPublicProvider>>;
 }
@@ -57,11 +59,13 @@ export interface PublicModelProjection {
   readonly alias: string;
   readonly target: string;
   readonly on: boolean;
+  readonly favorite: boolean;
 }
 
 export interface PublicProviderProjection {
   readonly providerId: string;
   readonly on: boolean;
+  readonly favorite: boolean;
   readonly models: readonly PublicModelProjection[];
 }
 
@@ -79,6 +83,7 @@ export interface PublicModelSnapshot {
     | { readonly providerId: string; readonly modelId: string }
     | undefined;
   publishedModels(): readonly PublishedPublicModel[];
+  favoriteModels(): readonly PublishedPublicModel[];
 }
 
 export interface PublicModelState {
@@ -90,6 +95,7 @@ export type PublicModelCommandOutcome =
   | "ok"
   | "conflict"
   | "invalid"
+  | "limit_exceeded"
   | "unavailable"
   | "storage_failure";
 
@@ -109,11 +115,22 @@ export interface PublicModelAuthority {
     readonly providerId: string;
     readonly on: boolean;
   }): Promise<PublicModelCommandResult>;
+  setProviderFavorite(input: {
+    readonly revision: number;
+    readonly providerId: string;
+    readonly favorite: boolean;
+  }): Promise<PublicModelCommandResult>;
   setModelOn(input: {
     readonly revision: number;
     readonly providerId: string;
     readonly modelId: string;
     readonly on: boolean;
+  }): Promise<PublicModelCommandResult>;
+  setModelFavorite(input: {
+    readonly revision: number;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly favorite: boolean;
   }): Promise<PublicModelCommandResult>;
   renameModel(input: {
     readonly revision: number;
@@ -145,6 +162,8 @@ export interface PublicModelAuthorityOptions {
 }
 
 const MAX_ALIAS_LENGTH = 128;
+export const MAX_FAVORITE_MODELS = 10;
+export const MAX_FAVORITE_PROVIDERS = 5;
 
 function normalizeModelName(modelId: string): string {
   return modelId.replaceAll("/", "-");
@@ -180,18 +199,21 @@ function validModelName(providerId: string, modelName: string): boolean {
 }
 
 function emptyDocument(endpoint: PublicModelEndpoint): PublicModelsDocument {
-  return { schemaVersion: 1, endpoint, providers: {} };
+  return { schemaVersion: 2, endpoint, providers: {} };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseDocument(raw: string): PublicModelsDocument {
+function parseDocument(raw: string): {
+  readonly document: PublicModelsDocument;
+  readonly migrated: boolean;
+} {
   const value: unknown = JSON.parse(raw);
   if (
     !isRecord(value) ||
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     !isRecord(value.endpoint) ||
     typeof value.endpoint.host !== "string" ||
     value.endpoint.host.length === 0 ||
@@ -202,11 +224,13 @@ function parseDocument(raw: string): PublicModelsDocument {
   ) {
     throw new Error("public-models.json has an invalid schema");
   }
+  const migrated = value.schemaVersion === 1;
   const providers: Record<string, StoredPublicProvider> = {};
   for (const [providerId, providerValue] of Object.entries(value.providers)) {
     if (
       !isRecord(providerValue) ||
       typeof providerValue.enabled !== "boolean" ||
+      (!migrated && typeof providerValue.favorite !== "boolean") ||
       !isRecord(providerValue.models)
     ) {
       throw new Error("public-models.json has an invalid provider entry");
@@ -217,27 +241,33 @@ function parseDocument(raw: string): PublicModelsDocument {
         !isRecord(modelValue) ||
         typeof modelValue.target !== "string" ||
         modelValue.target.length === 0 ||
-        typeof modelValue.enabled !== "boolean"
+        typeof modelValue.enabled !== "boolean" ||
+        (!migrated && typeof modelValue.favorite !== "boolean")
       ) {
         throw new Error("public-models.json has an invalid model entry");
       }
       models[alias] = {
         target: modelValue.target,
         enabled: modelValue.enabled,
+        favorite: migrated ? false : (modelValue.favorite as boolean),
       };
     }
     providers[providerId] = {
       enabled: providerValue.enabled,
+      favorite: migrated ? false : (providerValue.favorite as boolean),
       models,
     };
   }
   return {
-    schemaVersion: 1,
-    endpoint: {
-      host: value.endpoint.host as string,
-      port: value.endpoint.port as number,
+    migrated,
+    document: {
+      schemaVersion: 2,
+      endpoint: {
+        host: value.endpoint.host as string,
+        port: value.endpoint.port as number,
+      },
+      providers,
     },
-    providers,
   };
 }
 
@@ -284,9 +314,15 @@ function buildSnapshot(
       return Object.freeze({
         providerId,
         on: provider.enabled && runtime?.usable === true,
+        favorite: provider.favorite,
         models: Object.freeze(
           Object.entries(provider.models).map(([alias, model]) =>
-            Object.freeze({ alias, target: model.target, on: model.enabled }),
+            Object.freeze({
+              alias,
+              target: model.target,
+              on: model.enabled,
+              favorite: model.favorite,
+            }),
           ),
         ),
       });
@@ -295,10 +331,20 @@ function buildSnapshot(
 
   const byAlias = new Map<string, { providerId: string; modelId: string }>();
   const published: PublishedPublicModel[] = [];
+  const favorites: PublishedPublicModel[] = [];
   for (const provider of providers) {
     for (const model of provider.models) {
       const target = { providerId: provider.providerId, modelId: model.target };
       byAlias.set(model.alias, target);
+      if (model.favorite) {
+        favorites.push(
+          Object.freeze({
+            alias: model.alias,
+            providerId: target.providerId,
+            modelId: target.modelId,
+          }),
+        );
+      }
       if (
         provider.on &&
         model.on &&
@@ -316,12 +362,14 @@ function buildSnapshot(
   }
 
   const frozenPublished = Object.freeze(published);
+  const frozenFavorites = Object.freeze(favorites);
   return Object.freeze({
     version,
     endpoint: Object.freeze({ ...document.endpoint }),
     providers,
     resolve: (alias: string) => byAlias.get(alias),
     publishedModels: () => frozenPublished,
+    favoriteModels: () => frozenFavorites,
   });
 }
 
@@ -333,6 +381,7 @@ function materializeRuntime(
   for (const [providerId, provider] of Object.entries(document.providers)) {
     providers[providerId] = {
       enabled: provider.enabled,
+      favorite: provider.favorite,
       models: { ...provider.models },
     };
   }
@@ -342,10 +391,15 @@ function materializeRuntime(
     const existing = providers[runtimeProvider.providerId];
     const provider: {
       enabled: boolean;
+      favorite: boolean;
       models: Record<string, StoredPublicModel>;
     } = existing === undefined
-      ? { enabled: true, models: {} }
-      : { enabled: existing.enabled, models: { ...existing.models } };
+      ? { enabled: true, favorite: false, models: {} }
+      : {
+          enabled: existing.enabled,
+          favorite: existing.favorite,
+          models: { ...existing.models },
+        };
     if (existing === undefined) changed = true;
 
     const knownTargets = new Set(
@@ -359,7 +413,7 @@ function materializeRuntime(
         modelId,
         occupiedAliases,
       );
-      provider.models[alias] = { target: modelId, enabled: true };
+      provider.models[alias] = { target: modelId, enabled: true, favorite: false };
       occupiedAliases.add(alias);
       knownTargets.add(modelId);
       changed = true;
@@ -368,7 +422,7 @@ function materializeRuntime(
   }
 
   return {
-    document: { schemaVersion: 1, endpoint: document.endpoint, providers },
+    document: { schemaVersion: 2, endpoint: document.endpoint, providers },
     changed,
   };
 }
@@ -377,7 +431,7 @@ async function readInitialDocument(
   path: string,
   fileSystem: PublicModelFileSystem,
   initialEndpoint: PublicModelEndpoint,
-): Promise<PublicModelsDocument> {
+): Promise<{ readonly document: PublicModelsDocument; readonly migrated: boolean }> {
   try {
     return parseDocument(await fileSystem.readFile(path));
   } catch (error) {
@@ -387,7 +441,7 @@ async function readInitialDocument(
       "code" in error &&
       (error as { code?: unknown }).code === "ENOENT"
     ) {
-      return emptyDocument(initialEndpoint);
+      return { document: emptyDocument(initialEndpoint), migrated: false };
     }
     throw error;
   }
@@ -501,7 +555,15 @@ export function createPublicModelAuthority(
     reconcile(facts: PublicModelRuntimeFacts): Promise<PublicModelState> {
       return serialize(async () => {
         if (loaded === undefined) {
-          loaded = await readInitialDocument(options.path, fileSystem, initialEndpoint);
+          const initial = await readInitialDocument(
+            options.path,
+            fileSystem,
+            initialEndpoint,
+          );
+          loaded = initial.document;
+          if (initial.migrated) {
+            await writeAtomic(options.path, loaded, fileSystem);
+          }
         }
         const next = materializeRuntime(loaded, facts);
         const runtimeChanged = !sameRuntimeFacts(currentFacts, facts);
@@ -531,7 +593,7 @@ export function createPublicModelAuthority(
         const changed = loaded.endpoint.port !== input.port;
         const next: PublicModelsDocument = changed
           ? {
-              schemaVersion: 1,
+              schemaVersion: 2,
               endpoint: { host: loaded.endpoint.host, port: input.port },
               providers: loaded.providers,
             }
@@ -557,12 +619,52 @@ export function createPublicModelAuthority(
           return commitUserDocument(loaded, false);
         }
         const next: PublicModelsDocument = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           endpoint: loaded.endpoint,
           providers: {
             ...loaded.providers,
             [input.providerId]: {
               enabled: input.on,
+              favorite: provider.favorite,
+              models: { ...provider.models },
+            },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
+    },
+    setProviderFavorite(
+      input: Parameters<PublicModelAuthority["setProviderFavorite"]>[0],
+    ): Promise<PublicModelCommandResult> {
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        if (provider.favorite === input.favorite) {
+          return commitUserDocument(loaded, false);
+        }
+        if (
+          input.favorite &&
+          Object.values(loaded.providers).filter((candidate) => candidate.favorite)
+            .length >= MAX_FAVORITE_PROVIDERS
+        ) {
+          return Object.freeze({
+            outcome: "limit_exceeded",
+            state: currentState(),
+          });
+        }
+        const next: PublicModelsDocument = {
+          schemaVersion: 2,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: {
+              enabled: provider.enabled,
+              favorite: input.favorite,
               models: { ...provider.models },
             },
           },
@@ -592,15 +694,72 @@ export function createPublicModelAuthority(
           return commitUserDocument(loaded, false);
         }
         const next: PublicModelsDocument = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           endpoint: loaded.endpoint,
           providers: {
             ...loaded.providers,
             [input.providerId]: {
               enabled: provider.enabled,
+              favorite: provider.favorite,
               models: {
                 ...provider.models,
-                [alias]: { target: model.target, enabled: input.on },
+                [alias]: {
+                  target: model.target,
+                  enabled: input.on,
+                  favorite: model.favorite,
+                },
+              },
+            },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
+    },
+    setModelFavorite(
+      input: Parameters<PublicModelAuthority["setModelFavorite"]>[0],
+    ): Promise<PublicModelCommandResult> {
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const entry = Object.entries(provider.models).find(
+          ([, model]) => model.target === input.modelId,
+        );
+        if (entry === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const [alias, model] = entry;
+        if (model.favorite === input.favorite) {
+          return commitUserDocument(loaded, false);
+        }
+        if (
+          input.favorite &&
+          Object.values(loaded.providers).reduce(
+            (count, candidate) =>
+              count + Object.values(candidate.models).filter((item) => item.favorite).length,
+            0,
+          ) >= MAX_FAVORITE_MODELS
+        ) {
+          return Object.freeze({
+            outcome: "limit_exceeded",
+            state: currentState(),
+          });
+        }
+        const next: PublicModelsDocument = {
+          schemaVersion: 2,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: {
+              enabled: provider.enabled,
+              favorite: provider.favorite,
+              models: {
+                ...provider.models,
+                [alias]: { ...model, favorite: input.favorite },
               },
             },
           },
@@ -640,11 +799,15 @@ export function createPublicModelAuthority(
         delete models[currentAlias];
         models[alias] = model;
         const next: PublicModelsDocument = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           endpoint: loaded.endpoint,
           providers: {
             ...loaded.providers,
-            [input.providerId]: { enabled: provider.enabled, models },
+            [input.providerId]: {
+              enabled: provider.enabled,
+              favorite: provider.favorite,
+              models,
+            },
           },
         };
         return commitUserDocument(next, true);
@@ -678,11 +841,15 @@ export function createPublicModelAuthority(
         delete models[currentAlias];
         models[alias] = model;
         const next: PublicModelsDocument = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           endpoint: loaded.endpoint,
           providers: {
             ...loaded.providers,
-            [input.providerId]: { enabled: provider.enabled, models },
+            [input.providerId]: {
+              enabled: provider.enabled,
+              favorite: provider.favorite,
+              models,
+            },
           },
         };
         return commitUserDocument(next, true);

@@ -1,14 +1,20 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { CodexNativeModelSource } from "../../codex-native-seam.js";
 import type {
+  AgentIntegrationAdapter,
+  AgentIntegrationEffect,
+  AgentInjectionScope,
+} from "../agents/contract.js";
+import type { AgentInjectionSnapshot } from "../agents/snapshot.js";
+import type {
   CodexNativeCatalogEntry,
   CodexNativeCatalogSource,
 } from "./native-catalog-source.js";
 
-const STATE_SCHEMA = "luckytoken-codex-integration-v3" as const;
+const STATE_SCHEMA = "luckytoken-codex-integration-v4" as const;
 
 const ROOT_KEYS = [
   "model_provider",
@@ -35,11 +41,14 @@ export type CodexIntegrationAction =
 export interface CodexCatalogBuildResult {
   readonly content: string;
   readonly modelCount: number;
+  /** LuckyToken aliases actually projected, excluding preserved native models. */
+  readonly injectedModelCount: number;
   readonly warnings: readonly string[];
 }
 
 export interface CodexIntegrationProjection {
   readonly desiredEnabled: boolean;
+  readonly scope: AgentInjectionScope;
   readonly observedState: CodexIntegrationObservedState;
   readonly codexHome: string;
   readonly configPath: string;
@@ -54,9 +63,11 @@ export interface CodexIntegrationProjection {
   readonly message?: string;
 }
 
-export interface CodexIntegrationAuthority {
+export interface CodexIntegrationAuthority extends AgentIntegrationAdapter {
+  readonly id: "codex";
   readonly nativeModels: CodexNativeModelSource;
   query(): Promise<CodexIntegrationProjection>;
+  setScope(scope: AgentInjectionScope): Promise<CodexIntegrationProjection>;
   reconcile(action: CodexIntegrationAction): Promise<CodexIntegrationProjection>;
 }
 
@@ -69,9 +80,14 @@ export interface CodexIntegrationAuthorityOptions {
   readonly nativeCatalog: CodexNativeCatalogSource;
   readonly buildCatalog: (
     nativeEntries: readonly CodexNativeCatalogEntry[],
+    scope: AgentInjectionScope,
   ) => Promise<CodexCatalogBuildResult>;
   readonly validateCatalog: (content: string) => Promise<void>;
   readonly restoreTarget?: () => CodexRestoreTarget;
+  readonly projectionFingerprint?: (
+    snapshot: AgentInjectionSnapshot,
+    scope: AgentInjectionScope,
+  ) => Promise<string>;
 }
 
 export interface CodexRestoreTarget {
@@ -85,10 +101,12 @@ type RootValues = CodexRestoreTarget;
 interface IntegrationState {
   readonly schemaVersion: typeof STATE_SCHEMA;
   readonly desiredEnabled: boolean;
+  readonly scope: AgentInjectionScope;
   readonly managed: boolean;
   readonly modelCount?: number;
   readonly warnings?: readonly string[];
   readonly appliedGeneration?: number;
+  readonly appliedScope?: AgentInjectionScope;
 }
 
 interface RootInspection {
@@ -304,7 +322,46 @@ async function atomicWriteIfChanged(path: string, content: string): Promise<bool
 }
 
 function emptyState(): IntegrationState {
-  return { schemaVersion: STATE_SCHEMA, desiredEnabled: false, managed: false };
+  return {
+    schemaVersion: STATE_SCHEMA,
+    desiredEnabled: false,
+    scope: "favorite",
+    managed: false,
+  };
+}
+
+function fallbackFingerprint(
+  snapshot: AgentInjectionSnapshot,
+  scope: AgentInjectionScope,
+): string {
+  const selected = snapshot[scope];
+  const value = selected.length === 0
+    ? { scope, models: [] }
+    : { endpoint: snapshot.endpoint.openaiBaseUrl, scope, models: selected };
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function integrationEffect(
+  projection: CodexIntegrationProjection,
+  restoring = false,
+): AgentIntegrationEffect {
+  const message = projection.message ?? (
+    projection.restartRequired
+      ? restoring
+        ? "Codex configuration restored. Restart Codex to apply the change."
+        : "Codex synced. Restart Codex to load the updated model catalog."
+      : undefined
+  );
+  return Object.freeze({
+    observedState:
+      projection.observedState === "drifted"
+        ? "conflict"
+        : projection.observedState,
+    modelCount: restoring ? 0 : (projection.modelCount ?? 0),
+    warnings: projection.warnings,
+    changed: projection.restartRequired,
+    ...(message === undefined ? {} : { message }),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -341,11 +398,33 @@ async function readState(path: string): Promise<IntegrationState> {
     return Object.freeze({
       schemaVersion: STATE_SCHEMA,
       desiredEnabled: parsed.desiredEnabled,
+      scope: "favorite",
       managed,
+    });
+  }
+  if (parsed.schemaVersion === "luckytoken-codex-integration-v3") {
+    if (
+      typeof parsed.desiredEnabled !== "boolean" ||
+      typeof parsed.managed !== "boolean"
+    ) {
+      return invalidState();
+    }
+    return Object.freeze({
+      schemaVersion: STATE_SCHEMA,
+      desiredEnabled: parsed.desiredEnabled,
+      scope: "favorite",
+      managed: parsed.managed,
+      ...(typeof parsed.modelCount === "number"
+        ? { modelCount: parsed.modelCount }
+        : {}),
+      ...(Array.isArray(parsed.warnings)
+        ? { warnings: Object.freeze([...parsed.warnings] as string[]) }
+        : {}),
     });
   }
   if (parsed.schemaVersion !== STATE_SCHEMA) return emptyState();
   if (typeof parsed.desiredEnabled !== "boolean") return invalidState();
+  if (parsed.scope !== "favorite" && parsed.scope !== "full") return invalidState();
   if (typeof parsed.managed !== "boolean") return invalidState();
   const modelCount = parsed.modelCount;
   if (
@@ -368,16 +447,28 @@ async function readState(path: string): Promise<IntegrationState> {
   ) {
     return invalidState();
   }
+  const appliedScope = parsed.appliedScope;
+  if (
+    appliedScope !== undefined &&
+    appliedScope !== "favorite" &&
+    appliedScope !== "full"
+  ) {
+    return invalidState();
+  }
 
   return Object.freeze({
     schemaVersion: STATE_SCHEMA,
     desiredEnabled: parsed.desiredEnabled,
+    scope: parsed.scope,
     managed: parsed.managed,
     ...(modelCount === undefined ? {} : { modelCount: modelCount as number }),
     ...(warnings === undefined ? {} : { warnings: Object.freeze([...warnings]) }),
     ...(appliedGeneration === undefined
       ? {}
       : { appliedGeneration: appliedGeneration as number }),
+    ...(appliedScope === undefined
+      ? {}
+      : { appliedScope: appliedScope as AgentInjectionScope }),
   });
 }
 
@@ -444,6 +535,7 @@ export function createCodexIntegrationAuthority(
     const desiredGeneration = options.generation?.() ?? 0;
     return Object.freeze({
       desiredEnabled: state.desiredEnabled,
+      scope: state.scope,
       observedState,
       codexHome: options.codexHome,
       configPath,
@@ -458,7 +550,9 @@ export function createCodexIntegrationAuthority(
         : { appliedGeneration: state.appliedGeneration }),
       needsSync:
         state.desiredEnabled &&
-        (!state.managed || state.appliedGeneration !== desiredGeneration),
+        ((!state.managed && state.modelCount !== 0) ||
+          state.appliedGeneration !== desiredGeneration ||
+          state.appliedScope !== state.scope),
       ...(message === undefined ? {} : { message }),
       ...override,
     });
@@ -499,11 +593,38 @@ export function createCodexIntegrationAuthority(
         message: "The Codex model catalog could not be read. No Codex files were changed.",
       });
     }
-    const catalog = await options.buildCatalog(nativeSnapshot.entries);
+    const catalog = await options.buildCatalog(nativeSnapshot.entries, state.scope);
     const warnings = Object.freeze([
       ...nativeSnapshot.warnings,
       ...catalog.warnings,
     ]);
+    if (catalog.injectedModelCount === 0) {
+      let restoredState = state;
+      let restartRequired = false;
+      if (state.managed) {
+        const restored = await restore(state);
+        if (restored.observedState !== "native") return restored;
+        restoredState = await readState(statePath);
+        restartRequired = restored.restartRequired;
+      }
+      const committed: IntegrationState = {
+        ...restoredState,
+        desiredEnabled: true,
+        managed: false,
+        modelCount: 0,
+        warnings,
+        appliedGeneration: syncGeneration,
+        appliedScope: state.scope,
+      };
+      await writeState(committed);
+      currentNativeIds = new Set<string>();
+      const scopeLabel = state.scope === "favorite" ? "Favorite" : "Full";
+      return project(committed, {
+        observedState: "native",
+        restartRequired,
+        message: `Codex is enabled in ${scopeLabel} scope, but no model can be injected.`,
+      });
+    }
     try {
       await options.validateCatalog(catalog.content);
     } catch (error) {
@@ -520,7 +641,7 @@ export function createCodexIntegrationAuthority(
     }
     const committedBeforeApply: IntegrationState = {
       ...state,
-      modelCount: catalog.modelCount,
+      modelCount: catalog.injectedModelCount,
       warnings,
     };
     await writeState(committedBeforeApply);
@@ -556,8 +677,10 @@ export function createCodexIntegrationAuthority(
     currentNativeIds = new Set(nativeSnapshot.entries.map((entry) => entry.slug));
     const committed: IntegrationState = {
       ...committedBeforeApply,
+      desiredEnabled: true,
       managed: true,
       appliedGeneration: syncGeneration,
+      appliedScope: state.scope,
     };
     await writeState(committed);
     return project(committed, {
@@ -662,12 +785,66 @@ export function createCodexIntegrationAuthority(
     return operation;
   };
 
+  const setScope = (
+    scope: AgentInjectionScope,
+  ): Promise<CodexIntegrationProjection> => {
+    const operation = operationQueue.then(async () => {
+      const state = await readState(statePath);
+      if (state.scope === scope) return project(state);
+      const next = { ...state, scope };
+      await writeState(next);
+      return project(next);
+    });
+    operationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  };
+
+  const restoreAdapter = (): Promise<AgentIntegrationEffect> => {
+    const operation = operationQueue.then(async () => {
+      const before = await readState(statePath);
+      const projection = await perform("disable");
+      if (!before.managed) {
+        return Object.freeze({
+          observedState: "native" as const,
+          modelCount: 0,
+          warnings: projection.warnings,
+          changed: false,
+        });
+      }
+      return integrationEffect(projection, true);
+    });
+    operationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  };
+
   return Object.freeze({
+    id: "codex",
     nativeModels,
     query: async () => {
       await operationQueue;
       return project(await readState(statePath));
     },
+    projectionFingerprint: (
+      snapshot: AgentInjectionSnapshot,
+      scope: AgentInjectionScope,
+    ) =>
+      options.projectionFingerprint?.(snapshot, scope) ??
+      Promise.resolve(fallbackFingerprint(snapshot, scope)),
+    inject: async (
+      _snapshot: AgentInjectionSnapshot,
+      scope: AgentInjectionScope,
+    ) => {
+      await setScope(scope);
+      return integrationEffect(await reconcile("enable"));
+    },
+    restore: restoreAdapter,
+    setScope,
     reconcile,
   });
 }

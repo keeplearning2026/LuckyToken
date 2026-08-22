@@ -371,11 +371,13 @@ export interface PublicModelProjection {
   readonly alias: string;
   readonly target: string;
   readonly on: boolean;
+  readonly favorite: boolean;
 }
 
 export interface PublicProviderProjection {
   readonly providerId: string;
   readonly on: boolean;
+  readonly favorite: boolean;
   readonly models: readonly PublicModelProjection[];
 }
 
@@ -407,6 +409,19 @@ export type PublicModelsCommand =
       readonly on: boolean;
     }
   | {
+      readonly command: "set_provider_favorite";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly favorite: boolean;
+    }
+  | {
+      readonly command: "set_model_favorite";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly favorite: boolean;
+    }
+  | {
       readonly command: "rename_model";
       readonly revision: number;
       readonly providerId: string;
@@ -424,6 +439,7 @@ export type PublicModelsCommandOutcome =
   | "ok"
   | "conflict"
   | "invalid"
+  | "limit_exceeded"
   | "unavailable"
   | "storage_failure";
 
@@ -436,45 +452,63 @@ export type PublicModelsCommandHandler = (
   command: PublicModelsCommand,
 ) => Promise<PublicModelsCommandResult>;
 
-/** Codex integration desired state. While active, the Backend-owned authority
- * controls the three Codex routing keys, the projected model catalog, and the
- * Local Native model-identity snapshot. Restoring the integration clears that
- * Local Native snapshot without changing unrelated Provider lanes. */
-export type CodexIntegrationObservedState =
+export type AgentIntegrationId = "codex" | "pi";
+export type AgentInjectionScope = "favorite" | "full";
+export type AgentIntegrationObservedState =
   | "native"
   | "managed"
-  | "drifted"
   | "conflict"
   | "unavailable";
 
-export interface CodexIntegrationProjection {
-  readonly desiredEnabled: boolean;
-  readonly observedState: CodexIntegrationObservedState;
-  readonly codexHome: string;
-  readonly configPath: string;
-  readonly catalogPath: string;
-  readonly endpoint?: string;
-  readonly modelCount?: number;
+export interface AgentIntegrationEffectProjection {
+  readonly observedState: AgentIntegrationObservedState;
+  readonly modelCount: number;
   readonly warnings: readonly string[];
-  readonly restartRequired: boolean;
-  readonly desiredGeneration: number;
-  readonly appliedGeneration?: number;
-  readonly needsSync: boolean;
+  readonly changed: boolean;
   readonly message?: string;
 }
 
-export type CodexIntegrationCommand =
-  | { readonly command: "query" }
-  | { readonly command: "set_enabled"; readonly enabled: boolean }
-  | { readonly command: "sync" };
-
-export interface CodexIntegrationCommandResult {
-  readonly state: CodexIntegrationProjection;
+export interface AgentIntegrationProjection {
+  readonly agentId: AgentIntegrationId;
+  readonly enabled: boolean;
+  readonly scope: AgentInjectionScope;
+  readonly modelCount: number;
+  readonly needsSync: boolean;
 }
 
-export type CodexIntegrationCommandHandler = (
-  command: CodexIntegrationCommand,
-) => Promise<CodexIntegrationCommandResult>;
+export interface AgentIntegrationsState {
+  readonly agents: readonly AgentIntegrationProjection[];
+}
+
+export interface AgentIntegrationOperationResult {
+  readonly agentId: AgentIntegrationId;
+  readonly outcome: "ok" | "failed";
+  readonly effect?: AgentIntegrationEffectProjection;
+}
+
+export type AgentIntegrationsCommand =
+  | { readonly command: "query" }
+  | {
+      readonly command: "set_enabled";
+      readonly agentId: AgentIntegrationId;
+      readonly enabled: boolean;
+    }
+  | {
+      readonly command: "set_scope";
+      readonly agentId: AgentIntegrationId;
+      readonly scope: AgentInjectionScope;
+    }
+  | { readonly command: "sync" };
+
+export interface AgentIntegrationsCommandResult {
+  readonly outcome: "ok" | "partial" | "failed";
+  readonly state: AgentIntegrationsState;
+  readonly results: readonly AgentIntegrationOperationResult[];
+}
+
+export type AgentIntegrationsCommandHandler = (
+  command: AgentIntegrationsCommand,
+) => Promise<AgentIntegrationsCommandResult>;
 
 export type ModelsCommand =
   | { readonly command: "query" }
@@ -1196,9 +1230,9 @@ export interface ControlPlaneClient {
   executePublicModelsCommand(
     command: PublicModelsCommand,
   ): Promise<PublicModelsCommandResult>;
-  executeCodexIntegrationCommand(
-    command: CodexIntegrationCommand,
-  ): Promise<CodexIntegrationCommandResult>;
+  executeAgentIntegrationsCommand(
+    command: AgentIntegrationsCommand,
+  ): Promise<AgentIntegrationsCommandResult>;
   /** Ticket 18: bounded Request Ledger query (newest-first, pageable). */
   getRequestLedger(
     query?: RequestLedgerQuery,

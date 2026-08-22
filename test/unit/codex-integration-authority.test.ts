@@ -12,6 +12,7 @@ import type {
   CodexNativeCatalogEntry,
   CodexNativeCatalogSource,
 } from "../../src/integrations/codex/native-catalog-source.js";
+import type { AgentInjectionSnapshot } from "../../src/integrations/agents/snapshot.js";
 
 const roots: string[] = [];
 
@@ -41,6 +42,7 @@ async function fixture(options: {
   nativeCatalogUnavailable?: boolean;
   routedSlug?: string;
   validateCatalog?: (content: string) => Promise<void>;
+  injectedModelCount?: number;
   restoreTarget?: {
     readonly modelProvider: string | null;
     readonly openaiBaseUrl: string | null;
@@ -58,13 +60,17 @@ async function fixture(options: {
     { slug: "gpt-native", display_name: "GPT Native", base_instructions: "Codex native" },
   ];
   const routedSlug = options.routedSlug ?? "anthropic/claude-opus";
+  const buildScopes: Array<"favorite" | "full" | undefined> = [];
   const buildCatalog = async (
     native: readonly CodexNativeCatalogEntry[],
+    scope?: "favorite" | "full",
   ): Promise<CodexCatalogBuildResult> => ({
+    ...(buildScopes.push(scope), {}),
     content: `${JSON.stringify({
       models: [...native, { slug: routedSlug, display_name: routedSlug }],
     }, null, 2)}\n`,
     modelCount: native.length + 1,
+    injectedModelCount: options.injectedModelCount ?? 1,
     warnings: [],
   });
   const authority = createCodexIntegrationAuthority({
@@ -84,12 +90,24 @@ async function fixture(options: {
         modelCatalogJson: null,
       },
   });
-  return { root, codexHome, stateDirectory, authority };
+  return { root, codexHome, stateDirectory, authority, buildScopes };
 }
 
 function countRootKey(content: string, key: string): number {
   const root = content.split(/^\s*\[/mu, 1)[0] ?? "";
   return root.split(/\r?\n/u).filter((line) => new RegExp(`^\\s*${key}\\s*=`).test(line)).length;
+}
+
+function injectionSnapshot(): AgentInjectionSnapshot {
+  return Object.freeze({
+    endpoint: Object.freeze({
+      origin: "http://127.0.0.1:3000",
+      openaiBaseUrl: "http://127.0.0.1:3000/v1",
+    }),
+    full: Object.freeze([]),
+    favorite: Object.freeze([]),
+    warnings: Object.freeze([]),
+  });
 }
 
 describe("Codex integration authority", () => {
@@ -123,6 +141,7 @@ describe("Codex integration authority", () => {
       buildCatalog: async (native) => ({
         content: `${JSON.stringify({ models: native })}\n`,
         modelCount: native.length,
+        injectedModelCount: 1,
         warnings: [],
       }),
       validateCatalog: async () => undefined,
@@ -179,9 +198,83 @@ describe("Codex integration authority", () => {
     const projection = await fx.authority.query();
 
     expect(projection.desiredEnabled).toBe(false);
+    expect(projection.scope).toBe("favorite");
     expect(projection.observedState).toBe("native");
     expect(fx.authority.nativeModels.has("gpt-native")).toBe(false);
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(before);
+  });
+
+  it("persists Full scope without changing Codex files", async () => {
+    const fx = await fixture();
+    const before = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+
+    const changed = await fx.authority.setScope("full");
+
+    expect(changed.scope).toBe("full");
+    expect(changed.desiredEnabled).toBe(false);
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(before);
+    await expect(fx.authority.query()).resolves.toMatchObject({ scope: "full" });
+  });
+
+  it("builds the Codex catalog with the persisted injection scope", async () => {
+    const fx = await fixture();
+    await fx.authority.setScope("full");
+
+    await fx.authority.reconcile("enable");
+
+    expect(fx.buildScopes).toEqual(["full"]);
+  });
+
+  it("exposes Codex file handling through common inject and restore operations", async () => {
+    const fx = await fixture();
+
+    const injected = await fx.authority.inject(injectionSnapshot(), "full");
+    const restored = await fx.authority.restore();
+
+    expect(fx.authority.id).toBe("codex");
+    expect(fx.buildScopes).toEqual(["full"]);
+    expect(injected).toMatchObject({
+      observedState: "managed",
+      modelCount: 1,
+      changed: true,
+      message: "Codex synced. Restart Codex to load the updated model catalog.",
+    });
+    expect(restored).toMatchObject({
+      observedState: "native",
+      modelCount: 0,
+      message: "Codex configuration restored. Restart Codex to apply the change.",
+    });
+  });
+
+  it("treats restore as successful when Codex has no LuckyToken injection", async () => {
+    const fx = await fixture();
+    await rm(join(fx.codexHome, "config.toml"), { force: true });
+
+    await expect(fx.authority.restore()).resolves.toMatchObject({
+      observedState: "native",
+      modelCount: 0,
+      changed: false,
+    });
+  });
+
+  it("enables Favorite scope without changing Codex files when no model is injectable", async () => {
+    const fx = await fixture({ injectedModelCount: 0 });
+    const before = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+
+    const enabled = await fx.authority.reconcile("enable");
+
+    expect(enabled).toMatchObject({
+      desiredEnabled: true,
+      scope: "favorite",
+      observedState: "native",
+      modelCount: 0,
+      needsSync: false,
+      message: "Codex is enabled in Favorite scope, but no model can be injected.",
+    });
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(before);
+    await expect(readFile(enabled.catalogPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("keeps Enable OFF when Codex injection cannot start", async () => {
@@ -454,6 +547,7 @@ describe("Codex integration authority", () => {
       buildCatalog: async (native) => ({
         content: `${JSON.stringify({ models: native })}\n`,
         modelCount: native.length,
+        injectedModelCount: 1,
         warnings: [],
       }),
       validateCatalog: async () => undefined,

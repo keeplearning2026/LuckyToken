@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Star } from "lucide-react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 
@@ -27,6 +28,7 @@ export interface ProviderModelRow {
   readonly availability: "available" | "unavailable" | "unknown";
   readonly modelName: string;
   readonly on: boolean;
+  readonly favorite: boolean;
 }
 
 interface AuthModalState {
@@ -212,6 +214,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           availability: availabilityByModel.get(model.target) ?? "unavailable",
           modelName,
           on: model.on,
+          favorite: model.favorite,
         });
       }
     }
@@ -430,6 +433,24 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     }
   };
 
+  const setProviderFavorite = async (
+    providerId: string,
+    favorite: boolean,
+  ): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined) return;
+    const result = await api.control.executePublicModels({
+      command: "set_provider_favorite",
+      revision: state.revision,
+      providerId,
+      favorite,
+    });
+    setPublicModels(result);
+    if (result.outcome === "limit_exceeded") {
+      setNotice("You can favorite up to 5 providers.");
+    }
+  };
+
   const setModelOn = async (row: ProviderModelRow, on: boolean): Promise<void> => {
     const state = publicModels?.state;
     if (state === undefined) return;
@@ -441,6 +462,25 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       on,
     });
     setPublicModels(result);
+  };
+
+  const setModelFavorite = async (
+    row: ProviderModelRow,
+    favorite: boolean,
+  ): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined) return;
+    const result = await api.control.executePublicModels({
+      command: "set_model_favorite",
+      revision: state.revision,
+      providerId: row.providerId,
+      modelId: row.modelId,
+      favorite,
+    });
+    setPublicModels(result);
+    if (result.outcome === "limit_exceeded") {
+      setNotice("You can favorite up to 10 models.");
+    }
   };
 
   if (loading) {
@@ -458,12 +498,15 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       provider.name.toLowerCase().includes(normalizedSearch) ||
       provider.providerId.toLowerCase().includes(normalizedSearch),
   );
-  const connected = visible.filter(
-    (provider) => !provider.status.unavailable && !provider.status.expired,
-  );
-  const available = visible.filter(
-    (provider) => provider.status.unavailable || provider.status.expired,
-  );
+  const favoriteFirst = (left: ProviderOption, right: ProviderOption): number =>
+    Number(publicProviderById.get(right.providerId)?.favorite ?? false) -
+    Number(publicProviderById.get(left.providerId)?.favorite ?? false);
+  const connected = visible
+    .filter((provider) => !provider.status.unavailable && !provider.status.expired)
+    .sort(favoriteFirst);
+  const available = visible
+    .filter((provider) => provider.status.unavailable || provider.status.expired)
+    .sort(favoriteFirst);
 
   const selectedModelsProvider =
     modelsProviderId === undefined
@@ -489,6 +532,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     const publishedModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
     const isConnected = !provider.status.unavailable && !provider.status.expired;
     const providerOn = publicProvider?.on ?? false;
+    const providerFavorite = publicProvider?.favorite ?? false;
     const catalogFailed = availability?.state === "failed";
     return (
       <article className="page-card provider-card" key={provider.providerId}>
@@ -498,6 +542,22 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <p className="provider-source">{SOURCE_LABELS[provider.source]}</p>
           </div>
           <div className="provider-title-actions">
+            <button
+              type="button"
+              className={`favorite-button${providerFavorite ? " active" : ""}`}
+              aria-label={`${providerFavorite ? "Unfavorite" : "Favorite"} ${provider.name}`}
+              aria-pressed={providerFavorite}
+              disabled={publicProvider === undefined}
+              onClick={() =>
+                void setProviderFavorite(provider.providerId, !providerFavorite)}
+              title="Favorite providers are pinned within their current group."
+            >
+              <Star
+                size={17}
+                fill={providerFavorite ? "currentColor" : "none"}
+                aria-hidden="true"
+              />
+            </button>
             <span className={`badge ${isConnected ? "good" : "warning"}`}>
               {provider.status.expired
                 ? "Reconnect required"
@@ -805,6 +865,20 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                       <span className={`badge ${row.availability === "available" ? "good" : "neutral"}`}>
                         {row.availability}
                       </span>
+                      <button
+                        type="button"
+                        className={`favorite-button${row.favorite ? " active" : ""}`}
+                        aria-label={`${row.favorite ? "Unfavorite" : "Favorite"} ${row.modelName}`}
+                        aria-pressed={row.favorite}
+                        onClick={() => void setModelFavorite(row, !row.favorite)}
+                        title="Favorite models are included when an Agent uses Favorite scope."
+                      >
+                        <Star
+                          size={17}
+                          fill={row.favorite ? "currentColor" : "none"}
+                          aria-hidden="true"
+                        />
+                      </button>
                       <button
                         type="button"
                         className="provider-publish-toggle"

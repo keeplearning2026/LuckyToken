@@ -128,19 +128,23 @@ async function assertInheritedSandbox(env) {
   const rootValue = env[SANDBOX_ROOT]?.trim();
   const nonce = env[SANDBOX_NONCE]?.trim();
   const codexHomeValue = env.CODEX_HOME?.trim();
-  if (!rootValue || !nonce || !codexHomeValue) {
+  const piAgentDirectoryValue = env.PI_CODING_AGENT_DIR?.trim();
+  if (!rootValue || !nonce || !codexHomeValue || !piAgentDirectoryValue) {
     throw new Error(
       "P0 test isolation breach: inherited Codex sandbox lease is incomplete",
     );
   }
   const resolvedRoot = resolve(rootValue);
   const resolvedCodexHome = resolve(codexHomeValue);
-  const [rootStat, codexHomeStat, root, codexHome, temporaryDirectory] =
+  const resolvedPiAgentDirectory = resolve(piAgentDirectoryValue);
+  const [rootStat, codexHomeStat, piAgentDirectoryStat, root, codexHome, piAgentDirectory, temporaryDirectory] =
     await Promise.all([
       lstat(resolvedRoot),
       lstat(resolvedCodexHome),
+      lstat(resolvedPiAgentDirectory),
       realpath(resolvedRoot),
       realpath(resolvedCodexHome),
+      realpath(resolvedPiAgentDirectory),
       realpath(tmpdir()),
     ]).catch(() => {
       throw new Error(
@@ -150,8 +154,10 @@ async function assertInheritedSandbox(env) {
   if (
     rootStat.isSymbolicLink() ||
     codexHomeStat.isSymbolicLink() ||
+    piAgentDirectoryStat.isSymbolicLink() ||
     !isStrictDescendant(temporaryDirectory, root) ||
-    codexHome !== resolve(join(root, "codex-home"))
+    codexHome !== resolve(join(root, "codex-home")) ||
+    piAgentDirectory !== resolve(join(root, "pi-agent"))
   ) {
     throw new Error(
       "P0 test isolation breach: inherited Codex sandbox paths are invalid",
@@ -253,10 +259,12 @@ async function main() {
     : join(homedir(), ".codex");
   const guardRoot = await mkdtemp(join(tmpdir(), "luckytoken-test-codex-"));
   const sandboxCodexHome = join(guardRoot, "codex-home");
+  const sandboxPiAgentDirectory = join(guardRoot, "pi-agent");
   const sandboxNonce = randomUUID();
 
   try {
     await mkdir(sandboxCodexHome, { recursive: true });
+    await mkdir(sandboxPiAgentDirectory, { recursive: true });
     await writeFile(
       join(guardRoot, SANDBOX_LEASE_FILE),
       sandboxNonce,
@@ -267,6 +275,7 @@ async function main() {
     const result = await run(command, args, {
       ...process.env,
       CODEX_HOME: sandboxCodexHome,
+      PI_CODING_AGENT_DIR: sandboxPiAgentDirectory,
       [SANDBOX_MARKER]: "1",
       [SANDBOX_ROOT]: guardRoot,
       [SANDBOX_NONCE]: sandboxNonce,

@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 
 import type {
+  AgentIntegrationId,
+  AgentInjectionScope,
   DesktopBackendState,
   LuckyTokenDesktopApi,
   RuntimeCommand,
@@ -57,13 +59,14 @@ export function App({ api }: AppProps) {
   const [publicModels, setPublicModels] = useState<Awaited<
     ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
   >>();
-  const [codex, setCodex] = useState<
-    Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeCodexIntegration"]>>["state"]
+  const [agentIntegrations, setAgentIntegrations] = useState<
+    Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeAgentIntegrations"]>>["state"]
   >();
   const [editingPort, setEditingPort] = useState(false);
   const [portDraft, setPortDraft] = useState("");
-  const [codexPending, setCodexPending] = useState(false);
-  const [codexNotice, setCodexNotice] = useState<string>();
+  const [agentsPending, setAgentsPending] = useState(false);
+  const [agentNotice, setAgentNotice] = useState<string>();
+  const [agentWarnings, setAgentWarnings] = useState<readonly string[]>([]);
   const latestRevision = useRef(-1);
 
   useEffect(() => {
@@ -79,11 +82,10 @@ export function App({ api }: AppProps) {
         },
         () => undefined,
       );
-      void api.control.executeCodexIntegration({ command: "query" }).then(
+      void api.control.executeAgentIntegrations({ command: "query" }).then(
         (result) => {
           if (!active) return;
-          setCodex(result.state);
-          if (result.state.message !== undefined) setCodexNotice(result.state.message);
+          setAgentIntegrations(result.state);
         },
         () => undefined,
       );
@@ -122,12 +124,11 @@ export function App({ api }: AppProps) {
       port,
     });
     setPublicModels(result);
-    const codexResult = await api.control
-      .executeCodexIntegration({ command: "query" })
+    const integrationsResult = await api.control
+      .executeAgentIntegrations({ command: "query" })
       .catch(() => undefined);
-    if (codexResult !== undefined) {
-      setCodex(codexResult.state);
-      if (codexResult.state.message !== undefined) setCodexNotice(codexResult.state.message);
+    if (integrationsResult !== undefined) {
+      setAgentIntegrations(integrationsResult.state);
     }
   };
 
@@ -138,49 +139,84 @@ export function App({ api }: AppProps) {
     void setPort(value);
   };
 
-  const toggleCodex = async (): Promise<void> => {
-    if (codexPending) return;
-    const enabling = !(codex?.desiredEnabled ?? false);
-    setCodexPending(true);
+  const showAgentResult = (
+    result: Awaited<
+      ReturnType<LuckyTokenDesktopApi["control"]["executeAgentIntegrations"]>
+    >,
+  ): void => {
+    setAgentIntegrations(result.state);
+    const effects = result.results.flatMap((entry) =>
+      entry.effect === undefined ? [] : [entry.effect],
+    );
+    setAgentWarnings([...new Set(effects.flatMap((effect) => effect.warnings))]);
+    const messages = effects.flatMap((effect) =>
+      effect.message === undefined ? [] : [effect.message],
+    );
+    setAgentNotice(
+      messages.length > 0
+        ? messages.join(" ")
+        : result.outcome === "partial"
+          ? "Some Agent integrations could not be synchronized. Successful Agents were kept."
+          : result.outcome === "failed"
+            ? "Agent integration update failed. Existing Agent files were preserved."
+            : undefined,
+    );
+  };
+
+  const toggleAgent = async (agentId: AgentIntegrationId): Promise<void> => {
+    if (agentsPending) return;
+    const current = agentIntegrations?.agents.find((agent) => agent.agentId === agentId);
+    if (current === undefined) return;
+    const enabling = !current.enabled;
+    setAgentsPending(true);
     try {
-      const result = await api.control.executeCodexIntegration({
+      const result = await api.control.executeAgentIntegrations({
         command: "set_enabled",
+        agentId,
         enabled: enabling,
       });
-      setCodex(result.state);
-      setCodexNotice(
-        result.state.restartRequired
-          ? enabling
-            ? "Codex synced. Restart Codex to load the updated model catalog."
-            : "Codex configuration restored. Restart Codex to apply the change."
-          : result.state.message,
-      );
+      showAgentResult(result);
     } catch {
-      setCodexNotice(
-        enabling
-          ? "Codex sync failed. No Codex files were changed."
-          : "Codex configuration could not be restored. The integration remains enabled.",
+      setAgentNotice(
+        `${agentId === "codex" ? "Codex" : "Pi"} integration update failed. Existing Agent files were preserved.`,
       );
     } finally {
-      setCodexPending(false);
+      setAgentsPending(false);
     }
   };
 
-  const syncCodex = async (): Promise<void> => {
-    if (codexPending || codex?.desiredEnabled !== true) return;
-    setCodexPending(true);
+  const setAgentScope = async (
+    agentId: AgentIntegrationId,
+    scope: AgentInjectionScope,
+  ): Promise<void> => {
+    if (agentsPending) return;
+    setAgentsPending(true);
     try {
-      const result = await api.control.executeCodexIntegration({ command: "sync" });
-      setCodex(result.state);
-      setCodexNotice(
-        result.state.restartRequired
-          ? "Codex synced. Restart Codex to load the updated model catalog."
-          : result.state.message,
+      showAgentResult(
+        await api.control.executeAgentIntegrations({
+          command: "set_scope",
+          agentId,
+          scope,
+        }),
       );
     } catch {
-      setCodexNotice("Codex sync failed. No Codex files were changed.");
+      setAgentNotice("The Agent injection scope could not be saved.");
     } finally {
-      setCodexPending(false);
+      setAgentsPending(false);
+    }
+  };
+
+  const syncAgents = async (): Promise<void> => {
+    if (agentsPending) return;
+    setAgentsPending(true);
+    try {
+      showAgentResult(
+        await api.control.executeAgentIntegrations({ command: "sync" }),
+      );
+    } catch {
+      setAgentNotice("Agent synchronization failed. Existing Agent files were preserved.");
+    } finally {
+      setAgentsPending(false);
     }
   };
 
@@ -190,6 +226,12 @@ export function App({ api }: AppProps) {
   const endpointText = endpoint === undefined
     ? status?.dataPlane?.configuredOrigin?.replace(/^https?:\/\//u, "") ?? "-"
     : `${endpoint.host}:${endpoint.port}`;
+  const codex = agentIntegrations?.agents.find((agent) => agent.agentId === "codex");
+  const pi = agentIntegrations?.agents.find((agent) => agent.agentId === "pi");
+  const anyAgentEnabled = agentIntegrations?.agents.some((agent) => agent.enabled) ?? false;
+  const anyAgentDirty = agentIntegrations?.agents.some(
+    (agent) => agent.enabled && agent.needsSync,
+  ) ?? false;
 
   return (
     <div className="product-shell">
@@ -250,30 +292,67 @@ export function App({ api }: AppProps) {
             )}
           </div>
 
-          <div className="toolbar-group codex-controls" aria-label="Codex integration controls">
-            <img className="codex-mark" src={codexMark} alt="" aria-hidden="true" />
+          <div className="toolbar-group agent-controls" aria-label="Agent integration controls">
             <button
               type="button"
-              role="switch"
-              className={`codex-toggle${codex?.desiredEnabled ? " active" : ""}`}
-              aria-label={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
-              aria-checked={codex?.desiredEnabled ?? false}
-              disabled={codexPending || codex === undefined}
-              onClick={() => void toggleCodex()}
-              title={codex?.desiredEnabled ? "Disable Codex integration" : "Enable Codex integration"}
+              className={`agent-icon-button${codex?.enabled ? " active" : ""}`}
+              aria-label={codex?.enabled ? "Disable Codex integration" : "Enable Codex integration"}
+              aria-pressed={codex?.enabled ?? false}
+              disabled={agentsPending || codex === undefined}
+              onClick={() => void toggleAgent("codex")}
+              title={codex?.enabled ? "Disable Codex integration" : "Enable Codex integration"}
             >
-              <span className="codex-toggle-thumb" aria-hidden="true" />
+              <img className="codex-mark" src={codexMark} alt="" aria-hidden="true" />
             </button>
+            <select
+              className="agent-scope-select"
+              aria-label="Codex injection scope"
+              value={codex?.scope ?? "favorite"}
+              disabled={agentsPending || codex === undefined}
+              onChange={(event) =>
+                void setAgentScope(
+                  "codex",
+                  event.currentTarget.value as AgentInjectionScope,
+                )}
+            >
+              <option value="favorite">Favorite</option>
+              <option value="full">Full</option>
+            </select>
             <button
               type="button"
-              className={`toolbar-icon-button codex-sync${codex?.needsSync ? " dirty" : ""}`}
-              aria-label="Sync Codex"
-              disabled={codexPending || codex?.desiredEnabled !== true}
-              onClick={() => void syncCodex()}
-              title={codex?.needsSync ? "Sync Codex changes" : "Codex is synchronized"}
+              className={`agent-icon-button pi-mark${pi?.enabled ? " active" : ""}`}
+              aria-label={pi?.enabled ? "Disable Pi integration" : "Enable Pi integration"}
+              aria-pressed={pi?.enabled ?? false}
+              disabled={agentsPending || pi === undefined}
+              onClick={() => void toggleAgent("pi")}
+              title={pi?.enabled ? "Disable Pi integration" : "Enable Pi integration"}
+            >
+              <span aria-hidden="true">π</span>
+            </button>
+            <select
+              className="agent-scope-select"
+              aria-label="Pi injection scope"
+              value={pi?.scope ?? "favorite"}
+              disabled={agentsPending || pi === undefined}
+              onChange={(event) =>
+                void setAgentScope(
+                  "pi",
+                  event.currentTarget.value as AgentInjectionScope,
+                )}
+            >
+              <option value="favorite">Favorite</option>
+              <option value="full">Full</option>
+            </select>
+            <button
+              type="button"
+              className={`toolbar-icon-button agent-sync${anyAgentDirty ? " dirty" : ""}`}
+              aria-label="Sync Agent integrations"
+              disabled={agentsPending || !anyAgentEnabled}
+              onClick={() => void syncAgents()}
+              title={anyAgentDirty ? "Sync Agent changes" : "Enabled Agents are synchronized"}
             >
               <RefreshCw size={18} strokeWidth={1.8} aria-hidden="true" />
-              {codex?.needsSync ? <span className="sync-needed" aria-hidden="true" /> : null}
+              {anyAgentDirty ? <span className="sync-needed" aria-hidden="true" /> : null}
             </button>
           </div>
 
@@ -309,14 +388,14 @@ export function App({ api }: AppProps) {
       </header>
 
       <main className="product-content">
-        {codexNotice === undefined ? null : (
-          <div className="codex-notice" role="status" aria-live="polite">
-            {codexNotice}
+        {agentNotice === undefined ? null : (
+          <div className="agent-notice" role="status" aria-live="polite">
+            {agentNotice}
           </div>
         )}
-        {codex === undefined || codex.warnings.length === 0 ? null : (
-          <ul className="codex-warnings" aria-label="Codex integration warnings">
-            {codex.warnings.map((warning) => (
+        {agentWarnings.length === 0 ? null : (
+          <ul className="agent-warnings" aria-label="Agent integration warnings">
+            {agentWarnings.map((warning) => (
               <li key={warning}>{warning}</li>
             ))}
           </ul>

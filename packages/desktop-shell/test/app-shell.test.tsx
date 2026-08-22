@@ -286,7 +286,7 @@ describe("desktop command-router shell", () => {
     expect(container.textContent).toContain("Stopped");
   });
 
-  it("edits only the port value and reports when Codex sync needs a restart", async () => {
+  it("edits only the port and provides two icon toggles, two scopes, and one shared sync", async () => {
     let publicState = {
       outcome: "ok" as const,
       state: {
@@ -296,18 +296,23 @@ describe("desktop command-router shell", () => {
         providers: [],
       },
     };
-    let codexState = {
-      desiredEnabled: true,
-      observedState: "managed" as const,
-      codexHome: "C:\\Users\\test\\.codex",
-      configPath: "C:\\Users\\test\\.codex\\config.toml",
-      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
-      endpoint: "http://127.0.0.1:4317/v1",
-      warnings: [] as string[],
-      restartRequired: false,
-      desiredGeneration: 8,
-      appliedGeneration: 7,
-      needsSync: true,
+    let integrationsState = {
+      agents: [
+        {
+          agentId: "codex" as const,
+          enabled: true,
+          scope: "favorite" as const,
+          modelCount: 1,
+          needsSync: true,
+        },
+        {
+          agentId: "pi" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+      ],
     };
     const executePublicModels = vi.fn(async (command) => {
       if (command.command === "set_port") {
@@ -320,32 +325,52 @@ describe("desktop command-router shell", () => {
             endpoint: { ...publicState.state.endpoint, port: command.port },
           },
         };
-        codexState = {
-          ...codexState,
-          desiredGeneration: publicState.state.version,
-          needsSync: true,
+        integrationsState = {
+          agents: integrationsState.agents.map((agent) =>
+            agent.agentId === "codex" ? { ...agent, needsSync: true } : agent,
+          ),
         };
       }
       return publicState;
     });
-    const executeCodexIntegration = vi.fn(async (command) => {
+    const executeAgentIntegrations = vi.fn(async (command) => {
       if (command.command === "sync") {
-        codexState = {
-          ...codexState,
-          appliedGeneration: codexState.desiredGeneration,
-          needsSync: false,
-          restartRequired: true,
-          warnings: ["A malformed native Codex model entry was skipped."],
+        integrationsState = {
+          agents: integrationsState.agents.map((agent) => ({
+            ...agent,
+            needsSync: false,
+          })),
+        };
+        return {
+          outcome: "ok" as const,
+          state: integrationsState,
+          results: [
+            {
+              agentId: "codex" as const,
+              outcome: "ok" as const,
+              effect: {
+                observedState: "managed" as const,
+                modelCount: 1,
+                warnings: ["A malformed native Codex model entry was skipped."],
+                changed: true,
+                message: "Codex synced. Restart Codex to load the updated model catalog.",
+              },
+            },
+          ],
         };
       }
-      return { state: codexState };
+      return {
+        outcome: "ok" as const,
+        state: integrationsState,
+        results: [],
+      };
     });
     const api = createFakeDesktopApi({
       control: {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
         executePublicModels,
-        executeCodexIntegration,
+        executeAgentIntegrations,
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,
         getAnalytics: async (query) =>
@@ -408,14 +433,22 @@ describe("desktop command-router shell", () => {
       port: 5000,
     });
 
-    const toggle = container.querySelector('button[aria-label="Disable Codex integration"]');
-    const sync = container.querySelector('button[aria-label="Sync Codex"]');
-    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    const codexToggle = container.querySelector('button[aria-label="Disable Codex integration"]');
+    const piToggle = container.querySelector('button[aria-label="Enable Pi integration"]');
+    const sync = container.querySelector('button[aria-label="Sync Agent integrations"]');
+    expect(codexToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(piToggle).toBeInstanceOf(HTMLButtonElement);
     expect(sync).toBeInstanceOf(HTMLButtonElement);
-    expect(toggle?.getAttribute("role")).toBe("switch");
+    expect(codexToggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(piToggle?.getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".codex-mark")).toBeInstanceOf(HTMLImageElement);
+    expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeInstanceOf(
+      HTMLSelectElement,
+    );
+    expect(container.querySelector('select[aria-label="Pi injection scope"]')).toBeInstanceOf(
+      HTMLSelectElement,
+    );
     expect(sync?.classList.contains("dirty")).toBe(true);
-    expect(toggle?.textContent).toBe("");
     expect(sync?.querySelector("svg")).not.toBeNull();
 
     await act(async () => {
@@ -423,8 +456,8 @@ describe("desktop command-router shell", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(executeCodexIntegration).toHaveBeenCalledWith({ command: "sync" });
-    expect(container.querySelector('button[aria-label="Sync Codex"]')?.classList.contains("dirty")).toBe(false);
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "sync" });
+    expect(container.querySelector('button[aria-label="Sync Agent integrations"]')?.classList.contains("dirty")).toBe(false);
     expect(container.textContent).toContain(
       "Codex synced. Restart Codex to load the updated model catalog.",
     );
@@ -433,29 +466,34 @@ describe("desktop command-router shell", () => {
     );
   });
 
-  it("shows a visible failure when the Codex sync request rejects", async () => {
-    const codexState = {
-      desiredEnabled: true,
-      observedState: "managed" as const,
-      codexHome: "C:\\Users\\test\\.codex",
-      configPath: "C:\\Users\\test\\.codex\\config.toml",
-      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
-      endpoint: "http://127.0.0.1:4317/v1",
-      warnings: [],
-      restartRequired: false,
-      desiredGeneration: 1,
-      appliedGeneration: 1,
-      needsSync: false,
+  it("shows a visible failure when the shared Agent sync request rejects", async () => {
+    const integrationsState = {
+      agents: [
+        {
+          agentId: "codex" as const,
+          enabled: true,
+          scope: "favorite" as const,
+          modelCount: 1,
+          needsSync: false,
+        },
+        {
+          agentId: "pi" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+      ],
     };
-    const executeCodexIntegration = vi.fn(async (command) => {
+    const executeAgentIntegrations = vi.fn(async (command) => {
       if (command.command === "sync") throw new Error("transport closed");
-      return { state: codexState };
+      return { outcome: "ok" as const, state: integrationsState, results: [] };
     });
     const api = createFakeDesktopApi({
       control: {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
-        executeCodexIntegration,
+        executeAgentIntegrations,
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,
       },
@@ -463,7 +501,7 @@ describe("desktop command-router shell", () => {
 
     await act(async () => root.render(<App api={api} />));
     await flush();
-    const sync = container.querySelector('button[aria-label="Sync Codex"]');
+    const sync = container.querySelector('button[aria-label="Sync Agent integrations"]');
     if (!(sync instanceof HTMLButtonElement)) throw new Error("sync button missing");
     await act(async () => {
       sync.click();
@@ -472,31 +510,54 @@ describe("desktop command-router shell", () => {
     });
 
     expect(container.textContent).toContain(
-      "Codex sync failed. No Codex files were changed.",
+      "Agent synchronization failed. Existing Agent files were preserved.",
     );
     expect(sync.disabled).toBe(false);
   });
 
-  it("shows the Codex authority message returned by the initial query", async () => {
+  it("shows the Agent adapter message returned by a failed icon toggle", async () => {
+    const state = {
+      agents: [
+        {
+          agentId: "codex" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+        {
+          agentId: "pi" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+      ],
+    };
     const api = createFakeDesktopApi({
       control: {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
-        executeCodexIntegration: async () => ({
-          state: {
-            desiredEnabled: false,
-            observedState: "unavailable",
-            codexHome: "C:\\Users\\test\\.codex",
-            configPath: "C:\\Users\\test\\.codex\\config.toml",
-            catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
-            endpoint: "http://127.0.0.1:4317/v1",
-            warnings: [],
-            restartRequired: false,
-            desiredGeneration: 1,
-            needsSync: false,
-            message: "Codex config.toml was not found.",
-          },
-        }),
+        executeAgentIntegrations: async (command) =>
+          command.command === "set_enabled"
+            ? {
+                outcome: "failed",
+                state,
+                results: [
+                  {
+                    agentId: "codex",
+                    outcome: "failed",
+                    effect: {
+                      observedState: "unavailable",
+                      modelCount: 0,
+                      warnings: [],
+                      changed: false,
+                      message: "Codex config.toml was not found.",
+                    },
+                  },
+                ],
+              }
+            : { outcome: "ok", state, results: [] },
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,
       },
@@ -504,40 +565,70 @@ describe("desktop command-router shell", () => {
 
     await act(async () => root.render(<App api={api} />));
     await flush();
+    const toggle = container.querySelector('button[aria-label="Enable Codex integration"]');
+    if (!(toggle instanceof HTMLButtonElement)) throw new Error("Codex icon missing");
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
     expect(container.textContent).toContain("Codex config.toml was not found.");
   });
 
   it("reports that Codex must restart after the integration is restored", async () => {
-    let codexState = {
-      desiredEnabled: true,
-      observedState: "managed" as "managed" | "native",
-      codexHome: "C:\\Users\\test\\.codex",
-      configPath: "C:\\Users\\test\\.codex\\config.toml",
-      catalogPath: "C:\\Users\\test\\.codex\\luckytoken-model-catalog.json",
-      endpoint: "http://127.0.0.1:4317/v1",
-      warnings: [],
-      restartRequired: false,
-      desiredGeneration: 1,
-      appliedGeneration: 1,
-      needsSync: false,
+    let state = {
+      agents: [
+        {
+          agentId: "codex" as const,
+          enabled: true,
+          scope: "favorite" as const,
+          modelCount: 1,
+          needsSync: false,
+        },
+        {
+          agentId: "pi" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+      ],
     };
-    const executeCodexIntegration = vi.fn(async (command) => {
+    const executeAgentIntegrations = vi.fn(async (command) => {
       if (command.command === "set_enabled" && !command.enabled) {
-        codexState = {
-          ...codexState,
-          desiredEnabled: false,
-          observedState: "native",
-          restartRequired: true,
+        state = {
+          agents: state.agents.map((agent) =>
+            agent.agentId === "codex"
+              ? { ...agent, enabled: false, modelCount: 0 }
+              : agent,
+          ),
+        };
+        return {
+          outcome: "ok" as const,
+          state,
+          results: [
+            {
+              agentId: "codex" as const,
+              outcome: "ok" as const,
+              effect: {
+                observedState: "native" as const,
+                modelCount: 0,
+                warnings: [],
+                changed: true,
+                message: "Codex configuration restored. Restart Codex to apply the change.",
+              },
+            },
+          ],
         };
       }
-      return { state: codexState };
+      return { outcome: "ok" as const, state, results: [] };
     });
     const api = createFakeDesktopApi({
       control: {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
-        executeCodexIntegration,
+        executeAgentIntegrations,
         getRequestLedger: async () => ({ records: [], hasMore: false }),
         onRequestLedger: () => () => undefined,
       },

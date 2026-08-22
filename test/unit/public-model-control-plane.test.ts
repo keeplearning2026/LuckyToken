@@ -54,11 +54,13 @@ describe("Public Models Control Plane", () => {
       {
         providerId: "anthropic",
         on: true,
+        favorite: false,
         models: [
           {
             alias: "anthropic/claude-opus",
             target: "claude/opus",
             on: true,
+            favorite: false,
           },
         ],
       },
@@ -73,5 +75,15 @@ describe("Public Models Control Plane", () => {
     });
     expect(changed.outcome).toBe("ok");
     expect(changed.state.providers[0]?.models[0]?.on).toBe(false);
+
+    const favorited = await handle({
+      command: "set_model_favorite",
+      revision: changed.state.revision,
+      providerId: "anthropic",
+      modelId: "claude/opus",
+      favorite: true,
+    });
+    expect(favorited.outcome).toBe("ok");
+    expect(favorited.state.providers[0]?.models[0]?.favorite).toBe(true);
   });
 });

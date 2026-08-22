@@ -39,8 +39,8 @@ import {
   type AuthInteractionResponse,
   type CatalogCommand,
   type CatalogCommandResult,
-  type CodexIntegrationCommand,
-  type CodexIntegrationCommandResult,
+  type AgentIntegrationsCommand,
+  type AgentIntegrationsCommandResult,
   type CredentialCommand,
   type CredentialCommandResult,
   type ControlPlaneClient,
@@ -63,7 +63,7 @@ import type { PipeConnector } from "./pipe-transport.js";
 import {
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
-  decodeCodexIntegrationCommandResult,
+  decodeAgentIntegrationsCommandResult,
   decodeCredentialCommandResult,
   decodePublicModelsCommandResult,
   decodeRequestId,
@@ -499,17 +499,17 @@ export async function connectApplicationControlPlane(
       }
       return result;
     },
-    async executeCodexIntegrationCommand(
-      command: CodexIntegrationCommand,
-    ): Promise<CodexIntegrationCommandResult> {
+    async executeAgentIntegrationsCommand(
+      command: AgentIntegrationsCommand,
+    ): Promise<AgentIntegrationsCommandResult> {
       const response = await request({
-        type: "codex_integration_command",
+        type: "agent_integrations_command",
         command,
       });
-      if (response.type !== "codex_integration_command_result") {
+      if (response.type !== "agent_integrations_command_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeCodexIntegrationCommandResult(response.result);
+      const result = decodeAgentIntegrationsCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

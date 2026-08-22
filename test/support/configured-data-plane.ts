@@ -249,6 +249,7 @@ function directPublicModels(
       }
     },
     publishedModels: () => published,
+    favoriteModels: () => [],
   });
   return Object.freeze({ requestSnapshot: async () => snapshot });
 }

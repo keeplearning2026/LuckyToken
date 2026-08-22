@@ -1,8 +1,8 @@
-# LuckyToken Codex Model Catalog Specification v1.0
+# LuckyToken Codex Model Catalog Specification v1.1
 
 **Status:** IMPLEMENTED / VALIDATED ON CODEX 0.149.0
 
-**Date:** 2026-08-21
+**Date:** 2026-08-22
 
 **Observed Codex runtime:** `codex-cli 0.149.0`
 
@@ -45,7 +45,7 @@ Use the narrowest authority that owns each fact:
 | --- | --- |
 | Fields and enum values accepted by the installed Codex parser | The exact installed runtime, exercised through `codex debug models` and `codex debug prompt-input` |
 | Native Codex rows and current Codex reasoning descriptions | `codex debug models --bundled`; read-only `models_cache.json` remains the existing fallback when bundled discovery is unavailable |
-| Routed identity and callability | LuckyToken Public Model alias snapshot and resolved Pi `Models` collection |
+| Routed identity and callability | The selected LuckyToken Agent injection scope and resolved Pi `Models` collection |
 | Input modalities and context window | The resolved Pi `Model` |
 | Routable reasoning controls | Pi `getSupportedThinkingLevels(model)` and `Model.thinkingLevelMap`, intersected with the installed Codex vocabulary |
 | Tool/search/verbosity/summary behavior | LuckyToken's OpenAI Responses request/response implementation and end-to-end tests |
@@ -58,7 +58,8 @@ No reference project is authoritative for LuckyToken. Reference implementations 
 
 - [LuckyToken catalog generator](../../src/integrations/codex/catalog.ts) projects native rows plus callable aliases.
 - [Native catalog source](../../src/integrations/codex/native-catalog-source.ts) invokes `codex debug models --bundled` first and reads `models_cache.json` only as a fallback; it never reconstructs native identity from Pi.
-- [Codex integration authority](../../src/integrations/codex/integration.ts) owns the three root keys and the LuckyToken catalog path.
+- [Codex integration authority](../../src/integrations/codex/integration.ts) owns how the three root keys and LuckyToken catalog path are injected and restored.
+- [Agent integration coordinator](../../src/integrations/agents/coordinator.ts) owns when Codex and Pi inject or restore, their enabled state, and their selected scope.
 - [Codex catalog tests](../../test/unit/codex-catalog.test.ts) currently cover native-row preservation, alias identity, collisions, unavailable targets, and the one-slash boundary.
 - [Native source tests](../../test/unit/codex-native-catalog-source.test.ts) cover installed-runtime discovery and the read-only cache fallback.
 - [CommandCode model capabilities](../../packages/commandcode-model-catalog/src/index.ts) contain per-model context, modalities, reasoning status, and reasoning-effort data without volatile pricing. Private and Goat project those facts into their own Pi Model identities. For example, DeepSeek V4 Flash exposes `high/max`, Qwen 3.8 Max exposes `low/medium/xhigh`, Grok 4.5 exposes `low/medium/high`, and GPT-5.6 Luna exposes `low/medium/high/xhigh/max`.
@@ -250,7 +251,7 @@ LuckyToken must never write or invalidate `models_cache.json` under this contrac
 
 ### 6.2 Routed rows
 
-Only an explicit, currently callable Public Model alias is emitted. The order is deterministic:
+Only an explicit alias from the selected injection scope whose target still exists in the resolved Pi `Models` collection is emitted. `Full` selects published models; `Favorite` selects favorite models independently of publication. Favorite status affects Agent injection only and never changes `/v1/models` or model acceptance. The order is deterministic:
 
 1. preserved native rows in native-source order;
 2. callable aliases sorted by alias;
@@ -277,7 +278,7 @@ Generation is deterministic and the LuckyToken-owned file is atomically rewritte
 
 **Proposed sequence:**
 
-1. Resolve the current LuckyToken endpoint, Public Model generation, native snapshot, and routed entries.
+1. Resolve the current LuckyToken endpoint, selected `Favorite` or `Full` scope, Public Model generation, native snapshot, and routed entries.
 2. Build candidate catalog bytes without changing Codex files.
 3. Run the parser and prompt-input gates in section 8 against the candidate.
 4. If either gate fails, report failure and leave `config.toml` and the published catalog unchanged.

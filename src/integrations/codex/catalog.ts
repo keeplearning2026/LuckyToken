@@ -188,6 +188,7 @@ export function buildCodexCatalog(
   const aliases = [...options.aliases].sort((a, b) =>
     a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0,
   );
+  let injectedModelCount = 0;
   for (const entry of aliases) {
     if (nativeIds.has(entry.alias)) {
       warnings.push(
@@ -225,12 +226,14 @@ export function buildCodexCatalog(
         reasoningLevels,
       ),
     );
+    injectedModelCount += 1;
     nextRoutedPriority += 1;
   }
 
   return Object.freeze({
     content: `${JSON.stringify({ models: entries }, null, 2)}\n`,
     modelCount: entries.length,
+    injectedModelCount,
     warnings: Object.freeze(warnings),
   });
 }

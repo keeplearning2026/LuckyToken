@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -107,6 +107,9 @@ import {
   type CodexCatalogValidator,
 } from "./integrations/codex/catalog-validator.js";
 import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
+import { createAgentInjectionSnapshot } from "./integrations/agents/snapshot.js";
+import { createAgentIntegrationCoordinator } from "./integrations/agents/coordinator.js";
+import { createPiIntegrationAdapter } from "./integrations/pi/adapter.js";
 import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
 
 export type ApplicationOwnerKind = "cli" | "desktop";
@@ -455,7 +458,7 @@ async function startNormalApplication(options: {
   let publicModelAuthorityForCleanup:
     | ReturnType<typeof createPublicModelAuthority>
     | undefined;
-  let restoreCodexForCleanup: (() => Promise<void>) | undefined;
+  let restoreAgentsForCleanup: (() => Promise<void>) | undefined;
   let lastPublishedStatus: ApplicationStatus = Object.freeze({
     modelDataPlane: "stopped",
     provider: "unconfigured",
@@ -477,7 +480,7 @@ async function startNormalApplication(options: {
       failures.push(error);
     }
     attentionLedgerSubscription = undefined;
-    await restoreCodexForCleanup?.().catch((error: unknown) => failures.push(error));
+    await restoreAgentsForCleanup?.().catch((error: unknown) => failures.push(error));
     if (supervisor !== undefined) {
       await supervisor
         .execute(
@@ -751,6 +754,12 @@ async function startNormalApplication(options: {
       if (normalized === "::1" || normalized === "[::1]") return "[::1]";
       return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
     };
+    const agentSnapshot = async () =>
+      createAgentInjectionSnapshot({
+        publicModels: publicModelAuthority.snapshot(),
+        models: providerRuntime.models,
+      });
+    const codexNativeCatalog = createCodexNativeCatalogSource({ codexHome });
     const codexIntegrationAuthority = createCodexIntegrationAuthority({
       codexHome,
       stateDirectory: join(dirname(options.configPath), "integrations", "codex"),
@@ -759,25 +768,45 @@ async function startNormalApplication(options: {
         return `http://${codexDialHost(address.host)}:${address.port}/v1`;
       },
       generation: () => publicModelAuthority.snapshot().version,
-      nativeCatalog: createCodexNativeCatalogSource({ codexHome }),
+      nativeCatalog: codexNativeCatalog,
       validateCatalog:
         options.codexCatalogValidator?.validate ??
         createCodexCatalogValidator({ codexHome }).validate,
-      buildCatalog: async (nativeCatalogEntries) => {
+      buildCatalog: async (nativeCatalogEntries, scope) => {
+        const snapshot = await agentSnapshot();
         return buildCodexCatalog({
           nativeCatalogEntries,
           models: providerRuntime.models,
-          aliases: publicModelAuthority
-            .snapshot()
-            .publishedModels()
-            .map((entry) => ({
+          aliases: snapshot[scope].map((entry) => ({
               alias: entry.alias,
-              target: {
-                providerId: entry.providerId,
-                modelId: entry.modelId,
-              },
+              target: entry.target,
             })),
         });
+      },
+      projectionFingerprint: async (snapshot, scope) => {
+        const native = await codexNativeCatalog.load();
+        if (native.source === "unavailable") {
+          return createHash("sha256")
+            .update(`codex-unavailable:${scope}`)
+            .digest("hex");
+        }
+        const catalog = buildCodexCatalog({
+          nativeCatalogEntries: native.entries,
+          models: providerRuntime.models,
+          aliases: snapshot[scope].map((entry) => ({
+            alias: entry.alias,
+            target: entry.target,
+          })),
+        });
+        const actualOutput = catalog.injectedModelCount === 0
+          ? { kind: "empty" }
+          : {
+              endpoint: snapshot.endpoint.openaiBaseUrl,
+              catalog: catalog.content,
+            };
+        return createHash("sha256")
+          .update(JSON.stringify(actualOutput))
+          .digest("hex");
       },
       restoreTarget: () => {
         const configured = settingsRegistry.query([
@@ -796,10 +825,31 @@ async function startNormalApplication(options: {
         });
       },
     });
-    const restoreCodexBeforeShutdown = async (): Promise<void> => {
-      await codexIntegrationAuthority.reconcile("shutdown");
+    const piAgentDirectoryOverride = process.env.PI_CODING_AGENT_DIR?.trim();
+    const piIntegrationAdapter = createPiIntegrationAdapter({
+      agentDirectory:
+        piAgentDirectoryOverride === undefined || piAgentDirectoryOverride.length === 0
+          ? join(homedir(), ".pi", "agent")
+          : resolve(piAgentDirectoryOverride),
+      stateDirectory: join(dirname(options.configPath), "integrations", "pi"),
+    });
+    const previousCodexState = await codexIntegrationAuthority.query();
+    const agentIntegrations = createAgentIntegrationCoordinator({
+      stateDirectory: join(dirname(options.configPath), "integrations"),
+      snapshot: agentSnapshot,
+      adapters: [codexIntegrationAuthority, piIntegrationAdapter],
+      defaults: {
+        codex: {
+          enabled: previousCodexState.desiredEnabled,
+          scope: previousCodexState.scope,
+        },
+        pi: { enabled: false, scope: "favorite" },
+      },
+    });
+    const restoreAgentsBeforeShutdown = async (): Promise<void> => {
+      await agentIntegrations.shutdown();
     };
-    restoreCodexForCleanup = restoreCodexBeforeShutdown;
+    restoreAgentsForCleanup = restoreAgentsBeforeShutdown;
 
     const historyAuthority = createHistoryAuthority({
       sources: {
@@ -929,11 +979,11 @@ async function startNormalApplication(options: {
           }
           if (!dataPlaneStartedOnce) {
             try {
-              await restoreCodexBeforeShutdown();
+              await restoreAgentsBeforeShutdown();
             } catch (restoreError) {
               throw new AggregateError(
                 [startupError, restoreError],
-                "LuckyToken model gateway startup failed and Codex integration could not be restored",
+                "LuckyToken model gateway startup failed and Agent integrations could not be restored",
               );
             }
           }
@@ -975,7 +1025,7 @@ async function startNormalApplication(options: {
         now: Date.now,
         requireInitialClaim: true,
         onExpired: async () => {
-          await restoreCodexBeforeShutdown();
+          await restoreAgentsBeforeShutdown();
           const outcome = await supervisor?.quit({
             timeoutMs: drainTimeoutMs(),
             publishStatus: publish,
@@ -1085,30 +1135,50 @@ async function startNormalApplication(options: {
         });
       },
       publicModelsCommandHandler,
-      codexIntegrationCommandHandler: async (command) => {
-        const injectsCodex =
+      agentIntegrationsCommandHandler: async (command) => {
+        const injectsAgents =
           command.command === "sync" ||
           (command.command === "set_enabled" && command.enabled);
-        if (injectsCodex && lastPublishedStatus.modelDataPlane !== "running") {
-          const current = await codexIntegrationAuthority.query();
+        if (injectsAgents && lastPublishedStatus.modelDataPlane !== "running") {
+          const state = await agentIntegrations.query();
+          const targetIds = command.command === "set_enabled"
+            ? [command.agentId]
+            : state.agents
+                .filter((agent) => agent.enabled)
+                .map((agent) => agent.agentId);
           return {
-            state: Object.freeze({
-              ...current,
-              observedState: "unavailable" as const,
-              message:
-                "Start the Data Plane before syncing Codex. No Codex files were changed.",
-            }),
+            outcome: "failed" as const,
+            state,
+            results: Object.freeze(
+              targetIds.map((agentId) => Object.freeze({
+                agentId,
+                outcome: "failed" as const,
+                effect: Object.freeze({
+                  observedState: "unavailable" as const,
+                  modelCount: 0,
+                  warnings: Object.freeze([]),
+                  changed: false,
+                  message:
+                    "Start the Data Plane before syncing Agent integrations. No Agent files were changed.",
+                }),
+              })),
+            ),
           };
         }
-        const state =
-          command.command === "query"
-            ? await codexIntegrationAuthority.query()
-            : command.command === "sync"
-              ? await codexIntegrationAuthority.reconcile("sync")
-              : await codexIntegrationAuthority.reconcile(
-                  command.enabled ? "enable" : "disable",
-                );
-        return { state };
+        switch (command.command) {
+          case "query":
+            return {
+              outcome: "ok" as const,
+              state: await agentIntegrations.query(),
+              results: Object.freeze([]),
+            };
+          case "sync":
+            return agentIntegrations.sync();
+          case "set_enabled":
+            return agentIntegrations.setEnabled(command.agentId, command.enabled);
+          case "set_scope":
+            return agentIntegrations.setScope(command.agentId, command.scope);
+        }
       },
       applicationCommandHandler: async (command, publishStatus) => {
         switch (command.command) {
@@ -1128,11 +1198,11 @@ async function startNormalApplication(options: {
           }
           case "quit": {
             try {
-              await restoreCodexBeforeShutdown();
+              await restoreAgentsBeforeShutdown();
             } catch {
               return {
                 outcome: "failed",
-                error: "Codex integration could not be restored; LuckyToken remains running.",
+                error: "Agent integrations could not be restored; LuckyToken remains running.",
               };
             }
             const outcome = await supervisor?.quit({
@@ -1189,16 +1259,16 @@ async function startNormalApplication(options: {
     attentionRefreshTimer.unref();
 
     await supervisor.execute("start", publish);
-    // Backend startup is the one automatic Codex apply point. Data Plane
-    // listener restarts (for example after a port edit) never resync Codex.
+    // Backend startup is the automatic apply point for enabled Agent integrations.
+    // Data Plane listener restarts never resync external Agent files.
     if (lastPublishedStatus.modelDataPlane === "running") {
-      await codexIntegrationAuthority.reconcile("startup");
+      await agentIntegrations.startup();
     }
     lifecycle = createLifecycle({
       ownership,
       cleanup,
       drain: async () => {
-        await restoreCodexBeforeShutdown();
+        await restoreAgentsBeforeShutdown();
         return (
           (await supervisor?.quit({
             timeoutMs: drainTimeoutMs(),

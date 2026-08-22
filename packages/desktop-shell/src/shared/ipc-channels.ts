@@ -10,7 +10,7 @@ export const desktopIpcChannels = Object.freeze({
   models: "luckytoken:control:models",
   catalog: "luckytoken:control:catalog",
   publicModels: "luckytoken:control:public-models",
-  codex: "luckytoken:control:codex",
+  agentIntegrations: "luckytoken:control:agent-integrations",
   ledgerGet: "luckytoken:control:ledger:get",
   ledgerSubscribe: "luckytoken:control:ledger:subscribe",
   ledgerUnsubscribe: "luckytoken:control:ledger:unsubscribe",

@@ -53,6 +53,64 @@ const runtime: PublicModelRuntimeFacts = {
 };
 
 describe("PublicModelAuthority", () => {
+  it("upgrades schema v1 in place with non-favorite providers and models", async () => {
+    const initial = {
+      schemaVersion: 1,
+      endpoint: { host: "127.0.0.1", port: 4321 },
+      providers: {
+        anthropic: {
+          enabled: false,
+          models: {
+            "anthropic/my-opus": { target: "claude/opus", enabled: false },
+          },
+        },
+      },
+    };
+    const memory = memoryFileSystem({ [path]: `${JSON.stringify(initial, null, 2)}\n` });
+    const authority = createPublicModelAuthority({ path, fileSystem: memory.fileSystem });
+
+    const state = await authority.reconcile({
+      version: 1,
+      providers: [
+        { providerId: "anthropic", usable: true, models: ["claude/opus"] },
+      ],
+    });
+
+    expect(state.snapshot.endpoint).toEqual({ host: "127.0.0.1", port: 4321 });
+    expect(state.snapshot.providers).toEqual([
+      {
+        providerId: "anthropic",
+        on: false,
+        favorite: false,
+        models: [
+          {
+            alias: "anthropic/my-opus",
+            target: "claude/opus",
+            on: false,
+            favorite: false,
+          },
+        ],
+      },
+    ]);
+    expect(JSON.parse(memory.files.get(path) ?? "null")).toEqual({
+      schemaVersion: 2,
+      endpoint: { host: "127.0.0.1", port: 4321 },
+      providers: {
+        anthropic: {
+          enabled: false,
+          favorite: false,
+          models: {
+            "anthropic/my-opus": {
+              target: "claude/opus",
+              enabled: false,
+              favorite: false,
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("owns the local endpoint and makes a port command durable before ok", async () => {
     let writes = 0;
     const memory = memoryFileSystem();
@@ -95,13 +153,18 @@ describe("PublicModelAuthority", () => {
     let writes = 0;
     let scheduled: (() => void) | undefined;
     const initial = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: true,
+          favorite: false,
           models: {
-            "anthropic/claude-opus": { target: "claude/opus", enabled: true },
+            "anthropic/claude-opus": {
+              target: "claude/opus",
+              enabled: true,
+              favorite: false,
+            },
           },
         },
       },
@@ -180,16 +243,19 @@ describe("PublicModelAuthority", () => {
       {
         providerId: "anthropic",
         on: true,
+        favorite: false,
         models: [
           {
             alias: "anthropic/claude-opus",
             target: "claude/opus",
             on: true,
+            favorite: false,
           },
           {
             alias: "anthropic/claude-sonnet",
             target: "claude/sonnet",
             on: true,
+            favorite: false,
           },
         ],
       },
@@ -209,19 +275,22 @@ describe("PublicModelAuthority", () => {
     expect(files.has(path)).toBe(false);
     await authority.flush();
     expect(JSON.parse(files.get(path) ?? "null")).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: true,
+          favorite: false,
           models: {
             "anthropic/claude-opus": {
               target: "claude/opus",
               enabled: true,
+              favorite: false,
             },
             "anthropic/claude-sonnet": {
               target: "claude/sonnet",
               enabled: true,
+              favorite: false,
             },
           },
         },
@@ -232,14 +301,23 @@ describe("PublicModelAuthority", () => {
   it("preserves existing provider/model choices, adds only new targets, and does not rewrite unchanged state", async () => {
     let writes = 0;
     const initial = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: false,
+          favorite: false,
           models: {
-            "anthropic/my-opus": { target: "claude/opus", enabled: false },
-            "anthropic/old": { target: "claude/old", enabled: true },
+            "anthropic/my-opus": {
+              target: "claude/opus",
+              enabled: false,
+              favorite: false,
+            },
+            "anthropic/old": {
+              target: "claude/old",
+              enabled: true,
+              favorite: false,
+            },
           },
         },
       },
@@ -273,13 +351,25 @@ describe("PublicModelAuthority", () => {
       {
         providerId: "anthropic",
         on: false,
+        favorite: false,
         models: [
-          { alias: "anthropic/my-opus", target: "claude/opus", on: false },
-          { alias: "anthropic/old", target: "claude/old", on: true },
+          {
+            alias: "anthropic/my-opus",
+            target: "claude/opus",
+            on: false,
+            favorite: false,
+          },
+          {
+            alias: "anthropic/old",
+            target: "claude/old",
+            on: true,
+            favorite: false,
+          },
           {
             alias: "anthropic/claude-sonnet",
             target: "claude/sonnet",
             on: true,
+            favorite: false,
           },
         ],
       },
@@ -290,17 +380,27 @@ describe("PublicModelAuthority", () => {
     await authority.flush();
     expect(writes).toBe(1);
     expect(JSON.parse(memory.files.get(path) ?? "null")).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: false,
+          favorite: false,
           models: {
-            "anthropic/my-opus": { target: "claude/opus", enabled: false },
-            "anthropic/old": { target: "claude/old", enabled: true },
+            "anthropic/my-opus": {
+              target: "claude/opus",
+              enabled: false,
+              favorite: false,
+            },
+            "anthropic/old": {
+              target: "claude/old",
+              enabled: true,
+              favorite: false,
+            },
             "anthropic/claude-sonnet": {
               target: "claude/sonnet",
               enabled: true,
+              favorite: false,
             },
           },
         },
@@ -311,13 +411,18 @@ describe("PublicModelAuthority", () => {
   it("allows Provider OFF while logged out, durably, and rejects OFF to ON until login", async () => {
     let writes = 0;
     const initial = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: true,
+          favorite: false,
           models: {
-            "anthropic/claude-opus": { target: "claude/opus", enabled: true },
+            "anthropic/claude-opus": {
+              target: "claude/opus",
+              enabled: true,
+              favorite: false,
+            },
           },
         },
       },
@@ -374,16 +479,19 @@ describe("PublicModelAuthority", () => {
       {
         providerId: "anthropic",
         on: false,
+        favorite: false,
         models: [
           {
             alias: "anthropic/claude-opus",
             target: "claude/opus",
             on: true,
+            favorite: false,
           },
           {
             alias: "anthropic/claude-sonnet",
             target: "claude/sonnet",
             on: true,
+            favorite: false,
           },
         ],
       },
@@ -392,11 +500,17 @@ describe("PublicModelAuthority", () => {
     await authority.flush();
     expect(JSON.parse(files.get(path) ?? "null").providers.anthropic).toEqual({
       enabled: false,
+      favorite: false,
       models: {
-        "anthropic/claude-opus": { target: "claude/opus", enabled: true },
+        "anthropic/claude-opus": {
+          target: "claude/opus",
+          enabled: true,
+          favorite: false,
+        },
         "anthropic/claude-sonnet": {
           target: "claude/sonnet",
           enabled: true,
+          favorite: false,
         },
       },
     });
@@ -404,13 +518,18 @@ describe("PublicModelAuthority", () => {
 
   it("allows model switches while the Provider total switch is OFF or logged out", async () => {
     const initial = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {
         anthropic: {
           enabled: false,
+          favorite: false,
           models: {
-            "anthropic/claude-opus": { target: "claude/opus", enabled: true },
+            "anthropic/claude-opus": {
+              target: "claude/opus",
+              enabled: true,
+              favorite: false,
+            },
           },
         },
       },
@@ -464,6 +583,7 @@ describe("PublicModelAuthority", () => {
       alias: "anthropic/my-opus",
       target: "claude/opus",
       on: true,
+      favorite: false,
     });
 
     const restored = await authority.restoreModelName({
@@ -518,11 +638,13 @@ describe("PublicModelAuthority", () => {
         alias: "anthropic/claude-opus",
         target: "claude/opus",
         on: false,
+        favorite: false,
       },
       {
         alias: "anthropic/claude-sonnet",
         target: "claude/sonnet",
         on: true,
+        favorite: false,
       },
     ]);
     expect(result.state.snapshot.publishedModels()).toEqual([
@@ -538,9 +660,134 @@ describe("PublicModelAuthority", () => {
     });
   });
 
+  it("favorites a hidden model without publishing it", async () => {
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+    const initial = await authority.reconcile(runtime);
+    const hidden = await authority.setModelOn({
+      revision: initial.revision,
+      providerId: "anthropic",
+      modelId: "claude/opus",
+      on: false,
+    });
+
+    const favorited = await authority.setModelFavorite({
+      revision: hidden.state.revision,
+      providerId: "anthropic",
+      modelId: "claude/opus",
+      favorite: true,
+    });
+
+    expect(favorited.outcome).toBe("ok");
+    expect(favorited.state.snapshot.providers[0]?.models[0]).toMatchObject({
+      on: false,
+      favorite: true,
+    });
+    expect(favorited.state.snapshot.publishedModels()).not.toContainEqual({
+      alias: "anthropic/claude-opus",
+      providerId: "anthropic",
+      modelId: "claude/opus",
+    });
+    expect(favorited.state.snapshot.favoriteModels()).toEqual([
+      {
+        alias: "anthropic/claude-opus",
+        providerId: "anthropic",
+        modelId: "claude/opus",
+      },
+    ]);
+  });
+
+  it("rejects an eleventh favorite model without changing state", async () => {
+    const models = Array.from({ length: 11 }, (_, index) => `model-${index + 1}`);
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+    let state = await authority.reconcile({
+      version: 1,
+      providers: [{ providerId: "many", usable: true, models }],
+    });
+    for (const modelId of models.slice(0, 10)) {
+      const result = await authority.setModelFavorite({
+        revision: state.revision,
+        providerId: "many",
+        modelId,
+        favorite: true,
+      });
+      expect(result.outcome).toBe("ok");
+      state = result.state;
+    }
+
+    const rejected = await authority.setModelFavorite({
+      revision: state.revision,
+      providerId: "many",
+      modelId: models[10] as string,
+      favorite: true,
+    });
+
+    expect(rejected.outcome).toBe("limit_exceeded");
+    expect(
+      rejected.state.snapshot.providers.flatMap((provider) => provider.models)
+        .filter((model) => model.favorite),
+    ).toHaveLength(10);
+  });
+
+  it("favorites a Provider independently from its publication state", async () => {
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+    const initial = await authority.reconcile(runtime);
+    const hidden = await authority.setProviderOn({
+      revision: initial.revision,
+      providerId: "anthropic",
+      on: false,
+    });
+
+    const favorited = await authority.setProviderFavorite({
+      revision: hidden.state.revision,
+      providerId: "anthropic",
+      favorite: true,
+    });
+
+    expect(favorited).toMatchObject({
+      outcome: "ok",
+      state: {
+        snapshot: {
+          providers: [{ providerId: "anthropic", on: false, favorite: true }],
+        },
+      },
+    });
+  });
+
+  it("rejects a sixth favorite Provider without changing state", async () => {
+    const providers = Array.from({ length: 6 }, (_, index) => ({
+      providerId: `provider-${index + 1}`,
+      usable: true,
+      models: [`model-${index + 1}`],
+    }));
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+    let state = await authority.reconcile({ version: 1, providers });
+    for (const provider of providers.slice(0, 5)) {
+      const result = await authority.setProviderFavorite({
+        revision: state.revision,
+        providerId: provider.providerId,
+        favorite: true,
+      });
+      expect(result.outcome).toBe("ok");
+      state = result.state;
+    }
+
+    const rejected = await authority.setProviderFavorite({
+      revision: state.revision,
+      providerId: providers[5]!.providerId,
+      favorite: true,
+    });
+
+    expect(rejected.outcome).toBe("limit_exceeded");
+    expect(rejected.state.snapshot.providers.filter((provider) => provider.favorite)).toHaveLength(5);
+  });
+
   it("returns storage_failure without publishing a user mutation", async () => {
     const initial = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       endpoint,
       providers: {},
     };

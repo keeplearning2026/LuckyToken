@@ -61,6 +61,25 @@ export function createPublicModelsControlPlaneHandler(
         }),
       );
     }
+    if (command.command === "set_provider_favorite") {
+      return projectResult(
+        await authority.setProviderFavorite({
+          revision: command.revision,
+          providerId: command.providerId,
+          favorite: command.favorite,
+        }),
+      );
+    }
+    if (command.command === "set_model_favorite") {
+      return projectResult(
+        await authority.setModelFavorite({
+          revision: command.revision,
+          providerId: command.providerId,
+          modelId: command.modelId,
+          favorite: command.favorite,
+        }),
+      );
+    }
     if (command.command === "rename_model") {
       return projectResult(
         await authority.renameModel({

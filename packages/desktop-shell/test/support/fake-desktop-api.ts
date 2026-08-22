@@ -48,10 +48,18 @@ export function createFakeDesktopApi(options: {
         ? command
         : { command: "query" as const };
     const aliases = await executeAliases(aliasCommand);
-    const byProvider = new Map<string, Array<{ alias: string; target: string; on: boolean }>>();
+    const byProvider = new Map<
+      string,
+      Array<{ alias: string; target: string; on: boolean; favorite: boolean }>
+    >();
     for (const entry of aliases.state.effective?.aliases ?? []) {
       const rows = byProvider.get(entry.target.provider) ?? [];
-      rows.push({ alias: entry.alias, target: entry.target.model, on: true });
+      rows.push({
+        alias: entry.alias,
+        target: entry.target.model,
+        on: true,
+        favorite: false,
+      });
       byProvider.set(entry.target.provider, rows);
     }
     return {
@@ -63,6 +71,7 @@ export function createFakeDesktopApi(options: {
         providers: [...byProvider].map(([providerId, models]) => ({
           providerId,
           on: true,
+          favorite: false,
           models,
         })),
       },
@@ -79,7 +88,7 @@ export function createFakeDesktopApi(options: {
     executeModels: unavailable,
     executeCatalog: unavailable,
     executePublicModels: legacyPublicModels,
-    executeCodexIntegration: unavailable,
+    executeAgentIntegrations: unavailable,
     getRequestLedger: unavailable,
     onRequestLedger: () => () => undefined,
     getAnalytics: unavailable,

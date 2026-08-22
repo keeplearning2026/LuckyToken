@@ -10,8 +10,8 @@ import {
   type CatalogCommandHandler,
   type CatalogCommandResult,
   type CatalogStatusProjection,
-  type CodexIntegrationCommandHandler,
-  type CodexIntegrationCommandResult,
+  type AgentIntegrationsCommandHandler,
+  type AgentIntegrationsCommandResult,
   type ControlPlaneEndpoint,
   type ModelsCommandHandler,
   type ModelsProjection,
@@ -73,7 +73,7 @@ import {
   decodeApplicationStatus,
   decodeAuthCommandResult,
   decodeCatalogCommandResult,
-  decodeCodexIntegrationCommandResult,
+  decodeAgentIntegrationsCommandResult,
   decodeClientRequest,
   decodeCredentialCommandResult,
   decodeModelsCommandResult,
@@ -127,10 +127,8 @@ export interface StartControlPlaneOptions {
   /** The one live Public Model command seam used by desktop/CLI product
    * clients. The backing JSON file is never a Control Plane surface. */
   readonly publicModelsCommandHandler?: PublicModelsCommandHandler;
-  /** Optional local Codex config/catalog integration. This controls only
-   *  external Codex artifacts; native Codex request support remains in the
-   *  Data Plane regardless of this handler. */
-  readonly codexIntegrationCommandHandler?: CodexIntegrationCommandHandler;
+  /** Optional Codex/Pi external Agent integration control seam. */
+  readonly agentIntegrationsCommandHandler?: AgentIntegrationsCommandHandler;
   /** Live settings projection merged into every published snapshot. */
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
@@ -1078,8 +1076,8 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             result,
           });
-        } else if (request.type === "codex_integration_command") {
-          if (options.codexIntegrationCommandHandler === undefined) {
+        } else if (request.type === "agent_integrations_command") {
+          if (options.agentIntegrationsCommandHandler === undefined) {
             await writeFrame(state.connection, {
               type: "error",
               requestId: request.requestId,
@@ -1087,9 +1085,9 @@ export async function startApplicationStatusHost(
             });
             continue;
           }
-          let handled: CodexIntegrationCommandResult;
+          let handled: AgentIntegrationsCommandResult;
           try {
-            handled = await options.codexIntegrationCommandHandler(request.command);
+            handled = await options.agentIntegrationsCommandHandler(request.command);
           } catch {
             await writeFrame(state.connection, {
               type: "error",
@@ -1098,7 +1096,7 @@ export async function startApplicationStatusHost(
             });
             continue;
           }
-          const result = decodeCodexIntegrationCommandResult(handled);
+          const result = decodeAgentIntegrationsCommandResult(handled);
           if (result === undefined) {
             await writeFrame(state.connection, {
               type: "error",
@@ -1108,7 +1106,7 @@ export async function startApplicationStatusHost(
             continue;
           }
           await writeFrame(state.connection, {
-            type: "codex_integration_command_result",
+            type: "agent_integrations_command_result",
             requestId: request.requestId,
             result,
           });

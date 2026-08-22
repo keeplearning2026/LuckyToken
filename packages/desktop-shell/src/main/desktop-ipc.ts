@@ -4,7 +4,7 @@ import type {
   AuthInteractionResponse,
   BackupCreateCommand,
   CatalogCommand,
-  CodexIntegrationCommand,
+  AgentIntegrationsCommand,
   CredentialCommand,
   HistoryDeleteCommand,
   HistoryExportCommand,
@@ -149,8 +149,8 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.publicModels, (_event, ...args) =>
     session.client().executePublicModelsCommand(first<PublicModelsCommand>(args)),
   );
-  register(desktopIpcChannels.codex, (_event, ...args) =>
-    session.client().executeCodexIntegrationCommand(first<CodexIntegrationCommand>(args)),
+  register(desktopIpcChannels.agentIntegrations, (_event, ...args) =>
+    session.client().executeAgentIntegrationsCommand(first<AgentIntegrationsCommand>(args)),
   );
   register(desktopIpcChannels.ledgerGet, (_event, ...args) =>
     session.client().getRequestLedger(first<RequestLedgerQuery | undefined>(args)),

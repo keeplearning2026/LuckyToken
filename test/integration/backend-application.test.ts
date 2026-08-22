@@ -122,6 +122,24 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string; 
   return { configPath, descriptorPath, port };
 }
 
+async function writeInjectableModel(configPath: string): Promise<void> {
+  await writeFile(
+    join(dirname(configPath), "models.json"),
+    `${JSON.stringify({
+      providers: {
+        fixture: {
+          name: "Fixture",
+          baseUrl: "http://127.0.0.1:65534",
+          apiKey: "fixture-placeholder",
+          api: "anthropic-messages",
+          models: [{ id: "fixture-model", reasoning: true }],
+        },
+      },
+    }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 describe("Backend Application public lifecycle seam", () => {
   it("ignores obsolete client-auth files and exposes no token-management surface", async () => {
     const { configPath, descriptorPath } = await fixture();
@@ -363,6 +381,7 @@ describe("Backend Application public lifecycle seam", () => {
 
   it("restores Codex from persisted desktop settings across application restarts", async () => {
     const { configPath, descriptorPath } = await fixture();
+    await writeInjectableModel(configPath);
     const codexHome = join(dirname(configPath), "codex-home");
     await mkdir(codexHome, { recursive: true });
     const originalCodexConfig = [
@@ -409,14 +428,25 @@ describe("Backend Application public lifecycle seam", () => {
           key: "integrations.codex.preimage.modelCatalogJson",
           value: "C:/restore/catalog.json",
         });
-        const enabled = await client.executeCodexIntegrationCommand({
+        await client.executeAgentIntegrationsCommand({
+          command: "set_scope",
+          agentId: "codex",
+          scope: "full",
+        });
+        const enabled = await client.executeAgentIntegrationsCommand({
           command: "set_enabled",
+          agentId: "codex",
           enabled: true,
         });
-        expect(enabled.state).toMatchObject({
-          desiredEnabled: true,
-          observedState: "managed",
-        });
+        expect(enabled.state.agents).toContainEqual(
+          expect.objectContaining({ agentId: "codex", enabled: true }),
+        );
+        expect(enabled.results).toContainEqual(
+          expect.objectContaining({
+            agentId: "codex",
+            effect: expect.objectContaining({ observedState: "managed" }),
+          }),
+        );
       } finally {
         await client.close();
       }
@@ -458,10 +488,11 @@ describe("Backend Application public lifecycle seam", () => {
       if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     }
-  });
+  }, 15_000);
 
   it("refuses application quit when an active Codex projection cannot be restored", async () => {
     const { configPath, descriptorPath } = await fixture();
+    await writeInjectableModel(configPath);
     const codexHome = join(dirname(configPath), "codex-home-restore-failure");
     await mkdir(codexHome, { recursive: true });
     const originalCodexConfig = 'openai_base_url = "https://before.example/v1"\n';
@@ -498,7 +529,16 @@ describe("Backend Application public lifecycle seam", () => {
           key: "integrations.codex.preimage.openaiBaseUrl",
           value: "https://before.example/v1",
         });
-        await client.executeCodexIntegrationCommand({ command: "set_enabled", enabled: true });
+        await client.executeAgentIntegrationsCommand({
+          command: "set_scope",
+          agentId: "codex",
+          scope: "full",
+        });
+        await client.executeAgentIntegrationsCommand({
+          command: "set_enabled",
+          agentId: "codex",
+          enabled: true,
+        });
         await rm(join(codexHome, "config.toml"), { force: true });
 
         const quit = await client.executeApplicationCommand({
@@ -507,7 +547,7 @@ describe("Backend Application public lifecycle seam", () => {
         });
 
         expect(quit.outcome).toBe("failed");
-        expect(quit.error).toContain("Codex integration");
+        expect(quit.error).toContain("Agent integrations");
         await expect(client.getStatus()).resolves.toMatchObject({ modelDataPlane: "running" });
       } finally {
         await client.close();
@@ -556,21 +596,28 @@ describe("Backend Application public lifecycle seam", () => {
       });
       try {
         await client.hello(controlPlaneVersion);
-        await client.executeCodexIntegrationCommand({
+        await client.executeAgentIntegrationsCommand({
           command: "set_enabled",
+          agentId: "codex",
           enabled: true,
         });
         await client.executeRuntimeCommand("stop");
         const external = 'model_provider = "external"\nmodel = "keep"\n';
         await writeFile(join(codexHome, "config.toml"), external, "utf8");
 
-        const synced = await client.executeCodexIntegrationCommand({ command: "sync" });
+        const synced = await client.executeAgentIntegrationsCommand({ command: "sync" });
 
-        expect(synced.state).toMatchObject({
-          desiredEnabled: true,
-          observedState: "unavailable",
-          message: "Start the Data Plane before syncing Codex. No Codex files were changed.",
-        });
+        expect(synced.outcome).toBe("failed");
+        expect(synced.results).toContainEqual(
+          expect.objectContaining({
+            agentId: "codex",
+            effect: expect.objectContaining({
+              observedState: "unavailable",
+              message:
+                "Start the Data Plane before syncing Agent integrations. No Agent files were changed.",
+            }),
+          }),
+        );
         expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(external);
       } finally {
         await client.close();
