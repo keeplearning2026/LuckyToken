@@ -1221,25 +1221,27 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 > Provider Package 里，用户不需要任何 `models.json`。安装并配置 package 后，
 > `login` 填 API key 就能用。
 
-CommandCode 的 **33 个模型能力事实**全部硬编码在
-`packages/commandcode-model-catalog/src/index.ts`，这是 Private 与 Goat 两个 Provider
-共享的唯一权威来源。两个 Provider 只从这里投影模型，不共享认证、transport、wire
-conversion 或 response lifecycle。
+CommandCode 的 **58 个当前模型事实**全部保存在
+`packages/commandcode-model-catalog/src/models.ts`，这是 Private 与 Goat 两个 Provider
+共享的唯一权威来源。`projection.ts` 只负责事实到 Pi `Model` 的严格投影；两个
+Provider 自行选择模型，不共享认证、transport、wire conversion 或 response lifecycle。
 
-模型数据来自 `doc/# CommandCode 1.9.0 模型信息表.md`（官方 command-code@1.9.0
-bundle 静态分析）：
+模型数据来自官方 `command-code@1.32.1` bundle 提取表，并用当前 Provider API
+`/models` 结果核对可用性与缺失 context：
 
 - `id`：官方权威 id（如 `deepseek/deepseek-v4-flash`、`Qwen/Qwen3.8-Max`）；
 - `contextWindow` / `input`（text/image）：官方模态；
 - `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
-  `low/medium/xhigh`）；官方未标注档位的模型保持全档位宽松。
+  `low/medium/xhigh`）；官方未标注档位时不推断任何可选档位；
+- `minimumPlan`：Go、GOAT、Pro 或 Max，供 Goat 选择当前订阅可用模型。
 
 目录故意不保存价格，因为价格变化快且 LuckyToken 没有 live pricing authority。Pi
 `Model.cost` 是必填结构，因此投影统一使用零值表示“不追踪价格”，不是宣称上游免费。
 
-`thinkingLevelMap` 由 `reasoningEfforts` 生成，语义是：客户端请求档位在模型支持
-范围内 → 原样使用；不在范围内 → **fallback 到模型支持的最高档**（不报错、不发
-无效参数）；模型明确标注 `null` 的档位 → 报错。
+`thinkingLevelMap` 严格区分三态：非 reasoning 模型省略 map；reasoning 但无
+efforts 的模型把七个 level 全设为 `null`；有 efforts 时只映射明确列出的字符串，
+其余 level 显式为 `null`。请求级选择只经过 Pi 的 capability clamp，Provider 不再
+自行 fallback 到最高档。事实未给出 `maxOutputTokens` 时，Pi 投影使用 `64_000`。
 
 默认模型仍是 `deepseek/deepseek-v4-flash`（`COMMANDCODE_DEFAULT_MODEL_ID`）。
 
@@ -1928,9 +1930,11 @@ Pi AI IR
 ```
 
 它的固定身份是 `provider=commandcode-goat`、`api=openai-completions`、
-`baseUrl=https://api.commandcode.ai/provider/v1`。它从共享目录投影同一组模型能力，但
-拥有独立的 Pi credential slot，并且不 import 或复用 CommandCode Private 的 request
-builder、private protocol transport、JSONL assembler 或 response conversion。
+`baseUrl=https://api.commandcode.ai/provider/v1`。它从共享事实中只投影 minimum plan
+为 Go 或 GOAT 的 40 个模型，全部走 `/chat/completions`；当前不注册 Anthropic
+Messages 或 OpenAI Responses。它拥有独立的 Pi credential slot，并且不 import 或
+复用 CommandCode Private 的 request builder、private protocol transport、JSONL
+assembler 或 response conversion。
 
 ---
 
@@ -2187,7 +2191,7 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | `src/providers/catalog.ts` | `registerLuckyTokenProviders()`；只注册 Pi builtins 与 `models.json` | composition | Pi Providers、Pi Models | configured-composition、provider-boundary tests |
 | `src/providers/package-loader.ts` | 校验 npm 根名/契约/Provider，冲突检查后原子注册 | composition | Contract、Pi Models、dynamic import | package-loader/runtime/distribution tests |
-| `packages/commandcode-model-catalog/src/index.ts` | **33 个模型能力事实的唯一权威目录**（id/context/模态/推理档位/output limit；无价格）；按 provider/api/baseUrl 投影 Pi Model | Private、Goat model projection | Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
+| `packages/commandcode-model-catalog/src/models.ts`、`projection.ts` | **58 个当前模型事实的唯一权威目录**（含 minimum plan；无价格）及严格 Pi Model 投影 | Private、Goat model selection/projection | Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
 | `packages/provider-commandcode-private/src/models.ts` | Private identity projection | Private provider factory | shared capability catalog、`constants.ts` | model catalog/default-model tests |
 | `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
 | `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
@@ -2388,7 +2392,7 @@ flowchart LR
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Local credential、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
-| 模型单一权威来源 | CommandCode 33 个稳定能力事实只存在于共享 capability catalog；Private/Goat 各自投影 identity，目录不保存易变价格 | 符合 |
+| 模型单一权威来源 | CommandCode 58 个当前事实只存在于共享 catalog；Private 投影全部 58 个，Goat 按 Go/GOAT 选择 40 个，目录不保存易变价格 | 符合 |
 | `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
@@ -2563,10 +2567,10 @@ method、request/response conversion、retry/cancel/online conformance 仍由新
 > 翻译。先让 Pi 的模型目录、名称消歧、Provider catalog 和认证清单支持多项；实际
 > 请求仍携带已经选定的那个 Pi `Model`。
 
-当前 33 个 CommandCode models 的唯一权威来源是 Provider Package 的 `models.ts`。
-增删模型只应修改 package-owned catalog、model resolution/certification 期望及对应
-测试；不需要在 `models.json` 复制条目。CommandCode wire conversion 应继续只消费
-invocation 中已 resolved 的 `Model`。
+当前 58 个 CommandCode models 的唯一权威来源是共享 catalog 的 `models.ts`。
+增删模型只应修改共享事实、Provider selection/projection 期望及对应测试；不需要在
+`models.json` 复制条目。CommandCode wire conversion 应继续只消费 invocation 中已
+resolved 的 `Model`。
 
 ## 12.4 更新 Pi
 

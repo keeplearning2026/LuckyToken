@@ -5847,8 +5847,8 @@ POST /alpha/generate
 Package `@luckytoken/provider-commandcode-private` owns configuration
 validation, factory, Pi ↔ CommandCode Private conversion, and its upstream
 lifecycle. Stable CommandCode model capability facts are owned separately by
-`@luckytoken/commandcode-model-catalog`; the Private package only projects its
-own provider/api/baseUrl identity. Core imports only
+`@luckytoken/commandcode-model-catalog`; the Private package projects its own
+provider/api/baseUrl identity across all 58 current facts. Core imports only
 `@luckytoken/provider-contract`; it must not import, instantiate, or
 special-case the CommandCode implementation.
 
@@ -7299,7 +7299,10 @@ Request:
 Goat has `Provider.id=commandcode-goat`, `Model.api=openai-completions`, and an
 independent Pi credential slot. It shares only the price-free model capability
 catalog with CommandCode Private and must not import Private request builders,
-credentials, transport, assembler, or response conversion.
+credentials, transport, assembler, or response conversion. Goat selects only
+the 40 shared facts whose minimum plan is Go or GOAT. All currently eligible
+models use Chat Completions; Anthropic Messages and OpenAI Responses are not
+registered without an eligible model and confirmed upstream support.
 
 CommandCode Private 与 Goat vocabulary 不进入 Generic Core。
 

@@ -179,40 +179,51 @@ describe("CommandCode generation control mapping", () => {
     expect(value.reasoning_effort).toBe("xhigh");
   });
 
-  it("falls back to the highest supported effort for unsupported levels", () => {
+  it.each([
+    ["minimal", "high"],
+    ["low", "high"],
+    ["medium", "high"],
+    ["xhigh", "max"],
+  ] as const)("lets Pi clamp unsupported %s to %s", (level, expected) => {
     const strictModel = {
       ...model,
       reasoning: true,
-      thinkingLevelMap: { off: null, high: "high", max: "max" },
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
     };
-    for (const level of ["minimal", "low", "medium", "xhigh"] as const) {
-      const value = buildCommandCodeBody(
-        strictModel,
-        context,
-        { maxTokens: 20, reasoning: level },
-        createEmptyServerConfig(),
-        sessionId,
-        {},
-      ).body.params as Record<string, unknown>;
-      expect(value.reasoning_effort, level).toBe("max");
-    }
+    const value = buildCommandCodeBody(
+      strictModel,
+      context,
+      { maxTokens: 20, reasoning: level },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value.reasoning_effort).toBe(expected);
   });
 
-  it("falls back to the highest supported effort even for high", () => {
-    const strictModel = {
+  it("uses the Pi default mapping when an ordinary level key is omitted", () => {
+    const partiallyMappedModel = {
       ...model,
       reasoning: true,
       thinkingLevelMap: { off: null, max: "max" },
     };
     const value = buildCommandCodeBody(
-      strictModel,
+      partiallyMappedModel,
       context,
       { maxTokens: 20, reasoning: "high" },
       createEmptyServerConfig(),
       sessionId,
       {},
     ).body.params as Record<string, unknown>;
-    expect(value.reasoning_effort).toBe("max");
+    expect(value.reasoning_effort).toBe("high");
   });
 
   it("omits reasoning_effort when reasoning is absent or clamps to off", () => {
@@ -236,6 +247,44 @@ describe("CommandCode generation control mapping", () => {
       {},
     ).body.params as Record<string, unknown>;
     expect(off).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("omits reasoning_effort for a catalog model with no selectable efforts", () => {
+    const catalogModel = findCommandCodeModel("moonshotai/Kimi-K3");
+    expect(catalogModel).toBeDefined();
+
+    for (const level of [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ] as const) {
+      const value = buildCommandCodeBody(
+        catalogModel!,
+        context,
+        { maxTokens: 20, reasoning: level },
+        createEmptyServerConfig(),
+        sessionId,
+        {},
+      ).body.params as Record<string, unknown>;
+      expect(value, level).not.toHaveProperty("reasoning_effort");
+    }
+  });
+
+  it("uses the projected 64k output default for a catalog model without a source limit", () => {
+    const catalogModel = findCommandCodeModel("moonshotai/Kimi-K3");
+    expect(catalogModel).toBeDefined();
+    const value = buildCommandCodeBody(
+      catalogModel!,
+      context,
+      {},
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value.max_tokens).toBe(64_000);
   });
 
   it("clamps unsupported catalog efforts through the Pi model capability", () => {

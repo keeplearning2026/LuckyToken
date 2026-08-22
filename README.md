@@ -158,7 +158,9 @@ automatically through the standard Pi Provider contract:
 Users must **not** add either bundled package to `providerPackages`; that key is
 reserved for explicit external/user Provider Packages. No `models.json` entry
 is required. The Providers share one price-free model capability catalog but
-own independent authentication, transport, and response lifecycles.
+own independent authentication, transport, and response lifecycles. Private
+projects all 58 current facts; Goat exposes the 40 entries whose minimum plan
+is Go or GOAT and keeps every model on Chat Completions.
 
 Only npm root package names (including scoped root names) are accepted for
 user `providerPackages`. Package import, contract/export validation, factory

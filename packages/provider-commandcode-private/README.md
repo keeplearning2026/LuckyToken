@@ -2,6 +2,10 @@
 
 This private workspace package owns the complete CommandCode Private Pi Provider capability: its projection of the shared CommandCode model capability catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
 
+It projects all 58 current shared model facts. Reasoning effort is emitted only
+after Pi capability clamping produces a supported string; the Provider does not
+invent an effort or fall back to the model's highest advertised level.
+
 ## Product composition
 
 CommandCode Private is a **bundled LuckyToken product Provider**. Production LuckyToken discovers and registers it automatically through the standard Provider Package contract.

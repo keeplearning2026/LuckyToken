@@ -51,7 +51,7 @@ describe("CommandCode Goat Provider Package", () => {
 
     expect(provider.id).toBe("commandcode-goat");
     expect(provider.name).toBe("CommandCode Goat");
-    expect(provider.getModels()).toHaveLength(33);
+    expect(provider.getModels()).toHaveLength(40);
     expect(provider.getModels()[0]).toMatchObject({
       provider: "commandcode-goat",
       api: "openai-completions",
@@ -110,6 +110,53 @@ describe("CommandCode Goat Provider Package", () => {
       model: "deepseek/deepseek-v4-flash",
       stream: true,
     });
+  });
+
+  it("sends only reasoning efforts declared by the projected model", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetch: FetchFunction = async (input, init) => {
+      bodies.push((await new Request(input, init).json()) as Record<string, unknown>);
+      return openAICompletion("reasoning result");
+    };
+    const provider = providerPackage.createProvider({
+      configuration: {},
+      configurationPath:
+        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+      host: {
+        fetch,
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000104",
+      },
+    });
+    const context = {
+      messages: [{ role: "user" as const, content: "hello", timestamp: 1 }],
+    };
+    const deepSeek = provider
+      .getModels()
+      .find((entry) => entry.id === "deepseek/deepseek-v4-flash");
+    const kimi = provider
+      .getModels()
+      .find((entry) => entry.id === "moonshotai/Kimi-K3");
+    expect(deepSeek).toBeDefined();
+    expect(kimi).toBeDefined();
+
+    await provider
+      .streamSimple(deepSeek!, context, {
+        apiKey: "goat-secret",
+        maxTokens: 32,
+        reasoning: "low",
+      })
+      .result();
+    await provider
+      .streamSimple(kimi!, context, {
+        apiKey: "goat-secret",
+        maxTokens: 32,
+        reasoning: "high",
+      })
+      .result();
+
+    expect(bodies[0]?.reasoning_effort).toBe("high");
+    expect(bodies[1]).not.toHaveProperty("reasoning_effort");
   });
 
   it("keeps Goat credentials under its own Provider auth interface", async () => {

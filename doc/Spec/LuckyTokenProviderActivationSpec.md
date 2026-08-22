@@ -577,7 +577,8 @@ The package implementations are:
 
 Both project the price-free capability facts owned by
 `@luckytoken/commandcode-model-catalog`. They do not share Provider credentials,
-transport, wire conversion, or response lifecycle.
+transport, wire conversion, or response lifecycle. Private projects all 58
+current facts; Goat selects the 40 facts whose minimum plan is Go or GOAT.
 
 The npm/package identity is an implementation detail and is never required in normal UI or first-run configuration.
 
@@ -1761,7 +1762,8 @@ Without any user `providerPackages` configuration:
 models.getProvider("commandcode-private") exists
 models.getProvider("commandcode-goat") exists
 source = luckytoken_bundled
-both model counts = 33
+commandcode-private model count = 58
+commandcode-goat model count = 40
 ```
 
 ### P3 — source classification

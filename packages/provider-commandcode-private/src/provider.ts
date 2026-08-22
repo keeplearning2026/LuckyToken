@@ -59,7 +59,7 @@ export interface CommandCodePrivateProviderOptions {
    * precedence; exactly one of `model` or `models` must be provided.
    */
   model?: Model<string>;
-  /** Full model catalog (e.g. the built-in 33-model directory). */
+  /** Full model catalog (e.g. the built-in 58-model directory). */
   models?: readonly Model<string>[];
   now: () => number;
   compatibility?: CommandCodeCompatibilityPolicy;
@@ -284,7 +284,6 @@ export function convertCommandCodeTools(
 }
 
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
-const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
 
 function mapReasoningLevel(
   model: Model<typeof API_ID>,
@@ -299,22 +298,6 @@ function mapReasoningLevel(
       throw new Error(`Model maps ${level} to an invalid CommandCode effort`);
     }
     return explicit;
-  }
-  // Strict mode (model declares a thinkingLevelMap): an unsupported level
-  // falls back to the highest supported effort instead of erroring, so a
-  // client that picked a level this model cannot express still gets a valid
-  // upstream request.
-  if (model.thinkingLevelMap !== undefined) {
-    const supported = (Object.values(model.thinkingLevelMap) as Array<string | null>)
-      .filter((value): value is string => value !== null)
-      .sort(
-        (a, b) =>
-          EFFORT_ORDER.indexOf(a as (typeof EFFORT_ORDER)[number]) -
-          EFFORT_ORDER.indexOf(b as (typeof EFFORT_ORDER)[number]),
-      );
-    const highest = supported[supported.length - 1];
-    if (highest !== undefined) return highest;
-    throw new Error(`Model exposes no supported reasoning effort`);
   }
   if (level === "minimal" || level === "low") return "low";
   if (level === "medium" || level === "high") return level;
