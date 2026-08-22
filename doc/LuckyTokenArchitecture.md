@@ -1334,6 +1334,12 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
     },
     "openai-responses": {
       "stateFile": "state/openai-responses.json",
+      "providerNative": {
+        "transport": {
+          "maxRetries": 0,
+          "maxRetryDelayMs": 60000
+        }
+      },
       "conversion": {
         "request": {
           "privilegedMessages": "first",
@@ -1348,7 +1354,7 @@ loadLuckyTokenCliConfig(path): Promise<LuckyTokenCliConfig>
   },
   "pi": { "directory": "pi" },
   "limits": {
-    "maxRequestBytes": 1048576,
+    "maxRequestBytes": 268435456,
     "requestTimeoutMs": 120000
   }
 }

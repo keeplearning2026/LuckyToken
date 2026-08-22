@@ -56,7 +56,7 @@ describe("Provider Native Responses header boundary", () => {
     });
   });
 
-  it("forwards only approved client request headers while Provider auth owns Authorization", async () => {
+  it("builds Provider headers from Pi-owned facts without inheriting client transport identity", async () => {
     const captured: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       captured.push(new Request(input, init));
@@ -85,14 +85,21 @@ describe("Provider Native Responses header boundary", () => {
     await lane.execute({
       model: model(),
       rawBody: JSON.stringify({ model: "openai/gpt-5", input: "hi" }),
-      request,
+      signal: request.signal,
+      sessionId: "00000000-0000-4000-8000-000000000123",
       operation: "responses",
     });
 
     expect(captured).toHaveLength(1);
     const outbound = captured[0]!;
     expect(outbound.headers.get("authorization")).toBe("Bearer sk-provider");
-    expect(outbound.headers.get("x-stainless-retry-count")).toBe("2");
+    expect(outbound.headers.has("x-stainless-retry-count")).toBe(false);
+    expect(outbound.headers.get("session_id")).toBe(
+      "00000000-0000-4000-8000-000000000123",
+    );
+    expect(outbound.headers.get("x-client-request-id")).toBe(
+      "00000000-0000-4000-8000-000000000123",
+    );
     expect(outbound.headers.has("cookie")).toBe(false);
     expect(outbound.headers.has("x-api-key")).toBe(false);
     expect(outbound.headers.has("openai-beta")).toBe(false);

@@ -8,6 +8,8 @@ import { parseDeepDiagnosticsConfiguration, type DeepDiagnosticsConfiguration } 
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
+import { parseProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "./data-plane-limits.js";
 import {
   LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
   OwnedFileCompatibilityError,
@@ -16,6 +18,7 @@ import {
 export interface ClientProtocolCliConfiguration {
   readonly stateFile?: string;
   readonly adapterConfiguration?: unknown;
+  readonly providerNativeConfiguration?: unknown;
 }
 
 export interface LuckyTokenCliConfig {
@@ -170,6 +173,7 @@ export async function loadLuckyTokenCliConfig(
     {
       readonly stateFile?: string;
       readonly adapterConfiguration?: unknown;
+      readonly providerNativeConfiguration?: unknown;
     }
   >;
   for (const [protocolId, rawProtocol] of Object.entries(clientProtocols)) {
@@ -183,7 +187,7 @@ export async function loadLuckyTokenCliConfig(
     );
     assertKeys(
       protocol,
-      ["stateFile", "conversion"],
+      ["stateFile", "conversion", "providerNative"],
       `clientProtocols.${protocolId}`,
     );
     const stateFile =
@@ -210,9 +214,21 @@ export async function loadLuckyTokenCliConfig(
     if (adapterConfiguration === undefined && protocol.conversion !== undefined) {
       throw new Error(`clientProtocols.${protocolId}.conversion requires an installed adapter parser`);
     }
+    const providerNativeConfiguration = protocolId === "openai-responses"
+      ? parseProviderNativeResponsesConfiguration(
+          protocol.providerNative,
+          `clientProtocols.${protocolId}.providerNative`,
+        )
+      : undefined;
+    if (providerNativeConfiguration === undefined && protocol.providerNative !== undefined) {
+      throw new Error(`clientProtocols.${protocolId}.providerNative requires an installed lane parser`);
+    }
     resolvedClientProtocols[protocolId] = Object.freeze({
       ...(stateFile === undefined ? {} : { stateFile }),
       ...(adapterConfiguration === undefined ? {} : { adapterConfiguration }),
+      ...(providerNativeConfiguration === undefined
+        ? {}
+        : { providerNativeConfiguration }),
     });
   }
   Object.freeze(resolvedClientProtocols);
@@ -231,7 +247,7 @@ export async function loadLuckyTokenCliConfig(
     limits: Object.freeze({
       maxRequestBytes: safeInteger(
         limits.maxRequestBytes,
-        32 * 1024 * 1024,
+        DEFAULT_MAX_REQUEST_BYTES,
         "limits.maxRequestBytes",
         1,
         Number.MAX_SAFE_INTEGER,

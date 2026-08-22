@@ -1,6 +1,8 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { DEFAULT_MAX_REQUEST_BYTES } from "./data-plane-limits.js";
+
 const CONFIG_FILE_MODE = 0o600;
 
 // Ticket 26: the desktop-owned backend's first-run configuration. When the
@@ -67,7 +69,7 @@ function firstRunConfig(): unknown {
       directory: "pi",
     },
     limits: {
-      maxRequestBytes: 1048576,
+      maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
       requestTimeoutMs: 120000,
     },
   };

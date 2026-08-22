@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 
 describe("LuckyToken CLI configuration", () => {
   const directories: string[] = [];
@@ -53,13 +54,45 @@ describe("LuckyToken CLI configuration", () => {
         "future-client-protocol": {},
       },
       pi: { directory: resolve(directory, "pi") },
-      limits: { maxRequestBytes: 32 * 1024 * 1024, requestTimeoutMs: 120_000 },
+      limits: { maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES, requestTimeoutMs: 120_000 },
     });
     expect(config.providerPackages).toEqual({});
     expect(Object.getPrototypeOf(config.providerPackages)).toBeNull();
     expect(config.failureLogging.directory).toBe(resolve(directory, "logs/failed-requests"));
     expect(Object.getPrototypeOf(config.clientProtocols)).toBeNull();
     expect(config.clientProtocols["toString"]).toBeUndefined();
+  });
+
+  it("loads Provider Native Responses retry policy independently from conversion", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cli-native-"));
+    directories.push(directory);
+    const path = join(directory, "config.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: "luckytoken-config-v1",
+        clientProtocols: {
+          "openai-responses": {
+            providerNative: {
+              transport: { maxRetries: 2, maxRetryDelayMs: 9_876 },
+            },
+          },
+        },
+        pi: { directory: "pi" },
+      }),
+      "utf8",
+    );
+
+    const config = await loadLuckyTokenCliConfig(path);
+
+    expect(
+      config.clientProtocols["openai-responses"]?.providerNativeConfiguration,
+    ).toEqual({
+      transport: { maxRetries: 2, maxRetryDelayMs: 9_876 },
+    });
+    expect(
+      config.clientProtocols["openai-responses"]?.adapterConfiguration,
+    ).toMatchObject({ conversion: expect.any(Object) });
   });
 
   it("rejects server.host because the Data Plane bind address is fixed to loopback", async () => {

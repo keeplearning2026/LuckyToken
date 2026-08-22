@@ -53,7 +53,7 @@
     "directory": "pi"
   },
   "limits": {
-    "maxRequestBytes": 1048576,
+    "maxRequestBytes": 268435456,
     "requestTimeoutMs": 120000
   }
 }

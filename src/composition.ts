@@ -21,6 +21,7 @@ import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import type { PublicModelSource } from "./public-model-seam.js";
 import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/index.js";
 import { createProviderNativeResponses } from "./provider-native-responses/index.js";
+import { bindProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
 import { resolveRequestModel } from "./providers/request-composition.js";
 import { resolveUsageSemantics } from "./providers/usage-declarations.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
@@ -153,6 +154,9 @@ export async function createConfiguredLuckyTokenDataPlane(
     const providerNativeLane = createProviderNativeResponses({
       models: options.models,
       fetch: options.fetch,
+      configuration: bindProviderNativeResponsesConfiguration(
+        responsesConfig.providerNativeConfiguration,
+      ),
     });
     const localNativeLane =
       options.codexLocalAuth === undefined ||

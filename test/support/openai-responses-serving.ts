@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
@@ -134,7 +135,7 @@ export async function createOpenAIResponsesServingTestComposition(
       ? {}
       : { createResponseId: options.createResponseId }),
     ...(options.now === undefined ? {} : { now: options.now }),
-    maxRequestBytes: options.maxRequestBytes ?? 32 * 1024 * 1024,
+    maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
     ...(options.configuration === undefined
       ? {}
       : { configuration: options.configuration }),

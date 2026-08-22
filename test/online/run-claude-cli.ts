@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
@@ -747,7 +748,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       },
       providerPackages: {},
       pi: { directory: "pi" },
-      limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: REQUEST_TIMEOUT_MS },
+      limits: { maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES, requestTimeoutMs: REQUEST_TIMEOUT_MS },
     }),
     "utf8",
   );

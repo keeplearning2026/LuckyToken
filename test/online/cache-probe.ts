@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
@@ -75,7 +76,7 @@ async function main(): Promise<void> {
         },
         pi: { directory: "pi" },
         limits: {
-          maxRequestBytes: 32_000_000,
+          maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
           requestTimeoutMs: REQUEST_TIMEOUT_MS,
         },
       }),

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createFirstRunConfig } from "../../src/first-run-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 
 describe("desktop first-run configuration template", () => {
   const directories: string[] = [];
@@ -29,6 +30,7 @@ describe("desktop first-run configuration template", () => {
       readonly server?: { readonly port?: unknown };
       readonly clientProtocols?: Record<string, unknown>;
       readonly pi?: { readonly directory?: unknown };
+      readonly limits?: { readonly maxRequestBytes?: unknown };
     };
     expect(parsed.schemaVersion).toBe("luckytoken-config-v1");
     expect(parsed.server).toEqual({ port: 3000 });
@@ -37,6 +39,8 @@ describe("desktop first-run configuration template", () => {
     expect(parsed.clientProtocols?.["anthropic-messages"]).not.toHaveProperty("authFile");
     expect(parsed.clientProtocols?.["openai-responses"]).not.toHaveProperty("authFile");
     expect(parsed.pi).toHaveProperty("directory");
+    expect(DEFAULT_MAX_REQUEST_BYTES).toBe(256 * 1024 * 1024);
+    expect(parsed.limits?.maxRequestBytes).toBe(DEFAULT_MAX_REQUEST_BYTES);
 
     if (process.platform === "win32") return; // Windows mode bits are advisory
     const mode = await stat(configPath);

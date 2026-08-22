@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
@@ -699,7 +700,7 @@ export async function runOpenAIResponsesOnlineSuite(
         providerPackages: {},
         pi: { directory: "pi" },
         limits: {
-          maxRequestBytes: 1_048_576,
+          maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
           requestTimeoutMs: REQUEST_TIMEOUT_MS,
         },
       }),

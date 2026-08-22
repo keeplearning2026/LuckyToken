@@ -1,6 +1,11 @@
 import type { AuthResult, Model } from "@earendil-works/pi-ai";
 
-import { appendEndpoint, applyHeaders, rewriteModelJson } from "./common.js";
+import {
+  appendEndpoint,
+  applyHeaders,
+  executeProviderFetch,
+  rewriteModelJson,
+} from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
   ProviderResponsesOperation,
@@ -93,13 +98,12 @@ export function createAzureResponsesSender(
       });
       applyHeaders(headers, options.model.headers);
       applyHeaders(headers, options.auth.auth.headers);
-      applyHeaders(headers, options.forwardedHeaders);
       headers.set("content-type", "application/json");
 
       const endpoint = operation === "compact" ? "/responses/compact" : "/responses";
       const url = new URL(appendEndpoint(baseUrl, endpoint));
       url.searchParams.set("api-version", apiVersion);
-      return options.fetch(url, {
+      return executeProviderFetch(options.fetch, url, {
         method: "POST",
         headers,
         body: rewritten.text,

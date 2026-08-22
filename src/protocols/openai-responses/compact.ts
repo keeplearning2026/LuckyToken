@@ -83,7 +83,7 @@ async function providerCompact(
     const response = await lane.execute({
       model,
       rawBody,
-      request,
+      signal: request.signal,
       operation: "compact",
     });
     upstream = await bufferNativeResponsesResponse(response, request.signal);

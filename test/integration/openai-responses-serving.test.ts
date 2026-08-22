@@ -398,6 +398,25 @@ describe("OpenAI Responses serving", () => {
     expect(body.error.type).toBe("request_too_large");
   });
 
+  it("admits Responses bodies above the previous 32 MiB default", async () => {
+    const { runtime } = await start({
+      fetch: async () => {
+        throw new Error("unknown models must not reach an upstream");
+      },
+    });
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "unknown/provider",
+          input: "x".repeat(32 * 1024 * 1024),
+        },
+        "client-token",
+      ),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   it("returns 404 for an unknown model selector", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),

@@ -30,7 +30,15 @@ Responses request
 → provider-native Responses transport
 ```
 
-This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, and response alias projection.
+This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, LuckyToken constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
+
+- OpenAI-compatible Responses uses Pi model/auth facts and Pi session-affinity formats (`openai`, `openai-nosession`, or `openrouter`).
+- Azure Responses uses Pi's normalized endpoint, deployment identity, API version, and `api-key` authentication without session headers.
+- Codex Responses uses the Pi SSE contract: OAuth account identity, `originator: pi`, Pi user agent, experimental Responses header, effective session headers, and zstd when available. WebSocket parity is outside this contract.
+- Client credential, cookie, proxy, and `x-stainless-*` transport identity headers are not forwarded. Pi model/auth headers are authoritative.
+- The body is not semantically reconstructed: only the top-level `model` string is projected. Unknown and future fields, JSON numeric spellings, whitespace, and nested values otherwise remain client-authored.
+
+Compact remains a separately tested native operation and does not inherit ordinary Responses retry/session parity.
 
 ### 1.3 Semantic Conversion
 
@@ -340,6 +348,23 @@ Native coverage must never be used to claim completeness for Responses↔Pi conv
 ## 13. Configuration and composition
 
 The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds request identity, local/provider native lane seams, state store, resolvers, notices, semantic execution, and rendering without copying Responses business rules into Runtime.
+
+```json
+{
+  "clientProtocols": {
+    "openai-responses": {
+      "providerNative": {
+        "transport": {
+          "maxRetries": 0,
+          "maxRetryDelayMs": 60000
+        }
+      }
+    }
+  }
+}
+```
+
+`maxRetries` defaults to `0` and accepts integers from `0` through `100`. `maxRetryDelayMs` defaults to `60000`; `0` disables the cap on a server-requested retry delay. Retry applies only to ordinary Provider Native Responses HTTP execution. OpenAI/Azure follow the pinned Pi/OpenAI SDK retry classification and jitter; Codex SSE follows Pi Codex transient/quota classification and one-second exponential base. Cancellation aborts both fetch and backoff. Exhausted retries return the final upstream response unchanged; transport/backoff failure returns the fixed Provider Native 502 response and never falls through to another lane.
 
 ## 14. Evidence note
 

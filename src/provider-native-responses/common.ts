@@ -1,4 +1,18 @@
-import type { ProviderHeaders } from "@earendil-works/pi-ai";
+import type { FetchFunction, ProviderHeaders } from "@earendil-works/pi-ai";
+
+import { ProviderResponsesNetworkError } from "./contract.js";
+
+export async function executeProviderFetch(
+  fetch: FetchFunction,
+  input: RequestInfo | URL,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    throw new ProviderResponsesNetworkError(error);
+  }
+}
 
 export function appendEndpoint(baseUrl: string, endpoint: string): string {
   const url = new URL(baseUrl);

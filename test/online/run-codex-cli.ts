@@ -58,6 +58,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { buildCodexCatalog } from "../../src/integrations/codex/catalog.js";
 import { createCodexCatalogValidator } from "../../src/integrations/codex/catalog-validator.js";
 import { createCodexIntegrationAuthority } from "../../src/integrations/codex/integration.js";
@@ -1513,7 +1514,7 @@ export async function runCodexCliOnlineSuite(
       providerPackages: {},
       pi: { directory: "pi" },
       limits: {
-        maxRequestBytes: 1_048_576,
+        maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
       },
     }),

@@ -41,7 +41,13 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
   async function serve(
     modelsJson: Record<string, unknown>,
     fetch: FetchFunction,
-    options: { readonly env?: Readonly<Record<string, string>> } = {},
+    options: {
+      readonly env?: Readonly<Record<string, string>>;
+      readonly nativeTransport?: {
+        readonly maxRetries: number;
+        readonly maxRetryDelayMs?: number;
+      };
+    } = {},
   ): Promise<{
     readonly clientToken: string;
     readonly responsesToken: string;
@@ -64,7 +70,9 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
-          "openai-responses": {},
+          "openai-responses": options.nativeTransport === undefined
+            ? {}
+            : { providerNative: { transport: options.nativeTransport } },
         },
         pi: { directory: "pi", modelsJson: "pi/models.json" },
       }),
@@ -262,6 +270,50 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     // never duplicated.
     expect(headers.get("authorization")).toBe("Bearer openai-key");
     expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  it("applies the configured Provider Native retry policy in the production composition", async () => {
+    let upstreamCalls = 0;
+    const { responsesToken, runtime } = await serve(
+      {
+        providers: {
+          openai: {
+            apiKey: "openai-key",
+            modelOverrides: { "gpt-4": { name: "Noop" } },
+          },
+        },
+      },
+      async (input) => {
+        if (String(input).includes("/provider/v1/models")) {
+          return new Response(JSON.stringify({ object: "list", data: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        upstreamCalls += 1;
+        return upstreamCalls === 1
+          ? new Response("rate limited", {
+              status: 429,
+              headers: { "retry-after-ms": "0" },
+            })
+          : responsesJsonResponse();
+      },
+      { nativeTransport: { maxRetries: 1 } },
+    );
+
+    const response = await runtime.handle(
+      new Request("http://luckytoken.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${responsesToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ model: "openai/gpt-4", input: "hello" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(2);
   });
 
   it("accepts header-only cf-aig-authorization auth for the built-in cloudflare-ai-gateway on the Responses passthrough wire", async () => {

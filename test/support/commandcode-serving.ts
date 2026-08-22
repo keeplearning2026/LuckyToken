@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
 import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   certifyServingComposition,
@@ -103,7 +104,7 @@ export function createCommandCodeServingTestComposition(
   const compatibilitySource = options.commandCodeCompatibility ?? {};
   const routerDefaults = Object.freeze({ ...(options.routerDefaults ?? {}) });
   const model = createModel(options);
-  const maxRequestBytes = options.maxRequestBytes ?? 1_048_576;
+  const maxRequestBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
   const certification = certifyServingComposition({
     model,
     modelValidityPolicyRevision:

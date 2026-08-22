@@ -3,7 +3,11 @@ import { arch, platform, release } from "node:os";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
 
 import { resolveRequestModel } from "../providers/request-composition.js";
-import { applyHeaders, rewriteModelJson } from "./common.js";
+import {
+  applyHeaders,
+  executeProviderFetch,
+  rewriteModelJson,
+} from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
   ProviderResponsesOperation,
@@ -80,7 +84,6 @@ export function createCodexResponsesSender(
       const headers = new Headers();
       applyHeaders(headers, model.headers);
       applyHeaders(headers, options.auth.auth.headers);
-      applyHeaders(headers, options.forwardedHeaders);
       headers.set("authorization", `Bearer ${token}`);
       headers.set("chatgpt-account-id", accountId);
       headers.set("originator", "pi");
@@ -94,15 +97,20 @@ export function createCodexResponsesSender(
         headers.set("accept", "application/json");
         headers.delete("content-encoding");
       } else {
+        if (options.sessionId === undefined) {
+          throw new Error("Provider Native Responses requires a session ID");
+        }
         headers.set("openai-beta", "responses=experimental");
         headers.set("accept", "text/event-stream");
+        headers.set("session-id", options.sessionId);
+        headers.set("x-client-request-id", options.sessionId);
         if (compressed !== undefined) headers.set("content-encoding", "zstd");
         else headers.delete("content-encoding");
       }
       const url = isCompact
         ? `${resolveCodexUrl(model.baseUrl)}/compact`
         : resolveCodexUrl(model.baseUrl);
-      return options.fetch(url, {
+      return executeProviderFetch(options.fetch, url, {
         method: "POST",
         headers,
         body: compressed ?? rewritten.text,

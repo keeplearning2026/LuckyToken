@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   type ConfiguredLuckyTokenDataPlane,
@@ -417,7 +418,7 @@ export async function runCommandCodeOnlineSuite(
         providerPackages: {},
         pi: { directory: "pi" },
         limits: {
-          maxRequestBytes: 1_048_576,
+          maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
           requestTimeoutMs: REQUEST_TIMEOUT_MS,
         },
       }),

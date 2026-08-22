@@ -3,9 +3,23 @@ import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import {
-  createProviderResponsesSender as createResponsesNativeSender,
+  createProviderResponsesSender,
+  type CreateProviderResponsesSenderOptions,
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
+
+const SESSION_ID = "00000000-0000-4000-8000-000000000123";
+
+function createResponsesNativeSender(
+  options: Omit<CreateProviderResponsesSenderOptions, "sessionId"> & {
+    readonly sessionId?: string;
+  },
+) {
+  return createProviderResponsesSender({
+    ...options,
+    sessionId: options.sessionId ?? SESSION_ID,
+  });
+}
 
 function model(
   provider: string,
@@ -184,6 +198,67 @@ describe("Responses native provider sender", () => {
     expect(captured.requests[0]?.headers.get("authorization")).toBe(
       "Bearer provider-key",
     );
+  });
+
+  it.each([
+    ["openai", undefined, "session_id", true],
+    ["fixture", "openai-nosession", "session_id", false],
+    ["openrouter", undefined, "x-session-id", true],
+  ] as const)(
+    "mirrors Pi %s session affinity headers",
+    async (provider, sessionAffinityFormat, primaryHeader, primaryPresent) => {
+      const captured = capture();
+      const candidate = model(
+        provider,
+        "openai-responses",
+        provider === "openrouter"
+          ? "https://openrouter.ai/api/v1"
+          : "https://responses.example.com/v1",
+      );
+      if (sessionAffinityFormat !== undefined) {
+        (candidate as Model<"openai-responses">).compat = {
+          sessionAffinityFormat,
+        };
+      }
+      const sender = createResponsesNativeSender({
+        model: candidate,
+        auth: auth({ apiKey: "provider-key" }),
+        fetch: captured.fetch,
+      });
+
+      await sender!.send(
+        "responses",
+        JSON.stringify({ model: "alias", input: "hello" }),
+        AbortSignal.timeout(5_000),
+      );
+
+      const headers = captured.requests[0]!.headers;
+      expect(headers.has(primaryHeader)).toBe(primaryPresent);
+      if (primaryPresent) expect(headers.get(primaryHeader)).toBe(SESSION_ID);
+      expect(headers.get("x-client-request-id")).toBe(
+        provider === "openrouter" ? null : SESSION_ID,
+      );
+    },
+  );
+
+  it("does not extend ordinary Responses session affinity to Compact", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      auth: auth({ apiKey: "provider-key" }),
+      fetch: captured.fetch,
+    });
+
+    await sender!.send(
+      "compact",
+      JSON.stringify({ model: "alias", input: [] }),
+      AbortSignal.timeout(5_000),
+    );
+
+    const headers = captured.requests[0]!.headers;
+    expect(headers.has("session_id")).toBe(false);
+    expect(headers.has("x-client-request-id")).toBe(false);
+    expect(headers.has("x-session-id")).toBe(false);
   });
 
   it("uses Cloudflare header-owned auth and materializes its gateway base URL", async () => {

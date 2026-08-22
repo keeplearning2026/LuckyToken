@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 
@@ -87,7 +88,7 @@ async function main(): Promise<void> {
       },
       pi: { directory: "pi" },
       limits: {
-        maxRequestBytes: 1_048_576,
+        maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
         requestTimeoutMs: 120_000,
       },
     }),

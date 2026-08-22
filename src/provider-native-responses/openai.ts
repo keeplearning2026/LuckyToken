@@ -4,6 +4,7 @@ import { resolveRequestModel } from "../providers/request-composition.js";
 import {
   appendEndpoint,
   applyHeaders,
+  executeProviderFetch,
   hasHeader,
   rewriteModelJson,
 } from "./common.js";
@@ -59,6 +60,24 @@ function copilotDynamicHeaders(body: Record<string, unknown>): Record<string, st
   };
 }
 
+function applySessionAffinityHeaders(
+  headers: Headers,
+  model: Model<string>,
+  sessionId: string,
+): void {
+  const format =
+    (model as Model<"openai-responses">).compat?.sessionAffinityFormat ??
+    (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")
+      ? "openrouter"
+      : "openai");
+  if (format === "openrouter") {
+    headers.set("x-session-id", sessionId);
+    return;
+  }
+  if (format === "openai") headers.set("session_id", sessionId);
+  headers.set("x-client-request-id", sessionId);
+}
+
 export function createOpenAIResponsesSender(
   options: CreateProviderResponsesSenderOptions,
 ): ProviderResponsesSender {
@@ -89,12 +108,18 @@ export function createOpenAIResponsesSender(
       if (model.provider === "github-copilot") {
         applyHeaders(headers, copilotDynamicHeaders(rewritten.parsed));
       }
+      if (operation === "responses") {
+        if (options.sessionId === undefined) {
+          throw new Error("Provider Native Responses requires a session ID");
+        }
+        applySessionAffinityHeaders(headers, model, options.sessionId);
+      }
       applyHeaders(headers, options.auth.auth.headers);
-      applyHeaders(headers, options.forwardedHeaders);
       headers.set("content-type", "application/json");
 
       const endpoint = operation === "compact" ? "/responses/compact" : "/responses";
-      return options.fetch(appendEndpoint(model.baseUrl, endpoint), {
+      const url = appendEndpoint(model.baseUrl, endpoint);
+      return executeProviderFetch(options.fetch, url, {
         method: "POST",
         headers,
         body: rewritten.text,
