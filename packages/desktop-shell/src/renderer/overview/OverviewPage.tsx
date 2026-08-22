@@ -554,6 +554,37 @@ export function OverviewPage({
                               <p>{suggestedAction(row.status)}</p>
                               <span>{row.providerId === "-" ? row.protocolName : row.providerId}</span>
                             </section>
+                            {row.credentialCapture !== undefined ? (
+                              <section>
+                                <strong>Provider Profile</strong>
+                                <p>
+                                  {row.credentialCapture.displayName} · {row.credentialCapture.authMethodLabel}
+                                </p>
+                                <span>
+                                  {row.credentialCapture.lane === "provider_native"
+                                    ? "Provider Native"
+                                    : "Semantic Conversion"}
+                                </span>
+                                {row.credentialAttempts.length > 0 ? (
+                                  <ol className="credential-activity-trail">
+                                    {row.credentialAttempts.map((attempt) => (
+                                      <li key={`${attempt.attempt}-${attempt.credentialId}`}>
+                                        {attempt.displayName} — {attempt.outcome === "http_429"
+                                          ? "HTTP 429"
+                                          : attempt.outcome === "success"
+                                            ? "Success"
+                                            : attempt.outcome === "aborted"
+                                              ? "Aborted"
+                                              : "Failed"}
+                                        {attempt.selectionReason === "http_429_switch"
+                                          ? " · HTTP 429 failover"
+                                          : ""}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                ) : null}
+                              </section>
+                            ) : null}
                           </div>
                         </td>
                       </tr>

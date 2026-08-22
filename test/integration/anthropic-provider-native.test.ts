@@ -2,10 +2,18 @@ import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import {
+  ambientProfileBindings,
+  fixedManagedProfileBindings,
+} from "../support/profile-binding-fixture.js";
+import type {
+  ManagedProviderAuthBindingCapture,
+  ProviderAuthBindingCapture,
+} from "../../src/credentials/profile-contract.js";
 
 function model(api = "anthropic-messages", baseUrl = "https://provider.example.com/prefix"): Model<string> {
   return {
-    id: "claude-test", name: "Claude Test", api, provider: "fixture", baseUrl,
+    id: "claude-test", name: "Claude Test", api, provider: "anthropic", baseUrl,
     reasoning: false, input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1_000, maxTokens: 100,
@@ -34,9 +42,13 @@ function createLane(
   fetch: FetchFunction,
   auth: unknown = { auth: { apiKey: "provider-key" }, source: "fixture" },
   resolveRequestModel: (value: Model<string>) => Model<string> = (value) => value,
+  bindings = ambientProfileBindings,
 ) {
   return createAnthropicProviderNativeLane({
-    models: modelsWithAuth(auth), resolveRequestModel, fetch,
+    models: modelsWithAuth(auth),
+    bindings,
+    resolveRequestModel,
+    fetch,
   });
 }
 
@@ -45,7 +57,7 @@ describe("Anthropic Provider Native lane", () => {
     const lane = createLane(async () => new Response());
     expect(lane.claims(model())).toBe(true);
     expect(lane.claims(model("openai-responses"))).toBe(false);
-    expect(lane.claims({ ...model(), provider: "unrelated-vendor" })).toBe(true);
+    expect(lane.claims({ ...model(), provider: "unrelated-vendor" })).toBe(false);
   });
 
   it("requires Provider-owned auth before dispatch", async () => {
@@ -63,6 +75,87 @@ describe("Anthropic Provider Native lane", () => {
     expect(onExecutionStart).not.toHaveBeenCalled();
   });
 
+  it("projects a validated final-429 Retry-After fact into its own Profile transition", async () => {
+    let transitionInput: unknown;
+    const managed = fixedManagedProfileBindings("api_key");
+    const lane = createLane(
+      async () => new Response("limited", {
+        status: 429,
+        headers: { "retry-after": "2" },
+      }),
+      { auth: { apiKey: "provider-key" }, source: "fixture" },
+      (value) => value,
+      {
+        capture: managed.capture,
+        runBound: managed.runBound,
+        advanceAfterFinal429: async (input) => {
+          transitionInput = input;
+          return { outcome: "exhausted" };
+        },
+      },
+    );
+
+    const result = await lane.execute({
+      model: model(),
+      rawBody: '{"model":"fixture/claude-test","messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(transitionInput).toMatchObject({
+      attemptedCredentialIds: ["credential-a"],
+      retryAfterMs: 2_000,
+    });
+  });
+
+  it("stops after three outer Profile attempts even if a binding Adapter keeps switching", async () => {
+    const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
+      facts: {
+        kind: "managed",
+        providerId: "fixture",
+        credentialId: `credential-${index}`,
+        authType: "api_key",
+        authMethodLabel: "Fixture credentials",
+        displayName: `Profile ${index}`,
+        credentialGeneration: `credential-generation-${index}`,
+        selectionGeneration: `selection-generation-${index}`,
+      },
+    }));
+    let transitions = 0;
+    let calls = 0;
+    const lane = createLane(
+      async () => {
+        calls += 1;
+        return new Response("limited", { status: 429 });
+      },
+      { auth: { apiKey: "provider-key" }, source: "fixture" },
+      (value) => value,
+      {
+        capture: async () => captures[0]!,
+        runBound: async <T>(_binding: ProviderAuthBindingCapture, operation: () => Promise<T>) =>
+          operation(),
+        advanceAfterFinal429: async () => ({
+          outcome: "switched",
+          capture: captures[++transitions]!,
+        }),
+      },
+    );
+
+    const result = await lane.execute({
+      model: model(),
+      rawBody: '{"model":"fixture/claude-test","messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(calls).toBe(3);
+    expect(transitions).toBe(2);
+  });
+
   it("keeps auth-resolution failures diagnostic-only", async () => {
     const fetch = vi.fn(async () => new Response());
     const lane = createAnthropicProviderNativeLane({
@@ -71,6 +164,7 @@ describe("Anthropic Provider Native lane", () => {
           throw new Error("secret credential source failed");
         },
       } as unknown as Pick<Models, "getAuth">,
+      bindings: ambientProfileBindings,
       resolveRequestModel: (value) => value,
       fetch: fetch as unknown as FetchFunction,
     });
@@ -114,13 +208,16 @@ describe("Anthropic Provider Native lane", () => {
     expect(onExecutionStart).toHaveBeenCalledTimes(1);
     const call = calls[0];
     expect(String(call?.[0])).toBe("https://effective.example.com/gateway/v1/messages");
-    expect(call?.[1]?.body).toBe('{"model":"claude-test","max_tokens":1,"messages":[]}');
+    expect(call?.[1]?.body).toBe(
+      '{ "model": "claude-test", "max_tokens": 1, "messages": [] }',
+    );
     const headers = new Headers(call?.[1]?.headers);
     expect(headers.get("x-api-key")).toBe("provider-key");
     expect(headers.get("authorization")).toBe("Bearer provider-token");
     expect(headers.get("x-operator")).toBe("operator");
-    expect(headers.get("anthropic-beta")).toBe("tools-2025-04-14");
-    expect(headers.get("x-stainless-timeout")).toBe("60000");
+    expect(headers.get("anthropic-beta")).not.toBe("tools-2025-04-14");
+    expect(headers.get("x-stainless-timeout")).not.toBe("60000");
+    expect(headers.get("authorization")).not.toBe("Bearer client-secret");
     expect(headers.get("cookie")).toBeNull();
     expect(headers.get("content-length")).toBeNull();
     expect(result.response.status).toBe(201);
@@ -128,6 +225,241 @@ describe("Anthropic Provider Native lane", () => {
     expect(result.response.headers.get("x-ratelimit-remaining")).toBe("42");
     expect(result.response.headers.get("set-cookie")).toBeNull();
     expect(result.response.headers.get("x-api-key")).toBeNull();
+  });
+
+  it("selects the closed Anthropic OAuth body and envelope differential from the managed binding", async () => {
+    let upstreamRequest: Request | undefined;
+    const captures: unknown[] = [];
+    const attempts: unknown[] = [];
+    const lane = createLane(
+      async (input, init) => {
+        upstreamRequest = new Request(input, init);
+        return new Response(
+          '{"type":"message","model":"claude-test","content":[]}',
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+      { auth: { apiKey: "not-an-oauth-shaped-token" }, source: "fixture" },
+      (value) => value,
+      fixedManagedProfileBindings("oauth"),
+    );
+    const rawBody = JSON.stringify({
+      model: "anthropic/claude-test",
+      system: "Client instruction",
+      tools: [
+        { name: "read", input_schema: { type: "object", properties: {} } },
+      ],
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "t1", name: "bash", input: {} },
+          ],
+        },
+      ],
+    });
+
+    const result = await lane.execute({
+      model: { ...model(), provider: "anthropic" },
+      rawBody,
+      request: request(),
+      requestId: "req_client",
+      sessionId: "session-client",
+      onExecutionStart: () => undefined,
+      credentialActivity: {
+        credentialCaptured: (capture) => captures.push(capture),
+        credentialAttempt: (attempt) => attempts.push(attempt),
+      },
+    });
+
+    expect(result.outcome).toBe("success");
+    const sent = JSON.parse(await upstreamRequest!.text()) as Record<
+      string,
+      unknown
+    >;
+    expect(sent).toMatchObject({
+      model: "claude-test",
+      system: [
+        {
+          type: "text",
+          text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        },
+        { type: "text", text: "Client instruction" },
+      ],
+      tools: [{ name: "Read" }],
+      messages: [
+        { content: [{ type: "tool_use", name: "Bash" }] },
+      ],
+    });
+    expect(upstreamRequest!.headers.get("authorization")).toBe(
+      "Bearer not-an-oauth-shaped-token",
+    );
+    expect(upstreamRequest!.headers.get("x-api-key")).toBeNull();
+    expect(upstreamRequest!.headers.get("user-agent")).toBe("claude-cli/2.1.75");
+    expect(upstreamRequest!.headers.get("x-app")).toBe("cli");
+    expect(upstreamRequest!.headers.get("anthropic-beta")).toContain(
+      "claude-code-20250219",
+    );
+    expect(upstreamRequest!.headers.get("anthropic-beta")).toContain(
+      "oauth-2025-04-20",
+    );
+    expect(upstreamRequest!.headers.get("x-session-affinity")).toBeNull();
+    expect(captures).toEqual([
+      expect.objectContaining({
+        authType: "oauth",
+        authMethodLabel: "Account",
+        lane: "provider_native",
+        selectionReason: "active",
+      }),
+    ]);
+    expect(attempts).toEqual([
+      expect.objectContaining({ attempt: 1, outcome: "success" }),
+    ]);
+  });
+
+  it("does not select OAuth behavior from token text or an ambient binding", async () => {
+    const bodies: string[] = [];
+    const headers: Headers[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      const sent = new Request(input, init);
+      bodies.push(await sent.text());
+      headers.push(sent.headers);
+      return new Response(
+        '{"type":"message","model":"claude-test","content":[]}',
+        { headers: { "content-type": "application/json" } },
+      );
+    };
+    const auth = {
+      auth: { apiKey: "sk-ant-oat-misleading-text" },
+      source: "fixture",
+    };
+    const managedApiKey = createLane(
+      fetch,
+      auth,
+      (value) => value,
+      fixedManagedProfileBindings("api_key"),
+    );
+    const ambient = createLane(fetch, auth);
+    const input = {
+      model: { ...model(), provider: "anthropic" },
+      rawBody: '{ "model": "anthropic/claude-test", "messages": [] }',
+      request: request(),
+      requestId: "req_client",
+      sessionId: "session-client",
+      onExecutionStart: () => undefined,
+    } as const;
+
+    await managedApiKey.execute(input);
+    await ambient.execute(input);
+
+    expect(bodies).toEqual([
+      '{ "model": "claude-test", "messages": [] }',
+      '{ "model": "claude-test", "messages": [] }',
+    ]);
+    expect(headers[0]!.get("x-api-key")).toBe("sk-ant-oat-misleading-text");
+    expect(headers[0]!.get("authorization")).toBeNull();
+    expect(headers[1]!.get("x-api-key")).toBe("sk-ant-oat-misleading-text");
+    expect(headers[1]!.get("authorization")).toBeNull();
+  });
+
+  it("projects validated session affinity only for models that declare it", async () => {
+    const sent: Request[] = [];
+    const lane = createLane(
+      async (input, init) => {
+        sent.push(new Request(input, init));
+        return new Response(
+          '{"type":"message","model":"claude-test","content":[]}',
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+      undefined,
+      (value) => value,
+      fixedManagedProfileBindings("api_key"),
+    );
+    const compatibleModel = {
+      ...model(),
+      provider: "anthropic",
+      compat: { sendSessionAffinityHeaders: true },
+    } as unknown as Model<string>;
+
+    await lane.execute({
+      model: compatibleModel,
+      rawBody: '{"model":"anthropic/claude-test","messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      sessionId: "validated-session",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(sent[0]!.headers.get("x-session-affinity")).toBe(
+      "validated-session",
+    );
+  });
+
+  it("reconstructs the pinned GitHub Copilot bearer and request-intent headers", async () => {
+    let sent: Request | undefined;
+    const lane = createLane(
+      async (input, init) => {
+        sent = new Request(input, init);
+        return new Response(
+          '{"type":"message","model":"claude-test","content":[]}',
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+      { auth: { apiKey: "copilot-token" }, source: "fixture" },
+    );
+
+    await lane.execute({
+      model: { ...model(), provider: "github-copilot" },
+      rawBody: JSON.stringify({
+        model: "github-copilot/claude-test",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AA==" },
+              },
+            ],
+          },
+          { role: "assistant", content: [{ type: "text", text: "working" }] },
+        ],
+      }),
+      request: request(),
+      requestId: "req_client",
+      sessionId: "validated-session",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(sent!.headers.get("authorization")).toBe("Bearer copilot-token");
+    expect(sent!.headers.get("x-api-key")).toBeNull();
+    expect(sent!.headers.get("x-initiator")).toBe("agent");
+    expect(sent!.headers.get("openai-intent")).toBe("conversation-edits");
+    expect(sent!.headers.get("copilot-vision-request")).toBe("true");
+    expect(sent!.headers.get("x-session-affinity")).toBeNull();
+  });
+
+  it("fails before fetch when the OAuth differential cannot be applied safely", async () => {
+    const fetch = vi.fn(async () => new Response());
+    const lane = createLane(
+      fetch as unknown as FetchFunction,
+      { auth: { apiKey: "oauth-token" }, source: "fixture" },
+      (value) => value,
+      fixedManagedProfileBindings("oauth"),
+    );
+
+    const result = await lane.execute({
+      model: { ...model(), provider: "anthropic" },
+      rawBody: '{"model":"anthropic/claude-test","system":42,"messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.response.status).toBe(502);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("accepts header-only auth without fabricating an API key", async () => {
@@ -225,7 +557,7 @@ describe("Anthropic Provider Native lane", () => {
       return await new Promise<Response>(() => undefined);
     });
     await expect(cancelledLane.execute({
-      model: model(), rawBody: "{}", request: request(controller.signal),
+      model: model(), rawBody: '{"model":"fixture/claude-test"}', request: request(controller.signal),
       requestId: "req_client", onExecutionStart: () => undefined,
     })).rejects.toThrow("client closed");
   });

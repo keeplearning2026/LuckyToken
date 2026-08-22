@@ -35,8 +35,8 @@ import { createPersistenceDegradationAuthority } from "../../src/persistence-deg
  * preview; previews equal actual deletions; partial failure is reported per
  * authority (three SQLite files cannot delete atomically and no blanket
  * claim is made); and deletion provably cannot touch settings.json,
- * models.json, model-aliases.json, auth.json, Client Token files, or
- * failure journals (byte-compare).
+ * models.json, model-aliases.json, Provider Profile records, Client Token
+ * files, or failure journals (byte-compare).
  */
 
 let requestIdCounter = 0;
@@ -381,11 +381,14 @@ describe("History deletion through the Control Plane (Ticket 23)", () => {
       join(fx.root, "settings.json"),
       join(fx.root, "models.json"),
       join(fx.root, "model-aliases.json"),
-      join(fx.root, "auth.json"),
+      join(fx.root, "provider-credential-profiles", "provider-a.json"),
       join(fx.root, "client-auth", "anthropic-messages.json"),
       join(fx.root, "state", "failure-journal.jsonl"),
     ];
     await mkdir(join(fx.root, "client-auth"), { recursive: true });
+    await mkdir(join(fx.root, "provider-credential-profiles"), {
+      recursive: true,
+    });
     await mkdir(join(fx.root, "state"), { recursive: true });
     const contents = new Map<string, string>();
     for (const [index, path] of unrelated.entries()) {

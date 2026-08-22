@@ -151,7 +151,7 @@ describe("catalog composition runtime", () => {
     const { models, catalog } = await createConfiguredPiModels({
       piDirectory: ".unused-in-memory-pi",
       modelsStore: store,
-      credentials: new InMemoryCredentialStore(),
+      credentialSeedStore: new InMemoryCredentialStore(),
       fetch: async () => new Response(null, { status: 500 }),
       providerPackages: Object.freeze({
         "@fixture/dynamic": {},
@@ -170,17 +170,17 @@ describe("catalog composition runtime", () => {
     expect(catalog.models.getModel("dynamic-pkg", "cached-model")).toBeDefined();
   });
 
-  it("schedules a background refresh when a Provider login succeeds", async () => {
+  it("keeps direct Pi login free of hidden Catalog scheduling", async () => {
     const files = new Map<string, string>();
     const store = createCatalogCacheStore({
       path: "C:\\app\\models-catalog-cache.json",
       fileSystem: memoryFileSystem(files),
     });
-    const onProviderLogin = vi.fn();
-    const { models } = await createConfiguredPiModels({
+    const refreshModels = vi.fn(async () => []);
+    const { models, providerAuthBindings } = await createConfiguredPiModels({
       piDirectory: ".unused-in-memory-pi",
       modelsStore: store,
-      credentials: new InMemoryCredentialStore(),
+      credentialSeedStore: new InMemoryCredentialStore(),
       fetch: async () => new Response(null, { status: 500 }),
       providerPackages: Object.freeze({
         "@fixture/dynamic": {},
@@ -189,19 +189,27 @@ describe("catalog composition runtime", () => {
         dynamicPackage(
           createPackageProvider({
             id: "login-pkg",
-            fetch: async () => [],
+            fetch: refreshModels,
           }),
         ),
-      onProviderLogin,
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000003",
     });
-    await models.login("login-pkg", "api_key", {
-      prompt: async () => "secret",
-      notify: async () => undefined,
-      signal: new AbortController().signal,
+    const login = await providerAuthBindings.createLoginBinding({
+      providerId: "login-pkg",
+      authType: "api_key",
+      displayName: "Login fixture",
+      useNow: true,
+      expectedRevision: "absent",
     });
-    // The successful login reached the background-refresh seam.
-    expect(onProviderLogin).toHaveBeenCalledWith("login-pkg");
+    await providerAuthBindings.runBound(login, () =>
+      models.login("login-pkg", "api_key", {
+        prompt: async () => "secret",
+        notify: async () => undefined,
+        signal: new AbortController().signal,
+      }),
+    );
+    await Promise.resolve();
+    expect(refreshModels).not.toHaveBeenCalled();
   });
 });

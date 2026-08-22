@@ -19,6 +19,8 @@
  */
 import type {
   LedgerAttempt,
+  LedgerCredentialAttempt,
+  LedgerCredentialCapture,
   LedgerFailureSummary,
   LedgerNotice,
   LedgerOutcome,
@@ -365,6 +367,8 @@ export interface RequestLedgerDetailProjection extends RequestLedgerListProjecti
   readonly failure?: Readonly<LedgerFailureSummary>;
   readonly notices: readonly LedgerNotice[];
   readonly attempts: readonly LedgerAttempt[];
+  readonly credentialCapture?: Readonly<LedgerCredentialCapture>;
+  readonly credentialAttempts: readonly LedgerCredentialAttempt[];
 }
 
 export function projectRequestLedgerDetail(
@@ -396,5 +400,10 @@ export function projectRequestLedgerDetail(
       : { failure: record.facts.failure }),
     notices: record.facts?.notices ?? Object.freeze([]),
     attempts: record.facts?.attempts ?? Object.freeze([]),
+    ...(record.facts?.credentialCapture === undefined
+      ? {}
+      : { credentialCapture: record.facts.credentialCapture }),
+    credentialAttempts:
+      record.facts?.credentialAttempts ?? Object.freeze([]),
   });
 }

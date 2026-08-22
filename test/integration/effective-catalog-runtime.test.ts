@@ -85,6 +85,28 @@ describe("effective composition in the data plane", () => {
     );
   }
 
+  function piMessagesSseResponse(text: string): Response {
+    const usage = {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const events = [
+      { type: "start" },
+      { type: "text_start", contentIndex: 0 },
+      { type: "text_delta", contentIndex: 0, delta: text },
+      { type: "text_end", contentIndex: 0, content: text },
+      { type: "done", reason: "stop", usage },
+    ];
+    return new Response(
+      events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      { headers: { "content-type": "text/event-stream; charset=utf-8" } },
+    );
+  }
+
   async function serve(
     fixture: Awaited<ReturnType<typeof writeRuntimeFixture>>,
     fetch: FetchFunction,
@@ -95,13 +117,26 @@ describe("effective composition in the data plane", () => {
       fetch,
       ...(options?.credentials === undefined
         ? {}
-        : { credentials: options.credentials }),
+        : { credentialSeedStore: options.credentials }),
       createMessageId: () => "msg_effective",
       createSessionId: () => "00000000-0000-4000-8000-000000000270",
       now: () => 1_786_400_000_000,
     });
     compositions.push(composition);
     return composition;
+  }
+
+  async function withGlobalFetch<T>(
+    fetch: FetchFunction,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const original = globalThis.fetch;
+    (globalThis as { fetch: typeof globalThis.fetch }).fetch = fetch as typeof globalThis.fetch;
+    try {
+      return await operation();
+    } finally {
+      (globalThis as { fetch: typeof globalThis.fetch }).fetch = original;
+    }
   }
 
   function anthropicRequest(
@@ -219,32 +254,33 @@ describe("effective composition in the data plane", () => {
         broken: { baseUrl: "http://broken.example.com", models: [{ id: "m" }] },
         "ok-custom": {
           baseUrl: "http://ok.example.com",
-          api: "anthropic-messages",
+          api: "pi-messages",
           apiKey: "ok-key",
           models: [{ id: "m" }],
         },
       },
     });
-    const composition = await serve(
-      fixture,
-      async (input, init) => {
-        void init;
-        if (String(input).includes("/provider/v1/models")) {
-          return new Response(
-            JSON.stringify({ object: "list", data: [] }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        return anthropicJsonResponse("isolated");
-      },
-    );
+    const upstreamFetch: FetchFunction = async (input, init) => {
+      void init;
+      if (String(input).includes("/provider/v1/models")) {
+        return new Response(
+          JSON.stringify({ object: "list", data: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return piMessagesSseResponse("isolated");
+    };
+    const composition = await serve(fixture, upstreamFetch);
     // Both ids are user-configured; only the valid one is registered.
     expect(composition.userConfiguredProviderIds).toEqual([
       "broken",
       "ok-custom",
     ]);
-    const ok = await composition.runtime.handle(
-      anthropicRequest(fixture.clientToken, "ok-custom/m"),
+    const ok = await withGlobalFetch(
+      upstreamFetch,
+      () => composition.runtime.handle(
+        anthropicRequest(fixture.clientToken, "ok-custom/m"),
+      ),
     );
     expect(ok.status).toBe(200);
     // The broken provider never entered the data plane.
@@ -316,13 +352,13 @@ describe("effective composition in the data plane", () => {
         "my-radius": {
           baseUrl: "https://radius-gateway.example.com",
           oauth: "radius",
-          api: "anthropic-messages",
+          api: "pi-messages",
           apiKey: "radius-key",
           models: [{ id: "gateway-model" }],
         },
       },
     });
-    const composition = await serve(fixture, async (input, init) => {
+    const upstreamFetch: FetchFunction = async (input, init) => {
       const request = new Request(input, init);
       if (String(input).includes("/provider/v1/models")) {
         return new Response(
@@ -331,16 +367,20 @@ describe("effective composition in the data plane", () => {
         );
       }
       upstreamRequests.push(request);
-      return anthropicJsonResponse("custom radius");
-    });
+      return piMessagesSseResponse("custom radius");
+    };
+    const composition = await serve(fixture, upstreamFetch);
 
-    const served = await composition.runtime.handle(
-      anthropicRequest(fixture.clientToken, "my-radius/gateway-model"),
+    const served = await withGlobalFetch(
+      upstreamFetch,
+      () => composition.runtime.handle(
+        anthropicRequest(fixture.clientToken, "my-radius/gateway-model"),
+      ),
     );
     expect(served.status).toBe(200);
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://radius-gateway.example.com/v1/messages",
+      "https://radius-gateway.example.com/messages",
     );
   });
 

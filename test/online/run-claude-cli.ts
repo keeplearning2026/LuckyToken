@@ -778,7 +778,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       : { modelsJsonPath: config.pi.modelsJson }),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
-    credentials,
+    credentialSeedStore: credentials,
   });
   try {
     await preLogin.models.login(
@@ -799,7 +799,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   }
   const composition = await createConfiguredLuckyTokenDataPlane({
     config,
-    credentials,
+    credentialSeedStore: credentials,
     fetch: globalThis.fetch,
     ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });

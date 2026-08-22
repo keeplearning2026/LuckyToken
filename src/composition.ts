@@ -13,6 +13,7 @@ import type {
 } from "./codex-native-seam.js";
 import type { DeepCaptureAuthority } from "./deep-diagnostics/handler-seam.js";
 import { createExecutionOperation } from "./execution.js";
+import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
 import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
@@ -36,9 +37,13 @@ import {
   openaiResponsesProtocolId,
 } from "./protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "./protocols/openai-responses/session-state.js";
-import type { RequestLedger } from "./request-ledger/handler-seam.js";
+import {
+  credentialActivityForExecutionFacts,
+  type RequestLedger,
+} from "./request-ledger/handler-seam.js";
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
+import { createSemanticProfileExecution } from "./semantic-conversion/profile-execution.js";
 
 export type DataPlaneConfiguration = Readonly<
   Pick<
@@ -53,6 +58,7 @@ export type DataPlaneConfiguration = Readonly<
 export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly configuration: DataPlaneConfiguration;
   readonly models: Models;
+  readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly publicModels: PublicModelSource;
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
@@ -113,8 +119,14 @@ export async function createConfiguredLuckyTokenDataPlane(
     now,
     scrub: options.scrubSensitiveText,
   });
+  const semanticExecution = createSemanticProfileExecution({
+    bindings: options.providerAuthBindings,
+    execute: createExecutionOperation(resolveUsageSemantics),
+    resolveCredentialActivity: credentialActivityForExecutionFacts,
+  });
   const anthropicProviderNativeLane = createAnthropicProviderNativeLane({
     models: options.models,
+    bindings: options.providerAuthBindings,
     resolveRequestModel,
     fetch: options.fetch,
   });
@@ -135,7 +147,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     publicModels: options.publicModels,
     maxRequestBytes: config.limits.maxRequestBytes,
     now,
-    executeOperation: createExecutionOperation(resolveUsageSemantics),
+    executeOperation: semanticExecution,
   });
   const handlers: ClientProtocolHandler[] = [
     anthropic,
@@ -153,6 +165,7 @@ export async function createConfiguredLuckyTokenDataPlane(
       join(dirname(config.configPath), "state", "openai-responses.json");
     const providerNativeLane = createProviderNativeResponses({
       models: options.models,
+      bindings: options.providerAuthBindings,
       fetch: options.fetch,
       configuration: bindProviderNativeResponsesConfiguration(
         responsesConfig.providerNativeConfiguration,
@@ -198,7 +211,7 @@ export async function createConfiguredLuckyTokenDataPlane(
         publicModels: options.publicModels,
         maxRequestBytes: config.limits.maxRequestBytes,
         now,
-        executeOperation: createExecutionOperation(resolveUsageSemantics),
+        executeOperation: semanticExecution,
         ...(localNativeLane === undefined ? {} : { localNativeLane }),
       }),
       createOpenAIResponsesCompactHandler({
@@ -212,7 +225,7 @@ export async function createConfiguredLuckyTokenDataPlane(
         stateFile,
         sessionState,
         createSessionId,
-        executeOperation: createExecutionOperation(resolveUsageSemantics),
+        executeOperation: semanticExecution,
         maxRequestBytes: config.limits.maxRequestBytes,
         now,
       }),

@@ -5,6 +5,9 @@ export {
   assertLedgerPhase,
   type ControlPlaneRequestLedger,
   type LedgerAttempt,
+  type LedgerCredentialAttempt,
+  type LedgerCredentialCapture,
+  type LedgerCredentialUsage,
   type LedgerAuthFacts,
   type LedgerFailureInput,
   type LedgerFailureSummary,
@@ -56,12 +59,15 @@ export function createNoopRequestLedger(): RequestLedger {
       terminalUsage: () => undefined,
       notice: () => undefined,
       attempt: () => undefined,
+      credentialCaptured: () => undefined,
+      credentialAttempt: () => undefined,
       fail: () => undefined,
       completed: () => undefined,
     });
   return Object.freeze({
     begin: () => noopEntry(),
     query: () => Object.freeze({ records: Object.freeze([]), hasMore: false }),
+    credentialUsage: () => Object.freeze([]),
     subscribe: () =>
       Object.freeze({ unsubscribe: () => undefined }),
   });

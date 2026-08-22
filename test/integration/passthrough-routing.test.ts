@@ -17,13 +17,14 @@ import {
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 function anthropicModel(): Model<string> {
   return {
     id: "claude-sonnet",
     name: "claude-sonnet",
     api: "anthropic-messages",
-    provider: "my-anthropic",
+    provider: "anthropic",
     baseUrl: "https://gateway.example.com",
     reasoning: false,
     input: ["text"],
@@ -103,6 +104,7 @@ function dependencies(
       : {
           providerNativeLane: createAnthropicProviderNativeLane({
             models,
+            bindings: ambientProfileBindings,
             resolveRequestModel: identityRequestModelResolver,
             fetch: passthroughFetch,
           }),
@@ -141,7 +143,7 @@ describe("passthrough routing", () => {
       dependencies(models, passthroughFetch),
       request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
             top_p: 0.9,
@@ -176,7 +178,7 @@ describe("passthrough routing", () => {
       dependencies(models, async () => new Response(null, { status: 500 })),
       request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
@@ -259,7 +261,7 @@ describe("passthrough routing", () => {
       dependencies(models, passthroughFetch),
       request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [
               {
@@ -297,7 +299,7 @@ describe("passthrough routing", () => {
       dependencies(models, passthroughFetch),
       request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
@@ -327,7 +329,7 @@ describe("passthrough routing", () => {
       dependencies(models, passthroughFetch),
       request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),

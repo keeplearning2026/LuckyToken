@@ -266,6 +266,58 @@ describe("catalog cache store", () => {
     expect((await restarted.read("dynamic-b"))?.models[0]?.id).toBe("mb");
   });
 
+  it("keeps an exact refresh isolated until its stage is explicitly committed", async () => {
+    const { fileSystem, files } = createMemoryFileSystem();
+    const path = "C:\\app\\models-catalog-cache.json";
+    const store = createCatalogCacheStore({ path, fileSystem });
+    await store.write(
+      "dynamic-provider",
+      entry([modelFact({ id: "current" })]),
+    );
+    const durableBefore = files.get(path);
+
+    const discarded = await store.runStaged("dynamic-provider", async () => {
+      await store.write(
+        "dynamic-provider",
+        entry([modelFact({ id: "wrong-account" })]),
+      );
+      expect((await store.read("dynamic-provider"))?.models[0]?.id).toBe(
+        "wrong-account",
+      );
+      return "refreshed";
+    });
+
+    expect(discarded.result).toBe("refreshed");
+    expect(discarded.changed).toBe(true);
+    expect(discarded.entry?.models[0]?.id).toBe("wrong-account");
+    expect(files.get(path)).toBe(durableBefore);
+    expect((await store.read("dynamic-provider"))?.models[0]?.id).toBe("current");
+
+    await discarded.commit();
+    expect((await store.read("dynamic-provider"))?.models[0]?.id).toBe(
+      "wrong-account",
+    );
+    expect(await discarded.rollback()).toBe(true);
+    expect((await store.read("dynamic-provider"))?.models[0]?.id).toBe("current");
+  });
+
+  it("does not let a stage rollback overwrite a newer Catalog writer", async () => {
+    const { fileSystem } = createMemoryFileSystem();
+    const store = createCatalogCacheStore({
+      path: "C:\\app\\models-catalog-cache.json",
+      fileSystem,
+    });
+    await store.write("dynamic-provider", entry([modelFact({ id: "current" })]));
+    const stage = await store.runStaged("dynamic-provider", async () => {
+      await store.write("dynamic-provider", entry([modelFact({ id: "staged" })]));
+    });
+    await stage.commit();
+    await store.write("dynamic-provider", entry([modelFact({ id: "newer" })]));
+
+    expect(await stage.rollback()).toBe(false);
+    expect((await store.read("dynamic-provider"))?.models[0]?.id).toBe("newer");
+  });
+
   it("does not re-report the same dropped entries for an unchanged file", async () => {
     const { fileSystem, files } = createMemoryFileSystem();
     const path = "C:\\app\\models-catalog-cache.json";

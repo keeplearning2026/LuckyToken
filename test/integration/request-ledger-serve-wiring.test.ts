@@ -178,7 +178,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     }));
     const composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: (async () => commandCodeText("serve-wired answer")) as FetchFunction,
       importModule: commandCodeProviderImportModule(),
       diagnosticsStore,
@@ -301,7 +301,7 @@ describe("Request Ledger serve-level persistence-failure wiring (Ticket 18)", ()
     }));
     const composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: (async () => commandCodeText("composed answer")) as FetchFunction,
       importModule: commandCodeProviderImportModule(),
       diagnosticsStore,

@@ -8,21 +8,37 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
 
-function anthropicJsonResponse(text: string): Response {
+function anthropicSseResponse(text: string): Response {
   return new Response(
-    JSON.stringify({
-      id: "msg_upstream",
-      type: "message",
-      role: "assistant",
-      content: [{ type: "text", text }],
-      model: "claude-sonnet",
-      stop_reason: "end_turn",
-      stop_sequence: null,
-      usage: { input_tokens: 4, output_tokens: 5 },
-    }),
+    [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_upstream",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "claude-sonnet",
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 4, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 5 },
+      },
+      { type: "message_stop" },
+    ]
+      .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+      .join(""),
     {
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "text/event-stream; charset=utf-8" },
     },
   );
 }
@@ -112,7 +128,7 @@ describe("models.json custom provider registration", () => {
         );
       }
       upstreamRequests.push(request);
-      return anthropicJsonResponse("hello from custom gateway");
+      return anthropicSseResponse("hello from custom gateway");
     };
     const directory = await mkdtemp(
       join(tmpdir(), "luckytoken-models-json-"),
@@ -163,8 +179,12 @@ describe("models.json custom provider registration", () => {
 
     expect(composition.userConfiguredProviderIds).toEqual(["my-anthropic"]);
 
-    const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+    const originalFetch = globalThis.fetch;
+    (globalThis as { fetch: typeof globalThis.fetch }).fetch = fetch as typeof globalThis.fetch;
+    let response: Response;
+    try {
+      response = await composition.runtime.handle(
+        new Request("http://luckytoken.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer client-token",
@@ -176,12 +196,14 @@ describe("models.json custom provider registration", () => {
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
-      }),
-    );
+        }),
+      );
+    } finally {
+      (globalThis as { fetch: typeof globalThis.fetch }).fetch = originalFetch;
+    }
 
     expect(response.status).toBe(200);
-    // Native preservation projects only the public model identity back to
-    // the alias captured for this request.
+    // Uncertified custom Provider tuples execute through Semantic Conversion.
     await expect(response.json()).resolves.toMatchObject({
       id: "msg_upstream",
       model: "my-anthropic/claude-sonnet",

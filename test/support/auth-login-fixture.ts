@@ -15,7 +15,7 @@ import {
  * typed AuthInteraction event/prompt shape. Deterministic, no network:
  * "authorization" is a fixed fake code, device polling is a fixed expiry,
  * and credentials carry fake values that tests assert against the on-disk
- * auth.json bytes.
+ * Provider Profile record bytes.
  */
 
 function fixtureModel(providerId: string): Model<"fixture-api"> {

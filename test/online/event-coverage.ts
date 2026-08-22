@@ -103,7 +103,7 @@ async function main(): Promise<void> {
   const capturing = createCapturingFetch(globalThis.fetch);
   const composition = await createConfiguredLuckyTokenDataPlane({
     config,
-    credentials,
+    credentialSeedStore: credentials,
     fetch: capturing.fetch,
   });
   const server = await startLuckyTokenHttpServer({

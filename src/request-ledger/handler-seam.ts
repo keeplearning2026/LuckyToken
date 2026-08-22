@@ -2,13 +2,55 @@ import { randomUUID } from "node:crypto";
 
 import type {
   ConversionNotice,
+  ExecutionFactsSink,
   InvocationAttempt,
 } from "@luckytoken/provider-contract/diagnostics";
 import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+export interface CredentialActivityCapture {
+  readonly credentialId: string;
+  readonly displayName: string;
+  readonly authType: "api_key" | "oauth";
+  readonly authMethodLabel: string;
+  readonly lane: "provider_native" | "semantic_conversion";
+  readonly selectionReason: "active" | "http_429_switch";
+}
+
+export interface CredentialActivityAttempt extends CredentialActivityCapture {
+  readonly attempt: number;
+  readonly outcome: "success" | "http_429" | "failed" | "aborted";
+}
+
+export interface CredentialActivitySink {
+  credentialCaptured(capture: CredentialActivityCapture): void;
+  credentialAttempt(attempt: CredentialActivityAttempt): void;
+}
+
+// The public execution contract remains the neutral ExecutionFactsSink.
+// Composition records the associated credential-observation capability in
+// this consumer-owned registry instead of relying on undeclared properties.
+const credentialActivityByExecutionFacts = new WeakMap<
+  ExecutionFactsSink,
+  CredentialActivitySink
+>();
+
+export function bindCredentialActivityToExecutionFacts(
+  facts: ExecutionFactsSink,
+  activity: CredentialActivitySink,
+): void {
+  credentialActivityByExecutionFacts.set(facts, activity);
+}
+
+export function credentialActivityForExecutionFacts(
+  facts: ExecutionFactsSink | undefined,
+): CredentialActivitySink | undefined {
+  return facts === undefined
+    ? undefined
+    : credentialActivityByExecutionFacts.get(facts);
+}
 
 /** Handler-local lifecycle facts. Persistence and public query DTOs remain
  * outside this consumer-owned seam. */
-export interface RequestLedgerEntry {
+export interface RequestLedgerEntry extends CredentialActivitySink {
   readonly requestId: string;
   authorized(facts: {
     readonly effectiveSessionId: string;
@@ -65,6 +107,8 @@ export function createNoopRequestLedger(): RequestLedger {
       terminalUsage: () => undefined,
       notice: () => undefined,
       attempt: () => undefined,
+      credentialCaptured: () => undefined,
+      credentialAttempt: () => undefined,
       fail: () => undefined,
       completed: () => undefined,
     });

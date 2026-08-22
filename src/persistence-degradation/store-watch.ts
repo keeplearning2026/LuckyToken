@@ -273,6 +273,8 @@ export function createUnavailableRequestLedgerStore(
       terminalUsage: () => undefined,
       notice: () => undefined,
       attempt: () => undefined,
+      credentialCaptured: () => undefined,
+      credentialAttempt: () => undefined,
       fail: () => undefined,
       completed: () => undefined,
     });
@@ -285,6 +287,7 @@ export function createUnavailableRequestLedgerStore(
       if (closed) throw new Error("Request Ledger store is closed");
       return Object.freeze({ records: Object.freeze([]), hasMore: false });
     },
+    credentialUsage: () => Object.freeze([]),
     analyze(query: AnalyticsQuery): AnalyticsQueryResult {
       return createLedgerAnalyticsAccumulator(query).finish();
     },

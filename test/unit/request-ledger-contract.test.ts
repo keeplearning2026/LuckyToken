@@ -228,6 +228,24 @@ describe("Request Ledger wire contract", () => {
           },
           persistenceWarnings: 3,
           piStopReason: "stop",
+          credentialCapture: {
+            credentialId: "credential-primary",
+            displayName: "Production",
+            authType: "api_key",
+            authMethodLabel: "OpenAI API key",
+            lane: "provider_native",
+            selectionReason: "active",
+          },
+          credentialAttempts: [{
+            credentialId: "credential-backup",
+            displayName: "Backup",
+            authType: "api_key",
+            authMethodLabel: "OpenAI API key",
+            lane: "provider_native",
+            selectionReason: "http_429_switch",
+            attempt: 2,
+            outcome: "success",
+          }],
         },
       }),
     );
@@ -238,6 +256,8 @@ describe("Request Ledger wire contract", () => {
       failure: { classification: "runtime-failure" },
       persistenceWarnings: 3,
       piStopReason: "stop",
+      credentialCapture: { displayName: "Production" },
+      credentialAttempts: [{ displayName: "Backup", outcome: "success" }],
     });
 
     expect(
@@ -256,6 +276,21 @@ describe("Request Ledger wire contract", () => {
       decodeRequestLedgerRecord(
         validRecord({ facts: { unknownFact: true } }),
       ),
+    ).toBeUndefined();
+    expect(
+      decodeRequestLedgerRecord(validRecord({
+        facts: {
+          credentialCapture: {
+            credentialId: "credential-primary",
+            displayName: "Production",
+            authType: "api_key",
+            authMethodLabel: "OpenAI API key",
+            lane: "provider_native",
+            selectionReason: "active",
+            note: "must not cross the Activity wire",
+          },
+        },
+      })),
     ).toBeUndefined();
     expect(
       decodeRequestLedgerRecord(

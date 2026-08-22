@@ -201,17 +201,23 @@ describe("Responses native provider sender", () => {
   });
 
   it.each([
-    ["openai", undefined, "session_id", true],
-    ["fixture", "openai-nosession", "session_id", false],
-    ["openrouter", undefined, "x-session-id", true],
+    ["openai", undefined, "session_id", true, false],
+    ["xai", "openai-nosession", "session_id", false, false],
+    ["xai", undefined, "x-session-id", true, true],
   ] as const)(
     "mirrors Pi %s session affinity headers",
-    async (provider, sessionAffinityFormat, primaryHeader, primaryPresent) => {
+    async (
+      provider,
+      sessionAffinityFormat,
+      primaryHeader,
+      primaryPresent,
+      openRouterEndpoint,
+    ) => {
       const captured = capture();
       const candidate = model(
         provider,
         "openai-responses",
-        provider === "openrouter"
+        openRouterEndpoint
           ? "https://openrouter.ai/api/v1"
           : "https://responses.example.com/v1",
       );
@@ -236,7 +242,7 @@ describe("Responses native provider sender", () => {
       expect(headers.has(primaryHeader)).toBe(primaryPresent);
       if (primaryPresent) expect(headers.get(primaryHeader)).toBe(SESSION_ID);
       expect(headers.get("x-client-request-id")).toBe(
-        provider === "openrouter" ? null : SESSION_ID,
+        openRouterEndpoint ? null : SESSION_ID,
       );
     },
   );

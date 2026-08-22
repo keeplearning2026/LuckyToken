@@ -162,6 +162,36 @@ describe("Overview request table", () => {
           stage: "provider-request",
           messageHash: "safe-message-hash",
         },
+        credentialCapture: {
+          credentialId: "credential-production",
+          displayName: "Production",
+          authType: "oauth",
+          authMethodLabel: "Anthropic (Claude Pro/Max)",
+          lane: "provider_native",
+          selectionReason: "active",
+        },
+        credentialAttempts: [
+          {
+            credentialId: "credential-production",
+            displayName: "Production",
+            authType: "oauth",
+            authMethodLabel: "Anthropic (Claude Pro/Max)",
+            lane: "provider_native",
+            selectionReason: "active",
+            attempt: 1,
+            outcome: "http_429",
+          },
+          {
+            credentialId: "credential-backup",
+            displayName: "Backup",
+            authType: "oauth",
+            authMethodLabel: "Anthropic (Claude Pro/Max)",
+            lane: "provider_native",
+            selectionReason: "http_429_switch",
+            attempt: 2,
+            outcome: "failed",
+          },
+        ],
       },
     });
     const second = recordWithoutSession(9);
@@ -239,6 +269,10 @@ describe("Overview request table", () => {
     expect(container.textContent).toContain("Suggested action");
     expect(container.textContent).toContain("upstream-failure");
     expect(container.textContent).toContain("provider-request");
+    expect(container.textContent).toContain("Provider Profile");
+    expect(container.textContent).toContain("Production · Anthropic (Claude Pro/Max)");
+    expect(container.textContent).toContain("Production — HTTP 429");
+    expect(container.textContent).toContain("Backup — Failed · HTTP 429 failover");
 
     await act(async () => {
       const loadMore = [...container.querySelectorAll("button")].find(

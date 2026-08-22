@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type {
   ApplicationStatus,
-  CredentialProjection,
+  CredentialProfilesProjectionV1,
+  ProviderCredentialProfilesProjectionV1,
   PersistenceProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 import { decodeAttentionProjection } from "@luckytoken/application-control-plane/control-plane";
@@ -18,15 +19,9 @@ const running: ApplicationStatus = Object.freeze({
 });
 
 function credentials(
-  providers: CredentialProjection["providers"],
-): CredentialProjection {
-  return Object.freeze({
-    revision: 1,
-    path: "C:\\Users\\person\\.luckytoken\\auth.json",
-    present: true,
-    valid: true,
-    providers: Object.freeze(providers),
-  });
+  providers: readonly ProviderCredentialProfilesProjectionV1[],
+): CredentialProfilesProjectionV1 {
+  return Object.freeze({ providers: Object.freeze(providers) });
 }
 
 describe("operational attention authority", () => {
@@ -109,24 +104,27 @@ describe("operational attention authority", () => {
     let projection = credentials([
       {
         providerId: "never-configured",
-        stored: false,
-        environment: false,
-        modelsJson: false,
-        commandDerived: false,
-        expired: false,
-        unavailable: true,
-        effectiveSource: "none",
+        implementationAvailable: true,
+        profiles: [],
       },
       {
         providerId: "working-provider",
-        stored: true,
-        storedType: "oauth",
-        environment: false,
-        modelsJson: false,
-        commandDerived: false,
-        expired: false,
-        unavailable: false,
-        effectiveSource: "stored",
+        implementationAvailable: true,
+        revision: "revision-a",
+        selectionGeneration: "selection-a",
+        activeCredentialId: "credential-a",
+        switchPolicy: { apiKeyOn429: false, oauthOn429: false },
+        profiles: [{
+          credentialId: "credential-a",
+          authType: "oauth",
+          authMethodLabel: "Fixture account",
+          displayName: "Production",
+          enabled: true,
+          health: "ready",
+          priority: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
       },
     ]);
     const authority = createOperationalAttentionAuthority({
@@ -142,9 +140,10 @@ describe("operational attention authority", () => {
       projection.providers[0]!,
       {
         ...projection.providers[1]!,
-        expired: true,
-        unavailable: true,
-        effectiveSource: "none",
+        profiles: [{
+          ...projection.providers[1]!.profiles[0]!,
+          health: "reconnect_required",
+        }],
       },
     ]);
     expect(authority.project(running)?.conditions).toEqual([
@@ -161,9 +160,10 @@ describe("operational attention authority", () => {
       projection.providers[0]!,
       {
         ...projection.providers[1]!,
-        expired: false,
-        unavailable: false,
-        effectiveSource: "stored",
+        profiles: [{
+          ...projection.providers[1]!.profiles[0]!,
+          health: "ready",
+        }],
       },
     ]);
     expect(authority.project(running)).toBeUndefined();

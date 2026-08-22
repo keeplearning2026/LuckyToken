@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { dirname } from "node:path";
 
 import type {
@@ -80,8 +81,32 @@ export interface CatalogCacheStoreOptions {
 }
 
 export interface CatalogCacheStore extends ModelsStore {
+  /** Run one Provider refresh against an isolated cache view. Nothing is
+   * durable until the returned stage is committed. */
+  runStaged<T>(
+    providerId: string,
+    operation: () => Promise<T>,
+  ): Promise<CatalogCacheStage<T>>;
   /** Entries dropped by the most recent restore, for precise warnings. */
   takeDroppedReport(): readonly CatalogCacheDroppedEntry[];
+}
+
+export interface CatalogCacheStage<T> {
+  readonly result: T;
+  readonly entry?: ModelsStoreEntry;
+  /** True when the Provider attempted to publish or delete its entry. */
+  readonly changed: boolean;
+  /** Atomically publish this Provider entry into the latest cache file. */
+  commit(assertPublish?: () => void): Promise<void>;
+  /** Restore the entry observed when staging began, but only if this stage
+   * is still the durable writer. A newer writer is never overwritten. */
+  rollback(): Promise<boolean>;
+}
+
+interface CatalogCacheStageContext {
+  readonly providerId: string;
+  entry: ModelsStoreEntry | undefined;
+  changed: boolean;
 }
 
 interface FileState {
@@ -233,7 +258,8 @@ export function createCatalogCacheStore(
   // no Provider update is ever lost to a last-rename-wins race. The tail
   // never poisons: a failed mutation does not block later ones.
   let mutationTail: Promise<void> = Promise.resolve();
-  const enqueueMutation = (task: () => Promise<void>): Promise<void> => {
+  const stages = new AsyncLocalStorage<CatalogCacheStageContext>();
+  const enqueueMutation = <T>(task: () => Promise<T>): Promise<T> => {
     const run = mutationTail.then(task);
     mutationTail = run.then(
       () => undefined,
@@ -283,7 +309,10 @@ export function createCatalogCacheStore(
     return current;
   };
 
-  const commit = async (next: Readonly<Record<string, ModelsStoreEntry>>): Promise<void> => {
+  const commit = async (
+    next: Readonly<Record<string, ModelsStoreEntry>>,
+    assertPublish: () => void = () => undefined,
+  ): Promise<void> => {
     await fileSystem.mkdir(dirname(path));
     const content = `${JSON.stringify(
       { schema: CATALOG_CACHE_SCHEMA, providers: next },
@@ -293,6 +322,7 @@ export function createCatalogCacheStore(
     const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     try {
       await fileSystem.writeFile(temporaryPath, content);
+      assertPublish();
       await fileSystem.rename(temporaryPath, path);
     } catch (error) {
       await fileSystem.rm(temporaryPath).catch(() => undefined);
@@ -309,6 +339,12 @@ export function createCatalogCacheStore(
 
   return Object.freeze({
     async read(providerId: string): Promise<ModelsStoreEntry | undefined> {
+      const stage = stages.getStore();
+      if (stage?.providerId === providerId) {
+        return stage.entry === undefined
+          ? undefined
+          : structuredClone(stage.entry);
+      }
       const state = await load();
       const entry = state.entries[providerId];
       if (entry !== undefined) return structuredClone(entry);
@@ -346,6 +382,12 @@ export function createCatalogCacheStore(
         );
       }
       const queued = validated.entry;
+      const stage = stages.getStore();
+      if (stage?.providerId === providerId) {
+        stage.entry = structuredClone(queued);
+        stage.changed = true;
+        return;
+      }
       return enqueueMutation(async () => {
         const state = await load();
         const next: Record<string, ModelsStoreEntry> = { ...state.entries };
@@ -354,12 +396,85 @@ export function createCatalogCacheStore(
       });
     },
     async delete(providerId: string): Promise<void> {
+      const stage = stages.getStore();
+      if (stage?.providerId === providerId) {
+        stage.entry = undefined;
+        stage.changed = true;
+        return;
+      }
       return enqueueMutation(async () => {
         const state = await load();
         if (!Object.hasOwn(state.entries, providerId)) return;
         const next: Record<string, ModelsStoreEntry> = { ...state.entries };
         delete next[providerId];
         await commit(next);
+      });
+    },
+    async runStaged<T>(
+      providerId: string,
+      operation: () => Promise<T>,
+    ): Promise<CatalogCacheStage<T>> {
+      if (stages.getStore() !== undefined) {
+        throw new Error("Catalog cache stages cannot be nested");
+      }
+      const existing = await this.read(providerId);
+      const initialEntry = existing === undefined
+        ? undefined
+        : structuredClone(existing);
+      const context: CatalogCacheStageContext = {
+        providerId,
+        // Pi restore needs an explicit empty entry when no durable cache
+        // exists. It remains staging-only unless the Provider publishes.
+        entry: existing ?? Object.freeze({ models: Object.freeze([]) }),
+        changed: false,
+      };
+      const result = await stages.run(context, operation);
+      const stagedEntry = context.entry === undefined
+        ? undefined
+        : structuredClone(context.entry);
+      const changed = context.changed;
+      let committed = false;
+      return Object.freeze({
+        result,
+        ...(stagedEntry === undefined ? {} : { entry: stagedEntry }),
+        changed,
+        async commit(assertPublish: () => void = () => undefined): Promise<void> {
+          if (committed || !changed) return;
+          if (stagedEntry === undefined) {
+            await enqueueMutation(async () => {
+              const state = await load();
+              if (!Object.hasOwn(state.entries, providerId)) return;
+              const next: Record<string, ModelsStoreEntry> = { ...state.entries };
+              delete next[providerId];
+              await commit(next, assertPublish);
+            });
+          } else {
+            await enqueueMutation(async () => {
+              const state = await load();
+              await commit(
+                { ...state.entries, [providerId]: stagedEntry },
+                assertPublish,
+              );
+            });
+          }
+          committed = true;
+        },
+        async rollback(): Promise<boolean> {
+          if (!committed || !changed) return true;
+          return enqueueMutation(async () => {
+            const state = await load();
+            const durable = state.entries[providerId];
+            if (JSON.stringify(durable) !== JSON.stringify(stagedEntry)) {
+              return false;
+            }
+            const next: Record<string, ModelsStoreEntry> = { ...state.entries };
+            if (initialEntry === undefined) delete next[providerId];
+            else next[providerId] = initialEntry;
+            await commit(next);
+            committed = false;
+            return true;
+          });
+        },
       });
     },
     takeDroppedReport(): readonly CatalogCacheDroppedEntry[] {

@@ -1533,7 +1533,7 @@ export async function runCodexCliOnlineSuite(
       : { modelsJsonPath: config.pi.modelsJson }),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
-    credentials,
+    credentialSeedStore: credentials,
   });
   try {
     await preLogin.models.login(
@@ -1572,7 +1572,7 @@ export async function runCodexCliOnlineSuite(
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
   let composition = await createConfiguredLuckyTokenDataPlane({
     config,
-    credentials,
+    credentialSeedStore: credentials,
     fetch: upstreamLogger.fetch,
     ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
@@ -1693,7 +1693,7 @@ export async function runCodexCliOnlineSuite(
               await composition.close();
               composition = await createConfiguredLuckyTokenDataPlane({
                 config,
-                credentials,
+                credentialSeedStore: credentials,
                 fetch: upstreamLogger.fetch,
                 ...(publicModelAuthority === undefined
                   ? {}

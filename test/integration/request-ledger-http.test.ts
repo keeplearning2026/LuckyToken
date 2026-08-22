@@ -37,6 +37,7 @@ import {
 } from "../../src/protocols/anthropic/handler.js";
 import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 import { handleHttpRequest } from "../../src/http.js";
 
 /**
@@ -508,7 +509,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       id: "claude-sonnet",
       name: "claude-sonnet",
       api: "anthropic-messages",
-      provider: "my-anthropic",
+      provider: "anthropic",
       baseUrl: "https://gateway.example.com",
       reasoning: false,
       input: ["text"],
@@ -525,6 +526,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       maxRequestBytes: 1_000_000,
       providerNativeLane: createAnthropicProviderNativeLane({
         models,
+        bindings: ambientProfileBindings,
         resolveRequestModel: identityRequestModelResolver,
         fetch: passthroughFetch,
       }),
@@ -545,7 +547,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "my-anthropic/claude-sonnet",
+          model: "anthropic/claude-sonnet",
           max_tokens: 32,
           messages: [{ role: "user", content: "hi" }],
         }),
@@ -565,8 +567,8 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       phase: "terminal-preparation",
       clientHttpStatus: 200,
       protocolId: "anthropic-messages",
-      externalAlias: "my-anthropic/claude-sonnet",
-      providerId: "my-anthropic",
+      externalAlias: "anthropic/claude-sonnet",
+      providerId: "anthropic",
       realModelId: "claude-sonnet",
     });
     // Passthrough rows honestly skip the rendering phase.
@@ -888,7 +890,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       id: "claude-sonnet",
       name: "claude-sonnet",
       api: "anthropic-messages",
-      provider: "my-anthropic",
+      provider: "anthropic",
       baseUrl: "https://gateway.example.com",
       reasoning: false,
       input: ["text"],
@@ -903,6 +905,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
       } as unknown as Models,
       maxRequestBytes: 1_000_000,
       providerNativeLane: createAnthropicProviderNativeLane({
+        bindings: ambientProfileBindings,
         models: {
           getAuth: async () => ({ auth: { apiKey: "sk-gateway" } }),
         } as Pick<Models, "getAuth">,
@@ -926,7 +929,7 @@ describe("Request Ledger through the real Data Plane and Control Plane (Ticket 1
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "my-anthropic/claude-sonnet",
+          model: "anthropic/claude-sonnet",
           max_tokens: 32,
           messages: [{ role: "user", content: "hi" }],
         }),

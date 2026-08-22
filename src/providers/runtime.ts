@@ -9,8 +9,8 @@
  * - `models.json` Provider composition (overlays/custom Providers);
  * - bundled LuckyToken Provider Package loading;
  * - external user Provider Package loading;
- * - the one Pi-compatible credential store and the Live Credential
- *   Authority over it;
+ * - the one Provider Profile state owner, its narrow management/binding
+ *   views, and the composition-private Pi CredentialStore adapter;
  * - the catalog runtime handle (`models`, `capture`);
  * - Provider source classification (`pi_builtin` / `luckytoken_bundled` /
  *   `user`).
@@ -27,18 +27,23 @@ import {
   createModels,
   defaultProviderAuthContext,
   type AuthContext,
-  type CredentialStore,
   type FetchFunction,
   type Models,
   type ModelsStore,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-
-import type { LiveCredentialAuthority } from "../credentials/authority.js";
-import { createLiveCredentialAuthority } from "../credentials/authority.js";
-import { createFileCredentialStore } from "../pi/file-credential-store.js";
+import type {
+  CredentialProfileManagement,
+  ProviderAuthBindingAuthority,
+  ProviderAuthBindingCapture,
+} from "../credentials/profile-contract.js";
+import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
+import {
+  createFileProviderCredentialRecordStore,
+  type ProviderCredentialRecordStore,
+} from "../credentials/profile-record-store.js";
 import {
   bundledProviderIds,
   bundledProviderPackages,
@@ -47,6 +52,7 @@ import {
 import { registerLuckyTokenProviders } from "./catalog.js";
 import {
   createCatalogSnapshotModels,
+  type CatalogProviderOperations,
   type CatalogRuntimeHandle,
 } from "./catalog-refresh.js";
 import {
@@ -70,8 +76,11 @@ export type ProviderSource =
 /** The narrow Provider Runtime seam (Spec §7.3). */
 export interface ProviderRuntime {
   readonly models: Models;
-  readonly credentialAuthority: LiveCredentialAuthority;
+  readonly credentialManagement: CredentialProfileManagement;
+  readonly providerAuthBindings: ProviderAuthBindingAuthority;
+  scrubCredentialText(value: string): string;
   readonly catalog: CatalogRuntimeHandle;
+  catalogOperationsFor(capture: ProviderAuthBindingCapture): CatalogProviderOperations;
   providerSource(providerId: string): ProviderSource;
 }
 
@@ -82,19 +91,27 @@ export interface CreateProviderRuntimeOptions {
    *  packages are never configured here; claiming one is rejected. */
   readonly userProviderPackages: Readonly<Record<string, unknown>>;
   readonly fetch: FetchFunction;
-  readonly credentials?: CredentialStore;
+  /** Test/composition Adapter. Production uses the per-Provider file store. */
+  readonly credentialRecordStore?: ProviderCredentialRecordStore;
   readonly modelsStore?: ModelsStore;
   readonly configValueAdapters?: ConfigValueAdapters;
   readonly authContext?: AuthContext;
   readonly importModule?: ImportProviderModule;
   readonly onInvalidModelsJson?: (error: unknown) => void;
-  readonly onProviderLogin?: (providerId: string) => void;
+  readonly onCredentialStoreDegraded?: (error: unknown) => void;
   readonly createUuid?: () => string;
   readonly now?: () => number;
+  readonly credentialUsage?: (
+    credentialIds: readonly string[],
+  ) => readonly {
+    readonly credentialId: string;
+    readonly lastUsedAt: number;
+    readonly lastSucceededAt?: number;
+  }[];
 }
 
-/** One deterministic config-value context shared by the Pi models and the
- *  Credential Authority (mirror of the composition's helper). */
+/** One deterministic config-value context shared by Pi Models and the
+ *  Provider Profile state owner. */
 function createRuntimeConfigValueContext(
   configValueAdapters: ConfigValueAdapters | undefined,
   authContext: AuthContext | undefined,
@@ -161,15 +178,33 @@ export async function createProviderRuntime(
   );
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
-  const credentialStore =
-    options.credentials ??
-    createFileCredentialStore(join(options.piDirectory, "auth.json"));
+  let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
+  const profileState = createProviderCredentialProfiles({
+    recordStore: options.credentialRecordStore ??
+      createFileProviderCredentialRecordStore({
+        piDirectory: options.piDirectory,
+        createRevision: createUuid,
+        ...(options.onCredentialStoreDegraded === undefined
+          ? {}
+          : { onLockDegraded: options.onCredentialStoreDegraded }),
+      }),
+    providers: () => currentProviders(),
+    createId: createUuid,
+    now,
+    ambientStatus: (providerId) =>
+      modelsJson?.providers[providerId]?.apiKey === undefined
+        ? "unknown"
+        : "configured",
+    ...(options.credentialUsage === undefined
+      ? {}
+      : { credentialUsage: options.credentialUsage }),
+  });
 
   // The ONE Pi Models collection for the Backend lifetime: login and every
   // later Data Plane serving instance share this object graph (Spec §3.4,
   // §6).
   const mutableModels = createModels({
-    credentials: credentialStore,
+    credentials: profileState.credentialStore,
     authContext,
     ...(options.modelsStore === undefined
       ? {}
@@ -232,42 +267,14 @@ export async function createProviderRuntime(
     { configValues },
   );
 
-  // Ticket 11 login seam: a successful Provider login through the served
-  // Models schedules a background refresh for the relevant Provider.
-  const loginAware: Models =
-    options.onProviderLogin === undefined
-      ? facade
-      : Object.freeze({
-          ...facade,
-          login: (
-            providerId: string,
-            type: "api_key" | "oauth",
-            interaction: never,
-          ) =>
-            facade.login(providerId, type, interaction).then((credential) => {
-              options.onProviderLogin?.(providerId);
-              return credential;
-            }),
-        } as Models);
-
   // The served Models resolve the one authoritative active catalog
   // snapshot; a capture atomically swaps it for new requests while
   // in-flight invocations keep their captured Model objects.
-  const served = createCatalogSnapshotModels(loginAware);
+  const served = createCatalogSnapshotModels(facade);
+  currentProviders = () => served.getProviders();
   await served.refresh({ allowNetwork: false });
   served.capture();
-
-  // Credential Authority over the same store the Models use (Spec §10.1):
-  // one auth.json, one authority, for the whole Backend lifetime.
-  const credentialAuthority = await createLiveCredentialAuthority({
-    store: credentialStore,
-    path: join(options.piDirectory, "auth.json"),
-    configValues,
-    authContext,
-    providers: () => served.getProviders(),
-    modelsJsonProviders: () => modelsJson?.providers ?? Object.freeze({}),
-    now,
-  });
+  await profileState.management.query();
 
   // Source classification is deterministic (Spec §9.3): bundled IDs win,
   // then Pi built-in IDs, then the startup models.json/user-package Provider
@@ -290,13 +297,109 @@ export async function createProviderRuntime(
     return "user";
   };
 
+  const createCatalogOperationsFor = (
+    capture: ProviderAuthBindingCapture,
+  ): CatalogProviderOperations => {
+    const assertProvider = (providerId: string): void => {
+      if (capture.facts.providerId !== providerId) {
+        throw new Error("Catalog operation does not match its captured Provider binding");
+      }
+    };
+    return Object.freeze({
+      async isCurrent(providerId: string): Promise<boolean> {
+        assertProvider(providerId);
+        return profileState.binding.publishIfCurrent(capture, () => undefined);
+      },
+      async publishIfCurrent(
+        providerId: string,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ): Promise<boolean> {
+        assertProvider(providerId);
+        return profileState.binding.publishIfCurrent(capture, publish);
+      },
+      async refreshProvider(
+        providerId: string,
+        refreshOptions: Parameters<CatalogRuntimeHandle["refreshProvider"]>[1],
+      ) {
+        assertProvider(providerId);
+        return profileState.binding.runBound(capture, () =>
+          served.refresh({ ...refreshOptions, providers: [providerId] }),
+        );
+      },
+      async checkAuth(
+        providerId: string,
+        checkOptions?: Parameters<CatalogRuntimeHandle["checkAuth"]>[1],
+      ) {
+        assertProvider(providerId);
+        return profileState.binding.runBound(capture, () =>
+          served.checkAuth(providerId, checkOptions),
+        );
+      },
+    });
+  };
+
   return Object.freeze({
     models: served,
-    credentialAuthority,
+    credentialManagement: profileState.management,
+    providerAuthBindings: profileState.binding,
+    scrubCredentialText: (value: string) => profileState.scrub(value),
     catalog: Object.freeze({
       models: served,
-      capture: () => served.capture(),
+      capture: (preserveProviderIds?: ReadonlySet<string>) =>
+        served.capture(preserveProviderIds),
+      async operationsForProvider(providerId: string) {
+        return createCatalogOperationsFor(
+          await profileState.binding.capture(providerId),
+        );
+      },
+      async refreshProvider(
+        providerId: string,
+        refreshOptions: Parameters<CatalogRuntimeHandle["refreshProvider"]>[1],
+      ) {
+        const capture = await profileState.binding.capture(providerId);
+        return profileState.binding.runBound(capture, () =>
+          served.refresh({ ...refreshOptions, providers: [providerId] }),
+        );
+      },
+      async checkAuth(
+        providerId: string,
+        checkOptions?: Parameters<CatalogRuntimeHandle["checkAuth"]>[1],
+      ) {
+        const capture = await profileState.binding.capture(providerId);
+        return profileState.binding.runBound(capture, () =>
+          served.checkAuth(providerId, checkOptions),
+        );
+      },
+      async isCurrent(): Promise<boolean> {
+        return true;
+      },
+      async publishIfCurrent(
+        _providerId: string,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ): Promise<boolean> {
+        await publish(() => undefined);
+        return true;
+      },
+      async restoreProvider(
+        providerId: string,
+        entry: Parameters<CatalogRuntimeHandle["restoreProvider"]>[1],
+      ): Promise<void> {
+        const provider = served.getProvider(providerId);
+        if (provider?.refreshModels === undefined) return;
+        await provider.refreshModels({
+          stored: structuredClone(entry),
+          publish: async (publication) => {
+            publication.update?.();
+            return true;
+          },
+          allowNetwork: false,
+          signal: new AbortController().signal,
+        });
+      },
     }),
+    catalogOperationsFor(capture: ProviderAuthBindingCapture): CatalogProviderOperations {
+      return createCatalogOperationsFor(capture);
+    },
     providerSource,
   });
 }

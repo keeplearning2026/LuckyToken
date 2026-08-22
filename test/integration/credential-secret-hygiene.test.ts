@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
+import {
+  createConfiguredLuckyTokenDataPlane,
+  createSeededCredentialRecordStore,
+} from "../support/configured-data-plane.js";
 
 /**
  * Ticket 12 secret hygiene: credential values that enter the authority
@@ -73,9 +76,18 @@ describe("credential canary hygiene across public surfaces", () => {
       }),
       "utf8",
     );
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "secret-gw",
+      credential: {
+        type: "api_key",
+        key: CANARY_KEY,
+        env: { PROVIDER_PRIVATE_TOKEN: CANARY_IMPORT_KEY },
+      },
+    }]);
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch: async () => new Response(),
+      credentialRecordStore,
       configValueAdapters: {
         envSource: (name) =>
           name === CANARY_ENV ? CANARY_ENV_VALUE : undefined,
@@ -110,23 +122,10 @@ describe("credential canary hygiene across public surfaces", () => {
 
   it("keeps stored credential canaries out of status, events, diagnostics and journals", async () => {
     const { composition, stateDirectory } = await serve();
-    // The UI logs in with a literal secret and an env reference.
-    const authority = composition.credentialAuthority;
-    await authority.login({
-      providerId: "secret-gw",
-      expectedRevision: 0,
-      value: CANARY_KEY,
-      overwrite: true,
-    });
-    await authority.login({
-      providerId: "secret-gw",
-      expectedRevision: 1,
-      value: `$${CANARY_ENV}`,
-      overwrite: true,
-    });
+    const management = composition.credentialManagement;
 
     // The sanitized projection never carries the raw or resolved values.
-    const projection = JSON.stringify(authority.snapshot());
+    const projection = JSON.stringify(management.snapshot());
     expect(projection).not.toContain(CANARY_KEY);
     expect(projection).not.toContain(CANARY_ENV_VALUE);
     expect(projection).not.toContain(CANARY_ENV);
@@ -152,50 +151,28 @@ describe("credential canary hygiene across public surfaces", () => {
       expect(bytes).not.toContain(CANARY_ENV_VALUE);
     }
 
-    // The import preview plan is value-free.
-    const preview = await authority.importPreview({
-      expectedRevision: 2,
-      content: JSON.stringify({
-        "secret-gw": { type: "api_key", key: CANARY_IMPORT_KEY },
-      }),
-    });
-    expect(preview.outcome).toBe("ok");
-    expect(JSON.stringify(preview)).not.toContain(CANARY_IMPORT_KEY);
-    expect(JSON.stringify(preview)).not.toContain(CANARY_KEY);
+    expect(projection).not.toContain(CANARY_IMPORT_KEY);
   });
 
   it("keeps canaries out of every credential command result and failure surface", async () => {
     const { composition } = await serve();
-    const authority = composition.credentialAuthority;
-    await authority.login({
-      providerId: "secret-gw",
-      expectedRevision: 0,
-      value: CANARY_KEY,
-      overwrite: true,
-    });
+    const management = composition.credentialManagement;
+    const current = management.snapshot().providers.find(
+      (provider) => provider.providerId === "secret-gw",
+    )!;
+    const target = current.profiles[0]!;
     const results = [
-      await authority.query(),
-      await authority.login({
+      await management.query(),
+      await management.updateMetadata({
         providerId: "secret-gw",
-        expectedRevision: 1,
-        value: CANARY_IMPORT_KEY,
-        overwrite: true,
+        credentialId: target.credentialId,
+        expectedRevision: current.revision!,
+        displayName: CANARY_IMPORT_KEY,
       }),
-      await authority.logout({
+      await management.remove({
         providerId: "secret-gw",
-        expectedRevision: 2,
-      }),
-      await authority.login({
-        providerId: "secret-gw",
-        expectedRevision: 3,
-        value: "",
-        overwrite: true,
-      }),
-      await authority.login({
-        providerId: "no-such-provider",
-        expectedRevision: 3,
-        value: CANARY_KEY,
-        overwrite: true,
+        credentialId: target.credentialId,
+        expectedRevision: current.revision!,
       }),
     ];
     for (const result of results) {
@@ -205,30 +182,27 @@ describe("credential canary hygiene across public surfaces", () => {
     }
   });
 
-  it("status facts stay accurate after logout with models.json and env sources intact", async () => {
+  it("projects ambient eligibility after the last managed Profile is removed", async () => {
     const { composition } = await serve();
-    const authority = composition.credentialAuthority;
-    await authority.login({
+    const management = composition.credentialManagement;
+    const current = management.snapshot().providers.find(
+      (provider) => provider.providerId === "secret-gw",
+    )!;
+    await management.remove({
       providerId: "secret-gw",
-      expectedRevision: 0,
-      value: CANARY_KEY,
-      overwrite: true,
+      credentialId: current.profiles[0]!.credentialId,
+      expectedRevision: current.revision!,
     });
-    await authority.logout({
-      providerId: "secret-gw",
-      expectedRevision: 1,
-    });
-    const row = authority
-      .snapshot()
-      .providers.find((entry) => entry.providerId === "secret-gw");
+    const projection = await management.query();
+    const row = projection.providers.find(
+      (entry) => entry.providerId === "secret-gw",
+    );
     expect(row).toMatchObject({
-      stored: false,
-      modelsJson: true,
-      commandDerived: false,
-      unavailable: false,
-      effectiveSource: "models.json",
+      implementationAvailable: true,
+      profiles: [],
+      ambient: { kind: "external", status: "configured" },
     });
-    const serialized = JSON.stringify(authority.snapshot());
+    const serialized = JSON.stringify(projection);
     expect(serialized).not.toContain(CANARY_KEY);
     expect(serialized).not.toContain(CANARY_ENV_VALUE);
   });

@@ -1,6 +1,6 @@
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,12 +34,75 @@ async function fixture(): Promise<{ modelsJsonPath: string }> {
   return { modelsJsonPath: join(root, "models.json") };
 }
 
+async function getBoundModelAuth(runtime: Awaited<ReturnType<typeof createProviderRuntime>>, model: Model<string>) {
+  const capture = await runtime.providerAuthBindings.capture(model.provider);
+  return runtime.providerAuthBindings.runBound(capture, () =>
+    runtime.models.getAuth(model),
+  );
+}
+
 /**
  * Provider Activation Spec §23.1: Provider Runtime contract tests.
  * P1 — Pi built-in discovery; P2 — bundled CommandCode discovery; P3 —
  * source classification; P4 — reserved bundled identities.
  */
 describe("Provider Runtime composition", () => {
+  it("injects only the Profile Store into the one Backend-lifetime Models collection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-profile-runtime-"));
+    roots.push(root);
+    const piDirectory = join(root, "pi");
+    const legacyAuthPath = join(piDirectory, "auth.json");
+    await mkdir(piDirectory, { recursive: true });
+    await writeFile(legacyAuthPath, JSON.stringify({
+      anthropic: { type: "api_key", key: "legacy-secret-must-stay-ignored" },
+    }), "utf8");
+    let nextId = 0;
+    const runtime = await createProviderRuntime({
+      piDirectory,
+      modelsJsonPath: join(root, "models.json"),
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      authContext: { env: async () => undefined, fileExists: async () => false },
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => `runtime-id-${++nextId}`,
+    });
+    const modelsIdentity = runtime.models;
+    const modelIdentity = runtime.models.getModels("anthropic")[0];
+    const login = await runtime.providerAuthBindings.createLoginBinding({
+      providerId: "anthropic",
+      authType: "api_key",
+      displayName: "Production",
+      useNow: false,
+      expectedRevision: "absent",
+    });
+    await runtime.providerAuthBindings.runBound(login, () =>
+      runtime.models.login("anthropic", "api_key", {
+        prompt: async () => "managed-runtime-secret",
+        notify: () => {},
+      }),
+    );
+    await runtime.credentialManagement.query();
+    const capture = await runtime.providerAuthBindings.capture("anthropic");
+    const resolved = await runtime.providerAuthBindings.runBound(capture, () =>
+      runtime.models.getAuth("anthropic"),
+    );
+
+    expect(resolved?.auth.apiKey).toBe("managed-runtime-secret");
+    expect(runtime.models).toBe(modelsIdentity);
+    expect(runtime.models.getModels("anthropic")[0]).toBe(modelIdentity);
+    expect(runtime.credentialManagement.snapshot().providers.find(
+      (provider) => provider.providerId === "anthropic",
+    )?.profiles[0])
+      .toMatchObject({ displayName: "Production" });
+    expect(await readFile(legacyAuthPath, "utf8")).toContain(
+      "legacy-secret-must-stay-ignored",
+    );
+    expect("credentialAuthority" in runtime).toBe(false);
+    expect("credentialStore" in runtime.credentialManagement).toBe(false);
+    expect("credentialStore" in runtime.providerAuthBindings).toBe(false);
+  });
+
   it("P1: exposes the exact pinned Pi built-in Provider set with no user configuration", async () => {
     const { modelsJsonPath } = await fixture();
     const runtime = await createProviderRuntime({
@@ -47,7 +110,6 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000001",
@@ -71,7 +133,6 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000002",
@@ -117,7 +178,6 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000003",
@@ -145,7 +205,6 @@ describe("Provider Runtime composition", () => {
         "@user/test-provider": { token: "abc" },
       },
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: async (specifier) => {
         if (
           specifier === COMMANDCODE_PROVIDER_PACKAGE ||
@@ -196,37 +255,48 @@ describe("Provider Runtime composition", () => {
 
   it("keeps Private and Goat credentials in independent Pi Provider slots", async () => {
     const { modelsJsonPath } = await fixture();
-    const credentials = new InMemoryCredentialStore();
     const runtime = await createProviderRuntime({
       piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials,
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000010",
     });
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "private-key",
-    }));
+    const add = async (providerId: string, displayName: string, key: string) => {
+      const binding = await runtime.providerAuthBindings.createLoginBinding({
+        providerId,
+        authType: "api_key",
+        displayName,
+        useNow: false,
+        expectedRevision: "absent",
+      });
+      await runtime.providerAuthBindings.runBound(binding, () =>
+        runtime.models.login(providerId, "api_key", {
+          prompt: async () => key,
+          notify: () => {},
+        }),
+      );
+    };
+    const auth = async (providerId: string) => {
+      const capture = await runtime.providerAuthBindings.capture(providerId);
+      return runtime.providerAuthBindings.runBound(capture, () =>
+        runtime.models.getAuth(providerId),
+      );
+    };
 
-    expect(
-      (await runtime.models.getAuth("commandcode-private"))?.auth.apiKey,
-    ).toBe("private-key");
-    await expect(runtime.models.getAuth("commandcode-goat")).resolves.toBeUndefined();
+    await add("commandcode-private", "Private", "private-key");
+    expect((await auth("commandcode-private"))?.auth.apiKey).toBe("private-key");
+    await expect(runtime.providerAuthBindings.capture("commandcode-goat").then(
+      (capture) => runtime.providerAuthBindings.runBound(capture, () =>
+        runtime.models.getAuth("commandcode-goat"),
+      ),
+    )).resolves.toBeUndefined();
 
-    await credentials.modify("commandcode-goat", async () => ({
-      type: "api_key",
-      key: "goat-key",
-    }));
-    expect((await runtime.models.getAuth("commandcode-goat"))?.auth.apiKey).toBe(
-      "goat-key",
-    );
-    expect(
-      (await runtime.models.getAuth("commandcode-private"))?.auth.apiKey,
-    ).toBe("private-key");
+    await add("commandcode-goat", "Goat", "goat-key");
+    expect((await auth("commandcode-goat"))?.auth.apiKey).toBe("goat-key");
+    expect((await auth("commandcode-private"))?.auth.apiKey).toBe("private-key");
   });
 
   it("P4b: rejects a user models.json Provider claiming the reserved bundled Provider ID", async () => {
@@ -250,7 +320,6 @@ describe("Provider Runtime composition", () => {
         modelsJsonPath,
         userProviderPackages: {},
         fetch: vi.fn(async () => new Response()),
-        credentials: new InMemoryCredentialStore(),
         importModule: commandCodeProviderImportModule(),
         now: () => 1,
         createUuid: () => "00000000-0000-4000-8000-000000000006",
@@ -278,7 +347,6 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000005",
@@ -330,7 +398,6 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000007",
@@ -340,7 +407,7 @@ describe("Provider Runtime composition", () => {
 
     // Request A resolves its auth at generation N (the pinned per-request
     // auth resolution reads models.json facts at resolve time).
-    const requestA = await runtime.models.getAuth(model!);
+    const requestA = await getBoundModelAuth(runtime, model!);
     expect(requestA?.auth.apiKey).toBe("initial-key");
 
     // Changing the file does not mutate the fixed request-composition facts.
@@ -361,7 +428,7 @@ describe("Provider Runtime composition", () => {
     runtime.catalog.capture();
 
     expect(requestA?.auth.apiKey).toBe("initial-key");
-    const requestB = await runtime.models.getAuth(model!);
+    const requestB = await getBoundModelAuth(runtime, model!);
     expect(requestB?.auth.apiKey).toBe("initial-key");
   });
 
@@ -386,21 +453,20 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000008",
     });
     const model = runtime.models.getModel("keyed-custom", "model-1");
     expect(model).toBeDefined();
-    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+    expect((await getBoundModelAuth(runtime, model!))?.auth.apiKey).toBe(
       "initial-key",
     );
 
     await rm(modelsJsonPath, { force: true });
     runtime.catalog.capture();
 
-    const authAfter = await runtime.models.getAuth(model!);
+    const authAfter = await getBoundModelAuth(runtime, model!);
     expect(authAfter?.auth.apiKey).toBe("initial-key");
   });
 
@@ -425,14 +491,13 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
       importModule: commandCodeProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000009",
     });
     const model = runtime.models.getModel("keyed-custom", "model-1");
     expect(model).toBeDefined();
-    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+    expect((await getBoundModelAuth(runtime, model!))?.auth.apiKey).toBe(
       "generation-n-key",
     );
 
@@ -457,7 +522,7 @@ describe("Provider Runtime composition", () => {
     // Startup generation remains fully authoritative.
     expect(runtime.models.getProvider("keyed-custom")).toBeDefined();
     expect(runtime.providerSource("keyed-custom")).toBe("user");
-    expect((await runtime.models.getAuth(model!))?.auth.apiKey).toBe(
+    expect((await getBoundModelAuth(runtime, model!))?.auth.apiKey).toBe(
       "generation-n-key",
     );
   });

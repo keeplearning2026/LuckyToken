@@ -2,14 +2,14 @@ import type {
   ApplicationStatus,
   AttentionCondition,
   AttentionProjection,
-  CredentialProjection,
+  CredentialProfilesProjectionV1,
   PersistenceProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 import { RECENT_REQUEST_FAILURE_WINDOW_MS } from "@luckytoken/application-control-plane/control-plane";
 
 export interface OperationalAttentionAuthorityOptions {
   readonly now?: () => number;
-  readonly credentials: () => CredentialProjection | undefined;
+  readonly credentials: () => CredentialProfilesProjectionV1 | undefined;
   readonly persistence: () => PersistenceProjection | undefined;
   readonly requestFailureCount: (from: number, to: number) => number;
 }
@@ -81,7 +81,7 @@ export function createOperationalAttentionAuthority(
         });
       }
 
-      let credentialProjection: CredentialProjection | undefined;
+      let credentialProjection: CredentialProfilesProjectionV1 | undefined;
       try {
         credentialProjection = options.credentials();
       } catch {
@@ -91,10 +91,18 @@ export function createOperationalAttentionAuthority(
       for (const provider of credentialProjection?.providers ?? []) {
         if (!PROVIDER_ID.test(provider.providerId)) continue;
         visibleProviders.add(provider.providerId);
-        const effective =
-          provider.effectiveSource !== "none" &&
-          !provider.expired &&
-          !provider.unavailable;
+        if (provider.profiles.length === 0) {
+          providerWasEffective.delete(provider.providerId);
+          providerInvalidEpisodes.delete(provider.providerId);
+          continue;
+        }
+        const active = provider.profiles.find(
+          (profile) => profile.credentialId === provider.activeCredentialId,
+        );
+        const effective = provider.implementationAvailable &&
+          active?.enabled === true &&
+          active.health !== "reconnect_required" &&
+          active.health !== "disabled";
         const previous = providerWasEffective.get(provider.providerId);
         if (effective) {
           providerWasEffective.set(provider.providerId, true);

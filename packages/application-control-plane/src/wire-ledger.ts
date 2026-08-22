@@ -1,5 +1,7 @@
 import type {
   LedgerAttempt,
+  LedgerCredentialAttempt,
+  LedgerCredentialCapture,
   LedgerFailureSummary,
   LedgerNotice,
   LedgerPhase,
@@ -66,6 +68,8 @@ const LEDGER_FACTS_KEYS: ReadonlySet<string> = new Set([
   "failure",
   "persistenceWarnings",
   "piStopReason",
+  "credentialCapture",
+  "credentialAttempts",
 ]);
 
 const LEDGER_NOTICE_KEYS: ReadonlySet<string> = new Set([
@@ -89,6 +93,21 @@ const LEDGER_FAILURE_KEYS: ReadonlySet<string> = new Set([
   "classification",
   "stage",
   "messageHash",
+]);
+
+const LEDGER_CREDENTIAL_CAPTURE_KEYS: ReadonlySet<string> = new Set([
+  "credentialId",
+  "displayName",
+  "authType",
+  "authMethodLabel",
+  "lane",
+  "selectionReason",
+]);
+
+const LEDGER_CREDENTIAL_ATTEMPT_KEYS: ReadonlySet<string> = new Set([
+  ...LEDGER_CREDENTIAL_CAPTURE_KEYS,
+  "attempt",
+  "outcome",
 ]);
 
 function isLedgerPhase(value: unknown): value is LedgerPhase {
@@ -245,12 +264,82 @@ function decodeFailure(value: unknown): LedgerFailureSummary | undefined {
   });
 }
 
+function decodeCredentialCapture(
+  value: unknown,
+  allowedKeys: ReadonlySet<string> = LEDGER_CREDENTIAL_CAPTURE_KEYS,
+): LedgerCredentialCapture | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) return undefined;
+  }
+  const credentialId = boundedText(value.credentialId, 128);
+  const displayName = boundedText(value.displayName, 256);
+  const authMethodLabel = boundedText(value.authMethodLabel, 256);
+  if (
+    credentialId === undefined ||
+    displayName === undefined ||
+    authMethodLabel === undefined ||
+    (value.authType !== "api_key" && value.authType !== "oauth") ||
+    (value.lane !== "provider_native" && value.lane !== "semantic_conversion") ||
+    (value.selectionReason !== "active" &&
+      value.selectionReason !== "http_429_switch")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    credentialId,
+    displayName,
+    authType: value.authType,
+    authMethodLabel,
+    lane: value.lane,
+    selectionReason: value.selectionReason,
+  });
+}
+
+function decodeCredentialAttempt(value: unknown): LedgerCredentialAttempt | undefined {
+  const capture = decodeCredentialCapture(value, LEDGER_CREDENTIAL_ATTEMPT_KEYS);
+  if (
+    capture === undefined ||
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.attempt) ||
+    (value.attempt as number) < 1 ||
+    (value.outcome !== "success" &&
+      value.outcome !== "http_429" &&
+      value.outcome !== "failed" &&
+      value.outcome !== "aborted")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...capture,
+    attempt: value.attempt as number,
+    outcome: value.outcome,
+  });
+}
+
+function decodeCredentialAttemptArray(
+  value: unknown,
+): readonly LedgerCredentialAttempt[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
+    return undefined;
+  }
+  const attempts: LedgerCredentialAttempt[] = [];
+  for (const entry of value) {
+    const attempt = decodeCredentialAttempt(entry);
+    if (attempt === undefined) return undefined;
+    attempts.push(attempt);
+  }
+  return Object.freeze(attempts);
+}
+
 function decodeFacts(value: unknown): Readonly<{
   notices?: readonly LedgerNotice[];
   attempts?: readonly LedgerAttempt[];
   failure?: LedgerFailureSummary;
   persistenceWarnings?: number;
   piStopReason?: string;
+  credentialCapture?: LedgerCredentialCapture;
+  credentialAttempts?: readonly LedgerCredentialAttempt[];
 }> | undefined {
   if (!isRecord(value)) return undefined;
   for (const key of Object.keys(value)) {
@@ -262,10 +351,18 @@ function decodeFacts(value: unknown): Readonly<{
     value.attempts === undefined ? undefined : decodeAttemptArray(value.attempts);
   const failure =
     value.failure === undefined ? undefined : decodeFailure(value.failure);
+  const credentialCapture = value.credentialCapture === undefined
+    ? undefined
+    : decodeCredentialCapture(value.credentialCapture);
+  const credentialAttempts = value.credentialAttempts === undefined
+    ? undefined
+    : decodeCredentialAttemptArray(value.credentialAttempts);
   if (
     (value.notices !== undefined && notices === undefined) ||
     (value.attempts !== undefined && attempts === undefined) ||
-    (value.failure !== undefined && failure === undefined)
+    (value.failure !== undefined && failure === undefined) ||
+    (value.credentialCapture !== undefined && credentialCapture === undefined) ||
+    (value.credentialAttempts !== undefined && credentialAttempts === undefined)
   ) {
     return undefined;
   }
@@ -290,7 +387,9 @@ function decodeFacts(value: unknown): Readonly<{
       attempts === undefined &&
       failure === undefined &&
       persistenceWarnings === undefined &&
-      piStopReason === undefined)
+      piStopReason === undefined &&
+      credentialCapture === undefined &&
+      credentialAttempts === undefined)
   ) {
     return undefined;
   }
@@ -302,6 +401,8 @@ function decodeFacts(value: unknown): Readonly<{
       ? {}
       : { persistenceWarnings: persistenceWarnings as number }),
     ...(piStopReason === undefined ? {} : { piStopReason }),
+    ...(credentialCapture === undefined ? {} : { credentialCapture }),
+    ...(credentialAttempts === undefined ? {} : { credentialAttempts }),
   });
 }
 

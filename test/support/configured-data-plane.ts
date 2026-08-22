@@ -1,5 +1,6 @@
 import type {
   AuthContext,
+  Credential,
   CredentialStore,
   FetchFunction,
   ModelsStore,
@@ -14,7 +15,16 @@ import type {
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
-import type { LiveCredentialAuthority } from "../../src/credentials/authority.js";
+import type {
+  CredentialProfileManagement,
+  ProviderAuthBindingAuthority,
+} from "../../src/credentials/profile-contract.js";
+import {
+  createInMemoryProviderCredentialRecordStore,
+  NO_PROVIDER_RECORD_REVISION,
+  PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
+  type ProviderCredentialRecordStore,
+} from "../../src/credentials/profile-record-store.js";
 import {
   bindDeepDiagnosticsConfiguration,
   createDeepCaptureAuthority,
@@ -47,7 +57,9 @@ import type { SettingsRegistry } from "../../src/settings/catalog.js";
 
 export interface TestConfiguredDataPlaneOptions {
   readonly config: LuckyTokenCliConfig;
-  readonly credentials?: CredentialStore;
+  readonly credentialRecordStore?: ProviderCredentialRecordStore;
+  /** Test fixture source converted into one current Profile per Provider. */
+  readonly credentialSeedStore?: CredentialStore;
   readonly fetch: FetchFunction;
   readonly importModule?: ImportProviderModule;
   readonly createMessageId?: () => string;
@@ -62,7 +74,6 @@ export interface TestConfiguredDataPlaneOptions {
   readonly configValueAdapters?: ConfigValueAdapters;
   readonly authContext?: AuthContext;
   readonly modelsStore?: ModelsStore;
-  readonly onProviderLogin?: (providerId: string) => void;
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
   readonly publicModelAuthority?: PublicModelAuthority;
@@ -76,7 +87,8 @@ export interface TestConfiguredDataPlaneOptions {
 export interface TestConfiguredDataPlane extends ProductionDataPlane {
   readonly userConfiguredProviderIds: readonly string[];
   readonly diagnosticsStore: RuntimeDiagnosticsStore;
-  readonly credentialAuthority: LiveCredentialAuthority;
+  readonly credentialManagement: CredentialProfileManagement;
+  readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly catalog: ProviderRuntime["catalog"];
   readonly requestLedger: RequestLedgerStore;
   readonly deepCaptureStore: DeepCaptureStore;
@@ -87,11 +99,11 @@ export type ConfiguredLuckyTokenDataPlane = TestConfiguredDataPlane;
 
 export interface TestConfiguredPiModelsOptions {
   readonly piDirectory: string;
-  readonly credentials?: CredentialStore;
+  readonly credentialRecordStore?: ProviderCredentialRecordStore;
+  readonly credentialSeedStore?: CredentialStore;
   readonly fetch: FetchFunction;
   readonly modelsJsonPath?: string;
   readonly modelsStore?: ModelsStore;
-  readonly onProviderLogin?: (providerId: string) => void;
   readonly providerPackages?: Readonly<Record<string, unknown>>;
   readonly importModule?: ImportProviderModule;
   readonly createUuid?: () => string;
@@ -109,23 +121,28 @@ export async function createConfiguredPiModels(
   readonly userConfiguredProviderIds: readonly string[];
   readonly modelsJson?: Awaited<ReturnType<typeof loadModelsJson>>;
   readonly catalog: ProviderRuntime["catalog"];
+  readonly providerAuthBindings: ProviderRuntime["providerAuthBindings"];
+  readonly credentialManagement: ProviderRuntime["credentialManagement"];
 }> {
   const modelsJsonPath =
     options.modelsJsonPath ?? `${options.piDirectory}/models.json`;
+  const credentialRecordStore = options.credentialRecordStore ??
+    (options.credentialSeedStore === undefined
+      ? undefined
+      : await createSeededCredentialRecordStoreFromStore(
+          options.credentialSeedStore,
+        ));
   const runtime = await createProviderRuntime({
     piDirectory: options.piDirectory,
     modelsJsonPath,
     userProviderPackages: options.providerPackages ?? {},
     fetch: options.fetch,
-    ...(options.credentials === undefined
+    ...(credentialRecordStore === undefined
       ? {}
-      : { credentials: options.credentials }),
+      : { credentialRecordStore }),
     ...(options.modelsStore === undefined
       ? {}
       : { modelsStore: options.modelsStore }),
-    ...(options.onProviderLogin === undefined
-      ? {}
-      : { onProviderLogin: options.onProviderLogin }),
     ...(options.importModule === undefined
       ? {}
       : {
@@ -180,6 +197,8 @@ export async function createConfiguredPiModels(
     ]),
     ...(modelsJson === undefined ? {} : { modelsJson }),
     catalog: runtime.catalog,
+    providerAuthBindings: runtime.providerAuthBindings,
+    credentialManagement: runtime.credentialManagement,
   });
 }
 
@@ -260,6 +279,12 @@ export async function createConfiguredLuckyTokenDataPlane(
   options: TestConfiguredDataPlaneOptions,
 ): Promise<TestConfiguredDataPlane> {
   const now = options.now ?? Date.now;
+  const credentialRecordStore = options.credentialRecordStore ??
+    (options.credentialSeedStore === undefined
+      ? undefined
+      : await createSeededCredentialRecordStoreFromStore(
+          options.credentialSeedStore,
+        ));
   const runtime =
     options.providerRuntime ??
     (await createProviderRuntime({
@@ -267,9 +292,9 @@ export async function createConfiguredLuckyTokenDataPlane(
       modelsJsonPath: options.config.pi.modelsJson,
       userProviderPackages: options.config.providerPackages,
       fetch: options.fetch,
-      ...(options.credentials === undefined
+      ...(credentialRecordStore === undefined
         ? {}
-        : { credentials: options.credentials }),
+        : { credentialRecordStore }),
       ...(options.modelsStore === undefined
         ? {}
         : { modelsStore: options.modelsStore }),
@@ -292,9 +317,6 @@ export async function createConfiguredLuckyTokenDataPlane(
       ...(options.onInvalidModelsJson === undefined
         ? {}
         : { onInvalidModelsJson: options.onInvalidModelsJson }),
-      ...(options.onProviderLogin === undefined
-        ? {}
-        : { onProviderLogin: options.onProviderLogin }),
       ...(options.createSessionId === undefined
         ? {}
         : { createUuid: options.createSessionId }),
@@ -306,7 +328,7 @@ export async function createConfiguredLuckyTokenDataPlane(
   );
   const { userConfiguredProviderIds } = providerIds;
   const scrubSensitiveText = (value: string): string => {
-    const providerScrubbed = runtime.credentialAuthority.scrub(value);
+    const providerScrubbed = runtime.scrubCredentialText(value);
     return options.codexLocalAuth?.scrub(providerScrubbed) ?? providerScrubbed;
   };
   const diagnosticsStore =
@@ -371,6 +393,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     dataPlane = await createProductionDataPlane({
       configuration: options.config,
       models: runtime.models,
+      providerAuthBindings: runtime.providerAuthBindings,
       publicModels,
       requestLedger,
       deepCapture,
@@ -437,10 +460,72 @@ export async function createConfiguredLuckyTokenDataPlane(
     close,
     userConfiguredProviderIds,
     diagnosticsStore,
-    credentialAuthority: runtime.credentialAuthority,
+    credentialManagement: runtime.credentialManagement,
+    providerAuthBindings: runtime.providerAuthBindings,
     catalog: runtime.catalog,
     requestLedger,
     deepCaptureStore,
     deepCapture,
   });
+}
+
+export async function createSeededCredentialRecordStore(
+  entries: readonly {
+    readonly providerId: string;
+    readonly credential: Credential;
+    readonly displayName?: string;
+    readonly authMethodLabel?: string;
+  }[],
+): Promise<ProviderCredentialRecordStore> {
+  let revision = 0;
+  const store = createInMemoryProviderCredentialRecordStore({
+    createRevision: () => `test-revision-${++revision}`,
+  });
+  for (const entry of entries) {
+    await store.modifyManagement(
+      entry.providerId,
+      NO_PROVIDER_RECORD_REVISION,
+      () => ({
+        kind: "commit",
+        record: {
+          schemaVersion: PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
+          providerId: entry.providerId,
+          revision: NO_PROVIDER_RECORD_REVISION,
+          selectionGeneration: `test-selection-${entry.providerId}`,
+          activeCredentialId: `test-credential-${entry.providerId}`,
+          switchPolicy: { apiKeyOn429: false, oauthOn429: false },
+          profiles: [{
+            credentialId: `test-credential-${entry.providerId}`,
+            credentialGeneration: `test-generation-${entry.providerId}`,
+            authType: entry.credential.type,
+            authMethodLabel: entry.authMethodLabel ?? "Test credentials",
+            displayName: entry.displayName ?? "Test",
+            enabled: true,
+            priority: 0,
+            createdAt: 1,
+            updatedAt: 1,
+            credential: structuredClone(entry.credential),
+          }],
+        },
+        value: undefined,
+      }),
+    );
+  }
+  return store;
+}
+
+async function createSeededCredentialRecordStoreFromStore(
+  seedStore: CredentialStore,
+): Promise<ProviderCredentialRecordStore> {
+  const entries = await Promise.all(
+    (await seedStore.list()).map(async (info) => {
+      const credential = await seedStore.read(info.providerId);
+      return credential === undefined
+        ? undefined
+        : { providerId: info.providerId, credential };
+    }),
+  );
+  return createSeededCredentialRecordStore(
+    entries.filter((entry) => entry !== undefined),
+  );
 }

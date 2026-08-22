@@ -124,7 +124,7 @@ describe("secret canary hygiene across public surfaces", () => {
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch: options.fetch ?? (async () => new Response()),
-      credentials: new InMemoryCredentialStore(),
+      credentialSeedStore: new InMemoryCredentialStore(),
       configValueAdapters: {
         envSource: (name) => options.env?.[name],
         commandRunner: () => undefined,
@@ -165,7 +165,7 @@ describe("secret canary hygiene across public surfaces", () => {
     const response = await composition.runtime.handle(
       anthropicRequest("secret-gw/m1"),
     );
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(502);
     const body = await response.text();
     expect(body).not.toContain(CANARY_ENV);
     expect(body).not.toContain(CANARY_COMMAND);
@@ -173,15 +173,13 @@ describe("secret canary hygiene across public surfaces", () => {
     expect(body).not.toContain(CANARY_HEADER);
     expect(body).not.toContain(CANARY_MODEL_HEADER);
 
-    // Safe-detail journal: only hashes, never messages.
+    // Semantic Conversion receives only Pi's bounded terminal failure; the
+    // Provider resolution chain is not exposed to the journal.
     const safeJournal = await readJournal(stateDirectory);
     expect(safeJournal).not.toContain(CANARY_ENV);
     expect(safeJournal).not.toContain(CANARY_COMMAND);
     expect(safeJournal).not.toContain(CANARY_KEY);
-    expect(safeJournal.exceptionChain[0]).toMatchObject({
-      messageLength: expect.any(Number),
-      messageHash: expect.any(String),
-    });
+    expect(safeJournal.exceptionChain).toEqual([]);
   });
 
   it("keeps every canary out of the full-detail journal even though the error chain carries them", async () => {
@@ -192,7 +190,7 @@ describe("secret canary hygiene across public surfaces", () => {
     const response = await composition.runtime.handle(
       anthropicRequest("secret-gw/m1"),
     );
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(502);
     const journal = await readJournal(stateDirectory);
     const journalText = JSON.stringify(journal);
     expect(journalText).not.toContain(CANARY_ENV);
@@ -200,14 +198,12 @@ describe("secret canary hygiene across public surfaces", () => {
     expect(journalText).not.toContain(CANARY_KEY);
     expect(journalText).not.toContain(CANARY_HEADER);
     expect(journalText).not.toContain(CANARY_MODEL_HEADER);
-    // The bounded structural failure detail is preserved (provider id and
-    // the fixed description), never the env var name or command text.
+    // Pi's bounded semantic terminal does not export the Provider-private
+    // resolution chain into LuckyToken's failure journal.
     const messages = journal.exceptionChain
       .map((entry: { message?: string }) => entry.message ?? "")
       .join("\n");
-    expect(messages).toContain(
-      'Failed to resolve model "secret-gw/m1" header "X-Command" from shell command',
-    );
+    expect(messages).toBe("");
     expect(messages).not.toContain(CANARY_ENV);
   });
 
@@ -248,7 +244,7 @@ describe("secret canary hygiene across public surfaces", () => {
     const response = await composition.runtime.handle(
       anthropicRequest("secret-gw/m1"),
     );
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(502);
     const diagnosticsRoot = join(stateDirectory, "diagnostics");
     const files = await readdirRecursive(diagnosticsRoot);
     for (const file of files) {

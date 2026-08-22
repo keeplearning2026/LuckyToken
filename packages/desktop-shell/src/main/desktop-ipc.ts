@@ -1,16 +1,16 @@
 import type {
   AnalyticsQuery,
-  AuthCommand,
   AuthInteractionResponse,
   BackupCreateCommand,
   CatalogCommand,
   AgentIntegrationsCommand,
-  CredentialCommand,
+  CredentialProfilesCommand,
   HistoryDeleteCommand,
   HistoryExportCommand,
   HistoryRange,
   ModelsCommand,
   PublicModelsCommand,
+  ProviderProfileAuthCommand,
   RequestLedgerQuery,
   RuntimeCommand,
   RuntimeDiagnosticQuery,
@@ -129,13 +129,18 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.settings, (_event, ...args) =>
     session.client().executeSettingsCommand(first<SettingsCommand>(args)),
   );
-  register(desktopIpcChannels.credential, (_event, ...args) =>
-    session.client().executeCredentialCommand(first<CredentialCommand>(args)),
+  register(desktopIpcChannels.credentialProfiles, (_event, ...args) =>
+    session.client().executeCredentialProfilesCommand(
+      first<CredentialProfilesCommand>(args),
+    ),
   );
-  register(desktopIpcChannels.auth, (event, ...args) =>
-    session.client().executeAuthCommand(first<AuthCommand>(args), (interaction) => {
-      event.send(desktopIpcChannels.authEvent, interaction);
-    }),
+  register(desktopIpcChannels.providerProfileAuth, (event, ...args) =>
+    session.client().executeProviderProfileAuthCommand(
+      first<ProviderProfileAuthCommand>(args),
+      (interaction) => {
+        event.send(desktopIpcChannels.providerProfileAuthEvent, interaction);
+      },
+    ),
   );
   register(desktopIpcChannels.authRespond, async (_event, ...args) => {
     await session.client().respondAuthInteraction(first<AuthInteractionResponse>(args));

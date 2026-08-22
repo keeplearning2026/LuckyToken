@@ -25,18 +25,18 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import {
-} from "./contracts.js";
-import {
-  type AuthCommandHandler,
-  type AuthCommandResult,
   type AuthInteractionChannel,
   type AuthInteractionEvent,
-  type CredentialCommandHandler,
-  type CredentialCommandResult,
-  type CredentialProjection,
   type HistoryCommandHandler,
   type PersistenceProjection,
 } from "./contracts.js";
+import type {
+  CredentialProfilesCommandHandler,
+  CredentialProfilesCommandResult,
+  CredentialProfilesProjectionV1,
+  ProviderProfileAuthCommandHandler,
+  ProviderProfileAuthCommandResult,
+} from "./credential-profiles-contract.js";
 import type {
   BackupCommandHandler,
   RecoveryProjection,
@@ -71,11 +71,9 @@ import {
   compatibleHello,
   decodeApplicationCommandExecution,
   decodeApplicationStatus,
-  decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeAgentIntegrationsCommandResult,
   decodeClientRequest,
-  decodeCredentialCommandResult,
   decodeModelsCommandResult,
   decodePublicModelsCommandResult,
   decodeRuntimeCommandExecution,
@@ -84,6 +82,10 @@ import {
   isRecord,
   type ControlPlaneErrorCode,
 } from "./wire.js";
+import {
+  decodeCredentialProfilesCommandResult,
+  decodeProviderProfileAuthCommandResult,
+} from "./wire-credential-profiles.js";
 import { decodeHistoryCommandResult } from "./wire-history.js";
 import { decodeBackupResult } from "./wire-backup.js";
 import type { HistoryCommand, HistoryCommandResult, HistoryRange } from "./history-contract.js";
@@ -107,17 +109,14 @@ export interface StartControlPlaneOptions {
 
   /** Optional models.json catalog command handler (Ticket 08). */
   readonly modelsCommandHandler?: ModelsCommandHandler;
-  /** Optional Credential command handler (Ticket 12): serves the versioned
-   *  credential management commands used by UI and CLI against the live
-   *  Credential Authority. */
-  readonly credentialCommandHandler?: CredentialCommandHandler;
+  readonly credentialProfilesCommandHandler?: CredentialProfilesCommandHandler;
   /**
    * Optional Provider-auth command handler (Ticket 13): serves the
    * versioned auth query/login commands. A login gets a live interaction
    * channel bound to the requesting connection; typed interaction events
    * and prompt responses round-trip through it until the terminal result.
    */
-  readonly authCommandHandler?: AuthCommandHandler;
+  readonly providerProfileAuthCommandHandler?: ProviderProfileAuthCommandHandler;
   /**
    * Optional catalog command handler (Ticket 11): serves the versioned
    * catalog query/refresh commands against the authoritative active
@@ -133,9 +132,8 @@ export interface StartControlPlaneOptions {
   readonly settingsProjection?: () => SettingsProjection;
   /** Live sanitized models.json projection merged into every snapshot. */
   readonly modelsProjection?: () => ModelsProjection;
-  /** Live sanitized auth.json credential projection merged into every
-   *  snapshot (Ticket 12); absent until the Data Plane authority runs. */
-  readonly credentialProjection?: () => CredentialProjection | undefined;
+  readonly credentialProfilesProjection?: () =>
+    CredentialProfilesProjectionV1 | undefined;
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
@@ -224,16 +222,6 @@ interface AuthFlowState {
   settled: boolean;
 }
 
-/** Minimal value-free projection for unavailable/busy results (the
- *  authority is not running, so no path exists yet). */
-const EMPTY_CREDENTIAL_PROJECTION: CredentialProjection = Object.freeze({
-  revision: 0,
-  path: "",
-  present: false,
-  valid: false,
-  providers: Object.freeze([]),
-});
-
 export async function startApplicationStatusHost(
   options: StartControlPlaneOptions,
 ): Promise<RunningControlPlane> {
@@ -258,7 +246,7 @@ export async function startApplicationStatusHost(
   ): Omit<StatusSnapshot, "sequence"> => {
     const projection = options.settingsProjection?.();
     const modelsProjection = options.modelsProjection?.();
-    const credentialProjection = options.credentialProjection?.();
+    const credentialProfilesProjection = options.credentialProfilesProjection?.();
     const catalogProjection = options.catalogProjection?.();
     const persistenceProjection = options.persistenceProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
@@ -272,9 +260,9 @@ export async function startApplicationStatusHost(
         ? {}
         : { settings: projection.settings }),
       ...(modelsProjection === undefined ? {} : { models: modelsProjection }),
-      ...(credentialProjection === undefined
+      ...(credentialProfilesProjection === undefined
         ? {}
-        : { credentials: credentialProjection }),
+        : { credentialProfiles: credentialProfilesProjection }),
       ...(catalogProjection === undefined
         ? {}
         : { catalog: catalogProjection }),
@@ -451,8 +439,8 @@ export async function startApplicationStatusHost(
     return { flow, channel };
   };
 
-  const fallbackAuthState = (): CredentialProjection =>
-    options.credentialProjection?.() ?? EMPTY_CREDENTIAL_PROJECTION;
+  const fallbackCredentialProfilesState = (): CredentialProfilesProjectionV1 =>
+    options.credentialProfilesProjection?.() ?? Object.freeze({ providers: [] });
 
   const serveConnection = async (state: ConnectionState): Promise<void> => {
     try {
@@ -1155,113 +1143,68 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             result,
           });
-        } else if (request.type === "credential_command") {
-          if (options.credentialCommandHandler === undefined) {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "unknown_command",
-            });
-            continue;
-          }
-          // A credential command publishes only when it changed the
-          // authoritative revision: reads (query) are side-effect free and
-          // no-op writes do not broadcast. A revision change discovered by
-          // a command (e.g. an external edit) is a real file mutation and
-          // does publish, keeping subscribers current.
-          const credentialsBefore = options.credentialProjection?.();
-          let handled: CredentialCommandResult;
-          try {
-            handled = await options.credentialCommandHandler(request.command);
-          } catch {
-            handled = {
-              outcome: "unavailable",
-              revision: 0,
-              state: {
-                revision: 0,
-                path: "",
-                present: false,
-                valid: false,
-                providers: [],
-              },
-              error: "Credential Authority is unavailable",
-            };
-          }
-          // Validate the handler result against the request command before
-          // it is written: credential values or raw credential shapes can
-          // never pass the wire boundary.
-          const result = decodeCredentialCommandResult(
-            handled,
-            request.command,
-          );
-          if (result === undefined) {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "invalid_request",
-            });
-            continue;
-          }
-          if (
-            handled.outcome === "ok" &&
-            credentialsBefore !== undefined &&
-            handled.revision !== credentialsBefore.revision
-          ) {
-            // A successful write changed the authoritative file: publish
-            // the resulting credential projection to every subscriber.
-            await publishStatus({
-              modelDataPlane: current.modelDataPlane,
-              provider: current.provider,
-              ...(current.dataPlane === undefined
-                ? {}
-                : { dataPlane: current.dataPlane }),
-            });
-          }
-          await writeFrame(state.connection, {
-            type: "credential_command_result",
-            requestId: request.requestId,
-            result,
-          });
-        } else if (request.type === "auth_command") {
-          if (options.authCommandHandler === undefined) {
+        } else if (request.type === "credential_profiles_command") {
+          if (options.credentialProfilesCommandHandler === undefined) {
             await sendError(state.connection, request.requestId, "unknown_command");
             continue;
           }
-          if (request.command.command === "login") {
+          let handled: CredentialProfilesCommandResult;
+          try {
+            handled = await options.credentialProfilesCommandHandler(
+              request.command,
+            );
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              state: fallbackCredentialProfilesState(),
+              error: "Credential Profiles are unavailable",
+            };
+          }
+          const result = decodeCredentialProfilesCommandResult(handled);
+          if (result === undefined) {
+            await sendError(state.connection, request.requestId, "invalid_request");
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "credential_profiles_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "provider_profile_auth_command") {
+          if (options.providerProfileAuthCommandHandler === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+            continue;
+          }
+          if (request.command.command !== "query") {
             if (state.authFlow !== undefined) {
-              // One in-flight login per connection: a second login is
-              // refused instead of racing the Provider-owned flow.
               await writeFrame(state.connection, {
-                type: "auth_command_result",
+                type: "provider_profile_auth_command_result",
                 requestId: request.requestId,
                 result: {
                   outcome: "conflict",
-                  state: fallbackAuthState(),
+                  state: fallbackCredentialProfilesState(),
                   error: "Another sign-in is already in progress",
                 },
               });
               continue;
             }
-            // The login runs as a task: interaction responses arrive on
-            // this connection while the Provider-owned flow is pending.
             const { flow, channel } = createAuthFlow(state, request.requestId);
             state.authFlow = flow;
             void (async () => {
-              const credentialsBefore = options.credentialProjection?.();
-              let handled: AuthCommandResult;
+              let handled: ProviderProfileAuthCommandResult;
               try {
-                handled = await options.authCommandHandler!(
+                handled = await options.providerProfileAuthCommandHandler!(
                   request.command,
                   channel,
                 );
               } catch {
                 handled = {
                   outcome: "unavailable",
-                  state: fallbackAuthState(),
+                  state: fallbackCredentialProfilesState(),
                   error: "Provider sign-in is unavailable",
                 };
               }
-              const result = decodeAuthCommandResult(handled, request.command);
+              const result = decodeProviderProfileAuthCommandResult(handled);
               if (result === undefined) {
                 await sendError(
                   state.connection,
@@ -1270,55 +1213,35 @@ export async function startApplicationStatusHost(
                 );
               } else {
                 await writeFrame(state.connection, {
-                  type: "auth_command_result",
+                  type: "provider_profile_auth_command_result",
                   requestId: request.requestId,
                   result,
                 }).catch(() => undefined);
-                if (
-                  result.outcome === "ok" &&
-                  credentialsBefore !== undefined &&
-                  result.state.revision !== credentialsBefore.revision
-                ) {
-                  // A successful login changed the authoritative file:
-                  // publish the resulting credential projection (and the
-                  // scheduled Ticket 11 catalog refresh) to subscribers.
-                  await publishStatus({
-                    modelDataPlane: current.modelDataPlane,
-                    provider: current.provider,
-                    ...(current.dataPlane === undefined
-                      ? {}
-                      : { dataPlane: current.dataPlane }),
-                  });
-                }
               }
               if (state.authFlow === flow) state.authFlow = undefined;
-              abortAuthFlow(
-                flow,
-                new Error("Sign-in flow finished"),
-              );
+              abortAuthFlow(flow, new Error("Sign-in flow finished"));
             })();
             continue;
           }
-          // query: never uses the interaction channel.
-          let handled: AuthCommandResult;
+          let handled: ProviderProfileAuthCommandResult;
           try {
-            handled = await options.authCommandHandler(
+            handled = await options.providerProfileAuthCommandHandler(
               request.command,
               NOOP_AUTH_CHANNEL,
             );
           } catch {
             handled = {
               outcome: "unavailable",
-              state: fallbackAuthState(),
+              state: fallbackCredentialProfilesState(),
               error: "Provider sign-in is unavailable",
             };
           }
-          const result = decodeAuthCommandResult(handled, request.command);
+          const result = decodeProviderProfileAuthCommandResult(handled);
           if (result === undefined) {
             await sendError(state.connection, request.requestId, "invalid_request");
           } else {
             await writeFrame(state.connection, {
-              type: "auth_command_result",
+              type: "provider_profile_auth_command_result",
               requestId: request.requestId,
               result,
             });

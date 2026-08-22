@@ -11,6 +11,7 @@ import {
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
 import { createRecordingRequestLedger } from "../support/recording-request-ledger.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 function responsesModel(
   api = "openai-responses",
@@ -20,7 +21,7 @@ function responsesModel(
     id: "gpt-5",
     name: "gpt-5",
     api,
-    provider: "my-responses",
+    provider: "openai",
     baseUrl,
     reasoning: false,
     input: ["text"],
@@ -55,7 +56,11 @@ function dependencies(
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
-    providerNativeLane: createProviderNativeResponses({ models: source, fetch }),
+    providerNativeLane: createProviderNativeResponses({
+      models: source,
+      bindings: ambientProfileBindings,
+      fetch,
+    }),
     stateFile: "provider-native-contract-state.json",
     maxRequestBytes: 1_000_000,
     createResponseId: () => "resp_test",
@@ -84,6 +89,10 @@ describe("Provider Native Responses contract", () => {
     const unrelated = responsesModel("openai-codex-responses");
     unrelated.provider = "another-provider";
     expect(supportsProviderNativeResponses(unrelated)).toBe(false);
+
+    const custom = responsesModel("openai-responses");
+    custom.provider = "custom-provider";
+    expect(supportsProviderNativeResponses(custom)).toBe(false);
   });
 
   it("preserves opaque request fields while rewriting only the upstream model selector", async () => {
@@ -96,7 +105,7 @@ describe("Provider Native Responses contract", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     };
-    const rawBody = '{\n  "model": "my-responses/gpt-5",\n  "input": [{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","namespace":"dynamic_tools"}]}],\n  "future_number": 9007199254740993,\n  "negative_zero": -0,\n  "future_field": {"opaque":true}\n}';
+    const rawBody = '{\n  "model": "openai/gpt-5",\n  "input": [{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","namespace":"dynamic_tools"}]}],\n  "future_number": 9007199254740993,\n  "negative_zero": -0,\n  "future_field": {"opaque":true}\n}';
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch),
@@ -108,7 +117,7 @@ describe("Provider Native Responses contract", () => {
     expect(upstream[0]?.url).toBe("https://responses.example.com/responses");
     expect(upstream[0]?.headers.get("authorization")).toBe("Bearer sk-responses");
     await expect(upstream[0]?.text()).resolves.toBe(
-      rawBody.replace('"my-responses/gpt-5"', '"gpt-5"'),
+      rawBody.replace('"openai/gpt-5"', '"gpt-5"'),
     );
   });
 
@@ -136,7 +145,7 @@ describe("Provider Native Responses contract", () => {
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
-      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
     );
 
     expect(response.status).toBe(200);
@@ -178,7 +187,7 @@ describe("Provider Native Responses contract", () => {
       dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
       request(
         JSON.stringify({
-          model: "my-responses/gpt-5",
+          model: "openai/gpt-5",
           input: "hi",
           stream: true,
         }),
@@ -217,7 +226,7 @@ describe("Provider Native Responses contract", () => {
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch),
-      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi", stream: true })),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
     );
 
     expect(response.status).toBe(200);
@@ -239,7 +248,7 @@ describe("Provider Native Responses contract", () => {
     } as unknown as Models;
     const response = await handleHttpRequest(
       dependencies(missingCredentialModels, fetch),
-      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
     );
 
     expect(response.status).toBe(502);
@@ -257,7 +266,7 @@ describe("Provider Native Responses contract", () => {
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch),
-      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
     );
 
     expect(response.status).toBe(502);
@@ -279,7 +288,7 @@ describe("Provider Native Responses contract", () => {
 
     const response = await handleHttpRequest(
       dependencies(models(model), fetch),
-      request(JSON.stringify({ model: "my-responses/gpt-5", input: "hi" })),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
     );
 
     expect(response.status).toBe(200);

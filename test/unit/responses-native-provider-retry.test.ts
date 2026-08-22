@@ -2,7 +2,16 @@ import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { parseProviderNativeResponsesConfiguration } from "../../src/provider-native-responses/configuration.js";
-import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
+import { createProviderNativeResponses as createProviderNativeResponsesRaw } from "../../src/provider-native-responses/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
+import type {
+  ManagedProviderAuthBindingCapture,
+  ProviderAuthBindingCapture,
+} from "../../src/credentials/profile-contract.js";
+
+const createProviderNativeResponses = (
+  options: Omit<Parameters<typeof createProviderNativeResponsesRaw>[0], "bindings">,
+) => createProviderNativeResponsesRaw({ ...options, bindings: ambientProfileBindings });
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000123";
 
@@ -679,6 +688,54 @@ describe("Provider Native Responses HTTP retry", () => {
     expect(response).toBe(upstream);
     expect(cloned).toBe(false);
     await expect(response.text()).resolves.toBe("opaque final error");
+  });
+
+  it("stops after three outer Profile attempts independently of inner transport retry", async () => {
+    const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
+      facts: {
+        kind: "managed",
+        providerId: "openai",
+        credentialId: `credential-${index}`,
+        authType: "api_key",
+        authMethodLabel: "OpenAI credentials",
+        displayName: `Profile ${index}`,
+        credentialGeneration: `credential-generation-${index}`,
+        selectionGeneration: `selection-generation-${index}`,
+      },
+    }));
+    let transitions = 0;
+    let calls = 0;
+    const lane = createProviderNativeResponsesRaw({
+      models: models(),
+      bindings: {
+        capture: async () => captures[0]!,
+        runBound: async <T>(_binding: ProviderAuthBindingCapture, operation: () => Promise<T>) =>
+          operation(),
+        advanceAfterFinal429: async () => ({
+          outcome: "switched",
+          capture: captures[++transitions]!,
+        }),
+      },
+      fetch: async () => {
+        calls += 1;
+        return new Response("limited", { status: 429 });
+      },
+      configuration: parseProviderNativeResponsesConfiguration({
+        transport: { maxRetries: 0 },
+      }),
+    });
+
+    const response = await lane.execute({
+      model: model(),
+      rawBody: '{"model":"alias","input":"hello"}',
+      operation: "responses",
+      signal: AbortSignal.timeout(5_000),
+      sessionId: SESSION_ID,
+    });
+
+    expect(response.status).toBe(429);
+    expect(calls).toBe(3);
+    expect(transitions).toBe(2);
   });
 
   it("never applies Responses retry policy to Compact", async () => {

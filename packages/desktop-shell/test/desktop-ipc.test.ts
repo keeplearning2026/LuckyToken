@@ -26,9 +26,13 @@ function fixture() {
   const client = {
     getStatus: vi.fn(async () => runtimeResult.snapshot),
     executeRuntimeCommand: vi.fn(async () => runtimeResult),
-    executeAuthCommand: vi.fn(async (_command, onInteraction) => {
-      onInteraction?.({ type: "progress", message: "Signing in" });
-      return { outcome: "ok", state: { revision: 1, path: "auth.json", present: true, valid: true, providers: [] } };
+    executeCredentialProfilesCommand: vi.fn(async () => ({
+      outcome: "ok",
+      state: { providers: [] },
+    })),
+    executeProviderProfileAuthCommand: vi.fn(async (_command, onInteraction) => {
+      onInteraction?.({ type: "progress", message: "Adding Profile" });
+      return { outcome: "ok", state: { providers: [] } };
     }),
     subscribeRequestLedger: vi.fn(async (listener) => {
       ledgerListeners.push(listener);
@@ -104,18 +108,9 @@ describe("typed Electron desktop IPC", () => {
     expect(client.executeRuntimeCommand).toHaveBeenCalledWith("start");
   });
 
-  it("routes auth and ledger events only to the requesting renderer and releases live subscriptions", async () => {
+  it("routes ledger events only to the requesting renderer and releases live subscriptions", async () => {
     const { handlers, bridge, ledgerStop, event } = fixture();
     const trusted = event(7);
-
-    await handlers.get(desktopIpcChannels.auth)?.(
-      trusted,
-      { command: "login", providerId: "example", authType: "oauth" },
-    );
-    expect(trusted.send).toHaveBeenCalledWith(
-      desktopIpcChannels.authEvent,
-      { type: "progress", message: "Signing in" },
-    );
 
     await handlers.get(desktopIpcChannels.ledgerSubscribe)?.(trusted);
     expect(trusted.send).toHaveBeenCalledWith(
@@ -124,6 +119,23 @@ describe("typed Electron desktop IPC", () => {
     );
     await bridge.releaseSender(7);
     expect(ledgerStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes Profile management and Profile auth through their typed channels", async () => {
+    const { handlers, client, event } = fixture();
+    const trusted = event(7);
+    const command = { command: "query" as const };
+    await handlers.get(desktopIpcChannels.credentialProfiles)?.(trusted, command);
+    expect(client.executeCredentialProfilesCommand).toHaveBeenCalledWith(command);
+
+    await handlers.get(desktopIpcChannels.providerProfileAuth)?.(
+      trusted,
+      { command: "query" },
+    );
+    expect(trusted.send).toHaveBeenCalledWith(
+      desktopIpcChannels.providerProfileAuthEvent,
+      { type: "progress", message: "Adding Profile" },
+    );
   });
 
   it("rebinds a logical ledger subscription and rejects stale-client callbacks", async () => {

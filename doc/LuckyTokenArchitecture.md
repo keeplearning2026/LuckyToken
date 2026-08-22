@@ -151,7 +151,7 @@ WHATWG Response → Node ServerResponse → Agent
 - Data Plane 固定为 loopback-only，不维护 LuckyToken global/project client-token；
 - Codex Local Native 请求只接受与当前 Codex `auth.json` access token 匹配的 request Bearer，并把该 credential 限定在 Local Native lane；
 - 通过 Pi `Provider.auth` 接口执行 Provider login/logout，并把 credential 保存到
-  Pi-owned `auth.json`；
+  Provider Profile records；
 - CommandCode Private Provider 作为私有 workspace package 从 `node_modules` 加载
   （模型与上游地址由包拥有，配置只需声明 package 根名）；
 - 支持 `models.json` 注册用户自定义 Provider（`baseUrl` + `api` + `apiKey` +
@@ -286,7 +286,7 @@ flowchart LR
     Runtime --> Native
     CCP --> Upstream["Provider upstream"]
     Native --> Upstream
-    PiAuth["Pi auth.json"] --> Models
+    Profiles["credential-profiles/<provider>.json"] --> Models
 ```
 
 需要特别注意：图中没有 `Anthropic handler → CommandCode Provider`，也没有
@@ -312,7 +312,7 @@ InstanceAuthority.acquire()
 load/validate config
   ↓
 construct Backend-lifetime authorities
-  ├── Provider Runtime / credential authority
+  ├── Provider Runtime / Profile State Owner
   ├── Models / Catalog / Public Models
   ├── diagnostics / request ledger / history / backup
   └── settings / Codex integration
@@ -435,7 +435,7 @@ flowchart LR
 | Node socket / `IncomingMessage` | Node HTTP server | `server.ts` | Web `Request` 建立、response 完成或连接关闭 |
 | Codex request Bearer | Local Native request headers | `CodexLocalCredentialAuthority` → Local Native transport | request-local forward auth 建立并完成 native transport 后 |
 | Codex `auth.json` access token | Codex credential authority | constant-time comparison / bounded scrub memory | 不进入 Pi/Provider credential state |
-| Provider credential raw value | Pi `CredentialStore` / `LiveCredentialAuthority` | Provider auth resolution / request composition | request-local Provider auth 建立后；management projection 永不返回 secret |
+| Provider credential raw value | Profile State Owner / composition-private Pi `CredentialStore` | exact request-bound Provider auth resolution | request-local Provider auth 建立后；management/binding projection 永不返回 secret |
 | Control Plane capability | Backend discovery publication | trusted Main/CLI Control Plane handshake | authenticated management session 关闭后 |
 | `sessionId` / request identity | request identity authority | interested execution/diagnostics consumers | request terminal 后 |
 | Anthropic raw JSON | Anthropic handler | validation | validated source state 建立后 |
@@ -626,7 +626,8 @@ LuckyToken 不再给本地 Agent 发一套 global/project client token。当前�
    → 只在 Local Native lane 验证/转发
 
 2. Provider credential
-   ~/.luckytoken/pi/auth.json 或 Provider/环境配置
+   ~/.luckytoken/pi/credential-profiles/<providerId>.json
+   或 Provider/环境 ambient 配置
    → Provider Runtime / Pi Models 使用
 
 3. Control Plane capability
@@ -657,27 +658,25 @@ interface CodexLocalCredentialAuthority {
 
 该 authority 还维护有界 known-value scrub snapshot，供 diagnostics/redaction 消除当前和最近的 Codex token；读取失败只是 Local Native auth unavailable，不会让整个 Backend startup 失败。
 
-## 4.3 Provider credential authority — `src/credentials/authority.ts`
+## 4.3 Provider Profile State Owner — `src/credentials/profile-authority.ts`
 
-Provider credential 由 Backend-lifetime `LiveCredentialAuthority` 与 Pi `CredentialStore` 拥有。生产文件是 `config.pi.directory/auth.json`，默认即 `~/.luckytoken/pi/auth.json`。
+Provider credential 由 Backend-lifetime Profile State Owner 维护；每个 Provider 有一个独立的 `config.pi.directory/credential-profiles/<providerId>.json` record。一个 Provider 可以保存多个 Pi `api_key` branch 或 OAuth Profile，但后续请求同一时间只捕获一个 active managed Profile。零 managed Profiles 时才允许无 ID 的 ambient binding。
 
 主要 contract：
 
 ```text
-Control Plane / CLI login|logout|import
-        ↓
-LiveCredentialAuthority
-        ↓ revision + per-slot CAS
-CredentialStore
-        ↓
-auth.json
-        ↓
-Pi Models / Provider Runtime
+Desktop / CLI / Control Plane
+        ↓ secret-free Management Interface
+Profile State Owner
+        ├── secret-free opaque Binding Interface → 三条 Provider-backed request lane
+        └── composition-private Pi CredentialStore → one Backend-lifetime Models
+                ↓
+credential-profiles/<providerId>.json
 ```
 
-所有 mutation 都经过 revision/CAS；外部文件修改会被重新观察成新 revision，stale UI/CLI write 不能覆盖新值。Control Plane status 只暴露 stored/environment/models-json/expired/unavailable 等结构性事实，不返回 secret、环境变量名、command 文本或原始 credential object。
+Management mutation 使用 Provider `revision` CAS；request capture 另外携带 `credentialGeneration` 与 `selectionGeneration`，避免 reconnect、manual/automatic switch 和 A→B→A ABA 被旧请求覆盖。OAuth refresh 按 `credentialId` 串行，网络期间不持有 Provider file lock，写回前再次验证 logical credential generation。
 
-Provider login 既可以是 API key，也可以由 Provider 自己声明 account/subscription/OAuth interaction；CLI/Desktop 只实现 typed interaction shell，不硬编码具体 Provider 登录语义。
+Provider login 既可以是 literal key，也可以是 bearer/cloud profile/service account 等 Pi non-OAuth payload，或 Provider 自己声明的 account/subscription/OAuth interaction。产品文案只使用 Backend 投影的 `authMethodLabel`，不把内部 `api_key` discriminant 错写成通用“API Key”。旧 `pi/auth.json` 不读取、不迁移、不改写；它只是可由用户手动删除的 obsolete state。
 
 ## 4.4 Application Control Plane capability
 
@@ -1151,7 +1150,7 @@ Client Protocol，右边也可能增加更多 Provider。Pi 就像中间统一�
 flowchart LR
     CP["Client Protocol\n把客户请求变成 Pi 格式"] --> PI["Pi 统一接口\nModels / Model / Context / Events"]
     PI --> PR["Provider\n把 Pi 格式变成供应商请求"]
-    AC["auth.json\nProvider 凭证"] --> PI
+    AC["credential-profiles/<provider>.json\nProvider Profiles"] --> PI
     CO --> PI
     CO --> CP
     CO --> PR
@@ -1164,7 +1163,7 @@ Token，但它自己不做协议翻译。
 Pi 是 LuckyToken 的共享 runtime/IR contract，但 Pi Agent 不是 LuckyToken 的应用
 架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.84.2`；仓库中的
 `pi-agent/packages/ai` 用于 source review/reference，不被 LuckyToken-specific 代码
-修改。LuckyToken-owned 模块只补上文件加载、credential persistence、Provider
+修改。LuckyToken-owned 模块只补上文件加载、Profile persistence/binding、Provider
 construction 和 CLI shell。
 
 ## 6.1 Pi public runtime contract
@@ -1271,43 +1270,23 @@ import coding-agent 参考源）；`catalog.ts` 用 Pi 公共接口 `createProvi
 fallback 到配置字段。注册后走标准 Pi IR 路径：请求由对应 api adapter 按
 `model.baseUrl` 直发，响应经 Pi 解析后渲染回 Anthropic。
 
-## 6.3 Pi credential persistence — `src/pi/file-credential-store.ts`
+## 6.3 Provider Profile persistence — `src/credentials/profile-record-store.ts`
 
-> **小白理解：** `auth.json` 是“供应商保险柜”，保存 LuckyToken 登录外部 Provider
-> 所需的 API key 或 OAuth 凭证。它不是 Agent 访问本地服务使用的门卡文件。加锁是
-> 因为 Provider 凭证可能在运行时被登录、退出或自动刷新，多个动作不能同时改坏文件。
+> **小白理解：** `credential-profiles/` 是 Provider 分柜保险箱。每个 Provider 一个文件，
+> 文件内可以有多个命名 Profile；Pi 每次仍只看到当前 operation 精确绑定的那一个，
+> 不知道 sibling Profiles 存在。
 
-```ts
-createFileCredentialStore(authPath): CredentialStore
-```
-
-实现的是上游 Pi 接口，而不是 LuckyToken 自定义 credential API：
-
-```ts
-interface CredentialStore {
-  read(providerId): Promise<Credential | undefined>;
-  list(): Promise<readonly CredentialInfo[]>;
-  modify(providerId, fn): Promise<Credential | undefined>;
-  delete(providerId): Promise<void>;
-}
-```
+`ProviderCredentialRecordStore` 拥有 `listProviderIds/read/modifyManagement/modifyCredential/modifySelection`。Management 和 Binding public interfaces 都不返回 secret-bearing `CredentialStore`；只有 `createProviderRuntime()` composition 能取得 State Owner 内部 adapter 并注入唯一的 Backend-lifetime Pi `Models`。
 
 | 项目 | 内容 |
 | --- | --- |
-| 功能 | 按 Provider ID 保存一个 `api_key` 或 `oauth` credential；为 Pi login/refresh/logout 提供 serialized read-modify-write |
-| 配套文件 | `.luckytoken/pi/auth.json` |
-| 文件 owner | Pi `CredentialStore` implementation；Pi `Models` 是 semantic caller |
-| 持有状态 | resolved auth path；操作期间的 file lock/parsed credential clone |
-| 谁使用它 | `createModels({ credentials })` 间接通过 Pi `Models` 使用 |
-| 它使用谁 | Node file API、`proper-lockfile`、Pi credential types |
+| 功能 | 每 Provider 多 Profile、active pointer、revision、credential/selection generations、429 settings |
+| 配套文件 | `.luckytoken/pi/credential-profiles/<providerId>.json` |
+| 文件 owner | Provider Profile State Owner；Pi 只通过 composition-private adapter 使用 |
+| 并发 | Provider management short file lock；OAuth refresh 另按 `credentialId` serialized |
+| public projection | display name、note、Backend auth-method label、optional identity hint、health；无 credential payload |
 
-每次操作可接收 `AbortSignal`，创建目录/文件时请求 0700/0600 权限，并用跨进程 file
-lock 序列化 OAuth refresh、login write 与 logout delete。`list()` 只输出 Provider ID
-和 credential type，不输出 secret。
-
-这里使用 lock 是 Pi credential contract 的需要：运行时并发请求可能同时触发 OAuth
-refresh。它与 Codex Local Native request credential、Control Plane capability 是三个不同
-capability，不能因为都属于“认证信息”就共享 authority 或生命周期。
+OAuth network refresh 在 file lock 外进行，随后用 Profile 是否仍存在及 `credentialGeneration` 是否一致保护发布。Silent token refresh 不改变 management revision、selection generation、credential generation 或用户可见更新时间；reconnect 才生成新的 logical credential generation。
 
 ## 6.4 Main deployment config — `src/cli-config.ts`
 
@@ -1390,7 +1369,7 @@ Config loader 可以解析未来 protocol ID，但当前 concrete composition �
 
 ```ts
 createProviderRuntime(options)
-  → Backend-lifetime Pi Models + Provider/Credential/Catalog facts
+  → Backend-lifetime Pi Models + Provider/Profile/Catalog facts
 
 createConfiguredLuckyTokenDataPlane(options)
   → LuckyTokenRuntime + certification + idempotent close
@@ -1398,12 +1377,12 @@ createConfiguredLuckyTokenDataPlane(options)
 
 ### `createProviderRuntime()`
 
-这一层只组装 Pi/Provider 侧：准备 CredentialStore，按 Pi builtins、`models.json`、bundled product Providers 与 external user Provider Packages 的当前契约构造模型集合。CommandCode Private 是 bundled product Provider，会自动进入 runtime；用户不得在 `providerPackages` 重复配置它。Core/Client Protocol 不 import 它的私有实现。
+这一层只组装 Pi/Provider 侧：创建 Profile State Owner 与 composition-private CredentialStore adapter，按 Pi builtins、`models.json`、bundled product Providers 与 external user Provider Packages 的当前契约构造模型集合。CommandCode Private 是 bundled product Provider，会自动进入 runtime；用户不得在 `providerPackages` 重复配置它。Core/Client Protocol 不 import 它的私有实现。
 
 | 输入 | 输出/行为 |
 | --- | --- |
-| `piDirectory` / `modelsJsonPath` | 定位 `auth.json` 与 LuckyToken-owned models catalog |
-| optional `CredentialStore` | 测试可替换 production file store；同一 store 同时交给 Models 与 Credential Authority |
+| `piDirectory` / `modelsJsonPath` | 定位 per-Provider Profile records 与 LuckyToken-owned models catalog |
+| optional `ProviderCredentialRecordStore` | 测试可替换 production per-Provider file store；Pi adapter 仍只在 composition 内构造 |
 | Provider package configuration | package-private conversion/request/response config |
 | bound `fetch` / host capabilities | 交给需要 network/runtime capability 的 Provider |
 
@@ -1478,12 +1457,13 @@ Top-level CLI 是 adapter/shell，不是 Backend composition root：
 | --- | --- | --- |
 | `serve --config ...` | `startLuckyTokenApplication()` | 取得/附着 current-user Backend authority；运行或附着 Backend |
 | `control ... --descriptor ...` | `ControlPlaneClient` | 查询/修改运行中 Backend 的 typed management state |
-| `control auth login ...` | running Backend Control Plane | Provider-owned login flow；由 Backend-lifetime Models 写入 credential |
-| `control credentials login/logout ...` | running Backend Control Plane | 由唯一 Credential Authority 修改 `auth.json` |
+| `control profiles query ...` | running Backend Control Plane | 查询 sanitized runtime + persisted/orphan Provider Profile records |
+| `control profiles add/reconnect ...` | running Backend Control Plane | Provider-owned typed login flow；写入一个 exact Profile |
+| `control profiles rename/activate/enable/disable/priority/remove/settings/recheck ...` | running Backend Control Plane | revision-protected local management；只有 add/reconnect/recheck 可能触及 Provider interaction/network |
 
 `serve` 不接受自定义 descriptor。生产 singleton 固定使用 `~/.luckytoken/instance.sqlite`，matching discovery 固定发布到 `~/.luckytoken/control-plane.json`；只有 `control ...` 客户端命令把 `--descriptor` 当作连接导航参数。integration tests 若需要隔离实例，应通过独立 HOME 或内部 composition dependency 隔离，而不是改变生产 instance domain。
 
-Auth CLI 从运行中 Backend 的 typed Control Plane projection 读取 Provider login options；
+Profile CLI 从运行中 Backend 的 typed Control Plane projection 读取 Provider auth options；
 它只实现通用 prompt/notify shell，不在独立进程中创建第二套 Models 或 credential owner，
 也不硬编码 CommandCode key prompt。
 
@@ -1496,16 +1476,17 @@ Serve 获得 `RunningLuckyTokenApplication` 后只等待 process signal 或 appl
 
 ```mermaid
 flowchart TB
-    D[".luckytoken/pi/"] --> A["auth.json\nProvider credential"]
+    D[".luckytoken/pi/"] --> A["credential-profiles/<provider>.json\nProvider Profiles"]
     D --> C["models-catalog-cache.json\n动态 catalog cache"]
-    A --> P["Pi Models / Credential Authority"]
+    A --> P["Profile State Owner / Pi Models adapter"]
     C --> R["Catalog Refresh Controller"]
 ```
 
 ```text
 .luckytoken/pi/
-├── auth.json
-│   owner: Pi CredentialStore / LiveCredentialAuthority
+├── credential-profiles/
+│   └── <providerId>.json
+│       owner: Provider Profile State Owner
 └── models-catalog-cache.json
     owner: Backend Catalog cache store
 ```
@@ -1597,8 +1578,8 @@ Provider auth 通过 Pi `Provider.auth.apiKey` 暴露：
 - Pi `Models.login()` 负责调用并持久化到 `CredentialStore`；
 - request-time `resolve()` 优先使用 Pi stored credential；只有未存储时才使用可选
   deployment fallback `options.apiKey`；
-- Provider credential 只存于 Pi CredentialStore（`auth.json`），从不进入代码或
-  配置文件。
+- Provider credential 只存于对应 Provider Profile record，并只通过 request-bound Pi
+  CredentialStore adapter 进入 Provider invocation；从不进入代码或 public projection。
 
 ## 7.2 Pi Context → CommandCode messages/tools — `provider.ts`
 
@@ -1967,7 +1948,7 @@ flowchart LR
     APP["Backend Application"] --> IA["instance.sqlite\nInstanceAuthority"]
     APP --> DISC["control-plane.json\nDiscoveryPublication"]
     OP["操作者 / Control Plane"] --> CFG["config/models/settings/public-models"]
-    PI["Provider login / refresh"] --> PA["pi/auth.json\nProvider credential"]
+    PI["Provider login / refresh"] --> PA["pi/credential-profiles/<provider>.json\nProvider Profiles"]
     RESP["Responses handler"] --> STATE["state/openai-responses.json\nbounded session state"]
     OBS["Backend observation"] --> LEDGER["request-ledger / diagnostics / capture"]
 ```
@@ -2021,8 +2002,9 @@ flowchart LR
 │   owner: invocation diagnostics failure journal
 │
 └── pi/
-    ├── auth.json
-    │   owner: Pi CredentialStore / LiveCredentialAuthority
+    ├── credential-profiles/
+    │   └── <providerId>.json
+    │       owner: Provider Profile State Owner
     └── models-catalog-cache.json
         owner: Backend Catalog cache store
 ```
@@ -2039,7 +2021,7 @@ frequency、secret level 和 lifetime 不同：
 | `public-models.json` | 管理态 | 否 | Public Model on/off、rename、endpoint；debounced persistence + shutdown flush |
 | Responses state snapshot | 动态协议状态 | 含会话内容 | bounded `previous_response_id` state |
 | Request Ledger / Diagnostics / Capture SQLite | 动态 observation state | 经过各自 redaction/sensitivity policy | Backend-owned persistence |
-| `pi/auth.json` | 动态 Provider credential | 是 | Provider login/logout/refresh/CAS authority |
+| `pi/credential-profiles/<providerId>.json` | 动态 Provider Profiles | 是 | Profile lifecycle、exact binding、refresh publication、selection CAS |
 
 `instance.sqlite` 必须保持 InstanceAuthority 私有：backup、support bundle、generic scanner 或其他
 module 不应打开/复制/删除它。生产 backup 使用显式 allowlist，不扫描整个 `.luckytoken/`。
@@ -2075,7 +2057,7 @@ resolveRequestIdentity + request identity types
 createRuntimeDiagnosticsStoreFactory + diagnostics types/redaction helpers
 createLuckyTokenRuntime + Runtime types
 createFileCredentialStore
-createCredentialAuthorityStore / createLiveCredentialAuthority
+createFileProviderCredentialRecordStore / createProviderCredentialProfiles
 startLuckyTokenHttpServer + server types
 ```
 
@@ -2134,7 +2116,7 @@ flowchart TB
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
-| `src/index.ts` | package root re-exports | programmatic consumer | Runtime、diagnostics、Credential Authority、Server | public API tests |
+| `src/index.ts` | package root re-exports | programmatic consumer | Runtime、diagnostics、Server | public API tests |
 | `src/application.ts` | `startLuckyTokenApplication()` → running/attached Backend | CLI / packaged Backend entry | InstanceAuthority、management authorities、Control Plane、Data Plane supervisor | Backend Application integration + ownership E2E |
 | `src/instance-authority.ts` | `acquire()` → `InstanceLease` | Backend Application | dedicated `node:sqlite` connection | real-process SQLite certification + integration |
 | `src/control-plane-discovery.ts` | `read()` / `publish()` → `DiscoveryPublication` | Backend Application / trusted clients | current-user descriptor file | discovery ownership tests |
@@ -2147,7 +2129,8 @@ flowchart TB
 | `src/execution.ts` | Pi stream → committed `AssistantMessage` | semantic Client Protocol handlers | Pi event stream | execution + provider-boundary tests |
 | `src/cli-config.ts` | config file → frozen deployment facts | Backend/CLI composition | Node file/path | cli-config tests |
 | `src/composition.ts` | Pi Models + three-lane Data Plane runtime | Backend Application/tests | concrete lane constructors/authorities | composition/certification tests |
-| `src/credentials/authority.ts` | `LiveCredentialAuthority` | Backend Application / Control Plane | Pi CredentialStore | credential Control Plane tests |
+| `src/credentials/profile-authority.ts` | secret-free Management + opaque Binding views | Provider Runtime / Control Plane / Provider-backed lanes | Provider record store、composition-private Pi adapter | Profile lifecycle/binding/concurrency tests |
+| `src/credentials/profile-record-store.ts` | per-Provider durable record store | Profile State Owner | Node file API、`proper-lockfile` | file/in-memory store contract tests |
 | `src/core-serving-certification.ts` | provider-neutral facts → frozen Core manifest | composition | protocol/provider IDs、limits | certification tests |
 | `src/cli.ts` | serve/control/login/logout process shell | `npm start` | Backend Application、ControlPlaneClient、Pi Models | CLI integration |
 | `packages/desktop-shell/src/main/desktop-backend-connection.ts` | `start()` / `dispose()` | Electron Main | discovery、launcher、session、desktop lease | connection lifecycle tests + packaged E2E |
@@ -2165,7 +2148,7 @@ flowchart TB
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
-| `src/pi/file-credential-store.ts` | Pi `CredentialStore` implementation | Pi `createModels()`/Models auth | Node file API、`proper-lockfile` | `pi-credential-login`、CLI tests |
+| Profile-bound Pi adapter (private in `profile-authority.ts`) | exact operation-bound `CredentialStore` | Provider Runtime composition only | Profile State Owner binding scope | Pi binding/refresh tests |
 | `src/execution.ts` | Pi terminal → atomic success 或 `ExecutionFailure`；验证 neutral diagnostic 并保存在 `.failure` | Client handlers | Pi public event/diagnostic contracts、execution facts sink | execution unit + provider-boundary integration |
 | `packages/provider-contract/src/diagnostics.ts` | shared diagnostic contracts 与 trusted runtime identity | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerLuckyTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
@@ -2639,7 +2622,7 @@ flowchart TB
 1. `src/application.ts` → `instance-authority.ts` / `control-plane-discovery.ts`：Backend 如何取得 authority、启动和关闭；
 2. `packages/desktop-shell/src/main/desktop-backend-connection.ts`：Desktop 如何 discovery/attach/recover；
 3. `src/server.ts` → `runtime.ts` → `http.ts`：Data Plane request 如何进入/取消；
-4. `src/credentials/authority.ts` 与 `src/integrations/codex/local-auth.ts`：Provider credential 与 Local Native credential 如何保持隔离；
+4. `src/credentials/profile-authority.ts` 与 `src/integrations/codex/local-auth.ts`：Provider Profile binding 与 Local Native credential 如何保持隔离；
 5. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
 6. Pi `Models.streamSimple()` public contract；
 7. `src/providers/package-loader.ts` → Private package 的

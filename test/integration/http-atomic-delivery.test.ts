@@ -13,6 +13,7 @@ import {
   type HttpBoundaryDependencies,
 } from "../../src/http.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
@@ -176,7 +177,11 @@ describe("atomic HTTP failure delivery", () => {
   it("passes an observed upstream HTTP failure status to the Anthropic protocol", async () => {
     // anthropic-messages models take the passthrough path; mock the upstream
     // 429 and verify the status/body are forwarded to the Anthropic client.
-    const observableModel: Model<string> = { ...model, api: "anthropic-messages" };
+    const observableModel: Model<string> = {
+      ...model,
+      api: "anthropic-messages",
+      provider: "anthropic",
+    };
     const upstreamBody = JSON.stringify({
       error: { message: "provider rate limited", type: "rate_limit" },
     });
@@ -204,6 +209,7 @@ describe("atomic HTTP failure delivery", () => {
         models,
         providerNativeLane: createAnthropicProviderNativeLane({
           models,
+          bindings: ambientProfileBindings,
           resolveRequestModel: (value) => value,
           fetch: globalThis.fetch,
         }),

@@ -104,13 +104,15 @@ describe("request-time auth and header composition in the data plane", () => {
     } = {},
   ): Promise<{
     models: Awaited<ReturnType<typeof createConfiguredPiModels>>["models"];
+    providerAuthBindings: Awaited<ReturnType<typeof createConfiguredPiModels>>["providerAuthBindings"];
+    credentialManagement: Awaited<ReturnType<typeof createConfiguredPiModels>>["credentialManagement"];
     readonly runs: Array<{ command: string }>;
   }> {
     const runs: Array<{ command: string }> = [];
-    const { models } = await createConfiguredPiModels({
+    const { models, providerAuthBindings, credentialManagement } = await createConfiguredPiModels({
       piDirectory: ".unused-in-memory-pi",
       modelsJsonPath: fixture.modelsJsonPath,
-      credentials: options.credentials ?? new InMemoryCredentialStore(),
+      credentialSeedStore: options.credentials ?? new InMemoryCredentialStore(),
       fetch: options.fetch ?? (async () => new Response()),
       providerPackages: {},
       configValueAdapters: {
@@ -124,7 +126,16 @@ describe("request-time auth and header composition in the data plane", () => {
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000010",
     });
-    return { models, runs };
+    return { models, providerAuthBindings, credentialManagement, runs };
+  }
+
+  async function runBound<T>(
+    providerId: string,
+    bindings: Awaited<ReturnType<typeof createConfiguredPiModels>>["providerAuthBindings"],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const capture = await bindings.capture(providerId);
+    return bindings.runBound(capture, operation);
   }
 
   it("preserves built-in static model headers through an overlay and delivers them to the provider request", async () => {
@@ -137,7 +148,7 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       fetch: async () => new Response(),
     });
     const model = models.getModel("github-copilot", "claude-haiku-4.5");
@@ -145,12 +156,12 @@ describe("request-time auth and header composition in the data plane", () => {
     // Overlay preserved the built-in model fact (name overridden, headers intact).
     expect(model?.name).toBe("Overridden name");
 
-    const result = await models
+    const result = await runBound("github-copilot", providerAuthBindings, () => models
       .streamSimple(model!, piContext() as never, {
         sessionId: "00000000-0000-4000-8000-000000000011",
         fetch: upstreamFetch(upstreamRequests, anthropicSseResponse("ok")),
       } as never)
-      .result();
+      .result());
     expect(result.stopReason).toBe("stop");
     expect(upstreamRequests).toHaveLength(1);
     // The static built-in model headers survive the overlay and reach the wire.
@@ -178,14 +189,14 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models, runs } = await compose(fixture, {
+    const { models, providerAuthBindings, runs } = await compose(fixture, {
       env,
       commands,
       fetch: async () => new Response(),
     });
     const model = models.getModel("gw", "m1")!;
 
-    const first = await models
+    const first = await runBound("gw", providerAuthBindings, () => models
       .streamSimple(model, piContext() as never, {
         sessionId: "s1",
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -193,11 +204,12 @@ describe("request-time auth and header composition in the data plane", () => {
           return anthropicSseResponse("one");
         },
       } as never)
-      .result();
+      .result());
     void first;
     // Second request with changed env/command sources: per-request resolution.
     env.GW_KEY = "key-two";
-    env.HDR = "hdr-two";    const second = await models
+    env.HDR = "hdr-two";
+    const second = await runBound("gw", providerAuthBindings, () => models
       .streamSimple(model, piContext() as never, {
         sessionId: "s2",
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -205,7 +217,7 @@ describe("request-time auth and header composition in the data plane", () => {
           return anthropicSseResponse("two");
         },
       } as never)
-      .result();
+      .result());
     void second;
 
     expect(upstreamRequests).toHaveLength(2);
@@ -234,12 +246,12 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models, runs } = await compose(fixture, {
+    const { models, providerAuthBindings, runs } = await compose(fixture, {
       commands,
       fetch: async () => new Response(),
     });
     const model = models.getModel("gw", "m1")!;
-    await models
+    await runBound("gw", providerAuthBindings, () => models
       .streamSimple(model, piContext() as never, {
         sessionId: "s1",
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -247,9 +259,9 @@ describe("request-time auth and header composition in the data plane", () => {
           return anthropicSseResponse("one");
         },
       } as never)
-      .result();
+      .result());
     commands["fetch-gw-key"] = "cmd-two";
-    await models
+    await runBound("gw", providerAuthBindings, () => models
       .streamSimple(model, piContext() as never, {
         sessionId: "s2",
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -257,7 +269,7 @@ describe("request-time auth and header composition in the data plane", () => {
           return anthropicSseResponse("two");
         },
       } as never)
-      .result();
+      .result());
     expect(upstreamRequests.map((entry) => entry.headers.get("x-api-key"))).toEqual([
       "cmd-one",
       "cmd-two",
@@ -281,10 +293,10 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       fetch: async () => new Response(),
     });
-    await models
+    await runBound("gw", providerAuthBindings, () => models
       .streamSimple(models.getModel("gw", "m1")!, piContext() as never, {
         sessionId: "s1",
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -296,7 +308,7 @@ describe("request-time auth and header composition in the data plane", () => {
           return anthropicSseResponse("ok");
         },
       } as never)
-      .result();
+      .result());
     const headerRecord = rawHeaders[0]!;
     // Model-level headers win over provider-level on case-insensitive names
     // (a single "x-collide" remains); the model definition wins over the
@@ -322,14 +334,14 @@ describe("request-time auth and header composition in the data plane", () => {
       },
     });
     const credentials = new InMemoryCredentialStore();
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       credentials,
       fetch: async () => new Response(),
     });
     const model = models.getModel("gw", "m1")!;
     const invoke = async (): Promise<string | null> => {
       let key: string | null = null;
-      await models
+      await runBound("gw", providerAuthBindings, () => models
         .streamSimple(model, piContext() as never, {
           sessionId: "s",
           fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -337,17 +349,44 @@ describe("request-time auth and header composition in the data plane", () => {
             return anthropicSseResponse("ok");
           },
         } as never)
-        .result();
+        .result());
       return key;
     };
     // Configured fallback first.
     expect(await invoke()).toBe("sk-configured");
-    // A stored credential wins over the configured key.
-    await credentials.modify("gw", async () => ({ type: "api_key", key: "sk-stored" }));
-    expect(await invoke()).toBe("sk-stored");
-    // Removing the stored credential restores the configured fallback.
-    await credentials.delete("gw");
-    expect(await invoke()).toBe("sk-configured");
+    // A managed Profile present at composition wins over the configured key.
+    const managedCredentials = new InMemoryCredentialStore();
+    await managedCredentials.modify("gw", async () => ({
+      type: "api_key",
+      key: "sk-stored",
+    }));
+    const managed = await compose(fixture, {
+      credentials: managedCredentials,
+      fetch: async () => new Response(),
+    });
+    const managedModel = managed.models.getModel("gw", "m1")!;
+    const invokeManaged = async (): Promise<string | null> => {
+      let key: string | null = null;
+      await runBound("gw", managed.providerAuthBindings, () => managed.models
+        .streamSimple(managedModel, piContext() as never, {
+          sessionId: "managed",
+          fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+            key = new Request(input, init).headers.get("x-api-key");
+            return anthropicSseResponse("ok");
+          },
+        } as never)
+        .result());
+      return key;
+    };
+    expect(await invokeManaged()).toBe("sk-stored");
+    const projection = await managed.credentialManagement.query(["gw"]);
+    const provider = projection.providers[0]!;
+    await managed.credentialManagement.remove({
+      providerId: "gw",
+      credentialId: provider.profiles[0]!.credentialId,
+      expectedRevision: provider.revision!,
+    });
+    expect(await invokeManaged()).toBe("sk-configured");
   });
 
   it("fails cleanly with the pinned authHeader error when the resolved auth has no API key", async () => {
@@ -362,14 +401,14 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       env: { ANTHROPIC_AUTH_TOKEN: "token-canary" },
     });
-    const result = await models
+    const result = await runBound("anthropic", providerAuthBindings, () => models
       .streamSimple(models.getModel("anthropic", "claude-opus-4-7")!, piContext() as never, {
         sessionId: "s",
       } as never)
-      .result();
+      .result());
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("authHeader requires a resolved API key");
   });
@@ -386,12 +425,12 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture);
-    const result = await models
+    const { models, providerAuthBindings } = await compose(fixture);
+    const result = await runBound("gw", providerAuthBindings, () => models
       .streamSimple(models.getModel("gw", "m1")!, piContext() as never, {
         sessionId: "s",
       } as never)
-      .result();
+      .result());
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toContain("CANARY_ENV_NAME_42");
     expect(result.errorMessage).not.toContain("canary-command-text-77");
@@ -419,10 +458,10 @@ describe("request-time auth and header composition in the data plane", () => {
         expires: Date.now() + 3_600_000,
       }),
     );
-    const { models } = await compose(fixture, { credentials });
-    const resolution = await models.getAuth(
+    const { models, providerAuthBindings } = await compose(fixture, { credentials });
+    const resolution = await runBound("anthropic", providerAuthBindings, () => models.getAuth(
       models.getModel("anthropic", "claude-opus-4-7")!,
-    );
+    ));
     // The generic OAuth toAuth composition produced the Provider-facing
     // Authorization plus configured headers from the stored OAuth credential.
     expect(resolution?.auth.apiKey).toBe("access-canary");
@@ -450,12 +489,12 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       fetch: async () => new Response(),
     });
     const model = models.getModel("gw", "m1")!;
     expect(model.compat).toMatchObject({ maxTokensField: "max_tokens" });
-    await models
+    await runBound("gw", providerAuthBindings, () => models
       .streamSimple(model, piContext() as never, {
         sessionId: "s",
         maxTokens: 77,
@@ -482,7 +521,7 @@ describe("request-time auth and header composition in the data plane", () => {
           );
         },
       } as never)
-      .result();
+      .result());
     expect(upstreamBodies).toHaveLength(1);
     expect(upstreamBodies[0]).toMatchObject({ max_tokens: 77 });
     expect(upstreamBodies[0]).not.toHaveProperty("max_completion_tokens");
@@ -509,8 +548,10 @@ describe("request-time auth and header composition in the data plane", () => {
         expires: Date.now() + 3_600_000,
       }),
     );
-    const { models } = await compose(fixture, { credentials });
-    const resolution = await models.getAuth(models.getModel("radius", "m1")!);
+    const { models, providerAuthBindings } = await compose(fixture, { credentials });
+    const resolution = await runBound("radius", providerAuthBindings, () =>
+      models.getAuth(models.getModel("radius", "m1")!),
+    );
     // The generic OAuth composition (no Radius-specific code in the models.json
     // path) derives the Provider-facing Authorization from the stored OAuth
     // credential and adds the configured headers.
@@ -536,7 +577,7 @@ describe("request-time auth and header composition in the data plane", () => {
         },
       },
     });
-    const { models } = await compose(fixture, {
+    const { models, providerAuthBindings } = await compose(fixture, {
       fetch: async () => new Response(),
     });
     const model = models.getModel("gw", "m1")!;
@@ -547,12 +588,12 @@ describe("request-time auth and header composition in the data plane", () => {
       supportsStrictTools: false,
     });
     await expect(
-      models
+      runBound("gw", providerAuthBindings, () => models
         .streamSimple(model, piContext() as never, {
           sessionId: "s",
           fetch: async () => anthropicSseResponse("ok"),
         } as never)
-        .result(),
+        .result()),
     ).resolves.toMatchObject({ stopReason: "stop" });
   });
 });

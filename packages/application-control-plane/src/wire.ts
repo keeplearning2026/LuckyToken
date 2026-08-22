@@ -110,24 +110,24 @@ import {
   decodeRecoveryProjection,
 } from "./wire-backup.js";
 import { decodeAttentionProjection } from "./attention-contract.js";
+import type {
+  CredentialProfilesCommand,
+  CredentialProfilesCommandResult,
+  ProviderProfileAuthCommand,
+  ProviderProfileAuthCommandResult,
+} from "./credential-profiles-contract.js";
 import {
-  type AuthCommand,
-  type AuthCommandResult,
+  decodeCredentialProfilesCommand,
+  decodeCredentialProfilesCommandResult,
+  decodeCredentialProfilesProjection,
+  decodeProviderProfileAuthCommand,
+  decodeProviderProfileAuthCommandResult,
+} from "./wire-credential-profiles.js";
+import {
   type AuthInfoLink,
   type AuthInteractionEvent,
   type AuthInteractionResponse,
-  type AuthOptionsProjection,
   type AuthPromptOption,
-  type AuthProviderOption,
-  type CredentialCommand,
-  type CredentialCommandResult,
-  type CredentialFileError,
-  type CredentialFileErrorKind,
-  type CredentialImportApplyEntryResult,
-  type CredentialImportEntryPreview,
-  type CredentialImportSelection,
-  type CredentialProjection,
-  type ProviderAuthStatus,
 } from "./contracts.js";
 
 export type RecordValue = Record<string, unknown>;
@@ -218,14 +218,14 @@ export type ClientRequest =
       readonly command: ModelsCommand;
     }
   | {
-      readonly type: "credential_command";
+      readonly type: "credential_profiles_command";
       readonly requestId: string;
-      readonly command: CredentialCommand;
+      readonly command: CredentialProfilesCommand;
     }
   | {
-      readonly type: "auth_command";
+      readonly type: "provider_profile_auth_command";
       readonly requestId: string;
-      readonly command: AuthCommand;
+      readonly command: ProviderProfileAuthCommand;
     }
   | {
       readonly type: "auth_interaction_response";
@@ -330,14 +330,14 @@ export type ServerMessage =
       readonly result: ModelsCommandResult;
     }
   | {
-      readonly type: "credential_command_result";
+      readonly type: "credential_profiles_command_result";
       readonly requestId: string;
-      readonly result: CredentialCommandResult;
+      readonly result: CredentialProfilesCommandResult;
     }
   | {
-      readonly type: "auth_command_result";
+      readonly type: "provider_profile_auth_command_result";
       readonly requestId: string;
-      readonly result: AuthCommandResult;
+      readonly result: ProviderProfileAuthCommandResult;
     }
   | {
       readonly type: "auth_interaction_event";
@@ -453,8 +453,14 @@ export function decodeApplicationStatus(
   if (value.models !== undefined && models === undefined) {
     return undefined;
   }
-  const credentials = decodeCredentialProjection(value.credentials);
-  if (value.credentials !== undefined && credentials === undefined) {
+  if (value.credentials !== undefined) return undefined;
+  const credentialProfiles = decodeCredentialProfilesProjection(
+    value.credentialProfiles,
+  );
+  if (
+    value.credentialProfiles !== undefined &&
+    credentialProfiles === undefined
+  ) {
     return undefined;
   }
   const catalog = decodeCatalogStatusProjection(value.catalog);
@@ -469,7 +475,7 @@ export function decodeApplicationStatus(
     ...(dataPlane === undefined ? {} : { dataPlane }),
     ...(settings === undefined ? {} : { settings }),
     ...(models === undefined ? {} : { models }),
-    ...(credentials === undefined ? {} : { credentials }),
+    ...(credentialProfiles === undefined ? {} : { credentialProfiles }),
     ...(catalog === undefined ? {} : { catalog }),
   };
 }
@@ -1609,463 +1615,6 @@ export function decodeModelsProjection(
   });
 }
 
-function decodeCredentialFileError(
-  value: unknown,
-): CredentialFileError | undefined {
-  if (
-    !isRecord(value) ||
-    (value.kind !== "parse" &&
-      value.kind !== "invalid" &&
-      value.kind !== "load") ||
-    typeof value.message !== "string" ||
-    value.message.length === 0
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    kind: value.kind as CredentialFileErrorKind,
-    message: value.message,
-  });
-}
-
-export function decodeProviderAuthStatus(
-  value: unknown,
-): ProviderAuthStatus | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0 ||
-    typeof value.stored !== "boolean" ||
-    (value.storedType !== undefined &&
-      value.storedType !== "api_key" &&
-      value.storedType !== "oauth") ||
-    typeof value.environment !== "boolean" ||
-    typeof value.modelsJson !== "boolean" ||
-    typeof value.commandDerived !== "boolean" ||
-    typeof value.expired !== "boolean" ||
-    typeof value.unavailable !== "boolean" ||
-    (value.effectiveSource !== "stored" &&
-      value.effectiveSource !== "environment" &&
-      value.effectiveSource !== "models.json" &&
-      value.effectiveSource !== "command" &&
-      value.effectiveSource !== "none")
-  ) {
-    return undefined;
-  }
-  // Bounded-fact consistency: a stored credential is the effective source
-  // when present and `unavailable` means no source resolves.
-  // Stored presence is a fact; the effective source follows request-time
-  // precedence and may differ when a stored reference cannot resolve.
-  if (value.unavailable !== (value.effectiveSource === "none"))
-    return undefined;
-  if (value.stored === true && value.storedType === undefined) return undefined;
-  if (value.stored === false && value.storedType !== undefined)
-    return undefined;
-  return Object.freeze({
-    providerId: value.providerId,
-    stored: value.stored,
-    ...(value.storedType === undefined ? {} : { storedType: value.storedType }),
-    environment: value.environment,
-    modelsJson: value.modelsJson,
-    commandDerived: value.commandDerived,
-    expired: value.expired,
-    unavailable: value.unavailable,
-    effectiveSource: value.effectiveSource,
-  });
-}
-
-function decodeProviderAuthStatuses(
-  value: unknown,
-): readonly ProviderAuthStatus[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const statuses = value
-    .map((entry) => decodeProviderAuthStatus(entry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  return statuses.length === value.length ? Object.freeze(statuses) : undefined;
-}
-
-/** Sanitized auth.json projection (Ticket 12): file facts plus bounded
- *  per-Provider status rows; strict decoding so credential values or raw
- *  credential shapes can never cross the wire. */
-export function decodeCredentialProjection(
-  value: unknown,
-  options: { readonly allowEmptyPath?: boolean } = {},
-): CredentialProjection | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.revision !== "number" ||
-    !Number.isSafeInteger(value.revision) ||
-    (value.revision as number) < 0 ||
-    typeof value.path !== "string" ||
-    (value.path.length === 0 && options.allowEmptyPath !== true) ||
-    typeof value.present !== "boolean" ||
-    typeof value.valid !== "boolean"
-  ) {
-    return undefined;
-  }
-  const error = decodeCredentialFileError(value.error);
-  if (value.error !== undefined && error === undefined) return undefined;
-  if (value.valid && error !== undefined) return undefined;
-  const providers = decodeProviderAuthStatuses(value.providers);
-  if (providers === undefined) return undefined;
-  return Object.freeze({
-    revision: value.revision as number,
-    path: value.path,
-    present: value.present,
-    valid: value.valid,
-    ...(error === undefined ? {} : { error }),
-    providers,
-  });
-}
-
-function decodeCredentialImportSelection(
-  value: unknown,
-): CredentialImportSelection | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0 ||
-    typeof value.overwrite !== "boolean"
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    providerId: value.providerId,
-    overwrite: value.overwrite,
-  });
-}
-
-function decodeCredentialImportSelections(
-  value: unknown,
-): readonly CredentialImportSelection[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const selections = value
-    .map((entry) => decodeCredentialImportSelection(entry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  return selections.length === value.length
-    ? Object.freeze(selections)
-    : undefined;
-}
-
-function decodeCredentialImportEntryPreview(
-  value: unknown,
-): CredentialImportEntryPreview | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0 ||
-    (value.type !== "api_key" && value.type !== "oauth") ||
-    typeof value.wouldOverwrite !== "boolean"
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    providerId: value.providerId,
-    type: value.type,
-    wouldOverwrite: value.wouldOverwrite,
-  });
-}
-
-function decodeCredentialImportApplyEntryResult(
-  value: unknown,
-): CredentialImportApplyEntryResult | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0 ||
-    (value.outcome !== "applied" &&
-      value.outcome !== "unchanged" &&
-      value.outcome !== "skipped" &&
-      value.outcome !== "conflict" &&
-      value.outcome !== "overwrite_required")
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    providerId: value.providerId,
-    outcome: value.outcome,
-  });
-}
-
-function decodeCredentialImportApplyEntryResults(
-  value: unknown,
-): readonly CredentialImportApplyEntryResult[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const entries = value
-    .map((entry) => decodeCredentialImportApplyEntryResult(entry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  return entries.length === value.length ? Object.freeze(entries) : undefined;
-}
-
-export function decodeCredentialCommand(
-  value: unknown,
-): CredentialCommand | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.command === "query") {
-    return { command: "query" };
-  }
-  if (
-    typeof value.expectedRevision !== "number" ||
-    !Number.isSafeInteger(value.expectedRevision) ||
-    (value.expectedRevision as number) < 0
-  ) {
-    return undefined;
-  }
-  const expectedRevision = value.expectedRevision as number;
-  if (value.command === "logout") {
-    if (typeof value.providerId !== "string" || value.providerId.length === 0) {
-      return undefined;
-    }
-    return {
-      command: "logout",
-      providerId: value.providerId,
-      expectedRevision,
-    };
-  }
-  if (value.command === "login") {
-    if (
-      typeof value.providerId !== "string" ||
-      value.providerId.length === 0 ||
-      typeof value.value !== "string" ||
-      typeof value.overwrite !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      command: "login",
-      providerId: value.providerId,
-      expectedRevision,
-      value: value.value,
-      overwrite: value.overwrite,
-    };
-  }
-  if (value.command === "import_preview") {
-    if (typeof value.content !== "string") return undefined;
-    return {
-      command: "import_preview",
-      expectedRevision,
-      content: value.content,
-    };
-  }
-  if (value.command === "import_apply") {
-    if (typeof value.importId !== "string" || value.importId.length === 0) {
-      return undefined;
-    }
-    const selections = decodeCredentialImportSelections(value.selections);
-    if (selections === undefined) return undefined;
-    return {
-      command: "import_apply",
-      expectedRevision,
-      importId: value.importId,
-      selections,
-    };
-  }
-  return undefined;
-}
-
-/** Validates a credential command result against the command that produced
- *  it: `login`/`logout` may only carry `changed`, `import_preview` only the
- *  masked plan, and `import_apply` only per-entry outcomes — a credential
- *  value or raw credential shape can never pass. */
-export function decodeCredentialCommandResult(
-  value: unknown,
-  command: CredentialCommand,
-): CredentialCommandResult | undefined {
-  if (
-    !isRecord(value) ||
-    (value.outcome !== "ok" &&
-      value.outcome !== "conflict" &&
-      value.outcome !== "invalid" &&
-      value.outcome !== "unknown_provider" &&
-      value.outcome !== "overwrite_required" &&
-      value.outcome !== "storage_failure" &&
-      value.outcome !== "unavailable") ||
-    !Number.isSafeInteger(value.revision) ||
-    (value.revision as number) < 0
-  ) {
-    return undefined;
-  }
-  const outcome = value.outcome;
-  const revision = value.revision as number;
-  // The unavailable DTO carries a minimal value-free state (the authority
-  // is not running, so no path exists yet); every other outcome requires a
-  // normal non-empty projection.
-  const state = decodeCredentialProjection(value.state, {
-    allowEmptyPath: outcome === "unavailable",
-  });
-  if (state === undefined) return undefined;
-  if (outcome === "ok") {
-    if (typeof value.error === "string") return undefined;
-    if (command.command === "login" || command.command === "logout") {
-      if (value.changed !== undefined && typeof value.changed !== "boolean") {
-        return undefined;
-      }
-      if (value.importId !== undefined || value.previewEntries !== undefined) {
-        return undefined;
-      }
-      if (command.command === "logout" && value.entries !== undefined) {
-        return undefined;
-      }
-      return Object.freeze({
-        outcome,
-        revision,
-        state,
-        ...(value.changed === undefined ? {} : { changed: value.changed }),
-      });
-    }
-    if (command.command === "import_preview") {
-      if (typeof value.importId !== "string" || value.importId.length === 0) {
-        return undefined;
-      }
-      const previewEntries = decodeCredentialImportEntryPreviews(
-        value.previewEntries,
-      );
-      if (previewEntries === undefined) {
-        return undefined;
-      }
-      if (value.changed !== undefined || value.entries !== undefined) {
-        return undefined;
-      }
-      return Object.freeze({
-        outcome,
-        revision,
-        state,
-        importId: value.importId,
-        previewEntries,
-      });
-    }
-    if (command.command === "import_apply") {
-      const entries = decodeCredentialImportApplyEntryResults(value.entries);
-      if (entries === undefined) {
-        return undefined;
-      }
-      if (value.changed !== undefined || value.importId !== undefined) {
-        return undefined;
-      }
-      return Object.freeze({ outcome, revision, state, entries });
-    }
-    // query: no extras.
-    if (
-      value.changed !== undefined ||
-      value.importId !== undefined ||
-      value.previewEntries !== undefined ||
-      value.entries !== undefined
-    ) {
-      return undefined;
-    }
-    return Object.freeze({ outcome, revision, state });
-  }
-  if (outcome === "unavailable") {
-    if (
-      typeof value.error !== "string" ||
-      value.error.length === 0 ||
-      value.changed !== undefined ||
-      value.importId !== undefined ||
-      value.previewEntries !== undefined ||
-      value.entries !== undefined
-    ) {
-      return undefined;
-    }
-    return Object.freeze({ outcome, revision, state, error: value.error });
-  }
-  // conflict / invalid / unknown_provider / overwrite_required /
-  // storage_failure: error is required; import_apply may also carry the
-  // per-entry results.
-  if (typeof value.error !== "string" || value.error.length === 0) {
-    return undefined;
-  }
-  if (value.changed !== undefined || value.importId !== undefined) {
-    return undefined;
-  }
-  if (command.command === "import_apply") {
-    const entries = decodeCredentialImportApplyEntryResults(value.entries);
-    if (entries === undefined) return undefined;
-    return Object.freeze({
-      outcome,
-      revision,
-      state,
-      error: value.error,
-      entries,
-    });
-  }
-  if (value.previewEntries !== undefined || value.entries !== undefined) {
-    return undefined;
-  }
-  return Object.freeze({ outcome, revision, state, error: value.error });
-}
-
-function decodeCredentialImportEntryPreviews(
-  value: unknown,
-): readonly CredentialImportEntryPreview[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const entries = value
-    .map((entry) => decodeCredentialImportEntryPreview(entry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  return entries.length === value.length ? Object.freeze(entries) : undefined;
-}
-
-/** Ticket 13: strict decode of the per-Provider login options projection. */
-export function decodeAuthOptionsProjection(
-  value: unknown,
-): AuthOptionsProjection | undefined {
-  if (!isRecord(value) || !Array.isArray(value.providers)) return undefined;
-  const providers: AuthProviderOption[] = [];
-  for (const raw of value.providers) {
-    const option = decodeAuthProviderOption(raw);
-    if (option === undefined) return undefined;
-    providers.push(option);
-  }
-  return Object.freeze({ providers: Object.freeze(providers) });
-}
-
-function decodeAuthProviderOption(value: unknown): AuthProviderOption | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0 ||
-    typeof value.name !== "string" ||
-    value.name.length === 0 ||
-    (value.source !== "pi_builtin" &&
-      value.source !== "luckytoken_bundled" &&
-      value.source !== "user") ||
-    typeof value.account !== "boolean" ||
-    typeof value.subscription !== "boolean" ||
-    typeof value.apiKey !== "boolean"
-  ) {
-    return undefined;
-  }
-  if (
-    (value.accountLabel !== undefined &&
-      (typeof value.accountLabel !== "string" ||
-        value.accountLabel.length === 0)) ||
-    (value.apiKeyLabel !== undefined &&
-      (typeof value.apiKeyLabel !== "string" ||
-        value.apiKeyLabel.length === 0))
-  ) {
-    return undefined;
-  }
-  // A subscription is always an account flow: the metadata rule means
-  // `subscription` can never be true while `account` is false.
-  if (value.subscription === true && value.account !== true) return undefined;
-  const status = decodeProviderAuthStatus(value.status);
-  if (status === undefined) return undefined;
-  return Object.freeze({
-    providerId: value.providerId,
-    name: value.name,
-    source: value.source as AuthProviderOption["source"],
-    account: value.account,
-    subscription: value.subscription,
-    ...(value.accountLabel === undefined
-      ? {}
-      : { accountLabel: value.accountLabel as string }),
-    apiKey: value.apiKey,
-    ...(value.apiKeyLabel === undefined
-      ? {}
-      : { apiKeyLabel: value.apiKeyLabel as string }),
-    status,
-  });
-}
-
 /** Ticket 13: strict decode of one typed interaction event crossing the
  *  wire. Only the allowlisted event shapes pass; anything else (including
  *  any secret-bearing extension) is rejected. */
@@ -2250,84 +1799,6 @@ export function decodeAuthInteractionResponse(
     });
   }
   return undefined;
-}
-
-/** Ticket 13: strict decode of an auth command. */
-export function decodeAuthCommand(value: unknown): AuthCommand | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.command === "query") {
-    return Object.freeze({ command: "query" });
-  }
-  if (value.command === "login") {
-    if (
-      typeof value.providerId !== "string" ||
-      value.providerId.length === 0 ||
-      (value.authType !== "oauth" && value.authType !== "api_key")
-    ) {
-      return undefined;
-    }
-    return Object.freeze({
-      command: "login",
-      providerId: value.providerId,
-      authType: value.authType,
-    });
-  }
-  return undefined;
-}
-
-/**
- * Ticket 13: validates an auth command result against the command that
- * produced it. `query` may carry the options projection; `login` never
- * does. Non-ok outcomes require a value-free error; no credential value
- * or raw error text can pass.
- */
-export function decodeAuthCommandResult(
-  value: unknown,
-  command: AuthCommand,
-): AuthCommandResult | undefined {
-  if (
-    !isRecord(value) ||
-    (value.outcome !== "ok" &&
-      value.outcome !== "cancelled" &&
-      value.outcome !== "failed" &&
-      value.outcome !== "conflict" &&
-      value.outcome !== "unknown_provider" &&
-      value.outcome !== "unsupported" &&
-      value.outcome !== "storage_failure" &&
-      value.outcome !== "unavailable")
-  ) {
-    return undefined;
-  }
-  const outcome = value.outcome as AuthCommandResult["outcome"];
-  // The unavailable DTO carries a minimal value-free state (no path exists
-  // while the authority is not running); every other outcome requires a
-  // normal non-empty projection.
-  const state = decodeCredentialProjection(value.state, {
-    allowEmptyPath: outcome === "unavailable",
-  });
-  if (state === undefined) return undefined;
-  const options =
-    value.options === undefined
-      ? undefined
-      : decodeAuthOptionsProjection(value.options);
-  if (value.options !== undefined && options === undefined) return undefined;
-  if (outcome !== "ok") {
-    if (typeof value.error !== "string" || value.error.length === 0) {
-      return undefined;
-    }
-    // Non-ok outcomes never carry a projection; a failed query reports a
-    // fixed value-free error instead.
-    if (options !== undefined) return undefined;
-    return Object.freeze({ outcome, state, error: value.error });
-  }
-  if (typeof value.error === "string") return undefined;
-  if (command.command === "query") {
-    if (options === undefined) return undefined;
-    return Object.freeze({ outcome, state, options });
-  }
-  // login: never carries the options projection.
-  if (options !== undefined) return undefined;
-  return Object.freeze({ outcome, state });
 }
 
 export function decodeSettingsCommandResult(
@@ -2652,29 +2123,29 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
-  if (value.type === "credential_command") {
-    const command = decodeCredentialCommand(value.command);
+  if (value.type === "credential_profiles_command") {
+    const command = decodeCredentialProfilesCommand(value.command);
     if (command === undefined) {
       return { type: "invalid", requestId, code: "invalid_request" };
     }
     return {
       type: "valid",
       request: {
-        type: "credential_command",
+        type: "credential_profiles_command",
         requestId,
         command,
       },
     };
   }
-  if (value.type === "auth_command") {
-    const command = decodeAuthCommand(value.command);
+  if (value.type === "provider_profile_auth_command") {
+    const command = decodeProviderProfileAuthCommand(value.command);
     if (command === undefined) {
       return { type: "invalid", requestId, code: "invalid_request" };
     }
     return {
       type: "valid",
       request: {
-        type: "auth_command",
+        type: "provider_profile_auth_command",
         requestId,
         command,
       },
@@ -3218,60 +2689,17 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "models_command_result", requestId, result };
   }
-  if (value.type === "credential_command_result") {
-    // The full per-command result validation happens against the client's
-    // own command (executeCredentialCommand); the host already validated
-    // this result before writing it. Only the shared fields are checked
-    // here so a malformed frame is still rejected at the wire boundary.
-    if (
-      !isRecord(value.result) ||
-      (value.result.outcome !== "ok" &&
-        value.result.outcome !== "conflict" &&
-        value.result.outcome !== "invalid" &&
-        value.result.outcome !== "unknown_provider" &&
-        value.result.outcome !== "overwrite_required" &&
-        value.result.outcome !== "storage_failure" &&
-        value.result.outcome !== "unavailable") ||
-      !Number.isSafeInteger(value.result.revision) ||
-      (value.result.revision as number) < 0 ||
-      decodeCredentialProjection(value.result.state, {
-        allowEmptyPath: value.result.outcome === "unavailable",
-      }) === undefined
-    ) {
-      return undefined;
-    }
-    return {
-      type: "credential_command_result",
-      requestId,
-      result: value.result as unknown as CredentialCommandResult,
-    };
+  if (value.type === "credential_profiles_command_result") {
+    const result = decodeCredentialProfilesCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "credential_profiles_command_result", requestId, result };
   }
-  if (value.type === "auth_command_result") {
-    // The full per-command result validation happens against the client's
-    // own command (executeAuthCommand); the host already validated this
-    // result before writing it. Only the shared fields are checked here so
-    // a malformed frame is still rejected at the wire boundary.
-    if (
-      !isRecord(value.result) ||
-      (value.result.outcome !== "ok" &&
-        value.result.outcome !== "cancelled" &&
-        value.result.outcome !== "failed" &&
-        value.result.outcome !== "conflict" &&
-        value.result.outcome !== "unknown_provider" &&
-        value.result.outcome !== "unsupported" &&
-        value.result.outcome !== "storage_failure" &&
-        value.result.outcome !== "unavailable") ||
-      decodeCredentialProjection(value.result.state, {
-        allowEmptyPath: value.result.outcome === "unavailable",
-      }) === undefined
-    ) {
-      return undefined;
-    }
-    return {
-      type: "auth_command_result",
-      requestId,
-      result: value.result as unknown as AuthCommandResult,
-    };
+  if (value.type === "provider_profile_auth_command_result") {
+    const result = decodeProviderProfileAuthCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "provider_profile_auth_command_result", requestId, result };
   }
   if (value.type === "auth_interaction_event") {
     const event = decodeAuthInteractionEvent(value.event);

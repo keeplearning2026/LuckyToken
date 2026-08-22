@@ -28,8 +28,8 @@ import {
 import {
   execute,
   ExecutionAbortedError,
-  type ExecutionOperation,
 } from "../../execution.js";
+import type { ExecutionOperation } from "../../execution.js";
 import type { ClientProtocolHandler } from "../../http.js";
 import { ModelResolutionFailure } from "../../model-resolution.js";
 import {
@@ -588,6 +588,7 @@ async function providerNativeBranch(
         signal: request.signal,
         sessionId,
         operation: "responses",
+        credentialActivity: ledger,
       }),
       request.signal,
     );

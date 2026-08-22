@@ -11,8 +11,8 @@ type InvokeResults = {
   [desktopIpcChannels.backendStateGet]: ReturnType<DesktopControlPlaneApi["getBackendState"]>;
   [desktopIpcChannels.runtime]: ReturnType<DesktopControlPlaneApi["executeRuntime"]>;
   [desktopIpcChannels.settings]: ReturnType<DesktopControlPlaneApi["executeSettings"]>;
-  [desktopIpcChannels.credential]: ReturnType<DesktopControlPlaneApi["executeCredential"]>;
-  [desktopIpcChannels.auth]: ReturnType<DesktopControlPlaneApi["executeAuth"]>;
+  [desktopIpcChannels.credentialProfiles]: ReturnType<DesktopControlPlaneApi["executeCredentialProfiles"]>;
+  [desktopIpcChannels.providerProfileAuth]: ReturnType<DesktopControlPlaneApi["executeProviderProfileAuth"]>;
   [desktopIpcChannels.authRespond]: ReturnType<DesktopControlPlaneApi["respondAuth"]>;
   [desktopIpcChannels.models]: ReturnType<DesktopControlPlaneApi["executeModels"]>;
   [desktopIpcChannels.catalog]: ReturnType<DesktopControlPlaneApi["executeCatalog"]>;
@@ -66,11 +66,15 @@ const control: DesktopControlPlaneApi = {
     onEvent(desktopIpcChannels.backendStateEvent, listener),
   executeRuntime: (command) => invoke(desktopIpcChannels.runtime, command),
   executeSettings: (command) => invoke(desktopIpcChannels.settings, command),
-  executeCredential: (command) => invoke(desktopIpcChannels.credential, command),
-  async executeAuth(command, listener) {
-    const stop = listener === undefined ? undefined : onEvent(desktopIpcChannels.authEvent, listener);
+  executeCredentialProfiles: (command) =>
+    invoke(desktopIpcChannels.credentialProfiles, command),
+  async executeProviderProfileAuth(command, listener) {
+    const stop =
+      listener === undefined
+        ? undefined
+        : onEvent(desktopIpcChannels.providerProfileAuthEvent, listener);
     try {
-      return await invoke(desktopIpcChannels.auth, command);
+      return await invoke(desktopIpcChannels.providerProfileAuth, command);
     } finally {
       stop?.();
     }

@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type {
   CatalogSnapshotProjection,
-  CredentialProjection,
+  CredentialProfilesProjectionV1,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import { publicModelRuntimeFacts } from "../../src/public-models/runtime-facts.js";
 
 describe("Public Model runtime facts", () => {
-  it("takes Provider login usability from Credential Authority while Catalog supplies only current target ids", () => {
+  it("takes Provider login usability from Profile management while Catalog supplies only current target ids", () => {
     const catalog = {
       version: 7,
       modelsJsonValid: true,
@@ -37,34 +37,38 @@ describe("Public Model runtime facts", () => {
     } as CatalogSnapshotProjection;
 
     const credentials = {
-      revision: 3,
-      path: "C:\\app\\auth.json",
-      present: true,
-      valid: true,
       providers: [
         {
           providerId: "anthropic",
-          stored: false,
-          environment: false,
-          modelsJson: false,
-          commandDerived: false,
-          expired: false,
-          unavailable: true,
-          effectiveSource: "none",
+          implementationAvailable: true,
+          ambient: {
+            kind: "external",
+            status: "unknown",
+            message: "Resolved only when used",
+          },
+          profiles: [],
         },
         {
           providerId: "google",
-          stored: true,
-          storedType: "api_key",
-          environment: false,
-          modelsJson: false,
-          commandDerived: false,
-          expired: false,
-          unavailable: false,
-          effectiveSource: "stored",
+          implementationAvailable: true,
+          revision: "revision-google",
+          selectionGeneration: "selection-google",
+          activeCredentialId: "credential-google",
+          switchPolicy: { apiKeyOn429: false, oauthOn429: false },
+          profiles: [{
+            credentialId: "credential-google",
+            authType: "api_key",
+            authMethodLabel: "Google Cloud credentials",
+            displayName: "Production",
+            enabled: true,
+            health: "ready",
+            priority: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          }],
         },
       ],
-    } as CredentialProjection;
+    } as CredentialProfilesProjectionV1;
 
     expect(publicModelRuntimeFacts(catalog, credentials)).toEqual({
       version: 7,
@@ -80,6 +84,39 @@ describe("Public Model runtime facts", () => {
           models: ["gemini"],
         },
       ],
+    });
+  });
+
+  it("keeps locally configured ambient auth usable without treating unknown ambient auth as verified", () => {
+    const catalog = {
+      version: 1,
+      modelsJsonValid: true,
+      refreshErrors: [],
+      providers: [{
+        providerId: "fixture",
+        name: "Fixture",
+        dynamic: false,
+        state: "known",
+        models: [{ id: "model", dynamic: false, availability: "available" }],
+      }],
+    } as CatalogSnapshotProjection;
+    const credentials = {
+      providers: [{
+        providerId: "fixture",
+        implementationAvailable: true,
+        ambient: {
+          kind: "external",
+          status: "configured",
+          message: "External auth is configured",
+        },
+        profiles: [],
+      }],
+    } as CredentialProfilesProjectionV1;
+
+    expect(publicModelRuntimeFacts(catalog, credentials).providers[0]).toEqual({
+      providerId: "fixture",
+      usable: true,
+      models: ["model"],
     });
   });
 });

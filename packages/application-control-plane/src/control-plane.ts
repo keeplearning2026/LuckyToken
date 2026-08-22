@@ -36,30 +36,12 @@ export {
   type AgentIntegrationsCommandHandler,
   type AgentIntegrationsCommandResult,
   type AgentIntegrationsState,
-  type CredentialCommand,
-  type CredentialCommandHandler,
-  type CredentialCommandOutcome,
-  type CredentialCommandResult,
-  type CredentialEffectiveSource,
-  type CredentialFileError,
-  type CredentialFileErrorKind,
-  type CredentialImportApplyEntryResult,
-  type CredentialImportEntryPreview,
-  type CredentialImportSelection,
-  type CredentialProjection,
-  type ProviderAuthStatus,
   type ProviderSource,
-  type AuthCommand,
-  type AuthCommandHandler,
-  type AuthCommandOutcome,
-  type AuthCommandResult,
   type AuthInfoLink,
   type AuthInteractionChannel,
   type AuthInteractionEvent,
   type AuthInteractionResponse,
-  type AuthOptionsProjection,
   type AuthPromptOption,
-  type AuthProviderOption,
   type ControlPlaneDiagnostics,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
@@ -95,6 +77,9 @@ export {
   type HelloResult,
   type LedgerAliasFact,
   type LedgerAttempt,
+  type LedgerCredentialAttempt,
+  type LedgerCredentialCapture,
+  type LedgerCredentialUsage,
   type LedgerAuthFacts,
   type LedgerFailureInput,
   type LedgerFailureSummary,
@@ -162,6 +147,30 @@ export {
   type RuntimeDiagnosticsStore,
   type RuntimeDiagnosticsStoreFactory,
 } from "./contracts.js";
+export type {
+  CredentialProfileAuthType,
+  CredentialProfileHealth,
+  CredentialProfileOptionsProjection,
+  CredentialProfileProjectionV1,
+  CredentialProfilesCommand,
+  CredentialProfilesCommandHandler,
+  CredentialProfilesCommandOutcome,
+  CredentialProfilesCommandResult,
+  CredentialProfilesProjectionV1,
+  ProviderCredentialAuthMethodProjection,
+  ProviderCredentialOptionProjection,
+  ProviderCredentialProfilesProjectionV1,
+  ProviderProfileAuthCommand,
+  ProviderProfileAuthCommandHandler,
+  ProviderProfileAuthCommandOutcome,
+  ProviderProfileAuthCommandResult,
+} from "./credential-profiles-contract.js";
+export {
+  decodeCredentialProfilesCommand,
+  decodeCredentialProfilesCommandResult,
+  decodeProviderProfileAuthCommand,
+  decodeProviderProfileAuthCommandResult,
+} from "./wire-credential-profiles.js";
 export type {
   AttentionCategory,
   AttentionCondition,
@@ -241,10 +250,6 @@ export {
 } from "./contracts.js";
 export { decodeRequestLedgerEvent, decodeRequestLedgerQuery, decodeRequestLedgerRecord, decodeRequestLedgerResult } from "./wire-ledger.js";
 export { decodeAgentIntegrationsCommandResult } from "./wire.js";
-export {
-  decodeAuthCommandResult,
-  decodeAuthOptionsProjection,
-} from "./wire.js";
 export { decodeCaptureEvent, decodeCaptureQuery, decodeCaptureQueryResult, decodeCaptureRecord } from "./wire-capture.js";
 export {
   LEDGER_OUTCOMES,

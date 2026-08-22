@@ -19,7 +19,10 @@ import type {
 
 import type { ModelsJsonAuthority } from "../models-config/authority.js";
 import type { RuntimeDiagnosticsStore } from "../runtime-diagnostics/index.js";
-import type { CatalogCacheStore } from "./catalog-cache.js";
+import type {
+  CatalogCacheStage,
+  CatalogCacheStore,
+} from "./catalog-cache.js";
 
 /**
  * Ticket 11 catalog refresh controller — the single owner of the refresh
@@ -44,7 +47,7 @@ import type { CatalogCacheStore } from "./catalog-cache.js";
  *   atomically after each cycle — new requests resolve the new facts while
  *   in-flight invocations keep their already-captured Model objects.
  *
- * Background triggers (startup, successful login, model page open) are
+ * Background triggers (startup and model page open) are
  * non-blocking and deduplicated through the injected scheduler; manual
  * refresh is serialized, forced, and returns bounded per-Provider results.
  */
@@ -56,8 +59,39 @@ export interface CatalogRuntimeHandle {
   /** Atomically capture the current runtime catalog as the served snapshot.
    * Dynamic Provider catalog refresh may change model facts; models.json never
    * changes the Provider set after startup. */
-  readonly capture: () => void;
+  readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
+  /** Capture an opaque exact auth operation view for one lifecycle Provider
+   * before its refresh begins. */
+  operationsForProvider(providerId: string): Promise<CatalogProviderOperations>;
+  /** Refresh exactly one Provider under its captured Profile binding. */
+  refreshProvider(
+    providerId: string,
+    options: Omit<ModelsRefreshOptions, "providers">,
+  ): ReturnType<Models["refresh"]>;
+  /** Check exactly one Provider under its captured Profile binding. */
+  checkAuth(
+    providerId: string,
+    options?: { readonly signal?: AbortSignal },
+  ): ReturnType<Models["checkAuth"]>;
+  /** Default lifecycle runs have no pre-captured binding; exact operation
+   * views override these guards. */
+  isCurrent(providerId: string): Promise<boolean>;
+  publishIfCurrent(
+    providerId: string,
+    publish: (assertCurrent: () => void) => Promise<void> | void,
+  ): Promise<boolean>;
+  /** Restore one Provider's live dynamic facts from the current cache with
+   * no credential resolution or network use. */
+  restoreProvider(providerId: string, entry: ModelsStoreEntry): Promise<void>;
 }
+
+/** Exact, request-bound Provider operations used by an explicit recheck.
+ * The Catalog Controller owns refresh publication but never sees the
+ * credential binding that scopes these calls. */
+export type CatalogProviderOperations = Pick<
+  CatalogRuntimeHandle,
+  "refreshProvider" | "checkAuth" | "isCurrent" | "publishIfCurrent"
+>;
 
 export interface CatalogRefreshScheduler {
   schedule(task: () => void): void;
@@ -92,12 +126,20 @@ export interface CatalogRefreshController {
     trigger: Exclude<CatalogRefreshTrigger, "manual">,
     providerIds?: readonly string[],
   ): void;
-  /** Successful Provider login: schedules a background refresh for the
-   *  provider that just logged in. */
-  onProviderLogin(providerId: string): void;
+  /** Exact-profile, non-blocking post-login refresh. */
+  scheduleProviderBackground(
+    trigger: "login",
+    providerId: string,
+    operations: CatalogProviderOperations,
+  ): void;
   /** Serialized, forced manual refresh; resolves with bounded per-Provider
    *  results. */
   refreshManual(signal?: AbortSignal): Promise<CatalogRefreshReportProjection>;
+  refreshProviderManual(
+    providerId: string,
+    signal?: AbortSignal,
+    operations?: CatalogProviderOperations,
+  ): Promise<CatalogRefreshReportProjection>;
   dispose(): Promise<void>;
 }
 
@@ -134,6 +176,7 @@ function serializeEntry(
 interface PendingBackground {
   readonly trigger: Exclude<CatalogRefreshTrigger, "manual">;
   readonly providerIds?: readonly string[];
+  readonly providerOperations?: CatalogProviderOperations;
 }
 
 interface RefreshRun {
@@ -142,6 +185,7 @@ interface RefreshRun {
   readonly force: boolean;
   readonly providerIds?: readonly string[];
   readonly signal?: AbortSignal;
+  readonly providerOperations?: CatalogProviderOperations;
 }
 
 /** Safe failure category: ModelsError codes are fixed pi-ai enum values;
@@ -184,6 +228,10 @@ export function createCatalogRefreshController(
   });
   let pendingBackground: PendingBackground | undefined;
   let scheduled = false;
+  // A failed exact-run restore means mutable Pi Provider facts cannot be
+  // proven safe. Keep serving the previous captured snapshot until an exact
+  // successful publication repairs that Provider.
+  const restorationQuarantine = new Set<string>();
   // Serializes refresh runs; manual refresh awaits the current tail.
   let runQueue: Promise<unknown> = Promise.resolve();
 
@@ -240,12 +288,13 @@ export function createCatalogRefreshController(
   const checkAvailability = async (
     providerId: string,
     signal: AbortSignal | undefined,
+    operations: CatalogProviderOperations = runtime!,
   ): Promise<CatalogModelAvailability> => {
     try {
       const check: AuthCheck | undefined =
         signal === undefined
-          ? await runtime?.models.checkAuth(providerId)
-          : await runtime?.models.checkAuth(providerId, { signal });
+          ? await operations.checkAuth(providerId)
+          : await operations.checkAuth(providerId, { signal });
       return check === undefined ? "unavailable" : "available";
     } catch {
       return "unknown";
@@ -268,22 +317,83 @@ export function createCatalogRefreshController(
     // models.json is startup-only. Refresh may report the current file's
     // validity for management UI, but it never mutates this Backend's fixed
     // Provider composition.
-    const inScopeProviders = (runtime.models.getProviders() ?? []).filter(
+    const targetProviders = (runtime.models.getProviders() ?? []).filter(
       (provider) =>
-        provider.refreshModels !== undefined &&
         (run.providerIds === undefined ||
           run.providerIds.includes(provider.id)),
     );
+    const inScopeProviders = targetProviders.filter(
+      (provider) => provider.refreshModels !== undefined,
+    );
+    if (run.providerOperations === undefined && targetProviders.length > 0) {
+      const combined = new Map<string, RunOutcome>();
+      for (const provider of targetProviders) {
+        if (run.signal?.aborted === true) break;
+        let providerOperations: CatalogProviderOperations;
+        try {
+          providerOperations = await runtime.operationsForProvider(provider.id);
+        } catch (error) {
+          // Preserve the ordinary per-Provider failure projection without
+          // granting a credential binding that could mutate model facts.
+          providerOperations = Object.freeze({
+            refreshProvider: async () => {
+              throw error;
+            },
+            checkAuth: async () => {
+              throw error;
+            },
+            isCurrent: async () => true,
+            publishIfCurrent: async (_providerId, publish) => {
+              await publish(() => undefined);
+              return true;
+            },
+          });
+        }
+        const outcome = await runRefresh({
+          ...run,
+          providerIds: Object.freeze([provider.id]),
+          providerOperations,
+        });
+        const providerOutcome = outcome?.get(provider.id);
+        if (providerOutcome !== undefined) combined.set(provider.id, providerOutcome);
+      }
+      refreshErrors = Object.freeze(
+        [...combined.entries()].flatMap(([providerId, outcome]) =>
+          outcome.outcome === "failed"
+            ? [Object.freeze({
+                providerId,
+                code: outcome.errorCode,
+                message: outcome.error,
+              })]
+            : [],
+        ),
+      );
+      swap();
+      return combined;
+    }
+    if (
+      run.providerOperations !== undefined &&
+      run.providerIds?.length === 1 &&
+      !(await run.providerOperations.isCurrent(run.providerIds[0]!))
+    ) {
+      return new Map([[run.providerIds[0]!, { outcome: "skipped" as const }]]);
+    }
+    const operationsFor = (providerId: string): CatalogProviderOperations =>
+      run.providerOperations !== undefined &&
+      run.providerIds?.length === 1 &&
+      run.providerIds[0] === providerId
+        ? run.providerOperations
+        : runtime!;
     // The persisted entry each in-scope Provider starts from: a publish
     // during this run is the observable evidence that a refresh actually
     // happened (a no-credential Pi run skips the network phase without
     // recording anything).
-    const preRunEntries = new Map<string, string | undefined>();
+    const preRunEntries = new Map<string, ModelsStoreEntry | undefined>();
     for (const provider of inScopeProviders) {
       const entry = await options.store
         .read(provider.id)
         .catch(() => undefined);
-      preRunEntries.set(provider.id, serializeEntry(entry));
+      preRunEntries.set(provider.id, entry);
     }
     if (run.signal !== undefined && run.signal.aborted) return undefined;
     const preRunStates = providerStates;
@@ -322,8 +432,142 @@ export function createCatalogRefreshController(
         : { providers: run.providerIds }),
       ...(run.signal === undefined ? {} : { signal: run.signal }),
     };
-    const result = await runtime.models.refresh(refreshOptions);
+    const runErrors = new Map<string, unknown>();
+    const stagedRefreshes = new Map<
+      string,
+      CatalogCacheStage<Awaited<ReturnType<CatalogProviderOperations["refreshProvider"]>>>
+    >();
+    for (const provider of inScopeProviders) {
+      try {
+        const refresh = () => operationsFor(provider.id).refreshProvider(provider.id, {
+            ...(refreshOptions.allowNetwork === undefined
+              ? {}
+              : { allowNetwork: refreshOptions.allowNetwork }),
+            ...(refreshOptions.force === undefined
+              ? {}
+              : { force: refreshOptions.force }),
+            ...(refreshOptions.signal === undefined
+              ? {}
+              : { signal: refreshOptions.signal }),
+          });
+        const exactStage = run.providerOperations !== undefined && run.network
+          ? await options.store.runStaged(provider.id, refresh)
+          : undefined;
+        if (exactStage !== undefined) stagedRefreshes.set(provider.id, exactStage);
+        const result = exactStage?.result ?? await refresh();
+        const error = result.errors.get(provider.id);
+        if (error !== undefined) runErrors.set(provider.id, error);
+      } catch (error) {
+        runErrors.set(provider.id, error);
+      }
+    }
+    const discardExactRun = async (
+      unprovenCacheProviderIds: ReadonlySet<string> = new Set<string>(),
+    ): Promise<ReadonlyMap<string, RunOutcome>> => {
+      const restoreFailures: string[] = [];
+      for (const provider of inScopeProviders) {
+        if (
+          unprovenCacheProviderIds.has(provider.id) ||
+          restorationQuarantine.has(provider.id)
+        ) {
+          restorationQuarantine.add(provider.id);
+          restoreFailures.push(provider.id);
+          options.diagnostics.append({
+            level: "warning",
+            text: valueSafeFailureMessage(provider.id),
+            details: Object.freeze({
+              providerId: provider.id,
+              code: "catalog_cache_unproven",
+            }),
+          });
+          continue;
+        }
+        try {
+          // Restore the Provider's live model facts through another isolated
+          // view. A stale exact run never rewrites the authoritative cache.
+          const entry = await options.store.read(provider.id);
+          await runtime!.restoreProvider(
+            provider.id,
+            entry ?? Object.freeze({ models: Object.freeze([]) }),
+          );
+        } catch {
+          restorationQuarantine.add(provider.id);
+          restoreFailures.push(provider.id);
+          options.diagnostics.append({
+            level: "warning",
+            text: valueSafeFailureMessage(provider.id),
+            details: Object.freeze({ providerId: provider.id, code: "stale_publish_rollback" }),
+          });
+        }
+      }
+      if (restoreFailures.length === 0) {
+        try {
+          // An exact publish can fail after the mutable Provider was updated
+          // (or even after a served capture began). Re-capture only the
+          // authoritative restored facts before returning to the old
+          // controller snapshot.
+          runtime!.capture(restorationQuarantine);
+        } catch {
+          for (const provider of inScopeProviders) {
+            restorationQuarantine.add(provider.id);
+            restoreFailures.push(provider.id);
+            options.diagnostics.append({
+              level: "warning",
+              text: valueSafeFailureMessage(provider.id),
+              details: Object.freeze({
+                providerId: provider.id,
+                code: "restored_capture_failed",
+              }),
+            });
+          }
+        }
+      }
+      if (restoreFailures.length === 0) {
+        providerStates = preRunStates;
+        snapshot = preRunSnapshot;
+        options.onSnapshot?.(snapshot);
+      } else {
+        const quarantined: Record<string, ProviderRuntimeState> = {
+          ...preRunStates,
+        };
+        for (const providerId of restoreFailures) {
+          const previous = preRunStates[providerId];
+          quarantined[providerId] = Object.freeze({
+            state: "failed",
+            error: valueSafeFailureMessage(providerId),
+            errorCode: "restore_unproven",
+            ...(previous?.refreshedAt === undefined
+              ? {}
+              : { refreshedAt: previous.refreshedAt }),
+            ...(previous?.cachedAt === undefined
+              ? {}
+              : { cachedAt: previous.cachedAt }),
+            availability: "unknown",
+            dynamicModelIds:
+              previous?.dynamicModelIds ?? Object.freeze(new Set<string>()),
+          });
+        }
+        providerStates = Object.freeze(quarantined);
+        swap();
+      }
+      return new Map(
+        inScopeProviders.map((provider) => [
+          provider.id,
+          { outcome: "skipped" as const },
+        ]),
+      );
+    };
+    if (
+      run.providerOperations !== undefined &&
+      run.providerIds?.length === 1 &&
+      !(await run.providerOperations.isCurrent(run.providerIds[0]!))
+    ) {
+      return discardExactRun();
+    }
     const aborted = run.signal !== undefined && run.signal.aborted;
+    if (aborted && run.providerOperations !== undefined) {
+      return discardExactRun();
+    }
     // Per-Provider isolation: failed Providers keep their cached/built-in
     // facts; every failure becomes a precise value-safe warning. Outcomes
     // are observed for THIS run only — an aborted or no-credential run
@@ -333,16 +577,35 @@ export function createCatalogRefreshController(
     const next: Record<string, ProviderRuntimeState> = { ...preRunStates };
     for (const provider of inScopeProviders) {
       const previous = next[provider.id];
-      const error = result.errors.get(provider.id);
-      const stored = await options.store
-        .read(provider.id)
-        .catch(() => undefined);
+      const error = runErrors.get(provider.id);
+      const exactStage = stagedRefreshes.get(provider.id);
+      const stored = error !== undefined && exactStage !== undefined
+        ? preRunEntries.get(provider.id)
+        : exactStage?.entry ?? await options.store
+            .read(provider.id)
+            .catch(() => undefined);
       const dynamicIds = Object.freeze(
         new Set((stored?.models ?? []).map((model) => model.id)),
       );
-      const published =
-        serializeEntry(stored) !== preRunEntries.get(provider.id);
+      const published = exactStage?.changed ??
+        serializeEntry(stored) !== serializeEntry(preRunEntries.get(provider.id));
       if (error !== undefined) {
+        if (exactStage !== undefined) {
+          try {
+            const entry = await options.store.read(provider.id);
+            await runtime!.restoreProvider(
+              provider.id,
+              entry ?? Object.freeze({ models: Object.freeze([]) }),
+            );
+          } catch {
+            restorationQuarantine.add(provider.id);
+            options.diagnostics.append({
+              level: "warning",
+              text: valueSafeFailureMessage(provider.id),
+              details: Object.freeze({ providerId: provider.id, code: "failed_refresh_restore" }),
+            });
+          }
+        }
         failures.push(
           Object.freeze({
             providerId: provider.id,
@@ -366,7 +629,11 @@ export function createCatalogRefreshController(
             ...(previous?.cachedAt === undefined
               ? {}
               : { cachedAt: previous.cachedAt }),
-            availability: await checkAvailability(provider.id, run.signal),
+            availability: await checkAvailability(
+              provider.id,
+              run.signal,
+              operationsFor(provider.id),
+            ),
             dynamicModelIds: dynamicIds,
           });
         }
@@ -386,7 +653,11 @@ export function createCatalogRefreshController(
           state: "succeeded",
           refreshedAt: now(),
           ...(previous?.cachedAt === undefined ? {} : { cachedAt: previous.cachedAt }),
-          availability: await checkAvailability(provider.id, run.signal),
+          availability: await checkAvailability(
+            provider.id,
+            run.signal,
+            operationsFor(provider.id),
+          ),
           dynamicModelIds: dynamicIds,
         });
       }
@@ -402,15 +673,40 @@ export function createCatalogRefreshController(
       // Static Providers have no refresh lifecycle but still expose their
       // auth availability (pinned availability refresh covers every
       // Provider).
-      for (const provider of runtime.models.getProviders()) {
+      for (const provider of targetProviders) {
         if (provider.refreshModels !== undefined) continue;
         const previous = next[provider.id];
+        const availability = await checkAvailability(
+          provider.id,
+          run.signal,
+          operationsFor(provider.id),
+        );
         next[provider.id] = Object.freeze({
           state: "known",
           ...(previous?.cachedAt === undefined ? {} : { cachedAt: previous.cachedAt }),
-          availability: await checkAvailability(provider.id, run.signal),
+          availability,
           dynamicModelIds: Object.freeze(new Set<string>()),
         });
+        if (run.network) {
+          if (availability === "available") {
+            outcomes.set(provider.id, { outcome: "succeeded" });
+          } else if (availability === "unavailable") {
+            outcomes.set(provider.id, { outcome: "skipped" });
+          } else {
+            const errorCode = "auth_check_failed";
+            const message = valueSafeFailureMessage(provider.id);
+            failures.push(Object.freeze({
+              providerId: provider.id,
+              code: errorCode,
+              message,
+            }));
+            outcomes.set(provider.id, {
+              outcome: "failed",
+              error: message,
+              errorCode,
+            });
+          }
+        }
       }
       if (!run.network) {
         // Restore phase: cached facts are served, no network result yet.
@@ -433,13 +729,79 @@ export function createCatalogRefreshController(
           });
         }
       }
-      providerStates = Object.freeze(next);
-      refreshErrors = Object.freeze(failures);
-      if (run.network) refreshedAt = now();
-      // One authoritative swap: new requests see the fresh catalog;
-      // captured Model objects stay untouched.
-      runtime.capture();
-      swap();
+      const publish = async (
+        assertCurrent: () => void = () => undefined,
+      ): Promise<void> => {
+        for (const [providerId, stage] of stagedRefreshes) {
+          if (!runErrors.has(providerId)) await stage.commit(assertCurrent);
+        }
+        assertCurrent();
+        for (const [providerId, stage] of stagedRefreshes) {
+          if (!runErrors.has(providerId) && stage.changed) {
+            restorationQuarantine.delete(providerId);
+          }
+        }
+        for (const providerId of restorationQuarantine) {
+          const previous = next[providerId];
+          next[providerId] = Object.freeze({
+            state: "failed",
+            error: valueSafeFailureMessage(providerId),
+            errorCode: "restore_unproven",
+            ...(previous?.refreshedAt === undefined
+              ? {}
+              : { refreshedAt: previous.refreshedAt }),
+            ...(previous?.cachedAt === undefined
+              ? {}
+              : { cachedAt: previous.cachedAt }),
+            availability: "unknown",
+            dynamicModelIds:
+              previous?.dynamicModelIds ?? Object.freeze(new Set<string>()),
+          });
+        }
+        providerStates = Object.freeze(next);
+        refreshErrors = Object.freeze(failures);
+        if (run.network) refreshedAt = now();
+        // One authoritative swap: new requests see the fresh catalog;
+        // captured Model objects stay untouched.
+        runtime!.capture(restorationQuarantine);
+        swap();
+      };
+      if (
+        run.providerOperations !== undefined &&
+        run.providerIds?.length === 1
+      ) {
+        let committed: boolean;
+        try {
+          committed = await run.providerOperations.publishIfCurrent(
+            run.providerIds[0]!,
+            publish,
+          );
+        } catch {
+          const unprovenCacheProviderIds = new Set<string>();
+          for (const [providerId, stage] of stagedRefreshes) {
+            try {
+              await stage.rollback();
+            } catch {
+              unprovenCacheProviderIds.add(providerId);
+            }
+          }
+          const discarded = await discardExactRun(unprovenCacheProviderIds);
+          const providerId = run.providerIds[0]!;
+          options.diagnostics.append({
+            level: "warning",
+            text: valueSafeFailureMessage(providerId),
+            details: Object.freeze({ providerId, code: "exact_publish_failed" }),
+          });
+          return new Map(discarded).set(providerId, {
+            outcome: "failed",
+            error: valueSafeFailureMessage(providerId),
+            errorCode: "exact_publish_failed",
+          });
+        }
+        if (!committed) return discardExactRun();
+      } else {
+        await publish();
+      }
     }
     // Precise value-safe warnings: fixed templates and safe codes only.
     for (const failure of failures) {
@@ -487,6 +849,9 @@ export function createCatalogRefreshController(
           ...(pending.providerIds === undefined
             ? {}
             : { providerIds: pending.providerIds }),
+          ...(pending.providerOperations === undefined
+            ? {}
+            : { providerOperations: pending.providerOperations }),
           ...(activeController === undefined
             ? {}
             : { signal: activeController.signal }),
@@ -509,6 +874,31 @@ export function createCatalogRefreshController(
     scheduler.schedule(() => {
       scheduled = false;
       enqueueBackground();
+    });
+  };
+
+  const scheduleProviderBackground = (
+    trigger: "login",
+    providerId: string,
+    providerOperations: CatalogProviderOperations,
+  ): void => {
+    if (disposed || runtime === undefined) return;
+    scheduler.schedule(() => {
+      if (disposed || runtime === undefined) return;
+      runQueue = runQueue
+        .then(() =>
+          runRefresh({
+            trigger,
+            network: true,
+            force: false,
+            providerIds: Object.freeze([providerId]),
+            providerOperations,
+            ...(activeController === undefined
+              ? {}
+              : { signal: activeController.signal }),
+          }),
+        )
+        .catch(() => undefined);
     });
   };
 
@@ -541,10 +931,31 @@ export function createCatalogRefreshController(
       return runtime !== undefined;
     },
     scheduleBackground,
-    onProviderLogin(providerId: string): void {
-      scheduleBackground("login", [providerId]);
-    },
+    scheduleProviderBackground,
     refreshManual(signal?: AbortSignal): Promise<CatalogRefreshReportProjection> {
+      return refreshManualFor(undefined, signal);
+    },
+    refreshProviderManual(
+      providerId: string,
+      signal?: AbortSignal,
+      operations?: CatalogProviderOperations,
+    ): Promise<CatalogRefreshReportProjection> {
+      return refreshManualFor([providerId], signal, operations);
+    },
+    async dispose(): Promise<void> {
+      disposed = true;
+      pendingBackground = undefined;
+      activeController?.abort();
+      await runQueue.catch(() => undefined);
+      runtime = undefined;
+    },
+  });
+
+  function refreshManualFor(
+    providerIds: readonly string[] | undefined,
+    signal?: AbortSignal,
+    providerOperations?: CatalogProviderOperations,
+  ): Promise<CatalogRefreshReportProjection> {
       if (runtime === undefined) {
         return Promise.reject(
           new Error("Catalog refresh is not available before the runtime starts"),
@@ -558,11 +969,15 @@ export function createCatalogRefreshController(
           trigger: "manual",
           network: true,
           force: true,
+          ...(providerIds === undefined ? {} : { providerIds }),
           ...(runSignal === undefined ? {} : { signal: runSignal }),
+          ...(providerOperations === undefined ? {} : { providerOperations }),
         });
         const finishedAt = now();
         const providers = (runtime?.models.getProviders() ?? [])
-          .filter((provider) => provider.refreshModels !== undefined)
+          .filter((provider) =>
+            providerIds === undefined || providerIds.includes(provider.id),
+          )
           .map((provider) => {
             const outcome = outcomes?.get(provider.id);
             if (outcome === undefined) {
@@ -590,15 +1005,7 @@ export function createCatalogRefreshController(
       });
       runQueue = run.catch(() => undefined);
       return run;
-    },
-    async dispose(): Promise<void> {
-      disposed = true;
-      pendingBackground = undefined;
-      activeController?.abort();
-      await runQueue.catch(() => undefined);
-      runtime = undefined;
-    },
-  });
+  }
 }
 
 /**
@@ -613,7 +1020,9 @@ export function createCatalogRefreshController(
  */
 export function createCatalogSnapshotModels(
   models: Models,
-): Models & { readonly capture: () => void } {
+): Models & {
+  readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
+} {
   let captured: readonly Model<Api>[] | undefined;
   const snapshotModels = (providerId?: string): readonly Model<Api>[] => {
     const all = captured ?? models.getModels();
@@ -652,8 +1061,28 @@ export function createCatalogSnapshotModels(
       models.fetchDeferred(model, handle, options),
     cancelDeferred: (model, handle, options) =>
       models.cancelDeferred(model, handle, options),
-    capture: () => {
-      captured = Object.freeze([...models.getModels()]);
+    capture: (preserveProviderIds?: ReadonlySet<string>) => {
+      const live = models.getModels();
+      if (
+        captured === undefined ||
+        preserveProviderIds === undefined ||
+        preserveProviderIds.size === 0
+      ) {
+        captured = Object.freeze([...live]);
+        return;
+      }
+      const previous = captured;
+      const next: Model<Api>[] = [];
+      const providerIds = new Set(
+        [...previous, ...live].map((model) => model.provider),
+      );
+      for (const providerId of providerIds) {
+        const source = preserveProviderIds.has(providerId) ? previous : live;
+        next.push(...source.filter((model) => model.provider === providerId));
+      }
+      captured = Object.freeze(next);
     },
-  } as Models & { readonly capture: () => void });
+  } as Models & {
+    readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
+  });
 }

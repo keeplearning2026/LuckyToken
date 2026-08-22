@@ -545,6 +545,9 @@ test(
       await anthropicCard.waitFor();
       await anthropicCard.getByRole("button", { name: /api key/i }).click();
       const anthropicLogin = page.getByRole("dialog", { name: "Anthropic sign in" });
+      await anthropicLogin.getByLabel("Profile name").fill("Golden primary");
+      await anthropicLogin.getByLabel("Use this Profile for new requests").check();
+      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
       const secretInput = anthropicLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill(TEST_PROVIDER_KEY);
@@ -552,15 +555,25 @@ test(
       await anthropicLogin.getByText("Connected", { exact: true }).waitFor();
       await anthropicLogin.getByRole("button", { name: "Close", exact: true }).click();
       await assert.doesNotReject(async () => {
-        const auth = await client.executeAuthCommand({ command: "query" });
+        const auth = await client.executeCredentialProfilesCommand({
+          command: "query",
+          providerIds: ["anthropic"],
+        });
         const status = auth.state.providers.find((provider) => provider.providerId === "anthropic");
-        assert.equal(status?.stored, true);
-        assert.equal(status?.unavailable, false);
+        assert.equal(status?.profiles.length, 1);
+        assert.equal(status?.activeCredentialId, status?.profiles[0]?.credentialId);
+        const recheck = await client.executeCredentialProfilesCommand({
+          command: "recheck",
+          providerId: "anthropic",
+          credentialId: status.profiles[0].credentialId,
+          expectedRevision: status.revision,
+        });
+        assert.equal(recheck.outcome, "ok");
       });
 
       // Provider Activation (Spec v1.0 §14): the coarse Provider readiness
       // is derived from Catalog model availability, which the Backend
-      // republishes after the login-triggered refresh. Wait for that
+      // republishes after the explicit Profile recheck. Wait for that
       // authoritative convergence before sending the first model request.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const status = await client.getStatus();

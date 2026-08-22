@@ -8,8 +8,7 @@ import { pathToFileURL } from "node:url";
 
 import { startLuckyTokenApplication } from "./application.js";
 import { createControlPlaneDiscovery } from "./control-plane-discovery.js";
-import { runCredentialCli } from "./credentials/cli.js";
-import { runAuthCli } from "./credentials/auth-cli.js";
+import { runProfileCli } from "./credentials/profile-cli.js";
 import {
   connectControlPlane,
   controlPlaneVersion,
@@ -39,8 +38,7 @@ Usage:
   luckytoken control auto-start <status|enable|disable> --descriptor <path>
   luckytoken control settings <query|set> [<key> <value>] --descriptor <path>
   luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
-  luckytoken control credentials <query|login|logout|import> ... --descriptor <path>
-  luckytoken control auth <query|login> ... --descriptor <path>
+  luckytoken control profiles <query|add|reconnect|rename|activate|enable|disable|priority|remove|recheck|settings> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
   luckytoken control history <query|export|export-confirm|delete|delete-confirm|acknowledge> ... --descriptor <path>
@@ -54,8 +52,7 @@ Commands:
   control auto-start status|enable|disable  Query or change Windows login auto-start
   control settings query|set  Read or change registered Settings through the Control Plane
   control models query|write-raw|write-structured  Read or write the canonical models.json through the Control Plane
-  control credentials query|login|logout|import  Manage API-key credentials and effective auth status through the Control Plane
-  control auth query|login  Run Provider-owned account/subscription or API-key login
+  control profiles ...  Manage Provider credential Profiles through the Control Plane
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
   control public-models ...  Read or change the live Public Model authority
   control history query|export|export-confirm|delete|delete-confirm|acknowledge  Export, delete, or acknowledge permanent history state
@@ -74,21 +71,11 @@ control models commands:
   write-structured <rev> <file>  Replace models.json with the providers record in
                             <file> (compare-and-swap on <rev>, formatted)
 
-control credentials commands:
-  query                     Print the sanitized auth.json projection and per-Provider
-                            effective authentication status
-  login <provider> <value>  Store an API-key credential (literal, $ENV or !command
-                            source); replacing an occupied slot requires --overwrite
-  logout <provider>         Remove only the stored auth.json value
-  import <file>             Import a Pi-compatible auth.json Provider by Provider
-                            with overwrite confirmation
-
-control auth commands:
-  query                     Print the per-Provider login options and effective
-                            authentication status
-  login <provider> <account|api-key>  Run the Provider-owned interactive login flow
-                            through the typed interaction contract (browser,
-                            device code, prompts); secret input is masked on a TTY
+control profiles commands:
+  query                     Print sanitized Provider/Profile state
+  add|reconnect             Run a Provider-owned auth flow for one Profile
+  rename|activate|enable|disable|priority|remove|recheck|settings
+                            Mutate one Provider record with optimistic concurrency
 
 control catalog commands:
   query                     Print the active catalog snapshot
@@ -874,12 +861,8 @@ export async function runLuckyTokenCli(
       await runControlModelsCommand(args.slice(2));
       return;
     }
-    if (command === "credentials") {
-      await runCredentialCli(args.slice(2));
-      return;
-    }
-    if (command === "auth") {
-      await runAuthCli(args.slice(2));
+    if (command === "profiles") {
+      await runProfileCli(args.slice(2));
       return;
     }
     if (command === "catalog") {

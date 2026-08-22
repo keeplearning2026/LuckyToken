@@ -225,7 +225,39 @@ async function createCatalogPlane(options?: {
   }
   await controller.bind({
     models: wrapped,
-    capture: () => wrapped.capture(),
+    capture: (preserveProviderIds) => wrapped.capture(preserveProviderIds),
+    operationsForProvider: async () => ({
+      refreshProvider: (providerId, refreshOptions) =>
+        wrapped.refresh({ ...refreshOptions, providers: [providerId] }),
+      checkAuth: (providerId, checkOptions) =>
+        wrapped.checkAuth(providerId, checkOptions),
+      isCurrent: async () => true,
+      publishIfCurrent: async (_providerId, publish) => {
+        await publish(() => undefined);
+        return true;
+      },
+    }),
+    refreshProvider: (providerId, refreshOptions) =>
+      wrapped.refresh({ ...refreshOptions, providers: [providerId] }),
+    checkAuth: (providerId, checkOptions) =>
+      wrapped.checkAuth(providerId, checkOptions),
+    isCurrent: async () => true,
+    publishIfCurrent: async (_providerId, publish) => {
+      await publish(() => undefined);
+      return true;
+    },
+    restoreProvider: async (providerId, entry) => {
+      const provider = wrapped.getProvider(providerId);
+      await provider?.refreshModels?.({
+        stored: structuredClone(entry),
+        publish: async (publication) => {
+          publication.update?.();
+          return true;
+        },
+        allowNetwork: false,
+        signal: new AbortController().signal,
+      });
+    },
   });
   // Settle the non-blocking startup background refresh so the snapshot is
   // deterministic for the command assertions.

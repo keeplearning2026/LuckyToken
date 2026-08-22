@@ -116,6 +116,75 @@ describe("Request Ledger store public seam", () => {
     });
   });
 
+  it("persists bounded managed-Profile capture and attempt snapshots without notes or secrets", async () => {
+    const { configuration } = await fixture();
+    const store = await factory(configuration).open();
+    stores.push(store);
+    const entry = store.begin("openai-responses");
+    entry.credentialCaptured({
+      credentialId: "credential-primary",
+      displayName: "Production",
+      authType: "api_key",
+      authMethodLabel: "OpenAI API key",
+      lane: "provider_native",
+      selectionReason: "active",
+    });
+    entry.credentialAttempt({
+      credentialId: "credential-primary",
+      displayName: "Production",
+      authType: "api_key",
+      authMethodLabel: "OpenAI API key",
+      lane: "provider_native",
+      selectionReason: "active",
+      attempt: 1,
+      outcome: "http_429",
+    });
+    entry.credentialAttempt({
+      credentialId: "credential-backup",
+      displayName: "Backup",
+      authType: "api_key",
+      authMethodLabel: "OpenAI API key",
+      lane: "provider_native",
+      selectionReason: "http_429_switch",
+      attempt: 2,
+      outcome: "success",
+    });
+    entry.completed(200);
+
+    expect(store.query(undefined).records[0]?.facts).toMatchObject({
+      credentialCapture: {
+        credentialId: "credential-primary",
+        displayName: "Production",
+        authMethodLabel: "OpenAI API key",
+        lane: "provider_native",
+      },
+      credentialAttempts: [
+        { credentialId: "credential-primary", outcome: "http_429" },
+        {
+          credentialId: "credential-backup",
+          selectionReason: "http_429_switch",
+          outcome: "success",
+        },
+      ],
+    });
+    expect(JSON.stringify(store.query(undefined))).not.toContain("note");
+    expect(store.credentialUsage([
+      "credential-primary",
+      "credential-backup",
+      "credential-unused",
+    ])).toEqual([
+      {
+        credentialId: "credential-backup",
+        lastUsedAt: 1_700_000_000_000,
+        lastSucceededAt: 1_700_000_000_000,
+      },
+      {
+        credentialId: "credential-primary",
+        lastUsedAt: 1_700_000_000_000,
+      },
+    ]);
+  });
+
   it("creates a consistent self-contained backup snapshot through the store seam", async () => {
     const { root, configuration } = await fixture();
     const store = await factory(configuration).open();

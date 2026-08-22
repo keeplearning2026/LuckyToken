@@ -44,7 +44,7 @@ export interface BackupSnapshotSource {
   readonly id: string;
   readonly contract: string;
   readonly version: string | number;
-  readonly category: "history" | "capture";
+  readonly category: "history" | "capture" | "credentials";
   /** Optional explicit owned path used only to prove this snapshot belongs
    * to the configured LuckyToken root before invoking the store owner. */
   readonly sourcePath?: string;

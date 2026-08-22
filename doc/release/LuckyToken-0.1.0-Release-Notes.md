@@ -20,6 +20,28 @@ The management UI is organized around user tasks rather than internal subsystems
 - **Activity** — recent Request Ledger records and Backend-computed analytics.
 - **Settings** — General, Network, Routing, Data, and Advanced configuration.
 
+## Provider credential Profiles
+
+- A Provider can keep multiple independently named credential Profiles across
+  its Pi-declared non-OAuth and OAuth authentication methods. Exactly one
+  managed Profile is active for subsequent requests; switching never changes
+  the client protocol or data-plane lane.
+- Profiles support notes, priority, enable/disable, explicit activation,
+  reconnect, local removal, and separately configurable default-off HTTP 429
+  switching for the Provider's two Pi auth branches. A request makes at most
+  three outer Profile attempts.
+- Activity records only bounded request-time Profile identity, auth-method
+  label, lane, attempt, and outcome facts. Secrets and Profile notes are not
+  recorded.
+- Provider credentials are stored as independent
+  `pi/credential-profiles/<providerId>.json` records. The obsolete Provider
+  single-slot `pi/auth.json` is ignored, never migrated, never overwritten,
+  and never deleted automatically. After verifying that no older LuckyToken
+  installation is needed, users may manually remove that obsolete file.
+- This does not affect Codex Local Native Preservation: Codex's own
+  `CODEX_HOME/auth.json` remains owned by Codex and is not a Provider Profile
+  record.
+
 ## Certified evidence
 
 - **Backend Application seam**: normal serving, recovery-only startup, second-instance attach, ownership-aware quit, and cleanup are covered through one application lifecycle authority rather than CLI-owned composition.
@@ -27,7 +49,7 @@ The management UI is organized around user tasks rather than internal subsystems
 - **Electron security boundary**: renderer Node integration is disabled, context isolation and sandboxing are enabled, navigation/new-window creation are restricted, and preload exposes only the typed `LuckyTokenDesktopApi`; no generic `ipcRenderer` escape hatch exists.
 - **Tray-only lifecycle**: packaged Electron starts with zero BrowserWindows. Opening creates one renderer; closing destroys it. `window-all-closed` is explicitly retained by the tray application, and repeated reopen cycles construct fresh renderer state from Backend authority.
 - **Packaged Backend**: Electron packages `resources/backend/node/node.exe`, compiled Backend `dist`, production dependencies, and `launcher.json`. Electron attaches to an existing headless Backend rather than creating a second owner.
-- **First-successful-request golden journey**: deterministic release certification uses a local Anthropic-compatible upstream with no external credentials. A real packaged Electron UI stores an Anthropic API key through the Provider login flow, configures Codex, then a real OpenAI Responses client request travels through LuckyToken Client Protocol conversion, Pi IR, the Anthropic Provider, the local upstream, and back to the client. The successful request is visible in Activity and Analytics.
+- **First-successful-request golden journey**: deterministic release certification uses a local Anthropic-compatible upstream with no external credentials. A real packaged Electron UI adds and activates an Anthropic credential Profile through the Provider-owned login flow, configures Codex, then a real OpenAI Responses client request travels through LuckyToken Client Protocol conversion, Pi IR, the Anthropic Provider, the local upstream, and back to the client. The successful request and its sanitized Profile attribution are visible in Activity and Analytics.
 - **Background operation**: after the UI is closed and the renderer exits, a second real model request succeeds through the same Backend. Reopening the UI reconstructs Activity from the authoritative Request Ledger.
 - **Resource evidence**: product certification records process count, working/private memory, idle CPU, and UI cold-open time for Backend-only, tray-only, and UI-open states. The evidence is emitted to the ignored `.electron-out/product-certification-resource.json` artifact so retained renderers are detectable without coupling release correctness to one fixed memory threshold.
 - **Architecture guards**: certification fails if Core imports Electron/Control Plane, renderer imports Node/Electron/Control Plane internals, generic desktop IPC appears, or Tauri/Rust/legacy shell paths are reintroduced.

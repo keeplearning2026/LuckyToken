@@ -33,16 +33,12 @@ import {
   assertControlPlaneEndpoint,
   type ApplicationCommand,
   type ApplicationCommandResult,
-  type AuthCommand,
-  type AuthCommandResult,
   type AuthInteractionEvent,
   type AuthInteractionResponse,
   type CatalogCommand,
   type CatalogCommandResult,
   type AgentIntegrationsCommand,
   type AgentIntegrationsCommandResult,
-  type CredentialCommand,
-  type CredentialCommandResult,
   type ControlPlaneClient,
   type ControlPlaneDisconnect,
   type ControlPlaneEndpoint,
@@ -61,10 +57,8 @@ import {
 import { readFrame, writeFrame } from "./framing.js";
 import type { PipeConnector } from "./pipe-transport.js";
 import {
-  decodeAuthCommandResult,
   decodeCatalogCommandResult,
   decodeAgentIntegrationsCommandResult,
-  decodeCredentialCommandResult,
   decodePublicModelsCommandResult,
   decodeRequestId,
   decodeServerMessage,
@@ -78,6 +72,16 @@ import {
   decodeHistoryQueryResult,
 } from "./wire-history.js";
 import { decodeBackupResult } from "./wire-backup.js";
+import type {
+  CredentialProfilesCommand,
+  CredentialProfilesCommandResult,
+  ProviderProfileAuthCommand,
+  ProviderProfileAuthCommandResult,
+} from "./credential-profiles-contract.js";
+import {
+  decodeCredentialProfilesCommandResult,
+  decodeProviderProfileAuthCommandResult,
+} from "./wire-credential-profiles.js";
 
 export interface ControlPlaneClientDependencies {
   readonly createRequestId: () => string;
@@ -91,10 +95,10 @@ interface PendingRequest {
 
 /** One in-flight Provider-auth flow (Ticket 13): interaction events are
  *  dispatched to the caller until the terminal result arrives. */
-interface PendingAuthFlow {
-  readonly command: AuthCommand;
+interface PendingProfileAuthFlow {
+  readonly command: ProviderProfileAuthCommand;
   readonly onInteraction: (event: AuthInteractionEvent) => void;
-  readonly resolve: (result: AuthCommandResult) => void;
+  readonly resolve: (result: ProviderProfileAuthCommandResult) => void;
   readonly reject: (error: Error) => void;
 }
 
@@ -107,7 +111,7 @@ export async function connectApplicationControlPlane(
     endpoint.address,
   );
   const pending = new Map<string, PendingRequest>();
-  const pendingAuth = new Map<string, PendingAuthFlow>();
+  const pendingAuth = new Map<string, PendingProfileAuthFlow>();
   let activeAuthRequestId: string | undefined;
   let listener: ((event: StatusEvent) => void) | undefined;
   let diagnosticsListener:
@@ -188,11 +192,11 @@ export async function connectApplicationControlPlane(
           }
           continue;
         }
-        if (message.type === "auth_command_result") {
+        if (message.type === "provider_profile_auth_command_result") {
           const flow = pendingAuth.get(message.requestId);
           if (flow === undefined) continue;
           pendingAuth.delete(message.requestId);
-          const result = decodeAuthCommandResult(message.result, flow.command);
+          const result = decodeProviderProfileAuthCommandResult(message.result);
           if (result === undefined) {
             flow.reject(new Error("Control Plane response is malformed"));
           } else {
@@ -298,31 +302,26 @@ export async function connectApplicationControlPlane(
       }
       return response.result;
     },
-    async executeCredentialCommand(
-      command: CredentialCommand,
-    ): Promise<CredentialCommandResult> {
+    async executeCredentialProfilesCommand(
+      command: CredentialProfilesCommand,
+    ): Promise<CredentialProfilesCommandResult> {
       const response = await request({
-        type: "credential_command",
+        type: "credential_profiles_command",
         command,
       });
-      if (response.type !== "credential_command_result") {
+      if (response.type !== "credential_profiles_command_result") {
         throw new Error("Control Plane response is malformed");
       }
-      // The result shape depends on the command that was sent: credential
-      // values or raw credential shapes can never cross the wire. Re-
-      // validate against the local command.
-      const result = decodeCredentialCommandResult(response.result, command);
+      const result = decodeCredentialProfilesCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async executeAuthCommand(
-      command: AuthCommand,
+    async executeProviderProfileAuthCommand(
+      command: ProviderProfileAuthCommand,
       onInteraction?: (event: AuthInteractionEvent) => void,
-    ): Promise<AuthCommandResult> {
-      // A login command stays pending across typed interaction events; it
-      // resolves only with the terminal `auth_command_result` frame.
+    ): Promise<ProviderProfileAuthCommandResult> {
       if (settled) {
         throw new Error("Control Plane request is unavailable");
       }
@@ -334,16 +333,14 @@ export async function connectApplicationControlPlane(
       ) {
         throw new Error("Control Plane request is unavailable");
       }
-      const result = new Promise<AuthCommandResult>((resolve, reject) => {
+      const result = new Promise<ProviderProfileAuthCommandResult>((resolve, reject) => {
         pendingAuth.set(requestId, {
           command,
           onInteraction: onInteraction ?? (() => undefined),
           resolve,
           reject,
         });
-        // The host allows one in-flight login per connection: the first
-        // login owns the interaction response slot until it settles.
-        if (command.command === "login" && activeAuthRequestId === undefined) {
+        if (command.command !== "query" && activeAuthRequestId === undefined) {
           activeAuthRequestId = requestId;
         }
       });
@@ -358,15 +355,14 @@ export async function connectApplicationControlPlane(
       );
       try {
         await writeFrame(connection, {
-          type: "auth_command",
+          type: "provider_profile_auth_command",
           command,
           requestId,
         });
       } catch (error) {
-        const safeError =
-          error instanceof Error
-            ? new Error(`Control Plane disconnected: ${error.message}`)
-            : new Error("Control Plane disconnected");
+        const safeError = error instanceof Error
+          ? new Error(`Control Plane disconnected: ${error.message}`)
+          : new Error("Control Plane disconnected");
         settle("transport_lost", safeError);
         await connection.close().catch(() => undefined);
       }

@@ -8,6 +8,7 @@ import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http
 import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
@@ -27,7 +28,7 @@ function anthropicModel(): Model<string> {
     id: "claude-sonnet",
     name: "claude-sonnet",
     api: "anthropic-messages",
-    provider: "my-anthropic",
+    provider: "anthropic",
     baseUrl: "https://gateway.example.com",
     reasoning: false,
     input: ["text"],
@@ -71,6 +72,7 @@ function dependencies(
       : {
           providerNativeLane: createAnthropicProviderNativeLane({
             models,
+            bindings: ambientProfileBindings,
             resolveRequestModel: identityRequestModelResolver,
             fetch: passthroughFetch,
           }),
@@ -131,7 +133,7 @@ describe("11: native Anthropic passthrough certification", () => {
         dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
             stream: true,
@@ -166,7 +168,7 @@ describe("11: native Anthropic passthrough certification", () => {
         dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
@@ -182,7 +184,7 @@ describe("11: native Anthropic passthrough certification", () => {
     }
   });
 
-  it("forwards x-stainless-* approved end-to-end request headers", async () => {
+  it("reconstructs SDK headers and rejects client x-stainless overrides", async () => {
     const model = anthropicModel();
     const upstreamRequests: Request[] = [];
     const { restore, passthroughFetch } = captureFetch(async (input, init) => {
@@ -197,7 +199,7 @@ describe("11: native Anthropic passthrough certification", () => {
         dependencies(passthroughModels(model), {}, passthroughFetch),
         request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
@@ -206,11 +208,12 @@ describe("11: native Anthropic passthrough certification", () => {
       );
       expect(response.status).toBe(200);
       expect(upstreamRequests[0]?.headers.get("x-stainless-retry-count")).toBe(
-        "1",
+        "0",
       );
       expect(upstreamRequests[0]?.headers.get("x-stainless-timeout")).toBe(
-        "60000",
+        null,
       );
+      expect(upstreamRequests[0]?.headers.get("x-stainless-lang")).toBe("js");
     } finally {
       restore();
     }
@@ -248,7 +251,7 @@ describe("11: native Anthropic passthrough certification", () => {
         ),
         request(
           JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
@@ -288,7 +291,7 @@ describe("11: native Anthropic passthrough certification", () => {
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "my-anthropic/claude-sonnet",
+            model: "anthropic/claude-sonnet",
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),

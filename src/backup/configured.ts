@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { LuckyTokenCliConfig } from "../cli-config.js";
@@ -59,15 +59,42 @@ export function configuredBackupFiles(
       category: "configuration",
       optional: true,
     },
-    {
-      id: "provider-credentials",
-      path: join(config.pi.directory, "auth.json"),
-      contract: "pi-auth-json",
-      version: "0.84.1",
-      category: "credentials",
-      optional: true,
-    },
   ] satisfies readonly BackupFileSource[]);
+}
+
+export function configuredCredentialProfileBackupSnapshot(
+  config: LuckyTokenCliConfig,
+): BackupSnapshotSource {
+  const directory = join(config.pi.directory, "credential-profiles");
+  return Object.freeze({
+    id: "provider-credential-profiles",
+    contract: "luckytoken-provider-credential-profiles",
+    version: 1,
+    category: "credentials" as const,
+    sourcePath: directory,
+    optional: true,
+    async snapshot(signal: AbortSignal): Promise<Uint8Array> {
+      signal.throwIfAborted();
+      const entries = await readdir(directory, { withFileTypes: true });
+      const providers: Array<{ providerId: string; record: string }> = [];
+      for (const entry of entries.sort((left, right) =>
+        left.name.localeCompare(right.name))) {
+        signal.throwIfAborted();
+        if (!entry.isFile()) continue;
+        const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,63})\.json$/u.exec(entry.name);
+        if (match === null) continue;
+        providers.push({
+          providerId: match[1]!,
+          record: (await readFile(join(directory, entry.name))).toString("base64"),
+        });
+      }
+      signal.throwIfAborted();
+      return Buffer.from(JSON.stringify({
+        schemaVersion: "luckytoken-provider-credential-profiles-backup-v1",
+        providers,
+      }), "utf8");
+    },
+  });
 }
 
 export function createConfiguredBackupAuthority(
@@ -77,7 +104,10 @@ export function createConfiguredBackupAuthority(
     ownedRoot: resolve(dirname(options.configPath)),
     applicationVersion: options.applicationVersion,
     files: configuredBackupFiles(options.configPath, options.config),
-    snapshots: options.snapshots,
+    snapshots: Object.freeze([
+      configuredCredentialProfileBackupSnapshot(options.config),
+      ...options.snapshots,
+    ]),
   });
 }
 

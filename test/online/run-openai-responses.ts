@@ -719,7 +719,7 @@ export async function runOpenAIResponsesOnlineSuite(
         : { modelsJsonPath: config.pi.modelsJson }),
       providerPackages: config.providerPackages,
       fetch: globalThis.fetch,
-      credentials,
+      credentialSeedStore: credentials,
     });
     try {
       await preLogin.models.login(
@@ -754,7 +754,7 @@ export async function runOpenAIResponsesOnlineSuite(
           });
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: dispatchObserver.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
@@ -810,7 +810,7 @@ export async function runOpenAIResponsesOnlineSuite(
     const hangingFetch = createHangingFetch(globalThis.fetch, 60_000);
     const hangingComposition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: hangingFetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
@@ -866,7 +866,7 @@ export async function runOpenAIResponsesOnlineSuite(
     const capture = createCapturingFetch(globalThis.fetch);
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: capture.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
@@ -1051,7 +1051,7 @@ export async function runOpenAIResponsesOnlineSuite(
     composition = undefined;
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: dispatchObserver.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });

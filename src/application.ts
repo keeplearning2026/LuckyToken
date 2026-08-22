@@ -37,8 +37,7 @@ import {
   type DiscoveryPublication,
 } from "./control-plane-discovery.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
-import { createCredentialControlPlaneHandler } from "./credentials/control-plane.js";
-import { createAuthLoginControlPlaneHandler } from "./credentials/login-control-plane.js";
+import { createCredentialProfilesControlPlaneHandlers } from "./credentials/profile-control-plane.js";
 import {
   bindDeepDiagnosticsConfiguration,
   createDeepCaptureAuthority,
@@ -634,8 +633,8 @@ async function startNormalApplication(options: {
     catalogControllerForCleanup = catalogController;
     // Provider Activation (Spec v1.0 §6, §11.2): the Backend-lifetime
     // Provider Runtime is created BEFORE the Data Plane Supervisor and
-    // before the Control Plane starts. Provider discovery, credentials,
-    // login and the authoritative Catalog live for the whole Backend
+    // before the Control Plane starts. Provider discovery, Profile state,
+    // login, and the authoritative Catalog live for the whole Backend
     // lifetime; Data Plane stop/start/restart never recreates them.
     const providerRuntime = await createProviderRuntime({
       piDirectory: config.pi.directory,
@@ -655,21 +654,28 @@ async function startNormalApplication(options: {
           }),
         });
       },
-      onProviderLogin: (providerId) =>
-        catalogController.onProviderLogin(providerId),
+      onCredentialStoreDegraded: () => {
+        ownedDiagnosticsStore.append({
+          level: "warning",
+          text: "Provider credential storage lock release was degraded after a completed operation.",
+          details: Object.freeze({ kind: "lock_release" }),
+        });
+      },
+      credentialUsage: (credentialIds) =>
+        ownedLedgerStore.credentialUsage(credentialIds),
     });
-    const credentialAuthority = providerRuntime.credentialAuthority;
+    const credentialManagement = providerRuntime.credentialManagement;
     const reconcilePublicModels = (
       snapshot: Parameters<typeof publicModelRuntimeFacts>[0],
     ): Promise<void> =>
       publicModelAuthority
         .reconcile(
-          publicModelRuntimeFacts(snapshot, credentialAuthority.snapshot()),
+          publicModelRuntimeFacts(snapshot, credentialManagement.snapshot()),
         )
         .then(() => undefined);
     const operationalAttention = createOperationalAttentionAuthority({
       now: Date.now,
-      credentials: () => credentialAuthority.snapshot(),
+      credentials: () => credentialManagement.snapshot(),
       persistence: () => persistenceAuthority.projection(),
       requestFailureCount: (from, to) => {
         const result = ownedLedgerStore.analyze({
@@ -683,34 +689,50 @@ async function startNormalApplication(options: {
           : 0;
       },
     });
-    const baseCredentialCommandHandler = createCredentialControlPlaneHandler({
-      authority: () => credentialAuthority,
+    const profileControlPlane = createCredentialProfilesControlPlaneHandlers({
+      models: providerRuntime.models,
+      management: credentialManagement,
+      binding: providerRuntime.providerAuthBindings,
+      providerSource: (providerId) => providerRuntime.providerSource(providerId),
+      recheckProvider: async (providerId, capture) => {
+        const report = await catalogController.refreshProviderManual(
+          providerId,
+          undefined,
+          providerRuntime.catalogOperationsFor(capture),
+        );
+        return report.providers.find(
+          (provider) => provider.providerId === providerId,
+        )?.outcome ?? "skipped";
+      },
+      postLoginProvider: (providerId, capture) => {
+        catalogController.scheduleProviderBackground(
+          "login",
+          providerId,
+          providerRuntime.catalogOperationsFor(capture),
+        );
+      },
     });
-    const credentialCommandHandler: typeof baseCredentialCommandHandler = async (
+    const credentialProfilesCommandHandler: typeof profileControlPlane.credentials = async (
       command,
     ) => {
-      const result = await baseCredentialCommandHandler(command);
+      const result = await profileControlPlane.credentials(command);
       if (result.outcome !== "unavailable") {
         await reconcilePublicModels(catalogController.snapshot());
       }
       return result;
     };
-    const authCommandHandler = createAuthLoginControlPlaneHandler({
-      models: () => providerRuntime.models,
-      authority: () => credentialAuthority,
-      providerSource: (providerId) => providerRuntime.providerSource(providerId),
-    });
+    const providerProfileAuthCommandHandler = profileControlPlane.auth;
     // The Catalog refresh controller binds to the Provider Runtime BEFORE
     // Data Plane startup and stays bound for the Backend lifetime (Spec
-    // §11.2): stopping the Data Plane never aborts the Catalog. Credential
-    // Authority is already bound so the first Catalog publication can derive
-    // Provider ON from the real login authority rather than Catalog health.
+    // §11.2): stopping the Data Plane never aborts the Catalog. Profile state
+    // is already bound so the first Catalog publication can derive Provider
+    // ON from the real login authority rather than Catalog health.
     await catalogController.bind(providerRuntime.catalog);
     await reconcilePublicModels(catalogController.snapshot());
     const codexHome = resolveCodexHome();
     const codexLocalAuth = createCodexLocalCredentialAuthority({ codexHome });
     const scrubSensitiveText = (value: string): string =>
-      codexLocalAuth.scrub(providerRuntime.credentialAuthority.scrub(value));
+      codexLocalAuth.scrub(providerRuntime.scrubCredentialText(value));
     ownedDiagnosticsStore.attachScrub(scrubSensitiveText);
     ownedLedgerStore.attachScrub(scrubSensitiveText);
     ownedCaptureStore.attachScrub(scrubSensitiveText);
@@ -937,6 +959,7 @@ async function startNormalApplication(options: {
           composition = await createConfiguredLuckyTokenDataPlane({
             configuration: config,
             models: providerRuntime.models,
+            providerAuthBindings: providerRuntime.providerAuthBindings,
             publicModels,
             requestLedger: ownedLedgerStore,
             deepCapture,
@@ -1090,9 +1113,9 @@ async function startNormalApplication(options: {
       attentionProjection: (status) => operationalAttention.project(status),
       modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
       modelsProjection: () => modelsAuthority.snapshot(),
-      credentialCommandHandler,
-      credentialProjection: () => credentialAuthority.snapshot(),
-      authCommandHandler,
+      credentialProfilesCommandHandler,
+      credentialProfilesProjection: () => credentialManagement.snapshot(),
+      providerProfileAuthCommandHandler,
       catalogCommandHandler: async (command) => {
         if (command.command === "query") {
           return { outcome: "ok", snapshot: catalogController.snapshot() };
@@ -1247,7 +1270,7 @@ async function startNormalApplication(options: {
       attentionRefreshInFlight = true;
       void (async () => {
         try {
-          await credentialAuthority.query();
+          await credentialManagement.query();
           await controlPlane?.publishStatus(lastPublishedStatus);
         } catch {
           // Existing diagnostics surfaces own refresh faults.

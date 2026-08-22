@@ -2,7 +2,7 @@
 
 **文档性质：** 当前项目快速导览（current overview & map）
 
-**源码基线：** `main@e6f56dd`（2026-08-20）
+**源码基线：** Provider Credential Profiles v1.5 implementation（2026-08-22）
 
 **权威架构：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)
 
@@ -11,6 +11,8 @@
 **实现维护者地图：** [LuckyTokenArchitecture.md](./LuckyTokenArchitecture.md)
 
 **设计约束：** [AGENTS.md](../AGENTS.md)
+
+**Provider credential authority：** [Provider Credential Profiles PRD v1.5](./Spec/LuckyTokenProviderCredentialProfilesPRD.md)；旧 one-slot `pi/auth.json` 描述均为历史资料。
 
 本文只提供快速上下文，不复制完整规范。若本文与 Spec 或当前源码冲突，以 owning Spec + 当前源码为准。
 
@@ -270,7 +272,7 @@ Semantic Conversion 可将 `effectiveSessionId` 投影到 Pi `Options.sessionId`
 
 ### Provider credential
 
-Provider login/logout/import 与 `auth.json` 由 Backend-lifetime credential authority + Pi `CredentialStore` / `Models` / Provider contract 拥有。
+Provider Profile lifecycle、exact request binding 与 per-Provider record 由 Backend-lifetime Profile State Owner 拥有；Pi `Models` 只通过 composition-private bound `CredentialStore` adapter 看见当前 operation 的一个 Profile。
 
 ### Control Plane capability
 
@@ -342,7 +344,7 @@ model_catalog_json = "<LuckyToken-managed catalog>"
 │   └── deep-diagnostics/         # Deep Diagnostics SQLite
 ├── integrations/codex/           # LuckyToken Codex integration state/catalog
 └── pi/
-    ├── auth.json                 # Provider credentials
+    ├── credential-profiles/      # per-Provider credential Profile records
     └── models-catalog-cache.json # Provider model cache
 ```
 

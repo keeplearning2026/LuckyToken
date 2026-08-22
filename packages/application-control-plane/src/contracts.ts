@@ -21,6 +21,13 @@ import type {
 import type { RecoveryProjection } from "./backup-contract.js";
 import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
 import type { AttentionProjection } from "./attention-contract.js";
+import type {
+  CredentialProfilesCommand,
+  CredentialProfilesCommandResult,
+  CredentialProfilesProjectionV1,
+  ProviderProfileAuthCommand,
+  ProviderProfileAuthCommandResult,
+} from "./credential-profiles-contract.js";
 
 export const controlPlaneVersion = 2 as const;
 
@@ -84,8 +91,8 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly ownership?: ApplicationOwnership;
   /** Optional sanitized models.json projection (Ticket 08). */
   readonly models?: ModelsProjection;
-  /** Optional sanitized auth.json credential projection (Ticket 12). */
-  readonly credentials?: CredentialProjection;
+  /** Sanitized per-Provider Credential Profile projection. */
+  readonly credentialProfiles?: CredentialProfilesProjectionV1;
   /** Optional sanitized catalog lifecycle projection (Ticket 11). */
   readonly catalog?: CatalogStatusProjection;
 }
@@ -535,161 +542,6 @@ export interface ModelsCommandResult {
   readonly error?: ModelsFileError;
 }
 
-/**
- * Ticket 12 — API-key credential management and effective authentication
- * status. One Provider has one stored auth.json slot; every mutation runs
- * through the single serialized Credential Authority with a revision
- * compare-and-swap, so UI and CLI can never lose a concurrent update.
- */
-
-/** Effective auth source precedence (pinned Pi): stored credential, then
- *  models.json configured key (literal/`$ENV`/`!command`), then ambient
- *  environment. `none` means nothing resolves. */
-export type CredentialEffectiveSource =
-  "stored" | "environment" | "models.json" | "command" | "none";
-
-/**
- * Bounded structural authentication facts for one Provider. Credential
- * values, environment variable names, command text, headers and raw
- * credential objects never appear in this projection.
- */
-export interface ProviderAuthStatus {
-  readonly providerId: string;
-  /** The Provider's one stored auth.json slot is occupied. */
-  readonly stored: boolean;
-  readonly storedType?: "api_key" | "oauth";
-  /** An ambient (builtin) source resolves for this Provider. */
-  readonly environment: boolean;
-  /** models.json declares an apiKey for this Provider. */
-  readonly modelsJson: boolean;
-  /** The models.json apiKey is a `!command` source. */
-  readonly commandDerived: boolean;
-  /** A stored OAuth credential has expired. */
-  readonly expired: boolean;
-  /** No effective auth resolves for this Provider. */
-  readonly unavailable: boolean;
-  readonly effectiveSource: CredentialEffectiveSource;
-}
-
-export type CredentialFileErrorKind = "parse" | "invalid" | "load";
-
-/** Value-free auth.json file error (Ticket 12): syntax/shape locations and
- *  structural descriptions only, never file content or credential values. */
-export interface CredentialFileError {
-  readonly kind: CredentialFileErrorKind;
-  readonly message: string;
-}
-
-/**
- * Sanitized auth.json projection merged into status snapshots: file facts
- * plus bounded per-Provider authentication status. No secret values.
- */
-export interface CredentialProjection {
-  readonly revision: number;
-  readonly path: string;
-  readonly present: boolean;
-  readonly valid: boolean;
-  readonly error?: CredentialFileError;
-  readonly providers: readonly ProviderAuthStatus[];
-}
-
-/** One importable auth.json entry in a preview result (metadata only). */
-export interface CredentialImportEntryPreview {
-  readonly providerId: string;
-  readonly type: "api_key" | "oauth";
-  readonly wouldOverwrite: boolean;
-}
-
-/** One Provider selection of an import apply. */
-export interface CredentialImportSelection {
-  readonly providerId: string;
-  readonly overwrite: boolean;
-}
-
-/** Per-Provider outcome of an import apply. */
-export interface CredentialImportApplyEntryResult {
-  readonly providerId: string;
-  readonly outcome:
-    "applied" | "unchanged" | "skipped" | "conflict" | "overwrite_required";
-}
-
-/**
- * Versioned Credential commands (Ticket 12): UI and CLI manage the
- * Pi-compatible auth.json through these commands. Every mutation carries
- * the expected revision from a prior query/preview so a stale UI/CLI can
- * never overwrite a newer credential. `login` stores the value verbatim
- * (literal secret, `$ENV` reference or `!command` source; resolution is the
- * pinned Ticket 10 request-path behavior). `import_preview` validates a
- * Pi-compatible auth.json payload and returns the Provider-by-Provider
- * plan; `import_apply` writes only the selected Providers with the
- * previewed overwrite confirmations.
- */
-export type CredentialCommand =
-  | { readonly command: "query" }
-  | {
-      readonly command: "login";
-      readonly providerId: string;
-      readonly expectedRevision: number;
-      readonly value: string;
-      /** Explicit confirmation that an occupied slot may be replaced. */
-      readonly overwrite: boolean;
-    }
-  | {
-      readonly command: "logout";
-      readonly providerId: string;
-      readonly expectedRevision: number;
-    }
-  | {
-      readonly command: "import_preview";
-      readonly expectedRevision: number;
-      readonly content: string;
-    }
-  | {
-      readonly command: "import_apply";
-      readonly expectedRevision: number;
-      readonly importId: string;
-      readonly selections: readonly CredentialImportSelection[];
-    };
-
-export type CredentialCommandOutcome =
-  | "ok"
-  | "conflict"
-  | "invalid"
-  | "unknown_provider"
-  | "overwrite_required"
-  | "storage_failure"
-  | "unavailable";
-
-export interface CredentialCommandResult {
-  readonly outcome: CredentialCommandOutcome;
-  /** The authoritative auth.json revision after the attempt. */
-  readonly revision: number;
-  /** Authoritative sanitized auth.json projection after the attempt. */
-  readonly state: CredentialProjection;
-  /** Value-free failure detail (`conflict`, `invalid`, `storage_failure`). */
-  readonly error?: string;
-  /** Present on successful login/logout: whether the file changed. */
-  readonly changed?: boolean;
-  /** Present on a successful import_preview: the apply session id. */
-  readonly importId?: string;
-  readonly previewEntries?: readonly CredentialImportEntryPreview[];
-  /** Present on import_apply: per-selection results. */
-  readonly entries?: readonly CredentialImportApplyEntryResult[];
-}
-
-/**
- * Ticket 13 — Provider-owned account/subscription authentication projection.
- *
- * The top-level UI choices are exactly "Use an account or subscription" and
- * "Use an API key". Only Provider metadata may mark a flow as a true
- * subscription: `subscription` below is `provider.auth.oauth.isSubscription`
- * and nothing else may label a flow. The Provider owns every authentication
- * step; the renderer projects typed interaction events and never branches on
- * Provider ids or implements Provider-specific OAuth/API-key protocols.
- */
-
-/** One Provider's interactive login options, projected from Provider
- *  metadata only (never renderer labels). */
 /** Provider product origin (Provider Activation Spec v1.0 §9): where a
  *  Provider identity came from. Pi built-ins are the pinned Pi catalog;
  *  `luckytoken_bundled` is a LuckyToken product-bundled Provider (e.g.
@@ -699,32 +551,6 @@ export type ProviderSource =
   | "pi_builtin"
   | "luckytoken_bundled"
   | "user";
-
-export interface AuthProviderOption {
-  readonly providerId: string;
-  readonly name: string;
-  /** Product origin of the Provider identity (Spec v1.0 §9). */
-  readonly source: ProviderSource;
-  /** The Provider declares an account/OAuth login. */
-  readonly account: boolean;
-  /** True only when Provider metadata (`oauth.isSubscription`) marks the
-   *  account flow as a real subscription; OAuth/account alone is never
-   *  mislabeled as a subscription. */
-  readonly subscription: boolean;
-  /** Provider-declared label for the account login option. */
-  readonly accountLabel?: string;
-  /** The Provider declares API-key auth (the Ticket 12 stored-value path). */
-  readonly apiKey: boolean;
-  /** Provider-declared label for the API-key login option. */
-  readonly apiKeyLabel?: string;
-  /** Bounded effective authentication status facts (Ticket 12 shape). */
-  readonly status: ProviderAuthStatus;
-}
-
-/** The authoritative per-Provider login options for one auth query. */
-export interface AuthOptionsProjection {
-  readonly providers: readonly AuthProviderOption[];
-}
 
 export interface AuthInfoLink {
   readonly url: string;
@@ -801,55 +627,6 @@ export interface AuthInteractionChannel {
   }): Promise<string>;
 }
 
-/**
- * Versioned Provider-auth commands (Ticket 13): `query` returns the
- * per-Provider login options plus the refreshed effective authentication
- * status; `login` runs a Provider-owned login flow through the typed
- * interaction channel and atomically persists the returned credential
- * through the Ticket 12 Credential Authority's serialization seam (the
- * same store and revision machinery — no second credential authority). UI
- * and CLI use this same contract. Logout stays on the Ticket 12
- * credential channel: it is the same backend contract surface.
- */
-export type AuthCommand =
-  | { readonly command: "query" }
-  | {
-      readonly command: "login";
-      readonly providerId: string;
-      readonly authType: "oauth" | "api_key";
-    };
-
-export type AuthCommandOutcome =
-  | "ok"
-  | "cancelled"
-  | "failed"
-  | "conflict"
-  | "unknown_provider"
-  | "unsupported"
-  | "storage_failure"
-  | "unavailable";
-
-export interface AuthCommandResult {
-  readonly outcome: AuthCommandOutcome;
-  /** Authoritative sanitized auth.json projection after the attempt. */
-  readonly state: CredentialProjection;
-  /** Present on query: the per-Provider login options. */
-  readonly options?: AuthOptionsProjection;
-  /** Value-free failure detail (fixed templates; never raw errors). */
-  readonly error?: string;
-}
-
-/**
- * Handles versioned Provider-auth commands. The interaction channel is
- * live only for a `login` command; `query` never uses it. Implementations
- * must keep failure messages value-free and must never delete an
- * unrelated Provider's credential.
- */
-export type AuthCommandHandler = (
-  command: AuthCommand,
-  interaction: AuthInteractionChannel,
-) => Promise<AuthCommandResult>;
-
 export type SettingsCommand =
   | {
       readonly command: "query";
@@ -903,6 +680,9 @@ export type {
   ControlPlaneRequestLedger,
   LedgerAliasFact,
   LedgerAttempt,
+  LedgerCredentialAttempt,
+  LedgerCredentialCapture,
+  LedgerCredentialUsage,
   LedgerAuthFacts,
   LedgerFailureInput,
   LedgerFailureSummary,
@@ -1122,11 +902,6 @@ export type ModelsCommandHandler = (
   command: ModelsCommand,
 ) => Promise<ModelsCommandResult>;
 
-/** Handles versioned Credential commands against the live authority. */
-export type CredentialCommandHandler = (
-  command: CredentialCommand,
-) => Promise<CredentialCommandResult>;
-
 /** Live settings projection merged into every published status snapshot. */
 export interface SettingsProjection {
   readonly settings: Readonly<Record<string, RegisteredSetting>>;
@@ -1207,18 +982,14 @@ export interface ControlPlaneClient {
     command: ApplicationCommand,
   ): Promise<ApplicationCommandResult>;
 
-  executeCredentialCommand(
-    command: CredentialCommand,
-  ): Promise<CredentialCommandResult>;
+  executeCredentialProfilesCommand(
+    command: CredentialProfilesCommand,
+  ): Promise<CredentialProfilesCommandResult>;
 
-  /** Ticket 13: run a versioned Provider-auth command; interaction events
-   *  of an in-flight login are delivered to `onInteraction` until the
-   *  command resolves with its terminal outcome. Prompt responses and
-   *  cancellation are sent with `respondAuthInteraction`. */
-  executeAuthCommand(
-    command: AuthCommand,
+  executeProviderProfileAuthCommand(
+    command: ProviderProfileAuthCommand,
     onInteraction?: (event: AuthInteractionEvent) => void,
-  ): Promise<AuthCommandResult>;
+  ): Promise<ProviderProfileAuthCommandResult>;
 
   /** Ticket 13: send a prompt response or cancellation into the one
    *  in-flight login flow of this connection. Rejects when no login is

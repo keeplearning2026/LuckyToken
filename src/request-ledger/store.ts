@@ -27,6 +27,9 @@ import {
   assertLedgerPhase,
   type LedgerAliasFact,
   type LedgerAttempt,
+  type LedgerCredentialAttempt,
+  type LedgerCredentialCapture,
+  type LedgerCredentialUsage,
   type LedgerAuthFacts,
   type LedgerFailureInput,
   type LedgerFailureSummary,
@@ -112,6 +115,8 @@ interface DraftFacts {
   readonly failure?: LedgerFailureSummary;
   readonly persistenceWarnings: number;
   readonly piStopReason?: string;
+  readonly credentialCapture?: LedgerCredentialCapture;
+  readonly credentialAttempts: readonly LedgerCredentialAttempt[];
 }
 
 /** Ticket 20: the canonical terminal-usage snapshot draft (validated on
@@ -235,6 +240,12 @@ function encodeFacts(facts: DraftFacts): string | null {
   if (facts.piStopReason !== undefined) {
     output.piStopReason = facts.piStopReason;
   }
+  if (facts.credentialCapture !== undefined) {
+    output.credentialCapture = facts.credentialCapture;
+  }
+  if (facts.credentialAttempts.length > 0) {
+    output.credentialAttempts = facts.credentialAttempts;
+  }
   return Object.keys(output).length === 0 ? null : JSON.stringify(output);
 }
 
@@ -264,6 +275,16 @@ function decodeFacts(value: unknown): Readonly<LedgerFacts> | undefined {
     ...(facts.piStopReason === undefined
       ? {}
       : { piStopReason: facts.piStopReason as string }),
+    ...(facts.credentialCapture === undefined
+      ? {}
+      : { credentialCapture: facts.credentialCapture as LedgerCredentialCapture }),
+    ...(facts.credentialAttempts === undefined
+      ? {}
+      : {
+          credentialAttempts: Object.freeze(
+            facts.credentialAttempts as readonly LedgerCredentialAttempt[],
+          ),
+        }),
   });
   return Object.keys(output).length === 0 ? undefined : output;
 }
@@ -354,6 +375,28 @@ function safeName(value: string, field: string): string {
     throw new Error(`${field} must be a bounded safe identifier`);
   }
   return value;
+}
+
+function sanitizeCredentialCapture(
+  capture: LedgerCredentialCapture,
+  scrub: ((value: string) => string) | undefined,
+): LedgerCredentialCapture {
+  if (
+    (capture.authType !== "api_key" && capture.authType !== "oauth") ||
+    (capture.lane !== "provider_native" && capture.lane !== "semantic_conversion") ||
+    (capture.selectionReason !== "active" &&
+      capture.selectionReason !== "http_429_switch")
+  ) {
+    throw new Error("credential capture enum is invalid");
+  }
+  return Object.freeze({
+    credentialId: safeName(capture.credentialId, "credentialCapture.credentialId"),
+    displayName: safeText(capture.displayName, 256, scrub),
+    authType: capture.authType,
+    authMethodLabel: safeText(capture.authMethodLabel, 256, scrub),
+    lane: capture.lane,
+    selectionReason: capture.selectionReason,
+  });
 }
 
 function safeStatus(value: number | undefined, field: string): number | undefined {
@@ -615,6 +658,7 @@ export function createRequestLedgerStoreFactory(
           const facts: DraftFacts = Object.freeze({
             notices: Object.freeze([]),
             attempts: Object.freeze([]),
+            credentialAttempts: Object.freeze([]),
             persistenceWarnings: 0,
           });
           const entry: LedgerDraft = {
@@ -902,6 +946,49 @@ export function createRequestLedgerStoreFactory(
                 return;
               }
             },
+            credentialCaptured(capture: LedgerCredentialCapture): void {
+              if (entry.facts.credentialCapture !== undefined) return;
+              try {
+                entry.facts = Object.freeze({
+                  ...entry.facts,
+                  credentialCapture: sanitizeCredentialCapture(
+                    capture,
+                    attachedScrub,
+                  ),
+                });
+              } catch (error) {
+                countEntryFault(entry, error);
+              }
+            },
+            credentialAttempt(attempt: LedgerCredentialAttempt): void {
+              if (entry.facts.credentialAttempts.length >= MAX_ATTEMPTS) return;
+              try {
+                if (!Number.isSafeInteger(attempt.attempt) || attempt.attempt < 1) {
+                  throw new Error("credential attempt must be a positive integer");
+                }
+                if (
+                  attempt.outcome !== "success" &&
+                  attempt.outcome !== "http_429" &&
+                  attempt.outcome !== "failed" &&
+                  attempt.outcome !== "aborted"
+                ) {
+                  throw new Error("credential attempt outcome is invalid");
+                }
+                entry.facts = Object.freeze({
+                  ...entry.facts,
+                  credentialAttempts: Object.freeze([
+                    ...entry.facts.credentialAttempts,
+                    Object.freeze({
+                      ...sanitizeCredentialCapture(attempt, attachedScrub),
+                      attempt: attempt.attempt,
+                      outcome: attempt.outcome,
+                    }),
+                  ]),
+                });
+              } catch (error) {
+                countEntryFault(entry, error);
+              }
+            },
             fail(input: LedgerFailureInput): void {
               try {
                 if (typeof input.classification !== "string") {
@@ -1032,6 +1119,62 @@ export function createRequestLedgerStoreFactory(
             records: Object.freeze(visible.map(rowToRecord)),
             hasMore,
           });
+        },
+        credentialUsage(
+          credentialIds: readonly string[],
+        ): readonly LedgerCredentialUsage[] {
+          if (closed) throw new Error("Request Ledger store is closed");
+          if (credentialIds.length > 512) {
+            throw new Error("credential usage query is too large");
+          }
+          const requested = new Set<string>();
+          for (const credentialId of credentialIds) {
+            requested.add(safeName(credentialId, "credentialUsage.credentialId"));
+          }
+          if (requested.size === 0) return Object.freeze([]);
+          const usage = new Map<string, LedgerCredentialUsage>();
+          const rows = database.prepare(
+            "SELECT accepted_at AS acceptedAt, facts FROM requests WHERE facts IS NOT NULL ORDER BY id ASC",
+          ).all() as Array<{ readonly acceptedAt: number; readonly facts: string }>;
+          for (const row of rows) {
+            const facts = decodeFacts(decodeJson(row.facts));
+            const attempts = facts?.credentialAttempts;
+            if (attempts !== undefined) {
+              for (const attempt of attempts) {
+                if (!requested.has(attempt.credentialId)) continue;
+                const previous = usage.get(attempt.credentialId);
+                usage.set(attempt.credentialId, Object.freeze({
+                  credentialId: attempt.credentialId,
+                  lastUsedAt: Math.max(previous?.lastUsedAt ?? 0, row.acceptedAt),
+                  ...(attempt.outcome === "success"
+                    ? {
+                        lastSucceededAt: Math.max(
+                          previous?.lastSucceededAt ?? 0,
+                          row.acceptedAt,
+                        ),
+                      }
+                    : previous?.lastSucceededAt === undefined
+                      ? {}
+                      : { lastSucceededAt: previous.lastSucceededAt }),
+                }));
+              }
+              continue;
+            }
+            const capture = facts?.credentialCapture;
+            if (capture === undefined || !requested.has(capture.credentialId)) continue;
+            const previous = usage.get(capture.credentialId);
+            usage.set(capture.credentialId, Object.freeze({
+              credentialId: capture.credentialId,
+              lastUsedAt: Math.max(previous?.lastUsedAt ?? 0, row.acceptedAt),
+              ...(previous?.lastSucceededAt === undefined
+                ? {}
+                : { lastSucceededAt: previous.lastSucceededAt }),
+            }));
+          }
+          return Object.freeze(
+            [...usage.values()].sort((left, right) =>
+              left.credentialId.localeCompare(right.credentialId)),
+          );
         },
         analyze(query: AnalyticsQuery): AnalyticsQueryResult {
           if (closed) throw new Error("Request Ledger store is closed");

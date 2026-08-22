@@ -433,7 +433,7 @@ export async function runCommandCodeOnlineSuite(
     const dispatchObserver = createDispatchObserver(globalThis.fetch);
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: dispatchObserver.fetch,
     });
     server = await startLuckyTokenHttpServer({
@@ -467,7 +467,7 @@ export async function runCommandCodeOnlineSuite(
     const capture = createCapturingCommandCodeFetch(globalThis.fetch);
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: capture.fetch,
     });
     server = await startLuckyTokenHttpServer({

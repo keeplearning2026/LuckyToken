@@ -200,6 +200,11 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     assert.match(stdout, /application quit/u);
     assert.ok(!stdout.includes("raw secret"), "no credential material in output");
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   }
 }, 90_000);

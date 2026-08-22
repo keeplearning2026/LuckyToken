@@ -91,7 +91,7 @@ async function main(): Promise<void> {
     const config = await loadLuckyTokenCliConfig(configPath);
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       fetch: capture.fetch,
     });
     server = await startLuckyTokenHttpServer({

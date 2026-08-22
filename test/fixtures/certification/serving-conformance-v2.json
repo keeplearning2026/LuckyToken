@@ -185,7 +185,8 @@
       "tests": [
         "test/unit/commandcode-model.test.ts",
         "test/unit/cli-config.test.ts",
-        "test/integration/pi-credential-login.test.ts",
+        "test/unit/provider-auth-binding.test.ts",
+        "test/integration/credential-profiles-control-plane.test.ts",
         "test/integration/configured-composition.test.ts",
         "test/integration/cli.test.ts"
       ]
@@ -206,7 +207,8 @@
       "tests": [
         "test/unit/live-client-token-authority.test.ts",
         "test/unit/codex-local-auth.test.ts",
-        "test/integration/credential-request-resolution.test.ts",
+        "test/unit/semantic-profile-execution.test.ts",
+        "test/unit/openai-responses-passthrough-architecture.test.ts",
         "test/integration/codex-native-responses.test.ts",
         "test/integration/provider-execution-boundary.test.ts"
       ]

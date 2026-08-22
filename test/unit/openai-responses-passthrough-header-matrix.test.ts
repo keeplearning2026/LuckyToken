@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { bufferNativeResponsesResponse } from "../../src/protocols/openai-responses/native-response.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 function model(): Model<string> {
   return {
@@ -68,7 +69,11 @@ describe("Provider Native Responses header boundary", () => {
     const models = {
       getAuth: async () => ({ auth: { apiKey: "sk-provider" } }),
     } as unknown as Pick<Models, "getAuth">;
-    const lane = createProviderNativeResponses({ models, fetch });
+    const lane = createProviderNativeResponses({
+      models,
+      bindings: ambientProfileBindings,
+      fetch,
+    });
     const request = new Request("http://luckytoken.test/v1/responses", {
       method: "POST",
       headers: {

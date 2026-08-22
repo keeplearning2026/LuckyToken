@@ -40,9 +40,9 @@ function display(file) {
  *
  * These are static architecture gates that fail the release when a change
  * reintroduces the ownership defects the specification deletes: a second
- * Pi Models/credential composition in production serving, Data-Plane-owned
- * Catalog binding, optional normal-state Auth slots, static curated alias
- * defaults, or CommandCode-as-user-configuration behavior.
+ * Pi Models/Profile composition in production serving, Data-Plane-owned
+ * Catalog binding, optional normal-state Provider owners, static curated
+ * alias defaults, or CommandCode-as-user-configuration behavior.
  */
 
 test("production serving receives narrow Provider capabilities and cannot create Provider composition", async () => {
@@ -103,36 +103,54 @@ test("production serving receives narrow Provider capabilities and cannot create
   );
 });
 
-test("no optional normal-state Auth slots or Provider-config-derived readiness remain", async () => {
+test("the Backend owns one Profile state owner and exposes only narrow consumer views", async () => {
   const application = await readFile(
     path.join(repositoryRoot, "src", "application.ts"),
     "utf8",
   );
-  const contracts = await readFile(
+  const runtime = await readFile(
     path.join(
       repositoryRoot,
-      "packages",
-      "application-control-plane",
       "src",
-      "contracts.ts",
+      "providers",
+      "runtime.ts",
     ),
     "utf8",
   );
+  const profileContracts = await readFile(
+    path.join(repositoryRoot, "src", "credentials", "profile-contract.ts"),
+    "utf8",
+  );
 
-  // The Auth handler is wired to the Backend-lifetime runtime, never to an
-  // optional slot populated by Data Plane startup.
+  // Management and request binding are projections of the one
+  // Backend-lifetime Profile state owner. Pi's secret-bearing
+  // CredentialStore is created only inside Provider Runtime composition.
   assert.match(
     application,
-    /createAuthLoginControlPlaneHandler\(\{[\s\S]*?models: \(\) => providerRuntime\.models/u,
-    "Auth handler must use the non-optional Backend-lifetime Provider Runtime",
+    /createCredentialProfilesControlPlaneHandlers\(\{[\s\S]*?management: credentialManagement,[\s\S]*?binding: providerRuntime\.providerAuthBindings/u,
+    "Profile Control Plane must receive only the management and binding views",
+  );
+  assert.match(
+    runtime,
+    /createProviderCredentialProfiles\(/u,
+    "Provider Runtime must create the one Backend-lifetime Profile state owner",
+  );
+  assert.match(
+    runtime,
+    /createModels\([\s\S]*?credentials:\s*profileState\.credentialStore/u,
+    "Pi's CredentialStore adapter must be injected only at composition",
   );
   assert.ok(
-    !/let\s+(?:credentialAuthority|providerRuntime)\s*:/u.test(application),
+    !/CredentialStore/u.test(profileContracts),
+    "public Profile contracts must not expose Pi's secret-bearing CredentialStore",
+  );
+  assert.ok(
+    !/let\s+(?:credentialManagement|providerAuthBindings|providerRuntime)\s*:/u.test(application),
     "Backend-lifetime Provider owners must not be optional normal-state slots",
   );
   assert.ok(
-    !/\bauthModels\b/u.test(application),
-    "the optional authModels normal-state slot must be gone",
+    !/\bcredentialStore\s*\(\s*\)/u.test(profileContracts),
+    "public Profile interfaces must not provide a credentialStore escape hatch",
   );
   // The coarse Provider readiness is a pure Catalog derivation.
   assert.match(
@@ -143,6 +161,66 @@ test("no optional normal-state Auth slots or Provider-config-derived readiness r
   assert.ok(
     !/configured.*providerPackages|providerPackages.*configured/u.test(application),
     "Provider readiness must not be derived from providerPackages presence",
+  );
+});
+
+test("legacy single-slot credential contracts cannot return to production", async () => {
+  const deletedPaths = [
+    ["src", "credentials", "authority.ts"],
+    ["src", "credentials", "control-plane.ts"],
+    ["src", "credentials", "login-control-plane.ts"],
+    ["src", "pi", "file-credential-store.ts"],
+  ];
+  for (const parts of deletedPaths) {
+    assert.equal(
+      await exists(path.join(repositoryRoot, ...parts)),
+      false,
+      `${parts.join("/")} must remain deleted`,
+    );
+  }
+
+  for (const target of [
+    path.join(repositoryRoot, "src"),
+    path.join(repositoryRoot, "packages", "application-control-plane", "src"),
+    path.join(repositoryRoot, "packages", "desktop-shell", "src"),
+  ]) {
+    for (const file of await sourceFiles(target)) {
+      const source = await readFile(file, "utf8");
+      for (const forbidden of [
+        "createLiveCredentialAuthority",
+        "createAuthLoginControlPlaneHandler",
+        "executeCredentialCommand",
+        "executeAuthCommand",
+      ]) {
+        assert.ok(
+          !new RegExp(`\\b${forbidden}\\b`, "u").test(source),
+          `${display(file)} must not reference deleted ${forbidden}`,
+        );
+      }
+    }
+  }
+
+  const runtime = await readFile(
+    path.join(repositoryRoot, "src", "providers", "runtime.ts"),
+    "utf8",
+  );
+  assert.ok(
+    !/["']auth\.json["']/u.test(runtime),
+    "Provider Runtime must not read legacy Pi auth.json",
+  );
+  assert.match(
+    runtime,
+    /createFileProviderCredentialRecordStore/u,
+    "Provider Runtime must compose the per-Provider record store",
+  );
+  const recordStore = await readFile(
+    path.join(repositoryRoot, "src", "credentials", "profile-record-store.ts"),
+    "utf8",
+  );
+  assert.match(
+    recordStore,
+    /credential-profiles/u,
+    "Profile store must persist independent per-Provider records",
   );
 });
 

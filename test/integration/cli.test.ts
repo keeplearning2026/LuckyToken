@@ -134,7 +134,7 @@ describe("LuckyToken CLI", () => {
     );
   });
 
-  it("documents serve, login, logout, and the single config authority", async () => {
+  it("documents serve, Profile management, and the single config authority", async () => {
     const child = startCli(["--help"]);
     children.push(child);
     const result = await captureChild(child).result;
@@ -142,8 +142,9 @@ describe("LuckyToken CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("LuckyToken");
     expect(result.stdout).toContain("--config <path>");
-    expect(result.stdout).toContain("login");
-    expect(result.stdout).toContain("logout");
+    expect(result.stdout).toContain("control profiles");
+    expect(result.stdout).toContain("add|reconnect");
+    expect(result.stdout).not.toContain("control credentials");
     expect(result.stdout).not.toContain("client-token");
     expect(result.stdout).toContain("control history");
     expect(result.stdout).toContain("Control-command discovery descriptor");

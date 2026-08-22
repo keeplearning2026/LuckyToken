@@ -1,4 +1,9 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
+import {
+  isManagedProviderAuthBindingCapture,
+  MAX_PROFILE_ATTEMPTS_PER_REQUEST,
+  type ProviderAuthBindingAuthority,
+} from "../credentials/profile-contract.js";
 
 import { renderResponsesError } from "../protocols/openai-responses/response.js";
 import { createAzureResponsesSender } from "./azure.js";
@@ -25,6 +30,10 @@ export type {
 
 export interface CreateProviderNativeResponsesOptions {
   readonly models: Pick<Models, "getAuth">;
+  readonly bindings: Pick<
+    ProviderAuthBindingAuthority,
+    "capture" | "runBound" | "advanceAfterFinal429"
+  >;
   readonly fetch: FetchFunction;
   readonly configuration?: ProviderNativeResponsesConfiguration;
   readonly retryDependencies?: Partial<ProviderNativeResponsesRetryDependencies>;
@@ -173,10 +182,24 @@ function errorResponse(status: number, type: string, message: string): Response 
 
 type ProviderResponsesTransportKind = "openai" | "codex" | "azure";
 
+const CERTIFIED_OPENAI_RESPONSES_PROVIDERS = new Set([
+  "openai",
+  "xai",
+  "opencode",
+  "opencode-go",
+  "cloudflare-ai-gateway",
+  "github-copilot",
+]);
+
 function providerResponsesTransportKind(
   model: Model<string>,
 ): ProviderResponsesTransportKind | undefined {
-  if (model.api === "openai-responses") return "openai";
+  if (
+    model.api === "openai-responses" &&
+    CERTIFIED_OPENAI_RESPONSES_PROVIDERS.has(model.provider)
+  ) {
+    return "openai";
+  }
   if (
     model.provider === "openai-codex" &&
     model.api === "openai-codex-responses"
@@ -237,6 +260,21 @@ export function createProviderNativeResponses(
     async execute(
       input: Parameters<ProviderResponsesLane["execute"]>[0],
     ): Promise<Response> {
+      let capture = await options.bindings.capture(input.model.provider);
+      const attemptedCredentialIds: string[] = [];
+      let profileAttempt = 1;
+      let selectionReason: "active" | "http_429_switch" = "active";
+      if (capture.facts.kind === "managed") {
+        input.credentialActivity?.credentialCaptured({
+          ...capture.facts,
+          lane: "provider_native",
+          selectionReason,
+        });
+      }
+      for (;;) {
+      let response: Response;
+      try {
+      response = await options.bindings.runBound(capture, async () => {
       const auth = await options.models.getAuth(input.model);
       if (auth === undefined) {
         return errorResponse(502, "api_error", "Provider is not configured");
@@ -323,6 +361,49 @@ export function createProviderNativeResponses(
       } catch (error) {
         if (input.signal.aborted) throw error;
         return errorResponse(502, "api_error", "Upstream provider request failed");
+      }
+      });
+      } catch (error) {
+        if (capture.facts.kind === "managed") {
+          input.credentialActivity?.credentialAttempt({
+            ...capture.facts,
+            lane: "provider_native",
+            selectionReason,
+            attempt: profileAttempt,
+            outcome: input.signal.aborted ? "aborted" : "failed",
+          });
+        }
+        throw error;
+      }
+      if (capture.facts.kind === "managed") {
+        input.credentialActivity?.credentialAttempt({
+          ...capture.facts,
+          lane: "provider_native",
+          selectionReason,
+          attempt: profileAttempt,
+          outcome: response.status === 429
+            ? "http_429"
+            : response.ok
+              ? "success"
+              : "failed",
+        });
+      }
+      if (response.status !== 429) return response;
+      if (!isManagedProviderAuthBindingCapture(capture)) return response;
+      attemptedCredentialIds.push(capture.facts.credentialId);
+      if (profileAttempt >= MAX_PROFILE_ATTEMPTS_PER_REQUEST) return response;
+      const requestedDelay = retryAfterMs(response, retryDependencies.now);
+      const transition = await options.bindings.advanceAfterFinal429({
+        capture,
+        attemptedCredentialIds,
+        signal: input.signal,
+        ...(requestedDelay === undefined ? {} : { retryAfterMs: requestedDelay }),
+      });
+      if (transition.outcome !== "switched") return response;
+      await releaseRetryResponse(response);
+      capture = transition.capture;
+      profileAttempt += 1;
+      selectionReason = "http_429_switch";
       }
     },
   });

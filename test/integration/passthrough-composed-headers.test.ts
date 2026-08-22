@@ -81,7 +81,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
       fetch,
-      credentials: new InMemoryCredentialStore(),
+      credentialSeedStore: new InMemoryCredentialStore(),
       configValueAdapters: {
         envSource: (name) => options.env?.[name],
         commandRunner: () => undefined,
@@ -171,7 +171,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     // Configured provider headers and authHeader Authorization reach the wire.
     expect(headers.get("x-operator")).toBe("op");
     expect(headers.get("authorization")).toBe("Bearer copilot-key");
-    expect(headers.get("x-api-key")).toBe("copilot-key");
+    expect(headers.get("x-api-key")).toBeNull();
   });
 
   it("forwards header-only built-in auth (no apiKey) on the anthropic passthrough wire", async () => {
@@ -506,7 +506,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     expect(headers.get("authorization")).not.toBe("Bearer client-token");
   });
 
-  it("keeps a resolved apiKey authoritative over a conflicting composed x-api-key", async () => {
+  it("keeps explicit Provider configuration while using Copilot bearer auth", async () => {
     const upstreamRequests: Request[] = [];
     const { clientToken, runtime } = await serve(
       {
@@ -537,10 +537,11 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     expect(response.status).toBe(200);
     expect(upstreamRequests).toHaveLength(1);
     const headers = upstreamRequests[0]!.headers;
-    // The transport-generated credential from the resolved apiKey wins;
-    // the conflicting composed x-api-key never overwrites it and no
-    // duplicate credential headers are emitted.
-    expect(headers.get("x-api-key")).toBe("resolved-key");
+    // Pi's GitHub Copilot branch owns bearer authentication. A separately
+    // configured Provider header remains Provider-owned input rather than a
+    // client passthrough value.
+    expect(headers.get("authorization")).toBe("Bearer resolved-key");
+    expect(headers.get("x-api-key")).toBe("conflicting-composed-key");
   });
 
   it("resolves Cloudflare env per request without caching and never mutates the catalog model", async () => {

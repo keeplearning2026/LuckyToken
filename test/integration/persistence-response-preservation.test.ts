@@ -151,7 +151,7 @@ async function serveFixture(options: {
   }));
   const composition = await createConfiguredLuckyTokenDataPlane({
     config,
-    credentials,
+    credentialSeedStore: credentials,
     createMessageId: () => "msg_fixture",
     fetch: (async () =>
       commandCodeText("serve-preserved answer")) as FetchFunction,
@@ -337,7 +337,7 @@ describe("Persistence failure never changes an otherwise valid model response (T
     }));
     const composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialSeedStore: credentials,
       createMessageId: () => "msg_fixture",
       fetch: (async () =>
         commandCodeText("recovery answer")) as FetchFunction,

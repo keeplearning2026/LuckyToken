@@ -1,8 +1,4 @@
-import {
-  InMemoryCredentialStore,
-  type FetchFunction,
-  type Models,
-} from "@earendil-works/pi-ai";
+import { type FetchFunction, type Models } from "@earendil-works/pi-ai";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,7 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createConfiguredLuckyTokenDataPlane as createProductionDataPlane } from "../../src/composition.js";
-import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
+import {
+  createConfiguredLuckyTokenDataPlane,
+  createSeededCredentialRecordStore,
+} from "../support/configured-data-plane.js";
 import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
 
 function commandCodeText(text: string): Response {
@@ -98,6 +97,7 @@ describe("configured serving composition", () => {
     const composition = await createProductionDataPlane({
       configuration: config,
       models,
+      providerAuthBindings: {} as never,
       publicModels,
       requestLedger: {} as never,
       deepCapture: {} as never,
@@ -129,15 +129,14 @@ describe("configured serving composition", () => {
       return commandCodeText("configured through Pi");
     };
     const { configPath, piDirectory } = await writeConfiguration();
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "commandcode-private",
+      credential: { type: "api_key", key: "provider-secret" },
+    }]);
     const config = await loadLuckyTokenCliConfig(configPath);
     const composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentials,
+      credentialRecordStore,
       fetch,
       importModule: commandCodeProviderImportModule(),
       createMessageId: () => "msg_configured",
@@ -150,10 +149,11 @@ describe("configured serving composition", () => {
       "catalog",
       "certification",
       "close",
-      "credentialAuthority",
+      "credentialManagement",
       "deepCapture",
       "deepCaptureStore",
       "diagnosticsStore",
+      "providerAuthBindings",
       "requestLedger",
       "runtime",
       "userConfiguredProviderIds",
@@ -211,14 +211,13 @@ describe("configured serving composition", () => {
     const fetch: FetchFunction = async () =>
       commandCodeText("served through Pi");
     const { configPath } = await writeConfiguration();
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "commandcode-private",
+      credential: { type: "api_key", key: "provider-secret" },
+    }]);
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
-      credentials,
+      credentialRecordStore,
       fetch,
       importModule: commandCodeProviderImportModule(),
       createMessageId: () => "msg_models",
@@ -250,15 +249,14 @@ describe("configured serving composition", () => {
 
   it("keeps configured CommandCode execution project-free", async () => {
     const { configPath } = await writeConfiguration();
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "commandcode-private",
+      credential: { type: "api_key", key: "provider-secret" },
+    }]);
     let upstream: Request | undefined;
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
-      credentials,
+      credentialRecordStore,
       fetch: async (input, init) => {
         upstream = new Request(input, init);
         return commandCodeText("project-free");
@@ -395,14 +393,13 @@ describe("configured serving composition", () => {
       }),
       "utf8",
     );
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("commandcode-private", async () => ({
-      type: "api_key",
-      key: "provider-secret",
-    }));
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "commandcode-private",
+      credential: { type: "api_key", key: "provider-secret" },
+    }]);
     const composition = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
-      credentials,
+      credentialRecordStore,
       fetch: async () => commandCodeText("responses served"),
       importModule: commandCodeProviderImportModule(),
       createMessageId: () => "msg_anthropic",
@@ -466,7 +463,7 @@ describe("configured serving composition", () => {
 
     const restarted = await createConfiguredLuckyTokenDataPlane({
       config: await loadLuckyTokenCliConfig(configPath),
-      credentials,
+      credentialRecordStore,
       fetch: async () => commandCodeText("continued after restart"),
       importModule: commandCodeProviderImportModule(),
       createSessionId: () => "00000000-0000-4000-8000-000000000252",

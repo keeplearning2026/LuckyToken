@@ -20,6 +20,7 @@ import {
 } from "../../src/protocols/openai-responses/handler.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { resolveRequestModel } from "../../src/providers/request-composition.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 /**
  * Ticket 10 Client Protocol isolation seam: handlers receive the request-local
@@ -124,6 +125,7 @@ describe("Client Protocol request-model seam", () => {
           : {
               providerNativeLane: createAnthropicProviderNativeLane({
                 models,
+                bindings: ambientProfileBindings,
                 resolveRequestModel: requestModelResolver,
                 fetch: passthroughFetch,
               }),
@@ -251,6 +253,7 @@ describe("Client Protocol request-model seam", () => {
       const capture = captureFetch();
       const providerNativeLane = createProviderNativeResponses({
         models,
+        bindings: ambientProfileBindings,
         fetch: capture.passthroughFetch,
       });
       const response = await handleHttpRequest(

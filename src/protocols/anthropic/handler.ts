@@ -10,6 +10,7 @@ import {
   type InvocationDiagnosticsFactory,
 } from "../../invocation-diagnostics/index.js";
 import {
+  bindCredentialActivityToExecutionFacts,
   createNoopRequestLedger,
   type RequestLedger,
   type RequestLedgerEntry,
@@ -369,7 +370,9 @@ async function handleAnthropicMessages(
         request,
         ...(projectAlias === undefined ? {} : { alias: projectAlias }),
         requestId: ledger.requestId,
+        sessionId: requestIdentity.effectiveSessionId,
         onExecutionStart: () => ledger.executing(),
+        credentialActivity: ledger,
       });
       if (native.outcome === "success") {
         ledger.terminal("success", {
@@ -427,26 +430,26 @@ async function handleAnthropicMessages(
     );
     freezePiInvocation(model, invocation.context, piOptions);
     ledger.executing();
+    const executionFacts = {
+      notice: (notice: Parameters<RequestLedgerEntry["notice"]>[0]) => {
+        diagnostics.notice(notice);
+        ledger.notice(notice);
+      },
+      attempt: (attempt: Parameters<RequestLedgerEntry["attempt"]>[0]) => {
+        diagnostics.attempt(attempt);
+        ledger.attempt(attempt);
+      },
+      terminalUsage: (snapshot: Parameters<RequestLedgerEntry["terminalUsage"]>[0]) => {
+        ledger.terminalUsage(snapshot);
+      },
+    };
+    bindCredentialActivityToExecutionFacts(executionFacts, ledger);
     const message = await dependencies.executeOperation(
       dependencies.models,
       model,
       invocation.context,
       piOptions,
-      {
-        notice: (notice) => {
-          diagnostics.notice(notice);
-          ledger.notice(notice);
-        },
-        attempt: (attempt) => {
-          diagnostics.attempt(attempt);
-          ledger.attempt(attempt);
-        },
-        // Ticket 20: the canonical terminal-usage snapshot is persisted in
-        // the Request Ledger independently of Client Wire usage conversion.
-        terminalUsage: (snapshot) => {
-          ledger.terminalUsage(snapshot);
-        },
-      },
+      executionFacts,
     );
     request.signal.throwIfAborted();
     ledger.terminal("success", { piStopReason: message.stopReason });

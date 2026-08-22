@@ -359,14 +359,14 @@ test(
       await anthropicCard.waitFor();
       assert.match(await anthropicCard.textContent(), /Built in/u);
 
-      // 2. Stop the Gateway: Provider discovery, Auth query, Catalog query
+      // 2. Stop the Gateway: Provider discovery, Profile query, Catalog query
       // and the visible Providers product surface remain usable.
       const stopped = await client.executeRuntimeCommand("stop");
       assert.equal(stopped.outcome, "completed");
       assert.equal(stopped.snapshot.modelDataPlane, "stopped");
       await commandCodeCard.waitFor();
       await anthropicCard.waitFor();
-      const authWhileStopped = await client.executeAuthCommand({ command: "query" });
+      const authWhileStopped = await client.executeCredentialProfilesCommand({ command: "query" });
       assert.equal(authWhileStopped.outcome, "ok");
       const catalogWhileStopped = await client.executeCatalogCommand({ command: "query" });
       assert.equal(catalogWhileStopped.outcome, "ok");
@@ -377,6 +377,9 @@ test(
       const commandCodeLogin = page.getByRole("dialog", {
         name: "CommandCode Private sign in",
       });
+      await commandCodeLogin.getByLabel("Profile name").fill("Packaged primary");
+      await commandCodeLogin.getByLabel("Use this Profile for new requests").check();
+      await commandCodeLogin.getByRole("button", { name: "Continue" }).click();
       const secretInput = commandCodeLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill("sk-activation-commandcode-key");
@@ -384,12 +387,15 @@ test(
       await commandCodeLogin.getByText("Connected", { exact: true }).waitFor();
       await commandCodeLogin.getByRole("button", { name: "Close", exact: true }).click();
       await assert.doesNotReject(async () => {
-        const auth = await client.executeAuthCommand({ command: "query" });
+        const auth = await client.executeCredentialProfilesCommand({
+          command: "query",
+          providerIds: ["commandcode-private"],
+        });
         const status = auth.state.providers.find(
           (provider) => provider.providerId === "commandcode-private",
         );
-        assert.equal(status?.stored, true);
-        assert.equal(status?.unavailable, false);
+        assert.equal(status?.profiles.length, 1);
+        assert.equal(status?.activeCredentialId, status?.profiles[0]?.credentialId);
       });
       assert.equal((await client.getStatus()).modelDataPlane, "stopped");
 

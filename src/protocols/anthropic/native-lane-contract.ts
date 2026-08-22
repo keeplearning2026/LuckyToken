@@ -1,4 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
+import type { CredentialActivitySink } from "../../request-ledger/handler-seam.js";
 
 export interface AnthropicNativeDiagnostic {
   readonly upstreamStatus?: number;
@@ -27,7 +28,9 @@ export interface AnthropicProviderNativeLane {
     readonly request: Request;
     readonly alias?: string;
     readonly requestId: string;
+    /** Validated request-edge session identity; never read from generic headers. */
+    readonly sessionId?: string;
     readonly onExecutionStart: () => void;
+    readonly credentialActivity?: CredentialActivitySink;
   }): Promise<AnthropicNativeExecutionResult>;
 }
-

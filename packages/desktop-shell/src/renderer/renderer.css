@@ -199,7 +199,13 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .auth-interaction { display: grid; gap: 12px; }
 .auth-interaction code { display: block; overflow-wrap: anywhere; padding: 9px; border-radius: 8px; background: var(--surface-muted); }
 .auth-interaction form, .auth-interaction label { display: grid; gap: 8px; }
-.auth-interaction input, .auth-interaction select { max-width: 520px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--text); padding: 9px 10px; }
+.auth-interaction input, .auth-interaction select, .auth-interaction textarea { max-width: 520px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--text); padding: 9px 10px; }
+.credential-profile-list { display: grid; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; }
+.credential-profile-row { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface-muted); }
+.credential-profile-row form, .credential-profile-row label { display: grid; gap: 6px; }
+.credential-profile-row input, .credential-profile-row textarea { border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 9px; }
+.credential-switch-settings { display: grid; gap: 8px; margin-top: 14px; border: 1px solid var(--hairline); border-radius: 10px; }
+.credential-switch-settings label { display: flex; gap: 8px; align-items: flex-start; }
 .auth-browser-status, .auth-outcome { display: grid; gap: 10px; }
 .auth-browser-status p, .auth-outcome p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
 .auth-outcome.success strong { color: #276b43; }
@@ -245,3 +251,11 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 :root[data-theme="dark"] .badge.warning { background: #3c301e; color: #e6bd78; }
 :root[data-theme="dark"] .error-text { color: #e68d85 !important; }
 :root[data-theme="dark"] .agent-notice, :root[data-theme="dark"] .agent-warnings { background: #3c301e; color: #e6bd78; }
+.credential-activity-trail {
+  margin: 0.45rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.credential-activity-trail li {
+  margin-top: 0.2rem;
+}

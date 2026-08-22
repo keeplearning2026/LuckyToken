@@ -14,7 +14,10 @@ import {
 } from "../../execution.js";
 import type { InvocationDiagnostics } from "../../invocation-diagnostics/index.js";
 import type { RequestIdentity } from "../../request-identity.js";
-import type { RequestLedgerEntry } from "../../request-ledger/handler-seam.js";
+import {
+  bindCredentialActivityToExecutionFacts,
+  type RequestLedgerEntry,
+} from "../../request-ledger/handler-seam.js";
 import {
   composeOptions,
   type RouterOptionDefaults,
@@ -244,24 +247,26 @@ export async function executeSemanticResponses(
     });
     freezePiInvocation(options.model, invocation.context, piOptions);
     options.ledger.executing();
+    const executionFacts = {
+      notice: (notice: Parameters<RequestLedgerEntry["notice"]>[0]) => {
+        options.diagnostics.notice(notice);
+        options.ledger.notice(notice);
+      },
+      attempt: (attempt: Parameters<RequestLedgerEntry["attempt"]>[0]) => {
+        options.diagnostics.attempt(attempt);
+        options.ledger.attempt(attempt);
+      },
+      terminalUsage: (snapshot: Parameters<RequestLedgerEntry["terminalUsage"]>[0]) => {
+        options.ledger.terminalUsage(snapshot);
+      },
+    };
+    bindCredentialActivityToExecutionFacts(executionFacts, options.ledger);
     const message = await executeOperation(
       options.models,
       options.model,
       invocation.context,
       piOptions,
-      {
-        notice: (notice) => {
-          options.diagnostics.notice(notice);
-          options.ledger.notice(notice);
-        },
-        attempt: (attempt) => {
-          options.diagnostics.attempt(attempt);
-          options.ledger.attempt(attempt);
-        },
-        terminalUsage: (snapshot) => {
-          options.ledger.terminalUsage(snapshot);
-        },
-      },
+      executionFacts,
     );
     options.request.signal.throwIfAborted();
     options.ledger.terminal("success", { piStopReason: message.stopReason });

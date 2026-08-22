@@ -97,6 +97,26 @@ export interface LedgerAttempt {
   readonly safeIds?: Readonly<Record<string, string>>;
 }
 
+export interface LedgerCredentialCapture {
+  readonly credentialId: string;
+  readonly displayName: string;
+  readonly authType: "api_key" | "oauth";
+  readonly authMethodLabel: string;
+  readonly lane: "provider_native" | "semantic_conversion";
+  readonly selectionReason: "active" | "http_429_switch";
+}
+
+export interface LedgerCredentialAttempt extends LedgerCredentialCapture {
+  readonly attempt: number;
+  readonly outcome: "success" | "http_429" | "failed" | "aborted";
+}
+
+export interface LedgerCredentialUsage {
+  readonly credentialId: string;
+  readonly lastUsedAt: number;
+  readonly lastSucceededAt?: number;
+}
+
 /** Safe failure summary: bounded classification/stage plus a hash of the
  *  error message. Raw error text never enters the ledger or the wire. */
 export interface LedgerFailureSummary {
@@ -113,6 +133,8 @@ export interface LedgerFacts {
   readonly failure?: LedgerFailureSummary;
   readonly persistenceWarnings?: number;
   readonly piStopReason?: string;
+  readonly credentialCapture?: LedgerCredentialCapture;
+  readonly credentialAttempts?: readonly LedgerCredentialAttempt[];
 }
 
 /** One immutable committed ledger record. Timestamps are epoch-ms safe
@@ -242,6 +264,8 @@ export interface RequestLedgerEntry {
   terminalUsage(snapshot: NormalizedTerminalUsage): void;
   notice(notice: LedgerNotice): void;
   attempt(attempt: LedgerAttempt): void;
+  credentialCaptured(capture: LedgerCredentialCapture): void;
+  credentialAttempt(attempt: LedgerCredentialAttempt): void;
   fail(input: LedgerFailureInput): void;
   /** Terminal response preparation: phase terminal-preparation, completedAt,
    *  and the final client HTTP status. */
@@ -272,6 +296,9 @@ export interface RequestLedgerStore extends RequestLedger {
    *  Summary counts include every matching request; token/cache sums only
    *  Complete terminal usage. */
   analyze(query: AnalyticsQuery): AnalyticsQueryResult;
+  credentialUsage(
+    credentialIds: readonly string[],
+  ): readonly LedgerCredentialUsage[];
   close(): void;
   /** Ticket 23: deletes committed ledger rows whose `acceptedAt` falls in
    *  the half-open `[fromMs, toMs)` range (both endpoints optional = all) in

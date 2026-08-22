@@ -2,8 +2,6 @@ import type {
   AnalyticsOptionsResult,
   AnalyticsQuery,
   AnalyticsResult,
-  AuthCommand,
-  AuthCommandResult,
   AuthInteractionEvent,
   AuthInteractionResponse,
   BackupCreateCommand,
@@ -12,8 +10,8 @@ import type {
   CatalogCommandResult,
   AgentIntegrationsCommand,
   AgentIntegrationsCommandResult,
-  CredentialCommand,
-  CredentialCommandResult,
+  CredentialProfilesCommand,
+  CredentialProfilesCommandResult,
   HistoryAcknowledgeResult,
   HistoryDeleteCommand,
   HistoryDeleteResult,
@@ -25,6 +23,8 @@ import type {
   ModelsCommandResult,
   PublicModelsCommand,
   PublicModelsCommandResult,
+  ProviderProfileAuthCommand,
+  ProviderProfileAuthCommandResult,
   RequestLedgerEvent,
   RequestLedgerQuery,
   RequestLedgerQueryResult,
@@ -75,11 +75,13 @@ export interface DesktopControlPlaneApi {
 
   executeRuntime(command: RuntimeCommand): Promise<RuntimeCommandResult>;
   executeSettings(command: SettingsCommand): Promise<SettingsCommandResult>;
-  executeCredential(command: CredentialCommand): Promise<CredentialCommandResult>;
-  executeAuth(
-    command: AuthCommand,
+  executeCredentialProfiles(
+    command: CredentialProfilesCommand,
+  ): Promise<CredentialProfilesCommandResult>;
+  executeProviderProfileAuth(
+    command: ProviderProfileAuthCommand,
     listener?: (event: AuthInteractionEvent) => void,
-  ): Promise<AuthCommandResult>;
+  ): Promise<ProviderProfileAuthCommandResult>;
   respondAuth(response: AuthInteractionResponse): Promise<void>;
 
   executeModels(command: ModelsCommand): Promise<ModelsCommandResult>;

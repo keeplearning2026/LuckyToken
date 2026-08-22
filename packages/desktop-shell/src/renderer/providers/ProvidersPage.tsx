@@ -3,9 +3,18 @@ import { Star } from "lucide-react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 
-type AuthResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeAuth"]>>;
-type ProviderOption = NonNullable<AuthResult["options"]>["providers"][number];
-type AuthListener = NonNullable<Parameters<LuckyTokenDesktopApi["control"]["executeAuth"]>[1]>;
+type ProfilesResult = Awaited<
+  ReturnType<LuckyTokenDesktopApi["control"]["executeCredentialProfiles"]>
+>;
+type ProviderOption = NonNullable<ProfilesResult["options"]>["providers"][number];
+type ProviderProfiles = ProfilesResult["state"]["providers"][number];
+type CredentialProfile = ProviderProfiles["profiles"][number];
+type ProfileAuthResult = Awaited<
+  ReturnType<LuckyTokenDesktopApi["control"]["executeProviderProfileAuth"]>
+>;
+type AuthListener = NonNullable<
+  Parameters<LuckyTokenDesktopApi["control"]["executeProviderProfileAuth"]>[1]
+>;
 type AuthEvent = Parameters<AuthListener>[0];
 type ExternalAuthEvent = Extract<
   AuthEvent,
@@ -34,6 +43,8 @@ export interface ProviderModelRow {
 interface AuthModalState {
   readonly providerId: string;
   readonly authType: AuthType;
+  readonly mode: "add" | "reconnect";
+  readonly credentialId?: string;
 }
 
 interface AuthOutcome {
@@ -54,6 +65,9 @@ function modelNameFromInternalAlias(
 
 export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [providers, setProviders] = useState<readonly ProviderOption[]>([]);
+  const [profileState, setProfileState] = useState<ProfilesResult["state"]>({
+    providers: [],
+  });
   const [catalog, setCatalog] = useState<CatalogResult>();
   const [publicModels, setPublicModels] = useState<Awaited<
     ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
@@ -68,6 +82,13 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [externalInteraction, setExternalInteraction] = useState<ExternalAuthEvent>();
   const [interaction, setInteraction] = useState<InlineAuthEvent>();
   const [promptValue, setPromptValue] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [profileNote, setProfileNote] = useState("");
+  const [useNow, setUseNow] = useState(true);
+  const [authStarted, setAuthStarted] = useState(false);
+  const [editingProfileId, setEditingProfileId] = useState<string>();
+  const [editingProfileName, setEditingProfileName] = useState("");
+  const [editingProfileNote, setEditingProfileNote] = useState("");
   const [notice, setNotice] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
   const [modelsProviderId, setModelsProviderId] = useState<string>();
@@ -82,10 +103,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setAuthError(false);
     setCatalogError(false);
     void api.control
-      .executeAuth({ command: "query" })
-      .then((auth) => {
-        setProviders(auth.options?.providers ?? []);
-        setAuthError(auth.outcome !== "ok");
+      .executeCredentialProfiles({ command: "query" })
+      .then((profiles) => {
+        setProviders(profiles.options?.providers ?? []);
+        setProfileState(profiles.state);
+        setAuthError(profiles.outcome !== "ok");
       })
       .catch(() => setAuthError(true));
     void api.control
@@ -106,11 +128,12 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   useEffect(() => {
     let active = true;
     void api.control
-      .executeAuth({ command: "query" })
-      .then((auth) => {
+      .executeCredentialProfiles({ command: "query" })
+      .then((profiles) => {
         if (!active) return;
-        setProviders(auth.options?.providers ?? []);
-        setAuthError(auth.outcome !== "ok");
+        setProviders(profiles.options?.providers ?? []);
+        setProfileState(profiles.state);
+        setAuthError(profiles.outcome !== "ok");
       })
       .catch(() => {
         if (active) setAuthError(true);
@@ -145,6 +168,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     const stop = api.control.onBackendState((state) => {
       if (state.kind !== "ready") return;
       const status = state.status;
+      if (status.credentialProfiles !== undefined) {
+        setProfileState(status.credentialProfiles);
+      }
       const publishedVersion = status.catalog?.version;
       if (
         publishedVersion === undefined ||
@@ -221,16 +247,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     return rows;
   }, [catalogByProvider, publicModels]);
 
-  const applyAuthState = (result: AuthResult): void => {
-    const statuses = new Map(
-      result.state.providers.map((status) => [status.providerId, status]),
-    );
-    setProviders((current) =>
-      current.map((provider) => {
-        const status = statuses.get(provider.providerId);
-        return status === undefined ? provider : { ...provider, status };
-      }),
-    );
+  const applyProfileState = (
+    result: ProfilesResult | ProfileAuthResult,
+  ): void => {
+    setProfileState(result.state);
+    if (result.options !== undefined) setProviders(result.options.providers);
   };
 
   const clearAuthInteraction = (): void => {
@@ -239,18 +260,89 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setPromptValue("");
   };
 
-  const login = async (
+  const openAdd = (
     provider: ProviderOption,
     authType: AuthType,
-  ): Promise<void> => {
+  ): void => {
+    const profiles = profileState.providers.find(
+      (candidate) => candidate.providerId === provider.providerId,
+    )?.profiles ?? [];
+    const usedNames = new Set(
+      profiles.map((profile) => profile.displayName.trim().toLowerCase()),
+    );
+    let ordinal = 1;
+    while (usedNames.has(`profile ${ordinal}`)) ordinal += 1;
+    setProfileName(`Profile ${ordinal}`);
+    setProfileNote("");
+    setUseNow(profiles.length === 0);
+    setAuthStarted(false);
+    setAuthModal({ providerId: provider.providerId, authType, mode: "add" });
+    setAuthOutcome(undefined);
+    clearAuthInteraction();
+  };
+
+  const openReconnect = (
+    provider: ProviderOption,
+    profile: CredentialProfile,
+  ): void => {
+    setProfileName(profile.displayName);
+    setProfileNote(profile.note ?? "");
+    setUseNow(true);
+    setAuthStarted(false);
+    setAuthModal({
+      providerId: provider.providerId,
+      authType: profile.authType,
+      mode: "reconnect",
+      credentialId: profile.credentialId,
+    });
+    setAuthOutcome(undefined);
+    clearAuthInteraction();
+  };
+
+  const startAuth = async (): Promise<void> => {
+    const modal = authModal;
+    if (modal === undefined) return;
+    const provider = providers.find(
+      (candidate) => candidate.providerId === modal.providerId,
+    );
+    const providerState = profileState.providers.find(
+      (candidate) => candidate.providerId === modal.providerId,
+    );
+    if (provider === undefined || providerState?.revision === undefined) {
+      setAuthOutcome({
+        kind: "failed",
+        message: "Provider Profile state is unavailable. Refresh and try again.",
+      });
+      return;
+    }
+    if (modal.mode === "add" && profileName.trim().length === 0) {
+      setAuthOutcome({ kind: "failed", message: "Enter a Profile name." });
+      return;
+    }
     setBusyProvider(provider.providerId);
-    setAuthModal({ providerId: provider.providerId, authType });
+    setAuthStarted(true);
     setAuthOutcome(undefined);
     clearAuthInteraction();
     setNotice(undefined);
     try {
-      const result = await api.control.executeAuth(
-        { command: "login", providerId: provider.providerId, authType },
+      const result = await api.control.executeProviderProfileAuth(
+        modal.mode === "add"
+          ? {
+              command: "login",
+              providerId: provider.providerId,
+              authType: modal.authType,
+              displayName: profileName.trim(),
+              ...(profileNote.length === 0 ? {} : { note: profileNote }),
+              useNow,
+              expectedRevision: providerState.revision,
+            }
+          : {
+              command: "reconnect",
+              providerId: provider.providerId,
+              credentialId: modal.credentialId!,
+              useNow,
+              expectedRevision: providerState.revision,
+            },
         (event) => {
           if (event.type === "auth_url") {
             setExternalInteraction(event);
@@ -266,11 +358,14 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           if (event.type === "prompt") setPromptValue("");
         },
       );
-      applyAuthState(result);
+      applyProfileState(result);
       if (result.outcome === "ok") {
         setAuthOutcome({
           kind: "success",
-          message: `${provider.name} connected.`,
+          message:
+            modal.mode === "add"
+              ? `${profileName.trim()} added to ${provider.name}.`
+              : `${profileName} reconnected.`,
         });
       } else if (result.outcome === "cancelled") {
         setAuthOutcome({ kind: "cancelled", message: "Sign-in cancelled." });
@@ -296,6 +391,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       void api.control.respondAuth({ type: "cancel" });
     }
     setAuthModal(undefined);
+    setAuthStarted(false);
     setAuthOutcome(undefined);
     clearAuthInteraction();
   };
@@ -335,6 +431,63 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       type: "prompt_response",
       promptId: interaction.promptId,
       value: promptValue,
+    });
+  };
+
+  const executeProfileCommand = async (
+    command: Parameters<
+      LuckyTokenDesktopApi["control"]["executeCredentialProfiles"]
+    >[0],
+  ): Promise<ProfilesResult> => {
+    const result = await api.control.executeCredentialProfiles(command);
+    applyProfileState(result);
+    setNotice(
+      result.outcome === "ok"
+        ? "Provider Profile updated."
+        : result.error ?? "Provider Profile could not be updated.",
+    );
+    return result;
+  };
+
+  const saveProfileMetadata = async (
+    provider: ProviderProfiles,
+    profile: CredentialProfile,
+  ): Promise<void> => {
+    if (provider.revision === undefined || editingProfileName.trim().length === 0) {
+      return;
+    }
+    const result = await executeProfileCommand({
+      command: "update_metadata",
+      providerId: provider.providerId,
+      credentialId: profile.credentialId,
+      expectedRevision: provider.revision,
+      displayName: editingProfileName.trim(),
+      ...(editingProfileNote.length === 0 ? {} : { note: editingProfileNote }),
+    });
+    if (result.outcome === "ok") setEditingProfileId(undefined);
+  };
+
+  const removeProfile = async (
+    provider: ProviderProfiles,
+    profile: CredentialProfile,
+  ): Promise<void> => {
+    if (provider.revision === undefined) return;
+    const action =
+      profile.authType === "oauth"
+        ? "Disconnect from LuckyToken"
+        : "Remove from LuckyToken";
+    if (
+      !window.confirm(
+        `${action}: ${profile.displayName} (${profile.authMethodLabel})? This removes only LuckyToken's local credential. The credential may remain valid at the Provider; revoke it in the Provider's account or security settings when needed. Historical Activity snapshots remain.`,
+      )
+    ) {
+      return;
+    }
+    await executeProfileCommand({
+      command: "remove",
+      providerId: provider.providerId,
+      credentialId: profile.credentialId,
+      expectedRevision: provider.revision,
     });
   };
 
@@ -492,26 +645,62 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   }
 
   const normalizedSearch = search.trim().toLowerCase();
-  const visible = providers.filter(
-    (provider) =>
-      normalizedSearch.length === 0 ||
-      provider.name.toLowerCase().includes(normalizedSearch) ||
-      provider.providerId.toLowerCase().includes(normalizedSearch),
+  const profileByProvider = new Map(
+    profileState.providers.map((provider) => [provider.providerId, provider]),
   );
+  const optionByProvider = new Map(
+    providers.map((provider) => [provider.providerId, provider]),
+  );
+  const providerIds = new Set([
+    ...providers.map((provider) => provider.providerId),
+    ...profileState.providers.map((provider) => provider.providerId),
+  ]);
+  const allProviders: readonly ProviderOption[] = [...providerIds]
+    .sort()
+    .map(
+      (providerId) =>
+        optionByProvider.get(providerId) ?? {
+          providerId,
+          name: providerId,
+          source: "user" as const,
+          authMethods: [],
+        },
+    );
+  const visible = allProviders.filter((provider) => {
+    if (normalizedSearch.length === 0) return true;
+    const managed = profileByProvider.get(provider.providerId);
+    return (
+      provider.name.toLowerCase().includes(normalizedSearch) ||
+      provider.providerId.toLowerCase().includes(normalizedSearch) ||
+      managed?.profiles.some(
+        (profile) =>
+          profile.displayName.toLowerCase().includes(normalizedSearch) ||
+          profile.authMethodLabel.toLowerCase().includes(normalizedSearch) ||
+          profile.identityHint?.toLowerCase().includes(normalizedSearch) === true ||
+          profile.note?.toLowerCase().includes(normalizedSearch) === true,
+      ) === true
+    );
+  });
   const favoriteFirst = (left: ProviderOption, right: ProviderOption): number =>
     Number(publicProviderById.get(right.providerId)?.favorite ?? false) -
     Number(publicProviderById.get(left.providerId)?.favorite ?? false);
   const connected = visible
-    .filter((provider) => !provider.status.unavailable && !provider.status.expired)
+    .filter(
+      (provider) =>
+        (profileByProvider.get(provider.providerId)?.profiles.length ?? 0) > 0,
+    )
     .sort(favoriteFirst);
   const available = visible
-    .filter((provider) => provider.status.unavailable || provider.status.expired)
+    .filter(
+      (provider) =>
+        (profileByProvider.get(provider.providerId)?.profiles.length ?? 0) === 0,
+    )
     .sort(favoriteFirst);
 
   const selectedModelsProvider =
     modelsProviderId === undefined
       ? undefined
-      : providers.find((provider) => provider.providerId === modelsProviderId);
+      : allProviders.find((provider) => provider.providerId === modelsProviderId);
   const selectedModelRows =
     modelsProviderId === undefined
       ? []
@@ -519,9 +708,13 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const authProvider =
     authModal === undefined
       ? undefined
-      : providers.find((provider) => provider.providerId === authModal.providerId);
+      : allProviders.find((provider) => provider.providerId === authModal.providerId);
+  const authMethod = authProvider?.authMethods.find(
+    (method) => method.authType === authModal?.authType,
+  );
 
   const renderProviderCard = (provider: ProviderOption): React.ReactElement => {
+    const managed = profileByProvider.get(provider.providerId);
     const availability = catalogByProvider.get(provider.providerId);
     const publicProvider = publicProviderById.get(provider.providerId);
     const availableModels =
@@ -530,7 +723,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       ).length ?? 0;
     const knownModels = publicProvider?.models.length ?? 0;
     const publishedModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
-    const isConnected = !provider.status.unavailable && !provider.status.expired;
+    const active = managed?.profiles.find(
+      (profile) => profile.credentialId === managed.activeCredentialId,
+    );
+    const isConnected =
+      active !== undefined && active.health !== "reconnect_required";
     const providerOn = publicProvider?.on ?? false;
     const providerFavorite = publicProvider?.favorite ?? false;
     const catalogFailed = availability?.state === "failed";
@@ -559,11 +756,19 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
               />
             </button>
             <span className={`badge ${isConnected ? "good" : "warning"}`}>
-              {provider.status.expired
-                ? "Reconnect required"
-                : isConnected
-                  ? "Connected"
-                  : "Not connected"}
+              {managed?.recordError !== undefined
+                ? "Stored record error"
+                : managed?.implementationAvailable === false
+                  ? "Provider unavailable"
+                  : active?.health === "reconnect_required"
+                    ? "Reconnect required"
+                    : active !== undefined
+                      ? `Active: ${active.displayName}`
+                      : (managed?.profiles.length ?? 0) > 0
+                        ? "Select a Profile"
+                        : managed?.ambient !== undefined
+                          ? "External auth available"
+                          : "Not connected"}
             </span>
             <button
               type="button"
@@ -588,26 +793,238 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             {availability?.error ?? "Provider refresh failed"}
           </p>
         ) : null}
+        {managed?.recordError === undefined ? null : (
+          <p className="error-text" role="alert">{managed.recordError.message}</p>
+        )}
+        {(managed?.profiles.length ?? 0) === 0 ? (
+          <p>
+            {managed?.ambient?.message ??
+              "Add a named Provider credential Profile to manage it in LuckyToken."}
+          </p>
+        ) : (
+          <ul className="credential-profile-list">
+            {managed!.profiles.map((profile) => {
+              const editing = editingProfileId === profile.credentialId;
+              const method = provider.authMethods.find(
+                (candidate) => candidate.authType === profile.authType,
+              );
+              return (
+                <li className="credential-profile-row" key={profile.credentialId}>
+                  {editing ? (
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveProfileMetadata(managed!, profile);
+                      }}
+                    >
+                      <label>
+                        <span>Profile name</span>
+                        <input
+                          value={editingProfileName}
+                          maxLength={64}
+                          onChange={(event) =>
+                            setEditingProfileName(event.currentTarget.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>Note</span>
+                        <textarea
+                          value={editingProfileNote}
+                          maxLength={200}
+                          onChange={(event) =>
+                            setEditingProfileNote(event.currentTarget.value)}
+                        />
+                      </label>
+                      <div className="button-row compact">
+                        <button type="submit">Save</button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setEditingProfileId(undefined)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div>
+                        <strong>{profile.displayName}</strong>
+                        <span className="provider-source">
+                          {profile.authMethodLabel}
+                          {profile.identityHint === undefined
+                            ? ""
+                            : ` · ${profile.identityHint}`}
+                          {profile.credentialId === managed!.activeCredentialId
+                            ? " · Active"
+                            : ""}
+                          {` · ${profile.health.replaceAll("_", " ")}`}
+                        </span>
+                        {profile.note === undefined ? null : <p>{profile.note}</p>}
+                        {profile.lastUsedAt === undefined ? null : (
+                          <span className="provider-source">
+                            Last used {new Date(profile.lastUsedAt).toLocaleString()}
+                            {profile.lastSucceededAt === undefined
+                              ? ""
+                              : ` · Last success ${new Date(profile.lastSucceededAt).toLocaleString()}`}
+                          </span>
+                        )}
+                      </div>
+                      <div className="button-row compact">
+                        {profile.credentialId === managed!.activeCredentialId ||
+                        !profile.enabled ? null : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void executeProfileCommand({
+                                command: "activate",
+                                providerId: provider.providerId,
+                                credentialId: profile.credentialId,
+                                expectedRevision: managed!.revision!,
+                              })}
+                          >
+                            Use now
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() =>
+                            void executeProfileCommand({
+                              command: "set_enabled",
+                              providerId: provider.providerId,
+                              credentialId: profile.credentialId,
+                              expectedRevision: managed!.revision!,
+                              enabled: !profile.enabled,
+                            })}
+                        >
+                          {profile.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            setEditingProfileId(profile.credentialId);
+                            setEditingProfileName(profile.displayName);
+                            setEditingProfileNote(profile.note ?? "");
+                          }}
+                        >
+                          Rename / note
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          aria-label={`Move ${profile.displayName} earlier`}
+                          onClick={() =>
+                            void executeProfileCommand({
+                              command: "set_priority",
+                              providerId: provider.providerId,
+                              credentialId: profile.credentialId,
+                              expectedRevision: managed!.revision!,
+                              priority: profile.priority - 1,
+                            })}
+                        >
+                          Earlier
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          aria-label={`Move ${profile.displayName} later`}
+                          onClick={() =>
+                            void executeProfileCommand({
+                              command: "set_priority",
+                              providerId: provider.providerId,
+                              credentialId: profile.credentialId,
+                              expectedRevision: managed!.revision!,
+                              priority: profile.priority + 1,
+                            })}
+                        >
+                          Later
+                        </button>
+                        {method?.interactive === true ? (
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => openReconnect(provider, profile)}
+                          >
+                            Reconnect
+                          </button>
+                        ) : null}
+                        {profile.credentialId === managed!.activeCredentialId ? (
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() =>
+                              void executeProfileCommand({
+                                command: "recheck",
+                                providerId: provider.providerId,
+                                credentialId: profile.credentialId,
+                                expectedRevision: managed!.revision!,
+                              })}
+                          >
+                            Recheck
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => void removeProfile(managed!, profile)}
+                        >
+                          {profile.authType === "oauth"
+                            ? "Disconnect from LuckyToken"
+                            : "Remove from LuckyToken"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {managed?.switchPolicy === undefined || managed.revision === undefined ? null : (
+          <fieldset className="credential-switch-settings">
+            <legend>HTTP 429 switching</legend>
+            {provider.authMethods.map((method) => (
+              <label key={method.authType}>
+                <input
+                  type="checkbox"
+                  checked={
+                    method.authType === "api_key"
+                      ? managed.switchPolicy!.apiKeyOn429
+                      : managed.switchPolicy!.oauthOn429
+                  }
+                  onChange={(event) =>
+                    void executeProfileCommand({
+                      command: "set_switch_policy",
+                      providerId: provider.providerId,
+                      expectedRevision: managed.revision!,
+                      apiKeyOn429:
+                        method.authType === "api_key"
+                          ? event.currentTarget.checked
+                          : managed.switchPolicy!.apiKeyOn429,
+                      oauthOn429:
+                        method.authType === "oauth"
+                          ? event.currentTarget.checked
+                          : managed.switchPolicy!.oauthOn429,
+                    })}
+                />
+                Try the next {method.authMethodLabel} after HTTP 429
+              </label>
+            ))}
+          </fieldset>
+        )}
         <div className="button-row">
-          {provider.apiKey ? (
+          {provider.authMethods.filter((method) => method.interactive).map((method) => (
             <button
+              key={method.authType}
               type="button"
               disabled={busyProvider !== undefined}
-              onClick={() => void login(provider, "api_key")}
+              onClick={() => openAdd(provider, method.authType)}
             >
-              API key
+              Add {method.authMethodLabel}
             </button>
-          ) : null}
-          {provider.account ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busyProvider !== undefined}
-              onClick={() => void login(provider, "oauth")}
-            >
-              Auth
-            </button>
-          ) : null}
+          ))}
           <button
             type="button"
             className="secondary"
@@ -708,7 +1125,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           >
             <div className="task-modal-header">
               <div>
-                <p className="eyebrow">{authModal.authType === "api_key" ? "API KEY" : "AUTH"}</p>
+                <p className="eyebrow">
+                  {authMethod?.authMethodLabel ?? "Provider credential"}
+                </p>
                 <h3>{authProvider.name}</h3>
               </div>
               <button
@@ -736,6 +1155,57 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 </button>
               </div>
             ) : (
+              !authStarted ? (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void startAuth();
+                  }}
+                >
+                  {authModal.mode === "add" ? (
+                    <>
+                      <label>
+                        <span>Profile name</span>
+                        <input
+                          value={profileName}
+                          maxLength={64}
+                          autoFocus
+                          onChange={(event) => setProfileName(event.currentTarget.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>Note (optional)</span>
+                        <textarea
+                          value={profileNote}
+                          maxLength={200}
+                          onChange={(event) => setProfileNote(event.currentTarget.value)}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <p>Reconnect {profileName} using {authMethod?.authMethodLabel}.</p>
+                  )}
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={useNow}
+                      onChange={(event) => setUseNow(event.currentTarget.checked)}
+                    />
+                    Use this Profile for new requests
+                  </label>
+                  <div className="button-row">
+                    <button
+                      type="submit"
+                      disabled={authModal.mode === "add" && profileName.trim().length === 0}
+                    >
+                      {authModal.mode === "add" ? "Continue" : "Reconnect"}
+                    </button>
+                    <button type="button" className="secondary" onClick={cancelAuth}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
               <>
                 {authModal.authType === "oauth" && externalInteraction === undefined && interaction === undefined ? (
                   <p>Opening your browser…</p>
@@ -812,6 +1282,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                   </button>
                 )}
               </>
+              )
             )}
           </section>
         </div>

@@ -1,6 +1,11 @@
 import type { FetchFunction, Model } from "@earendil-works/pi-ai";
 
 import {
+  AnthropicNativeBodyProjectionError,
+  projectAnthropicNativeBody,
+  type AnthropicNativeBodyProjectionMode,
+} from "./body-projection.js";
+import {
   parseSseFrames,
   renderSseFrame,
   sseFramePayload,
@@ -13,14 +18,15 @@ export interface PassthroughAnthropicRequestOptions {
   readonly apiKey: string | undefined;
   readonly signal: AbortSignal;
   readonly fetch: FetchFunction;
-  readonly upstreamHeaders?: Readonly<Record<string, string>>;
+  readonly bodyProjectionMode: AnthropicNativeBodyProjectionMode;
+  readonly authMode: "api_key" | "oauth" | "github_copilot" | "ambient";
+  readonly sessionId?: string;
   /**
    * Composed Provider-facing request facts (Ticket 10): the auth result's
    * merged headers (built-in static model headers, configured provider/
-   * model headers, authHeader Authorization). These are the operator's
-   * authoritative request headers; client-forwarded headers merge below
-   * them and the resolved apiKey always owns `x-api-key`. Null values
-   * (ProviderHeaders) are ignored.
+   * model headers, authHeader Authorization). These are Pi/Provider-owned
+   * request facts. No generic inbound request header enters this transport.
+   * Null values (ProviderHeaders) are ignored.
    */
   readonly composedHeaders?: Readonly<Record<string, string | null>>;
 }
@@ -34,22 +40,24 @@ export interface PassthroughAnthropicResult {
 /**
  * Declared wire compatibility for native Anthropic passthrough.
  *
- * Selection is based on the Pi model's declared API (`anthropic-messages`),
- * never on a concrete Provider name or provider-private fields. This is the
- * only place that knows the compatibility rule; the handler routes on the
- * result.
+ * Every claimed tuple has a reviewed Pi-wire fixture. A custom Provider that
+ * happens to reuse the API id remains Semantic Conversion unless its own
+ * Provider Native projection is explicitly certified here.
  */
+const CERTIFIED_ANTHROPIC_NATIVE_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "cloudflare-ai-gateway",
+]);
+
 export function isAnthropicNativePassthroughModel(
   model: Model<string>,
 ): boolean {
-  return model.api === "anthropic-messages";
+  return (
+    model.api === "anthropic-messages" &&
+    CERTIFIED_ANTHROPIC_NATIVE_PROVIDERS.has(model.provider)
+  );
 }
-
-const FORWARDED_REQUEST_HEADERS = new Set([
-  "anthropic-beta",
-  "anthropic-user-profile-id",
-  "x-stainless-*",
-]);
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -76,14 +84,6 @@ const FORBIDDEN_RESPONSE_HEADERS = new Set([
   "x-api-key",
 ]);
 
-function isSafeForwardedRequestHeader(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (HOP_BY_HOP.has(lower)) return false;
-  if (FORBIDDEN_RESPONSE_HEADERS.has(lower)) return false;
-  if (lower.startsWith("x-stainless-")) return true;
-  return FORWARDED_REQUEST_HEADERS.has(lower);
-}
-
 function isSafeResponseHeader(name: string): boolean {
   const lower = name.toLowerCase();
   if (HOP_BY_HOP.has(lower)) return false;
@@ -106,47 +106,190 @@ function filterHeaders(
   return Object.freeze(output);
 }
 
-/** Request fields the transport itself owns: neither composed Provider
- *  headers nor client headers may override them (mirrors the pinned SDK,
- *  which sets these after merging default headers). */
-const TRANSPORT_OWNED = new Set(["content-type", "anthropic-version"]);
+/** Request fields the transport itself owns. Composed Provider headers may
+ *  override Pi SDK defaults but never framing fields produced after that
+ *  merge, matching the pinned SDK request construction order. */
+const TRANSPORT_OWNED = new Set([
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "host",
+]);
+
+const ANTHROPIC_SDK_VERSION = "0.91.1";
+const CLAUDE_CODE_VERSION = "2.1.75";
+const FINE_GRAINED_TOOL_STREAMING_BETA =
+  "fine-grained-tool-streaming-2025-05-14";
+const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+
+function normalizedPlatform(): string {
+  switch (process.platform) {
+    case "darwin":
+      return "MacOS";
+    case "linux":
+      return "Linux";
+    case "win32":
+      return "Windows";
+    case "freebsd":
+      return "FreeBSD";
+    case "openbsd":
+      return "OpenBSD";
+    default:
+      return process.platform.length > 0
+        ? `Other:${process.platform}`
+        : "Unknown";
+  }
+}
+
+function normalizedArchitecture(): string {
+  switch (process.arch) {
+    case "ia32":
+      return "x32";
+    case "x64":
+      return "x64";
+    case "arm":
+      return "arm";
+    case "arm64":
+      return "arm64";
+    default:
+      return process.arch.length > 0 ? `other:${process.arch}` : "unknown";
+  }
+}
+
+function parsedBody(rawBody: string): Record<string, unknown> {
+  const parsed = JSON.parse(rawBody) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new AnthropicNativeBodyProjectionError(
+      "Anthropic Native body must be a JSON object",
+    );
+  }
+  return parsed as Record<string, unknown>;
+}
+
+interface AnthropicNativeCompatFacts {
+  readonly supportsEagerToolInputStreaming?: boolean;
+  readonly forceAdaptiveThinking?: boolean;
+  readonly sendSessionAffinityHeaders?: boolean;
+}
+
+function anthropicCompat(model: Model<string>): AnthropicNativeCompatFacts {
+  return (
+    model as unknown as { readonly compat?: AnthropicNativeCompatFacts }
+  ).compat ?? {};
+}
+
+function piBetaFeatures(model: Model<string>, rawBody: string): string[] {
+  const body = parsedBody(rawBody);
+  const features: string[] = [];
+  if (
+    Array.isArray(body.tools) &&
+    body.tools.length > 0 &&
+    anthropicCompat(model).supportsEagerToolInputStreaming !== true
+  ) {
+    features.push(FINE_GRAINED_TOOL_STREAMING_BETA);
+  }
+  if (anthropicCompat(model).forceAdaptiveThinking !== true) {
+    features.push(INTERLEAVED_THINKING_BETA);
+  }
+  return features;
+}
+
+function copilotDynamicHeaders(rawBody: string): Record<string, string> {
+  const body = parsedBody(rawBody);
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const last = messages.at(-1);
+  const lastRole =
+    typeof last === "object" && last !== null && !Array.isArray(last)
+      ? (last as Record<string, unknown>).role
+      : undefined;
+  const hasImage = messages.some((message) => {
+    if (typeof message !== "object" || message === null || Array.isArray(message)) {
+      return false;
+    }
+    const content = (message as Record<string, unknown>).content;
+    return (
+      Array.isArray(content) &&
+      content.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          !Array.isArray(block) &&
+          (block as Record<string, unknown>).type === "image",
+      )
+    );
+  });
+  return {
+    "x-initiator": lastRole !== undefined && lastRole !== "user" ? "agent" : "user",
+    "openai-intent": "conversation-edits",
+    ...(hasImage ? { "copilot-vision-request": "true" } : {}),
+  };
+}
 
 function buildUpstreamHeaders(
+  model: Model<string>,
+  rawBody: string,
   apiKey: string | undefined,
-  upstreamHeaders: Readonly<Record<string, string>> | undefined,
+  authMode: PassthroughAnthropicRequestOptions["authMode"],
+  sessionId: string | undefined,
   composedHeaders: Readonly<Record<string, string | null>> | undefined,
 ): Record<string, string> {
+  const betaFeatures = piBetaFeatures(model, rawBody);
   const headers: Record<string, string> = {
+    accept: "application/json",
+    "user-agent": `Anthropic/JS ${ANTHROPIC_SDK_VERSION}`,
+    "x-stainless-retry-count": "0",
+    "x-stainless-lang": "js",
+    "x-stainless-package-version": ANTHROPIC_SDK_VERSION,
+    "x-stainless-os": normalizedPlatform(),
+    "x-stainless-arch": normalizedArchitecture(),
+    "x-stainless-runtime": "node",
+    "x-stainless-runtime-version": process.version,
+    "anthropic-dangerous-direct-browser-access": "true",
     "content-type": "application/json",
     "anthropic-version": "2023-06-01",
   };
-  // Header-only auth (no resolved apiKey) must not fabricate an empty
-  // x-api-key field; a composed x-api-key then carries the credential.
   const ownsApiKey = apiKey !== undefined && apiKey.length > 0;
   if (ownsApiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  // Client-forwarded end-to-end headers (existing strict whitelist).
-  if (upstreamHeaders !== undefined) {
-    for (const [name, value] of Object.entries(upstreamHeaders)) {
-      const lower = name.toLowerCase();
-      if (HOP_BY_HOP.has(lower) || FORBIDDEN_RESPONSE_HEADERS.has(lower)) {
-        continue;
-      }
-      headers[lower] = value;
+    if (authMode === "oauth" || authMode === "github_copilot") {
+      headers.authorization = `Bearer ${apiKey}`;
+    } else {
+      headers["x-api-key"] = apiKey;
     }
   }
-  // Composed Provider-facing headers are the operator's authority: they
-  // merge above client headers and may carry their own Authorization or
-  // x-api-key (header-only auth). Hop-by-hop and transport-owned fields
-  // stay fixed; a composed x-api-key yields to the transport-generated
-  // credential whenever a resolved apiKey exists (lowercased names, so a
-  // mixed-case composed entry emits exactly one header).
+  if (authMode === "oauth") {
+    headers["anthropic-beta"] = [
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      ...betaFeatures,
+    ].join(",");
+    headers["user-agent"] = `claude-cli/${CLAUDE_CODE_VERSION}`;
+    headers["x-app"] = "cli";
+  } else if (betaFeatures.length > 0) {
+    headers["anthropic-beta"] = betaFeatures.join(",");
+  }
+  if (
+    authMode !== "oauth" &&
+    authMode !== "github_copilot" &&
+    sessionId !== undefined &&
+    anthropicCompat(model).sendSessionAffinityHeaders === true
+  ) {
+    headers["x-session-affinity"] = sessionId;
+  }
+  if (authMode === "github_copilot") {
+    Object.assign(headers, copilotDynamicHeaders(rawBody));
+  }
+
   if (composedHeaders !== undefined) {
     for (const [name, value] of Object.entries(composedHeaders)) {
       const lower = name.toLowerCase();
       if (HOP_BY_HOP.has(lower) || TRANSPORT_OWNED.has(lower)) continue;
-      if (ownsApiKey && lower === "x-api-key") continue;
+      if (
+        ownsApiKey &&
+        (authMode === "api_key" || authMode === "ambient") &&
+        lower === "x-api-key"
+      ) {
+        continue;
+      }
       if (value === undefined || value === null) continue;
       headers[lower] = value;
     }
@@ -166,34 +309,6 @@ function buildUpstreamHeaders(
 function joinEndpoint(baseUrl: string, path: string): string {
   const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   return `${base}${path}`;
-}
-
-/**
- * Replace the `model` field of a raw Anthropic request body with the
- * registered model id.
- *
- * The client selector is a LuckyToken `provider/model_id` string; the
- * upstream wire addresses models by their bare model id. Forwarding the
- * qualified selector would leak a Lucky selector to the upstream, which
- * cannot resolve it. When the selector already equals the model id the raw
- * body is returned byte-identical. When the body has no `model` field it is
- * passed through untouched (a legal Anthropic request must carry one, but
- * this module never fabricates fields).
- */
-function rewriteModelSelector(rawBody: string, modelId: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawBody);
-  } catch {
-    return rawBody;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return rawBody;
-  }
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.model !== "string") return rawBody;
-  if (record.model === modelId) return rawBody;
-  return JSON.stringify({ ...record, model: modelId });
 }
 
 /**
@@ -235,12 +350,23 @@ export async function passthroughAnthropicRequest(
     }
   }
   const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
-  const forwardedBody = rewriteModelSelector(rawBody, model.id);
+  const forwardedBody = projectAnthropicNativeBody({
+    rawBody,
+    modelId: model.id,
+    mode: options.bodyProjectionMode,
+  }).body;
   let upstream: Response;
   try {
     upstream = await fetchImpl(endpoint, {
       method: "POST",
-      headers: buildUpstreamHeaders(apiKey, options.upstreamHeaders, options.composedHeaders),
+      headers: buildUpstreamHeaders(
+        model,
+        rawBody,
+        apiKey,
+        options.authMode,
+        options.sessionId,
+        options.composedHeaders,
+      ),
       body: forwardedBody,
       signal,
     });
@@ -271,12 +397,6 @@ export async function passthroughAnthropicRequest(
     headers: filterHeaders(upstream.headers, isSafeResponseHeader),
     body,
   };
-}
-
-export function passthroughRequestHeaders(
-  request: Request,
-): Readonly<Record<string, string>> {
-  return filterHeaders(request.headers, isSafeForwardedRequestHeader);
 }
 
 /**

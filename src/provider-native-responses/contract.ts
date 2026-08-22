@@ -1,4 +1,5 @@
 import type { AuthResult, FetchFunction, Model } from "@earendil-works/pi-ai";
+import type { CredentialActivitySink } from "../request-ledger/handler-seam.js";
 
 export type ProviderResponsesOperation = "responses" | "compact";
 
@@ -13,6 +14,7 @@ export type ProviderResponsesLaneInput = {
   readonly model: Model<string>;
   readonly rawBody: string;
   readonly signal: AbortSignal;
+  readonly credentialActivity?: CredentialActivitySink;
 } & (
   | {
       readonly operation: "responses";

@@ -23,6 +23,7 @@ import { createCatalogCacheStore } from "../../src/providers/catalog-cache.js";
 import {
   createCatalogRefreshController,
   createCatalogSnapshotModels,
+  type CatalogProviderOperations,
   type CatalogRefreshControllerOptions,
   type CatalogRuntimeHandle,
 } from "../../src/providers/catalog-refresh.js";
@@ -338,7 +339,39 @@ function createRuntimeHandle(options: {
   const wrapped = createCatalogSnapshotModels(mutable);
   return {
     models: wrapped,
-    capture: () => wrapped.capture(),
+    capture: (preserveProviderIds) => wrapped.capture(preserveProviderIds),
+    operationsForProvider: async () => ({
+      refreshProvider: (providerId, refreshOptions) =>
+        wrapped.refresh({ ...refreshOptions, providers: [providerId] }),
+      checkAuth: (providerId, checkOptions) =>
+        wrapped.checkAuth(providerId, checkOptions),
+      isCurrent: async () => true,
+      publishIfCurrent: async (_providerId, publish) => {
+        await publish(() => undefined);
+        return true;
+      },
+    }),
+    refreshProvider: (providerId, refreshOptions) =>
+      wrapped.refresh({ ...refreshOptions, providers: [providerId] }),
+    checkAuth: (providerId, checkOptions) =>
+      wrapped.checkAuth(providerId, checkOptions),
+    isCurrent: async () => true,
+    publishIfCurrent: async (_providerId, publish) => {
+      await publish(() => undefined);
+      return true;
+    },
+    restoreProvider: async (providerId, entry) => {
+      const provider = wrapped.getProvider(providerId);
+      await provider?.refreshModels?.({
+        stored: structuredClone(entry),
+        publish: async (publication) => {
+          publication.update?.();
+          return true;
+        },
+        allowNetwork: false,
+        signal: new AbortController().signal,
+      });
+    },
   };
 }
 
@@ -409,9 +442,8 @@ describe("catalog refresh controller", () => {
     });
     const controller = createController(fixture);
     await controller.bind(createRuntimeHandle({ modelsStore: fixture.store, providers: [controlled.provider] }));
-    // Startup, login and page-open triggers arrive before the scheduler ran.
+    // Startup and page-open triggers arrive before the scheduler ran.
     controller.scheduleBackground("startup");
-    controller.onProviderLogin("dynamic-a");
     controller.scheduleBackground("page_open");
     await fixture.scheduler.flush();
     await vi.waitFor(() => {
@@ -420,27 +452,6 @@ describe("catalog refresh controller", () => {
     // No second run is triggered by the coalesced triggers.
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(controlled.fetches.length).toBe(1);
-  });
-
-  it("schedules a background refresh for the provider that just logged in", async () => {
-    const fixture = await createFixture();
-    writeModelsJson(fixture, {});
-    const a = createControlledProvider("dynamic-a", {
-      fetch: async () => [dynamicModelFact("dynamic-a", "m1", "https://a.example/v1")],
-    });
-    const b = createControlledProvider("dynamic-b", {
-      fetch: async () => [dynamicModelFact("dynamic-b", "m1", "https://b.example/v1")],
-    });
-    const controller = createController(fixture);
-    await controller.bind(
-      createRuntimeHandle({ modelsStore: fixture.store, providers: [a.provider, b.provider] }),
-    );
-    controller.onProviderLogin("dynamic-b");
-    await fixture.scheduler.flush();
-    await vi.waitFor(() => {
-      expect(b.fetches.length).toBe(1);
-    });
-    expect(a.fetches).toEqual([]);
   });
 
   it("atomically swaps the served catalog; captured Model snapshots are untouched", async () => {
@@ -507,6 +518,9 @@ describe("catalog refresh controller", () => {
       snapshot.providers.find((provider) => provider.providerId === "dynamic-b")
         ?.state,
     ).toBe("succeeded");
+    expect(snapshot.refreshErrors).toEqual([
+      expect.objectContaining({ providerId: "dynamic-a" }),
+    ]);
     expect(
       handle.models.getModels("dynamic-a")?.some((model) => model.id === "cached-model"),
     ).toBe(true);
@@ -869,6 +883,9 @@ describe("catalog refresh controller", () => {
     const dynamic = createControlledProvider("dynamic-a", {
       baseline: [dynamicModelFact("dynamic-a", "gen-n-model", "https://n.example/v1")],
       fetch: async () => {
+        if (dynamic.fetches.length === 1) {
+          return [dynamicModelFact("dynamic-a", "gen-n-model", "https://n.example/v1")];
+        }
         await gate;
         return [dynamicModelFact("dynamic-a", "gen-n1-model", "https://n1.example/v1")];
       },
@@ -879,18 +896,34 @@ describe("catalog refresh controller", () => {
       providers: [dynamic.provider],
     });
     await controller.bind(handle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(
+        controller.snapshot().providers.find(
+          (provider) => provider.providerId === "dynamic-a",
+        )?.state,
+      ).toBe("succeeded");
+    });
 
     // Request A captures its Model object from generation N.
     const capturedA = handle.models.getModel("dynamic-a", "gen-n-model");
     expect(capturedA?.baseUrl).toBe("https://n.example/v1");
 
-    // Successful login schedules the Backend-owned background refresh
-    // (generation N+1). The fetch is gated so the publication is
-    // explicitly controlled — no scheduler luck.
-    controller.onProviderLogin("dynamic-a");
+    const exactOperations: CatalogProviderOperations = {
+      refreshProvider: handle.refreshProvider,
+      checkAuth: handle.checkAuth,
+      isCurrent: async () => true,
+      publishIfCurrent: async (_providerId: string, publish) => {
+        await publish(() => undefined);
+        return true;
+      },
+    };
+    // The successful login child phase carries exact Profile operations.
+    // The fetch is gated so publication is explicitly controlled.
+    controller.scheduleProviderBackground("login", "dynamic-a", exactOperations);
     await fixture.scheduler.flush();
     await vi.waitFor(() => {
-      expect(dynamic.fetches.length).toBe(1);
+      expect(dynamic.fetches.length).toBe(2);
     });
     // The provisional snapshot is published while the refresh is in flight.
     expect(
@@ -916,5 +949,408 @@ describe("catalog refresh controller", () => {
     expect(handle.models.getModel("dynamic-a", "gen-n1-model")).toBeDefined();
     // Request A keeps its captured generation-N facts.
     expect(capturedA?.baseUrl).toBe("https://n.example/v1");
+  });
+
+  it("discards an exact post-login Catalog result when its Profile selection becomes stale", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    let releaseFetch: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const dynamic = createControlledProvider("dynamic-a", {
+      baseline: [dynamicModelFact("dynamic-a", "stable-model", "https://stable.example/v1")],
+      fetch: async () => {
+        if (dynamic.fetches.length === 1) {
+          return [dynamicModelFact("dynamic-a", "stable-model", "https://stable.example/v1")];
+        }
+        await gate;
+        return [dynamicModelFact("dynamic-a", "stale-model", "https://stale.example/v1")];
+      },
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamic.provider],
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(
+        controller.snapshot().providers.find(
+          (provider) => provider.providerId === "dynamic-a",
+        )?.state,
+      ).toBe("succeeded");
+    });
+    let current = true;
+    controller.scheduleProviderBackground("login", "dynamic-a", {
+      refreshProvider: handle.refreshProvider,
+      checkAuth: handle.checkAuth,
+      isCurrent: async () => current,
+      publishIfCurrent: async (_providerId, publish) => {
+        if (!current) return false;
+        await publish(() => undefined);
+        return true;
+      },
+    });
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => expect(dynamic.fetches).toHaveLength(2));
+
+    current = false;
+    releaseFetch?.();
+    await vi.waitFor(() => {
+      expect(
+        controller.snapshot().providers.find(
+          (provider) => provider.providerId === "dynamic-a",
+        )?.state,
+      ).not.toBe("refreshing");
+    });
+
+    expect(handle.models.getModel("dynamic-a", "stale-model")).toBeUndefined();
+    expect((await fixture.store.read("dynamic-a"))?.models).toEqual([
+      expect.objectContaining({ id: "stable-model" }),
+    ]);
+    // Even a later raw capture cannot leak the discarded live Provider state.
+    handle.capture();
+    expect(handle.models.getModel("dynamic-a", "stale-model")).toBeUndefined();
+    expect(handle.models.getModel("dynamic-a", "stable-model")).toBeDefined();
+  });
+
+  it("rolls back an exact Catalog publication failure and never leaves refreshing state", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const dynamic = createControlledProvider("dynamic-a", {
+      baseline: [],
+      fetch: async () => [
+        dynamicModelFact(
+          "dynamic-a",
+          dynamic.fetches.length === 1 ? "stable-model" : "uncommitted-model",
+          "https://dynamic.example/v1",
+        ),
+      ],
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamic.provider],
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(handle.models.getModel("dynamic-a", "stable-model")).toBeDefined();
+    });
+
+    const report = await controller.refreshProviderManual(
+      "dynamic-a",
+      undefined,
+      {
+        refreshProvider: handle.refreshProvider,
+        checkAuth: handle.checkAuth,
+        isCurrent: async () => true,
+        publishIfCurrent: async (_providerId, publish) => {
+          await publish(() => {
+            throw new Error("selection lease compromised");
+          });
+          return true;
+        },
+      },
+    );
+
+    expect(report.providers).toEqual([
+      expect.objectContaining({
+        providerId: "dynamic-a",
+        outcome: "failed",
+        errorCode: "exact_publish_failed",
+      }),
+    ]);
+    expect(
+      controller.snapshot().providers.find(
+        (provider) => provider.providerId === "dynamic-a",
+      )?.state,
+    ).not.toBe("refreshing");
+    expect(handle.models.getModel("dynamic-a", "uncommitted-model")).toBeUndefined();
+    expect((await fixture.store.read("dynamic-a"))?.models).toEqual([
+      expect.objectContaining({ id: "stable-model" }),
+    ]);
+  });
+
+  it("quarantines only the Provider whose post-commit rollback is unproven", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const dynamicA = createControlledProvider("dynamic-a", {
+      baseline: [],
+      fetch: async () => [
+        dynamicModelFact(
+          "dynamic-a",
+          dynamicA.fetches.length === 1 ? "a-stable" : "a-unsafe",
+          "https://a.example/v1",
+        ),
+      ],
+    });
+    const dynamicB = createControlledProvider("dynamic-b", {
+      baseline: [],
+      fetch: async () => [
+        dynamicModelFact(
+          "dynamic-b",
+          dynamicB.fetches.length === 1 ? "b-stable" : "b-new",
+          "https://b.example/v1",
+        ),
+      ],
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamicA.provider, dynamicB.provider],
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(handle.models.getModel("dynamic-a", "a-stable")).toBeDefined();
+      expect(handle.models.getModel("dynamic-b", "b-stable")).toBeDefined();
+    });
+
+    const originalRename = fixture.fileSystem.rename.bind(fixture.fileSystem);
+    let exactRenames = 0;
+    fixture.fileSystem.rename = async (from, to) => {
+      exactRenames += 1;
+      if (exactRenames === 2) throw new Error("rollback storage unavailable");
+      await originalRename(from, to);
+    };
+    let ownershipAssertions = 0;
+    await controller.refreshProviderManual("dynamic-a", undefined, {
+      refreshProvider: handle.refreshProvider,
+      checkAuth: handle.checkAuth,
+      isCurrent: async () => true,
+      publishIfCurrent: async (_providerId, publish) => {
+        await publish(() => {
+          ownershipAssertions += 1;
+          if (ownershipAssertions === 2) {
+            throw new Error("selection lease compromised after cache commit");
+          }
+        });
+        return true;
+      },
+    });
+
+    expect((await fixture.store.read("dynamic-a"))?.models).toEqual([
+      expect.objectContaining({ id: "a-unsafe" }),
+    ]);
+    expect(handle.models.getModel("dynamic-a", "a-stable")).toBeDefined();
+    expect(handle.models.getModel("dynamic-a", "a-unsafe")).toBeUndefined();
+    expect(
+      controller.snapshot().providers.find(
+        (provider) => provider.providerId === "dynamic-a",
+      ),
+    ).toMatchObject({ state: "failed", errorCode: "restore_unproven" });
+
+    await controller.refreshProviderManual("dynamic-b", undefined, {
+      refreshProvider: handle.refreshProvider,
+      checkAuth: handle.checkAuth,
+      isCurrent: async () => true,
+      publishIfCurrent: async (_providerId, publish) => {
+        await publish(() => undefined);
+        return true;
+      },
+    });
+    expect(handle.models.getModel("dynamic-b", "b-new")).toBeDefined();
+    expect(handle.models.getModel("dynamic-a", "a-stable")).toBeDefined();
+    expect(handle.models.getModel("dynamic-a", "a-unsafe")).toBeUndefined();
+  });
+
+  it("generation-guards an ordinary lifecycle refresh captured before a Profile switch", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    let releaseFetch: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const dynamic = createControlledProvider("dynamic-a", {
+      baseline: [],
+      fetch: async () => {
+        if (dynamic.fetches.length === 1) {
+          return [dynamicModelFact("dynamic-a", "stable", "https://stable.example/v1")];
+        }
+        await gate;
+        return [dynamicModelFact("dynamic-a", "stale", "https://stale.example/v1")];
+      },
+    });
+    const baseHandle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamic.provider],
+    });
+    let current = true;
+    const guardedHandle: CatalogRuntimeHandle = {
+      ...baseHandle,
+      operationsForProvider: async () => ({
+        refreshProvider: baseHandle.refreshProvider,
+        checkAuth: baseHandle.checkAuth,
+        isCurrent: async () => current,
+        publishIfCurrent: async (_providerId, publish) => {
+          if (!current) return false;
+          await publish(() => undefined);
+          return true;
+        },
+      }),
+    };
+    const controller = createController(fixture);
+    await controller.bind(guardedHandle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(baseHandle.models.getModel("dynamic-a", "stable")).toBeDefined();
+    });
+
+    controller.scheduleBackground("page_open", ["dynamic-a"]);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => expect(dynamic.fetches).toHaveLength(2));
+    current = false;
+    releaseFetch?.();
+    await vi.waitFor(() => {
+      expect(
+        controller.snapshot().providers.find(
+          (provider) => provider.providerId === "dynamic-a",
+        )?.state,
+      ).not.toBe("refreshing");
+    });
+
+    expect(baseHandle.models.getModel("dynamic-a", "stale")).toBeUndefined();
+    expect((await fixture.store.read("dynamic-a"))?.models).toEqual([
+      expect.objectContaining({ id: "stable" }),
+    ]);
+  });
+
+  it("queues every exact post-login Provider refresh without overwriting an earlier login", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const dynamicA = createControlledProvider("dynamic-a", {
+      baseline: [],
+      fetch: async () => [
+        dynamicModelFact(
+          "dynamic-a",
+          `a-${dynamicA.fetches.length}`,
+          "https://a.example/v1",
+        ),
+      ],
+    });
+    const dynamicB = createControlledProvider("dynamic-b", {
+      baseline: [],
+      fetch: async () => [
+        dynamicModelFact(
+          "dynamic-b",
+          `b-${dynamicB.fetches.length}`,
+          "https://b.example/v1",
+        ),
+      ],
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      modelsStore: fixture.store,
+      providers: [dynamicA.provider, dynamicB.provider],
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => {
+      expect(dynamicA.fetches).toHaveLength(1);
+      expect(dynamicB.fetches).toHaveLength(1);
+    });
+
+    const exactFor = (providerId: string): CatalogProviderOperations => ({
+      refreshProvider: handle.refreshProvider,
+      checkAuth: handle.checkAuth,
+      isCurrent: async (candidate) => candidate === providerId,
+      publishIfCurrent: async (candidate, publish) => {
+        if (candidate !== providerId) return false;
+        await publish(() => undefined);
+        return true;
+      },
+    });
+    controller.scheduleProviderBackground("login", "dynamic-a", exactFor("dynamic-a"));
+    controller.scheduleProviderBackground("login", "dynamic-b", exactFor("dynamic-b"));
+    await fixture.scheduler.flush();
+
+    await vi.waitFor(() => {
+      expect(dynamicA.fetches).toHaveLength(2);
+      expect(dynamicB.fetches).toHaveLength(2);
+    });
+    await vi.waitFor(() => {
+      expect(handle.models.getModel("dynamic-a", "a-2")).toBeDefined();
+      expect(handle.models.getModel("dynamic-b", "b-2")).toBeDefined();
+    });
+  });
+
+  it("checks and publishes a static Provider only under that Provider's exact binding", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const staticA = createControlledProvider("static-a", {
+      baseline: [dynamicModelFact("static-a", "a", "https://a.example/v1")],
+    });
+    const staticB = createControlledProvider("static-b", {
+      baseline: [dynamicModelFact("static-b", "b", "https://b.example/v1")],
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      providers: [staticA.provider, staticB.provider],
+      modelsStore: fixture.store,
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+
+    const checked: string[] = [];
+    const published: string[] = [];
+    controller.scheduleProviderBackground("login", "static-a", {
+      refreshProvider: handle.refreshProvider,
+      checkAuth: async (providerId, options) => {
+        checked.push(providerId);
+        return handle.checkAuth(providerId, options);
+      },
+      isCurrent: async (providerId) => providerId === "static-a",
+      publishIfCurrent: async (providerId, publish) => {
+        published.push(providerId);
+        if (providerId !== "static-a") return false;
+        await publish(() => undefined);
+        return true;
+      },
+    });
+    await fixture.scheduler.flush();
+    await vi.waitFor(() => expect(published).toEqual(["static-a"]));
+
+    expect(checked).toEqual(["static-a"]);
+  });
+
+  it("treats an unconfigured static Provider as skipped availability without warnings", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const staticProvider = createControlledProvider("static-unconfigured", {
+      baseline: [
+        dynamicModelFact(
+          "static-unconfigured",
+          "static-model",
+          "https://static.example/v1",
+        ),
+      ],
+      available: false,
+    });
+    const controller = createController(fixture);
+    const handle = createRuntimeHandle({
+      providers: [staticProvider.provider],
+      modelsStore: fixture.store,
+    });
+    await controller.bind(handle);
+    await fixture.scheduler.flush();
+    const report = await controller.refreshProviderManual("static-unconfigured");
+
+    expect(report.providers).toEqual([
+      { providerId: "static-unconfigured", outcome: "skipped" },
+    ]);
+    expect(controller.snapshot().refreshErrors).toEqual([]);
+    expect(
+      controller.snapshot().providers.find(
+        (provider) => provider.providerId === "static-unconfigured",
+      )?.models[0]?.availability,
+    ).toBe("unavailable");
+    expect(
+      fixture.warnings.some((warning) =>
+        warning.text.includes("static-unconfigured"),
+      ),
+    ).toBe(false);
   });
 });

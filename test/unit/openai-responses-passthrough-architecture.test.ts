@@ -41,6 +41,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
 
   it("keeps Semantic conversion independent from both Native transports", async () => {
     for (const file of [
+      "src/semantic-conversion/profile-execution.ts",
       "src/protocols/openai-responses/semantic.ts",
       "src/protocols/openai-responses/compact-semantic.ts",
     ]) {
@@ -49,7 +50,28 @@ describe("OpenAI Responses three-lane architecture certification", () => {
       expect(text).not.toMatch(/integrations[\\/]codex/u);
       expect(text).not.toMatch(/codex-responses-passthrough/u);
       expect(text).not.toMatch(/passthroughResponsesRequest/u);
+      expect(text).not.toMatch(/provider-native-anthropic/u);
     }
+  });
+
+  it("keeps Anthropic Provider Native and its OAuth projector independent from every other execution lane", async () => {
+    for (const file of [
+      "src/provider-native-anthropic/index.ts",
+      "src/provider-native-anthropic/transport.ts",
+      "src/provider-native-anthropic/body-projection.ts",
+    ]) {
+      const text = await source(file);
+      expect(text).not.toMatch(/semantic-conversion/u);
+      expect(text).not.toMatch(/provider-native-responses/u);
+      expect(text).not.toMatch(/integrations[\\/]codex/u);
+      expect(text).not.toMatch(/openai-responses[\\/]semantic/u);
+      expect(text).not.toMatch(/streamSimple|Pi AI IR/u);
+    }
+    const projector = await source(
+      "src/provider-native-anthropic/body-projection.ts",
+    );
+    expect(projector).not.toMatch(/@earendil-works\/pi-ai/u);
+    expect(projector).not.toMatch(/credentials/u);
   });
 
   it("keeps the Responses handler as a lane selector instead of a concrete transport owner", async () => {
