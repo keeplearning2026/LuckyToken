@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx ../../test/online/run-claude-cli.ts"
+    "test": "node ../../scripts/run-with-codex-test-sandbox.mjs -- tsx ../../test/online/run-claude-cli.ts"
   }
 }

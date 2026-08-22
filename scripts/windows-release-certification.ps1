@@ -60,6 +60,17 @@ if ($RequireSignature) {
   Add-Check -Name "installer-signature" -Passed ($signature.Status -eq "Valid") -Detail $signature.Status
 }
 
+$testCodexHome = [IO.Path]::GetFullPath(
+  (Join-Path ([IO.Path]::GetTempPath()) ("luckytoken-windows-cert-codex-{0}" -f [Guid]::NewGuid().ToString("N")))
+)
+$testTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+if (-not $testCodexHome.StartsWith($testTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+  throw "Temporary Codex home escaped the system temp directory: $testCodexHome"
+}
+$previousCodexHomeEnvironment = $env:CODEX_HOME
+New-Item -ItemType Directory -Path $testCodexHome -Force | Out-Null
+$env:CODEX_HOME = $testCodexHome
+
 try {
   $setupProcess = Start-Process -FilePath $resolvedInstaller -ArgumentList @("--silent") -PassThru -WindowStyle Hidden
   Wait-ReleaseProcess -Process $setupProcess -TimeoutMilliseconds 300000 -Label "Squirrel installer"
@@ -121,20 +132,31 @@ try {
   }
   Add-Check -Name "installed-blank-first-run-provider-catalog" -Passed ($firstRunExit -eq 0) -Detail "node --test exit $firstRunExit"
 } finally {
-  if (Test-Path -LiteralPath $updateExe -PathType Leaf) {
-    $uninstallProcess = Start-Process -FilePath $updateExe -ArgumentList @("--uninstall", "-s") -PassThru -WindowStyle Hidden
-    Wait-ReleaseProcess -Process $uninstallProcess -TimeoutMilliseconds 120000 -Label "Squirrel uninstaller"
-    for ($attempt = 0; $attempt -lt 100 -and (Test-Path -LiteralPath $installedExe -PathType Leaf); $attempt += 1) {
-      Start-Sleep -Milliseconds 100
+  try {
+    if (Test-Path -LiteralPath $updateExe -PathType Leaf) {
+      $uninstallProcess = Start-Process -FilePath $updateExe -ArgumentList @("--uninstall", "-s") -PassThru -WindowStyle Hidden
+      Wait-ReleaseProcess -Process $uninstallProcess -TimeoutMilliseconds 120000 -Label "Squirrel uninstaller"
+      for ($attempt = 0; $attempt -lt 100 -and (Test-Path -LiteralPath $installedExe -PathType Leaf); $attempt += 1) {
+        Start-Sleep -Milliseconds 100
+      }
+      Add-Check -Name "uninstall-removes-application" -Passed (-not (Test-Path -LiteralPath $installedExe -PathType Leaf))
     }
-    Add-Check -Name "uninstall-removes-application" -Passed (-not (Test-Path -LiteralPath $installedExe -PathType Leaf))
+    $remainingInstalledProcesses = @(
+      Get-CimInstance Win32_Process |
+        Where-Object { $_.ExecutablePath -like "$installRoot\*" }
+    )
+    Add-Check -Name "uninstall-leaves-no-installed-process" -Passed ($remainingInstalledProcesses.Count -eq 0)
+    Add-Check -Name "uninstall-preserves-user-state" -Passed (Test-Path -LiteralPath $userState)
+  } finally {
+    if ($null -eq $previousCodexHomeEnvironment) {
+      Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
+    } else {
+      $env:CODEX_HOME = $previousCodexHomeEnvironment
+    }
+    if (Test-Path -LiteralPath $testCodexHome -PathType Container) {
+      Remove-Item -LiteralPath $testCodexHome -Recurse -Force
+    }
   }
-  $remainingInstalledProcesses = @(
-    Get-CimInstance Win32_Process |
-      Where-Object { $_.ExecutablePath -like "$installRoot\*" }
-  )
-  Add-Check -Name "uninstall-leaves-no-installed-process" -Passed ($remainingInstalledProcesses.Count -eq 0)
-  Add-Check -Name "uninstall-preserves-user-state" -Passed (Test-Path -LiteralPath $userState)
 }
 
 $evidence.finishedAt = [DateTimeOffset]::UtcNow.ToString("o")

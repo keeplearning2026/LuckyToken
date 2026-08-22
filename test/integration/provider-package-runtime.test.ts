@@ -14,15 +14,22 @@ describe("configured Provider Package runtime", () => {
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000007",
     });
-    expect(externalProviderIds).toEqual(["commandcode-private"]);
+    expect(externalProviderIds).toEqual([
+      "commandcode-private",
+      "commandcode-goat",
+    ]);
     await expect(
       models.checkAuth("commandcode-private"),
     ).resolves.toBeUndefined();
+    await expect(models.checkAuth("commandcode-goat")).resolves.toBeUndefined();
     const model = models.getModel(
       "commandcode-private",
       "deepseek/deepseek-v4-flash",
     );
     expect(model).toBeDefined();
+    expect(
+      models.getModel("commandcode-goat", "deepseek/deepseek-v4-flash"),
+    ).toBeDefined();
 
     const events = [];
     for await (const event of models.streamSimple(

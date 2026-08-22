@@ -313,13 +313,15 @@ representation nor lookup, resolution, or transport behavior. If implementation
 proves another Provider-domain operation is required, add the smallest explicit
 dependency rather than passing the whole runtime.
 
-## 5.5 No compatibility path for old CommandCode package configuration
+## 5.5 Bundled CommandCode packages are not user configuration
 
-`@luckytoken/provider-commandcode-private` becomes a bundled product Provider.
+`@luckytoken/provider-commandcode-private` and
+`@luckytoken/provider-commandcode-goat` are bundled product Providers.
 
-It is no longer a user-installed Provider Package configuration entry.
+They are not user-installed Provider Package configuration entries.
 
-If `providerPackages` contains the bundled CommandCode package specifier, configuration is rejected with a clear current-contract error.
+If `providerPackages` contains either bundled CommandCode package specifier,
+configuration is rejected with a clear current-contract error.
 
 Do not silently ignore it, merge it, or support dual configuration.
 
@@ -563,13 +565,19 @@ V1 contains:
 
 ```text
 CommandCode Private
+CommandCode Goat
 ```
 
-The package implementation remains:
+The package implementations are:
 
 ```text
 @luckytoken/provider-commandcode-private
+@luckytoken/provider-commandcode-goat
 ```
+
+Both project the price-free capability facts owned by
+`@luckytoken/commandcode-model-catalog`. They do not share Provider credentials,
+transport, wire conversion, or response lifecycle.
 
 The npm/package identity is an implementation detail and is never required in normal UI or first-run configuration.
 
@@ -599,6 +607,11 @@ export const bundledProviderPackages = Object.freeze([
   Object.freeze({
     specifier: "@luckytoken/provider-commandcode-private",
     providerId: "commandcode-private",
+    configuration: Object.freeze({}),
+  }),
+  Object.freeze({
+    specifier: "@luckytoken/provider-commandcode-goat",
+    providerId: "commandcode-goat",
     configuration: Object.freeze({}),
   }),
 ]);
@@ -650,10 +663,12 @@ Pi built-in overlays through `models.json` remain the existing explicit exceptio
 
 The shipped Backend must be able to resolve every bundled Provider Package without user action.
 
-For CommandCode Private this means the release assembly/package dependency graph must guarantee:
+For the CommandCode Providers this means the release assembly/package dependency graph must guarantee:
 
 ```text
+@luckytoken/commandcode-model-catalog
 @luckytoken/provider-commandcode-private
+@luckytoken/provider-commandcode-goat
 ```
 
 exists as a runtime dependency in the packaged Backend.
@@ -1744,8 +1759,9 @@ Without any user `providerPackages` configuration:
 
 ```text
 models.getProvider("commandcode-private") exists
+models.getProvider("commandcode-goat") exists
 source = luckytoken_bundled
-models count > 0
+both model counts = 33
 ```
 
 ### P3 — source classification
@@ -1754,7 +1770,7 @@ Prove:
 
 ```text
 Pi builtin → pi_builtin
-CommandCode → luckytoken_bundled
+CommandCode Private/Goat → luckytoken_bundled
 custom models.json Provider → user
 external package Provider → user
 ```

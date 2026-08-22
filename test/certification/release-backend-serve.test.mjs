@@ -61,7 +61,11 @@ test("the assembled release backend serves as a desktop-owned instance from the 
 
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-release-serve-"));
   const userRoot = join(directory, "home");
-  await mkdir(join(userRoot, ".luckytoken", "pi"), { recursive: true });
+  const codexHome = join(userRoot, ".codex");
+  await Promise.all([
+    mkdir(join(userRoot, ".luckytoken", "pi"), { recursive: true }),
+    mkdir(codexHome, { recursive: true }),
+  ]);
   const configPath = join(userRoot, ".luckytoken", "config.json");
   const descriptorPath = join(userRoot, ".luckytoken", "control-plane.json");
   const port = await freePort();
@@ -121,7 +125,12 @@ test("the assembled release backend serves as a desktop-owned instance from the 
       ],
       {
         cwd: backendRoot,
-        env: { ...process.env, USERPROFILE: userRoot, HOME: userRoot },
+        env: {
+          ...process.env,
+          USERPROFILE: userRoot,
+          HOME: userRoot,
+          CODEX_HOME: codexHome,
+        },
         maxBuffer: 8 * 1024 * 1024,
       },
     );

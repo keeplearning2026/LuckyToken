@@ -254,7 +254,9 @@ flowchart LR
 | Credential/security authorities | `credentials/`, `integrations/codex/local-auth.ts`, Application Control Plane capability | Provider credential mutation/status、Codex Local Native request credential、management capability authentication | Client/Provider semantic conversion |
 | Anthropic adapter | `protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
 | Pi integration/composition | `pi/`, `composition.ts`, `cli-config.ts`, `cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
-| CommandCode Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode、fixed runtime compatibility config、HTTP attempts、JSONL lifecycle | Anthropic/OpenAI 响应格式与 Core 注册策略 |
+| CommandCode model capability catalog | `packages/commandcode-model-catalog/` | 两个 CommandCode Provider 的稳定模型能力事实；price-free Pi Model projection | Provider identity、credential、transport、wire lifecycle |
+| CommandCode Private Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode Private、fixed runtime compatibility config、HTTP attempts、JSONL lifecycle | Goat/OpenAI Completions transport、Client Protocol 格式与 Core 注册策略 |
+| CommandCode Goat Provider Package | `packages/provider-commandcode-goat/` | 独立认证并使用 Pi OpenAI Completions adapter 调用 `/provider/v1` | Private Protocol conversion/transport/response handling |
 
 上表是 model-serving 语义模块，不包含产品生命周期。当前产品另外有三组 lifecycle 模块：
 
@@ -1220,18 +1222,21 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 > Provider Package 里，用户不需要任何 `models.json`。安装并配置 package 后，
 > `login` 填 API key 就能用。
 
-CommandCode Private Provider Package 内置 **33 个模型**，全部硬编码在
-`packages/provider-commandcode-private/src/models.ts`（`COMMANDCODE_MODEL_SOURCES`），这是
-**唯一的模型权威来源**——没有运行时端点拉取，更新模型只需改这个文件。
+CommandCode 的 **33 个模型能力事实**全部硬编码在
+`packages/commandcode-model-catalog/src/index.ts`，这是 Private 与 Goat 两个 Provider
+共享的唯一权威来源。两个 Provider 只从这里投影模型，不共享认证、transport、wire
+conversion 或 response lifecycle。
 
 模型数据来自 `doc/# CommandCode 1.9.0 模型信息表.md`（官方 command-code@1.9.0
 bundle 静态分析）：
 
 - `id`：官方权威 id（如 `deepseek/deepseek-v4-flash`、`Qwen/Qwen3.8-Max`）；
 - `contextWindow` / `input`（text/image）：官方模态；
-- `cost`：官方定价表（每百万 token USD）；
 - `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
   `low/medium/xhigh`）；官方未标注档位的模型保持全档位宽松。
+
+目录故意不保存价格，因为价格变化快且 LuckyToken 没有 live pricing authority。Pi
+`Model.cost` 是必填结构，因此投影统一使用零值表示“不追踪价格”，不是宣称上游免费。
 
 `thinkingLevelMap` 由 `reasoningEfforts` 生成，语义是：客户端请求档位在模型支持
 范围内 → 原样使用；不在范围内 → **fallback 到模型支持的最高档**（不报错、不发
@@ -1931,6 +1936,21 @@ flowchart TD
 配套规范是 [CommandCode Private Protocol](./Protocols/commandcode%20private%20protocol.md)
 与 [Pi ↔ CommandCode Provider Conversion Method](./Protocols/PI%20AI%20IR-Commandcode%20Private%20Conversion.md)。
 
+## 7.11 CommandCode Goat Provider
+
+`@luckytoken/provider-commandcode-goat` 是另一条独立的 Semantic Conversion Provider：
+
+```text
+Pi AI IR
+  → Pi openai-completions adapter
+  → https://api.commandcode.ai/provider/v1/chat/completions
+```
+
+它的固定身份是 `provider=commandcode-goat`、`api=openai-completions`、
+`baseUrl=https://api.commandcode.ai/provider/v1`。它从共享目录投影同一组模型能力，但
+拥有独立的 Pi credential slot，并且不 import 或复用 CommandCode Private 的 request
+builder、private protocol transport、JSONL assembler 或 response conversion。
+
 ---
 
 # 8. 持久文件、生成物与公共 API
@@ -2069,8 +2089,9 @@ AnthropicModelValidityPolicy
 FinalAssistantPrefillValidity
 ```
 
-私有包 `@luckytoken/provider-commandcode-private` 通过标准 Provider Package contract 进入
-Pi Provider runtime；LuckyToken 根包不导出它的 concrete conversion implementation。
+私有包 `@luckytoken/provider-commandcode-private` 与
+`@luckytoken/provider-commandcode-goat` 都通过标准 Provider Package contract 进入 Pi
+Provider runtime；LuckyToken 根包不导出它们的 concrete implementation。
 `@luckytoken/provider-contract` 只暴露 Provider package/diagnostics contract。
 
 `application.ts`、`cli.ts`、`cli-config.ts`、`composition.ts`、InstanceAuthority、Control
@@ -2183,7 +2204,8 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | `src/providers/catalog.ts` | `registerLuckyTokenProviders()`；只注册 Pi builtins 与 `models.json` | composition | Pi Providers、Pi Models | configured-composition、provider-boundary tests |
 | `src/providers/package-loader.ts` | 校验 npm 根名/契约/Provider，冲突检查后原子注册 | composition | Contract、Pi Models、dynamic import | package-loader/runtime/distribution tests |
-| `packages/provider-commandcode-private/src/models.ts` | **33 个模型的唯一权威目录**（id/context/模态/价格/推理档位，来自官方 1.9.0 分析）；`thinkingLevelMap` 生成 | provider factory | `constants.ts`、Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
+| `packages/commandcode-model-catalog/src/index.ts` | **33 个模型能力事实的唯一权威目录**（id/context/模态/推理档位/output limit；无价格）；按 provider/api/baseUrl 投影 Pi Model | Private、Goat model projection | Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
+| `packages/provider-commandcode-private/src/models.ts` | Private identity projection | Private provider factory | shared capability catalog、`constants.ts` | model catalog/default-model tests |
 | `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
 | `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
 | `packages/provider-commandcode-private/src/provider.ts` | factory、Pi→wire conversion、request preparation | Provider Package entry | fixed config helper、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
@@ -2192,6 +2214,7 @@ flowchart TB
 | `assembler.ts` | JSONL lines + EOF → ordered result or typed error | attempts | no other business module | assembler/response lifecycle tests |
 | `semantic.ts` | committed result → Pi message/event replay | Provider stream | Pi types/pricing、lossless JSON | semantic/replay/thinking tests |
 | `json.ts` | strict lossless JSON clone | provider + semantic | JS reflection only | payload/tool/response fidelity tests |
+| `packages/provider-commandcode-goat/src/provider.ts` | independent auth + Pi `openai-completions` stream binding | Goat Provider Package entry | Pi OpenAI Completions adapter、shared capability catalog | `test/unit/commandcode-goat-provider-package.test.ts`、provider-runtime tests |
 
 ## 9.5 Concrete import-boundary check
 
@@ -2207,6 +2230,12 @@ src/protocols/anthropic/**
 
 packages/provider-commandcode-private/src/**
   imports/names Anthropic or /v1/messages?  no
+
+packages/provider-commandcode-goat/src/**
+  imports Private Provider or concrete Client Protocols?  no
+
+packages/commandcode-model-catalog/src/**
+  imports concrete Providers?  no
 
 src/runtime.ts / src/http.ts
   imports either concrete protocol/provider?  no
@@ -2376,7 +2405,7 @@ flowchart LR
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Local credential、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
-| 模型单一权威来源 | CommandCode 33 个模型只存在于 `models.ts`（官方 1.9.0 数据）；无运行时端点拉取、无第二份模型清单 | 符合 |
+| 模型单一权威来源 | CommandCode 33 个稳定能力事实只存在于共享 capability catalog；Private/Goat 各自投影 identity，目录不保存易变价格 | 符合 |
 | `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
@@ -2613,8 +2642,9 @@ flowchart TB
 4. `src/credentials/authority.ts` 与 `src/integrations/codex/local-auth.ts`：Provider credential 与 Local Native credential 如何保持隔离；
 5. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
 6. Pi `Models.streamSimple()` public contract；
-7. `src/providers/package-loader.ts` → `@luckytoken/provider-commandcode-private` →
-   `provider.ts` → project/attempts/assembler/semantic；
+7. `src/providers/package-loader.ts` → Private package 的
+   `provider.ts` → project/attempts/assembler/semantic，或 Goat package → Pi
+   `openai-completions` adapter；
 8. 对应 Protocol/Conversion Spec；
 9. owning unit/integration test、serving conformance record，以及深度在线证据
    （`test/online/deep-online.ts`、`test/online/event-coverage.ts`）——后者证明

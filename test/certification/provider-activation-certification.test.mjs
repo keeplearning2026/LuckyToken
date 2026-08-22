@@ -170,7 +170,7 @@ test("the static curated alias default table and defaults generation counter are
   }
 });
 
-test("CommandCode Private is a bundled product Provider, never a user providerPackages entry", async () => {
+test("both CommandCode integrations are bundled product Providers", async () => {
   const bundled = await readFile(
     path.join(repositoryRoot, "src", "providers", "bundled.ts"),
     "utf8",
@@ -188,6 +188,16 @@ test("CommandCode Private is a bundled product Provider, never a user providerPa
     bundled,
     /commandcode-private/u,
     "bundled metadata must reserve the CommandCode Provider id",
+  );
+  assert.match(
+    bundled,
+    /@luckytoken\/provider-commandcode-goat/u,
+    "bundled metadata must carry the CommandCode Goat package specifier",
+  );
+  assert.match(
+    bundled,
+    /commandcode-goat/u,
+    "bundled metadata must reserve the CommandCode Goat Provider id",
   );
   assert.match(
     runtime,
@@ -216,24 +226,32 @@ test("the packaged Electron activation journey is a release blocker", async () =
       "utf8",
     ),
   );
+  const distributionCommands = [
+    rootManifest.scripts["test:distribution"],
+    rootManifest.scripts["test:distribution:inner"],
+  ].join(" ");
+  const productJourneyCommands = [
+    desktopManifest.scripts["test:product-e2e:run"],
+    desktopManifest.scripts["test:product-e2e:run:inner"],
+  ].join(" ");
   assert.match(
-    rootManifest.scripts["test:distribution"] ?? "",
+    distributionCommands,
     /test:product-e2e:run/u,
     "distribution certification must execute the packaged Electron product journeys",
   );
   assert.match(
-    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    productJourneyCommands,
     /product-golden-journey\.e2e\.test\.mjs/u,
     "desktop must expose the release-blocking golden-journey runner",
   );
   assert.match(
-    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    productJourneyCommands,
     /provider-activation-journey\.e2e\.test\.mjs/u,
     "desktop must expose the release-blocking Provider activation journey runner",
   );
 });
 
-test("the release assembly resolves the bundled CommandCode package as a runtime dependency", async () => {
+test("the release assembly resolves every bundled CommandCode package", async () => {
   const assemble = await readFile(
     path.join(repositoryRoot, "scripts", "assemble-release-backend.mjs"),
     "utf8",
@@ -242,6 +260,16 @@ test("the release assembly resolves the bundled CommandCode package as a runtime
     assemble,
     /provider-commandcode-private/u,
     "release assembly must pack the bundled CommandCode package",
+  );
+  assert.match(
+    assemble,
+    /commandcode-model-catalog/u,
+    "release assembly must pack the shared CommandCode model catalog",
+  );
+  assert.match(
+    assemble,
+    /provider-commandcode-goat/u,
+    "release assembly must pack the bundled CommandCode Goat package",
   );
   const desktopManifest = JSON.parse(
     await readFile(
@@ -276,7 +304,7 @@ test("the renderer Providers page contains no Provider-ID branching", async () =
     "ProvidersPage must never branch on a concrete Provider id",
   );
   assert.ok(
-    !/commandcode-private|anthropic/u.test(providersPage),
+    !/commandcode-private|commandcode-goat|anthropic/u.test(providersPage),
     "ProvidersPage must contain no concrete Provider identity text",
   );
 });

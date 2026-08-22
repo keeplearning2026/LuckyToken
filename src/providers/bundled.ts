@@ -25,8 +25,7 @@ export interface BundledProviderPackage {
 }
 
 /**
- * The frozen product assembly list. V1 contains exactly CommandCode
- * Private. Any future bundled Provider is added here with its own
+ * The frozen product assembly list. Each bundled Provider has its own package
  * specifier/id; the loading and classification machinery is generic.
  */
 export const bundledProviderPackages: readonly BundledProviderPackage[] =
@@ -34,6 +33,11 @@ export const bundledProviderPackages: readonly BundledProviderPackage[] =
     Object.freeze({
       specifier: "@luckytoken/provider-commandcode-private",
       providerId: "commandcode-private",
+      configuration: Object.freeze({}),
+    }),
+    Object.freeze({
+      specifier: "@luckytoken/provider-commandcode-goat",
+      providerId: "commandcode-goat",
       configuration: Object.freeze({}),
     }),
   ]);

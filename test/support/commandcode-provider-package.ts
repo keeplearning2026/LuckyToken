@@ -7,9 +7,12 @@ import type { ImportProviderModule } from "../../src/providers/package-loader.js
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
 import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
+import { providerPackage as commandCodeGoatProviderPackage } from "../../packages/provider-commandcode-goat/src/index.js";
 
 export const COMMANDCODE_PROVIDER_PACKAGE =
   "@luckytoken/provider-commandcode-private";
+export const COMMANDCODE_GOAT_PROVIDER_PACKAGE =
+  "@luckytoken/provider-commandcode-goat";
 
 export function commandCodeProviderImportModule(): ImportProviderModule {
   const providerPackage = Object.freeze({
@@ -28,9 +31,12 @@ export function commandCodeProviderImportModule(): ImportProviderModule {
     },
   } satisfies LuckyTokenProviderPackage);
   return async (specifier) => {
-    if (specifier !== COMMANDCODE_PROVIDER_PACKAGE) {
-      throw new Error(`Unexpected test Provider Package: ${specifier}`);
+    if (specifier === COMMANDCODE_PROVIDER_PACKAGE) {
+      return Object.freeze({ providerPackage });
     }
-    return Object.freeze({ providerPackage });
+    if (specifier === COMMANDCODE_GOAT_PROVIDER_PACKAGE) {
+      return Object.freeze({ providerPackage: commandCodeGoatProviderPackage });
+    }
+    throw new Error(`Unexpected test Provider Package: ${specifier}`);
   };
 }

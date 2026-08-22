@@ -5844,10 +5844,13 @@ CommandCode Private Protocol
 POST /alpha/generate
 ```
 
-Package `@luckytoken/provider-commandcode-private` owns the model catalog,
-configuration validation, factory, Pi ↔ CommandCode conversion, and upstream
-lifecycle. Core imports only `@luckytoken/provider-contract`; it must not
-import, instantiate, or special-case the CommandCode implementation.
+Package `@luckytoken/provider-commandcode-private` owns configuration
+validation, factory, Pi ↔ CommandCode Private conversion, and its upstream
+lifecycle. Stable CommandCode model capability facts are owned separately by
+`@luckytoken/commandcode-model-catalog`; the Private package only projects its
+own provider/api/baseUrl identity. Core imports only
+`@luckytoken/provider-contract`; it must not import, instantiate, or
+special-case the CommandCode implementation.
 
 本章只讨论这个 integration。
 
@@ -7268,13 +7271,43 @@ Request:
              Generic Execution rules
 ```
 
-CommandCode Private vocabulary 不进入 Generic Core。
+## 11.7 Concrete CommandCode Goat Extension
+
+```text
+Startup:
+  @luckytoken/provider-commandcode-goat
+          │ fixed providerPackage export
+          ▼
+  Generic Provider Package Loader
+          │ validated Pi Provider
+          ▼
+        Pi Models registration
+
+Request:
+  Pi Model + Context + Options
+          │
+          ▼
+  Pi openai-completions adapter
+          │ independent Goat auth/transport
+          ▼
+  https://api.commandcode.ai/provider/v1/chat/completions
+          │
+          ▼
+  Pi AssistantMessageEventStream
+```
+
+Goat has `Provider.id=commandcode-goat`, `Model.api=openai-completions`, and an
+independent Pi credential slot. It shares only the price-free model capability
+catalog with CommandCode Private and must not import Private request builders,
+credentials, transport, assembler, or response conversion.
+
+CommandCode Private 与 Goat vocabulary 不进入 Generic Core。
 
 The package root additionally exposes the existing direct Pi Provider factory and its option/policy types. Production Core uses the fixed `providerPackage` export through the generic loader; no project snapshot/project identity type is exported because current Provider request construction uses a fixed empty ServerConfig and no project metadata flow.
 
 ---
 
-## 11.7 Specification Map
+## 11.8 Specification Map
 
 LuckyToken 保持三种 specification responsibility 分离：
 

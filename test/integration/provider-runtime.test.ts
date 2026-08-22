@@ -15,6 +15,7 @@ import {
   createProviderRuntime,
 } from "../../src/providers/runtime.js";
 import {
+  COMMANDCODE_GOAT_PROVIDER_PACKAGE,
   COMMANDCODE_PROVIDER_PACKAGE,
   commandCodeProviderImportModule,
 } from "../support/commandcode-provider-package.js";
@@ -63,7 +64,7 @@ describe("Provider Runtime composition", () => {
     }
   });
 
-  it("P2: discovers bundled CommandCode without user providerPackages configuration", async () => {
+  it("P2: discovers both bundled CommandCode Providers without user configuration", async () => {
     const { modelsJsonPath } = await fixture();
     const runtime = await createProviderRuntime({
       piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
@@ -82,6 +83,13 @@ describe("Provider Runtime composition", () => {
       "luckytoken_bundled",
     );
     expect(runtime.models.getModels("commandcode-private").length).toBeGreaterThan(0);
+    const goat = runtime.models.getProvider("commandcode-goat");
+    expect(goat).toBeDefined();
+    expect(goat?.name).toBe("CommandCode Goat");
+    expect(runtime.providerSource("commandcode-goat")).toBe(
+      "luckytoken_bundled",
+    );
+    expect(runtime.models.getModels("commandcode-goat")).toHaveLength(33);
   });
 
   it("P3: classifies Pi builtin, bundled, custom models.json, external package and builtin overlay sources", async () => {
@@ -129,6 +137,7 @@ describe("Provider Runtime composition", () => {
 
   it("P3b: an external user Provider Package is classified user", async () => {
     const { modelsJsonPath } = await fixture();
+    const importBundledProvider = commandCodeProviderImportModule();
     const runtime = await createProviderRuntime({
       piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
       modelsJsonPath,
@@ -138,8 +147,11 @@ describe("Provider Runtime composition", () => {
       fetch: vi.fn(async () => new Response()),
       credentials: new InMemoryCredentialStore(),
       importModule: async (specifier) => {
-        if (specifier === COMMANDCODE_PROVIDER_PACKAGE) {
-          return (await commandCodeProviderImportModule()(specifier)) as object;
+        if (
+          specifier === COMMANDCODE_PROVIDER_PACKAGE ||
+          specifier === COMMANDCODE_GOAT_PROVIDER_PACKAGE
+        ) {
+          return (await importBundledProvider(specifier)) as object;
         }
         if (specifier === "@user/test-provider") {
           return {
@@ -168,15 +180,53 @@ describe("Provider Runtime composition", () => {
     expect(runtime.models.getProvider("user-package-provider")).toBeDefined();
   });
 
-  it("P4: rejects user configuration claiming the bundled package specifier", () => {
+  it.each([
+    COMMANDCODE_PROVIDER_PACKAGE,
+    COMMANDCODE_GOAT_PROVIDER_PACKAGE,
+  ])("P4: rejects user configuration claiming bundled package %s", (specifier) => {
     expect(() =>
       assertUserProviderPackages({
-        [COMMANDCODE_PROVIDER_PACKAGE]: {},
+        [specifier]: {},
       }),
     ).toThrow(/bundled product Provider/);
-    // The bundled metadata itself is never empty.
     expect(bundledProviderPackages.length).toBeGreaterThan(0);
     expect(bundledProviderIds.has("commandcode-private")).toBe(true);
+    expect(bundledProviderIds.has("commandcode-goat")).toBe(true);
+  });
+
+  it("keeps Private and Goat credentials in independent Pi Provider slots", async () => {
+    const { modelsJsonPath } = await fixture();
+    const credentials = new InMemoryCredentialStore();
+    const runtime = await createProviderRuntime({
+      piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
+      modelsJsonPath,
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      credentials,
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000010",
+    });
+    await credentials.modify("commandcode-private", async () => ({
+      type: "api_key",
+      key: "private-key",
+    }));
+
+    expect(
+      (await runtime.models.getAuth("commandcode-private"))?.auth.apiKey,
+    ).toBe("private-key");
+    await expect(runtime.models.getAuth("commandcode-goat")).resolves.toBeUndefined();
+
+    await credentials.modify("commandcode-goat", async () => ({
+      type: "api_key",
+      key: "goat-key",
+    }));
+    expect((await runtime.models.getAuth("commandcode-goat"))?.auth.apiKey).toBe(
+      "goat-key",
+    );
+    expect(
+      (await runtime.models.getAuth("commandcode-private"))?.auth.apiKey,
+    ).toBe("private-key");
   });
 
   it("P4b: rejects a user models.json Provider claiming the reserved bundled Provider ID", async () => {

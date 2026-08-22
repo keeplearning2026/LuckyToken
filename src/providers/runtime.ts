@@ -7,7 +7,7 @@
  * - the one Pi `Models` collection for login AND request execution;
  * - Pi built-in Provider registration;
  * - `models.json` Provider composition (overlays/custom Providers);
- * - bundled LuckyToken Provider Package loading (CommandCode Private);
+ * - bundled LuckyToken Provider Package loading;
  * - external user Provider Package loading;
  * - the one Pi-compatible credential store and the Live Credential
  *   Authority over it;

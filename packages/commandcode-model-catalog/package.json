@@ -1,5 +1,5 @@
 {
-  "name": "@luckytoken/provider-commandcode-private",
+  "name": "@luckytoken/commandcode-model-catalog",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,8 +15,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
-    "@luckytoken/commandcode-model-catalog": "0.1.0",
-    "@luckytoken/provider-contract": "0.1.0"
+    "@earendil-works/pi-ai": "0.84.2"
   }
 }

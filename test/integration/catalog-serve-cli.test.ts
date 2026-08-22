@@ -49,7 +49,11 @@ function startCli(args: readonly string[]): ChildProcessWithoutNullStreams {
       ...process.env,
       ...(fixtureHome === undefined
         ? {}
-        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
+        : {
+            HOME: fixtureHome,
+            USERPROFILE: fixtureHome,
+            CODEX_HOME: join(fixtureHome, ".codex"),
+          }),
       NO_COLOR: "1",
     },
     stdio: "pipe",

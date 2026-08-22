@@ -325,6 +325,7 @@ test(
       LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
+      CODEX_HOME: join(home, ".codex"),
       APPDATA: appData,
       LOCALAPPDATA: localAppData,
     };

@@ -1,6 +1,6 @@
 # `@luckytoken/provider-commandcode-private`
 
-This private workspace package owns the complete CommandCode Private Pi Provider capability: its 33-model catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
+This private workspace package owns the complete CommandCode Private Pi Provider capability: its projection of the shared CommandCode model capability catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
 
 ## Product composition
 

@@ -31,12 +31,12 @@ describe("CommandCode built-in default model", () => {
     expect(Object.isFrozen(model.input)).toBe(true);
   });
 
-  it("uses the DeepSeek V4 Flash per-1M-token pricing", () => {
+  it("does not track volatile upstream pricing", () => {
     const model = createCommandCodeDefaultModel();
     expect(model.cost).toEqual({
-      input: 0.14,
-      output: 0.28,
-      cacheRead: 0.0028,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
       cacheWrite: 0,
     });
   });

@@ -80,7 +80,11 @@ function startCli(
       ...process.env,
       ...(fixtureHome === undefined
         ? {}
-        : { HOME: fixtureHome, USERPROFILE: fixtureHome }),
+        : {
+            HOME: fixtureHome,
+            USERPROFILE: fixtureHome,
+            CODEX_HOME: join(fixtureHome, ".codex"),
+          }),
       ...extraEnv,
       ...(bridgeSignal
         ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }

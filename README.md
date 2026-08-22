@@ -148,19 +148,23 @@ value. The same sanitized committed records are the only ones reachable
 through the Control Plane diagnostics query/typed-event surface (`get
 _diagnostics`, `diagnostics_subscribe`) and any fallback output.
 
-The CommandCode Private Provider is shipped as the bundled product package
-`@luckytoken/provider-commandcode-private` and is registered automatically
-through the standard Pi Provider contract. Users must **not** add this package
-to `providerPackages`; that key is reserved for explicit external/user Provider
-Packages, and configuring the bundled CommandCode specifier there is rejected.
-No `models.json` entry is required for CommandCode Private. Users authenticate
-through the Provider login/credential flow and are then ready to serve.
+Two CommandCode Providers are shipped as bundled product packages and registered
+automatically through the standard Pi Provider contract:
+
+- `commandcode-private` uses CommandCode's private `/alpha/generate` protocol;
+- `commandcode-goat` uses Pi's `openai-completions` adapter at
+  `https://api.commandcode.ai/provider/v1`.
+
+Users must **not** add either bundled package to `providerPackages`; that key is
+reserved for explicit external/user Provider Packages. No `models.json` entry
+is required. The Providers share one price-free model capability catalog but
+own independent authentication, transport, and response lifecycles.
 
 Only npm root package names (including scoped root names) are accepted for
 user `providerPackages`. Package import, contract/export validation, factory
 construction, and Provider ID collision checks complete before external
 Providers are registered. Product composition registers Pi built-ins,
-`models.json` Providers, the bundled CommandCode Provider, and then explicit
+`models.json` Providers, the bundled CommandCode Providers, and then explicit
 external/user packages according to the owning runtime contract. The legacy
 `providerAdapters.commandcode-private` key is an error. A missing Provider API
 key does not block Backend startup; Provider auth state is managed through the
@@ -186,12 +190,14 @@ subscription/OAuth:
 
 ```powershell
 npm start -- login commandcode-private --config .luckytoken/config.json
+npm start -- login commandcode-goat --config .luckytoken/config.json
 ```
 
-The key is saved to `.luckytoken/pi/auth.json`. No `models.json` configuration
-is required. The canonical Provider model remains `deepseek/deepseek-v4-flash`,
-while LuckyToken exposes its default external Model name as
-`commandcode-private/deepseek-deepseek-v4-flash`.
+Each key is saved under its own Provider ID in `.luckytoken/pi/auth.json`. No
+`models.json` configuration is required. Both Providers expose the canonical
+model `deepseek/deepseek-v4-flash`; their default external names are
+`commandcode-private/deepseek-deepseek-v4-flash` and
+`commandcode-goat/deepseek-deepseek-v4-flash`.
 
 Start the local Backend:
 
@@ -252,6 +258,7 @@ Remove the stored Provider credential with:
 
 ```powershell
 npm start -- logout commandcode-private --config .luckytoken/config.json
+npm start -- logout commandcode-goat --config .luckytoken/config.json
 ```
 
 `SIGINT` and `SIGTERM` stop new connections, abort active requests, and wait for

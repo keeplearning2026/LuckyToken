@@ -71,6 +71,7 @@ try {
     );
     assert.ok(providerIds.includes("anthropic"));
     assert.ok(providerIds.includes("commandcode-private"));
+    assert.ok(providerIds.includes("commandcode-goat"));
     process.stdout.write(
       `${JSON.stringify({
         backendPid: status.ownership.owner.pid,

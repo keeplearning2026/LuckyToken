@@ -4,6 +4,7 @@ import {
   COMMANDCODE_MODELS,
   findCommandCodeModel,
 } from "../../packages/provider-commandcode-private/src/models.js";
+import { COMMANDCODE_GOAT_MODELS } from "../../packages/provider-commandcode-goat/src/models.js";
 
 describe("CommandCode model catalog", () => {
   it("ships every model from the source table", () => {
@@ -62,23 +63,44 @@ describe("CommandCode model catalog", () => {
     });
   });
 
-  it("uses the official pricing values", () => {
-    const model = findCommandCodeModel("deepseek/deepseek-v4-pro");
-    expect(model?.cost).toEqual({
-      input: 0.435,
-      output: 0.87,
-      cacheRead: 0.003625,
-      cacheWrite: 0,
-    });
+  it("does not track volatile upstream prices", () => {
+    for (const model of COMMANDCODE_MODELS) {
+      expect(model.cost).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+    }
   });
 
-  it("treats Free and unsupported cache write as zero", () => {
-    const free = findCommandCodeModel("poolside/laguna-s-2.1-free");
-    expect(free?.cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
+  it("projects the same capability catalog for CommandCode Goat", () => {
+    expect(COMMANDCODE_GOAT_MODELS).toHaveLength(33);
+    expect(
+      COMMANDCODE_GOAT_MODELS.map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        thinkingLevelMap: model.thinkingLevelMap,
+        input: model.input,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      })),
+    ).toEqual(
+      COMMANDCODE_MODELS.map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        thinkingLevelMap: model.thinkingLevelMap,
+        input: model.input,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      })),
+    );
+    expect(COMMANDCODE_GOAT_MODELS[0]).toMatchObject({
+      provider: "commandcode-goat",
+      api: "openai-completions",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
     });
   });
 

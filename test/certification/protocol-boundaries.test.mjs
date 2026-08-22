@@ -9,10 +9,22 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const sourceRoot = path.join(repositoryRoot, "src");
 const anthropicRoot = path.join(sourceRoot, "protocols", "anthropic");
 const responsesRoot = path.join(sourceRoot, "protocols", "openai-responses");
-const commandCodeRoot = path.join(
+const commandCodePrivateRoot = path.join(
   repositoryRoot,
   "packages",
   "provider-commandcode-private",
+  "src",
+);
+const commandCodeGoatRoot = path.join(
+  repositoryRoot,
+  "packages",
+  "provider-commandcode-goat",
+  "src",
+);
+const commandCodeCatalogRoot = path.join(
+  repositoryRoot,
+  "packages",
+  "commandcode-model-catalog",
   "src",
 );
 
@@ -138,15 +150,11 @@ test("Client Protocols import only their own modules, Pi, Node, and narrow neutr
   assertClosedProtocol(responses, responsesRoot, anthropicRoot);
 });
 
-test("the private CommandCode Provider never imports concrete Client Protocols", async () => {
-  for (const entry of await inspect(commandCodeRoot)) {
+async function assertClosedProvider(root, allowedPackages) {
+  for (const entry of await inspect(root)) {
     if (!entry.specifier.startsWith(".")) {
       assert.ok(
-        entry.specifier === "@earendil-works/pi-ai" ||
-          entry.specifier === "@luckytoken/provider-contract/package" ||
-          entry.specifier === "@luckytoken/provider-contract/diagnostics" ||
-          entry.specifier === "@sindresorhus/slugify" ||
-          entry.specifier.startsWith("node:"),
+        allowedPackages.has(entry.specifier) || entry.specifier.startsWith("node:"),
         `${slash(path.relative(repositoryRoot, entry.file))} imports unclassified package ${entry.specifier}`,
       );
       continue;
@@ -157,9 +165,38 @@ test("the private CommandCode Provider never imports concrete Client Protocols",
         !target.startsWith(`${responsesRoot}${path.sep}`),
       `${slash(path.relative(repositoryRoot, entry.file))} imports a concrete Client Protocol`,
     );
-    if (target.startsWith(`${commandCodeRoot}${path.sep}`)) continue;
+    if (target.startsWith(`${root}${path.sep}`)) continue;
     assert.fail(
       `${slash(path.relative(repositoryRoot, entry.file))} imports outside its package: ${slash(path.relative(repositoryRoot, target))}`,
     );
   }
+}
+
+test("CommandCode Providers never import concrete Client Protocols or one another", async () => {
+  await assertClosedProvider(
+    commandCodePrivateRoot,
+    new Set([
+      "@earendil-works/pi-ai",
+      "@luckytoken/commandcode-model-catalog",
+      "@luckytoken/provider-contract/package",
+      "@luckytoken/provider-contract/diagnostics",
+      "@sindresorhus/slugify",
+    ]),
+  );
+  await assertClosedProvider(
+    commandCodeGoatRoot,
+    new Set([
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-ai/api/openai-completions.lazy",
+      "@luckytoken/commandcode-model-catalog",
+      "@luckytoken/provider-contract/package",
+    ]),
+  );
+});
+
+test("the shared CommandCode model catalog imports no concrete Provider", async () => {
+  await assertClosedProvider(
+    commandCodeCatalogRoot,
+    new Set(["@earendil-works/pi-ai"]),
+  );
 });

@@ -239,23 +239,31 @@ test("distribution certification is blocked by the Electron product golden journ
       "utf8",
     ),
   );
+  const distributionCommands = [
+    rootManifest.scripts["test:distribution"],
+    rootManifest.scripts["test:distribution:inner"],
+  ].join(" ");
+  const productJourneyCommands = [
+    desktopManifest.scripts["test:product-e2e:run"],
+    desktopManifest.scripts["test:product-e2e:run:inner"],
+  ].join(" ");
   assert.match(
-    rootManifest.scripts["test:distribution"] ?? "",
+    distributionCommands,
     /test:product-e2e:run/u,
     "distribution certification must execute the product golden journey",
   );
   assert.match(
-    rootManifest.scripts["test:distribution"] ?? "",
+    distributionCommands,
     /npm test --workspace @luckytoken\/desktop-shell/u,
     "distribution certification must execute desktop lifecycle/unit regression tests",
   );
   assert.match(
-    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    productJourneyCommands,
     /product-golden-journey\.e2e\.test\.mjs/u,
     "desktop must expose the release-blocking golden-journey runner",
   );
   assert.match(
-    desktopManifest.scripts["test:product-e2e:run"] ?? "",
+    productJourneyCommands,
     /electron-window-lifecycle\.e2e\.test\.mjs/u,
     "desktop release tests must prove single-instance shell handoff and renderer lifecycle",
   );

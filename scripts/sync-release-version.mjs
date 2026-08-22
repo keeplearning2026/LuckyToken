@@ -25,7 +25,9 @@ if (!/^\d+\.\d+\.\d+$/u.test(root.version)) {
 
 for (const path of [
   "packages/application-control-plane/package.json",
+  "packages/commandcode-model-catalog/package.json",
   "packages/provider-contract/package.json",
+  "packages/provider-commandcode-goat/package.json",
   "packages/provider-commandcode-private/package.json",
   "packages/desktop-shell/package.json",
 ]) {

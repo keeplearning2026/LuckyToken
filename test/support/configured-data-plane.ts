@@ -132,6 +132,8 @@ export async function createConfiguredPiModels(
           importModule: (specifier: string) =>
             specifier === "@luckytoken/provider-commandcode-private"
               ? import("@luckytoken/provider-commandcode-private")
+              : specifier === "@luckytoken/provider-commandcode-goat"
+                ? import("@luckytoken/provider-commandcode-goat")
               : options.importModule!(specifier),
         }),
     ...(options.createUuid === undefined
@@ -282,6 +284,8 @@ export async function createConfiguredLuckyTokenDataPlane(
             importModule: (specifier: string) =>
               specifier === "@luckytoken/provider-commandcode-private"
                 ? import("@luckytoken/provider-commandcode-private")
+                : specifier === "@luckytoken/provider-commandcode-goat"
+                  ? import("@luckytoken/provider-commandcode-goat")
                 : options.importModule!(specifier),
           }),
       ...(options.onInvalidModelsJson === undefined

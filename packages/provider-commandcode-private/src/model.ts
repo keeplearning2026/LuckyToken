@@ -5,17 +5,16 @@ import { findCommandCodeModel } from "./models.js";
 /**
  * CommandCode Private provider-owned model construction.
  *
- * The CommandCode upstream endpoint is fixed and the provider ships one
- * built-in model, so users are ready after login without any models.json
- * configuration. This module is fully internal to the provider; external code
- * never imports it.
+ * The CommandCode upstream endpoint and model catalog projection are fixed, so
+ * users are ready after login without any models.json configuration. This
+ * module is fully internal to the provider; external code never imports it.
  */
 
 export { COMMANDCODE_BASE_URL, COMMANDCODE_PROVIDER_ID, COMMANDCODE_API_ID } from "./constants.js";
 
 /**
- * Built-in default model. The CommandCode provider ships with this model so
- * users are ready to go after login without any models.json configuration.
+ * Built-in default model selected from the shared CommandCode capability
+ * catalog.
  */
 export const COMMANDCODE_DEFAULT_MODEL_ID = "deepseek/deepseek-v4-flash";
 

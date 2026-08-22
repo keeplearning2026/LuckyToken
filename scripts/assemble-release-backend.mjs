@@ -61,8 +61,16 @@ export async function assembleReleaseBackend({
       name: "@luckytoken/provider-contract",
     },
     {
+      directory: "packages/commandcode-model-catalog",
+      name: "@luckytoken/commandcode-model-catalog",
+    },
+    {
       directory: "packages/provider-commandcode-private",
       name: "@luckytoken/provider-commandcode-private",
+    },
+    {
+      directory: "packages/provider-commandcode-goat",
+      name: "@luckytoken/provider-commandcode-goat",
     },
     {
       directory: "packages/application-control-plane",
