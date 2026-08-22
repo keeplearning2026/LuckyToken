@@ -154,12 +154,37 @@ These lanes must remain independent:
 - The two native lanes must not be unified behind a shared native target, native credential, native executor, native transport, or fallback abstraction. Similar wire-construction code may remain duplicated when sharing it would couple credential ownership or lifecycle.
 - Runtime/composition or the Client Protocol edge may select a lane using only the minimum routing facts required by that lane. After a lane is selected and execution begins, failure in that lane must not fall through to another lane.
 - Local Native eligibility is established by that integration's explicit local model/capability contract. Provider Native eligibility is established by an explicit `(provider, api/protocol)` transport contract or equivalent model capability; fuzzy provider-name similarity or payload resemblance is not sufficient.
-- Native lanes preserve model-visible request and response semantics rather than translating them. Only boundary-required model identity projection, credential/auth transport, header filtering, content encoding, and endpoint construction may alter the wire representation.
+- Native lanes preserve model-visible request and response semantics rather than translating them. Only boundary-required model identity projection, the exact credential-bound Anthropic OAuth body projection defined below, credential/auth transport, header filtering, content encoding, and endpoint construction may alter the wire representation.
 - The raw client wire remains authoritative on native lanes. Native passthrough must not reconstruct or semantically normalize unrelated request fields merely to forward them.
 - Credentials remain owned by the authority of the selected lane. Local credentials never become Pi Provider credentials; Pi Provider credentials never become Local Native credentials; neither credential representation enters Pi AI IR.
 - If serving a request requires semantic reinterpretation, invented defaults, cross-protocol repair, or an uncertain mapping, that request is not native preservation. Route it to Semantic Conversion before execution begins, or fail explicitly if no valid semantic mapping exists.
 
 A Client Protocol edge may invoke narrow lane-specific seams, but it must not implement the concrete transport rules of any lane itself. Local Native, Provider Native, and Semantic Conversion are three separate execution paths with separate ownership and lifecycle.
+
+### Provider Native Request Reconstruction Contract
+
+This contract applies only to Provider Native Preservation. It does not change or extend Local Native Preservation.
+
+For Provider Native, the compatible client request body is authoritative for model-visible semantics. By default, the lane may replace only the boundary-required top-level `model` selector with the resolved Provider model or deployment identity. It must not add, remove, default, repair, normalize, reinterpret, or otherwise change any other body field, value, relationship, or extension. Transport encoding or compression may change only when decoding produces the preserved body with the permitted projection.
+
+There is exactly one declared body-projection exception: first-party Anthropic `anthropic-messages` under an exact request-bound `oauth` Profile. That combination may additionally apply only the OAuth-dependent request-body transformations confirmed by the pinned Pi Agent Anthropic implementation, including the required Claude Code system identity and Claude Code tool-name projection across tool definitions and related message references. The captured Profile `authType`, not token text, selects this exception. The projection must preserve every unrelated client-authored semantic and fail before upstream execution when the required transformation cannot be performed without guessing or repair.
+
+The Anthropic OAuth exception is owned entirely by the Anthropic Provider Native lane as a narrow, pure body-projection implementation. It must not import, invoke, wrap, or reuse Pi AI IR, Pi Provider execution, Semantic Conversion body construction, or another Native lane. No other Provider, API/protocol, auth type, or future Pi change inherits this exception. Expanding it requires source evidence and an explicit architecture-contract change.
+
+Provider Native is not blind HTTP passthrough. It must reconstruct the upstream request envelope that the pinned Pi Agent Provider implementation would send, using only:
+
+- the resolved Pi `Model` and its effective Provider/API compatibility facts;
+- the exact request-bound Provider Profile, its authoritative auth type, and the `AuthResult` resolved under that binding;
+- the selected Provider operation and request-local lifecycle facts;
+- the pinned Pi Agent Provider implementation as a mirror reference, never as a shared runtime execution path.
+
+Every upstream fact whose correct value can vary with the Profile, authentication type, resolved Model, Provider, or Pi Agent wire behavior must be generated or overwritten by the Provider Native lane. This includes method and endpoint where applicable, base URL, authentication, account identity, Provider/model headers, version/beta/intent headers, session/request headers, SDK identity/User-Agent, accept/content type, and content encoding/compression. An inbound client value with the same name is not authoritative and cannot override the reconstructed value.
+
+Provider Native must not expose a generic inbound request-header passthrough. If a compatible client protocol carries a client-owned, model-visible header fact that must survive native preservation, the explicit `(provider, api/protocol, operation)` contract must name, validate, and re-project that fact through a lane-owned Interface. It must never override a Profile/Pi-owned fact.
+
+Provider Native Responses and Semantic Conversion/Pi AI IR are absolutely uncoupled execution paths. Provider Native Responses must not import, call, wrap, or reuse Pi AI IR types, Client Wire ↔ Pi AI IR adapters, Pi Provider execution, Semantic Conversion request builders, transports, retry state, credential-binding Adapter, or response handling. Semantic Conversion must not import, call, wrap, or reuse Provider Native request reconstruction, transport, retry state, credential-binding Adapter, or response handling. Each lane may independently consume the minimum shared request-edge/lifecycle facts and the Backend-lifetime Pi `Models` capabilities already allowed above, but no shared execution or credential object may cross between them.
+
+Architecture and wire-contract tests must enforce the default model-only body rule, the exact Anthropic OAuth exception, the envelope ownership rules, and the bidirectional dependency prohibition above. A violation is an architecture error and a release blocker, even if the observed Provider response appears correct.
 
 The CommandCode private provider must implement and register through the same Pi Provider contract and invocation path as Pi built-in providers. It is a LuckyToken implementation detail. External protocol adapters and public interfaces may use it only through the standard Pi model/provider path and must not directly instantiate, import, or special-case its private implementation.
 
