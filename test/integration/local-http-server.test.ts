@@ -26,12 +26,191 @@ function commandCodeText(text: string): Response {
   );
 }
 
+async function exchangeRawHttp(
+  host: string,
+  port: number,
+  request: string,
+): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    const socket = net.connect(port, host);
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    socket.setTimeout(2_000, () => {
+      socket.destroy(new Error("Timed out waiting for raw HTTP response"));
+    });
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.once("end", finish);
+    socket.once("close", finish);
+    socket.once("error", fail);
+    socket.once("connect", () => socket.write(request));
+  });
+}
+
 describe("local Anthropic HTTP server", () => {
   let server: RunningLuckyTokenHttpServer | undefined;
 
   afterEach(async () => {
     await server?.close();
     server = undefined;
+  });
+
+  it("signals clients to retry WebSocket upgrades over HTTP", async () => {
+    let runtimeCalls = 0;
+    const runtime: LuckyTokenRuntime = {
+      handle: async () => {
+        runtimeCalls += 1;
+        return new Response(null, { status: 204 });
+      },
+      routes: [],
+    };
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    const rawResponse = await exchangeRawHttp(
+      server.host,
+      server.port,
+      [
+        "GET /v1/responses HTTP/1.1",
+        `Host: ${server.host}:${server.port}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    const headerEnd = rawResponse.indexOf("\r\n\r\n");
+    expect(headerEnd).toBeGreaterThanOrEqual(0);
+    const headerLines = rawResponse.subarray(0, headerEnd).toString("ascii").split("\r\n");
+    const headers = new Headers(
+      headerLines.slice(1).map<[string, string]>((line) => {
+        const separator = line.indexOf(":");
+        return [line.slice(0, separator), line.slice(separator + 1).trim()];
+      }),
+    );
+    const body = rawResponse.subarray(headerEnd + 4);
+
+    expect(headerLines[0]).toBe("HTTP/1.1 426 Upgrade Required");
+    expect(headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(headers.get("content-length")).toBe(String(body.byteLength));
+    expect(headers.get("cache-control")).toBe("no-store");
+    expect(headers.get("connection")).toBe("close");
+    expect(headers.has("upgrade")).toBe(false);
+    expect(JSON.parse(body.toString("utf8"))).toEqual({
+      error: {
+        message:
+          "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+        type: "upgrade_required",
+        code: "websocket_transport_not_supported",
+        param: null,
+      },
+    });
+    expect(runtimeCalls).toBe(0);
+  });
+
+  it("keeps ordinary Responses HTTP requests on the runtime path", async () => {
+    let receivedRequest: Request | undefined;
+    const runtime: LuckyTokenRuntime = {
+      handle: async (request) => {
+        receivedRequest = request;
+        return Response.json({ transport: "http" }, { status: 202 });
+      },
+      routes: [],
+    };
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    const response = await fetch(`${server.origin}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-model", input: "hello" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({ transport: "http" });
+    expect(receivedRequest?.method).toBe("POST");
+    expect(receivedRequest?.url).toBe(`${server.origin}/v1/responses`);
+  });
+
+  it("applies the HTTP-only signal to WebSocket upgrades on every path", async () => {
+    let runtimeCalls = 0;
+    const runtime: LuckyTokenRuntime = {
+      handle: async () => {
+        runtimeCalls += 1;
+        return new Response(null, { status: 204 });
+      },
+      routes: [],
+    };
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    const rawResponse = await exchangeRawHttp(
+      server.host,
+      server.port,
+      [
+        "GET /v1/messages HTTP/1.1",
+        `Host: ${server.host}:${server.port}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+
+    const headerEnd = rawResponse.indexOf("\r\n\r\n");
+    expect(headerEnd).toBeGreaterThanOrEqual(0);
+    const statusLine = rawResponse.subarray(0, headerEnd).toString("ascii").split("\r\n")[0];
+    const body = rawResponse.subarray(headerEnd + 4);
+
+    expect(statusLine).toBe("HTTP/1.1 426 Upgrade Required");
+    expect(JSON.parse(body.toString("utf8"))).toEqual({
+      error: {
+        message:
+          "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+        type: "upgrade_required",
+        code: "websocket_transport_not_supported",
+        param: null,
+      },
+    });
+    expect(runtimeCalls).toBe(0);
+  });
+
+  it("does not apply the WebSocket signal to other Upgrade protocols", async () => {
+    let runtimeCalls = 0;
+    const runtime: LuckyTokenRuntime = {
+      handle: async () => {
+        runtimeCalls += 1;
+        return new Response(null, { status: 204 });
+      },
+      routes: [],
+    };
+    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+
+    const rawResponse = await exchangeRawHttp(
+      server.host,
+      server.port,
+      [
+        "GET /opaque HTTP/1.1",
+        `Host: ${server.host}:${server.port}`,
+        "Connection: Upgrade",
+        "Upgrade: h2c",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+
+    expect(rawResponse).toHaveLength(0);
+    expect(runtimeCalls).toBe(0);
   });
 
   it("uses the bound origin and transfers status, headers, and bytes mechanically", async () => {

@@ -4,7 +4,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { Readable } from "node:stream";
+import { type Duplex, Readable } from "node:stream";
 
 import { HttpRequestAbortedError } from "./http.js";
 import type { LuckyTokenRuntime } from "./runtime.js";
@@ -44,6 +44,41 @@ export interface RunningLuckyTokenHttpServer {
    *  exits. */
   drain(timeoutMs: number, options?: ServerDrainOptions): Promise<DrainOutcome>;
   close(): Promise<void>;
+}
+
+const WEBSOCKET_FALLBACK_BODY = Buffer.from(
+  JSON.stringify({
+    error: {
+      message:
+        "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+      type: "upgrade_required",
+      code: "websocket_transport_not_supported",
+      param: null,
+    },
+  }),
+  "utf8",
+);
+
+function isWebSocketUpgrade(request: IncomingMessage): boolean {
+  return request.headers.upgrade?.toLowerCase() === "websocket";
+}
+
+function rejectWebSocketUpgrade(socket: Duplex): void {
+  const responseHead = [
+    "HTTP/1.1 426 Upgrade Required",
+    "Content-Type: application/json; charset=utf-8",
+    `Content-Length: ${WEBSOCKET_FALLBACK_BODY.byteLength}`,
+    "Cache-Control: no-store",
+    "Connection: close",
+    "",
+    "",
+  ].join("\r\n");
+  socket.end(
+    Buffer.concat([
+      Buffer.from(responseHead, "ascii"),
+      WEBSOCKET_FALLBACK_BODY,
+    ]),
+  );
 }
 
 function requestHeaders(request: IncomingMessage): Headers {
@@ -187,6 +222,14 @@ export async function startLuckyTokenHttpServer(
         response.off("close", onResponseClose);
         settleCompletion?.();
       });
+  });
+  server.on("upgrade", (request, socket) => {
+    socket.once("error", () => socket.destroy());
+    if (!accepting || !isWebSocketUpgrade(request)) {
+      socket.destroy();
+      return;
+    }
+    rejectWebSocketUpgrade(socket);
   });
 
   await listen(server, host, requestedPort);

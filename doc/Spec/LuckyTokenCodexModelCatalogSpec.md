@@ -215,7 +215,9 @@ In addition to the required fields, routed entries must explicitly emit these co
 | `multi_agent_version` | Omit until routed subagent behavior is independently certified |
 | `node_repl_*` | Omit until the corresponding client surface is certified |
 
-Runtime observation: on `codex-cli 0.149.0`, the built-in `openai` provider may first attempt a WebSocket Responses connection even when the routed catalog says `prefer_websockets: false`; a `404` then falls back to HTTP and the turn succeeds. The catalog field is therefore a capability declaration, not a proven global transport-disable switch. LuckyToken does not add a fourth owned root config field to suppress this behavior.
+Runtime contract: on `codex-cli 0.149.0`, the built-in `openai` provider may first attempt a WebSocket Responses connection even when the routed catalog says `prefer_websockets: false`. The LuckyToken local listener is HTTP-only: while it is accepting traffic, every WebSocket upgrade receives `426 Upgrade Required` with code `websocket_transport_not_supported`, regardless of method or path. Codex treats that status as the signal to retry the turn over HTTP. Rejected upgrades do not enter runtime dispatch, authentication, model resolution, request accounting, or any data-plane lane. Non-WebSocket upgrade protocols retain the server's prior close behavior, and ordinary HTTP requests remain unchanged.
+
+The catalog field is therefore a capability declaration, not a proven global transport-disable switch. LuckyToken does not add a fourth owned root config field to suppress this behavior.
 
 Likewise, `supports_search_tool: false` prevents LuckyToken from advertising hosted search as a routed model capability, but it does not disable a user's independent global Codex web-search setting. LuckyToken continues to own only the three routing fields in section 7.
 
