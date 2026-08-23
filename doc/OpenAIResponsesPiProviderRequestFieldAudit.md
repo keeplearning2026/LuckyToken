@@ -2,19 +2,21 @@
 
 Date: 2026-08-23
 
-Scope: the pinned `pi-agent/packages/ai/src` implementation in this repository and LuckyToken's current Semantic Conversion request path.
+Status: historical source/target evidence baseline captured before commit `3fdd8d2`; current ownership target is defined by the OpenAI Responses protocol specification and decoupling plan.
+
+Scope: the pinned `pi-agent/packages/ai/src` implementation and the LuckyToken Semantic Conversion request path at the time of the audit. Re-audit final wire behavior after every Pi dependency upgrade.
 
 Primary protocol source: the pinned official OpenAI TypeScript SDK 6.40.0.
 
 ## Conclusion
 
-LuckyToken currently has three correctness gaps that should be treated as high priority:
+At the audit baseline, LuckyToken had three correctness gaps that required high-priority correction:
 
 1. `text.format`, `parallel_tool_calls`, and `tool_choice: "required"` are silently lost on the Semantic Conversion path. `tool_choice` for a named function is also discarded, although a notice is emitted. The final Provider request therefore does not preserve the client's control semantics.
 2. Most target Providers already have a corresponding native request control for required/named tool choice. The main blocker is Pi's generic `SimpleStreamOptions → streamSimple()` contract, not universal Provider incapability.
 3. `top_p` currently reaches only the three OpenAI-compatible builders that apply `samplingParams`. `service_tier`, `truncation`, `text.*`, `parallel_tool_calls`, and most identity/cache controls have no typed generic projection. Blindly putting them in `samplingParams` works only in those builders and is not a cross-Provider solution.
 
-There are also confirmed protocol-contract bugs at the Responses edge itself: the current parser implements an obsolete `tool_choice` allowed-list shape, accepts the wrong `prompt_cache_retention` spelling, rejects legal `null` values for `conversation`/`prompt`, collapses absent reasoning and explicit `reasoning.effort:"none"`, and the response renderer reports requested/default controls rather than the controls that reached the final Provider request.
+The baseline also had confirmed protocol-contract bugs at the Responses edge itself: the parser implemented an obsolete `tool_choice` allowed-list shape, accepted the wrong `prompt_cache_retention` spelling, rejected legal `null` values for `conversation`/`prompt`, collapsed absent reasoning and explicit `reasoning.effort:"none"`, and rendered requested/default controls rather than the controls that reached the final Provider request.
 
 Correctness must be evaluated at the final Provider request. A field parsed into a LuckyToken object or placed in `SimpleStreamOptions` is not supported unless the selected Pi adapter's final builder emits an equivalent Provider-wire control.
 
@@ -207,14 +209,13 @@ The response should be built from a small request-local record of the **effectiv
 
 ## Design implications
 
-The minimum coherent fix is not a Provider-name switch inside the Responses client adapter. The shared semantic request contract needs explicit, typed controls whose target mapping remains owned by each Pi adapter:
+The coherent fix belongs to the OpenAI Responses vertical Semantic Conversion module, not to a global all-protocol semantic contract and not to a Provider-name switch inside the request parser.
 
-1. Add a typed generic tool choice capable of `auto|none|required|named`, and make each `streamSimple()` map it to its existing direct option. Fail before execution for named choice on Google/Codex until their adapters implement an equivalent restriction.
-2. Add `parallelToolCalls?: boolean`. Map it to OpenAI-family/Mistral `parallel_tool_calls` and Anthropic `disable_parallel_tool_use`; Codex must stop hard-coding `true`. For targets without a proven control, reject `false` rather than silently allowing parallel calls.
-3. Add a typed structured-output constraint distinct from tool argument schemas. Map Responses `text.format` to Responses `text.format`, Chat Completions/Mistral `response_format`, Anthropic `output_config.format`, and Google response MIME/schema configuration only where the pinned builder is updated and the target schema subset is validated. If strict schema adherence cannot be preserved, fail the conversion.
-4. Add named `topP` rather than relying on OpenAI-only `samplingParams`; populate the corresponding native builder fields where supported.
-5. Preserve the tri-state distinction between reasoning omitted, explicitly disabled, and enabled at a level. Define `max_output_tokens` as the combined Provider output ceiling and make thinking-budget adapters fit inside it rather than add to it.
-6. Keep operational controls separate: service tier is OpenAI-family-specific; Responses metadata/store remain client-protocol lifecycle state; cache key/retention needs a narrow adapter-neutral cache contract; background requires full deferred fetch/cancel lifecycle, not just a body key.
-7. Add end-to-end tests that assert the final Provider request, not merely the intermediate options. At minimum cover each supported API for required/named tool choice, `parallel_tool_calls:false`, structured JSON schema output, `top_p`, reasoning summary behavior, output-token ceilings, response echo, and incompatible-target failure/warning.
+1. Preserve typed Responses tool choice, parallel-tool, structured-output, sampling, reasoning, cache, identity, lifecycle, and response-contract facts in the Responses-owned Invocation.
+2. Keep Responses reasoning omission, explicit disable, enabled effort, summary preference, historical summary text, and opaque item continuity distinct.
+3. Let Responses-owned source-to-target projectors validate Pi-native mappings and project only certified final Provider fields through the kernel-owned payload seam.
+4. Keep operational and Client lifecycle facts under their actual Responses owners; do not force them into Pi IR or another Client Protocol's supplement.
+5. Prove every enabled mapping with Client Responses Wire → final Provider Wire tests and full-history Provider response → Responses history → next Provider request tests.
+6. Keep the Pi execution kernel unaware of Responses fields and target mapping policy.
 
-Until those typed mappings exist, placing explicitly converted, allow-listed keys into `samplingParams` is an acceptable narrow workaround only for the three builders that demonstrably merge it. Never copy the whole client body: the last-step merge can also overwrite authoritative fields such as `model`, `input/messages`, `stream`, and `store`. The workaround must not be presented as support for Anthropic, Google, Vertex, Mistral, Bedrock, Codex Responses, or Pi Messages.
+Placing explicitly converted, allow-listed keys into `samplingParams` remains a narrow Pi path only for builders that demonstrably merge it. Never copy the whole Client body: the last-step merge can overwrite authoritative fields such as `model`, `input/messages`, `stream`, and `store`. No behavior in this audit is evidence that another Client Protocol should share Responses semantic contracts or projectors.

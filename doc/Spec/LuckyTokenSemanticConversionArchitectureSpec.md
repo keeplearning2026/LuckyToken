@@ -1,838 +1,497 @@
 # LuckyToken Semantic Conversion Architecture Specification
 
-Status: **Proposed current contract and implementation roadmap**  
-Date: **2026-08-23**  
-Scope: the Semantic Conversion lane only. Local Native Preservation and Provider Native Preservation remain governed by their own contracts.
+Status: **PROPOSED TARGET CONTRACT — DECOUPLING MIGRATION REQUIRED**
+Date: **2026-08-23**
+Scope: the Semantic Conversion data-plane lane only. Local Native Preservation and Provider Native Preservation remain independent and are governed by their own contracts.
 
-This document is the authoritative architecture and implementation route for:
+This document is authoritative for the structure shared by Semantic Conversion implementations. Protocol-specific field meanings, supplements, reasoning policies, request projectors, target-aware response interpretation, response rendering, and certification matrices belong to protocol-specific specifications and plans.
+
+## 1. Decision
+
+Semantic Conversion is a family of cohesive Client Protocol modules, not one universal semantic-conversion module.
+
+Each Client Protocol owns a complete vertical slice:
 
 ```text
-Client Protocol Wire
-→ Semantic Conversion Invocation
-→ LuckyToken Pi Wrapper
-→ Pi Provider Adapter
+Client Wire
+→ protocol-owned request conversion
+→ protocol-owned Semantic Invocation
+→ protocol-owned reasoning and target projection
+→ LuckyToken Pi execution kernel
+→ Pi Provider
 → Provider Wire
+→ Pi AssistantMessage
+→ protocol-owned response conversion
+→ Client Wire
 ```
 
-Where an older document says that Pi AI IR is the only shared semantic representation, or that a recognized field without a Pi slot must simply be dropped, this document supersedes that statement for the Semantic Conversion lane.
+OpenAI Responses, Anthropic Messages, and future Client Protocols do not share:
 
-## 1. Objective
+- a Semantic Invocation type;
+- a supplement type;
+- a reasoning request model;
+- a target projector registry;
+- field mapping policy;
+- target-response interpretation policy;
+- effective-state response policy;
+- protocol test cases or expected-wire assertions.
 
-The correctness endpoint is the final Provider request, not an intermediate LuckyToken object and not Pi AI IR by itself.
+They may reuse only mechanism-level modules that contain no Client Protocol semantics. The principal shared module is the LuckyToken Pi execution kernel, which owns Pi invocation and the `onPayload` lifecycle but does not know what any projected field means.
 
-For a supported conversion from Client Protocol A to Provider Protocol C:
+Controlled duplication is preferred when a shared abstraction would make independently evolving Client Protocols change together.
+
+## 2. Correctness objective
+
+Request correctness ends at the final Provider request, not at an intermediate LuckyToken object or Pi AI IR. Response correctness ends at the Client response and, for replay-required facts, at the next complete-history Provider request.
+
+For each supported source-protocol/target-API pair:
 
 1. preserve the Client request's model-visible meaning and enforceable controls;
-2. use Pi AI IR and Pi options wherever they produce the correct Provider request;
-3. retain recognized facts that Pi cannot carry until the final Provider target is known;
-4. project only mappings proven for the resolved Provider adapter/model;
-5. never claim that a control took effect unless the final Provider request contains an equivalent control;
-6. warn, degrade, omit, or fail explicitly when no valid target mapping exists.
+2. reuse the existing Client converter for validation, Pi messages, tool relationships, response state, and notices;
+3. use audited Pi IR and Pi options where they emit the correct target meaning;
+4. preserve recognized facts that Pi cannot carry inside that Client Protocol's own typed Invocation;
+5. apply only mappings certified for that source protocol, resolved Pi API, Provider/model compatibility, and final payload shape;
+6. report a control as effective only when the final Provider request contains an equivalent control;
+7. warn, fall back, omit, or fail according to the source protocol's requirement strength;
+8. restore replay-required Provider response facts in the next complete-history Provider request when compatible provenance permits it.
 
-The first implementation slice is reasoning. General request supplements and other Provider projections follow after the reasoning path is correct end to end.
+Protocol independence is an ownership rule, not a permission to reduce fidelity. A protocol module is incomplete if it omits a recognized request or response fact merely to avoid implementing a protocol-local type or target policy.
 
-## 2. Terms
+## 3. Terms
 
-### 2.1 Client Protocol Adapter
+### 3.1 Client Protocol Semantic Module
 
-Owns validation and conversion from one Client Wire protocol into a `ClientConversionResult`, and conversion from Pi response IR back to that Client Wire.
+A deep module that owns one Client Protocol's complete Semantic Conversion behavior. Its external Interface is small: accept one Client request plus request-local infrastructure facts and return the Client response or a protocol-correct failure.
 
-It knows the Client protocol but does not know the eventual concrete Provider payload shape.
+Its implementation may contain internal seams for request conversion, reasoning, supplement construction, target projection, response conversion, streaming, and tests. Those internal seams are not global extension points.
 
-### 2.2 Wrapped Client Conversion Module
+### 3.2 Protocol-owned Semantic Invocation
 
-Each existing Client conversion implementation is deepened rather than replaced. For OpenAI Responses, the implementation starts from the current `convertResponsesRequest()` behavior and preserves its proven message, tool, option, render-state, notice, and reference-resolution logic.
+The request-local representation owned by one Client Protocol Semantic Module. It normally contains:
 
-Its external Interface becomes one conversion operation:
+- the strongest correct Pi `Context` and Pi options;
+- that protocol's typed reasoning intent and historical continuity;
+- that protocol's typed supplement for recognized request facts Pi cannot carry correctly;
+- the smallest immutable attachment/provenance facts needed by that protocol;
+- Client-owned render state and notices kept outside Provider projection.
 
-```ts
-convertClientRequest(clientWire): ClientConversionResult<RenderState>;
-```
+The concrete shape is protocol-specific. No common discriminated union combines all Client Protocol Invocation types.
 
-Internally it performs two coordinated jobs:
+### 3.3 Protocol-owned supplement
 
-1. produce the strongest correct Pi `Context` and common Pi options using the existing conversion implementation;
-2. capture every recognized, validated semantic that the Pi path cannot carry correctly in first-class reasoning semantics or the complete `ProjectionSupplement`.
+A typed, immutable collection of validated request facts for one Client Protocol. It is complete relative to that protocol's supported request grammar, not relative to every other Client Protocol.
 
-These are two outputs of one Client conversion, not two independent parsers. The Client request is validated once, and a semantic fact has one authoritative canonical representation in the returned result.
+It is not:
 
-### 2.3 Semantic Conversion Invocation
+- raw Client Wire;
+- an unvalidated extension bag;
+- a Provider request object;
+- a common union of every known Client field;
+- model-visible Pi message content used as storage.
 
-The request-local Interface passed from a Client Protocol Adapter toward Provider-side semantic execution. It contains:
+### 3.4 Protocol-owned reasoning module
 
-- Pi `Context` for conversation, ordered history, thinking, and tool relationships;
-- Pi common options for controls Pi can express correctly;
-- typed semantic controls, beginning with reasoning;
-- later, a complete `ProjectionSupplement` for recognized controls Pi cannot carry;
-- the smallest immutable conversion context needed to attach preserved facts correctly.
+The reasoning module for one Client Protocol owns its request-generation grammar, historical reasoning interpretation, continuity codec, source-to-target replay decisions, content fallback, response rendering, and outcomes.
 
-It is not a second complete conversation IR and never contains raw Client or Provider bodies.
+For example, OpenAI Responses effort/summary/encrypted reasoning items and Anthropic disabled/enabled/adaptive thinking with budgets are different source contracts. They must not be forced into one request type merely because both eventually affect model reasoning.
 
-The intended shapes are:
+### 3.5 Protocol-owned target projector
 
-```ts
-interface SemanticConversionInvocation {
-  readonly pi: {
-    readonly context: Context;
-    readonly options: ModelsSimpleStreamOptions;
-  };
-  readonly reasoning: ReasoningSemantics;
-  readonly supplement: ProjectionSupplement;
-}
+A pure Adapter for one source-protocol/target-API pair. It consumes only:
 
-interface ClientConversionResult<TRenderState> {
-  readonly selector: string;
-  readonly invocation: SemanticConversionInvocation;
-  readonly client: {
-    readonly renderState: TRenderState;
-    readonly notices: readonly ConversionNotice[];
-  };
-}
-```
+- its source protocol's typed Invocation facts;
+- the resolved Pi `Model`, `model.api`, and certified compatibility facts;
+- the exact audited Pi-built Provider payload shape.
 
-The concrete Client adapter owns the exact render-state type. Runtime uses `selector` for model resolution and passes only `invocation` plus the resolved model to Provider-side semantic execution. Provider-side modules never receive or inspect Client render state. The exact TypeScript packaging may vary, but these information owners must remain visible.
+It validates and returns a copied payload plus explicit outcomes. It does not parse raw Client Wire or perform transport.
 
-### 2.4 LuckyToken Pi Wrapper
+### 3.6 Protocol-owned response interpreter
 
-Owns final-target-aware preparation and the call to the pinned Pi AI package. It:
+A target-aware Adapter inside one Client Protocol module. It consumes the final Pi `AssistantMessage`, its actual `provider/api/model` provenance, certified model compatibility, and that protocol's request-local render state. It decides how each retained Pi response fact maps into the Client response and into any next-request continuity carrier.
 
-- receives the resolved Pi `Model` and the Invocation;
-- asks the reasoning module to prepare history and request controls;
-- maps controls through audited Pi options first;
-- selects only certified target projectors;
-- creates and owns Pi's `onPayload` callback;
-- composes reasoning projection and general projection without two writers for one field;
-- returns the Pi `AssistantMessage` plus the effective projection outcome.
+It cannot recover Provider response data that the pinned Pi Adapter discarded. Such facts must be recorded by the protocol's response audit and resolved through a valid Client default/null, explicit omission with a developer notice, visible fallback, or critical conversion failure. It never uses the request-side `onPayload` seam and never intercepts Provider transport.
 
-### 2.5 Reasoning Module
+### 3.7 LuckyToken Pi execution kernel
 
-A mandatory deep module for reasoning generation intent, historical reasoning, and opaque continuity. It is separate from the optional general `ProjectionSupplement` because reasoning crosses both request and response directions and may require exact replay metadata.
+A protocol-agnostic deep module that owns:
 
-### 2.6 Projection Supplement
+- the public Pi execution call;
+- rejection of a caller-supplied `onPayload`;
+- installation and invocation of one already-selected projection operation;
+- payload projection failure enforcement;
+- final projection outcome collection;
+- delegation to the existing `ExecutionOperation`.
 
-A complete, typed collection of validated Client request facts that Pi `Context` and audited common Pi options cannot carry. Completeness describes capture, not target support: every fact is retained, but a Provider projector may initially support only a subset.
+It owns no request-field meaning and selects no Client Protocol or target projector.
 
-### 2.7 Provider Projector
+### 3.8 Mechanism-only leaf utility
 
-A pure target adapter used after Pi has built its Provider payload. It consumes normalized semantic facts, the resolved target facts, and the audited Provider payload shape. It returns a copied payload with only proven mappings.
+A small shared utility is permitted only when it is unaware of all source protocols and semantic policies. Examples include immutable payload cloning, exact shape guards, conflict ledgers, bounded outcome containers, and test transport capture.
 
-## 3. Authoritative data flow
+The deletion test applies: deleting the utility must reproduce identical mechanics in more than one protocol module. Similar-looking field mappings are not sufficient evidence.
+
+## 4. Authoritative structure
 
 ```text
-OpenAI Responses / Anthropic / other Client Wire
-                         │
-                         ▼
-              Wrapped Client Conversion Module
-          ┌──────────────────────────────────────┐
-          │ existing Pi conversion implementation│
-          │ + complete semantic capture          │
-          └──────────────────┬───────────────────┘
-                             │
-                             ▼
-                Client Conversion Result
-          ┌──────────────────────────────────────┐
-          │ selector → model resolution            │
-          │ invocation → Provider-side execution   │
-          │ client state → later response render   │
-          └──────────────────┬───────────────────┘
-                             │ invocation
-                             │ + resolved Pi Model
-                             ▼
-             Semantic Conversion Invocation
-          ┌──────────────────────────────────────┐
-          │ pi.context + pi.options               │
-          │ reasoning                             │
-          │ supplement                            │
-          └──────────────────┬───────────────────┘
-                             │
-                             ▼
-                   LuckyToken Pi Wrapper
-          ┌──────────────────────────────────────┐
-          │ prepare reasoning                    │
-          │ choose audited Pi option mappings    │
-          │ install wrapper-owned onPayload      │
-          │ call Pi streamSimple                 │
-          └──────────────────┬───────────────────┘
-                             │
-                   Pi builds base payload
-                             │
-                             ▼
-                      onPayload seam
-          ┌──────────────────────────────────────┐
-          │ reasoning projector                  │
-          │ + target supplement projector        │
-          └──────────────────┬───────────────────┘
-                             │
-                             ▼
-                    Final Provider Wire
+OpenAI Responses Wire
+        │
+        ▼
+OpenAI Responses Semantic Module
+  ├─ Responses Invocation
+  ├─ Responses supplement
+  ├─ Responses reasoning/continuity
+  ├─ Responses → target projectors
+  ├─ target Pi response → Responses interpretation
+  └─ Responses response conversion
+        │ Pi input + prepared projection operation
+        ▼
+┌──────────────────────────────────┐
+│ LuckyToken Pi execution kernel   │
+│ - owns onPayload                 │
+│ - invokes projection operation   │
+│ - calls existing Pi execution    │
+└──────────────────────────────────┘
+        ▲
+        │ Pi input + prepared projection operation
+Anthropic Messages Semantic Module
+  ├─ Anthropic Invocation
+  ├─ Anthropic supplement
+  ├─ Anthropic reasoning/continuity
+  ├─ Anthropic → target projectors
+  ├─ target Pi response → Anthropic interpretation
+  └─ Anthropic response conversion
+        ▲
+        │
+Anthropic Messages Wire
 ```
 
-Native preservation lanes do not enter this flow.
+The two protocol modules do not converge into a shared semantic representation. They converge only at the execution-mechanism seam.
 
-### 3.1 Composition in one request
+## 5. Dependency and locality rules
 
-The intended composition is direct:
-
-```ts
-const converted = clientConversion.convert(clientWire);
-const resolvedModel = resolveModel(converted.selector);
-const result = await luckyTokenPi.execute({
-  models,
-  model: resolvedModel,
-  invocation: converted.invocation,
-  infrastructure,
-});
-
-return clientConversion.render(result, converted.client.renderState);
-```
-
-Conceptually, the wrapper executes:
-
-```ts
-const prepared = reasoning.prepare(invocation.reasoning, invocation.pi, model);
-const projector = projectors.resolve(model);
-
-const options = {
-  ...prepared.piOptions,
-  onPayload: (basePayload: unknown) => {
-    const withReasoning = reasoning.project(basePayload, prepared, model);
-    return projector === undefined
-      ? validateUnprojectedSupplement(withReasoning, invocation.supplement)
-      : projector.project(withReasoning, invocation.supplement, model);
-  },
-};
-
-return models.streamSimple(model, prepared.context, options);
-```
-
-This pseudocode expresses ownership, not final function names. The important property is that the same Invocation drives both paths:
-
-- its Pi portion is consumed by Pi's existing Provider adapter;
-- its supplement is consumed at the Provider payload seam;
-- the wrapper composes both into one final request without changing Pi AI.
-
-Pinned Pi AI 0.84.2 currently invokes `onPayload` in all ten built-in text Provider adapters. This confirms the seam is available, but each adapter passes a different payload shape and therefore requires independent shape validation and certification.
-
-## 4. Governing principles
-
-### 4.1 Final-wire principle
-
-A semantic is supported only when an end-to-end test proves its equivalent representation in the final Provider request. Parser acceptance, Invocation snapshots, Pi IR snapshots, and projector-only tests are supporting evidence, not completion evidence.
-
-### 4.2 Preserve before target resolution
-
-A Client Protocol Adapter must not discard a recognized, validated fact merely because Pi lacks a slot. It preserves the fact in the narrowest typed Invocation location until the resolved target is known.
-
-### 4.3 Reuse-first composition principle
-
-The refactor wraps and deepens the existing Client conversion implementation. It does not replace proven request parsing, Pi message conversion, tool correlation, Pi option mapping, response rendering, or notice behavior with a new parallel implementation.
-
-The migration seam is the existing conversion result:
+The required dependency direction is:
 
 ```text
-current:
-  Client Wire → { context, options, renderState, notices }
-
-deepened:
-  Client Wire → {
-    pi: { context, options },
-    reasoning,
-    supplement,
-    client: { renderState, notices }
-  }
+protocol request/response code
+        ↓
+same-protocol semantic contracts and implementation
+        ↓
+Pi execution kernel Interface
+        ↓
+existing Pi execution / Pi AI
 ```
+
+Fixed rules:
+
+1. `protocols/openai-responses` and its semantic implementation do not import Anthropic protocol or semantic modules.
+2. `protocols/anthropic` and its semantic implementation do not import OpenAI Responses protocol or semantic modules.
+3. The Pi execution kernel imports no Client Protocol module, Invocation, supplement, reasoning type, or registry.
+4. No global `ClientProtocol` union or `switch (clientProtocol)` selects semantic behavior in the kernel.
+5. A protocol module selects its own target projector only after model resolution, using `model.api` plus certified Provider/model compatibility facts.
+6. Composition registers a Client Protocol handler and supplies shared infrastructure capabilities; it does not translate request controls or mutate Provider payloads.
+7. Adding a Client Protocol creates a new vertical module and composition registration. It does not modify the kernel or existing Client Protocol modules.
+8. Deleting a Client Protocol removes its vertical module without leaving fields or cases in a common semantic model.
+
+Architecture tests must enforce these rules through import/dependency assertions and a compile-time or fixture-based new-protocol locality test.
+
+## 6. Pi execution kernel Interface
+
+The exact TypeScript packaging may vary, but the kernel seam must remain equivalent to this small Interface:
+
+```ts
+interface PiInvocation {
+  readonly context: Context;
+  readonly options: ModelsSimpleStreamOptions;
+}
+
+interface PreparedPayloadProjection {
+  readonly pi: PiInvocation;
+  readonly initialOutcomes: readonly ProjectionOutcome[];
+  project(payload: unknown): {
+    readonly payload: unknown;
+    readonly outcomes: readonly ProjectionOutcome[];
+  };
+}
+
+interface PayloadProjectionOperation {
+  prepare(input: {
+    readonly model: Model<string>;
+    readonly pi: PiInvocation;
+  }): PreparedPayloadProjection;
+}
+
+interface PiKernelInfrastructure {
+  readonly executeOperation: ExecutionOperation;
+  readonly factsSink?: ExecutionFactsSink;
+}
+
+executeWithPiKernel(input: {
+  readonly models: Models;
+  readonly model: Model<string>;
+  readonly pi: PiInvocation;
+  readonly projection: PayloadProjectionOperation;
+  readonly infrastructure: PiKernelInfrastructure;
+}): Promise<{
+  readonly message: AssistantMessage;
+  readonly outcomes: readonly ProjectionOutcome[];
+}>;
+```
+
+The projection operation hides protocol-specific prepared state behind its implementation. The kernel does not inspect that state or the meaning of its outcomes except for the common terminal `failed` disposition. `PiKernelInfrastructure` is deliberately narrow; it cannot become a bag for Profile, routing, protocol render state, Provider payload types, or raw request facts.
+
+The protocol request converter does not create this operation. The owning protocol's semantic executor creates it after validation and target resolution from typed Invocation facts. The kernel alone creates Pi's `onPayload` callback.
+
+### 6.1 Kernel execution order
+
+1. Reject any Pi options already containing `onPayload`.
+2. Invoke the supplied operation's `prepare()` before freezing Pi input.
+3. Reject a failed initial outcome before invoking Pi.
+4. Freeze the prepared Pi Context/options using the existing execution guard.
+5. Install one kernel-owned `onPayload` callback.
+6. When Pi supplies its final base payload, invoke `project()` exactly once and throw from the callback before it returns if projection failed, so transport cannot receive the payload.
+7. Return the Pi `AssistantMessage` and immutable outcomes.
+8. If Pi reaches Provider dispatch or a successful terminal without invoking the certified payload seam, fail; an earlier Pi validation or execution failure remains authoritative and is not replaced by a missing-callback error.
+
+Pi retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion.
+
+## 7. Protocol-owned conversion rules
+
+### 7.1 One source parser
+
+Each Client request is validated once. The existing converter remains authoritative for behavior already proved correct. The same conversion operation produces Pi input, protocol-owned supplement/reasoning facts, Client render state, and conversion notices.
+
+Do not introduce a second parser that reinterprets raw Client Wire for projection.
+
+### 7.2 One authoritative source representation
+
+Within one protocol module, classify each recognized fact into exactly one owner:
+
+| Fact class | Owner |
+|---|---|
+| Conversation, ordered history, thinking blocks, images, tool calls/results | Pi `Context` |
+| An audited Pi option that works for this resolved target | Pi options |
+| Protocol-specific reasoning generation/history/continuity | protocol reasoning module |
+| Recognized request fact Pi cannot carry correctly | protocol supplement |
+| Client echo, streaming/render state, session behavior | protocol response state |
+| Conversion/projection notices | protocol-owned bounded facts published through fail-open observation |
+| Target-retained Pi response facts and Client response mapping | protocol-owned response interpreter |
+| Credentials, transport, retries, cancellation, diagnostics | existing infrastructure owner |
+
+A fact may be present in Pi options and the supplement only when the Pi path is target-dependent and the supplement is the authoritative source used to validate or repair the final wire. The target projector records one final writer and one outcome.
+
+### 7.3 Completeness without a universal model
+
+Every protocol must audit its own complete recognized grammar. Completeness means no validated source fact is silently lost merely because Pi IR lacks a slot. It does not require another Client Protocol to learn or represent that fact.
+
+The same completeness rule applies in the response direction. For every supported target API, the protocol records which Provider response facts survive Pi parsing, their `AssistantMessage` attachment, their Client response mapping, whether they are replay semantics, and the exact disposition when Pi cannot expose them.
+
+For each fact, the protocol plan declares:
+
+- source location and validation;
+- requirement strength;
+- Pi representation, if any;
+- target mappings known at that time;
+- warning/fallback/failure behavior;
+- protocol-valid response behavior and effective-state mapping when the Client protocol defines one;
+- required final-wire tests.
+
+### 7.4 No semantic guesswork
+
+Mappings are source-to-target contracts. Similar names do not establish equivalence. For example, output-token limits, cache durations, service tiers, reasoning activation, and structured-output names can differ across Client Protocols even when their Provider fields look similar.
+
+When equivalence is not proven:
+
+- preserve a validated protocol-owned fact until target resolution if a supported mapping may exist;
+- omit a preference with a warning when no mapping exists;
+- fail a hard control before Provider dispatch;
+- never invent a required target value unless the target Adapter contract defines that default.
+
+## 8. Protocol-owned target projection
+
+### 8.1 Projection matrix
+
+Projectors are indexed by source protocol first and resolved target second:
+
+```text
+OpenAI Responses → OpenAI Completions
+OpenAI Responses → Google
+OpenAI Responses → Bedrock
+...
+
+Anthropic Messages → OpenAI Completions
+Anthropic Messages → Google
+Anthropic Messages → Bedrock
+...
+```
+
+Two projectors that write the same Provider field may retain separate policies and code. Source semantics, requirement strength, fallback behavior, and effective-state reporting remain source-owned.
+
+### 8.2 Pi-first, final-wire verified
+
+An audited Pi-native mapping remains the first choice. The protocol-owned projector then:
+
+1. validates whether Pi emitted the exact or bounded target meaning;
+2. records `pi-native` when correct;
+3. repairs only a certified Provider-native field and emits a warning when repair is allowed;
+4. writes a missing field only for a proven mapping;
+5. rejects incompatible payload shapes rather than guessing;
+6. emits an explicit unsupported or failed outcome for every unconsumed fact.
+
+### 8.3 One writer and conflicts
+
+One final Provider field has one authoritative writer inside one protocol projection operation. The operation composes its reasoning and ordinary supplement internally and must detect overlap before mutation.
+
+The kernel enforces operation failure but does not decide which semantic owner wins.
+
+### 8.4 Unknown targets
+
+An unknown Pi API or unaudited payload shape receives no mutation. The owning protocol applies its own requirement policy before dispatch. Unknown target handling is not a kernel mapping policy.
+
+## 9. Reasoning and continuity
+
+Reasoning is protocol-owned because source grammars differ materially.
+
+Each protocol reasoning module must cover:
+
+- request generation intent, including omission versus explicit disable;
+- source-specific effort, budget, adaptive, and summary controls;
+- historical visible reasoning text;
+- opaque thinking-, text-, and tool-call-bound continuity;
+- actual Provider/API/model provenance from Pi responses;
+- same-target replay compatibility;
+- model-switch fallback;
+- response rendering into that Client Wire;
+- full-history response → next Provider request tests.
+
+Opaque state retains its source provenance and semantic attachment. Foreign Provider state must not masquerade as a native Client Protocol field. A protocol-specific client-wire envelope may preserve it when that wire has a valid bounded extension point. If the Client cannot return the envelope, preserve visible meaning and report that exact opaque replay was unavailable.
+
+No server-side continuity store is introduced unless a separate product contract explicitly requires server-owned continuation.
+
+## 10. Response interpretation
+
+Each Client Protocol owns a response-capability matrix indexed by the actual Pi response `api` plus Provider/model compatibility where required. The matrix must cover:
+
+- Provider response facts retained in Pi content, usage, stop fields, IDs, and opaque signatures;
+- their exact Pi attachment points;
+- valid Client response fields and SSE events;
+- response-only observations versus next-request replay semantics;
+- target-defined null/default values;
+- visible fallback, warning omission, and critical failure behavior;
+- fields irretrievably lost by the pinned Pi response parser.
+
+`onPayload` participates only in request construction. It is never evidence that a response field can be preserved. A protocol may not inject a transport, reread a consumed stream, or use diagnostics as a response data source to compensate for a Pi parser gap. If a critical Client response or replay relationship cannot be constructed from the authoritative Pi result, fail explicitly; otherwise emit the strongest valid Client response and publish a bounded developer notice for the loss.
+
+## 11. Projection outcomes and failures
+
+The kernel may share a small outcome vocabulary because it describes execution mechanics, not Client field meaning:
+
+- `pi-native`;
+- `payload-projected`;
+- `content-fallback`;
+- `omitted`;
+- `failed`.
+
+The protocol module owns the subject/control identifier, warning text, and whether a fact is hard or a preference.
 
 Rules:
 
-- Existing correct Pi conversion remains the authoritative implementation for Pi-representable facts.
-- Supplement capture is added beside that implementation, using the same validated source facts.
-- The Client conversion module never gains Provider payload switches.
-- The projector never reparses Client Wire or rebuilds Pi Context.
-- The Pi wrapper consumes both outputs and composes them for one request.
-- Introducing the wrapper with no enabled projector must preserve the current final Provider request byte-for-byte except for already-declared nondeterministic fields.
-- Projectors are enabled incrementally behind final-wire tests, so one projector does not require a rewrite of other Client conversion behavior.
+- hard unsupported controls fail before dispatch;
+- unsupported preferences are omitted with a protocol-owned warning;
+- repairs emit a developer warning identifying the protocol projector;
+- diagnostics are fail-open and never affect projection;
+- Client responses claim effectiveness only from successful final outcomes when their protocol defines an effective-state field; other protocols do not invent an echo.
 
-This is the principal complexity-reduction strategy for the refactor.
+## 12. Native-lane isolation
 
-### 4.4 Pi-first principle
+Local Native Preservation and Provider Native Preservation do not use protocol Semantic Invocations, protocol target projectors, or the Pi execution kernel.
 
-Pi owns base Provider request construction. If an audited Pi `Context` or common-option path already emits the correct target semantic, use it. Payload projection is a supplement for demonstrated Pi gaps, not a replacement Provider implementation.
+Native lane eligibility and request reconstruction remain governed by `AGENTS.md`. Failure after lane commitment never falls through into a Semantic Conversion module.
 
-### 4.5 One authoritative writer
+## 13. Testing contract
 
-Every final Provider field has exactly one owner for a request:
+### 13.1 Kernel tests
 
-- Pi native mapping; or
-- reasoning projection; or
-- general Provider projection.
+Kernel tests use a synthetic projection operation and prove only mechanics:
 
-The wrapper must reject conflicting projection plans rather than applying an arbitrary last-write-wins rule.
+- `onPayload` ownership;
+- prepare/project ordering;
+- exactly-once projection;
+- immutable Pi input;
+- failed outcome prevents dispatch;
+- missing Pi payload callback fails;
+- projection outcomes are returned;
+- diagnostics do not alter execution.
 
-### 4.6 Target selection principle
+They contain no OpenAI Responses or Anthropic request fixtures.
 
-Select reasoning policies and Provider projectors from:
+### 13.2 Protocol tests
 
-```text
-resolved model.api
-+ resolved model.provider where required
-+ certified model.compat/model-family facts
-+ validated source provenance for replay
-```
+Every protocol owns independent tests for:
 
-Client protocol identity alone never selects a Provider projector. Fuzzy Provider-name or payload-shape matching is forbidden.
+- Client Wire → protocol Invocation;
+- complete supplement capture;
+- reasoning and continuity;
+- every certified source-protocol/target-API projector;
+- Provider response → Client Wire → next Provider request replay;
+- final Provider body after Pi and `onPayload`;
+- unsupported hard/preference behavior;
+- protocol-valid response behavior; effective-state echo only when the Client protocol defines such fields;
+- target Provider response → Pi `AssistantMessage` → Client Wire coverage, including explicit unavailable-field dispositions.
 
-### 4.7 Provenance and opaque-state principle
+Tests for one Client Protocol do not import another protocol's fixtures, supplement builders, expected semantics, or projector registry.
 
-Opaque continuity metadata is meaningful only with its original semantic attachment and source provenance.
+### 13.3 Locality tests
 
-- Preserve the original Provider/API/model when known.
-- Preserve whether the value belongs to thinking, text, or a tool call.
-- Restore it only when the selected target adapter's replay contract accepts that provenance.
-- Never invent or translate opaque signatures.
-- Discard incompatible opaque state on model switch while retaining visible reasoning through the best valid target representation.
-- Do not persist deterministic adapter facts when they can be recomputed from certified target capabilities.
-
-### 4.8 Honest provenance principle
-
-Do not mark arbitrary Client history as though the target Provider generated it. Target rebinding is allowed only when a certified target adapter accepts unsigned historical reasoning and the transformation is explicitly recorded as semantic conversion. Opaque signatures are never rebound.
-
-### 4.9 Explicit outcome principle
-
-Each preserved control receives one effective outcome:
-
-```ts
-type ProjectionOutcome =
-  | { kind: "pi-native" }
-  | {
-      kind: "payload-projected";
-      projector: string;
-      warning?: "pi-native-mapping-repaired";
-    }
-  | { kind: "content-fallback"; reason: string }
-  | { kind: "omitted"; warning: string }
-  | { kind: "failed"; error: string };
-```
-
-Responses and diagnostics may report a control as applied only for `pi-native` or `payload-projected`.
-
-The final payload verifier must compare audited Pi-native output with the requested semantic control. When Pi emitted a different value and the exact Provider-native replacement is certified, the projector repairs the copied payload and returns `pi-native-mapping-repaired`; this warning is emitted even though the request can continue. When the verifier can prove the payload is wrong but cannot prove the exact replacement, it must not guess: a hard control fails and a preference is omitted with a warning. A payload that already has the certified value remains `pi-native` and is not rewritten.
-
-Every `omitted`, `content-fallback`, and repaired outcome also publishes one bounded request-local developer notice through the fail-open observation seam. The outcome remains authoritative if observation is unavailable. A `failed` outcome is terminal: the wrapper must throw before the Provider transport receives the payload.
-
-### 4.10 Unknown-target principle
-
-An unknown API or unaudited payload shape receives no payload mutation. Visible historical reasoning may fall back to ordinary assistant content when valid. Opaque state is discarded. An explicit reasoning disable is hard and fails when the final target cannot be proved disabled. An enabled reasoning effort level and a reasoning-summary preference are preferences and may be omitted with a warning. Every other hard control that cannot be preserved fails before dispatch.
-
-### 4.11 Pinned-dependency principle
-
-Do not modify `@earendil-works/pi-ai` or `node_modules`. Pi is pinned evidence and execution machinery. A deterministic default from the pinned Pi Adapter's compatibility resolver counts as certified only when LuckyToken mirrors that exact version-bound rule and final-wire tests cover it. LuckyToken must not add independent Provider-name, URL, model-name, or payload-shape heuristics. Every Pi upgrade reruns resolver parity checks, adapter audits, and final-wire contract tests before projection remains certified.
-
-## 5. Reasoning module contract
-
-The term “reasoning summary” is ambiguous and must not be used alone in code. Use these two distinct concepts:
-
-1. `ReasoningSummaryPreference`: a current-request instruction such as Responses `reasoning.summary: "detailed"`.
-2. `ReasoningSummaryText`: model-visible historical text from a prior reasoning output item.
-
-### 5.1 Canonical inputs
-
-```ts
-type ReasoningEffortIntent =
-  | { kind: "provider-default" }
-  | { kind: "disabled" }
-  | {
-      kind: "enabled";
-      level: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-    };
-
-type ReasoningSummaryIntent =
-  | { kind: "provider-default" }
-  | {
-      kind: "requested";
-      value: "auto" | "concise" | "detailed";
-    };
-
-interface ReasoningRequestIntent {
-  readonly effort: ReasoningEffortIntent;
-  readonly summary: ReasoningSummaryIntent;
-}
-
-interface HistoricalReasoning {
-  readonly attachment: {
-    readonly messageIndex: number;
-    readonly contentIndex: number;
-    readonly sourceItemId?: string;
-  };
-  readonly summaryText: string;
-  readonly source?: {
-    readonly provider: string;
-    readonly api: string;
-    readonly model: string;
-  };
-}
-
-type ReasoningContinuityAttachmentPoint =
-  | {
-      readonly target: "thinking" | "text";
-      readonly messageIndex: number;
-      readonly contentIndex: number;
-      readonly sourceItemId?: string;
-    }
-  | {
-      readonly target: "toolCall";
-      readonly messageIndex: number;
-      readonly contentIndex: number;
-      readonly callId: string;
-    };
-
-interface ReasoningContinuityAttachment {
-  readonly attachment: ReasoningContinuityAttachmentPoint;
-  readonly source: {
-    readonly provider: string;
-    readonly api: string;
-    readonly model: string;
-  };
-  readonly kind:
-    | "opaque-signature"
-    | "responses-reasoning-item"
-    | "reasoning-field-selector";
-  readonly representation?: "redacted";
-  readonly value: string;
-}
-
-interface ReasoningSemantics {
-  readonly request: ReasoningRequestIntent;
-  readonly history: readonly HistoricalReasoning[];
-  readonly continuity: readonly ReasoningContinuityAttachment[];
-}
-```
-
-The exact TypeScript names may change during implementation, but these facts and distinctions are required.
-
-`representation: "redacted"` is valid only for a thinking attachment with `kind: "opaque-signature"`. It preserves the Provider response's replay representation without selecting a target Provider. The target reasoning Adapter restores it only when the opaque value's source provenance is compatible with the resolved Provider/API/model.
-
-### 5.2 External Interface
-
-The reasoning module presents two operations because Pi payload creation occurs after context preparation:
-
-```ts
-prepareReasoning(input: {
-  readonly model: Model<string>;
-  readonly context: Context;
-  readonly options: ModelsSimpleStreamOptions;
-  readonly semantics: ReasoningSemantics;
-}): PreparedReasoning;
-
-projectReasoningPayload(input: {
-  readonly model: Model<string>;
-  readonly prepared: PreparedReasoning;
-  readonly payload: unknown;
-}): ReasoningProjectionResult;
-```
-
-`prepareReasoning` is pure and returns copied/frozen request data. It may:
-
-- preserve or deliberately rebind a Pi thinking block under a certified replay policy;
-- restore a compatible Pi `thinkingSignature` representation;
-- map request effort through Pi options;
-- choose content fallback;
-- produce typed, target-specific projection facts for the later payload seam.
-
-`projectReasoningPayload` is also pure. It validates the audited payload shape and returns a copy. It does not send requests, resolve credentials, select Profiles, retry, or log raw content.
-
-The LuckyToken Pi Wrapper, not the reasoning module and not the Client Adapter, creates `onPayload` and calls `projectReasoningPayload` from it.
-
-### 5.3 Preparation rules
-
-For each historical reasoning item:
-
-1. Preserve `summaryText` in a Pi `ThinkingContent` candidate.
-2. Validate the attachment against the final immutable Pi Context.
-3. If source and target satisfy exact replay compatibility, restore the target adapter's required Pi representation.
-4. If opaque continuity is incompatible, discard only the opaque value.
-5. If the target accepts unsigned historical reasoning, project the visible summary as target-native reasoning.
-6. Otherwise convert the visible summary to ordinary assistant text at the same history position.
-7. Never silently drop non-empty visible reasoning.
-
-The following block is therefore an output of target-aware preparation, not something the Client Adapter should construct blindly:
-
-```ts
-{
-  type: "thinking",
-  thinking: summaryText,
-  thinkingSignature: restoredSignature,
-  redacted: restoredRepresentation === "redacted" ? true : undefined,
-}
-```
-
-### 5.4 Response continuity rules
-
-When Pi returns reasoning:
-
-1. render the visible summary in the Client protocol's reasoning representation where possible;
-2. extract adapter-provided opaque continuity and its actual Provider/API/model provenance;
-3. preserve its attachment point in a bounded Client-carried envelope when the Client protocol has a valid carrier;
-4. preserve a validated redacted replay representation beside an opaque thinking value when Pi marks the block `redacted: true`;
-5. keep every Responses-native reasoning item field (`id`, `status`, `summary`, `content`, and `encrypted_content`) in its standard Responses field rather than duplicating model-visible fields inside the opaque envelope;
-6. on the next full-history request, reconstruct `HistoricalReasoning` from that item and envelope;
-7. do not use server-side session storage merely because full-history replay is inconvenient.
-
-Provider response facts that Pi stores on text or tool calls, such as Google thought signatures, remain attached to text or tool calls. They must not be moved to the nearest thinking block.
-
-## 6. Pinned Pi 0.84.2 reasoning adapter policies
-
-This matrix records the initial implementation policy inferred from the pinned adapter source. It is an audit starting point, not certification. Each row requires a final-wire test before being enabled.
-
-| `model.api` | Historical reasoning replay | Continuity form | Initial policy |
-|---|---|---|---|
-| `openai-completions` | Provider-specific assistant reasoning field or text | Pi `thinkingSignature` is commonly the field selector `reasoning_content`, `reasoning`, or `reasoning_text` | Use a selector learned from validated prior adapter output or a certified Provider/model capability. Respect `requiresThinkingAsText`. Never use an opaque Provider signature as a property name. |
-| `openai-responses` | Complete Responses reasoning input item | serialized complete reasoning item JSON | Exact replay only from a valid complete item. A summary alone is not enough for Pi's current builder; do not fabricate item identity or encrypted content. |
-| `azure-openai-responses` | Same shared Responses item conversion, with Azure payload differences | serialized complete reasoning item JSON | Same continuity rule as `openai-responses`; certify the Azure payload independently. |
-| `openai-codex-responses` | Same shared Responses item conversion | serialized complete reasoning item JSON | Same continuity rule; certify Codex-specific defaults independently. Native preservation remains a separate lane. |
-| `anthropic-messages` | Anthropic thinking/redacted-thinking blocks | opaque thinking signature or redacted data | Restore only for compatible source/target provenance. Ordinary unsigned thinking normally becomes text unless the model's audited compatibility explicitly permits an empty signature. |
-| `bedrock-converse-stream` | Bedrock `reasoningContent.reasoningText` | signature required for supported Anthropic model families; unsigned for other supported families | Select by audited Bedrock model family. Missing required signature falls back to text. Do not send a signature to a model family that rejects it. |
-| `google-generative-ai` | Gemini `thought: true` part | optional opaque `thoughtSignature`, also possible on text/tool-call parts | Preserve only for the same compatible Provider/model and original attachment. Visible unsigned history may use `thought:true` only when certified. |
-| `google-vertex` | Same Google shared conversion | optional opaque `thoughtSignature` | Same semantic rules as Google Generative AI, with an independent final payload-shape test. |
-| `mistral-conversations` | structured Mistral thinking content | no Pi reasoning signature currently used | Preserve visible thinking through Pi when target compatibility is certified; otherwise content fallback. |
-| `pi-messages` | Pi Context is sent in the Provider wire | Pi content signatures are transported as Pi fields | Treat as delegated Pi-IR transport. Preserve valid Pi attachments; do not inject another Provider's opaque state without compatible provenance. |
-
-### 6.1 Current Pi transformation hazard
-
-Pi's common message transform treats an AssistantMessage as same-model only when `provider`, `api`, and `model` all match. Different-model thinking is converted to text and opaque signatures are removed.
-
-LuckyToken currently labels converted Client history with synthetic `luckytoken-client` / `luckytoken-client-history` provenance. Therefore inserting a `ThinkingContent` block alone does not prove final Provider reasoning replay. The reasoning module must make the replay decision after target resolution.
-
-### 6.2 Request-generation control policy
-
-`ReasoningEffortIntent` must preserve three states through target resolution:
-
-- `provider-default`: do not turn Pi's adapter-specific omission behavior into a claimed explicit choice;
-- `disabled`: emit an explicit target off only when the target mapping is certified;
-- `enabled`: map the requested effort.
-
-`ReasoningSummaryIntent` is independent. This prevents a request that supplies only `reasoning.summary`, or supplies summary alongside an explicit effort choice, from losing either fact.
-
-Pi common `reasoning` is the first choice for enabled effort where its adapter mapping is equivalent. It does not carry Responses `reasoning.summary`, and current `streamSimple` paths may collapse omission and explicit off. Target-specific reasoning projection must repair those gaps where the Provider has an equivalent field.
-
-Initial `ReasoningSummaryPreference` policy:
-
-| Target family | Policy |
-|---|---|
-| OpenAI Responses / Azure Responses / Codex Responses | Project to native `reasoning.summary` after validating the payload shape. |
-| Anthropic / Bedrock | Only map to their coarser summarized/omitted display behavior when the requested meaning is demonstrably compatible; otherwise warn about degradation. |
-| OpenAI Completions, Google, Mistral, Pi Messages | No generic equivalent is assumed. A Provider/model-specific certified mapping may be added later; otherwise omit with warning. |
-
-## 7. General Projection Supplement
-
-The supplement is implemented after the reasoning module, but its first schema must capture every recognized and validated Client request semantic that the existing Pi conversion cannot carry correctly to every supported final target. Projector coverage may be incremental; capture completeness may not be incremental.
-
-The supplement is always produced as an immutable value, even when empty. The projection module is optional. These are separate statements:
-
-- complete capture prevents information loss before target resolution;
-- optional projection allows incremental Provider support without rewriting the Client conversion module.
-
-The supplement is not a raw extension bag. Its stable Interface is organized by protocol-neutral semantic families:
-
-```ts
-interface ProjectionSupplement {
-  readonly output?: OutputProjectionControls;
-  readonly tools?: ToolProjectionControls;
-  readonly sampling?: SamplingProjectionControls;
-  readonly cache?: CacheProjectionControls;
-  readonly identity?: IdentityProjectionControls;
-  readonly lifecycle?: LifecycleProjectionControls;
-}
-```
-
-Only families with recognized fields are present in the final concrete shape. Each field preserves:
-
-- the normalized semantic value;
-- source presence versus explicit disable/null where meaningful;
-- whether the source requirement is hard or preferential;
-- the minimum provenance or compatibility condition needed for projection;
-- its source attachment where the semantic belongs to a particular tool or output contract.
-
-It never stores credentials, transport objects, callbacks, a raw body, or a copied Provider request.
-
-### 7.1 Classification rule
-
-Classify every Client request fact once:
-
-| Classification | Authoritative location |
-|---|---|
-| Pi can express it portably and audited adapters preserve it | `invocation.pi` |
-| reasoning generation/history/continuity | `invocation.reasoning` |
-| Pi cannot express it or Pi support is target-dependent/partial | `invocation.supplement` |
-| Client response echo/session/render-only state | `ClientConversionResult.client.renderState` |
-| credential, transport, retry, cancellation, diagnostics lifecycle | owning infrastructure module, never the semantic Invocation |
-
-A target-dependent Pi escape hatch such as `samplingParams` is not automatically a portable Pi mapping. The canonical fact remains in the supplement when non-OpenAI targets need it. After target resolution, the wrapper may choose an audited Pi option path for one adapter or the payload projector for another, but only one path writes the final field.
-
-### 7.2 Projector absence
-
-If the resolved target has no general projector:
-
-- an empty supplement proceeds through the existing Pi path unchanged;
-- a non-empty supplement is evaluated field by field;
-- preferential unsupported fields are omitted with explicit outcomes/warnings;
-- hard output constraints, required tool choices, or other critical semantics fail before dispatch;
-- no supplement value is silently copied into an unknown payload.
-
-For OpenAI Responses, the first schema audit must include at least:
-
-- `text.format` and verbosity;
-- `parallel_tool_calls`;
-- all legal `tool_choice` variants, including `required` and a named tool;
-- explicit reasoning off and reasoning summary preference not handled by the reasoning module's Pi option path;
-- `service_tier`;
-- `truncation`;
-- exact prompt-cache controls and safe end-user identity controls;
-- response-contract controls whose request injection alone would be insufficient, such as requested extra output fields.
-
-Reasoning remains a first-class `ReasoningSemantics` field, not an entry in the general supplement. The same wrapper payload seam may execute both, but their ownership and failure policies remain separate.
-
-“Every Pi-unrepresentable fact goes into the supplement” therefore means every ordinary request semantic. Reasoning-unrepresentable facts are also preserved completely, but in the dedicated first-class `reasoning` field because they have a response-to-next-request continuity lifecycle that the general supplement does not own.
-
-## 8. LuckyToken Pi Wrapper contract
-
-The wrapper's intended external Interface is one request-local call:
-
-```ts
-executeSemanticConversion(input: {
-  readonly models: Models;
-  readonly model: Model<string>;
-  readonly invocation: SemanticConversionInvocation;
-  readonly infrastructure: SemanticExecutionInfrastructure;
-}): Promise<SemanticConversionResult>;
-```
-
-Internally it performs:
-
-```text
-validate/freeze Invocation
-→ prepare reasoning
-→ map audited Pi common options
-→ select certified reasoning/general projectors
-→ install one wrapper-owned onPayload
-→ call Pi streamSimple
-→ return AssistantMessage + effective outcomes
-```
-
-The `onPayload` order is:
-
-1. validate the exact payload shape for the resolved `model.api`;
-2. apply reasoning-owned fields;
-3. apply general supplement fields that do not overlap reasoning;
-4. validate ownership conflicts and final required controls;
-5. return a copied payload.
-
-Infrastructure callbacks already owned by Pi execution may be composed only through explicit wrapper rules. A Client Adapter never creates or captures `onPayload`.
-
-## 9. Provider projector contract
-
-A projector must declare:
-
-- exact `model.api` values supported;
-- any Provider/model compatibility predicate;
-- expected pinned Pi payload shape and version evidence;
-- semantic fields it owns;
-- unsupported and malformed behavior;
-- whether a mapping is exact, approximate, or unavailable.
-
-An exact-value verifier repairs a mismatch only when the exact Provider field and replacement are certified. `max_output_tokens` is a request control over the generated response's total output-token ceiling, not the Client input-token size. An upper-bound verifier may accept a smaller response-output ceiling required by context safety, but a final Provider request that raises the ceiling above the Client value fails. A Provider minimum cannot widen that hard limit.
-
-It must not:
-
-- import Client Protocol wire types;
-- receive a raw Client request;
-- resolve credentials or endpoints;
-- send the request;
-- mutate Pi-owned objects in place;
-- write an unregistered Provider field;
-- silently accept an unknown payload shape.
+Architecture certification must prove:
 
-One adapter implementation may cover multiple APIs only when they truly share an audited payload contract. Shared source code does not waive independent final-wire tests.
+- no imports between Client Protocol modules;
+- no Client Protocol imports from the kernel;
+- no central Client Protocol discriminant in the kernel;
+- a synthetic new Client Protocol can bind a projection operation and execute without modifying existing protocol modules or the kernel.
 
-### 9.1 Current LuckyToken reuse map
-
-The refactor reuses current ownership as follows:
+### 13.4 Online tests
 
-| Current implementation | Refactored role |
-|---|---|
-| `convertResponsesRequest()` validation, message/tool conversion, and Pi option construction | implementation inside the wrapped OpenAI Responses Client conversion module |
-| `ResponsesInvocation.context` and `.options` | `ClientConversionResult.invocation.pi` |
-| `ResponsesInvocation.renderState` and `.notices` | `ClientConversionResult.client`; never passed to Provider projectors |
-| current request-local reference resolution and history expansion | stays Client-adapter-owned before the semantic Invocation is finalized |
-| current infrastructure/router option composition | stays on the execution side and is composed by the Pi wrapper |
-| `execute()` and `models.streamSimple()` | remain Pi execution machinery called by the wrapper |
-| Provider Profile binding and 429 retry behavior | remains outside conversion/projectors and wraps the same execution call |
-| new `ReasoningSemantics` | added beside the reused Pi conversion result |
-| new complete `ProjectionSupplement` | added beside the reused Pi conversion result |
-| new Provider projectors | called only from the wrapper-owned `onPayload` seam |
+Use one independently runnable script per Client Protocol and Provider. Direct protocol probes remain separate from real Agent/CLI tests. Scripts may share only mechanism-level HTTP server, capture, timeout, credential isolation, and reporting helpers.
 
-This arrangement reduces the refactor to three controlled additions around proven code:
+Every direct semantic probe sends complete Client history and asserts the captured final Provider request. `previous_response_id` belongs only to a real Codex/Responses client path and is not generic continuity evidence.
 
-1. deepen the converter's returned value;
-2. wrap the existing Pi execution call;
-3. register target projectors incrementally.
+## 14. Migration route
 
-It does not create a second protocol converter or a second Provider request builder.
+### Phase 1 — Freeze current behavior
 
-## 10. Implementation route
+Capture current spec-conforming OpenAI Responses final-wire and round-trip behavior as the regression baseline. A known contradiction with the Responses protocol specification is a bug to correct, not behavior to freeze. Add architecture tests that initially expose the shared-contract coupling.
 
-This is an incremental composition refactor, not a big-bang rewrite. At every phase, the existing Pi conversion remains runnable and previously supported requests keep their current behavior unless a test intentionally changes a documented semantic loss.
+### Phase 2 — Extract the execution kernel
 
-### Phase 0 — Freeze evidence and tests
+Deepen the current wrapper into a mechanism-only kernel. Replace its semantic-conversion-specific Interface with `PiInvocation + PayloadProjectionOperation`. Preserve authentication, Profile binding, retry, transport, response parsing, and existing `ExecutionOperation` ownership.
 
-1. Pin the Pi package version and record the ten built-in API IDs.
-2. Add test helpers that capture the payload after Pi `onPayload` and before transport.
-3. Establish final-wire fixtures for each API without touching real credentials or user state.
-4. Mark every adapter/semantic pair `uncertified` by default.
+### Phase 3 — Localize OpenAI Responses
 
-Exit condition: a failing final-wire test can demonstrate the present reasoning loss.
+Move the current shared Invocation, supplement, reasoning policies, target projectors, and effective-state behavior into the OpenAI Responses vertical module. Preserve final-wire behavior through the kernel Interface. Remove obsolete shared registries and types rather than retaining compatibility shims.
 
-### Phase 1 — Reasoning contracts and Client extraction
+### Phase 4 — Certify locality
 
-1. Add `ReasoningRequestIntent`, `HistoricalReasoning`, provenance, attachment, and continuity types.
-2. Change Responses request parsing to preserve omission, explicit `none`, effort, and summary preference separately.
-3. Extract historical reasoning summary text and the complete continuity facts needed for later target replay.
-4. Stop treating a Responses-owned envelope as though it were automatically the complete Pi Responses reasoning item.
-5. Keep visible summary text available even when opaque continuity is malformed or incompatible, unless the Client input itself is invalid.
+Pass dependency tests, the synthetic new-protocol test, all Responses final-wire tests, and the three independent Responses online Provider scripts.
 
-Exit condition: Client Wire → Invocation tests prove complete reasoning capture without knowing the Provider target.
+### Phase 5 — Implement Anthropic independently
 
-### Phase 2 — Target-aware reasoning preparation
+Audit the complete Anthropic Client request grammar and the Provider response → Pi → Anthropic response surface. Build a separate Anthropic Invocation, supplement, reasoning/continuity module, request projector registry, target-aware response interpreter registry, response renderer, and online suite. Reuse only the kernel and proven mechanism-only leaf utilities.
 
-1. Implement the reasoning module's two-operation Interface.
-2. Add internal adapters for all ten pinned Pi API IDs.
-3. Begin with the exact policies that can be certified: OpenAI Completions field selection, OpenAI Responses complete-item replay, Anthropic signatures, Bedrock model-family rules, Google attachment rules, Mistral visible thinking, and Pi Messages delegation.
-4. Resolve synthetic-history degradation without falsifying opaque provenance.
-5. Produce explicit outcomes and conversion notices.
+## 15. Current implementation divergence
 
-Exit condition: pure module tests cover same model, model switch, missing signature, malformed metadata, unsupported target, and content fallback for every adapter policy.
+The implementation committed before this architecture decision uses a shared `SemanticConversionInvocation`, shared `ProjectionSupplement`, shared reasoning request model, and shared target projector registry under `src/semantic-conversion/`. Those modules represent the implemented OpenAI Responses baseline, not the desired extension seam for new Client Protocols; only spec-conforming behavior is preserved as a migration invariant.
 
-### Phase 3 — Response-side continuity
+The migration must preserve their tested Responses behavior while localizing them. Anthropic must not be added to those shared semantic contracts as an interim shortcut.
 
-1. Extract signature/continuity fields from Pi responses according to the actual source `provider/api/model`.
-2. Preserve the original attachment: thinking, text, or tool call.
-3. Encode only a bounded verified Client-carried envelope.
-4. Decode it on the next complete-history request.
-5. Do not add server-side session persistence for facts the Client wire can carry.
+## 16. Definition of done
 
-Exit condition: Provider response → Client response → next Client request → Provider request restores compatible replay state end to end.
+The architecture migration is complete only when:
 
-### Phase 4 — Deepen the existing conversion module and add the complete supplement
-
-1. Audit the complete supported Client request schema.
-2. Classify each fact as Pi IR, Pi option, reasoning, supplement, Client-only lifecycle, warning omission, or failure.
-3. Add all validated Pi-unrepresentable facts to the supplement in one schema pass.
-4. Do not wait for projector support before preserving a fact.
-5. Expand the existing conversion result rather than creating a second request parser or message converter.
-6. Keep existing `context`, `options`, render state, notices, tool correlation, and response conversion behavior behind the deepened module Interface.
-7. Add equivalence tests proving that an empty supplement produces the same Pi inputs as the current implementation.
-
-Exit condition: field-inventory tests prove that every recognized Client fact has an explicit owner and disposition, and unchanged requests produce equivalent Pi conversion output.
-
-### Phase 5 — LuckyToken Pi Wrapper
-
-1. Add a request-local wrapper around the current `model + context + options` Pi execution entry; do not rewrite Pi execution internals.
-2. Keep credential binding, retry, cancellation, streaming, and diagnostics behavior unchanged behind the wrapper.
-3. Create the single wrapper-owned `onPayload` callback.
-4. Compose reasoning projection first and non-overlapping general projection second.
-5. Return effective projection outcomes for honest Client response echo and diagnostics.
-6. First run the wrapper with all general projectors disabled and prove final Provider request equivalence with the current execution path.
-
-Exit condition: the wrapper can execute with no projector and remains equivalent to current Pi execution for unaffected requests.
-
-### Phase 6 — Incremental Provider projectors
-
-Implement projectors in value order, not by pretending all Providers are identical:
-
-1. `openai-completions`;
-2. `anthropic-messages`;
-3. `google-generative-ai` and `google-vertex` with separate certification;
-4. `mistral-conversations`;
-5. `bedrock-converse-stream` by model family;
-6. Responses-family semantic targets where Native Preservation is ineligible;
-7. `pi-messages` only for semantics its wire contract actually accepts.
-
-Each projector may support a subset of the complete supplement. Remaining facts keep explicit unsupported outcomes.
-
-Adding a projector does not change the Client conversion Interface or Pi execution machinery. It only adds another Adapter at the Provider payload seam and registers its certified target predicate with the wrapper.
-
-Exit condition for each semantic: Client Wire → final captured Provider Wire test passes for every enabled target mapping.
-
-### Phase 7 — Effective-state response rendering
-
-1. Stop echoing raw requested/default values as though they took effect.
-2. Render only wrapper-reported effective controls.
-3. Keep conversion warnings non-model-visible and request-local.
-
-Exit condition: Client responses never claim application of a field that the final Provider request omitted.
-
-### Phase 8 — Pi upgrade gate
-
-For every Pi dependency upgrade:
-
-1. diff adapter request builders, response parsers, option mapping, message transforms, and `onPayload` shapes;
-2. rerun all final-wire contract tests;
-3. disable a projector when its audited payload contract no longer holds;
-4. update this matrix and evidence before re-enabling it.
-
-## 11. Required test matrix
-
-### 11.1 Reasoning history
-
-For every certified adapter:
-
-- same Provider/API/model with valid continuity;
-- same API but different model;
-- different Provider;
-- visible summary without continuity;
-- opaque continuity without visible summary where legal;
-- malformed continuity envelope;
-- signature attached to thinking, text, and tool call where the adapter supports each;
-- target supports reasoning generation but not historical reasoning replay;
-- target does not support reasoning.
-
-### 11.2 Reasoning request controls
-
-- omitted vs explicit disabled;
-- every supported effort level and target clamp;
-- `summary: auto`, `concise`, and `detailed`;
-- target with exact mapping;
-- target with approximate mapping;
-- target with no mapping;
-- Pi-native and payload-projected paths never both write the same field.
-
-### 11.3 End-to-end assertions
-
-Tests start with a Client Wire request and assert the final captured Provider payload after `onPayload`. Response continuity tests additionally start with a simulated Provider response and include the full next-request cycle.
-
-Intermediate snapshots are useful for diagnosis but cannot certify semantic support.
-
-## 12. Current known gaps this route closes
-
-1. Responses reasoning omission and explicit `effort: "none"` are currently collapsed.
-2. Responses `reasoning.summary` is not carried through the common Pi options.
-3. Converted Client history currently uses synthetic provenance, causing Pi to downgrade thinking before some Provider builders see it.
-4. OpenAI Completions uses `thinkingSignature` as a reasoning field selector, while other adapters use it as opaque continuity; treating them uniformly is incorrect.
-5. OpenAI Responses replay requires a complete serialized reasoning item; a generic encrypted-content envelope is not automatically that item.
-6. Several Providers attach opaque thought signatures to text or tool calls, not only thinking blocks.
-7. Current semantic conversion loses other recognized request controls because there is not yet a complete supplement and wrapper-owned projection seam.
-
-## 13. Definition of done
-
-The refactor is complete when:
-
-- the existing Client conversion implementation remains the single implementation of proven Pi message/tool conversion;
-- the wrapper with projectors disabled is equivalent to the previous Pi execution path;
-- every supported Client request field has one authoritative lifecycle owner;
-- reasoning generation intent and historical reasoning are distinct typed facts;
-- all ten pinned Pi API adapters have an explicit reasoning policy, even if that policy is unsupported/fallback;
-- compatible opaque continuity round-trips through the Client response and next request;
-- the wrapper owns target resolution and payload projection without modifying Pi;
-- the supplement captures every validated Pi-unrepresentable fact;
-- projectors mutate only certified fields and shapes;
-- effective Client responses match the actual final Provider request;
-- end-to-end final-wire tests, not intermediate snapshots, are the release gate.
+1. the Pi execution kernel imports no Client Protocol semantic type or registry;
+2. OpenAI Responses owns its Invocation, supplement, reasoning, projectors, continuity, response policy, and tests;
+3. no existing protocol changes are required to register a synthetic new Client Protocol;
+4. final-wire and round-trip behavior remains equivalent to the frozen Responses baseline;
+5. all supported source-protocol/target-API mappings have explicit outcomes and final-wire tests;
+6. each protocol has an explicit Provider-response capability matrix and end-to-end response/replay tests;
+7. native lanes remain independent;
+8. no compatibility shim, dual contract, raw-wire carrier, or global Client Protocol semantic union remains.
