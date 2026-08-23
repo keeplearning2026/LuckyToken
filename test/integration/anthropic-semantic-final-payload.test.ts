@@ -1,0 +1,923 @@
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as streamAnthropicMessages } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as streamGoogleGenerativeAI } from "@earendil-works/pi-ai/api/google-generative-ai";
+import { streamSimple as streamGoogleVertex } from "@earendil-works/pi-ai/api/google-vertex";
+import { streamSimple as streamMistral } from "@earendil-works/pi-ai/api/mistral-conversations";
+import { streamSimple as streamOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
+import { streamSimple as streamAzureOpenAIResponses } from "@earendil-works/pi-ai/api/azure-openai-responses";
+import { streamSimple as streamBedrock } from "@earendil-works/pi-ai/api/bedrock-converse-stream";
+import { streamSimple as streamPiMessages } from "@earendil-works/pi-ai/api/pi-messages";
+import type { Model } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+
+import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
+
+import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
+import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
+import { captureFinalPiPayload } from "../support/pi-final-payload.js";
+import { captureJsonProviderRequest } from "../support/provider-request-capture.js";
+
+const baseModelFields = {
+  baseUrl: "https://provider.invalid/v1",
+  input: ["text"] as ("text" | "image")[],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 32_768,
+  maxTokens: 8_192,
+};
+
+const model: Model<"openai-completions"> = {
+  ...baseModelFields,
+  id: "deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
+  api: "openai-completions",
+  provider: "opencode-go",
+  reasoning: false,
+};
+
+const commandCodePrivateModel: Model<"commandcode-private"> = {
+  ...baseModelFields,
+  id: "deepseek/deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
+  api: "commandcode-private",
+  provider: "commandcode-private",
+  reasoning: true,
+};
+
+describe("Anthropic Client Wire to final CommandCode Private payload", () => {
+  it("validates and projects against the custom Provider's actual onPayload shape", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      temperature: 0.4,
+      top_p: 0.8,
+      top_k: 12,
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: commandCodePrivateModel,
+      invocation: converted.invocation,
+    });
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "test-only-key",
+      model: commandCodePrivateModel,
+      now: () => 1,
+      fetch: async () => {
+        throw new Error("capture must stop before transport");
+      },
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      provider.streamSimple(
+        commandCodePrivateModel,
+        converted.invocation.pi.context,
+        {
+          ...converted.invocation.pi.options,
+          sessionId: "00000000-0000-4000-8000-000000000123",
+          async onPayload(basePayload) {
+            const projected = await projection.project(basePayload, commandCodePrivateModel);
+            if (projected.failure !== undefined) throw new Error(projected.failure);
+            return capture(projected.payload);
+          },
+        },
+      ),
+    );
+
+    expect(payload).toMatchObject({
+      params: {
+        model: "deepseek/deepseek-v4-flash",
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+        max_tokens: 2_048,
+        temperature: 0.4,
+        reasoning_effort: "high",
+        stream: true,
+      },
+    });
+    expect(payload).not.toHaveProperty("params.top_p");
+    expect(payload).not.toHaveProperty("params.top_k");
+  });
+});
+
+const anthropicModel: Model<"anthropic-messages"> = {
+  ...baseModelFields,
+  id: "claude-semantic-target",
+  name: "Claude semantic target",
+  api: "anthropic-messages",
+  provider: "custom-anthropic",
+  reasoning: true,
+};
+
+const googleModel: Model<"google-generative-ai"> = {
+  ...baseModelFields,
+  id: "gemini-2.5-pro",
+  name: "Gemini 2.5 Pro",
+  api: "google-generative-ai",
+  provider: "google-test",
+  reasoning: true,
+};
+
+const vertexModel: Model<"google-vertex"> = {
+  ...googleModel,
+  api: "google-vertex",
+  provider: "google-vertex-test",
+};
+
+const mistralModel: Model<"mistral-conversations"> = {
+  ...baseModelFields,
+  id: "magistral-medium-latest",
+  name: "Magistral Medium",
+  api: "mistral-conversations",
+  provider: "mistral-test",
+  reasoning: true,
+};
+
+const responsesModel: Model<"openai-responses"> = {
+  ...baseModelFields,
+  id: "gpt-semantic-target",
+  name: "GPT semantic target",
+  api: "openai-responses",
+  provider: "openai-test",
+  reasoning: false,
+};
+
+const azureResponsesModel: Model<"azure-openai-responses"> = {
+  ...baseModelFields,
+  id: "azure-semantic-target",
+  name: "Azure semantic target",
+  api: "azure-openai-responses",
+  provider: "azure-test",
+  baseUrl: "https://resource.openai.azure.com/openai",
+  reasoning: false,
+};
+
+const bedrockClaudeModel: Model<"bedrock-converse-stream"> = {
+  ...baseModelFields,
+  id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+  name: "Claude Sonnet 4",
+  api: "bedrock-converse-stream",
+  provider: "amazon-bedrock",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+  reasoning: true,
+};
+
+const bedrockNovaModel: Model<"bedrock-converse-stream"> = {
+  ...baseModelFields,
+  id: "amazon.nova-pro-v1:0",
+  name: "Amazon Nova Pro",
+  api: "bedrock-converse-stream",
+  provider: "amazon-bedrock",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+  reasoning: false,
+};
+
+const piMessagesModel: Model<"pi-messages"> = {
+  ...baseModelFields,
+  id: "pi-semantic-target",
+  name: "Pi Messages semantic target",
+  api: "pi-messages",
+  provider: "pi-test",
+  reasoning: true,
+};
+
+describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
+  it("projects exact top-level output, sampling, stop, and tool controls", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 4_096,
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.4,
+        top_p: 0.8,
+        top_k: 32,
+        stop_sequences: ["END", "STOP"],
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: { answer: { type: "string" } },
+              required: ["answer"],
+              additionalProperties: false,
+            },
+          },
+        },
+        metadata: { user_id: "user-123" },
+        service_tier: "standard_only",
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        tool_choice: {
+          type: "tool",
+          name: "lookup",
+          disable_parallel_tool_use: true,
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model,
+      invocation: converted.invocation,
+    });
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(
+        model,
+        converted.invocation.pi.context,
+        {
+          ...converted.invocation.pi.options,
+          apiKey: "test-only-key",
+          async onPayload(basePayload) {
+            const projected = await projection.project(basePayload, model);
+            if (projected.failure !== undefined) {
+              throw new Error(projected.failure);
+            }
+            return capture(projected.payload);
+          },
+        },
+      ),
+    );
+
+    expect(payload).toMatchObject({
+      model: "deepseek-v4-flash",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+        },
+      ],
+      max_completion_tokens: 4_096,
+      temperature: 0.4,
+      top_p: 0.8,
+      top_k: 32,
+      stop: ["END", "STOP"],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "anthropic_output",
+          strict: true,
+          schema: {
+            type: "object",
+            required: ["answer"],
+            additionalProperties: false,
+          },
+        },
+      },
+      tool_choice: { type: "function", function: { name: "lookup" } },
+      parallel_tool_calls: false,
+      user: "user-123",
+      service_tier: "default",
+    });
+  });
+});
+
+describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
+  it("restores exact Anthropic controls after Pi construction", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 4_096,
+        messages: [{ role: "user", content: "hello" }],
+        top_p: 0.8,
+        top_k: 32,
+        stop_sequences: ["END"],
+        thinking: {
+          type: "enabled",
+          budget_tokens: 1_024,
+          display: "omitted",
+        },
+        output_config: {
+          effort: "high",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: {} },
+          },
+        },
+        metadata: { user_id: "user-123" },
+        service_tier: "standard_only",
+        inference_geo: "us",
+        container: "container-123",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+        tools: [
+          {
+            name: "lookup",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        tool_choice: {
+          type: "any",
+          disable_parallel_tool_use: true,
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: anthropicModel,
+      invocation: converted.invocation,
+    });
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(
+        anthropicModel,
+        converted.invocation.pi.context,
+        {
+          ...converted.invocation.pi.options,
+          apiKey: "test-only-key",
+          async onPayload(basePayload) {
+            const projected = await projection.project(basePayload, anthropicModel);
+            if (projected.failure !== undefined) throw new Error(projected.failure);
+            return capture(projected.payload);
+          },
+        },
+      ),
+    );
+
+    expect(payload).toMatchObject({
+      model: "claude-semantic-target",
+      max_tokens: 4_096,
+      top_p: 0.8,
+      top_k: 32,
+      stop_sequences: ["END"],
+      thinking: {
+        type: "enabled",
+        budget_tokens: 1_024,
+        display: "omitted",
+      },
+      output_config: {
+        effort: "high",
+        format: {
+          type: "json_schema",
+          schema: { type: "object", properties: {} },
+        },
+      },
+      metadata: { user_id: "user-123" },
+      service_tier: "standard_only",
+      inference_geo: "us",
+      container: "container-123",
+      cache_control: { type: "ephemeral", ttl: "1h" },
+      tool_choice: { type: "any", disable_parallel_tool_use: true },
+    });
+  });
+
+  it("restores Pi-unrepresentable Anthropic blocks and typed server tools", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        system: [
+          { type: "text", text: "system", cache_control: { type: "ephemeral" } },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "url", url: "https://example.test/image.png" },
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srv-1",
+                name: "web_search",
+                input: { query: "LuckyToken" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "web_search_tool_result",
+                tool_use_id: "srv-1",
+                content: {
+                  type: "web_search_tool_result_error",
+                  error_code: "unavailable",
+                },
+              },
+            ],
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+          { name: "web_search", type: "web_search_20250305", max_uses: 2 },
+        ],
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: anthropicModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(anthropicModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, anthropicModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      system: [
+        { type: "text", text: "system", cache_control: { type: "ephemeral" } },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "url", url: "https://example.test/image.png" },
+            },
+          ],
+        },
+        { role: "assistant", content: [expect.objectContaining({ type: "server_tool_use" })] },
+        { role: "user", content: [expect.objectContaining({ type: "web_search_tool_result" })] },
+        { role: "user", content: [expect.objectContaining({ type: "text", text: "continue" })] },
+      ],
+      tools: [
+        expect.objectContaining({ name: "lookup" }),
+        expect.objectContaining({ name: "web_search", type: "web_search_20250305" }),
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain("[web search result]");
+  });
+});
+
+describe("Anthropic Client Wire to final Google payloads", () => {
+  const request = {
+    model: "client-selector",
+    max_tokens: 2_048,
+    messages: [{ role: "user", content: "hello" }],
+    temperature: 0.3,
+    top_p: 0.7,
+    top_k: 24,
+    stop_sequences: ["END"],
+    output_config: {
+      format: {
+        type: "json_schema",
+        schema: { type: "object", properties: { answer: { type: "string" } } },
+      },
+    },
+    tools: [
+      {
+        name: "lookup",
+        input_schema: { type: "object", properties: {} },
+      },
+    ],
+    tool_choice: { type: "tool", name: "lookup" },
+  } as const;
+
+  it("projects the independently registered Google Generative AI shape", async () => {
+    const converted = parseAnthropicTextInvocation(request, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: googleModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamGoogleGenerativeAI(googleModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, googleModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      model: "gemini-2.5-pro",
+      config: {
+        maxOutputTokens: 2_048,
+        temperature: 0.3,
+        topP: 0.7,
+        topK: 24,
+        stopSequences: ["END"],
+        responseMimeType: "application/json",
+        responseJsonSchema: {
+          type: "object",
+          properties: { answer: { type: "string" } },
+        },
+        toolConfig: {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: ["lookup"],
+          },
+        },
+      },
+    });
+  });
+
+  it("projects the independently registered Google Vertex shape", async () => {
+    const converted = parseAnthropicTextInvocation(request, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: vertexModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamGoogleVertex(vertexModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, vertexModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      model: "gemini-2.5-pro",
+      config: {
+        maxOutputTokens: 2_048,
+        temperature: 0.3,
+        topP: 0.7,
+        topK: 24,
+        stopSequences: ["END"],
+        responseMimeType: "application/json",
+        responseJsonSchema: {
+          type: "object",
+          properties: { answer: { type: "string" } },
+        },
+        toolConfig: {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: ["lookup"],
+          },
+        },
+      },
+    });
+  });
+});
+
+describe("Anthropic Client Wire to final Mistral payload", () => {
+  it("projects Mistral-native sampling, stop, format, and tool controls", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.25,
+        top_p: 0.75,
+        top_k: 20,
+        stop_sequences: ["END"],
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+        ],
+        tool_choice: {
+          type: "tool",
+          name: "lookup",
+          disable_parallel_tool_use: true,
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: mistralModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamMistral(mistralModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, mistralModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      model: "magistral-medium-latest",
+      maxTokens: 2_048,
+      temperature: 0.25,
+      topP: 0.75,
+      stop: ["END"],
+      responseFormat: {
+        type: "json_schema",
+        jsonSchema: {
+          name: "anthropic_output",
+          strict: true,
+          schemaDefinition: {
+            type: "object",
+            properties: { answer: { type: "string" } },
+          },
+        },
+      },
+      toolChoice: { type: "function", function: { name: "lookup" } },
+      parallelToolCalls: false,
+    });
+  });
+
+  it("certifies the post-callback HTTP wire rather than only Pi's internal payload", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        top_p: 0.75,
+        stop_sequences: ["END"],
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+        ],
+        tool_choice: {
+          type: "tool",
+          name: "lookup",
+          disable_parallel_tool_use: true,
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: mistralModel,
+      invocation: converted.invocation,
+    });
+    const request = await captureJsonProviderRequest((fetch) =>
+      streamMistral(mistralModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        fetch,
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, mistralModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return projected.payload;
+        },
+      }),
+    );
+
+    expect(request).toMatchObject({
+      method: "POST",
+      body: {
+        model: "magistral-medium-latest",
+        max_tokens: 2_048,
+        top_p: 0.75,
+        stop: ["END"],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "anthropic_output",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { answer: { type: "string" } },
+            },
+          },
+        },
+        tool_choice: { type: "function", function: { name: "lookup" } },
+        parallel_tool_calls: false,
+      },
+    });
+  });
+});
+
+describe.each([
+  ["OpenAI", responsesModel, streamOpenAIResponses],
+  ["Azure OpenAI", azureResponsesModel, streamAzureOpenAIResponses],
+] as const)("Anthropic Client Wire to final %s Responses payload", (_name, targetModel, start) => {
+  it("projects the independently registered Responses shape", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.2,
+        top_p: 0.6,
+        top_k: 12,
+        stop_sequences: ["END"],
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+        metadata: { user_id: "user-123" },
+        service_tier: "standard_only",
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+        ],
+        tool_choice: {
+          type: "tool",
+          name: "lookup",
+          disable_parallel_tool_use: true,
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: targetModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      start(targetModel as never, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload: unknown) {
+          const projected = await projection.project(basePayload, targetModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      max_output_tokens: 2_048,
+      temperature: 0.2,
+      top_p: 0.6,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "anthropic_output",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: { answer: { type: "string" } },
+          },
+        },
+      },
+      tool_choice: { type: "function", name: "lookup" },
+      parallel_tool_calls: false,
+      user: "user-123",
+      service_tier: "default",
+    });
+  });
+});
+
+describe("Anthropic Client Wire to final Bedrock payloads", () => {
+  const bedrockOptions = {
+    env: {
+      AWS_BEDROCK_SKIP_AUTH: "1",
+      AWS_REGION: "us-east-1",
+    },
+  } as const;
+
+  it("restores Claude thinking and the original total output ceiling", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 4_096,
+        messages: [{ role: "user", content: "hello" }],
+        top_p: 0.7,
+        top_k: 20,
+        stop_sequences: ["END"],
+        thinking: { type: "enabled", budget_tokens: 1_024, display: "omitted" },
+        output_config: {
+          effort: "high",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: bedrockClaudeModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamBedrock(bedrockClaudeModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        ...bedrockOptions,
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, bedrockClaudeModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      inferenceConfig: {
+        maxTokens: 4_096,
+        topP: 0.7,
+        stopSequences: ["END"],
+      },
+      additionalModelRequestFields: {
+        top_k: 20,
+        thinking: { type: "enabled", budget_tokens: 1_024, display: "omitted" },
+        output_config: {
+          effort: "high",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "string" } } },
+          },
+        },
+      },
+    });
+  });
+
+  it("uses the separately certified non-Claude Bedrock family", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 1_024,
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.4,
+        top_p: 0.8,
+        stop_sequences: ["END"],
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+        ],
+        tool_choice: { type: "tool", name: "lookup" },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: bedrockNovaModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamBedrock(bedrockNovaModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        ...bedrockOptions,
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, bedrockNovaModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      inferenceConfig: {
+        maxTokens: 1_024,
+        temperature: 0.4,
+        topP: 0.8,
+        stopSequences: ["END"],
+      },
+      toolConfig: { toolChoice: { tool: { name: "lookup" } } },
+    });
+  });
+});
+
+describe("Anthropic Client Wire to final Pi Messages payload", () => {
+  it("projects only controls certified by the delegated Pi wire", async () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.3,
+        top_p: 0.7,
+        top_k: 16,
+        stop_sequences: ["END"],
+        output_config: { effort: "high" },
+        tools: [
+          { name: "lookup", input_schema: { type: "object", properties: {} } },
+        ],
+        tool_choice: { type: "tool", name: "lookup" },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: piMessagesModel,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamPiMessages(piMessagesModel, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, piMessagesModel);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      model: "pi-semantic-target",
+      options: {
+        maxTokens: 2_048,
+        temperature: 0.3,
+        reasoning: "high",
+        toolChoice: { type: "function", function: { name: "lookup" } },
+      },
+    });
+  });
+});

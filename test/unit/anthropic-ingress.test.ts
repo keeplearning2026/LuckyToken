@@ -82,7 +82,7 @@ describe("Anthropic closed-world body acceptance", () => {
       }),
       1,
     );
-    expect(invocation.context.messages[0]?.content).toEqual([
+    expect(invocation.invocation.pi.context.messages[0]?.content).toEqual([
       { type: "text", text: "hello" },
     ]);
   });
@@ -104,7 +104,7 @@ describe("Anthropic closed-world body acceptance", () => {
       minimalBody({ messages: [{ role: "user", content: [] }] }),
       1,
     );
-    expect(emptyUser.context.messages[0]).toMatchObject({
+    expect(emptyUser.invocation.pi.context.messages[0]).toMatchObject({
       role: "user",
       content: [],
     });
@@ -129,87 +129,24 @@ describe("Anthropic closed-world body acceptance", () => {
       }),
       1,
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result?.content).toEqual([]);
   });
 });
 
-describe("Anthropic system-role degradation", () => {
-  it("promotes the first messages[].role=system into the systemPrompt", () => {
-    const invocation = parseAnthropicTextInvocation(
-      minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
-      1,
-    );
-    expect(invocation.context.systemPrompt).toBe("runtime hint");
-    expect(invocation.context.messages).toHaveLength(0);
+describe("Anthropic message-role validation", () => {
+  it("rejects the non-standard message-level system role", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
+        minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
+        1,
+      ),
+    ).toThrow(/top-level system/u);
   });
 
-  it("promotes only the first system message and degrades later ones to user", () => {
-    const invocation = parseAnthropicTextInvocation(
-      minimalBody({
-        messages: [
-          { role: "user", content: "hello" },
-          { role: "system", content: "first instruction" },
-          { role: "system", content: "second instruction" },
-        ],
-      }),
-      1,
-    );
-    expect(invocation.context.systemPrompt).toBe("first instruction");
-    const users = invocation.context.messages.filter(
-      (message) => message.role === "user",
-    );
-    expect(users).toHaveLength(1);
-    const content = users[0]?.content as Array<{ text: string }>;
-    expect(content.map((entry) => entry.text)).toEqual([
-      "hello",
-      "second instruction",
-    ]);
-  });
-
-  it("preserves relative ordering of degraded later system messages", () => {
-    const invocation = parseAnthropicTextInvocation(
-      minimalBody({
-        messages: [
-          { role: "user", content: "A" },
-          { role: "system", content: "B" },
-          { role: "assistant", content: "C" },
-          { role: "system", content: "D" },
-        ],
-      }),
-      1,
-    );
-    expect(invocation.context.systemPrompt).toBe("B");
-    const roles = invocation.context.messages.map((message) => message.role);
-    expect(roles).toEqual(["user", "assistant", "user"]);
-  });
-
-  it("appends the first system message after the top-level system prompt", () => {
-    const invocation = parseAnthropicTextInvocation(
-      minimalBody({
-        system: "stable root prompt",
-        messages: [
-          { role: "user", content: "hello" },
-          { role: "system", content: "runtime context" },
-        ],
-      }),
-      1,
-    );
-    expect(invocation.context.systemPrompt).toBe(
-      "stable root prompt\nruntime context",
-    );
-    const userMessages = invocation.context.messages.filter(
-      (m) => m.role === "user",
-    );
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toEqual([
-      { type: "text", text: "hello" },
-    ]);
-  });
-
-  it("rejects unknown role values that are not user/assistant/system", () => {
+  it("rejects unknown role values that are not user/assistant", () => {
     expect(() =>
       parseAnthropicTextInvocation(
         minimalBody({ messages: [{ role: "tool", content: "x" }] }),
@@ -218,19 +155,4 @@ describe("Anthropic system-role degradation", () => {
     ).toThrow(InvalidRequest);
   });
 
-  it("validates system message content blocks as user", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        minimalBody({
-          messages: [
-            {
-              role: "system",
-              content: [{ type: "thinking", thinking: "x", signature: "sig" }],
-            },
-          ],
-        }),
-        1,
-      ),
-    ).toThrow(InvalidRequest);
-  });
 });

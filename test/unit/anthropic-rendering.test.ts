@@ -35,7 +35,7 @@ function usage() {
 function message(): AssistantMessage {
   return {
     role: "assistant",
-    api: "api",
+    api: "anthropic-messages",
     provider: "provider",
     model: "internal",
     content: [

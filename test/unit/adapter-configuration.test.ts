@@ -32,7 +32,6 @@ describe("adapter-owned configuration", () => {
       conversion: {
         request: {
           unknownContent: "error",
-          unresolvedToolCall: "xrepair",
           localCacheControl: "ignore",
         },
         response: { unknownPiContent: "error" },
@@ -133,11 +132,6 @@ describe("adapter-owned configuration", () => {
       ).toBe(value);
     }
     for (const value of ["error", "xrepair"] as const) {
-      expect(
-        parseAnthropicConfiguration({
-          conversion: { request: { unresolvedToolCall: value } },
-        }).conversion.request.unresolvedToolCall,
-      ).toBe(value);
       expect(
         parseOpenAIResponsesConfiguration({
           conversion: { request: { unresolvedToolCall: value } },
@@ -705,7 +699,6 @@ describe("adapter-owned configuration", () => {
               conversion: {
                 request: {
                   unknownContent: "ignore",
-                  unresolvedToolCall: "error",
                   localCacheControl: "promote",
                 },
                 response: { unknownPiContent: "ignore" },
@@ -790,7 +783,6 @@ describe("adapter-owned configuration", () => {
         conversion: {
           request: {
             unknownContent: "ignore",
-            unresolvedToolCall: "error",
             localCacheControl: "promote",
           },
           response: { unknownPiContent: "ignore" },

@@ -45,7 +45,7 @@ describe("Anthropic tool turns", () => {
       1,
     );
 
-    expect(conversion.context.messages[1]).toMatchObject({
+    expect(conversion.invocation.pi.context.messages[1]).toMatchObject({
       role: "assistant",
       content: [
         { type: "toolCall", id: "call", name: "lookup", arguments: { q: "x" } },
@@ -53,7 +53,7 @@ describe("Anthropic tool turns", () => {
     });
   });
 
-  it("ignores optional caller forms per doc §4.3", () => {
+  it("preserves Pi tool identity while validating optional caller forms", () => {
     const withCaller = (caller: unknown) =>
       request([
         { role: "user", content: "run" },
@@ -71,20 +71,22 @@ describe("Anthropic tool turns", () => {
 
     for (const caller of [
       undefined,
-      {},
       { type: "direct" },
-      { type: "server_tool", tool_name: "lookup" },
+      { type: "code_execution_20250825", tool_id: "server-tool" },
     ]) {
       const conversion = convertValidatedAnthropicRequest(
         validateAnthropicSourceRequest(withCaller(caller)),
         1,
       );
-      expect(conversion.context.messages[1]).toMatchObject({
+      expect(conversion.invocation.pi.context.messages[1]).toMatchObject({
         role: "assistant",
         content: [
           { type: "toolCall", id: "call", name: "lookup", arguments: {} },
         ],
       });
+    }
+    for (const caller of [{}, { type: "server_tool", tool_name: "lookup" }]) {
+      expect(() => validateAnthropicSourceRequest(withCaller(caller))).toThrow(/caller/u);
     }
   });
 
@@ -118,7 +120,7 @@ describe("Anthropic tool turns", () => {
       receivedAt,
     );
 
-    expect(conversion.context.messages).toMatchObject([
+    expect(conversion.invocation.pi.context.messages).toMatchObject([
       { role: "user" },
       {
         role: "assistant",
@@ -170,7 +172,7 @@ describe("Anthropic tool turns", () => {
         ),
         1,
       );
-      const resultA = conversion.context.messages.find(
+      const resultA = conversion.invocation.pi.context.messages.find(
         (m) => m.role === "toolResult" && m.toolCallId === "call_a",
       );
       expect(resultA?.content).toEqual([{ type: "text", text: content }]);
@@ -192,7 +194,7 @@ describe("Anthropic tool turns", () => {
       ),
       1,
     );
-    const resultA = emptyArray.context.messages.find(
+    const resultA = emptyArray.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult" && m.toolCallId === "call_a",
     );
     expect(resultA?.content).toEqual([]);
@@ -221,7 +223,7 @@ describe("Anthropic tool turns", () => {
       1,
     );
 
-    expect(conversion.context.messages.slice(-2)).toMatchObject([
+    expect(conversion.invocation.pi.context.messages.slice(-2)).toMatchObject([
       { role: "toolResult", toolCallId: "call_a", isError: false },
       { role: "toolResult", toolCallId: "call_b", isError: false },
     ]);
@@ -282,8 +284,8 @@ describe("Anthropic tool turns", () => {
     ).toThrow(/Orphan|duplicate/u);
   });
 
-  it("repairs a partially resolved parallel call set by default", () => {
-    const conversion = convertValidatedAnthropicRequest(
+  it("rejects a partially resolved parallel call set without inventing a result", () => {
+    expect(() => convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([
           { role: "user", content: "run" },
@@ -295,16 +297,7 @@ describe("Anthropic tool turns", () => {
         ]),
       ),
       1,
-    );
-    const results = conversion.context.messages.filter(
-      (m) => m.role === "toolResult",
-    );
-    expect(results.map((r) => r.toolCallId)).toEqual(["call_a", "call_b"]);
-    expect(results[1]).toMatchObject({
-      toolCallId: "call_b",
-      toolName: "beta",
-      isError: true,
-    });
+    )).toThrow(/Unresolved tool call.*call_b/u);
   });
 
   it("allows ordinary user content before results in mixed source order", () => {
@@ -326,7 +319,7 @@ describe("Anthropic tool turns", () => {
       ),
       1,
     );
-    const roles = conversion.context.messages.map((m) => m.role);
+    const roles = conversion.invocation.pi.context.messages.map((m) => m.role);
     expect(roles).toEqual([
       "user",
       "assistant",
@@ -335,7 +328,7 @@ describe("Anthropic tool turns", () => {
       "toolResult",
       "user",
     ]);
-    const users = conversion.context.messages.filter((m) => m.role === "user");
+    const users = conversion.invocation.pi.context.messages.filter((m) => m.role === "user");
     expect(users.at(-2)?.content).toEqual([{ type: "text", text: "before" }]);
     expect(users.at(-1)?.content).toEqual([{ type: "text", text: "after" }]);
   });

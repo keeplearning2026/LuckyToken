@@ -15,7 +15,6 @@ import {
   execute,
   ExecutionAbortedError,
   ExecutionFailure,
-  freezePiInvocation,
   type ExecutionOperation,
 } from "../../execution.js";
 import {
@@ -67,6 +66,7 @@ import {
   requestIdFromFact,
 } from "./failure-rendering.js";
 import type { AnthropicProviderNativeLane } from "./native-lane-contract.js";
+import { executeAnthropicSemanticInvocation } from "./semantic/execution.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
@@ -771,7 +771,7 @@ async function handleAnthropicMessages(
       receivedAt,
       dependencies.configuration.conversion.request,
     );
-    for (const notice of invocation.notices) {
+    for (const notice of invocation.client.notices) {
       observeJourney(journey, {
         kind: "conversion_notice_observed",
         code: notice.code,
@@ -780,21 +780,27 @@ async function handleAnthropicMessages(
       });
     }
     const piOptions = composeOptions(
-      invocation.options,
+      invocation.invocation.pi.options,
       {
         sessionId: requestIdentity.effectiveSessionId,
         signal: request.signal,
       },
       dependencies.routerDefaults,
     );
-    freezePiInvocation(model, invocation.context, piOptions);
+    const semanticInvocation = {
+      ...invocation.invocation,
+      pi: {
+        context: invocation.invocation.pi.context,
+        options: piOptions,
+      },
+    };
     try {
       const invocationSnapshot = encodedBoundedSummary({
         schema: "luckytoken.pi_invocation_summary.v1",
-        selector: invocation.renderState.selector,
+        selector: invocation.client.renderState.selector,
         model: { provider: model.provider, id: model.id, api: model.api },
-        systemPrompt: invocation.context.systemPrompt,
-        messages: invocation.context.messages,
+        systemPrompt: invocation.invocation.pi.context.systemPrompt,
+        messages: invocation.invocation.pi.context.messages,
         options: {
           maxTokens: piOptions.maxTokens,
           temperature: piOptions.temperature,
@@ -920,13 +926,16 @@ async function handleAnthropicMessages(
     enterJourneyStep(journey, "p4.create_pi_stream", executionLocation);
     let message;
     try {
-      message = await dependencies.executeOperation(
-        dependencies.models,
+      const semanticResult = await executeAnthropicSemanticInvocation({
+        models: dependencies.models,
         model,
-        invocation.context,
-        piOptions,
-        executionFacts,
-      );
+        invocation: semanticInvocation,
+        execution: {
+          executeOperation: dependencies.executeOperation,
+          factsSink: executionFacts,
+        },
+      });
+      message = semanticResult.message;
     } catch (error) {
       failJourneyStep(
         journey,
@@ -989,7 +998,7 @@ async function handleAnthropicMessages(
     const responseConversion = convertAssistantMessageToAnthropicWithPolicy(
       message,
       {
-        selector: invocation.renderState.selector,
+        selector: invocation.client.renderState.selector,
         createMessageId: dependencies.createMessageId,
       },
       dependencies.configuration.conversion.response,
@@ -1012,7 +1021,7 @@ async function handleAnthropicMessages(
       phase: "client_response_preparation",
       lane: "semantic_conversion",
       direction: "pi_to_client",
-      step: invocation.renderState.stream
+      step: invocation.client.renderState.stream
         ? "encode_atomic_sse"
         : "encode_client_json",
       subject: "envelope",
@@ -1023,7 +1032,7 @@ async function handleAnthropicMessages(
       location: responseEncodingLocation,
     };
     enterJourneyStep(journey, "p6.encode_client_response", responseEncodingLocation);
-    const prepared = invocation.renderState.stream
+    const prepared = invocation.client.renderState.stream
       ? renderAnthropicAtomicSse(target)
       : renderAnthropicJsonSuccess(target);
     request.signal.throwIfAborted();

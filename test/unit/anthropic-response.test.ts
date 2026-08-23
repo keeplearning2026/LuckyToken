@@ -27,7 +27,7 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text: "hello" }],
-    api: "internal-api",
+    api: "anthropic-messages",
     provider: "internal-provider",
     model: "internal-model",
     usage: usage(),
@@ -73,7 +73,7 @@ describe("schema-complete Anthropic JSON response", () => {
       "opaque-id",
     );
 
-    expect(target.content).toEqual([
+    expect(target.content).toMatchObject([
       { citations: null, text: "before", type: "text" },
       {
         id: "call_Exact",
@@ -105,7 +105,7 @@ describe("schema-complete Anthropic JSON response", () => {
       "opaque-id",
     );
 
-    expect(target.content).toEqual([
+    expect(target.content).toMatchObject([
       { citations: null, text: "before", type: "text" },
       {
         type: "thinking",
@@ -419,7 +419,9 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(converted.message.usage).not.toHaveProperty("totalTokens");
     expect(converted.message.usage.input_tokens).toBe(1);
     expect(converted.message.usage.output_tokens).toBe(2);
-    expect(converted.notices).toHaveLength(0);
+    expect(converted.notices.some(
+      (notice) => notice.jsonPath === "$.usage.totalTokens",
+    )).toBe(false);
   });
 
   it.each([
@@ -449,12 +451,11 @@ describe("schema-complete Anthropic JSON response", () => {
     );
     expect(target.stop_reason).toBe("tool_use");
 
-    const noTool = convertAssistantMessageToAnthropic(
+    expect(() => convertAssistantMessageToAnthropic(
       message({ stopReason: "toolUse" }),
       "client-selector",
       "opaque-id",
-    );
-    expect(noTool.stop_reason).toBe("end_turn");
+    )).toThrow(/no tool-call content/u);
   });
 
   it("echoes only client identity and includes all required Message fields", () => {
@@ -465,7 +466,8 @@ describe("schema-complete Anthropic JSON response", () => {
         { type: "provider-detail", timestamp: 1, details: { secret: "hidden" } },
       ],
       errorMessage: "diagnostic only",
-      rawStopReason: "provider-raw-reason",
+      rawStopReason: "tool_use",
+      stopReason: "toolUse",
       content: [
         { type: "text", text: "text", textSignature: "opaque-text" },
         {
@@ -510,16 +512,20 @@ describe("schema-complete Anthropic JSON response", () => {
       ].sort(),
     );
     const wire = JSON.stringify(target);
-    for (const internal of [
-      "internal-api",
-      "internal-provider",
-      "internal-model",
-      "opaque-text",
-      "opaque-thought",
-      "secret",
-    ]) {
+    for (const internal of ["provider-response-model", "diagnostic only", "secret"]) {
       expect(wire).not.toContain(internal);
     }
+    expect(target.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        luckytoken_continuity: expect.objectContaining({
+          source: {
+            api: "anthropic-messages",
+            provider: "internal-provider",
+            model: "internal-model",
+          },
+        }),
+      }),
+    ]));
     expect(JSON.parse(wire)).toEqual(target);
   });
 
@@ -561,7 +567,7 @@ describe("schema-complete Anthropic JSON response", () => {
       "client-selector",
       "opaque-id",
     );
-    expect(target.content).toEqual([
+    expect(target.content).toMatchObject([
       { citations: null, text: "A", type: "text" },
       { data: "redacted-payload", type: "redacted_thinking" },
       { citations: null, text: "B", type: "text" },
@@ -583,7 +589,7 @@ describe("schema-complete Anthropic JSON response", () => {
       "client-selector",
       "opaque-id",
     );
-    expect(target.content).toEqual([
+    expect(target.content).toMatchObject([
       { data: "redacted-payload", type: "redacted_thinking" },
     ]);
   });

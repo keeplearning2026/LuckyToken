@@ -72,7 +72,6 @@ async function fixture(options: { readonly port?: number } = {}) {
         conversion: {
           request: {
             unknownContent: "error",
-            unresolvedToolCall: "xrepair",
             localCacheControl: "ignore",
           },
           response: { unknownPiContent: "error" },

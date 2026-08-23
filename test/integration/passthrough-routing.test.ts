@@ -74,6 +74,26 @@ function streamFrom(events: AssistantMessageEvent[]): AssistantMessageEventStrea
   } as AssistantMessageEventStream;
 }
 
+function projectedStreamFrom(
+  events: AssistantMessageEvent[],
+  onStart: () => Promise<unknown>,
+): AssistantMessageEventStream {
+  const stream = streamFrom(events);
+  const iterator = stream[Symbol.asyncIterator]();
+  let prepared = false;
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: async () => {
+        if (!prepared) {
+          prepared = true;
+          await onStart();
+        }
+        return iterator.next();
+      },
+    }),
+  } as AssistantMessageEventStream;
+}
+
 function request(
   body: string,
 ): Request {
@@ -199,7 +219,7 @@ describe("passthrough routing", () => {
         void m;
         void c;
         void o;
-        return streamFrom([
+        return projectedStreamFrom([
           {
             type: "done",
             reason: "stop",
@@ -214,7 +234,18 @@ describe("passthrough routing", () => {
               timestamp: 1,
             } as AssistantMessage,
           },
-        ]);
+        ], async () =>
+          o?.onPayload?.({
+            config: {},
+            params: {
+              model: model.id,
+              messages: [],
+              tools: [],
+              stream: true,
+              max_tokens: 32,
+            },
+          }, model),
+        );
       },
     );
     const models = {

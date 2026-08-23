@@ -2,16 +2,16 @@ import type {
   AssistantMessage,
   Model,
   Models,
-  ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
 
-import {
-  execute,
-  freezePiInvocation,
-  type ExecutionOperation,
-} from "../execution.js";
+import type { ExecutionOperation } from "../execution.js";
 import type { SemanticConversionInvocation } from "./contract.js";
+import {
+  executeWithPiKernel,
+  InvalidPiKernelExecution,
+} from "./kernel/execution.js";
+import type { PayloadProjectionOperation } from "./kernel/contract.js";
 import type { ProjectionOutcome } from "./projection-outcome.js";
 import {
   prepareReasoning,
@@ -94,14 +94,22 @@ function publishProjectionWarnings(
   }
 }
 
-function assertNoFailedProjection(
+function failedProjection(
   outcomes: readonly { readonly outcome: ProjectionOutcome }[],
-): void {
+): string | undefined {
   const failed = outcomes.find((entry) => entry.outcome.kind === "failed");
   if (failed?.outcome.kind === "failed") {
-    throw new InvalidSemanticExecution(failed.outcome.error);
+    return failed.outcome.error;
   }
+  return undefined;
 }
+
+type SemanticKernelOutcome =
+  | { readonly scope: "reasoning"; readonly value: ReasoningOutcome }
+  | {
+      readonly scope: "supplement";
+      readonly value: SupplementProjectionOutcome;
+    };
 
 export async function executeSemanticConversion(input: {
   readonly models: Models;
@@ -120,61 +128,94 @@ export async function executeSemanticConversion(input: {
     options: input.invocation.pi.options,
     semantics: input.invocation.reasoning,
   });
-  let reasoningOutcomes: readonly ReasoningOutcome[] = prepared.outcomes;
-  let supplementOutcomes: readonly SupplementProjectionOutcome[] = [];
-  let payloadProjected = false;
   const emittedProjectionWarnings = new Set<string>();
-  const options: ModelsSimpleStreamOptions = {
-    ...prepared.options,
-    onPayload(payload) {
-      payloadProjected = true;
+  const initialOutcomes: readonly SemanticKernelOutcome[] = prepared.outcomes.map(
+    (value) => ({ scope: "reasoning", value }),
+  );
+  const initialFailure = failedProjection(prepared.outcomes);
+  const projection: PayloadProjectionOperation<SemanticKernelOutcome> = {
+    initialOutcomes,
+    ...(initialFailure === undefined ? {} : { initialFailure }),
+    project(payload) {
       const reasoning = projectReasoningPayload({
         model: input.model,
         prepared,
         payload,
       });
-      reasoningOutcomes = reasoning.outcomes;
       publishProjectionWarnings(
         "reasoning",
         reasoning.outcomes,
         input.infrastructure.factsSink,
         emittedProjectionWarnings,
       );
-      assertNoFailedProjection(reasoning.outcomes);
+      const reasoningFailure = failedProjection(reasoning.outcomes);
+      if (reasoningFailure !== undefined) {
+        return {
+          payload: reasoning.payload,
+          outcomes: reasoning.outcomes.map((value) => ({
+            scope: "reasoning" as const,
+            value,
+          })),
+          failure: reasoningFailure,
+        };
+      }
       const supplement = projectSupplementPayload({
         model: input.model,
         payload: reasoning.payload,
         supplement: input.invocation.supplement,
         reasoning: input.invocation.reasoning.request,
       });
-      supplementOutcomes = supplement.outcomes;
       publishProjectionWarnings(
         "supplement",
         supplement.outcomes,
         input.infrastructure.factsSink,
         emittedProjectionWarnings,
       );
-      assertNoFailedProjection(supplement.outcomes);
-      return supplement.payload;
+      const supplementFailure = failedProjection(supplement.outcomes);
+      return {
+        payload: supplement.payload,
+        outcomes: [
+          ...reasoning.outcomes.map((value) => ({
+            scope: "reasoning" as const,
+            value,
+          })),
+          ...supplement.outcomes.map((value) => ({
+            scope: "supplement" as const,
+            value,
+          })),
+        ],
+        ...(supplementFailure === undefined
+          ? {}
+          : { failure: supplementFailure }),
+      };
     },
   };
-  freezePiInvocation(input.model, prepared.context, options);
-  const operation = input.infrastructure.executeOperation ?? execute;
-  const message = await operation(
-    input.models,
-    input.model,
-    prepared.context,
-    options,
-    input.infrastructure.factsSink,
-  );
-  if (!payloadProjected) {
-    throw new InvalidSemanticExecution(
-      `Pi API ${input.model.api} completed without invoking the wrapper-owned onPayload seam`,
-    );
+  let result;
+  try {
+    result = await executeWithPiKernel({
+      models: input.models,
+      model: input.model,
+      pi: { context: prepared.context, options: prepared.options },
+      projection,
+      infrastructure: input.infrastructure,
+    });
+  } catch (error) {
+    if (error instanceof InvalidPiKernelExecution) {
+      throw new InvalidSemanticExecution(error.message);
+    }
+    throw error;
   }
   return Object.freeze({
-    message,
-    reasoningOutcomes: Object.freeze([...reasoningOutcomes]),
-    supplementOutcomes: Object.freeze([...supplementOutcomes]),
+    message: result.message,
+    reasoningOutcomes: Object.freeze(
+      result.outcomes
+        .filter((entry) => entry.scope === "reasoning")
+        .map((entry) => entry.value),
+    ),
+    supplementOutcomes: Object.freeze(
+      result.outcomes
+        .filter((entry) => entry.scope === "supplement")
+        .map((entry) => entry.value),
+    ),
   });
 }

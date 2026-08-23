@@ -23,7 +23,7 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text: "hello" }],
-    api: "internal-api",
+    api: "anthropic-messages",
     provider: "internal-provider",
     model: "internal-model",
     usage: usage(),
@@ -88,11 +88,13 @@ describe("09: Pi-to-Anthropic response projection", () => {
       { selector: "client-selector" },
       policy(),
     );
-    expect(result.message.content).toEqual([
+    expect(result.message.content).toMatchObject([
       { citations: null, text: "A", type: "text" },
       { signature: "sig", thinking: "reasoning", type: "thinking" },
     ]);
-    expect(result.notices).toEqual([]);
+    expect(result.notices.some(
+      (notice) => notice.code === "anthropic_missing_thinking_signature",
+    )).toBe(false);
   });
 
   it("synthesizes an empty signature with a notice when ordinary thinking lacks one", () => {
@@ -103,7 +105,7 @@ describe("09: Pi-to-Anthropic response projection", () => {
       { selector: "client-selector" },
       policy(),
     );
-    expect(result.message.content).toEqual([
+    expect(result.message.content).toMatchObject([
       { signature: "", thinking: "unsigned", type: "thinking" },
     ]);
     expect(
@@ -130,7 +132,7 @@ describe("09: Pi-to-Anthropic response projection", () => {
       { selector: "client-selector" },
       policy(),
     );
-    expect(result.message.content).toEqual([
+    expect(result.message.content).toMatchObject([
       { data: "opaque-payload", type: "redacted_thinking" },
     ]);
 
@@ -200,7 +202,9 @@ describe("09: Pi-to-Anthropic response projection", () => {
       policy(),
     );
     expect(result.message.stop_reason).toBe("max_tokens");
-    expect(result.notices).toEqual([]);
+    expect(result.notices.some(
+      (notice) => notice.code === "anthropic_stop_reason_normalized",
+    )).toBe(true);
   });
 
   it("emits a non-model-visible notice when stop reason is normalized", () => {

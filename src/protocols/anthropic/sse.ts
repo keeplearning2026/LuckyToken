@@ -88,6 +88,18 @@ function assertFields(
   }
 }
 
+function blockFields(
+  block: Record<string, unknown>,
+  fields: readonly string[],
+): string[] {
+  return [
+    ...fields,
+    ...(block.luckytoken_continuity === undefined
+      ? []
+      : ["luckytoken_continuity"]),
+  ];
+}
+
 function assertCount(value: unknown, label: string): void {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     fail(`${label} must be a non-negative safe integer`);
@@ -179,7 +191,7 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     if (event.content_block.type === "text") {
       assertFields(
         block,
-        ["citations", "text", "type"],
+        blockFields(block, ["citations", "text", "type"]),
         "Anthropic streaming TextBlock",
       );
       if (event.content_block.citations !== null || event.content_block.text !== "") {
@@ -190,7 +202,7 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     if (event.content_block.type === "thinking") {
       assertFields(
         block,
-        ["signature", "thinking", "type"],
+        blockFields(block, ["signature", "thinking", "type"]),
         "Anthropic streaming ThinkingBlock",
       );
       if (
@@ -204,7 +216,7 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     if (event.content_block.type === "redacted_thinking") {
       assertFields(
         block,
-        ["data", "type"],
+        blockFields(block, ["data", "type"]),
         "Anthropic streaming RedactedThinkingBlock",
       );
       if (typeof event.content_block.data !== "string") {
@@ -214,7 +226,7 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     }
     assertFields(
       block,
-      ["id", "caller", "input", "name", "type"],
+      blockFields(block, ["id", "caller", "input", "name", "type"]),
       "Anthropic streaming ToolUseBlock",
     );
     if (
@@ -327,6 +339,16 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { citations: null, text: "", type: "text" },
+          ...(block.luckytoken_continuity === undefined
+            ? {}
+            : {
+                content_block: {
+                  citations: null,
+                  text: "",
+                  type: "text" as const,
+                  luckytoken_continuity: block.luckytoken_continuity,
+                },
+              }),
         },
         {
           type: "content_block_delta",
@@ -343,6 +365,16 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { type: "thinking", thinking: "", signature: "" },
+          ...(block.luckytoken_continuity === undefined
+            ? {}
+            : {
+                content_block: {
+                  type: "thinking" as const,
+                  thinking: "",
+                  signature: "",
+                  luckytoken_continuity: block.luckytoken_continuity,
+                },
+              }),
         },
         {
           type: "content_block_delta",
@@ -364,6 +396,15 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { data: block.data, type: "redacted_thinking" },
+          ...(block.luckytoken_continuity === undefined
+            ? {}
+            : {
+                content_block: {
+                  data: block.data,
+                  type: "redacted_thinking" as const,
+                  luckytoken_continuity: block.luckytoken_continuity,
+                },
+              }),
         },
         { type: "content_block_stop", index },
       );
@@ -383,6 +424,9 @@ export function createAnthropicAtomicSseEvents(
           input: {},
           name: block.name,
           type: "tool_use",
+          ...(block.luckytoken_continuity === undefined
+            ? {}
+            : { luckytoken_continuity: block.luckytoken_continuity }),
         },
       },
       {

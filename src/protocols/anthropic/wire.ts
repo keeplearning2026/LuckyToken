@@ -66,6 +66,30 @@ function assertExactFields(
   }
 }
 
+function contentFields(
+  block: Record<string, unknown>,
+  required: readonly string[],
+): ReadonlySet<string> {
+  return new Set([
+    ...required,
+    ...(block.luckytoken_continuity === undefined
+      ? []
+      : ["luckytoken_continuity"]),
+  ]);
+}
+
+function assertContinuityExtension(
+  block: Record<string, unknown>,
+  label: string,
+): void {
+  if (block.luckytoken_continuity === undefined) return;
+  assertJsonValue(
+    block.luckytoken_continuity,
+    new Set(),
+    `${label}.luckytoken_continuity`,
+  );
+}
+
 function assertCount(value: unknown, label: string): void {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     fail(`${label} must be a non-negative safe integer`);
@@ -156,18 +180,19 @@ export function assertAnthropicTargetSchema(
     if (block.type === "text") {
       assertExactFields(
         block,
-        new Set(["citations", "text", "type"]),
+        contentFields(block, ["citations", "text", "type"]),
         `Anthropic content[${index}]`,
       );
       if (block.citations !== null || typeof block.text !== "string") {
         fail(`Anthropic content[${index}] TextBlock is malformed`);
       }
+      assertContinuityExtension(block, `Anthropic content[${index}]`);
       return;
     }
     if (block.type === "thinking") {
       assertExactFields(
         block,
-        new Set(["signature", "thinking", "type"]),
+        contentFields(block, ["signature", "thinking", "type"]),
         `Anthropic content[${index}]`,
       );
       if (
@@ -176,17 +201,19 @@ export function assertAnthropicTargetSchema(
       ) {
         fail(`Anthropic content[${index}] ThinkingBlock is malformed`);
       }
+      assertContinuityExtension(block, `Anthropic content[${index}]`);
       return;
     }
     if (block.type === "redacted_thinking") {
       assertExactFields(
         block,
-        new Set(["data", "type"]),
+        contentFields(block, ["data", "type"]),
         `Anthropic content[${index}]`,
       );
       if (typeof block.data !== "string" || block.data.length === 0) {
         fail(`Anthropic content[${index}] RedactedThinkingBlock is malformed`);
       }
+      assertContinuityExtension(block, `Anthropic content[${index}]`);
       return;
     }
     if (block.type !== "tool_use") {
@@ -194,7 +221,7 @@ export function assertAnthropicTargetSchema(
     }
     assertExactFields(
       block,
-      new Set(["id", "caller", "input", "name", "type"]),
+      contentFields(block, ["id", "caller", "input", "name", "type"]),
       `Anthropic content[${index}]`,
     );
     if (
@@ -210,6 +237,7 @@ export function assertAnthropicTargetSchema(
       fail(`Anthropic content[${index}] ToolUseBlock is malformed`);
     }
     assertJsonValue(block.input, new Set(), `Anthropic content[${index}].input`);
+    assertContinuityExtension(block, `Anthropic content[${index}]`);
   });
 
   if (!isRecord(raw.usage)) fail("Anthropic target usage must be an object");

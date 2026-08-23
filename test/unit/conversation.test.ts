@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   InvalidRequest,
-  UnsupportedFeature,
 } from "../../src/protocols/anthropic/failures.js";
 import {
   convertValidatedAnthropicRequest,
@@ -21,7 +20,7 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(omitted.context).not.toHaveProperty("systemPrompt");
+    expect(omitted.invocation.pi.context).not.toHaveProperty("systemPrompt");
 
     const stringSystem = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
@@ -32,7 +31,7 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(stringSystem.context.systemPrompt).toBe(" exact\t\n");
+    expect(stringSystem.invocation.pi.context.systemPrompt).toBe(" exact\t\n");
 
     const blockSystem = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
@@ -43,7 +42,7 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(blockSystem.context.systemPrompt).toBe("");
+    expect(blockSystem.invocation.pi.context.systemPrompt).toBe("");
 
     const multiBlockSystem = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
@@ -57,7 +56,7 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(multiBlockSystem.context.systemPrompt).toBe("one\ntwo");
+    expect(multiBlockSystem.invocation.pi.context.systemPrompt).toBe("one\ntwo");
   });
 
   it("preserves exact text and coalesces only adjacent same-role turns", () => {
@@ -86,7 +85,7 @@ describe("Anthropic conversation conversion", () => {
       receivedAt,
     );
 
-    expect(conversion.context.messages).toEqual([
+    expect(conversion.invocation.pi.context.messages).toEqual([
       {
         role: "user",
         content: [
@@ -149,7 +148,7 @@ describe("Anthropic conversation conversion", () => {
 
     expect(validated.hasThinking).toBe(true);
     const conversion = convertValidatedAnthropicRequest(validated, receivedAt);
-    expect(conversion.context.messages[1]).toMatchObject({
+    expect(conversion.invocation.pi.context.messages[1]).toMatchObject({
       role: "assistant",
       api: SYNTHETIC_CLIENT_HISTORY_API,
       provider: SYNTHETIC_CLIENT_HISTORY_PROVIDER,
@@ -163,7 +162,7 @@ describe("Anthropic conversation conversion", () => {
         { type: "text", text: "answer" },
       ],
     });
-    expect(conversion.context.messages[1]).not.toHaveProperty(
+    expect(conversion.invocation.pi.context.messages[1]).not.toHaveProperty(
       "content.1.thinkingSignature",
     );
   });
@@ -196,7 +195,7 @@ describe("Anthropic conversation conversion", () => {
       ),
       1,
     );
-    const assistant = conversion.context.messages.find(
+    const assistant = conversion.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -209,7 +208,7 @@ describe("Anthropic conversation conversion", () => {
     ]);
   });
 
-  it("preserves supported base64 image MIME and payload and rejects opaque/remote variants", () => {
+  it("preserves base64 images, carries URL images, and rejects unknown source variants", () => {
     const conversion = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
         model: "client-model",
@@ -232,14 +231,14 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(conversion.context.messages[0]).toMatchObject({
+    expect(conversion.invocation.pi.context.messages[0]).toMatchObject({
       role: "user",
       content: [
         { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
       ],
     });
 
-    expect(() =>
+    const remote = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest({
         model: "client-model",
         max_tokens: 32,
@@ -252,7 +251,11 @@ describe("Anthropic conversation conversion", () => {
           },
         ],
       }),
-    ).toThrow(UnsupportedFeature);
+      100,
+    );
+    expect(remote.invocation.supplement.content).toContainEqual(
+      expect.objectContaining({ kind: "image", piRepresentation: "none" }),
+    );
     expect(() =>
       validateAnthropicSourceRequest({
         model: "client-model",
@@ -266,6 +269,6 @@ describe("Anthropic conversation conversion", () => {
           },
         ],
       }),
-    ).toThrow(UnsupportedFeature);
+    ).toThrow(InvalidRequest);
   });
 });

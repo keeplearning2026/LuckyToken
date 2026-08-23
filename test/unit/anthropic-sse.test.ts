@@ -17,8 +17,8 @@ import {
 function target(): AnthropicResponseMessage {
   const source: AssistantMessage = {
     role: "assistant",
-    api: "api",
-    provider: "provider",
+    api: "anthropic-messages",
+    provider: "anthropic",
     model: "internal-model",
     content: [
       { type: "text", text: "" },
@@ -189,8 +189,8 @@ describe("verifiable Anthropic Atomic SSE", () => {
     const converted = convertAssistantMessageToAnthropicWithPolicy(
       {
         role: "assistant",
-        api: "api",
-        provider: "provider",
+        api: "anthropic-messages",
+        provider: "anthropic",
         model: "internal-model",
         content: [{ type: "text", text: "complete" }],
         usage: {

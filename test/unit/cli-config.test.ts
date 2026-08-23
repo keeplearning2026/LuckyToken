@@ -46,7 +46,7 @@ describe("LuckyToken CLI configuration", () => {
         "anthropic-messages": {
           adapterConfiguration: {
             conversion: {
-              request: { unknownContent: "error", unresolvedToolCall: "xrepair", localCacheControl: "ignore" },
+              request: { unknownContent: "error", localCacheControl: "ignore" },
               response: { unknownPiContent: "error" },
             },
           },

@@ -2,6 +2,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import { interpretAnthropicAssistantResponse } from "./semantic/response-interpretation/registry.js";
+import type { AnthropicInterpretedResponse } from "./semantic/response-interpretation/contract.js";
+import type { LuckyTokenAnthropicContinuityEnvelopeV1 } from "./semantic/reasoning/continuity.js";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
@@ -16,17 +19,20 @@ export interface AnthropicTextBlock {
   citations: null;
   text: string;
   type: "text";
+  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicThinkingBlock {
   signature: string;
   thinking: string;
   type: "thinking";
+  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicRedactedThinkingBlock {
   data: string;
   type: "redacted_thinking";
+  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicToolUseBlock {
@@ -35,6 +41,7 @@ export interface AnthropicToolUseBlock {
   input: Record<string, JsonValue>;
   name: string;
   type: "tool_use";
+  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
 }
 
 export type JsonValue =
@@ -128,6 +135,8 @@ export const UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_pi_content_ignored";
 export const STOP_REASON_NORMALIZED_NOTICE_CODE =
   "anthropic_stop_reason_normalized";
+export const PROVIDER_RESPONSE_FIELD_UNAVAILABLE_NOTICE_CODE =
+  "anthropic_provider_response_field_unavailable";
 
 /**
  * Ticket 20 additive fail-open usage codes. Usage is observability, never
@@ -396,6 +405,7 @@ function convertUsage(
 
 function convertContent(
   message: AssistantMessage,
+  interpreted: AnthropicInterpretedResponse,
   notices: ConversionNotice[],
   policy: AnthropicResponseConversionPolicy,
 ): Array<
@@ -418,6 +428,7 @@ function convertContent(
       );
     }
     const path = `$.content[${index}]`;
+    const continuity = interpreted.continuityByContentIndex.get(index);
     if (raw.type === "thinking") {
       assertAllowedFields(
         raw,
@@ -449,10 +460,25 @@ function convertContent(
             `Pi content[${index}] redacted thinking requires opaque data`,
           );
         }
-        projected.push({ data, type: "redacted_thinking" });
+        if (interpreted.nativeThinkingIndexes.has(index)) {
+          projected.push({
+            data: data as string,
+            type: "redacted_thinking",
+            ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+          });
+        } else {
+          projected.push({
+            signature: "",
+            thinking: raw.thinking,
+            type: "thinking",
+            ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+          });
+        }
         return;
       }
-      const signature = raw.thinkingSignature;
+      const signature = interpreted.nativeThinkingIndexes.has(index)
+        ? raw.thinkingSignature
+        : undefined;
       if (signature === undefined) {
         notices.push(
           responseNotice(
@@ -466,6 +492,7 @@ function convertContent(
         signature: signature ?? "",
         thinking: raw.thinking,
         type: "thinking",
+        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
       });
       return;
     }
@@ -480,7 +507,21 @@ function convertContent(
           `Pi content[${index}].text must be a string`,
         );
       }
-      projected.push({ citations: null, text: raw.text, type: "text" });
+      projected.push({
+        citations: null,
+        text: raw.text,
+        type: "text",
+        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+      });
+      if (interpreted.unavailable.textCitations) {
+        notices.push(
+          responseNotice(
+            PROVIDER_RESPONSE_FIELD_UNAVAILABLE_NOTICE_CODE,
+            "degrade",
+            `${path}.citations`,
+          ),
+        );
+      }
       return;
     }
     if (raw.type === "toolCall") {
@@ -517,6 +558,7 @@ function convertContent(
         input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
         name: raw.name,
         type: "tool_use",
+        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
       });
       return;
     }
@@ -535,37 +577,6 @@ function convertContent(
     );
   });
   return projected;
-}
-
-function resolveStopReason(
-  message: AssistantMessage,
-  projected: Array<
-    | AnthropicTextBlock
-    | AnthropicThinkingBlock
-    | AnthropicRedactedThinkingBlock
-    | AnthropicToolUseBlock
-  >,
-): { stopReason: AnthropicResponseMessage["stop_reason"]; mismatch: boolean } {
-  if (message.stopReason === "length") {
-    return { stopReason: "max_tokens", mismatch: false };
-  }
-  if (
-    message.stopReason === "stop" ||
-    message.stopReason === "toolUse"
-  ) {
-    const hasToolUse = projected.some((block) => block.type === "tool_use");
-    if (hasToolUse) {
-      return { stopReason: "tool_use", mismatch: message.stopReason !== "toolUse" };
-    }
-    return { stopReason: "end_turn", mismatch: message.stopReason !== "stop" };
-  }
-  // pending/error/aborted/deferred and any future stop reason are not
-  // committed success terminals; projecting them into a legal Anthropic
-  // stop_reason would fabricate success. They are handled by execution/error
-  // boundaries and must never reach the converter.
-  throw new OutboundResponseFidelityFailure(
-    `Unsupported Pi stop reason: ${String(message.stopReason)}`,
-  );
 }
 
 function assertMessageEnvelope(message: AssistantMessage): void {
@@ -652,14 +663,30 @@ export function convertAssistantMessageToAnthropicWithPolicy(
   assertMessageEnvelope(message);
   const notices: ConversionNotice[] = [];
   const id = createResponseId(message, renderState);
-  const content = convertContent(message, notices, policy);
-  const stop = resolveStopReason(message, content);
-  if (stop.mismatch) {
+  let interpreted: AnthropicInterpretedResponse;
+  try {
+    interpreted = interpretAnthropicAssistantResponse(message);
+  } catch (error) {
+    throw new OutboundResponseFidelityFailure(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  const content = convertContent(message, interpreted, notices, policy);
+  if (interpreted.stop.normalized) {
     notices.push(
       responseNotice(
         STOP_REASON_NORMALIZED_NOTICE_CODE,
         "degrade",
         "$.stop_reason",
+      ),
+    );
+  }
+  for (const path of interpreted.unavailable.responsePaths) {
+    notices.push(
+      responseNotice(
+        PROVIDER_RESPONSE_FIELD_UNAVAILABLE_NOTICE_CODE,
+        "degrade",
+        path,
       ),
     );
   }
@@ -671,7 +698,7 @@ export function convertAssistantMessageToAnthropicWithPolicy(
     model: selector,
     role: "assistant",
     stop_details: null,
-    stop_reason: stop.stopReason,
+    stop_reason: interpreted.stop.reason,
     stop_sequence: null,
     type: "message",
     usage,
@@ -684,7 +711,8 @@ export function convertAssistantMessageToAnthropicWithPolicy(
 
 export function assertOutboundResponseFidelity(message: AssistantMessage): void {
   assertMessageEnvelope(message);
-  convertContent(message, [], { unknownPiContent: "error" });
+  const interpreted = interpretAnthropicAssistantResponse(message);
+  convertContent(message, interpreted, [], { unknownPiContent: "error" });
   // Usage is fail-open by design (Ticket 20 additive): malformed usage never
   // discards an otherwise valid response and is not part of this strict
   // fidelity assertion.

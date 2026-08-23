@@ -87,7 +87,6 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string; 
             conversion: {
               request: {
                 unknownContent: "error",
-                unresolvedToolCall: "xrepair",
                 localCacheControl: "ignore",
               },
               response: { unknownPiContent: "error" },

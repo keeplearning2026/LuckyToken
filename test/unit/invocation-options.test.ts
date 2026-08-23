@@ -31,18 +31,18 @@ describe("Anthropic Pi invocation controls", () => {
       1,
     );
 
-    expect(invocation.options).toEqual({
+    expect(invocation.invocation.pi.options).toEqual({
       maxTokens: 32,
       temperature: 0,
       samplingParams: { top_p: 0.5, top_k: 3 },
       metadata: { user_id: "exact-user" },
       reasoning: "high",
     });
-    expect(invocation.renderState).toEqual({
+    expect(invocation.client.renderState).toEqual({
       stream: true,
       selector: "model",
     });
-    expect(invocation.options).not.toHaveProperty("stream");
+    expect(invocation.invocation.pi.options).not.toHaveProperty("stream");
   });
 
   it("preserves omission without materializing option containers", () => {
@@ -51,8 +51,8 @@ describe("Anthropic Pi invocation controls", () => {
       1,
     );
 
-    expect(invocation.options).toEqual({ maxTokens: 32 });
-    expect(invocation.renderState.stream).toBe(false);
+    expect(invocation.invocation.pi.options).toEqual({ maxTokens: 32 });
+    expect(invocation.client.renderState.stream).toBe(false);
   });
 
   it.each([
@@ -65,29 +65,33 @@ describe("Anthropic Pi invocation controls", () => {
   it.each([
     { name: "top p", extras: { top_p: 0.5 }, expected: { samplingParams: { top_p: 0.5 } } },
     { name: "top k", extras: { top_k: 1 }, expected: { samplingParams: { top_k: 1 } } },
-    { name: "thinking enabled", extras: { thinking: { type: "enabled", budget_tokens: 4096 } }, expected: { thinkingBudgets: { low: 4096 } } },
     { name: "thinking disabled", extras: { thinking: { type: "disabled" } }, expected: {} },
     { name: "thinking adaptive", extras: { thinking: { type: "adaptive" } }, expected: {} },
     { name: "stop sequences", extras: { stop_sequences: ["stop"] }, expected: {} },
     { name: "metadata extension", extras: { metadata: { other: "value" } }, expected: {} },
-    { name: "unknown output field", extras: { output_config: { format: "text" } }, expected: {} },
     { name: "future top-level field", extras: { future_control: true }, expected: {} },
   ])("handles unconverted or mapped fields: $name", ({ extras, expected }) => {
     const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(request(extras)),
       1,
     );
-    expect(invocation.options).toEqual({ maxTokens: 32, ...expected });
+    expect(invocation.invocation.pi.options).toEqual({ maxTokens: 32, ...expected });
   });
 
-  it("falls back to Pi reasoning default for an unknown effort", () => {
-    const invocation = convertValidatedAnthropicRequest(
+  it("rejects an unknown effort instead of changing it to Provider default", () => {
+    expect(() =>
       validateAnthropicSourceRequest(
         request({ output_config: { effort: "super" } }),
       ),
-      1,
-    );
-    expect(invocation.options.reasoning).toBeUndefined();
+    ).toThrow(InvalidRequest);
+  });
+
+  it("rejects a malformed known output format instead of ignoring it", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request({ output_config: { format: "text" } }),
+      ),
+    ).toThrow(InvalidRequest);
   });
 
   it("rejects a non-string output_config.effort as malformed", () => {

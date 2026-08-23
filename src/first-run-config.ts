@@ -24,7 +24,6 @@ function firstRunConfig(): unknown {
         conversion: {
           request: {
             unknownContent: "error",
-            unresolvedToolCall: "xrepair",
             localCacheControl: "ignore",
           },
           response: { unknownPiContent: "error" },

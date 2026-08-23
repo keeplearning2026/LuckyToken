@@ -13,7 +13,7 @@ import {
 function message(): AssistantMessage {
   return {
     role: "assistant",
-    api: "api",
+    api: "anthropic-messages",
     provider: "provider",
     model: "model",
     content: [
@@ -76,7 +76,7 @@ describe("Anthropic atomic wire rendering", () => {
     };
     const source: AssistantMessage = {
       role: "assistant",
-      api: "api",
+      api: "anthropic-messages",
       provider: "provider",
       model: "model",
       content: [

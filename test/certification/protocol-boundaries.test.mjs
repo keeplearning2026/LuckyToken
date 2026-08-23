@@ -50,20 +50,27 @@ const CLIENT_SHARED_SEAMS = new Set([
   // operation/claim contract. Credential resolution, request construction,
   // and transport implementations remain outside the Client Protocol tree.
   "provider-native-responses/contract.ts",
-  // Semantic Conversion exposes one LuckyToken-owned Invocation contract,
-  // protocol-neutral reasoning/supplement contracts, response continuity
-  // extraction, and the wrapper execution entry. Client Protocols still
-  // cannot import Provider projectors, registries, payload types, or Pi
-  // Provider implementations.
+  // The Pi execution kernel is mechanism-only. Client protocols own their
+  // semantic contracts and projectors independently and share only this
+  // payload-callback lifecycle seam.
+  "semantic-conversion/kernel/contract.ts",
+  "semantic-conversion/kernel/execution.ts",
+  // Ticket 18 neutral handler seam: both Client Protocols observe the
+  // Request Lifecycle Ledger only through this narrow seam (observer
+  // contract + safe no-op); persistence/configuration/store DTOs stay out
+  // of the protocol boundary.
+]);
+
+const RESPONSES_SHARED_SEAMS = new Set([
+  ...CLIENT_SHARED_SEAMS,
+  // These modules are the existing OpenAI Responses semantic-conversion
+  // implementation. They are not a shared protocol model and Anthropic is
+  // independently forbidden from importing them.
   "semantic-conversion/contract.ts",
   "semantic-conversion/reasoning/contract.ts",
   "semantic-conversion/reasoning/response.ts",
   "semantic-conversion/supplement/contract.ts",
   "semantic-conversion/execution.ts",
-  // Ticket 18 neutral handler seam: both Client Protocols observe the
-  // Request Lifecycle Ledger only through this narrow seam (observer
-  // contract + safe no-op); persistence/configuration/store DTOs stay out
-  // of the protocol boundary.
 ]);
 
 function slash(value) {
@@ -125,7 +132,7 @@ async function inspect(root) {
   return imports;
 }
 
-function assertClosedProtocol(imports, ownRoot, siblingRoot) {
+function assertClosedProtocol(imports, ownRoot, siblingRoot, allowedShared) {
   for (const entry of imports) {
     if (!entry.specifier.startsWith(".")) {
       assert.ok(
@@ -145,7 +152,7 @@ function assertClosedProtocol(imports, ownRoot, siblingRoot) {
     if (target.startsWith(`${ownRoot}${path.sep}`)) continue;
     const shared = slash(path.relative(sourceRoot, target));
     assert.ok(
-      CLIENT_SHARED_SEAMS.has(shared),
+      allowedShared.has(shared),
       `${slash(path.relative(repositoryRoot, entry.file))} uses unclassified shared seam ${shared}`,
     );
   }
@@ -156,8 +163,18 @@ test("Client Protocols import only their own modules, Pi, Node, and narrow neutr
     inspect(anthropicRoot),
     inspect(responsesRoot),
   ]);
-  assertClosedProtocol(anthropic, anthropicRoot, responsesRoot);
-  assertClosedProtocol(responses, responsesRoot, anthropicRoot);
+  assertClosedProtocol(
+    anthropic,
+    anthropicRoot,
+    responsesRoot,
+    CLIENT_SHARED_SEAMS,
+  );
+  assertClosedProtocol(
+    responses,
+    responsesRoot,
+    anthropicRoot,
+    RESPONSES_SHARED_SEAMS,
+  );
 });
 
 async function assertClosedProvider(root, allowedPackages) {

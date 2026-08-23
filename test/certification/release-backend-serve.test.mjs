@@ -80,7 +80,6 @@ test("the assembled release backend serves as a desktop-owned instance from the 
             conversion: {
               request: {
                 unknownContent: "error",
-                unresolvedToolCall: "xrepair",
                 localCacheControl: "ignore",
               },
               response: { unknownPiContent: "error" },

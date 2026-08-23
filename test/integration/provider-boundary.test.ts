@@ -7,6 +7,7 @@ import {
   type AssistantMessageEventStream,
   type Model,
   type Models,
+  type ModelsSimpleStreamOptions,
   type Provider,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ function model(provider: string, id: string): Model<Api> {
   return {
     id,
     name: id,
-    api: `${provider}-private-api`,
+    api: "pi-messages",
     provider,
     baseUrl: `https://${provider}.fixture.test`,
     reasoning: false,
@@ -62,13 +63,25 @@ function provider(
   onDispatch: (selected: Model<Api>) => void,
 ): Provider {
   const selected = model(providerId, modelId);
-  const stream = (dispatched: Model<Api>): AssistantMessageEventStream => {
+  const stream = (
+    dispatched: Model<Api>,
+    _context: unknown,
+    options?: ModelsSimpleStreamOptions,
+  ): AssistantMessageEventStream => {
     onDispatch(dispatched);
     const events = createAssistantMessageEventStream();
     const completed = message(dispatched, text);
-    events.push({ type: "start", partial: completed });
-    events.push({ type: "done", reason: "stop", message: completed });
-    events.end(completed);
+    void Promise.resolve(
+      options?.onPayload?.({
+        model: dispatched.id,
+        context: {},
+        options: { maxTokens: options.maxTokens },
+      }, dispatched),
+    ).then(() => {
+      events.push({ type: "start", partial: completed });
+      events.push({ type: "done", reason: "stop", message: completed });
+      events.end(completed);
+    });
     return events;
   };
   return createProvider({

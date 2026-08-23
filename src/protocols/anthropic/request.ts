@@ -18,23 +18,39 @@ import {
   validateAnthropicTools,
   type ValidatedAnthropicTool,
 } from "./tools.js";
+import type { AnthropicConversionResult } from "./semantic/invocation.js";
+import type {
+  AnthropicEffortIntent,
+  AnthropicReasoningSemantics,
+  AnthropicThinkingActivation,
+  AnthropicThinkingDisplayIntent,
+} from "./semantic/reasoning/contract.js";
+import {
+  decodeAnthropicContinuity,
+  type AnthropicContinuityAttachment,
+  type AnthropicContinuitySource,
+} from "./semantic/reasoning/continuity.js";
+import type {
+  AnthropicCacheControl,
+  AnthropicOutputFormat,
+  AnthropicPresence,
+  AnthropicProjectionSupplement,
+  AnthropicToolChoice,
+} from "./semantic/supplement/contract.js";
+import {
+  validateAnthropicSupplementContentBlock,
+  validateAnthropicSystemSupplementBlock,
+} from "./semantic/supplement/validation.js";
 
 export interface AnthropicRequestRenderState {
   readonly selector: string;
   readonly stream: boolean;
 }
 
-export interface AnthropicRequestConversion {
-  readonly selector: string;
-  readonly context: Context;
-  readonly options: Partial<ModelsSimpleStreamOptions>;
-  readonly renderState: AnthropicRequestRenderState;
-  readonly notices: readonly ConversionNotice[];
-}
+export type AnthropicRequestConversion = AnthropicConversionResult;
 
 export interface AnthropicRequestConversionPolicy {
   readonly unknownContent: "error" | "ignore";
-  readonly unresolvedToolCall: "error" | "xrepair";
   readonly localCacheControl: "ignore" | "promote";
 }
 
@@ -47,7 +63,7 @@ export interface AnthropicRequestConversionInput {
 export interface ValidatedAnthropicSourceRequest {
   selector: string;
   maxTokens: number;
-  reasoning?: "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning: AnthropicReasoningSemantics;
   messages: Array<Record<string, unknown>>;
   hasImages: boolean;
   hasThinking: boolean;
@@ -56,17 +72,22 @@ export interface ValidatedAnthropicSourceRequest {
   temperature?: number;
   topP?: number;
   topK?: number;
-  metadataUserId?: string;
+  stopSequences?: string[];
+  toolChoice?: AnthropicToolChoice;
+  outputFormat: AnthropicPresence<AnthropicOutputFormat>;
+  metadataUserId: AnthropicPresence<string>;
+  serviceTier: AnthropicPresence<"auto" | "standard_only">;
+  inferenceGeo: AnthropicPresence<string>;
+  container: AnthropicPresence<string>;
   systemPrompt?: string;
+  systemSource?: string | Array<Record<string, unknown>>;
   tools?: ValidatedAnthropicTool[];
-  thinkingBudget?: number;
-  cacheControl?: { ttl?: "5m" | "1h" };
+  cacheControl: AnthropicPresence<AnthropicCacheControl>;
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
 export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
 
-export const XREPAIR_NOTICE_CODE = "anthropic_unresolved_tool_call_xrepair";
 export const PREFILL_DEGRADED_NOTICE_CODE =
   "anthropic_assistant_prefill_degraded_to_history";
 export const THINKING_SIGNATURE_NOTICE_CODE =
@@ -124,13 +145,19 @@ function validateOptionalFieldShapes(value: Record<string, unknown>): void {
     "tool_choice",
     "thinking",
     "output_config",
-    "cache_control",
     "metadata",
   ] as const;
   for (const name of objectFields) {
     if (value[name] !== undefined && !isRecord(value[name])) {
       throw new InvalidRequest(`${name} must be an object when present`);
     }
+  }
+  if (
+    value.cache_control !== undefined &&
+    value.cache_control !== null &&
+    !isRecord(value.cache_control)
+  ) {
+    throw new InvalidRequest("cache_control must be an object or null when present");
   }
   const numericFields = ["temperature", "top_p"] as const;
   for (const name of numericFields) {
@@ -168,7 +195,7 @@ function validateSystem(value: unknown): string | undefined {
     throw new InvalidRequest("system must be a string or block array when present");
   }
   const texts: string[] = [];
-  for (const block of value) {
+  for (const [index, block] of value.entries()) {
     if (
       !isRecord(block) ||
       block.type !== "text" ||
@@ -176,43 +203,94 @@ function validateSystem(value: unknown): string | undefined {
     ) {
       throw new InvalidRequest("system blocks must be text blocks");
     }
+    validateAnthropicSystemSupplementBlock(block, `$.system[${index}]`);
     texts.push(block.text);
   }
   return texts.join("\n");
 }
 
-function validateOutputConfig(
-  value: unknown,
-): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
-  if (value === undefined) return undefined;
+function validateOutputConfig(value: unknown): {
+  effort: AnthropicEffortIntent;
+  format: AnthropicPresence<AnthropicOutputFormat>;
+} {
+  if (value === undefined) {
+    return {
+      effort: { kind: "omitted" },
+      format: { kind: "omitted" },
+    };
+  }
   if (!isRecord(value)) {
     throw new InvalidRequest("output_config must be an object when present");
   }
   const effort = value.effort;
-  if (effort === undefined || effort === null) return undefined;
-  if (typeof effort !== "string") {
+  let effortIntent: AnthropicEffortIntent;
+  if (effort === undefined) {
+    effortIntent = { kind: "omitted" };
+  } else if (effort === null) {
+    effortIntent = { kind: "explicit-null" };
+  } else if (typeof effort !== "string") {
     throw new InvalidRequest("output_config.effort must be a string when present");
+  } else if (!ANTHROPIC_EFFORTS.has(effort)) {
+    throw new InvalidRequest(`output_config.effort is not supported: ${effort}`);
+  } else {
+    effortIntent = {
+      kind: "specified",
+      level: effort as "low" | "medium" | "high" | "xhigh" | "max",
+    };
   }
-  if (!ANTHROPIC_EFFORTS.has(effort)) return undefined;
-  return effort as "low" | "medium" | "high" | "xhigh" | "max";
+
+  const format = value.format;
+  let formatIntent: AnthropicPresence<AnthropicOutputFormat>;
+  if (format === undefined) {
+    formatIntent = { kind: "omitted" };
+  } else if (format === null) {
+    formatIntent = { kind: "explicit-null" };
+  } else if (
+    !isRecord(format) ||
+    format.type !== "json_schema" ||
+    !isRecord(format.schema)
+  ) {
+    throw new InvalidRequest(
+      "output_config.format must be null or a json_schema object",
+    );
+  } else {
+    formatIntent = {
+      kind: "specified",
+      value: {
+        kind: "json-schema",
+        schema: structuredClone(format.schema),
+      },
+    };
+  }
+  return { effort: effortIntent, format: formatIntent };
 }
 
-function validateMetadata(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
+function validateMetadata(value: unknown): AnthropicPresence<string> {
+  if (value === undefined) return { kind: "omitted" };
   if (!isRecord(value)) {
     throw new InvalidRequest("metadata must be an object when present");
   }
-  if (value.user_id === undefined || value.user_id === null) return undefined;
+  if (value.user_id === undefined) return { kind: "omitted" };
+  if (value.user_id === null) return { kind: "explicit-null" };
   if (typeof value.user_id !== "string") {
     throw new InvalidRequest("metadata.user_id must be a string when present");
   }
-  return value.user_id;
+  return { kind: "specified", value: value.user_id };
 }
 
-function validateThinking(
-  value: unknown,
-): { budget?: number; dropped: boolean } | undefined {
-  if (value === undefined) return undefined;
+function validateThinkingDisplay(value: unknown): AnthropicThinkingDisplayIntent {
+  if (value === undefined) return { kind: "omitted" };
+  if (value === null) return { kind: "explicit-null" };
+  if (value === "summarized" || value === "omitted") {
+    return { kind: "specified", value };
+  }
+  throw new InvalidRequest(
+    "thinking.display must be summarized, omitted, null, or absent",
+  );
+}
+
+function validateThinking(value: unknown): AnthropicThinkingActivation {
+  if (value === undefined) return { kind: "omitted" };
   if (!isRecord(value)) {
     throw new InvalidRequest("thinking must be an object when present");
   }
@@ -230,18 +308,32 @@ function validateThinking(
         "thinking.enabled.budget_tokens must be an integer from 1024 upward",
       );
     }
-    return { budget: value.budget_tokens as number, dropped: false };
+    return {
+      kind: "enabled",
+      budgetTokens: value.budget_tokens as number,
+      display: validateThinkingDisplay(value.display),
+    };
   }
-  if (type === "disabled" || type === "adaptive") {
-    return { dropped: true };
+  if (type === "disabled") {
+    if (value.display !== undefined) {
+      throw new InvalidRequest("thinking.disabled does not accept display");
+    }
+    return { kind: "disabled" };
+  }
+  if (type === "adaptive") {
+    return {
+      kind: "adaptive",
+      display: validateThinkingDisplay(value.display),
+    };
   }
   throw new InvalidRequest(`thinking.type is not supported: ${type}`);
 }
 
 function validateCacheControl(
   value: unknown,
-): { ttl?: "5m" | "1h" } | undefined {
-  if (value === undefined || value === null) return undefined;
+): AnthropicPresence<AnthropicCacheControl> {
+  if (value === undefined) return { kind: "omitted" };
+  if (value === null) return { kind: "explicit-null" };
   if (!isRecord(value)) {
     throw new InvalidRequest("cache_control must be an object when present");
   }
@@ -249,11 +341,73 @@ function validateCacheControl(
     throw new InvalidRequest("cache_control.type must be ephemeral");
   }
   const ttl = value.ttl;
-  if (ttl === undefined) return {};
+  if (ttl === undefined) return { kind: "specified", value: {} };
   if (ttl !== "5m" && ttl !== "1h") {
     throw new InvalidRequest("cache_control.ttl must be 5m or 1h");
   }
-  return { ttl };
+  return { kind: "specified", value: { ttl } };
+}
+
+function validateNullableString(
+  value: Record<string, unknown>,
+  field: "container" | "inference_geo",
+): AnthropicPresence<string> {
+  const candidate = value[field];
+  if (candidate === undefined) return { kind: "omitted" };
+  if (candidate === null) return { kind: "explicit-null" };
+  return { kind: "specified", value: candidate as string };
+}
+
+function validateServiceTier(
+  value: unknown,
+): AnthropicPresence<"auto" | "standard_only"> {
+  if (value === undefined) return { kind: "omitted" };
+  if (value !== "auto" && value !== "standard_only") {
+    throw new InvalidRequest("service_tier must be auto or standard_only");
+  }
+  return { kind: "specified", value };
+}
+
+function validateStopSequences(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new InvalidRequest("stop_sequences must be an array of strings");
+  }
+  return [...value] as string[];
+}
+
+function validateToolChoice(value: unknown): AnthropicToolChoice | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new InvalidRequest("tool_choice must contain a string type");
+  }
+  if (value.type === "none") {
+    if (value.disable_parallel_tool_use !== undefined) {
+      throw new InvalidRequest(
+        "tool_choice.none does not accept disable_parallel_tool_use",
+      );
+    }
+    return { kind: "none" };
+  }
+  if (
+    value.disable_parallel_tool_use !== undefined &&
+    typeof value.disable_parallel_tool_use !== "boolean"
+  ) {
+    throw new InvalidRequest(
+      "tool_choice.disable_parallel_tool_use must be boolean",
+    );
+  }
+  const disableParallelToolUse = value.disable_parallel_tool_use === true;
+  if (value.type === "auto" || value.type === "any") {
+    return { kind: value.type, disableParallelToolUse };
+  }
+  if (value.type === "tool") {
+    if (typeof value.name !== "string" || value.name.length === 0) {
+      throw new InvalidRequest("tool_choice.tool requires a non-empty name");
+    }
+    return { kind: "named", name: value.name, disableParallelToolUse };
+  }
+  throw new InvalidRequest(`tool_choice.type is not supported: ${value.type}`);
 }
 
 function validateMessages(
@@ -268,15 +422,14 @@ function validateMessages(
   }
   const facts = { hasImages: false, hasThinking: false };
   const normalized: Array<Record<string, unknown>> = [];
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     if (
       !isRecord(message) ||
       (message.role !== "user" &&
-        message.role !== "assistant" &&
-        message.role !== "system")
+        message.role !== "assistant")
     ) {
       throw new InvalidRequest(
-        "messages require a user, assistant, or system role",
+        "messages require a user or assistant role; use top-level system for system instructions",
       );
     }
     if (typeof message.content === "string") {
@@ -288,9 +441,14 @@ function validateMessages(
     }
     const assistantCallIds = new Set<string>();
     const isAssistantTurn = message.role === "assistant";
-    for (const block of message.content) {
-      const role: "user" | "assistant" =
-        message.role === "system" ? "user" : message.role;
+    for (const [contentIndex, block] of message.content.entries()) {
+      if (isRecord(block)) {
+        validateAnthropicSupplementContentBlock(
+          block,
+          `$.messages[${messageIndex}].content[${contentIndex}]`,
+        );
+      }
+      const role = message.role as "user" | "assistant";
       validateContentBlock(block, facts, role);
       if (isAssistantTurn && isRecord(block) && block.type === "tool_use") {
         const id = block.id as string;
@@ -352,9 +510,16 @@ function validateContentBlock(
       if (!isRecord(block.source) || typeof block.source.type !== "string") {
         throw new InvalidRequest("image blocks require a source object");
       }
+      if (block.source.type === "url") {
+        if (typeof block.source.url !== "string" || block.source.url.length === 0) {
+          throw new InvalidRequest("URL image sources require a non-empty URL");
+        }
+        facts.hasImages = true;
+        return;
+      }
       if (block.source.type !== "base64") {
-        throw new UnsupportedFeature(
-          `unsupported image source: ${String(block.source.type)}`,
+        throw new InvalidRequest(
+          `image source type is not supported: ${String(block.source.type)}`,
         );
       }
       if (
@@ -461,6 +626,11 @@ function validateContentBlock(
       }
       return;
     }
+    case "container_upload":
+      if (typeof block.file_id !== "string" || block.file_id.length === 0) {
+        throw new InvalidRequest("container_upload requires a non-empty file_id");
+      }
+      return;
     case "web_search_tool_result":
     case "web_fetch_tool_result":
     case "code_execution_tool_result":
@@ -520,21 +690,33 @@ function validateDocumentBlock(block: Record<string, unknown>): void {
     return;
   }
   if (sourceType === "base64" || sourceType === "url") {
-    // No resolver capability is installed for this source family, so the
-    // source is treated as unsupported-known (frozen §4.3), not as malformed.
-    throw new UnsupportedFeature(
-      `document source requires resolution: ${sourceType}`,
-    );
+    if (
+      sourceType === "base64" &&
+      (typeof block.source.data !== "string" ||
+        typeof block.source.media_type !== "string")
+    ) {
+      throw new InvalidRequest("base64 document sources require media_type and data");
+    }
+    if (
+      sourceType === "url" &&
+      (typeof block.source.url !== "string" || block.source.url.length === 0)
+    ) {
+      throw new InvalidRequest("URL document sources require a non-empty URL");
+    }
+    return;
   }
   throw new InvalidRequest(`document source type is not supported: ${sourceType}`);
 }
 
 function validateSearchResultBlock(block: Record<string, unknown>): void {
+  if (typeof block.source !== "string") {
+    throw new InvalidRequest("search_result requires a string source");
+  }
   if (typeof block.title !== "string") {
     throw new InvalidRequest("search_result requires a string title");
   }
-  if (typeof block.content !== "string") {
-    throw new InvalidRequest("search_result requires string content");
+  if (!Array.isArray(block.content)) {
+    throw new InvalidRequest("search_result content must be a text-block array");
   }
 }
 
@@ -558,22 +740,46 @@ export function validateAnthropicSourceRequest(
   const tools = validateAnthropicTools(value.tools);
   const systemPrompt = validateSystem(value.system);
   const metadataUserId = validateMetadata(value.metadata);
-  const reasoning = validateOutputConfig(value.output_config);
+  const outputConfig = validateOutputConfig(value.output_config);
   const thinking = validateThinking(value.thinking);
   const cacheControl = validateCacheControl(value.cache_control);
+  if (
+    thinking.kind === "enabled" &&
+    thinking.budgetTokens >= (maxTokens as number)
+  ) {
+    throw new InvalidRequest(
+      "thinking.enabled.budget_tokens must be less than max_tokens",
+    );
+  }
 
   const validated: ValidatedAnthropicSourceRequest = {
     selector: model,
     maxTokens: maxTokens as number,
+    reasoning: {
+      activation: thinking,
+      effort: outputConfig.effort,
+      history: [],
+      continuity: [],
+    },
     messages: messageFacts.messages,
     hasImages: messageFacts.hasImages,
     hasThinking: messageFacts.hasThinking,
     stream: value.stream === true,
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
+    outputFormat: outputConfig.format,
+    metadataUserId,
+    serviceTier: validateServiceTier(value.service_tier),
+    inferenceGeo: validateNullableString(value, "inference_geo"),
+    container: validateNullableString(value, "container"),
+    cacheControl,
   };
-  if (reasoning !== undefined) validated.reasoning = reasoning;
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
+  if (value.system !== undefined) {
+    validated.systemSource = structuredClone(
+      value.system as string | Array<Record<string, unknown>>,
+    );
+  }
   if (tools !== undefined) validated.tools = tools;
   if (value.temperature !== undefined) {
     validated.temperature = value.temperature as number;
@@ -584,9 +790,10 @@ export function validateAnthropicSourceRequest(
   if (value.top_k !== undefined) {
     validated.topK = value.top_k as number;
   }
-  if (metadataUserId !== undefined) validated.metadataUserId = metadataUserId;
-  if (thinking?.budget !== undefined) validated.thinkingBudget = thinking.budget;
-  if (cacheControl !== undefined) validated.cacheControl = cacheControl;
+  const stopSequences = validateStopSequences(value.stop_sequences);
+  if (stopSequences !== undefined) validated.stopSequences = stopSequences;
+  const toolChoice = validateToolChoice(value.tool_choice);
+  if (toolChoice !== undefined) validated.toolChoice = toolChoice;
   return validated;
 }
 
@@ -627,35 +834,39 @@ type ConvertedBlock =
       isError: boolean;
       addedToolNames?: string[];
     }
-  | { type: "transcript"; text: string };
+  | { type: "transcript"; text: string }
+  | { type: "supplementOnly" };
 
 function convertDocumentBlock(
   block: Record<string, unknown>,
 ): ConvertedBlock {
   const source = block.source as Record<string, unknown>;
   if (source.type === "content") {
+    if (typeof source.content === "string") {
+      return { type: "text", text: source.content };
+    }
     const texts = (source.content as Array<Record<string, unknown>>)
-      .map((entry) => entry.text as string)
-      .join("\n");
-    return { type: "text", text: texts };
+      .filter((entry) => entry.type === "text")
+      .map((entry) => entry.text as string);
+    return texts.length === 0
+      ? { type: "supplementOnly" }
+      : { type: "text", text: texts.join("\n") };
   }
   if (source.type === "text") {
     return { type: "text", text: source.data as string };
   }
-  // url/base64 document sources are resolver-dependent and cannot be
-  // materialized without a resolver capability, which is not installed.
-  // Report precisely as a Client conversion failure (§4.3 known-family
-  // rule) instead of surfacing a bare internal error at the HTTP boundary.
-  throw new UnsupportedFeature(
-    `document source requires resolution: ${String(source.type)}`,
-  );
+  // URL/base64 documents are retained in the protocol-owned supplement.
+  // Pi IR must not fabricate visible text for bytes it did not resolve.
+  return { type: "supplementOnly" };
 }
 
 function convertSearchResultBlock(
   block: Record<string, unknown>,
 ): ConvertedBlock {
   const title = block.title as string;
-  const content = block.content as string;
+  const content = (block.content as Array<Record<string, unknown>>)
+    .map((entry) => entry.text as string)
+    .join("\n");
   return {
     type: "text",
     text: content.length === 0 ? title : `${title}\n${content}`,
@@ -690,11 +901,7 @@ function convertBlock(
       };
     case "image": {
       const source = block.source as Record<string, unknown>;
-      if (source.type !== "base64") {
-        throw new UnsupportedFeature(
-          `unsupported image source: ${String(source.type)}`,
-        );
-      }
+      if (source.type !== "base64") return { type: "supplementOnly" };
       return {
         type: "image",
         mimeType: source.media_type as string,
@@ -768,19 +975,15 @@ function convertBlock(
     case "document-resolver-required":
       return convertDocumentBlock(block);
     case "server_tool_use":
-      return {
-        type: "transcript",
-        text: `[server tool: ${String(block.name)}]`,
-      };
+      return { type: "supplementOnly" };
     case "web_search_tool_result":
-      return { type: "transcript", text: "[web search result]" };
     case "web_fetch_tool_result":
-      return { type: "transcript", text: "[web fetch result]" };
     case "code_execution_tool_result":
     case "bash_code_execution_tool_result":
     case "text_editor_code_execution_tool_result":
     case "tool_search_tool_result":
-      return { type: "transcript", text: `[${String(block.type)}]` };
+    case "container_upload":
+      return { type: "supplementOnly" };
     default:
       if (policy.unknownContent === "ignore") {
         notices.push(
@@ -794,6 +997,54 @@ function convertBlock(
       }
       throw new UnsupportedFeature(`unknown content block: ${String(block.type)}`);
   }
+}
+
+function decodeBlockContinuity(
+  block: Record<string, unknown>,
+  jsonPath: string,
+): {
+  readonly source?: AnthropicContinuitySource;
+  readonly attachments: readonly AnthropicContinuityAttachment[];
+  readonly notices: readonly ConversionNotice[];
+} {
+  if (block.type === "thinking") {
+    return decodeAnthropicContinuity({
+      value: block.luckytoken_continuity,
+      owner: {
+        target: "thinking",
+        representation: "thinking",
+        hasNativeValue:
+          typeof block.signature === "string" && block.signature.length > 0,
+      },
+      jsonPath,
+    });
+  }
+  if (block.type === "redacted_thinking") {
+    return decodeAnthropicContinuity({
+      value: block.luckytoken_continuity,
+      owner: {
+        target: "thinking",
+        representation: "redacted",
+        hasNativeValue: typeof block.data === "string" && block.data.length > 0,
+      },
+      jsonPath,
+    });
+  }
+  if (block.type === "text") {
+    return decodeAnthropicContinuity({
+      value: block.luckytoken_continuity,
+      owner: { target: "text" },
+      jsonPath,
+    });
+  }
+  if (block.type === "tool_use" && typeof block.id === "string") {
+    return decodeAnthropicContinuity({
+      value: block.luckytoken_continuity,
+      owner: { target: "toolCall", callId: block.id },
+      jsonPath,
+    });
+  }
+  return { attachments: [], notices: [] };
 }
 
 function emptyUsage(): Usage {
@@ -845,44 +1096,196 @@ function convertHistoricalAssistant(
   };
 }
 
-function resolveSystemPrompt(
-  request: ValidatedAnthropicSourceRequest,
-): { systemPrompt?: string; degraded: boolean; firstSystemIndex?: number } {
-  let degraded = false;
-  const promptParts: string[] = [];
-  if (request.systemPrompt !== undefined) promptParts.push(request.systemPrompt);
-  for (const [index, message] of request.messages.entries()) {
-    if (message.role !== "system") continue;
-    degraded = true;
-    const text = messageSystemText(message);
-    if (text !== undefined) promptParts.push(text);
-    if (promptParts.length === 0) return { degraded, firstSystemIndex: index };
-    return {
-      systemPrompt: promptParts.join("\n"),
-      degraded,
-      firstSystemIndex: index,
-    };
-  }
-  return {
-    ...(promptParts.length === 0 ? {} : { systemPrompt: promptParts.join("\n") }),
-    degraded,
-  };
+function withoutContinuity(
+  value: Record<string, unknown>,
+): Readonly<Record<string, unknown>> {
+  const copied = structuredClone(value);
+  delete copied.luckytoken_continuity;
+  return Object.freeze(copied);
 }
 
-function messageSystemText(message: Record<string, unknown>): string | undefined {
-  if (typeof message.content === "string") return message.content;
-  if (!Array.isArray(message.content)) return undefined;
-  const texts: string[] = [];
-  for (const block of message.content) {
-    if (
-      isRecord(block) &&
-      block.type === "text" &&
-      typeof block.text === "string"
-    ) {
-      texts.push(block.text);
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function contentPiRepresentation(
+  block: Record<string, unknown>,
+): "partial" | "none" | undefined {
+  switch (block.type) {
+    case "text":
+      return hasOnlyKeys(block, ["type", "text", "luckytoken_continuity"])
+        ? undefined
+        : "partial";
+    case "thinking":
+      return hasOnlyKeys(block, [
+        "type",
+        "thinking",
+        "signature",
+        "luckytoken_continuity",
+      ])
+        ? undefined
+        : "partial";
+    case "redacted_thinking":
+      return hasOnlyKeys(block, ["type", "data", "luckytoken_continuity"])
+        ? undefined
+        : "partial";
+    case "image": {
+      const source = block.source as Record<string, unknown>;
+      return source.type === "base64" && hasOnlyKeys(block, ["type", "source"])
+        ? undefined
+        : source.type === "base64"
+          ? "partial"
+          : "none";
+    }
+    case "tool_use": {
+      const caller = block.caller;
+      const directCaller =
+        isRecord(caller) &&
+        caller.type === "direct" &&
+        hasOnlyKeys(caller, ["type"]);
+      return hasOnlyKeys(block, [
+        "type",
+        "id",
+        "name",
+        "input",
+        ...(directCaller ? ["caller"] : []),
+        "luckytoken_continuity",
+      ])
+        ? undefined
+        : "partial";
+    }
+    case "tool_result": {
+      if (!hasOnlyKeys(block, ["type", "tool_use_id", "content", "is_error"])) {
+        return "partial";
+      }
+      return Array.isArray(block.content) &&
+        block.content.some(
+          (nested) =>
+            isRecord(nested) &&
+            !["text", "image"].includes(nested.type as string),
+        )
+        ? "partial"
+        : undefined;
+    }
+    case "document": {
+      const source = block.source as Record<string, unknown>;
+      if (source.type === "text") return "partial";
+      if (source.type !== "content") return "none";
+      if (typeof source.content === "string") return "partial";
+      return (source.content as Array<Record<string, unknown>>).some(
+        (entry) => entry.type === "text",
+      )
+        ? "partial"
+        : "none";
+    }
+    case "search_result":
+      return "partial";
+    case "server_tool_use":
+    case "web_search_tool_result":
+    case "web_fetch_tool_result":
+    case "code_execution_tool_result":
+    case "bash_code_execution_tool_result":
+    case "text_editor_code_execution_tool_result":
+    case "tool_search_tool_result":
+    case "container_upload":
+      return "none";
+    default:
+      return undefined;
+  }
+}
+
+function buildContentSupplement(
+  request: ValidatedAnthropicSourceRequest,
+): AnthropicProjectionSupplement["content"] {
+  const content: AnthropicProjectionSupplement["content"][number][] = [];
+  for (const [sourceMessageIndex, message] of request.messages.entries()) {
+    if (!Array.isArray(message.content)) continue;
+    for (const [sourceContentIndex, candidate] of message.content.entries()) {
+      if (!isRecord(candidate)) continue;
+      const piRepresentation = contentPiRepresentation(candidate);
+      if (piRepresentation === undefined) continue;
+      content.push(
+        Object.freeze({
+          sourceMessageIndex,
+          sourceContentIndex,
+          role: message.role as "user" | "assistant",
+          kind: candidate.type as string,
+          piRepresentation,
+          value: withoutContinuity(candidate),
+        }),
+      );
     }
   }
-  return texts.length === 0 ? undefined : texts.join("\n");
+  return Object.freeze(content);
+}
+
+function buildToolSupplement(
+  tools: readonly ValidatedAnthropicTool[] | undefined,
+): AnthropicProjectionSupplement["tools"] {
+  if (tools === undefined) return Object.freeze([]);
+  return Object.freeze(
+    tools.flatMap((tool, sourceToolIndex) => {
+      const baseline = [
+        "name",
+        "description",
+        "input_schema",
+        "strict",
+      ];
+      if (
+        tool.kind === "custom" &&
+        hasOnlyKeys(tool.source, baseline)
+      ) {
+        return [];
+      }
+      return [
+        Object.freeze({
+          sourceToolIndex,
+          name: tool.name,
+          kind: tool.kind,
+          piRepresentation: tool.kind === "custom" ? "partial" as const : "none" as const,
+          value: Object.freeze(structuredClone(tool.source)),
+        }),
+      ];
+    }),
+  );
+}
+
+function buildMessageFrames(
+  request: ValidatedAnthropicSourceRequest,
+): AnthropicProjectionSupplement["messageFrames"] {
+  return Object.freeze(
+    request.messages.map((message, sourceMessageIndex) => {
+      const sourceContent = message.content;
+      const entries =
+        typeof sourceContent === "string"
+          ? [Object.freeze({ sourceContentIndex: 0, ownership: "pi" as const })]
+          : (sourceContent as Array<Record<string, unknown>>).map(
+              (block, sourceContentIndex) => {
+                const piRepresentation = contentPiRepresentation(block);
+                return piRepresentation === undefined
+                  ? Object.freeze({
+                      sourceContentIndex,
+                      ownership: "pi" as const,
+                    })
+                  : Object.freeze({
+                      sourceContentIndex,
+                      ownership: "supplement" as const,
+                      consumesPi: piRepresentation === "partial",
+                      value: withoutContinuity(block),
+                    });
+              },
+            );
+      return Object.freeze({
+        sourceMessageIndex,
+        role: message.role as "user" | "assistant",
+        entries: Object.freeze(entries),
+      });
+    }),
+  );
 }
 
 export function convertValidatedAnthropicRequest(
@@ -891,7 +1294,6 @@ export function convertValidatedAnthropicRequest(
 ): AnthropicRequestConversion {
   return convertValidatedAnthropicRequestWithPolicy(request, receivedAt, {
     unknownContent: "error",
-    unresolvedToolCall: "xrepair",
     localCacheControl: "ignore",
   });
 }
@@ -903,6 +1305,8 @@ export function convertValidatedAnthropicRequestWithPolicy(
 ): AnthropicRequestConversion {
   const notices: ConversionNotice[] = [];
   const messages: Message[] = [];
+  const reasoningHistory: AnthropicReasoningSemantics["history"][number][] = [];
+  const reasoningContinuity: AnthropicReasoningSemantics["continuity"][number][] = [];
   const knownToolNames =
     request.tools === undefined
       ? undefined
@@ -911,98 +1315,25 @@ export function convertValidatedAnthropicRequestWithPolicy(
 
   const pushRepairResults = (jsonPath: string): void => {
     if (pendingCalls.length === 0) return;
-    if (policy.unresolvedToolCall === "error") {
-      throw new UnsupportedFeature(
-        `Unresolved tool call: ${pendingCalls[0]?.id ?? "unknown"}`,
-      );
-    }
-    for (const call of pendingCalls) {
-      messages.push({
-        role: "toolResult",
-        toolCallId: call.id,
-        toolName: call.name,
-        content: [
-          {
-            type: "text",
-            text: "No result — the tool call did not complete (interrupted or lost).",
-          },
-        ],
-        isError: true,
-        timestamp: receivedAt,
-      });
-      notices.push(
-        requestNotice(
-          XREPAIR_NOTICE_CODE,
-          "xrepair",
-          `${jsonPath}.tool_result`,
-        ),
-      );
-    }
-    pendingCalls.length = 0;
+    throw new UnsupportedFeature(
+      `Unresolved tool call at ${jsonPath}: ${pendingCalls[0]?.id ?? "unknown"}`,
+    );
   };
 
-  const system = resolveSystemPrompt(request);
   const context: Context = { messages };
-  if (system.systemPrompt !== undefined) {
-    context.systemPrompt = system.systemPrompt;
-  }
-  if (system.degraded) {
-    notices.push(
-      requestNotice(
-        "anthropic_message_system_promoted",
-        "degrade",
-        "$.messages[0]",
-      ),
-    );
+  if (request.systemPrompt !== undefined) {
+    context.systemPrompt = request.systemPrompt;
   }
 
   for (const [messageIndex, message] of request.messages.entries()) {
-    const sourceRole = message.role as "user" | "assistant" | "system";
-    if (sourceRole === "system" && messageIndex === system.firstSystemIndex) {
-      // The first message-level system entry contributes its text blocks to
-      // the systemPrompt (already resolved above). Its non-text blocks keep
-      // their normal mapping and are emitted as user content below, so they
-      // are not granted system privilege and are not dropped.
-      const rawContent = message.content;
-      const blocks: ConvertedBlock[] = [];
-      if (Array.isArray(rawContent)) {
-        for (const [blockIndex, block] of rawContent.entries()) {
-          const candidate = block as Record<string, unknown>;
-          if (candidate.type === "text") continue;
-          const converted = convertBlock(
-            candidate,
-            [],
-            knownToolNames,
-            notices,
-            policy,
-            `$.messages[${messageIndex}].content[${blockIndex}]`,
-          );
-          if (converted !== undefined) blocks.push(converted);
-        }
-      }
-      const ordinary: Array<TextContent | ImageContent> = [];
-      for (const block of blocks) {
-        if (block.type === "transcript") {
-          ordinary.push({ type: "text", text: block.text });
-        } else if (
-          block.type !== "toolResult" &&
-          block.type !== "toolUse" &&
-          block.type !== "thinking"
-        ) {
-          ordinary.push(block);
-        }
-      }
-      if (ordinary.length > 0) {
-        messages.push({ role: "user", content: ordinary, timestamp: receivedAt });
-      }
-      continue;
-    }
+    const sourceRole = message.role as "user" | "assistant";
     const role = sourceRole;
     const rawContent = message.content;
     const blocks: ConvertedBlock[] =
       typeof rawContent === "string"
         ? [{ type: "text", text: rawContent }]
         : [];
+    const blockSourceIndexes: number[] = typeof rawContent === "string" ? [-1] : [];
     if (Array.isArray(rawContent)) {
       for (const [blockIndex, block] of rawContent.entries()) {
         const converted = convertBlock(
@@ -1013,7 +1344,10 @@ export function convertValidatedAnthropicRequestWithPolicy(
           policy,
           `$.messages[${messageIndex}].content[${blockIndex}]`,
         );
-        if (converted !== undefined) blocks.push(converted);
+        if (converted !== undefined) {
+          blocks.push(converted);
+          blockSourceIndexes.push(blockIndex);
+        }
       }
     }
 
@@ -1025,10 +1359,69 @@ export function convertValidatedAnthropicRequestWithPolicy(
         receivedAt,
       );
       const previous = messages.at(-1);
+      let piMessageIndex: number;
+      let baseContentIndex: number;
       if (previous?.role === "assistant") {
+        piMessageIndex = messages.length - 1;
+        baseContentIndex = previous.content.length;
         previous.content.push(...assistant.content);
       } else {
+        piMessageIndex = messages.length;
+        baseContentIndex = 0;
         messages.push(assistant);
+      }
+      if (Array.isArray(rawContent)) {
+        for (const [convertedIndex, semanticBlock] of blocks.entries()) {
+          const sourceContentIndex = blockSourceIndexes[convertedIndex];
+          if (sourceContentIndex === undefined || sourceContentIndex < 0) continue;
+          const candidate = rawContent[sourceContentIndex];
+          if (!isRecord(candidate)) continue;
+          const representsPiContent =
+            (semanticBlock.type === "text" ||
+              semanticBlock.type === "thinking" ||
+              semanticBlock.type === "toolUse" ||
+              semanticBlock.type === "transcript");
+          if (!representsPiContent) continue;
+          const piContentIndex = baseContentIndex + convertedIndex;
+          if (
+            candidate.type === "thinking" ||
+            candidate.type === "redacted_thinking"
+          ) {
+            reasoningHistory.push(
+              Object.freeze({
+                sourceMessageIndex: messageIndex,
+                sourceContentIndex,
+                piMessageIndex,
+                piContentIndex,
+                representation:
+                  candidate.type === "thinking" ? "thinking" : "redacted",
+              }),
+            );
+          }
+          const decoded = decodeBlockContinuity(
+            candidate,
+            `$.messages[${messageIndex}].content[${sourceContentIndex}].luckytoken_continuity`,
+          );
+          notices.push(...decoded.notices);
+          if (decoded.source !== undefined) {
+            for (const attachment of decoded.attachments) {
+              reasoningContinuity.push(
+                Object.freeze({
+                  sourceMessageIndex: messageIndex,
+                  sourceContentIndex,
+                  target: attachment.target,
+                  ...(attachment.target === "toolCall"
+                    ? { callId: attachment.callId }
+                    : {}),
+                  piMessageIndex,
+                  piContentIndex,
+                  source: decoded.source,
+                  attachment,
+                }),
+              );
+            }
+          }
+        }
       }
       pendingCalls.length = 0;
       for (const block of blocks) {
@@ -1102,7 +1495,7 @@ export function convertValidatedAnthropicRequestWithPolicy(
         throw new InvalidRequest(
           "thinking is valid only in an assistant turn",
         );
-      } else {
+      } else if (block.type !== "supplementOnly") {
         ordinary.push(block);
       }
     }
@@ -1131,20 +1524,27 @@ export function convertValidatedAnthropicRequestWithPolicy(
   if (Object.keys(samplingParams).length > 0) {
     options.samplingParams = Object.freeze(samplingParams);
   }
-  if (request.reasoning !== undefined) {
-    options.reasoning = request.reasoning;
+  if (request.reasoning.effort.kind === "specified") {
+    options.reasoning = request.reasoning.effort.level;
   }
-  if (request.thinkingBudget !== undefined) {
-    const level = request.reasoning ?? budgetLevel(request.thinkingBudget);
+  if (request.reasoning.activation.kind === "enabled") {
+    const budget = request.reasoning.activation.budgetTokens;
+    const level =
+      request.reasoning.effort.kind === "specified"
+        ? request.reasoning.effort.level
+        : budgetLevel(budget);
     const budgets: NonNullable<typeof options.thinkingBudgets> = {
       [level === "xhigh" || level === "max" ? "high" : level]:
-        request.thinkingBudget,
+        budget,
     };
     options.thinkingBudgets = Object.freeze(budgets);
   }
-  if (request.cacheControl !== undefined && policy.localCacheControl === "promote") {
+  if (
+    request.cacheControl.kind === "specified" &&
+    policy.localCacheControl === "promote"
+  ) {
     const retention =
-      request.cacheControl.ttl === "1h" ? "long" : "short";
+      request.cacheControl.value.ttl === "1h" ? "long" : "short";
     options.cacheRetention = retention;
     notices.push(
       requestNotice(
@@ -1154,16 +1554,63 @@ export function convertValidatedAnthropicRequestWithPolicy(
       ),
     );
   }
-  if (request.metadataUserId !== undefined) {
-    options.metadata = Object.freeze({ user_id: request.metadataUserId });
+  if (request.metadataUserId.kind === "specified") {
+    options.metadata = Object.freeze({ user_id: request.metadataUserId.value });
   }
+
+  const sampling: AnthropicProjectionSupplement["sampling"] = Object.freeze({
+    ...(request.temperature === undefined
+      ? {}
+      : { temperature: request.temperature }),
+    ...(request.topP === undefined ? {} : { topP: request.topP }),
+    ...(request.topK === undefined ? {} : { topK: request.topK }),
+  });
+  const supplement: AnthropicProjectionSupplement = Object.freeze({
+    maxTokens: request.maxTokens,
+    sampling,
+    ...(request.stopSequences === undefined
+      ? {}
+      : { stopSequences: Object.freeze([...request.stopSequences]) }),
+    ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
+    outputFormat: request.outputFormat,
+    metadataUserId: request.metadataUserId,
+    serviceTier: request.serviceTier,
+    inferenceGeo: request.inferenceGeo,
+    container: request.container,
+    cacheControl: request.cacheControl,
+    ...(request.systemSource === undefined || typeof request.systemSource === "string"
+      ? {}
+      : {
+          system: Object.freeze({
+            kind: "blocks" as const,
+            blocks: Object.freeze(
+              request.systemSource.map((block) => Object.freeze(structuredClone(block))),
+            ),
+          }),
+        }),
+    ...(request.finalAssistantPrefill ? { finalAssistantPrefill: true as const } : {}),
+    messageFrames: buildMessageFrames(request),
+    content: buildContentSupplement(request),
+    tools: buildToolSupplement(request.tools),
+  });
+  const reasoning: AnthropicReasoningSemantics = Object.freeze({
+    activation: request.reasoning.activation,
+    effort: request.reasoning.effort,
+    history: Object.freeze(reasoningHistory),
+    continuity: Object.freeze(reasoningContinuity),
+  });
 
   return {
     selector: request.selector,
-    context,
-    options,
-    renderState: { selector: request.selector, stream: request.stream },
-    notices: Object.freeze(notices),
+    invocation: {
+      pi: { context, options },
+      reasoning,
+      supplement,
+    },
+    client: {
+      renderState: { selector: request.selector, stream: request.stream },
+      notices: Object.freeze(notices),
+    },
   };
 }
 
@@ -1181,6 +1628,6 @@ export function parseAnthropicTextInvocation(
   return convertValidatedAnthropicRequestWithPolicy(
     validateAnthropicSourceRequest(value),
     receivedAt,
-    { unknownContent: "error", unresolvedToolCall: "xrepair", localCacheControl: "ignore" },
+    { unknownContent: "error", localCacheControl: "ignore" },
   );
 }

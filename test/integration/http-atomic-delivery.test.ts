@@ -4,6 +4,7 @@ import type {
   AssistantMessageEventStream,
   Model,
   Models,
+  ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,7 +24,7 @@ import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthrop
 const model: Model<string> = {
   id: "model",
   name: "model",
-  api: "api",
+  api: "pi-messages",
   provider: "provider",
   baseUrl: "https://provider.test",
   reasoning: false,
@@ -38,7 +39,7 @@ function message(
 ): AssistantMessage {
   return {
     role: "assistant",
-    api: "api",
+    api: "pi-messages",
     provider: "provider",
     model: "model",
     content: [{ type: "text", text: "complete" }],
@@ -97,7 +98,28 @@ function dependencies(
 ): HttpBoundaryDependencies {
   const models = {
     getModels: () => [model],
-    streamSimple: vi.fn(streamFactory),
+    streamSimple: vi.fn(
+      (_model: Model<string>, _context: unknown, options?: ModelsSimpleStreamOptions) => {
+        const stream = streamFactory();
+        const iterator = stream[Symbol.asyncIterator]();
+        let prepared = false;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              if (!prepared) {
+                prepared = true;
+                await options?.onPayload?.({
+                  model: model.id,
+                  context: {},
+                  options: { maxTokens: 10 },
+                }, model);
+              }
+              return iterator.next();
+            },
+          }),
+        } as AssistantMessageEventStream;
+      },
+    ),
   } as unknown as Models;
   const anthropic = createAnthropicMessagesHandler({
     models,

@@ -8,6 +8,7 @@ import type {
   AssistantMessageEventStream,
   Model,
   Models,
+  ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -49,7 +50,7 @@ const HANDOFF_LOCATION = {
 const model: Model<string> = {
   id: "model",
   name: "model",
-  api: "fixture-api",
+  api: "pi-messages",
   provider: "fixture-provider",
   baseUrl: "https://provider.test",
   reasoning: false,
@@ -144,8 +145,29 @@ describe("Request Journey semantic response failures", () => {
     };
 
     const terminal = successfulPiMessageWithUnrepresentableClientArguments();
-    const streamSimple = vi.fn(() =>
-      streamFrom([{ type: "done", reason: "toolUse", message: terminal }]),
+    const streamSimple = vi.fn(
+      (_model: Model<string>, _context: unknown, options?: ModelsSimpleStreamOptions) => {
+        const stream = streamFrom([
+          { type: "done", reason: "toolUse", message: terminal },
+        ]);
+        const iterator = stream[Symbol.asyncIterator]();
+        let prepared = false;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              if (!prepared) {
+                prepared = true;
+                await options?.onPayload?.({
+                  model: model.id,
+                  context: {},
+                  options: { maxTokens: 10 },
+                }, model);
+              }
+              return iterator.next();
+            },
+          }),
+        } as AssistantMessageEventStream;
+      },
     );
     const models = {
       getModels: () => [model],

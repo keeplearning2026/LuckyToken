@@ -83,7 +83,7 @@ describe("Anthropic tool definitions", () => {
     );
     const invocation = convertValidatedAnthropicRequest(validated, 1);
 
-    expect(invocation.context.tools).toEqual([
+    expect(invocation.invocation.pi.context.tools).toEqual([
       {
         name: "lookup",
         description: "Exact description",
@@ -101,7 +101,7 @@ describe("Anthropic tool definitions", () => {
       1,
     );
 
-    expect(invocation.context.tools?.[0]).toEqual({
+    expect(invocation.invocation.pi.context.tools?.[0]).toEqual({
       name: "lookup",
       description: "",
       parameters: { type: "object", properties: {} },
@@ -114,20 +114,34 @@ describe("Anthropic tool definitions", () => {
     ["deferred loading", { defer_loading: true }],
     ["eager input", { eager_input_streaming: true }],
     ["input examples", { input_examples: [{}] }],
-    ["server tool type", { type: "web_search_20250305" }],
-    ["future control", { future_control: true }],
-  ])("ignores non-converted tool control: %s", (_name, extras) => {
+  ])("retains non-Pi tool control in the supplement: %s", (_name, extras) => {
     const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([tool({ type: "object", properties: {} }, extras)]),
       ),
       1,
     );
-    expect(invocation.context.tools?.[0]).toEqual({
+    expect(invocation.invocation.pi.context.tools?.[0]).toEqual({
       name: "lookup",
       description: "",
       parameters: { type: "object", properties: {} },
     });
+    expect(invocation.invocation.supplement.tools).toEqual([
+      expect.objectContaining({
+        name: "lookup",
+        piRepresentation: "partial",
+        value: expect.objectContaining(extras),
+      }),
+    ]);
+  });
+
+  it.each([
+    ["server tool type on a custom tool", { type: "web_search_20250305" }],
+    ["future control", { future_control: true }],
+  ])("rejects invalid or unknown tool control: %s", (_name, extras) => {
+    expect(() => validateAnthropicSourceRequest(
+      request([tool({ type: "object", properties: {} }, extras)]),
+    )).toThrow(/server-tool|unexpected/u);
   });
 
   it("passes malformed-shape schemas through for non-strict tools", () => {
@@ -143,7 +157,7 @@ describe("Anthropic tool definitions", () => {
       ),
       1,
     );
-    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual({
       type: "object",
       properties: [],
       format: "also-unsupported",
@@ -162,7 +176,7 @@ describe("Anthropic tool definitions", () => {
       validateAnthropicSourceRequest(request([tool(schema)])),
       1,
     );
-    expect(invocation.context.tools?.[0]?.parameters).toEqual(schema);
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual(schema);
   });
 
   it("accepts non-strict cyclic schema graphs without recursing forever", () => {
@@ -173,7 +187,7 @@ describe("Anthropic tool definitions", () => {
       validateAnthropicSourceRequest(request([tool(cyclic)])),
       1,
     );
-    expect(invocation.context.tools?.[0]?.parameters).toEqual(cyclic);
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual(cyclic);
   });
 
   it("enforces request-wide strict limits before the subset check", () => {

@@ -4,8 +4,10 @@ import { InvalidRequest } from "./failures.js";
 
 export interface ValidatedAnthropicTool {
   name: string;
+  kind: "custom" | "server";
+  source: Record<string, unknown>;
   description?: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema?: Record<string, unknown>;
   strict: boolean;
 }
 
@@ -22,6 +24,61 @@ const SUPPORTED_SCHEMA_TYPES = new Set([
   "integer",
   "boolean",
   "null",
+]);
+
+const SERVER_TOOL_TYPES = new Set([
+  "bash_20250124",
+  "code_execution_20250522",
+  "code_execution_20250825",
+  "code_execution_20260120",
+  "memory_20250818",
+  "text_editor_20250124",
+  "text_editor_20250429",
+  "text_editor_20250728",
+  "web_search_20250305",
+  "web_search_20260209",
+  "web_fetch_20250910",
+  "web_fetch_20260209",
+  "web_fetch_20260309",
+  "tool_search_tool_bm25_20251119",
+  "tool_search_tool_bm25",
+  "tool_search_tool_regex_20251119",
+  "tool_search_tool_regex",
+]);
+const ANTHROPIC_CALLERS = new Set([
+  "direct",
+  "code_execution_20250825",
+  "code_execution_20260120",
+]);
+const SERVER_TOOL_NAMES_BY_TYPE_PREFIX: Readonly<Record<string, string>> = {
+  bash: "bash",
+  code_execution: "code_execution",
+  memory: "memory",
+  text_editor: "str_replace",
+  web_search: "web_search",
+  web_fetch: "web_fetch",
+  tool_search_tool_bm25: "tool_search_tool_bm25",
+  tool_search_tool_regex: "tool_search_tool_regex",
+};
+const TOOL_KEYS = new Set([
+  "name",
+  "type",
+  "description",
+  "input_schema",
+  "strict",
+  "allowed_callers",
+  "cache_control",
+  "defer_loading",
+  "eager_input_streaming",
+  "input_examples",
+  "allowed_domains",
+  "blocked_domains",
+  "max_uses",
+  "user_location",
+  "citations",
+  "max_content_tokens",
+  "use_cache",
+  "max_characters",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,23 +218,126 @@ function countStrictSchema(
 }
 
 function validateToolControlShapes(tool: Record<string, unknown>): void {
-  if (tool.cache_control !== undefined && !isRecord(tool.cache_control)) {
-    throw new InvalidRequest("tool.cache_control must be an object");
+  const unknown = Object.keys(tool).find((key) => !TOOL_KEYS.has(key));
+  if (unknown !== undefined) {
+    throw new InvalidRequest(`tool.${unknown} is unexpected`);
+  }
+  if (
+    tool.cache_control !== undefined &&
+    tool.cache_control !== null &&
+    !isRecord(tool.cache_control)
+  ) {
+    throw new InvalidRequest("tool.cache_control must be an object or null");
+  }
+  if (isRecord(tool.cache_control)) {
+    const cacheUnknown = Object.keys(tool.cache_control).find(
+      (key) => key !== "type" && key !== "ttl",
+    );
+    if (cacheUnknown !== undefined) {
+      throw new InvalidRequest(`tool.cache_control.${cacheUnknown} is unexpected`);
+    }
+    if (tool.cache_control.type !== "ephemeral") {
+      throw new InvalidRequest("tool.cache_control.type must be ephemeral");
+    }
+    if (
+      tool.cache_control.ttl !== undefined &&
+      tool.cache_control.ttl !== "5m" &&
+      tool.cache_control.ttl !== "1h"
+    ) {
+      throw new InvalidRequest("tool.cache_control.ttl must be 5m or 1h");
+    }
   }
   if (tool.allowed_callers !== undefined) {
-    requireUniqueStrings(tool.allowed_callers, "tool.allowed_callers");
+    const callers = requireUniqueStrings(tool.allowed_callers, "tool.allowed_callers");
+    if (callers.some((caller) => !ANTHROPIC_CALLERS.has(caller))) {
+      throw new InvalidRequest("tool.allowed_callers contains an unsupported caller");
+    }
   }
-  for (const field of ["defer_loading", "eager_input_streaming"] as const) {
+  for (const field of ["defer_loading"] as const) {
     if (tool[field] !== undefined && typeof tool[field] !== "boolean") {
       throw new InvalidRequest(`tool.${field} must be boolean`);
     }
   }
-  if (tool.input_examples !== undefined && !Array.isArray(tool.input_examples)) {
-    throw new InvalidRequest("tool.input_examples must be an array");
+  if (
+    tool.eager_input_streaming !== undefined &&
+    tool.eager_input_streaming !== null &&
+    typeof tool.eager_input_streaming !== "boolean"
+  ) {
+    throw new InvalidRequest("tool.eager_input_streaming must be boolean or null");
   }
-  if (tool.type !== undefined && typeof tool.type !== "string") {
-    throw new InvalidRequest("tool.type must be a string");
+  if (
+    tool.input_examples !== undefined &&
+    (!Array.isArray(tool.input_examples) ||
+      tool.input_examples.some((example) => !isRecord(example)))
+  ) {
+    throw new InvalidRequest("tool.input_examples must be an array of objects");
   }
+  if (
+    tool.type !== undefined &&
+    tool.type !== null &&
+    typeof tool.type !== "string"
+  ) {
+    throw new InvalidRequest("tool.type must be a string or null");
+  }
+  for (const name of ["allowed_domains", "blocked_domains"] as const) {
+    const value = tool[name];
+    if (
+      value !== undefined &&
+      value !== null &&
+      (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
+    ) {
+      throw new InvalidRequest(`tool.${name} must be an array of strings or null`);
+    }
+  }
+  if (tool.allowed_domains !== undefined && tool.blocked_domains !== undefined) {
+    throw new InvalidRequest("tool.allowed_domains and blocked_domains are mutually exclusive");
+  }
+  for (const name of ["max_uses", "max_content_tokens", "max_characters"] as const) {
+    const value = tool[name];
+    if (
+      value !== undefined &&
+      value !== null &&
+      (!Number.isSafeInteger(value) || (value as number) < 0)
+    ) {
+      throw new InvalidRequest(`tool.${name} must be a non-negative safe integer or null`);
+    }
+  }
+  if (tool.use_cache !== undefined && typeof tool.use_cache !== "boolean") {
+    throw new InvalidRequest("tool.use_cache must be boolean");
+  }
+  if (tool.citations !== undefined && tool.citations !== null) {
+    if (!isRecord(tool.citations) ||
+      Object.keys(tool.citations).some((key) => key !== "enabled") ||
+      (tool.citations.enabled !== undefined && typeof tool.citations.enabled !== "boolean")) {
+      throw new InvalidRequest("tool.citations must be a citations config or null");
+    }
+  }
+  if (tool.user_location !== undefined && tool.user_location !== null) {
+    if (!isRecord(tool.user_location) || tool.user_location.type !== "approximate") {
+      throw new InvalidRequest("tool.user_location must be an approximate location or null");
+    }
+    const allowed = new Set(["type", "city", "country", "region", "timezone"]);
+    if (Object.keys(tool.user_location).some((key) => !allowed.has(key))) {
+      throw new InvalidRequest("tool.user_location contains an unexpected field");
+    }
+    for (const key of ["city", "country", "region", "timezone"] as const) {
+      const value = tool.user_location[key];
+      if (value !== undefined && value !== null && typeof value !== "string") {
+        throw new InvalidRequest(`tool.user_location.${key} must be a string or null`);
+      }
+    }
+  }
+}
+
+function expectedServerToolName(type: string): string | undefined {
+  const prefix = Object.keys(SERVER_TOOL_NAMES_BY_TYPE_PREFIX).find(
+    (candidate) => type === candidate || type.startsWith(`${candidate}_`),
+  );
+  const expected = prefix === undefined
+    ? undefined
+    : SERVER_TOOL_NAMES_BY_TYPE_PREFIX[prefix];
+  if (expected === "str_replace") return undefined;
+  return expected;
 }
 
 export function validateAnthropicTools(
@@ -213,35 +373,61 @@ export function validateAnthropicTools(
     ) {
       throw new InvalidRequest(`tools[${index}].description must be a string`);
     }
-    if (!isRecord(candidate.input_schema)) {
-      throw new InvalidRequest(`tools[${index}].input_schema must be an object`);
+    const inputSchema = isRecord(candidate.input_schema)
+      ? candidate.input_schema
+      : undefined;
+    const custom = inputSchema !== undefined;
+    const server =
+      typeof candidate.type === "string" && SERVER_TOOL_TYPES.has(candidate.type);
+    if (custom && server) {
+      throw new InvalidRequest(
+        `tools[${index}] cannot combine a server-tool type with input_schema`,
+      );
+    }
+    if (!custom && !server) {
+      throw new InvalidRequest(
+        `tools[${index}] must be a custom tool with input_schema or a known typed server tool`,
+      );
     }
     if (candidate.strict !== undefined && typeof candidate.strict !== "boolean") {
       throw new InvalidRequest(`tools[${index}].strict must be boolean`);
     }
     validateToolControlShapes(candidate);
+    if (custom && candidate.type !== undefined && candidate.type !== null && candidate.type !== "custom") {
+      throw new InvalidRequest(`tools[${index}].type must be custom or null`);
+    }
+    if (server) {
+      const expectedName = expectedServerToolName(candidate.type as string);
+      if (expectedName !== undefined && candidate.name !== expectedName) {
+        throw new InvalidRequest(
+          `tools[${index}].name must be ${expectedName} for ${candidate.type}`,
+        );
+      }
+    }
 
     const strict = candidate.strict === true;
     if (strict) strictToolCount += 1;
-    if (strict) {
+    if (strict && custom) {
       countStrictSchema(
-        candidate.input_schema,
+        inputSchema,
         `tools[${index}].input_schema`,
         strictCounts,
         new Set(),
       );
     }
-    if (
-      typeof candidate.input_schema.type === "string" &&
-      candidate.input_schema.type !== "object"
+    if (inputSchema !== undefined &&
+      typeof inputSchema.type === "string" &&
+      inputSchema.type !== "object"
     ) {
       throw new InvalidRequest(`tools[${index}].input_schema must have type object`);
     }
     const validated: ValidatedAnthropicTool = {
       name: candidate.name,
-      inputSchema: candidate.input_schema,
+      kind: custom ? "custom" : "server",
+      source: structuredClone(candidate),
       strict,
     };
+    if (inputSchema !== undefined) validated.inputSchema = inputSchema;
     if (candidate.description !== undefined) {
       validated.description = candidate.description;
     }
@@ -267,11 +453,11 @@ export function validateAnthropicTools(
 export function convertAnthropicTools(
   tools: readonly ValidatedAnthropicTool[] | undefined,
 ): Tool[] | undefined {
-  return tools?.map((tool) => {
+  return tools?.filter((tool) => tool.kind === "custom").map((tool) => {
     const converted: Tool = {
       name: tool.name,
       description: tool.description ?? "",
-      parameters: tool.inputSchema,
+      parameters: tool.inputSchema ?? {},
     };
     if (tool.strict) {
       converted.constrainedSampling = {
