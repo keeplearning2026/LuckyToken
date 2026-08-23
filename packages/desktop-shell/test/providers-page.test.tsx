@@ -568,6 +568,38 @@ describe("Providers Profile product slice", () => {
     expect(refreshModels.querySelector("svg")).not.toBeNull();
   });
 
+  it("keeps Provider guidance behind a compact help action", async () => {
+    await render({ profiles: managedProfiles() });
+
+    expect(container.textContent).not.toContain("AI SERVICES");
+    expect(container.textContent).not.toContain(
+      "Find a provider, connect it, and manage the model names you use.",
+    );
+    expect(container.querySelector(".provider-page-heading h2")?.textContent).toBe(
+      "Providers",
+    );
+
+    const toolbar = container.querySelector(".provider-toolbar");
+    expect(toolbar?.querySelector('input[type="search"]')).not.toBeNull();
+    expect(toolbar?.contains(ariaButton("Refresh models"))).toBe(true);
+    expect(
+      container.querySelector('[role="dialog"][aria-label="How to use Providers"]'),
+    ).toBeNull();
+
+    await clickAria("How to use Providers");
+    const help = container.querySelector(
+      '[role="dialog"][aria-label="How to use Providers"]',
+    );
+    expect(help?.textContent).toContain("Connect");
+    expect(help?.textContent).toContain("Profiles");
+    expect(help?.textContent).toContain("Models");
+
+    await clickAria("Close Provider help");
+    expect(
+      container.querySelector('[role="dialog"][aria-label="How to use Providers"]'),
+    ).toBeNull();
+  });
+
   it("keeps orphaned persisted Profiles visible and removable", async () => {
     const orphan = managedProfiles();
     const orphanState = {

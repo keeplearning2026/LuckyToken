@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
+  CircleHelp,
   GripVertical,
   KeyRound,
   Layers,
@@ -87,6 +88,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [authError, setAuthError] = useState(false);
   const [catalogError, setCatalogError] = useState(false);
   const [search, setSearch] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
   const [busyProvider, setBusyProvider] = useState<string>();
   const [authModal, setAuthModal] = useState<AuthModalState>();
   const [authOutcome, setAuthOutcome] = useState<AuthOutcome>();
@@ -1043,25 +1045,16 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
 
   return (
     <section className="page-stack">
-      <div className="page-card section-heading">
-        <div>
-          <p className="eyebrow">AI SERVICES</p>
-          <h2>Providers</h2>
-          <p>Find a provider, connect it, and manage the model names you use.</p>
-        </div>
+      <div className="provider-page-heading">
+        <h2>Providers</h2>
         <button
           type="button"
-          className="card-icon-button provider-refresh-button"
-          aria-label="Refresh models"
-          title="Refresh models"
-          disabled={refreshing}
-          onClick={() => void refresh()}
+          className="card-icon-button provider-help-button"
+          aria-label="How to use Providers"
+          title="How to use this page"
+          onClick={() => setHelpOpen(true)}
         >
-          <RefreshCw
-            className={refreshing ? "spinning" : undefined}
-            size={20}
-            aria-hidden="true"
-          />
+          <CircleHelp size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -1077,15 +1070,31 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         </section>
       ) : (
         <>
-          <label className="provider-search">
-            <span className="sr-only">Search providers</span>
-            <input
-              type="search"
-              placeholder="Search providers…"
-              value={search}
-              onChange={(event) => setSearch(event.currentTarget.value)}
-            />
-          </label>
+          <div className="provider-toolbar">
+            <label className="provider-search">
+              <span className="sr-only">Search providers</span>
+              <input
+                type="search"
+                placeholder="Search providers…"
+                value={search}
+                onChange={(event) => setSearch(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="card-icon-button provider-refresh-button"
+              aria-label="Refresh models"
+              title="Refresh models"
+              disabled={refreshing}
+              onClick={() => void refresh()}
+            >
+              <RefreshCw
+                className={refreshing ? "spinning" : undefined}
+                size={20}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
 
           {catalogError ? (
             <section className="page-card" role="alert">
@@ -1115,6 +1124,55 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             </section>
           )}
         </>
+      )}
+
+      {!helpOpen ? null : (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="page-card task-modal provider-help-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="How to use Providers"
+          >
+            <div className="task-modal-header">
+              <div>
+                <h3>Providers</h3>
+                <p>Connect credentials, choose Profiles, and control model names.</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close Provider help"
+                onClick={() => setHelpOpen(false)}
+              >
+                <X size={19} aria-hidden="true" />
+              </button>
+            </div>
+            <ol className="provider-help-list">
+              <li>
+                <Power size={19} aria-hidden="true" />
+                <div>
+                  <strong>Connect</strong>
+                  <p>Add an API key or sign in with an account.</p>
+                </div>
+              </li>
+              <li>
+                <UserRoundCheck size={19} aria-hidden="true" />
+                <div>
+                  <strong>Profiles</strong>
+                  <p>Choose the active credential, reorder Profiles, and configure fallback.</p>
+                </div>
+              </li>
+              <li>
+                <Layers size={19} aria-hidden="true" />
+                <div>
+                  <strong>Models</strong>
+                  <p>Search, publish, rename, and drag models into the order clients see.</p>
+                </div>
+              </li>
+            </ol>
+          </section>
+        </div>
       )}
 
       {profilesProviderId === undefined ||
