@@ -23,13 +23,13 @@ describe("13 recheck: null means absence per frozen contract", () => {
       1,
       policy(),
     );
-    expect(invocation.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
     const effortNull = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: null } },
       1,
       policy(),
     );
-    expect(effortNull.options.reasoning).toBeUndefined();
+    expect(effortNull.invocation.pi.options.reasoning).toBeUndefined();
   });
 
   it("accepts temperature: null and top_p: null as target-default absence", () => {
@@ -38,8 +38,8 @@ describe("13 recheck: null means absence per frozen contract", () => {
       1,
       policy(),
     );
-    expect(invocation.options.temperature).toBeUndefined();
-    expect(invocation.options.samplingParams).toBeUndefined();
+    expect(invocation.invocation.pi.options.temperature).toBeUndefined();
+    expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
   });
 
   it("accepts instructions: null as absence", () => {
@@ -48,7 +48,7 @@ describe("13 recheck: null means absence per frozen contract", () => {
       1,
       policy(),
     );
-    expect(invocation.context.systemPrompt).toBeUndefined();
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
   });
 
   it("accepts safety_identifier: null and user: null as absence", () => {
@@ -57,7 +57,7 @@ describe("13 recheck: null means absence per frozen contract", () => {
       1,
       policy(),
     );
-    expect(invocation.options.metadata).toBeUndefined();
+    expect(invocation.invocation.pi.options.metadata).toBeUndefined();
   });
 
   it("accepts stream: null as false", () => {
@@ -66,7 +66,7 @@ describe("13 recheck: null means absence per frozen contract", () => {
       1,
       policy(),
     );
-    expect(invocation.renderState.stream).toBe(false);
+    expect(invocation.client.renderState.stream).toBe(false);
   });
 
   it("still rejects wrong non-null types", () => {
@@ -86,7 +86,7 @@ describe("13 recheck: max_output_tokens and prompt_cache_retention nullability",
       1,
       policy(),
     );
-    expect(invocation.options.maxTokens).toBeUndefined();
+    expect(invocation.invocation.pi.options.maxTokens).toBeUndefined();
   });
 
   it("accepts prompt_cache_retention: null as absence (already covered)", () => {
@@ -95,7 +95,7 @@ describe("13 recheck: max_output_tokens and prompt_cache_retention nullability",
       1,
       policy(),
     );
-    expect(invocation.options.cacheRetention).toBeUndefined();
+    expect(invocation.invocation.pi.options.cacheRetention).toBeUndefined();
   });
 });
 
@@ -108,7 +108,7 @@ describe("13 recheck: store nullability", () => {
       1,
       policy(),
     );
-    expect(invocation.options).toBeDefined();
+    expect(invocation.invocation.pi.options).toBeDefined();
   });
 });
 
@@ -128,7 +128,7 @@ describe("13 recheck: previous_response_id nullability", () => {
       1,
       policy(),
     );
-    expect(invocation.renderState.stream).toBe(false);
+    expect(invocation.client.renderState.stream).toBe(false);
   });
 
   it("accepts tool_choice: null as auto", () => {
@@ -142,7 +142,7 @@ describe("13 recheck: previous_response_id nullability", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
   });
 });
 
@@ -165,6 +165,6 @@ describe("13 recheck: max_output_tokens must be positive", () => {
       1,
       policy(),
     );
-    expect(invocation.options.maxTokens).toBe(512);
+    expect(invocation.invocation.pi.options.maxTokens).toBe(512);
   });
 });

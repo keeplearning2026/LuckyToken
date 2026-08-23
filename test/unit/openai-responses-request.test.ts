@@ -34,16 +34,16 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     );
 
     expect(invocation.selector).toBe("commandcode-private/deepseek/deepseek-v4-flash");
-    expect(invocation.context.systemPrompt).toBe("You are a helpful assistant");
-    expect(invocation.context.messages).toEqual([
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("You are a helpful assistant");
+    expect(invocation.invocation.pi.context.messages).toEqual([
       {
         role: "user",
         content: [{ type: "text", text: "hello" }],
         timestamp: 1_786_400_000_000,
       },
     ]);
-    expect(invocation.options.maxTokens).toBe(100);
-    expect(invocation.renderState).toEqual({
+    expect(invocation.invocation.pi.options.maxTokens).toBe(100);
+    expect(invocation.client.renderState).toEqual({
       clientModel: "commandcode-private/deepseek/deepseek-v4-flash",
       stream: true,
     });
@@ -74,7 +74,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
     );
 
-    const assistant = invocation.context.messages.find((m) => m.role === "assistant");
+    const assistant = invocation.invocation.pi.context.messages.find((m) => m.role === "assistant");
     expect(assistant?.content).toEqual([
       { type: "thinking", thinking: "thinking hard" },
       { type: "text", text: "answer" },
@@ -103,16 +103,16 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
     );
 
-    expect(invocation.context.messages.map((m) => m.role)).toEqual([
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
       "user",
       "assistant",
       "toolResult",
     ]);
-    const assistant = invocation.context.messages[1];
+    const assistant = invocation.invocation.pi.context.messages[1];
     expect(assistant?.content).toEqual([
       { type: "toolCall", id: "call_1", name: "lookup", arguments: { key: "value" } },
     ]);
-    expect(invocation.context.messages[2]).toMatchObject({
+    expect(invocation.invocation.pi.context.messages[2]).toMatchObject({
       role: "toolResult",
       toolCallId: "call_1",
       toolName: "lookup",
@@ -153,9 +153,9 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
     );
 
-    const roles = invocation.context.messages.map((m) => m.role);
+    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
     expect(roles).toEqual(["user", "assistant", "toolResult", "toolResult"]);
-    const results = invocation.context.messages.filter(
+    const results = invocation.invocation.pi.context.messages.filter(
       (m) => m.role === "toolResult",
     );
     expect(results.map((m) => m.toolCallId)).toEqual(["call_1", "call_2"]);
@@ -177,7 +177,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    const assistant = invocation.context.messages.find((m) => m.role === "assistant");
+    const assistant = invocation.invocation.pi.context.messages.find((m) => m.role === "assistant");
     expect(assistant?.content).toEqual([
       { type: "toolCall", id: "call_1", name: "noop", arguments: {} },
     ]);
@@ -219,9 +219,9 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
       policy({ orphanToolOutput: "ignore" }),
     );
-    expect(ignored.context.messages).toHaveLength(1);
+    expect(ignored.invocation.pi.context.messages).toHaveLength(1);
     expect(
-      ignored.notices.some(
+      ignored.client.notices.some(
         (n) => n.code === "openai-responses_orphan_tool_output_ignored",
       ),
     ).toBe(true);
@@ -260,7 +260,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    expect(invocation.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
   });
 
   it("converts agent_message to a user message", () => {
@@ -277,7 +277,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    expect(invocation.context.messages[0]).toMatchObject({
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "report from subagent" }],
     });
@@ -313,8 +313,8 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["base", "extra"]);
-    expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["base", "extra"]);
+    expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
       type: "json_schema",
       strict: "require",
     });
@@ -325,7 +325,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       { model: "m", input: "x", reasoning: { effort: "ultra" } },
       1,
     );
-    expect(invocation.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBe("max");
   });
 
   it("rejects malformed previous_response_id, store, and tool_choice shapes", () => {
@@ -337,7 +337,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     ).toThrow("store must be a boolean");
     expect(() =>
       validateResponsesRequest({ model: "m", input: "x", tool_choice: 42 }),
-    ).toThrow("tool_choice must be a string or object");
+    ).toThrow("tool_choice must be auto, none, required, or an object");
   });
 
   it("maps a future reasoning.effort to max by default with a notice", () => {
@@ -348,9 +348,9 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
       policy(),
     );
-    expect(invocation.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBe("max");
     expect(
-      invocation.notices.some((n) => n.code === "openai-responses_future_effort"),
+      invocation.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
   });
 
@@ -379,14 +379,14 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "shell_command",
       "apply_patch",
       "mcp__inner_tool",
     ]);
-    const shell = invocation.context.tools?.[0];
+    const shell = invocation.invocation.pi.context.tools?.[0];
     expect(shell?.parameters).toMatchObject({ type: "object" });
-    const applyPatch = invocation.context.tools?.[1];
+    const applyPatch = invocation.invocation.pi.context.tools?.[1];
     expect(applyPatch?.parameters).toMatchObject({
       type: "object",
       properties: { input: { type: "string" } },
@@ -409,7 +409,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       },
       1,
     );
-    expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+    expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
       type: "json_schema",
       strict: "require",
     });
@@ -430,8 +430,8 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.context.systemPrompt).toBe("You are helpful\ncode rules");
-    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("You are helpful\ncode rules");
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user"]);
   });
 
   it("full mode promotes every system/developer message into systemPrompt in order", () => {
@@ -450,10 +450,10 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ privilegedMessages: "full" }),
     );
-    expect(invocation.context.systemPrompt).toBe("top\ns1\nd1\nd2");
-    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("top\ns1\nd1\nd2");
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
     expect(
-      invocation.context.messages.map(
+      invocation.invocation.pi.context.messages.map(
         (m) => (m.content as Array<{ text: string }>)[0]?.text,
       ),
     ).toEqual(["u1", "u2"]);
@@ -474,11 +474,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ privilegedMessages: "first" }),
     );
-    expect(invocation.context.systemPrompt).toBe("s1\nd1");
-    const roles = invocation.context.messages.map((m) => m.role);
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("s1\nd1");
+    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
     expect(roles).toEqual(["user", "user", "user"]);
     expect(
-      invocation.context.messages.map(
+      invocation.invocation.pi.context.messages.map(
         (m) => (m.content as Array<{ text: string }>)[0]?.text,
       ),
     ).toEqual(["u1", "later-rules", "u2"]);
@@ -498,14 +498,14 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ privilegedMessages: "user" }),
     );
-    expect(invocation.context.systemPrompt).toBe("top");
-    expect(invocation.context.messages.map((m) => m.role)).toEqual([
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("top");
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
       "user",
       "user",
       "user",
     ]);
     expect(
-      invocation.context.messages.map(
+      invocation.invocation.pi.context.messages.map(
         (m) => (m.content as Array<{ text: string }>)[0]?.text,
       ),
     ).toEqual(["s1", "d1", "u1"]);
@@ -525,7 +525,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ privilegedMessages: "full" }),
     );
-    expect(invocation.context.systemPrompt).toBe("first\nsecond");
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("first\nsecond");
   });
 
   it("later privileged messages degraded to user keep source order and are never lost", () => {
@@ -542,11 +542,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ privilegedMessages: "first" }),
     );
-    expect(invocation.context.systemPrompt).toBeUndefined();
-    const roles = invocation.context.messages.map((m) => m.role);
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
+    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
     expect(roles).toEqual(["user", "user", "user", "user"]);
     expect(
-      invocation.context.messages.map(
+      invocation.invocation.pi.context.messages.map(
         (m) => (m.content as Array<{ text: string }>)[0]?.text,
       ),
     ).toEqual(["u1", "late-system", "late-dev", "u2"]);
@@ -564,30 +564,30 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.options.maxTokens).toBe(512);
-    expect(invocation.options.temperature).toBe(0.4);
-    expect(invocation.options.samplingParams).toEqual({ top_p: 0.9 });
+    expect(invocation.invocation.pi.options.maxTokens).toBe(512);
+    expect(invocation.invocation.pi.options.temperature).toBe(0.4);
+    expect(invocation.invocation.pi.options.samplingParams).toEqual({ top_p: 0.9 });
   });
 
   it("maps prompt_cache_retention to Pi cacheRetention", () => {
     const shortInvocation = convertResponsesRequest(
-      { model: "m", input: "x", prompt_cache_retention: "in-memory" },
+      { model: "m", input: "x", prompt_cache_retention: "in_memory" },
       1,
       policy(),
     );
-    expect(shortInvocation.options.cacheRetention).toBe("short");
+    expect(shortInvocation.invocation.pi.options.cacheRetention).toBe("short");
     const longInvocation = convertResponsesRequest(
       { model: "m", input: "x", prompt_cache_retention: "24h" },
       1,
       policy(),
     );
-    expect(longInvocation.options.cacheRetention).toBe("long");
+    expect(longInvocation.invocation.pi.options.cacheRetention).toBe("long");
     const none = convertResponsesRequest(
       { model: "m", input: "x", prompt_cache_retention: null },
       1,
       policy(),
     );
-    expect(none.options.cacheRetention).toBeUndefined();
+    expect(none.invocation.pi.options.cacheRetention).toBeUndefined();
   });
 
   it("maps safety_identifier with a user fallback into Pi metadata", () => {
@@ -596,45 +596,64 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(fromSafety.options.metadata).toEqual({ user_id: "sid-1" });
+    expect(fromSafety.invocation.pi.options.metadata).toEqual({ user_id: "sid-1" });
     const fromUser = convertResponsesRequest(
       { model: "m", input: "x", user: "uid-2" },
       1,
       policy(),
     );
-    expect(fromUser.options.metadata).toEqual({ user_id: "uid-2" });
+    expect(fromUser.invocation.pi.options.metadata).toEqual({ user_id: "uid-2" });
     const safetyWins = convertResponsesRequest(
       { model: "m", input: "x", safety_identifier: "sid-3", user: "uid-4" },
       1,
       policy(),
     );
-    expect(safetyWins.options.metadata).toEqual({ user_id: "sid-3" });
+    expect(safetyWins.invocation.pi.options.metadata).toEqual({ user_id: "sid-3" });
   });
 
-  it("echoes stream into render state and drops unsupported auxiliary top-level fields", () => {
+  it("captures validated auxiliary controls in the complete supplement", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
         input: "x",
         stream: true,
-        service_tier: "premium",
+        service_tier: "priority",
         prompt_cache_key: "cache-key",
         parallel_tool_calls: false,
         truncation: "auto",
-        context_management: { type: "auto" },
+        context_management: [{ type: "compaction", compact_threshold: 1000 }],
         text: { format: { type: "text" }, verbosity: "low" },
-        include: ["reasoning.summary"],
+        include: ["reasoning.encrypted_content"],
         unknown_top_level: "ignored",
       },
       1,
       policy(),
     );
-    expect(invocation.renderState.stream).toBe(true);
-    expect(invocation.options.samplingParams).toBeUndefined();
-    expect(invocation.options.cacheRetention).toBeUndefined();
-    expect(invocation.context.tools).toBeUndefined();
-    // Unknown auxiliary fields must not appear in the options snapshot.
-    expect(invocation.options).not.toHaveProperty("service_tier");
+    expect(invocation.client.renderState.stream).toBe(true);
+    expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
+    expect(invocation.invocation.pi.options.cacheRetention).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
+    expect(invocation.invocation.supplement).toMatchObject({
+      output: {
+        format: { value: { type: "text" }, requirement: "hard" },
+        verbosity: { value: "low", requirement: "preference" },
+        include: {
+          value: ["reasoning.encrypted_content"],
+          requirement: "preference",
+        },
+      },
+      tools: {
+        parallelCalls: { value: false, requirement: "hard" },
+      },
+      cache: { key: { value: "cache-key", requirement: "preference" } },
+      lifecycle: {
+        serviceTier: { value: "priority", requirement: "preference" },
+        truncation: { value: "auto", requirement: "hard" },
+        contextManagement: { requirement: "hard" },
+      },
+    });
+    // Unknown auxiliary fields must not appear in the typed invocation.
+    expect(invocation.invocation.pi.options).not.toHaveProperty("service_tier");
   });
 
   it("maps reasoning effort minimal through xhigh directly", () => {
@@ -644,30 +663,26 @@ describe("13: Responses privileged prompts, options, and handles", () => {
         1,
         policy(),
       );
-      expect(invocation.options.reasoning).toBe(effort);
+      expect(invocation.invocation.pi.options.reasoning).toBe(effort);
     }
   });
 
-  it("maps none to omission (documented degradation) and absent/null without notices", () => {
+  it("preserves explicit none separately from absent provider-default", () => {
     const none = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: "none" } },
       1,
       policy(),
     );
-    expect(none.options.reasoning).toBeUndefined();
-    // none is a documented explicit-off degradation: a notice is emitted.
-    expect(
-      none.notices.some(
-        (n) => n.code === "openai-responses_effort_none_omitted",
-      ),
-    ).toBe(true);
+    expect(none.invocation.pi.options.reasoning).toBeUndefined();
+    expect(none.invocation.reasoning.request.effort).toEqual({ kind: "disabled" });
+    expect(none.client.notices).toEqual([]);
     const absent = convertResponsesRequest(
       { model: "m", input: "x" },
       1,
       policy(),
     );
-    expect(absent.options.reasoning).toBeUndefined();
-    expect(absent.notices).toEqual([]);
+    expect(absent.invocation.pi.options.reasoning).toBeUndefined();
+    expect(absent.client.notices).toEqual([]);
   });
 
   it("maps ultra and max to Pi max", () => {
@@ -676,17 +691,17 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(ultra.options.reasoning).toBe("max");
+    expect(ultra.invocation.pi.options.reasoning).toBe("max");
     expect(
-      ultra.notices.some((n) => n.code === "openai-responses_effort_ultra_alias"),
+      ultra.client.notices.some((n) => n.code === "openai-responses_effort_ultra_alias"),
     ).toBe(true);
     const max = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: "max" } },
       1,
       policy(),
     );
-    expect(max.options.reasoning).toBe("max");
-    expect(max.notices).toEqual([]);
+    expect(max.invocation.pi.options.reasoning).toBe("max");
+    expect(max.client.notices).toEqual([]);
   });
 
   it("applies futureReasoningEffort=max to a future effort value with a notice", () => {
@@ -695,9 +710,9 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ futureReasoningEffort: "max" }),
     );
-    expect(invocation.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBe("max");
     expect(
-      invocation.notices.some((n) => n.code === "openai-responses_future_effort"),
+      invocation.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
   });
 
@@ -707,9 +722,9 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ futureReasoningEffort: "omit" }),
     );
-    expect(invocation.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
     expect(
-      invocation.notices.some((n) => n.code === "openai-responses_future_effort"),
+      invocation.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
   });
 
@@ -733,27 +748,31 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(none.context.tools).toBeUndefined();
+    expect(none.invocation.pi.context.tools).toBeUndefined();
     const auto = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "auto" },
       1,
       policy(),
     );
-    expect(auto.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
+    expect(auto.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
     const allowed = convertResponsesRequest(
       {
         model: "m",
         input: "x",
         tools,
-        tool_choice: { type: "allowed", allowed_tools: ["b"] },
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "auto",
+          tools: [{ type: "function", name: "b" }],
+        },
       },
       1,
       policy(),
     );
-    expect(allowed.context.tools?.map((t) => t.name)).toEqual(["b"]);
+    expect(allowed.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["b"]);
   });
 
-  it("drops unsupported forced tool_choice controls", () => {
+  it("preserves a named tool_choice for target projection", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -764,8 +783,8 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
-    expect(invocation.renderState.toolChoice).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
+    expect(invocation.client.renderState.toolChoice).toBe("required");
   });
 
   it("errors on a forced tool_choice requiring a tool absent from the catalog", () => {
@@ -783,20 +802,22 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/tool_choice requires/);
   });
 
-  it("rejects background=true as a Core conversion error", () => {
-    expect(() =>
-      convertResponsesRequest(
-        { model: "m", input: "x", background: true },
-        1,
-        policy(),
-      ),
-    ).toThrow(/background/);
+  it("retains background=true as a hard lifecycle requirement", () => {
+    const background = convertResponsesRequest(
+      { model: "m", input: "x", background: true },
+      1,
+      policy(),
+    );
+    expect(background.invocation.supplement.lifecycle?.background).toEqual({
+      value: true,
+      requirement: "hard",
+    });
     const sync = convertResponsesRequest(
       { model: "m", input: "x", background: false },
       1,
       policy(),
     );
-    expect(sync.renderState.stream).toBe(false);
+    expect(sync.client.renderState.stream).toBe(false);
   });
 
   it("rejects conversation, prompt, external item_reference, and foreign encrypted compaction", () => {
@@ -854,7 +875,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
         },
       },
     );
-    expect(invocation.context.messages[0]).toMatchObject({
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "materialized" }],
     });
@@ -881,7 +902,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       },
     );
     expect(
-      invocation.notices.some(
+      invocation.client.notices.some(
         (n) => n.code === "openai-responses_reference_unresolved",
       ),
     ).toBe(true);
@@ -1007,21 +1028,39 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/item_reference cannot be resolved/);
   });
 
-  it("retains source metadata only for request-local response echo", () => {
+  it("retains valid source metadata only for request-local response echo", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
         input: "x",
-        metadata: { thread: "t-1", numeric: 42, nested: { a: 1 } },
+        metadata: { thread: "t-1" },
       },
       1,
       policy(),
     );
-    // Only safely-echoable string values are retained; nothing enters Pi
-    // model context.
-    expect(invocation.renderState.metadataEcho).toEqual({ thread: "t-1" });
-    expect(invocation.options.metadata).toBeUndefined();
-    expect(invocation.context).not.toHaveProperty("metadata");
+    expect(invocation.client.renderState.metadataEcho).toEqual({ thread: "t-1" });
+    expect(invocation.invocation.pi.options.metadata).toBeUndefined();
+    expect(invocation.invocation.pi.context).not.toHaveProperty("metadata");
+  });
+
+  it("rejects invalid metadata values and SDK count/length overflow", () => {
+    for (const metadata of [
+      { numeric: 42 },
+      { nested: { a: 1 } },
+      Object.fromEntries(
+        Array.from({ length: 17 }, (_, index) => [`key-${index}`, "value"]),
+      ),
+      { ["k".repeat(65)]: "value" },
+      { key: "v".repeat(513) },
+    ]) {
+      expect(() =>
+        convertResponsesRequest(
+          { model: "m", input: "x", metadata },
+          1,
+          policy(),
+        ),
+      ).toThrow(/metadata/u);
+    }
   });
 
   it("applies unknownInputItem=error by default and ignore with a notice", () => {
@@ -1043,9 +1082,9 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ unknownInputItem: "ignore" }),
     );
-    expect(ignored.context.messages).toHaveLength(1);
+    expect(ignored.invocation.pi.context.messages).toHaveLength(1);
     expect(
-      ignored.notices.some(
+      ignored.client.notices.some(
         (n) => n.code === "openai-responses_unknown_input_item_ignored",
       ),
     ).toBe(true);
@@ -1074,24 +1113,23 @@ describe("13 recheck: resolved references keep privileged promotion", () => {
         ],
       },
     );
-    expect(invocation.context.systemPrompt).toContain("resolved rules");
-    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toContain("resolved rules");
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user"]);
   });
 });
 
-describe("13 recheck: effort none is a documented degradation", () => {
-  it("emits a notice for reasoning.effort=none (explicit off degradation)", () => {
+describe("13 recheck: effort none retains explicit-off intent", () => {
+  it("does not claim degradation before target projection", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: "none" } },
       1,
       policy(),
     );
-    expect(invocation.options.reasoning).toBeUndefined();
-    expect(
-      invocation.notices.some(
-        (n) => n.code === "openai-responses_effort_none_omitted",
-      ),
-    ).toBe(true);
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.reasoning.request.effort).toEqual({
+      kind: "disabled",
+    });
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("emits no notice for absent or null reasoning", () => {
@@ -1100,19 +1138,19 @@ describe("13 recheck: effort none is a documented degradation", () => {
       1,
       policy(),
     );
-    expect(absent.notices).toEqual([]);
+    expect(absent.client.notices).toEqual([]);
     const nulled = convertResponsesRequest(
       { model: "m", input: "x", reasoning: null },
       1,
       policy(),
     );
-    expect(nulled.notices).toEqual([]);
+    expect(nulled.client.notices).toEqual([]);
     const effortNull = convertResponsesRequest(
       { model: "m", input: "x", reasoning: { effort: null } },
       1,
       policy(),
     );
-    expect(effortNull.notices).toEqual([]);
+    expect(effortNull.client.notices).toEqual([]);
   });
 });
 
@@ -1145,8 +1183,8 @@ describe("13 recheck: resolver receives explicit limits", () => {
   });
 });
 
-describe("13 recheck: forced tool_choice drop is documented", () => {
-  it("emits a notice when an unsupported forced tool_choice is dropped", () => {
+describe("13 recheck: tool_choice is retained for target projection", () => {
+  it("retains a named choice without a premature degradation notice", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1157,12 +1195,13 @@ describe("13 recheck: forced tool_choice drop is documented", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
-    expect(
-      invocation.notices.some(
-        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
-      ),
-    ).toBe(true);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
+    expect(invocation.invocation.supplement.tools?.choice?.value).toEqual({
+      kind: "named",
+      toolType: "function",
+      name: "a",
+    });
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("emits no notice for tool_choice none/auto/allowed", () => {
@@ -1176,7 +1215,7 @@ describe("13 recheck: forced tool_choice drop is documented", () => {
       1,
       policy(),
     );
-    expect(none.notices).toEqual([]);
+    expect(none.client.notices).toEqual([]);
     const auto = convertResponsesRequest(
       {
         model: "m",
@@ -1187,18 +1226,22 @@ describe("13 recheck: forced tool_choice drop is documented", () => {
       1,
       policy(),
     );
-    expect(auto.notices).toEqual([]);
+    expect(auto.client.notices).toEqual([]);
     const allowed = convertResponsesRequest(
       {
         model: "m",
         input: "x",
         tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
-        tool_choice: { type: "allowed", allowed_tools: ["a"] },
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "auto",
+          tools: [{ type: "function", name: "a" }],
+        },
       },
       1,
       policy(),
     );
-    expect(allowed.notices).toEqual([]);
+    expect(allowed.client.notices).toEqual([]);
   });
 });
 
@@ -1232,12 +1275,16 @@ describe("13 recheck: malformed allowed_tools is rejected", () => {
           model: "m",
           input: "x",
           tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
-          tool_choice: { type: "allowed", allowed_tools: "not-an-array" },
+          tool_choice: {
+            type: "allowed_tools",
+            mode: "auto",
+            tools: "not-an-array",
+          },
         },
         1,
         policy(),
       ),
-    ).toThrow(/allowed_tools/);
+    ).toThrow(/tool_choice\.tools/);
   });
 
   it("rejects an allowed_tools array with a non-string entry", () => {
@@ -1247,12 +1294,16 @@ describe("13 recheck: malformed allowed_tools is rejected", () => {
           model: "m",
           input: "x",
           tools: [{ type: "function", name: "a", parameters: { type: "object" } }],
-          tool_choice: { type: "allowed", allowed_tools: ["a", 42] },
+          tool_choice: {
+            type: "allowed_tools",
+            mode: "auto",
+            tools: [{ type: "function", name: "a" }, 42],
+          },
         },
         1,
         policy(),
       ),
-    ).toThrow(/allowed_tools/);
+    ).toThrow(/tool_choice\.tools/);
   });
 });
 
@@ -1263,7 +1314,7 @@ describe("13 recheck: temperature range is validated", () => {
       1,
       policy(),
     );
-    expect(invocation.options.temperature).toBe(1.5);
+    expect(invocation.invocation.pi.options.temperature).toBe(1.5);
   });
 
   it("rejects temperature below 0", () => {
@@ -1299,7 +1350,7 @@ describe("13 recheck: temperature range is validated", () => {
       1,
       policy(),
     );
-    expect(valid.options.samplingParams).toEqual({ top_p: 0.5 });
+    expect(valid.invocation.pi.options.samplingParams).toEqual({ top_p: 0.5 });
   });
 });
 
@@ -1318,7 +1369,7 @@ describe("13 recheck: prototype pollution resistance", () => {
       1,
       policy(),
     );
-    const echo = invocation.renderState.metadataEcho ?? {};
+    const echo = invocation.client.renderState.metadataEcho ?? {};
     expect(Object.keys(echo).sort()).toEqual(["constructor", "normal"]);
     // The echo object is null-prototype: hostile keys cannot pollute it.
     expect(Object.getPrototypeOf(echo)).toBeNull();
@@ -1328,14 +1379,13 @@ describe("13 recheck: prototype pollution resistance", () => {
 
 describe("13 recheck: prototype pollution via JSON.parse input", () => {
   it("does not pollute when metadata arrives from JSON.parse with __proto__ as own key", () => {
-    const raw = '{"model":"m","input":"x","metadata":{"__proto__":{"polluted":true},"constructor":"ctor-value","normal":"safe"}}';
+    const raw = '{"model":"m","input":"x","metadata":{"__proto__":"proto-value","constructor":"ctor-value","normal":"safe"}}';
     const value = JSON.parse(raw) as Record<string, unknown>;
     const invocation = convertResponsesRequest(value, 1, policy());
-    const echo = invocation.renderState.metadataEcho ?? {};
+    const echo = invocation.client.renderState.metadataEcho ?? {};
     const keys = Object.keys(echo).sort();
-    // __proto__ as an own key must not be echoed as an own property, and the
-    // echo object is null-prototype so hostile keys cannot pollute it.
-    expect(keys).toEqual(["constructor", "normal"]);
+    // __proto__ remains a harmless own string key on a null-prototype object.
+    expect(keys).toEqual(["__proto__", "constructor", "normal"]);
     expect(Object.getPrototypeOf(echo)).toBeNull();
     expect((echo as Record<string, unknown>).polluted).toBeUndefined();
     // The source object must not have been mutated either.
@@ -1366,12 +1416,12 @@ describe("13 recheck: resolver failure branches", () => {
       },
     );
     expect(
-      invocation.notices.some(
+      invocation.client.notices.some(
         (n) => n.code === "openai-responses_reference_unresolved",
       ),
     ).toBe(true);
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.messages[0]).toMatchObject({
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "keep me" }],
     });
@@ -1447,8 +1497,8 @@ describe("13 recheck: privileged mode extreme combinations", () => {
       1,
       policy({ privilegedMessages: "first" }),
     );
-    expect(invocation.context.systemPrompt).toBe("s1\nd1\ns2");
-    expect(invocation.context.messages).toHaveLength(0);
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("s1\nd1\ns2");
+    expect(invocation.invocation.pi.context.messages).toHaveLength(0);
   });
 
   it("joins consecutive system messages with single newlines (no blank lines)", () => {
@@ -1465,8 +1515,8 @@ describe("13 recheck: privileged mode extreme combinations", () => {
       1,
       policy({ privilegedMessages: "full" }),
     );
-    expect(invocation.context.systemPrompt).toBe("a\nb\nc");
-    expect(invocation.context.systemPrompt).not.toContain("\n\n");
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("a\nb\nc");
+    expect(invocation.invocation.pi.context.systemPrompt).not.toContain("\n\n");
   });
 
   it("preserves exact segment text including internal newlines", () => {
@@ -1482,7 +1532,7 @@ describe("13 recheck: privileged mode extreme combinations", () => {
       policy({ privilegedMessages: "first" }),
     );
     // Exact segment text is not rewritten; segments join with one newline.
-    expect(invocation.context.systemPrompt).toBe("line1\nline2\n\nline4");
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("line1\nline2\n\nline4");
   });
 
   it("degrades every system/developer to user in user mode even without user messages", () => {
@@ -1497,10 +1547,10 @@ describe("13 recheck: privileged mode extreme combinations", () => {
       1,
       policy({ privilegedMessages: "user" }),
     );
-    expect(invocation.context.systemPrompt).toBeUndefined();
-    expect(invocation.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
     expect(
-      invocation.context.messages.map(
+      invocation.invocation.pi.context.messages.map(
         (m) => (m.content as Array<{ text: string }>)[0]?.text,
       ),
     ).toEqual(["s1", "d1"]);
@@ -1525,7 +1575,7 @@ describe("13 recheck: effort full matrix", () => {
         1,
         policy(),
       );
-      expect(invocation.options.reasoning).toBe(expected);
+      expect(invocation.invocation.pi.options.reasoning).toBe(expected);
     }
   });
 
@@ -1535,9 +1585,9 @@ describe("13 recheck: effort full matrix", () => {
       1,
       policy({ futureReasoningEffort: "max" }),
     );
-    expect(max.options.reasoning).toBe("max");
+    expect(max.invocation.pi.options.reasoning).toBe("max");
     expect(
-      max.notices.some((n) => n.code === "openai-responses_future_effort"),
+      max.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
 
     const omit = convertResponsesRequest(
@@ -1545,9 +1595,9 @@ describe("13 recheck: effort full matrix", () => {
       1,
       policy({ futureReasoningEffort: "omit" }),
     );
-    expect(omit.options.reasoning).toBeUndefined();
+    expect(omit.invocation.pi.options.reasoning).toBeUndefined();
     expect(
-      omit.notices.some((n) => n.code === "openai-responses_future_effort"),
+      omit.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
 
     expect(() =>
@@ -1573,9 +1623,9 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools).toBeUndefined();
-    expect(invocation.renderState.toolChoice).toBe("none");
-    expect(invocation.notices).toEqual([]);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
+    expect(invocation.client.renderState.toolChoice).toBe("none");
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("auto keeps the full catalog", () => {
@@ -1584,12 +1634,12 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "a",
       "b",
       "apply_patch",
     ]);
-    expect(invocation.renderState.toolChoice).toBeUndefined();
+    expect(invocation.client.renderState.toolChoice).toBe("auto");
   });
 
   it("absence/null keeps the full catalog with no effective choice", () => {
@@ -1598,18 +1648,18 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       1,
       policy(),
     );
-    expect(absent.context.tools?.map((t) => t.name)).toEqual([
+    expect(absent.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "a",
       "b",
       "apply_patch",
     ]);
-    expect(absent.renderState.toolChoice).toBeUndefined();
+    expect(absent.client.renderState.toolChoice).toBeUndefined();
     const nulled = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: null },
       1,
       policy(),
     );
-    expect(nulled.context.tools?.map((t) => t.name)).toEqual([
+    expect(nulled.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "a",
       "b",
       "apply_patch",
@@ -1618,52 +1668,77 @@ describe("13 recheck: tool_choice full combination matrix", () => {
 
   it("allowed filters deterministically and records the effective choice", () => {
     const invocation = convertResponsesRequest(
-      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: ["a", "b"] } },
+      {
+        model: "m",
+        input: "x",
+        tools,
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "auto",
+          tools: [
+            { type: "function", name: "a" },
+            { type: "function", name: "b" },
+          ],
+        },
+      },
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
     // The SDK has no bare "allowed" tool_choice string; the filter is
     // auto-mode filtering, so the effective echo is "auto".
-    expect(invocation.renderState.toolChoice).toBe("auto");
+    expect(invocation.client.renderState.toolChoice).toBe("auto");
   });
 
   it("allowed with an unknown name filters it out", () => {
     const invocation = convertResponsesRequest(
-      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: ["a", "zzz"] } },
+      {
+        model: "m",
+        input: "x",
+        tools,
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "auto",
+          tools: [
+            { type: "function", name: "a" },
+            { type: "function", name: "zzz" },
+          ],
+        },
+      },
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["a"]);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
   });
 
-  it("allowed with an empty list clears the catalog but records the effective auto", () => {
-    const invocation = convertResponsesRequest(
-      { model: "m", input: "x", tools, tool_choice: { type: "allowed", allowed_tools: [] } },
-      1,
-      policy(),
-    );
-    expect(invocation.context.tools).toBeUndefined();
-    expect(invocation.renderState.toolChoice).toBe("auto");
+  it("rejects an empty current allowed_tools list", () => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools,
+          tool_choice: { type: "allowed_tools", mode: "auto", tools: [] },
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/non-empty array/u);
   });
 
-  it("forced with an available tool drops the control with a notice", () => {
+  it("named choice with an available tool is retained", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: { type: "function", name: "a" } },
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "a",
       "b",
       "apply_patch",
     ]);
-    expect(invocation.renderState.toolChoice).toBeUndefined();
-    expect(
-      invocation.notices.some(
-        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
-      ),
-    ).toBe(true);
+    expect(invocation.client.renderState.toolChoice).toBe("required");
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("forced with an unavailable tool errors", () => {
@@ -1676,19 +1751,19 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     ).toThrow(/tool_choice requires an unavailable tool/);
   });
 
-  it("required string behaves like a dropped forced control", () => {
+  it("required string is retained for target projection", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "required" },
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "a",
       "b",
       "apply_patch",
     ]);
-    expect(invocation.renderState.toolChoice).toBeUndefined();
-    expect(invocation.notices).toEqual([]);
+    expect(invocation.client.renderState.toolChoice).toBe("required");
+    expect(invocation.client.notices).toEqual([]);
   });
 });
 
@@ -1716,7 +1791,7 @@ describe("13 recheck: resolver returns malformed items", () => {
         ],
       },
     );
-    const texts = invocation.context.messages
+    const texts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(texts).toEqual(["valid-resolved", "after"]);
@@ -1740,9 +1815,9 @@ describe("13 recheck: resolver returns malformed items", () => {
         resolveItemReference: async () => [{ type: "future_family", data: 1 }],
       },
     );
-    expect(invocation.context.messages).toHaveLength(0);
+    expect(invocation.invocation.pi.context.messages).toHaveLength(0);
     expect(
-      invocation.notices.some(
+      invocation.client.notices.some(
         (n) => n.code === "openai-responses_unknown_input_item_ignored",
       ),
     ).toBe(true);

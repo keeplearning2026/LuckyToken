@@ -38,7 +38,7 @@ const CLIENT_TOKEN = "client-semantic-usage-token-canary";
 const model: Model<string> = {
   id: "semantic-usage",
   name: "Semantic Usage",
-  api: "faux",
+  api: "anthropic-messages",
   provider: "faux",
   baseUrl: "https://semantic-provider.invalid",
   reasoning: true,
@@ -212,6 +212,17 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
             context: Context,
             options: ModelsSimpleStreamOptions,
           ) => {
+            void options.onPayload?.(
+              {
+                model: selectedModel.id,
+                messages: [],
+                stream: true,
+                max_tokens: options.maxTokens,
+                temperature: options.temperature,
+                thinking: { type: "disabled" },
+              },
+              selectedModel,
+            );
             piInvocations.push(
               snapshotInvocation(selectedModel, context, options),
             );
@@ -309,7 +320,11 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
       expect(enabled.workOutcomes).toEqual(disabled.workOutcomes);
       expect(enabled.piInvocations).toHaveLength(1);
       expect(enabled.piInvocations[0]).toMatchObject({
-        model: { provider: "faux", api: "faux", id: "semantic-usage" },
+        model: {
+          provider: "faux",
+          api: "anthropic-messages",
+          id: "semantic-usage",
+        },
         context: {
           systemPrompt: "Answer precisely",
           messages: [

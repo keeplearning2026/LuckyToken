@@ -790,10 +790,10 @@ describe("OpenAI Responses serving", () => {
         {
           model: "commandcode-private/deepseek/deepseek-v4-flash",
           input: "hello",
-          // A dropped forced control and a parallel flag must never be echoed
-          // as effective; the response carries target defaults instead.
-          tool_choice: { type: "shell" },
-          parallel_tool_calls: false,
+          // CommandCode uses its native automatic tool policy. Its missing
+          // top-p and explicit parallel fields must not be claimed effective.
+          tool_choice: "auto",
+          parallel_tool_calls: true,
           temperature: 0.5,
           top_p: 0.9,
         },
@@ -805,7 +805,7 @@ describe("OpenAI Responses serving", () => {
     expect(json.tool_choice).toBe("auto");
     expect(json.parallel_tool_calls).toBe(true);
     expect(json.temperature).toBe(0.5);
-    expect(json.top_p).toBe(0.9);
+    expect(json.top_p).toBeNull();
     expect(json.tools).toEqual([]);
   });
 
@@ -884,12 +884,7 @@ describe("OpenAI Responses serving", () => {
     });
   });
 
-  it("echoes tool_choice allowed filtering as the SDK auto value, never a raw allowed string", async () => {
-    // The SDK Response.tool_choice accepts 'none'|'auto'|'required' or the
-    // ToolChoiceAllowed object; a bare "allowed" string is not a legal wire
-    // value. The allowed_tools filter is auto-mode filtering, so the
-    // effective echo is "auto" with the filtered catalog (ticket 17: echo
-    // effective normalized controls).
+  it("echoes an effective allowed_tools object with the filtered catalog", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
     });
@@ -914,17 +909,25 @@ describe("OpenAI Responses serving", () => {
               strict: false,
             },
           ],
-          tool_choice: { type: "allowed", allowed_tools: ["lookup"] },
+          tool_choice: {
+            type: "allowed_tools",
+            mode: "auto",
+            tools: [{ type: "function", name: "lookup" }],
+          },
         },
         "client-token",
       ),
     );
     expect(response.status).toBe(200);
     const json = (await response.json()) as {
-      tool_choice: string;
+      tool_choice: Record<string, unknown>;
       tools: Array<{ name: string }>;
     };
-    expect(json.tool_choice).toBe("auto");
+    expect(json.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "lookup" }],
+    });
     expect(json.tools.map((tool) => tool.name)).toEqual(["lookup"]);
   });
 

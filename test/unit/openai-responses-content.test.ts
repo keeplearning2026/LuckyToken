@@ -38,7 +38,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [
           { type: "text", text: "exact text" },
@@ -63,7 +63,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toEqual([
@@ -91,7 +91,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "text", text: "raw string input" }],
       });
@@ -113,7 +113,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toEqual([
@@ -140,7 +140,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const block = (assistant?.content as Array<{
@@ -175,7 +175,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const block = (assistant?.content as Array<{
@@ -207,7 +207,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const block = (assistant?.content as Array<{
@@ -242,7 +242,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "image", mimeType: "image/png", data: PNG_DATA }],
       });
@@ -269,7 +269,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "image", mimeType: "image/jpeg", data: jpegData }],
       });
@@ -404,7 +404,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           policy(),
         );
         const image = (
-          invocation.context.messages[0]?.content as Array<{
+          invocation.invocation.pi.context.messages[0]?.content as Array<{
             type: string;
             mimeType: string;
           }>
@@ -441,7 +441,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           1,
           policy(),
         );
-        expect(invocation.context.messages[0]).toMatchObject({
+        expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
           role: "user",
           content: [{ type: "image", mimeType: mime }],
         });
@@ -531,7 +531,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           },
         },
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "image", mimeType: "image/png" }],
       });
@@ -575,7 +575,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           },
         },
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "image", mimeType: "image/webp" }],
       });
@@ -606,11 +606,11 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         },
       );
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_reference_unresolved",
         ),
       ).toBe(true);
-      const texts = invocation.context.messages
+      const texts = invocation.invocation.pi.context.messages
         .filter((m) => m.role === "user")
         .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
       expect(texts).toEqual(["keep me"]);
@@ -803,13 +803,13 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           ],
         },
       );
-      expect(invocation.context.messages).toHaveLength(1);
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "text", text: "keep me" }],
       });
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_reference_unresolved",
         ),
       ).toBe(true);
@@ -846,13 +846,13 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           ],
         },
       );
-      const userTexts = invocation.context.messages
+      const userTexts = invocation.invocation.pi.context.messages
         .filter((m) => m.role === "user")
         .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
       // The text survives; the un-materialized image degrades with a notice.
       expect(userTexts).toEqual(["see image", "keep me"]);
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_reference_unresolved",
         ),
       ).toBe(true);
@@ -880,8 +880,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           resolveItemReference: async () => [],
         },
       );
-      expect(invocation.context.messages).toHaveLength(1);
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "text", text: "keep me" }],
       });
@@ -913,12 +913,12 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           },
         },
       );
-      expect(invocation.context.messages[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "text", text: "describe this" }],
       });
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_reference_unresolved",
         ),
       ).toBe(true);
@@ -978,16 +978,16 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const userTexts = invocation.context.messages
+      const userTexts = invocation.invocation.pi.context.messages
         .filter((m) => m.role === "user")
         .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
       expect(userTexts).toEqual(["after"]);
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_input_file_dropped",
         ),
       ).toBe(true);
-      expect(invocation.context.messages).not.toContainEqual(
+      expect(invocation.invocation.pi.context.messages).not.toContainEqual(
         expect.objectContaining({ content: expect.arrayContaining([expect.objectContaining({ type: "image" })]) }),
       );
     });
@@ -1017,7 +1017,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const images = invocation.context.messages.flatMap((m) =>
+      const images = invocation.invocation.pi.context.messages.flatMap((m) =>
         m.role === "user"
           ? (m.content as Array<{ type: string }>).filter(
               (b) => b.type === "image",
@@ -1027,7 +1027,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       expect(images).toHaveLength(1);
       expect(images[0]).toMatchObject({ mimeType: "image/png" });
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_input_file_dropped",
         ),
       ).toBe(false);
@@ -1056,9 +1056,9 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           1,
           policy(),
         );
-        expect(invocation.context.messages).toHaveLength(0);
+        expect(invocation.invocation.pi.context.messages).toHaveLength(0);
         expect(
-          invocation.notices.some(
+          invocation.client.notices.some(
             (n) => n.code === "openai-responses_input_file_dropped",
           ),
         ).toBe(true);
@@ -1084,9 +1084,9 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages).toHaveLength(0);
+      expect(invocation.invocation.pi.context.messages).toHaveLength(0);
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_input_file_dropped",
         ),
       ).toBe(true);
@@ -1221,7 +1221,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toEqual([
@@ -1230,7 +1230,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       ]);
     });
 
-    it("stores Responses-native continuity state in a versioned provenance-bearing thinkingSignature", () => {
+    it("does not guess Responses-native continuity provenance from encrypted_content alone", () => {
       const invocation = convertResponsesRequest(
         {
           model: "m",
@@ -1251,7 +1251,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const thinking = (
@@ -1262,15 +1262,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         }>
       ).find((b) => b.type === "thinking");
       expect(thinking?.thinking).toBe("visible");
-      expect(thinking?.thinkingSignature).toBeDefined();
-      const envelope = JSON.parse(
-        String(thinking?.thinkingSignature),
-      ) as Record<string, unknown>;
-      expect(envelope.v).toBe(1);
-      expect(envelope.id).toBe("openai-responses");
-      expect(envelope.authority).toBe("openai-responses");
-      expect(envelope.encrypted_content).toBe("opaque-responses-state");
-      expect(envelope.item_id).toBe("rs_cont_1");
+      expect(thinking?.thinkingSignature).toBeUndefined();
+      expect(invocation.invocation.reasoning.continuity).toEqual([]);
     });
 
     it("preserves a reasoning-only assistant message without disappearing", () => {
@@ -1288,8 +1281,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages).toHaveLength(2);
-      const assistant = invocation.context.messages[1];
+      expect(invocation.invocation.pi.context.messages).toHaveLength(2);
+      const assistant = invocation.invocation.pi.context.messages[1];
       expect(assistant?.role).toBe("assistant");
       expect(assistant?.content).toEqual([
         { type: "thinking", thinking: "trailing thoughts" },
@@ -1316,7 +1309,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toEqual([
@@ -1345,7 +1338,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const thinking = (
@@ -1384,7 +1377,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const thinking = (
@@ -1400,9 +1393,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       expect(thinking?.thinkingSignature).toBeUndefined();
     });
 
-    it("restores encrypted_content when the envelope authority is the Responses authority", () => {
-      // A Lucky-owned envelope with the Responses authority and a verified
-      // schema version/id restores encrypted_content.
+    it("keeps a complete Responses reasoning item outside Pi IR until target resolution", () => {
       const invocation = convertResponsesRequest(
         {
           model: "m",
@@ -1411,11 +1402,14 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               type: "reasoning",
               id: "rs_owned",
               encrypted_content: "owned-secret-bytes",
-              envelope: {
-                v: 1,
-                id: "openai-responses",
-                authority: "openai-responses",
-                encrypted_content: "owned-secret-bytes",
+              luckytoken_continuity: {
+                version: 1,
+                source: {
+                  provider: "openai",
+                  api: "openai-responses",
+                  model: "gpt-test",
+                },
+                attachments: [],
               },
               summary: [{ type: "summary_text", text: "visible part" }],
             },
@@ -1429,7 +1423,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const thinking = (
@@ -1438,14 +1432,26 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           thinkingSignature?: string;
         }>
       ).find((b) => b.type === "thinking");
-      const envelope = JSON.parse(
-        String(thinking?.thinkingSignature),
-      ) as Record<string, unknown>;
-      expect(envelope).toMatchObject({
-        v: 1,
-        id: "openai-responses",
-        authority: "openai-responses",
-        encrypted_content: "owned-secret-bytes",
+      expect(thinking?.thinkingSignature).toBeUndefined();
+      expect(invocation.invocation.reasoning.continuity).toContainEqual({
+        attachment: {
+          target: "thinking",
+          messageIndex: 0,
+          contentIndex: 0,
+          sourceItemId: "rs_owned",
+        },
+        source: {
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-test",
+        },
+        kind: "responses-reasoning-item",
+        value: JSON.stringify({
+          type: "reasoning",
+          id: "rs_owned",
+          summary: [{ type: "summary_text", text: "visible part" }],
+          encrypted_content: "owned-secret-bytes",
+        }),
       });
     });
 
@@ -1479,7 +1485,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           1,
           policy(),
         );
-        const assistant = invocation.context.messages.find(
+        const assistant = invocation.invocation.pi.context.messages.find(
           (m) => m.role === "assistant",
         );
         const thinking = (
@@ -1519,7 +1525,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
           1,
           policy(),
         );
-        const assistant = invocation.context.messages.find(
+        const assistant = invocation.invocation.pi.context.messages.find(
           (m) => m.role === "assistant",
         );
         const thinking = (
@@ -1530,8 +1536,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         ).find((b) => b.type === "thinking");
         expect(thinking?.thinkingSignature).toBeUndefined();
       }
-      // A null envelope is treated as absent: the SDK-native encrypted
-      // content restores.
+      // A null legacy envelope is treated as absent, but without explicit
+      // source provenance the adapter must not guess a replay target.
       const nullEnvelope = convertResponsesRequest(
         {
           model: "m",
@@ -1553,14 +1559,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const nullThinking = (
-        nullEnvelope.context.messages.find(
-          (m) => m.role === "assistant",
-        )?.content as Array<{ thinkingSignature?: string }>
-      ).find((b) => b.thinkingSignature !== undefined);
-      expect(JSON.parse(String(nullThinking?.thinkingSignature))).toMatchObject(
-        { encrypted_content: "null-bytes" },
-      );
+      expect(nullEnvelope.invocation.reasoning.continuity).toEqual([]);
     });
 
     it("never injects signature envelopes into model-visible text", () => {
@@ -1588,7 +1587,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const blocks = assistant?.content as Array<{
@@ -1603,7 +1602,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
       expect(thinking?.thinking).toBe("visible thought");
       expect(thinking?.thinking).not.toContain("state-bytes");
       expect(thinking?.thinking).not.toContain("openai-responses");
-      expect(thinking?.thinkingSignature).toContain("state-bytes");
+      expect(thinking?.thinkingSignature).toBeUndefined();
       expect(text?.text).toBe("visible answer");
       expect(text?.text).not.toContain("final_answer");
       expect(text?.text).not.toContain("openai-responses");
@@ -1629,7 +1628,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const thinking = (
@@ -1651,6 +1650,15 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               id: "rs_a",
               encrypted_content: "state-a",
               summary: [{ type: "summary_text", text: "a" }],
+              luckytoken_continuity: {
+                version: 1,
+                source: {
+                  provider: "openai",
+                  api: "openai-responses",
+                  model: "gpt-a",
+                },
+                attachments: [],
+              },
             },
             {
               type: "message",
@@ -1671,6 +1679,15 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               id: "rs_b",
               encrypted_content: "state-b",
               summary: [{ type: "summary_text", text: "b" }],
+              luckytoken_continuity: {
+                version: 1,
+                source: {
+                  provider: "openai",
+                  api: "openai-responses",
+                  model: "gpt-b",
+                },
+                attachments: [],
+              },
             },
             {
               type: "message",
@@ -1682,24 +1699,18 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         2,
         policy(),
       );
-      const firstThinking = (
-        first.context.messages[0]?.content as Array<{
-          thinkingSignature?: string;
-        }>
-      ).find((b) => b.thinkingSignature !== undefined);
-      const secondThinking = (
-        second.context.messages[0]?.content as Array<{
-          thinkingSignature?: string;
-        }>
-      ).find((b) => b.thinkingSignature !== undefined);
-      expect(JSON.parse(String(firstThinking?.thinkingSignature))).toMatchObject(
-        { item_id: "rs_a", encrypted_content: "state-a" },
-      );
-      expect(JSON.parse(String(secondThinking?.thinkingSignature))).toMatchObject(
-        { item_id: "rs_b", encrypted_content: "state-b" },
-      );
+      expect(first.invocation.reasoning.continuity[0]).toMatchObject({
+        source: { model: "gpt-a" },
+        kind: "responses-reasoning-item",
+      });
+      expect(first.invocation.reasoning.continuity[0]?.value).toContain("state-a");
+      expect(second.invocation.reasoning.continuity[0]).toMatchObject({
+        source: { model: "gpt-b" },
+        kind: "responses-reasoning-item",
+      });
+      expect(second.invocation.reasoning.continuity[0]?.value).toContain("state-b");
       // No shared mutable state leaks between invocations.
-      expect(first.context.messages).not.toContain("state-b");
+      expect(first.invocation.pi.context.messages).not.toContain("state-b");
     });
 
     it("preserves reasoning-only history across multiple assistant turns", () => {
@@ -1726,7 +1737,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistants = invocation.context.messages.filter(
+      const assistants = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "assistant",
       );
       expect(assistants).toHaveLength(2);
@@ -1757,7 +1768,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(absent.context.messages).toHaveLength(1);
+      expect(absent.invocation.pi.context.messages).toHaveLength(1);
       const completed = convertResponsesRequest(
         {
           model: "m",
@@ -1773,7 +1784,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(completed.context.messages).toHaveLength(1);
+      expect(completed.invocation.pi.context.messages).toHaveLength(1);
     });
 
     it("errors on an in_progress message", () => {
@@ -1812,8 +1823,8 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages).toHaveLength(1);
-      const assistant = invocation.context.messages[0];
+      expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+      const assistant = invocation.invocation.pi.context.messages[0];
       expect(assistant?.role).toBe("assistant");
       expect((assistant?.content as Array<{ text: string }>)[0]?.text).toBe(
         "partial answer",
@@ -1836,14 +1847,14 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const texts = JSON.stringify(invocation.context.messages);
+      const texts = JSON.stringify(invocation.invocation.pi.context.messages);
       expect(texts).not.toContain("incomplete");
       expect(texts).not.toContain("length");
       expect(texts).not.toContain("notice");
       // A non-model-visible request-local diagnostic records the incomplete
       // status; notice text is never injected into model-visible content.
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_incomplete_message",
         ),
       ).toBe(true);
@@ -1898,7 +1909,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toContainEqual({
@@ -1906,7 +1917,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         thinking: "partial reasoning",
       });
       // No notice text or guessed length enters model-visible content.
-      const texts = JSON.stringify(invocation.context.messages);
+      const texts = JSON.stringify(invocation.invocation.pi.context.messages);
       expect(texts).not.toContain("incomplete");
       expect(texts).not.toContain("length");
     });
@@ -1935,7 +1946,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistants = invocation.context.messages.filter(
+      const assistants = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "assistant",
       );
       expect(assistants).toHaveLength(1);
@@ -1967,7 +1978,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         policy(),
       );
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_incomplete_message",
         ),
       ).toBe(true);
@@ -1994,7 +2005,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toContainEqual({

@@ -65,7 +65,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools).toEqual([
+      expect(invocation.invocation.pi.context.tools).toEqual([
         {
           name: "get_weather",
           description: "Get the weather for a city",
@@ -96,7 +96,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(loose.context.tools?.[0]?.constrainedSampling).toBeUndefined();
+      expect(loose.invocation.pi.context.tools?.[0]?.constrainedSampling).toBeUndefined();
     });
 
     it("treats absent strict as the SDK default of strict:true", () => {
@@ -112,7 +112,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(absent.context.tools?.[0]?.constrainedSampling).toEqual({
+      expect(absent.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "json_schema",
         strict: "require",
       });
@@ -135,7 +135,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]?.parameters).toEqual({
+      expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual({
         type: "object",
       });
     });
@@ -152,7 +152,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]).toMatchObject({
+      expect(invocation.invocation.pi.context.tools?.[0]).toMatchObject({
         name: "apply_patch",
         parameters: {
           type: "object",
@@ -160,7 +160,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           required: ["input"],
         },
       });
-      expect(invocation.renderState.freeformToolNames).toEqual(
+      expect(invocation.client.renderState.freeformToolNames).toEqual(
         new Set(["apply_patch"]),
       );
     });
@@ -181,7 +181,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+      expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "grammar",
         variants: { openai_lark: "start: letter+" },
       });
@@ -203,7 +203,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+      expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "grammar",
         variants: { openai_regex: "^[a-z]+$" },
       });
@@ -232,7 +232,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+      expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "grammar",
         variants: { openai_lark: "start: letter+" },
       });
@@ -258,7 +258,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.[0]?.constrainedSampling).toEqual({
+      expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "grammar",
         variants: { openai_regex: "^[a-z]+$" },
       });
@@ -303,7 +303,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           1,
           policy(),
         );
-        const assistant = invocation.context.messages.find(
+        const assistant = invocation.invocation.pi.context.messages.find(
           (m) => m.role === "assistant",
         );
         const call = (assistant?.content as Array<{ arguments: unknown }>)[0];
@@ -327,7 +327,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       const call = (assistant?.content as Array<{ arguments: unknown }>)[0];
@@ -427,7 +427,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(assistant?.content).toEqual([
@@ -438,7 +438,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           arguments: { input: "*** Begin Patch\n*** End Patch" },
         },
       ]);
-      const result = invocation.context.messages.find(
+      const result = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "toolResult",
       );
       expect(result).toMatchObject({
@@ -465,7 +465,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         policy(),
       );
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_custom_input_compat",
         ),
       ).toBe(true);
@@ -546,7 +546,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const names = invocation.context.tools?.map((tool) => tool.name) ?? [];
+      const names = invocation.invocation.pi.context.tools?.map((tool) => tool.name) ?? [];
       expect(names).toEqual(["multi_agent_v1__spawn_agent"]);
       expect(names.every((name) => /^[a-zA-Z0-9_-]+$/u.test(name))).toBe(true);
     });
@@ -575,8 +575,8 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.map((t) => t.name)).toEqual(["mcp__read"]);
-      const tool = invocation.context.tools?.[0];
+      expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["mcp__read"]);
+      const tool = invocation.invocation.pi.context.tools?.[0];
       expect(tool?.description).toBe("read a resource");
       expect(tool?.parameters).toEqual({ type: "object", properties: {} });
     });
@@ -618,7 +618,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (message) => message.role === "assistant",
       );
       expect(assistant?.content).toContainEqual({
@@ -653,7 +653,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (message) => message.role === "assistant",
       );
       expect(assistant?.content).toContainEqual({
@@ -683,14 +683,14 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
         "mcp__freeform_child",
       ]);
-      expect(invocation.context.tools?.[0]?.parameters).toMatchObject({
+      expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toMatchObject({
         type: "object",
         properties: { input: { type: "string" } },
       });
-      expect(invocation.renderState.freeformToolNames).toEqual(
+      expect(invocation.client.renderState.freeformToolNames).toEqual(
         new Set(["mcp__freeform_child"]),
       );
     });
@@ -748,13 +748,13 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.renderState.namespaceReverse).toBeDefined();
-      expect(invocation.renderState.namespaceReverse).toEqual({
+      expect(invocation.client.renderState.namespaceReverse).toBeDefined();
+      expect(invocation.client.renderState.namespaceReverse).toEqual({
         "mcp__read": { namespace: "mcp", child: "read" },
       });
       // The reverse metadata must never enter model context or options.
-      expect(invocation.context).not.toHaveProperty("namespaceReverse");
-      expect(invocation.options).not.toHaveProperty("namespaceReverse");
+      expect(invocation.invocation.pi.context).not.toHaveProperty("namespaceReverse");
+      expect(invocation.invocation.pi.options).not.toHaveProperty("namespaceReverse");
     });
   });
 
@@ -782,7 +782,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.messages.map((m) => m.role)).toEqual([
+      expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
         "assistant",
         "toolResult",
       ]);
@@ -863,7 +863,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy({ orphanToolOutput: "ignore" }),
       );
-      const thinkingBlocks = invocation.context.messages.flatMap((m) =>
+      const thinkingBlocks = invocation.invocation.pi.context.messages.flatMap((m) =>
         m.role === "assistant"
           ? (m.content as Array<{ type: string }>).filter(
               (b) => b.type === "thinking",
@@ -871,7 +871,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           : [],
       );
       expect(thinkingBlocks).toHaveLength(1);
-      const assistant = invocation.context.messages.find(
+      const assistant = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "assistant",
       );
       expect(
@@ -903,9 +903,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy({ orphanToolOutput: "ignore" }),
       );
-      expect(ignored.context.messages).toHaveLength(1);
+      expect(ignored.invocation.pi.context.messages).toHaveLength(1);
       expect(
-        ignored.notices.some(
+        ignored.client.notices.some(
           (n) => n.code === "openai-responses_orphan_tool_output_ignored",
         ),
       ).toBe(true);
@@ -928,7 +928,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const messages = invocation.context.messages;
+      const messages = invocation.invocation.pi.context.messages;
       expect(messages.map((m) => m.role)).toEqual([
         "assistant",
         "toolResult",
@@ -947,7 +947,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         ],
       });
       expect(
-        invocation.notices.some((n) => n.code === "openai-responses_unresolved_call_repaired"),
+        invocation.client.notices.some((n) => n.code === "openai-responses_unresolved_call_repaired"),
       ).toBe(true);
     });
 
@@ -976,7 +976,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const messages = invocation.context.messages;
+      const messages = invocation.invocation.pi.context.messages;
       expect(messages.map((m) => m.role)).toEqual([
         "assistant",
         "toolResult",
@@ -1030,16 +1030,16 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       );
       // The reasoning after call_2 attaches to call_2's assistant turn, and
       // call_2's synthetic result follows that assistant in order.
-      const repairIndex = invocation.context.messages.findIndex(
+      const repairIndex = invocation.invocation.pi.context.messages.findIndex(
         (m) => m.role === "toolResult" && m.toolCallId === "call_2",
       );
       expect(repairIndex).toBeGreaterThanOrEqual(0);
-      expect(invocation.context.messages[repairIndex]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[repairIndex]).toMatchObject({
         toolCallId: "call_2",
         toolName: "b",
         isError: true,
       });
-      const call2Assistant = invocation.context.messages[repairIndex - 1];
+      const call2Assistant = invocation.invocation.pi.context.messages[repairIndex - 1];
       expect(call2Assistant?.role).toBe("assistant");
       const blocks = call2Assistant?.content as Array<{ type: string }>;
       expect(blocks.some((b) => b.type === "thinking")).toBe(true);
@@ -1080,17 +1080,17 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const roles = invocation.context.messages.map((m) => m.role);
+      const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
       const repairIndex = roles.lastIndexOf("toolResult");
       const reasoningIndex = roles.lastIndexOf("assistant");
       // The repair for call_2 precedes the detached reasoning-only assistant,
       // which in turn precedes the user message.
       expect(repairIndex).toBeGreaterThan(reasoningIndex);
-      expect(invocation.context.messages[repairIndex]).toMatchObject({
+      expect(invocation.invocation.pi.context.messages[repairIndex]).toMatchObject({
         toolCallId: "call_2",
         isError: true,
       });
-      const reasoningAssistant = invocation.context.messages[reasoningIndex];
+      const reasoningAssistant = invocation.invocation.pi.context.messages[reasoningIndex];
       expect(
         (reasoningAssistant?.content as Array<{ type: string }>)[0]?.type,
       ).toBe("thinking");
@@ -1140,7 +1140,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const results = invocation.context.messages.filter(
+      const results = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "toolResult",
       );
       expect(results).toHaveLength(1);
@@ -1180,7 +1180,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const results = invocation.context.messages.filter(
+      const results = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "toolResult",
       );
       expect(results).toHaveLength(2);
@@ -1228,9 +1228,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const roles = invocation.context.messages.map((m) => m.role);
+      const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
       expect(roles).toEqual(["user", "assistant", "toolResult", "toolResult"]);
-      const results = invocation.context.messages.filter(
+      const results = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "toolResult",
       );
       expect(results.map((r) => r.toolCallId)).toEqual(["c2", "c1"]);
@@ -1273,7 +1273,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const results = invocation.context.messages.filter(
+      const results = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "toolResult",
       );
       expect(results.map((r) => r.toolName)).toEqual([
@@ -1331,25 +1331,25 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       );
       const results = await Promise.all(conversions);
       for (const [i, invocation] of results.entries()) {
-        const tools = invocation.context.tools?.map((t) => t.name) ?? [];
+        const tools = invocation.invocation.pi.context.tools?.map((t) => t.name) ?? [];
         expect(tools).toContain(`custom_${i}`);
         expect(tools).toContain(`ns_${i}__child`);
-        expect(invocation.renderState.freeformToolNames).toEqual(
+        expect(invocation.client.renderState.freeformToolNames).toEqual(
           new Set([`custom_${i}`]),
         );
-        expect(invocation.renderState.namespaceReverse).toEqual({
+        expect(invocation.client.renderState.namespaceReverse).toEqual({
           [`ns_${i}__child`]: { namespace: `ns_${i}`, child: "child" },
         });
         // No cross-request leakage of another conversion's names.
         for (const [j, other] of results.entries()) {
           if (j === i) continue;
           const otherNames = Object.keys(
-            other.renderState.namespaceReverse ?? {},
+            other.client.renderState.namespaceReverse ?? {},
           );
           expect(otherNames).not.toContain(`ns_${i}__child`);
         }
         const image = (
-          invocation.context.messages[0]?.content as Array<{
+          invocation.invocation.pi.context.messages[0]?.content as Array<{
             type: string;
             mimeType?: string;
           }>
@@ -1382,7 +1382,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         ),
       );
       for (const [i, invocation] of conversions.entries()) {
-        const result = invocation.context.messages.find(
+        const result = invocation.invocation.pi.context.messages.find(
           (m) => m.role === "toolResult",
         );
         expect(result).toMatchObject({
@@ -1390,7 +1390,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           toolName: `tool_${i}`,
           content: [{ type: "text", text: `result_${i}` }],
         });
-        const call = invocation.context.messages.find(
+        const call = invocation.invocation.pi.context.messages.find(
           (m) => m.role === "assistant",
         );
         expect(
@@ -1429,7 +1429,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const result = invocation.context.messages.find(
+      const result = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "toolResult",
       );
       expect(result).toMatchObject({
@@ -1469,7 +1469,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const result = invocation.context.messages.find(
+      const result = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "toolResult",
       );
       expect(result).toMatchObject({
@@ -1477,7 +1477,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         content: [{ type: "text", text: "result text" }],
       });
       expect(
-        invocation.notices.some(
+        invocation.client.notices.some(
           (n) => n.code === "openai-responses_output_image_unresolved",
         ),
       ).toBe(true);
@@ -1507,7 +1507,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      const result = invocation.context.messages.find(
+      const result = invocation.invocation.pi.context.messages.find(
         (m) => m.role === "toolResult",
       );
       expect(result).toMatchObject({
@@ -1606,9 +1606,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy({ orphanToolOutput: "ignore" }),
       );
-      expect(ignored.context.messages).toHaveLength(1);
+      expect(ignored.invocation.pi.context.messages).toHaveLength(1);
       expect(
-        ignored.notices.some(
+        ignored.client.notices.some(
           (n) => n.code === "openai-responses_orphan_tool_output_ignored",
         ),
       ).toBe(true);
@@ -1626,9 +1626,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy({ orphanToolOutput: "ignore" }),
       );
-      expect(ignored.context.messages).toHaveLength(1);
+      expect(ignored.invocation.pi.context.messages).toHaveLength(1);
       expect(
-        ignored.notices.some(
+        ignored.client.notices.some(
           (n) => n.code === "openai-responses_orphan_tool_output_ignored",
         ),
       ).toBe(true);
@@ -1656,7 +1656,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy({ orphanToolOutput: "ignore" }),
       );
-      const results = invocation.context.messages.filter(
+      const results = invocation.invocation.pi.context.messages.filter(
         (m) => m.role === "toolResult",
       );
       expect(results).toHaveLength(1);
@@ -1807,18 +1807,18 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
         "crm__freeform",
       ]);
-      expect(invocation.renderState.namespaceReverse).toEqual({
+      expect(invocation.client.renderState.namespaceReverse).toEqual({
         "crm__freeform": { namespace: "crm", child: "freeform" },
       });
-      expect(invocation.renderState.freeformToolNames).toEqual(
+      expect(invocation.client.renderState.freeformToolNames).toEqual(
         new Set(["crm__freeform"]),
       );
       // The reverse metadata stays out of model context and options.
-      expect(invocation.context).not.toHaveProperty("namespaceReverse");
-      expect(invocation.options).not.toHaveProperty("namespaceReverse");
+      expect(invocation.invocation.pi.context).not.toHaveProperty("namespaceReverse");
+      expect(invocation.invocation.pi.options).not.toHaveProperty("namespaceReverse");
       // Output reversal restores the child name and namespace.
       const response = convertAssistantMessageToResponses(
         assistantMessage({
@@ -1835,12 +1835,12 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         {
           clientModel: "m",
           stream: false,
-          ...(invocation.renderState.freeformToolNames === undefined
+          ...(invocation.client.renderState.freeformToolNames === undefined
             ? {}
-            : { freeformToolNames: invocation.renderState.freeformToolNames }),
-          ...(invocation.renderState.namespaceReverse === undefined
+            : { freeformToolNames: invocation.client.renderState.freeformToolNames }),
+          ...(invocation.client.renderState.namespaceReverse === undefined
             ? {}
-            : { namespaceReverse: invocation.renderState.namespaceReverse }),
+            : { namespaceReverse: invocation.client.renderState.namespaceReverse }),
         },
         "resp_1",
         1,
@@ -1884,15 +1884,15 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+      expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
         "server__list",
         "server__freeform",
       ]);
-      expect(invocation.renderState.namespaceReverse).toEqual({
+      expect(invocation.client.renderState.namespaceReverse).toEqual({
         "server__list": { namespace: "server", child: "list" },
         "server__freeform": { namespace: "server", child: "freeform" },
       });
-      expect(invocation.renderState.freeformToolNames).toEqual(
+      expect(invocation.client.renderState.freeformToolNames).toEqual(
         new Set(["server__freeform"]),
       );
     });

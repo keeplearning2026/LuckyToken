@@ -96,7 +96,10 @@ function sourceConversationProjection(body: Record<string, unknown>): string[] {
     if (type === "reasoning") {
       const summary = sourceTextParts(candidate.summary).join("");
       const content = sourceTextParts(candidate.content).join("");
-      events.push(`assistant:reasoning:${summary || content}`);
+      // This fixture resolves to a model declared reasoning:false. The
+      // target-aware reasoning module therefore preserves visible summary
+      // text through the required assistant-content fallback.
+      events.push(`assistant:text:${summary || content}`);
       continue;
     }
     if (type === "function_call" || type === "custom_tool_call") {
@@ -281,7 +284,7 @@ describe("Codex CLI request sample replay", () => {
       expect(typeof format.definition).toBe("string");
       expect(String(format.definition).length).toBeGreaterThan(0);
       const piInvocation = convertResponsesRequest(sample.body, 1, replayPolicy);
-      const piApplyPatch = piInvocation.context.tools?.find(
+      const piApplyPatch = piInvocation.invocation.pi.context.tools?.find(
         (tool) => tool.name === "apply_patch",
       );
       expect(piApplyPatch?.constrainedSampling).toEqual({

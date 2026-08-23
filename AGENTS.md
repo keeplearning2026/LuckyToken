@@ -117,6 +117,10 @@ For conversion from protocol A to protocol B:
 
 Never invent defaults or repair malformed semantic state by guessing.
 
+Classify every preserved request control before final projection. An explicit reasoning disable, a required or named tool choice, a structured-output contract, and a Client-specified response-output token ceiling are hard controls. A reasoning effort level, reasoning-summary preference, verbosity, temperature, and other sampling preferences are preferences unless the source protocol gives them stronger semantics. An unsupported hard control fails before Provider dispatch; an unsupported preference produces an `omitted` outcome and warning. A `failed` projection outcome is terminal and can never accompany a dispatched Provider request.
+
+Projection outcomes are the authoritative semantic record. Every omission, content fallback, and repair additionally publishes a bounded request-local developer notice through the fail-open observation seam; observation failure never changes execution. Client responses report only controls proved effective in the final Provider request.
+
 ### Intermediate Carrier Principle
 
 Evaluate conversion over the complete supported pipeline `A → B → C`, not only the adjacent `A → B` boundary. B's inability to consume a fact does not by itself justify losing it: when a supported B → C adapter can use that fact, A → B should preserve it so the final C request can restore the strongest valid equivalent.
@@ -135,11 +139,20 @@ For every model-visible or replay-required Provider response fact whose Provider
 
 This invariant does not apply to response-only observations such as usage, timing, transport status, or diagnostics unless a target protocol explicitly makes them replay semantics. When the resolved target has changed or cannot accept the original representation, preserve the portable model-visible meaning through the best valid target representation and discard only target-bound opaque state. Prove the invariant with an end-to-end response → client history → next Provider request test rather than independent one-way adapter tests alone.
 
+### Online Semantic Certification Boundary
+
+Provider semantic-conversion online tests must send complete Client Wire history and assert the final Provider request after Pi and wrapper projection. Use one independently runnable script per Provider with a fixed Provider/model/Profile target; scripts may share a protocol-neutral harness, but each Provider keeps its own report and exit status.
+
+Keep direct protocol probes separate from real Agent/CLI product tests. A script that constructs OpenAI Responses or Anthropic Messages requests itself certifies that Client Wire → Provider Wire path only; Codex CLI, Claude Code, or another real client must use a separate entry point, report, and exit status to certify its client-owned behavior.
+
+Treat `previous_response_id` as a stateful Codex/Responses client capability, not as a substitute for complete-history Provider semantic certification. Certify it only through the real Codex client or Codex CLI path that owns its state and lifecycle. A generic Provider online script must not claim `previous_response_id`, restart recovery, or incremental-state behavior as evidence that response reasoning, signatures, tool relationships, or other replay semantics were restored in the next Provider request.
+
 ### Opaque Continuity Preservation
 
 When a Provider response contains opaque continuity metadata needed to replay that response in a later request, preserve only the metadata that protocol conversion would otherwise lose and that the Provider adapter requires for exact replay.
 
 - Preserve the source provenance and original attachment point needed to restore each opaque value. A signature attached to thinking, text, or a tool call must return to that same semantic block.
+- Preserve a validated `redacted` replay representation with an opaque thinking value when the Provider response marks that block as redacted. This representation describes how the target Adapter may replay the value; it does not select a Provider. Restore it only under the same provenance compatibility rule as the opaque value.
 - Prefer a client-wire opaque round-trip field when the client sends complete history. Do not add server-side session persistence unless the client wire cannot carry the required state and the product contract explicitly requires server-owned continuation.
 - Do not duplicate model-visible text, summaries, tool names, or arguments inside the opaque carrier. Do not preserve values that the resolved target adapter can reconstruct deterministically, such as a known reasoning field selector.
 - Restore opaque continuity only when its validated provenance and the resolved target Provider/API/model satisfy the adapter's replay contract. On mismatch, discard the opaque value while preserving visible reasoning through the best valid target representation, falling back to assistant content only when the target cannot accept historical thinking.
@@ -171,10 +184,12 @@ Treat Pi AI as a pinned external dependency. Request-control projection must not
 
 - The wrapper accepts the resolved Pi Model, Pi Context, typed semantic controls, bounded conversion context, and infrastructure options through one request-local Interface.
 - The wrapper selects a payload projector from the resolved `model.api` plus certified Provider/model compatibility facts. Client protocol identity alone must never select a projector.
+- A deterministic compatibility default defined by the pinned Pi Adapter may be a certified fact only when LuckyToken mirrors that exact version-bound resolver and final-wire tests cover the result. LuckyToken-specific Provider-name, URL, model-name, or payload-shape heuristics are not certified defaults. Re-audit the resolver on every Pi upgrade.
 - The wrapper creates and owns `onPayload` after target resolution. The callback captures only normalized semantic controls and validated request-local facts; it never captures raw Client Wire or client-protocol-native objects.
 - Pi AI calls `onPayload` after constructing its Provider payload and before sending it. The projector validates the exact audited payload shape, returns a copied payload with only proven Provider-native mappings, and fails rather than guessing when the shape is incompatible.
 - Pi AI retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion. The wrapper must not duplicate those implementations.
 - An audited Pi native option takes precedence over payload projection. A semantic control must have exactly one authoritative final projection; the wrapper must not set it through both paths.
+- Verify exact-value controls and upper-bound controls according to their distinct semantics. Repair a mismatched exact value only when its Provider-native field and replacement are certified, and emit a repair warning. The final Provider request's response-output token ceiling may be lower than the Client-specified ceiling when required by context safety, but it must never exceed that hard limit; a Provider minimum that would exceed it fails rather than widening it. This control does not describe Client input-token size.
 - Unknown APIs and unaudited payload shapes cannot receive payload projection. Apply the normal warning or failure rules for every remaining control before execution can silently lose critical semantics.
 - End-to-end tests must start with the Client Wire request and assert the final Provider request captured by a test transport after `onPayload` has returned. Projector-only or intermediate payload assertions do not establish support. Every Pi AI dependency upgrade must rerun these wire-contract tests for each supported projector.
 

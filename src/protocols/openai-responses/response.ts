@@ -1,6 +1,17 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
+import {
+  extractReasoningResponse,
+  normalizeResponsesReasoningItem,
+  type ReasoningResponseExtraction,
+  type ResponseContinuityBlock,
+} from "../../semantic-conversion/reasoning/response.js";
 import { redactMessage } from "./error-rendering.js";
+import {
+  encodeResponsesContinuity,
+  type LuckyTokenContinuityEnvelopeV1,
+  type WireContinuityAttachment,
+} from "./reasoning-continuity.js";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
@@ -25,6 +36,7 @@ export interface ResponsesMessageOutputItem {
   role: "assistant";
   status: "completed";
   content: Array<{ type: "output_text"; text: string; annotations: [] }>;
+  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesFunctionCallOutputItem {
@@ -35,6 +47,7 @@ export interface ResponsesFunctionCallOutputItem {
   namespace?: string;
   arguments: string;
   status: "completed";
+  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesCustomToolCallOutputItem {
@@ -45,53 +58,18 @@ export interface ResponsesCustomToolCallOutputItem {
   namespace?: string;
   input: string;
   status: "completed";
+  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesReasoningOutputItem {
   type: "reasoning";
   id: string;
+  status?: "completed" | "incomplete";
   summary: Array<{ type: "summary_text"; text: string }>;
+  content?: Array<{ type: "reasoning_text"; text: string }>;
   /** Restored only from a verified Responses-owned continuity envelope. */
   encrypted_content?: string;
-}
-
-/**
- * The versioned Responses-owned continuity envelope that may restore
- * `encrypted_content`. Only this exact shape (v1, the Responses authority and
- * id) is verified; a foreign signature never is.
- */
-interface ResponsesContinuityEnvelopeV1 {
-  readonly v: 1;
-  readonly id: "openai-responses";
-  readonly authority: "openai-responses";
-  readonly encrypted_content: string;
-}
-
-/** Parse and verify a Responses continuity envelope; undefined when foreign,
- *  malformed, or missing the encrypted payload. */
-function parseVerifiedContinuityEnvelope(
-  signature: string,
-): ResponsesContinuityEnvelopeV1 | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(signature);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return undefined;
-  }
-  const envelope = parsed as Record<string, unknown>;
-  if (envelope.v !== 1) return undefined;
-  if (envelope.id !== "openai-responses") return undefined;
-  if (envelope.authority !== "openai-responses") return undefined;
-  if (
-    typeof envelope.encrypted_content !== "string" ||
-    envelope.encrypted_content.length === 0
-  ) {
-    return undefined;
-  }
-  return envelope as unknown as ResponsesContinuityEnvelopeV1;
+  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesCompactionOutputItem {
@@ -159,7 +137,7 @@ export interface ResponsesResponseObject {
   /** Only legal SDK tool_choice values are echoed; the target union is
    *  'none' | 'auto' | 'required' (or an allowed/function object). A residual
    *  render value that is not a legal echo normalizes to "auto". */
-  tool_choice: "auto" | "none" | "required";
+  tool_choice: ResponsesEchoToolChoice;
   tools: ResponsesEchoTool[];
   top_p: number | null;
   usage: ResponsesUsage;
@@ -199,6 +177,21 @@ export type ResponsesEchoTool =
   | ResponsesEchoFunctionTool
   | ResponsesEchoCustomTool;
 
+export type ResponsesEchoToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | {
+      readonly type: "function" | "custom";
+      readonly name: string;
+    }
+  | {
+      readonly type: "allowed_tools";
+      readonly mode: "auto" | "required";
+      readonly tools: readonly Readonly<Record<string, unknown>>[];
+    }
+  | Readonly<Record<string, unknown>>;
+
 /**
  * Immutable Responses-owned render facts, frozen at request conversion and
  * consumed once to render an honest Response. Only the effective normalized
@@ -207,7 +200,8 @@ export type ResponsesEchoTool =
 export interface ResponsesRenderState {
   readonly clientModel: string;
   readonly stream: boolean;
-  readonly toolChoice?: string;
+  readonly toolChoice?: ResponsesEchoToolChoice | string;
+  readonly parallelToolCalls?: boolean;
   readonly freeformToolNames?: ReadonlySet<string>;
   readonly namespaceReverse?: Readonly<
     Record<string, { namespace: string; child: string }>
@@ -426,8 +420,65 @@ function convertUsage(
   };
 }
 
+function continuityEnvelope(
+  block: ResponseContinuityBlock | undefined,
+): LuckyTokenContinuityEnvelopeV1 | undefined {
+  if (block === undefined) return undefined;
+  const attachments: WireContinuityAttachment[] = [];
+  const continuity = block.continuity;
+  if (
+    block.target === "thinking" &&
+    continuity !== undefined &&
+    continuity.kind !== "responses-reasoning-item"
+  ) {
+    attachments.push(
+      Object.freeze({
+        source: block.source,
+        target: "thinking",
+        kind: continuity.kind,
+        value: continuity.value,
+        ...(continuity.kind === "opaque-signature" &&
+        continuity.representation === "redacted"
+          ? { representation: "redacted" as const }
+          : {}),
+      }),
+    );
+  } else if (
+    block.target === "text" &&
+    continuity?.kind === "opaque-signature"
+  ) {
+    attachments.push(
+      Object.freeze({
+        source: block.source,
+        target: "text",
+        partIndex: 0,
+        kind: continuity.kind,
+        value: continuity.value,
+      }),
+    );
+  } else if (
+    block.target === "toolCall" &&
+    continuity?.kind === "opaque-signature"
+  ) {
+    attachments.push(
+      Object.freeze({
+        source: block.source,
+        target: "toolCall",
+        callId: block.callId,
+        kind: continuity.kind,
+        value: continuity.value,
+      }),
+    );
+  }
+  return encodeResponsesContinuity({
+    source: block.source,
+    attachments,
+  });
+}
+
 function convertOutput(
   message: AssistantMessage,
+  reasoning: ReasoningResponseExtraction,
   responseId: string,
   freeformToolNames: ReadonlySet<string>,
   namespaceReverse: Readonly<Record<string, { namespace: string; child: string }>>,
@@ -437,7 +488,7 @@ function convertOutput(
   const output: ResponsesOutputItem[] = [];
   let textBlockIndex = 0;
   let toolCallIndex = 0;
-  for (const block of message.content) {
+  for (const [contentIndex, block] of message.content.entries()) {
     const raw = block as unknown;
     if (!isRecord(raw) || typeof raw.type !== "string") {
       throw new OutboundResponseFidelityFailure(
@@ -451,22 +502,49 @@ function convertOutput(
           "Pi thinking content must be a string",
         );
       }
-      // Verified Responses continuity: only a redacted thinking block whose
-      // versioned envelope was created by the Responses adapter may restore
-      // `encrypted_content`. An arbitrary opaque signature (foreign authority,
-      // wrong version, non-redacted block, unparseable text) is never emitted
-      // as Responses encrypted data — the visible summary is retained instead.
-      const signature =
-        raw.redacted === true && typeof raw.thinkingSignature === "string"
-          ? parseVerifiedContinuityEnvelope(raw.thinkingSignature)
+      const responseContinuity = reasoning.blocks.find(
+        (entry) =>
+          entry.target === "thinking" && entry.contentIndex === contentIndex,
+      );
+      const nativeItem =
+        responseContinuity?.continuity?.kind === "responses-reasoning-item"
+          ? normalizeResponsesReasoningItem(
+              responseContinuity.continuity.value,
+            )
           : undefined;
+      const itemId =
+        typeof nativeItem?.id === "string"
+          ? nativeItem.id
+          : `rs_${responseId}_${textBlockIndex}`;
+      const nativeSummary = nativeItem?.summary as
+        | readonly { readonly type: "summary_text"; readonly text: string }[]
+        | undefined;
+      const nativeContent = nativeItem?.content as
+        | readonly { readonly type: "reasoning_text"; readonly text: string }[]
+        | undefined;
       const item: ResponsesReasoningOutputItem = {
         type: "reasoning",
-        id: `rs_${responseId}_${textBlockIndex}`,
-        summary: [{ type: "summary_text", text: thinking }],
+        id: itemId,
+        summary:
+          nativeSummary === undefined
+            ? [{ type: "summary_text", text: thinking }]
+            : nativeSummary.map((part) => ({ ...part })),
       };
-      if (signature !== undefined) {
-        item.encrypted_content = signature.encrypted_content;
+      if (
+        nativeItem?.status === "completed" ||
+        nativeItem?.status === "incomplete"
+      ) {
+        item.status = nativeItem.status;
+      }
+      if (nativeContent !== undefined) {
+        item.content = nativeContent.map((part) => ({ ...part }));
+      }
+      if (typeof nativeItem?.encrypted_content === "string") {
+        item.encrypted_content = nativeItem.encrypted_content;
+      }
+      const envelope = continuityEnvelope(responseContinuity);
+      if (envelope !== undefined) {
+        item.luckytoken_continuity = envelope;
       }
       output.push(item);
       textBlockIndex += 1;
@@ -479,13 +557,19 @@ function convertOutput(
           "Pi text content must be a string",
         );
       }
-      output.push({
+      const item: ResponsesMessageOutputItem = {
         type: "message",
         id: `msg_${responseId}_${textBlockIndex}`,
         role: "assistant",
         status: "completed",
         content: [{ type: "output_text", text, annotations: [] }],
-      });
+      };
+      const responseContinuity = reasoning.blocks.find(
+        (entry) => entry.target === "text" && entry.contentIndex === contentIndex,
+      );
+      const envelope = continuityEnvelope(responseContinuity);
+      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      output.push(item);
       textBlockIndex += 1;
       continue;
     }
@@ -559,7 +643,7 @@ function convertOutput(
           "custom tool input must be a string",
         );
       }
-      output.push({
+      const item: ResponsesCustomToolCallOutputItem = {
         type: "custom_tool_call",
         id: `ctc_${responseId}_${toolCallIndex}`,
         call_id: callId,
@@ -567,9 +651,16 @@ function convertOutput(
         ...(namespace === undefined ? {} : { namespace }),
         input,
         status: "completed",
-      });
+      };
+      const responseContinuity = reasoning.blocks.find(
+        (entry) =>
+          entry.target === "toolCall" && entry.contentIndex === contentIndex,
+      );
+      const envelope = continuityEnvelope(responseContinuity);
+      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      output.push(item);
     } else {
-      output.push({
+      const item: ResponsesFunctionCallOutputItem = {
         type: "function_call",
         id: `fc_${responseId}_${toolCallIndex}`,
         call_id: callId,
@@ -577,7 +668,14 @@ function convertOutput(
         ...(namespace === undefined ? {} : { namespace }),
         arguments: argumentsJson,
         status: "completed",
-      });
+      };
+      const responseContinuity = reasoning.blocks.find(
+        (entry) =>
+          entry.target === "toolCall" && entry.contentIndex === contentIndex,
+      );
+      const envelope = continuityEnvelope(responseContinuity);
+      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      output.push(item);
     }
     toolCallIndex += 1;
   }
@@ -673,7 +771,12 @@ function deepFreeze(value: unknown): unknown {
   return value;
 }
 
-function normalizeEchoedToolChoice(value: string | undefined): "auto" | "none" | "required" {
+function normalizeEchoedToolChoice(
+  value: ResponsesEchoToolChoice | string | undefined,
+): ResponsesEchoToolChoice {
+  if (typeof value === "object" && value !== null) {
+    return deepFreeze(value) as ResponsesEchoToolChoice;
+  }
   if (value === "none" || value === "required") return value;
   return "auto";
 }
@@ -693,6 +796,7 @@ export function convertAssistantMessageToResponses(
   };
   const output = convertOutput(
     message,
+    extractReasoningResponse(message),
     responseId,
     renderState.freeformToolNames ?? new Set(),
     renderState.namespaceReverse ?? {},
@@ -714,7 +818,7 @@ export function convertAssistantMessageToResponses(
     metadata: Object.freeze({ ...(renderState.metadataEcho ?? {}) }),
     model: renderState.clientModel,
     output,
-    parallel_tool_calls: true,
+    parallel_tool_calls: renderState.parallelToolCalls ?? true,
     temperature: renderState.temperature ?? null,
     // The SDK Response tool_choice has no bare "allowed" string; the
     // allowed_tools filter is auto-mode filtering, so any residual "allowed"

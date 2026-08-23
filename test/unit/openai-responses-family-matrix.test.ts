@@ -135,8 +135,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("drops file_search_call as provider-hosted transcript", () => {
@@ -151,8 +151,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("does not emit a transcript for an in-progress hosted file_search_call", () => {
@@ -176,7 +176,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual(["keep"]);
@@ -209,7 +209,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual([
@@ -217,9 +217,9 @@ describe("16: every known Responses input-item family", () => {
       "see readme",
       "keep",
     ]);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
     // Pure metadata (file ids, filenames) never enters Pi.
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("file_1");
     expect(serialized).not.toContain("bug.js");
   });
@@ -262,7 +262,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -302,7 +302,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -313,7 +313,7 @@ describe("16: every known Responses input-item family", () => {
         arguments: { type: "exec", commands: ["ls"] },
       },
     ]);
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -344,7 +344,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -375,7 +375,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -406,7 +406,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -443,7 +443,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -478,7 +478,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -504,7 +504,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -538,7 +538,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -572,7 +572,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -617,7 +617,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     const text = (result?.content as Array<{ text: string }>)[0]?.text;
@@ -650,7 +650,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -684,7 +684,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -722,7 +722,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -761,7 +761,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -803,7 +803,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -834,7 +834,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     const call = assistant?.content?.[0] as { type: string; name: string };
@@ -874,13 +874,13 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     const call = assistant?.content?.[0] as { type: string; name: string };
     expect(call?.type).toBe("toolCall");
     expect(call?.name).toBe("computer");
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -908,8 +908,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("maps computer_call_output screenshots to Pi images on the Client side", () => {
@@ -942,7 +942,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -981,7 +981,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -1002,8 +1002,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("does not emit a transcript for an in-progress hosted code_interpreter_call", () => {
@@ -1023,7 +1023,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual(["keep"]);
@@ -1053,13 +1053,13 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual(["1\n", "keep"]);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
     // Pure lifecycle metadata (container id, code) never enters Pi.
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("cont_1");
   });
 
@@ -1075,8 +1075,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("materializes a directly present data-URL image_generation_call result", () => {
@@ -1100,12 +1100,12 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => m.content);
     expect(userTexts[0]).toMatchObject([{ type: "image", mimeType: "image/png" }]);
     expect(userTexts[1]).toEqual([{ type: "text", text: "keep" }]);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("drops a bare base64 image_generation_call result without inventing a MIME", () => {
@@ -1128,8 +1128,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("preserves MCP approval decision text as model-visible transcript only", () => {
@@ -1163,19 +1163,19 @@ describe("16: every known Responses input-item family", () => {
     // Decision text survives as a deterministic transcript; pure lifecycle
     // metadata (arguments, server label) drops; no executable approval tool
     // is advertised.
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual([
       "The user approved access to the database",
       "keep",
     ]);
-    expect(invocation.context.tools).toBeUndefined();
-    expect(invocation.context.messages).not.toContainEqual(
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).not.toContainEqual(
       expect.objectContaining({ role: "assistant" }),
     );
     // Pure lifecycle metadata (arguments, server label) never enters Pi.
-    expect(JSON.stringify(invocation.context)).not.toContain("db-server");
+    expect(JSON.stringify(invocation.invocation.pi.context)).not.toContain("db-server");
   });
 
   it("drops pure MCP list metadata but keeps model-visible content if present", () => {
@@ -1197,8 +1197,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("preserves the SDK mcp_approval_response approve/reason decision as model-visible transcript", () => {
@@ -1223,13 +1223,13 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts).toEqual(["user clicked approve", "keep"]);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
     // Pure lifecycle metadata (approval_request_id) never enters Pi.
-    expect(JSON.stringify(invocation.context)).not.toContain("mar_1");
+    expect(JSON.stringify(invocation.invocation.pi.context)).not.toContain("mar_1");
   });
 
   it("degrades a reason-less SDK mcp_approval_response to a deterministic decision text", () => {
@@ -1252,7 +1252,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const userTexts = invocation.context.messages
+    const userTexts = invocation.invocation.pi.context.messages
       .filter((m) => m.role === "user")
       .map((m) => (m.content as Array<{ text: string }>)[0]?.text);
     expect(userTexts[0]).toContain("denied");
@@ -1284,7 +1284,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     const call = assistant?.content?.[0] as { type: string; name: string };
@@ -1318,7 +1318,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     expect(assistant?.content).toEqual([
@@ -1356,7 +1356,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -1366,7 +1366,7 @@ describe("16: every known Responses input-item family", () => {
       content: [{ type: "text", text: "partial" }],
     });
     // The raw error text is lifecycle metadata; it never enters Pi.
-    expect(JSON.stringify(invocation.context)).not.toContain("invalid sql");
+    expect(JSON.stringify(invocation.invocation.pi.context)).not.toContain("invalid sql");
   });
 
   it("marks the result isError false when an mcp_call has no error", () => {
@@ -1391,7 +1391,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({ isError: false });
@@ -1415,8 +1415,8 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("never leaks MCP credentials or headers into Pi", () => {
@@ -1445,7 +1445,7 @@ describe("16: every known Responses input-item family", () => {
       1,
       policy(),
     );
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("sekret");
     expect(serialized).not.toContain("authorization");
   });
@@ -1502,7 +1502,7 @@ describe("16: every known Responses tool-definition family", () => {
       );
       const expectedName =
         name ?? (type === "computer_use_preview" ? "computer" : type);
-      expect(invocation.context.tools?.map((t) => t.name)).toContain(
+      expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toContain(
         expectedName,
       );
     }
@@ -1520,7 +1520,7 @@ describe("16: every known Responses tool-definition family", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools).toBeUndefined();
+      expect(invocation.invocation.pi.context.tools).toBeUndefined();
     }
     // Namespace groups client-owned children.
     const ns = convertResponsesRequest(
@@ -1540,7 +1540,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(ns.context.tools?.map((t) => t.name)).toEqual(["ns__child"]);
+    expect(ns.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["ns__child"]);
   });
 
   it("classifies every installed tool-definition family explicitly", () => {
@@ -1556,7 +1556,7 @@ describe("16: every known Responses tool-definition family", () => {
           policy(),
         );
         const mapped =
-          invocation.context.tools?.some((t) => t.name === `${type}_probe`) ??
+          invocation.invocation.pi.context.tools?.some((t) => t.name === `${type}_probe`) ??
           false;
         outcomes.push([type, mapped ? "mapped" : "dropped"]);
       } catch (error) {
@@ -1611,7 +1611,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "fn",
       "custom_tool",
       "ns__child",
@@ -1634,11 +1634,11 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "local_shell",
       "shell",
     ]);
-    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual({
       type: "object",
     });
   });
@@ -1656,14 +1656,14 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual([
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "apply_patch",
     ]);
-    expect(invocation.context.tools?.[0]?.parameters).toMatchObject({
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toMatchObject({
       type: "object",
       properties: { input: { type: "string" } },
     });
-    expect(invocation.renderState.freeformToolNames).toEqual(
+    expect(invocation.client.renderState.freeformToolNames).toEqual(
       new Set(["apply_patch"]),
     );
   });
@@ -1685,7 +1685,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["fn"]);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["fn"]);
   });
 
   it("drops a bare tool_search tool declaration without advertising a Pi tool", () => {
@@ -1694,7 +1694,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("maps computer/computer_use tools only when Client/BYOT, drops provider-hosted", () => {
@@ -1710,7 +1710,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(owned.context.tools?.map((t) => t.name)).toEqual([
+    expect(owned.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
       "computer",
       "computer_use",
     ]);
@@ -1737,12 +1737,12 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["computer"]);
-    expect(invocation.context.tools?.[0]?.parameters).toEqual({
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["computer"]);
+    expect(invocation.invocation.pi.context.tools?.[0]?.parameters).toEqual({
       type: "object",
     });
     // Viewport/environment fields never enter Pi.
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("display_width");
     expect(serialized).not.toContain("linux");
   });
@@ -1766,7 +1766,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    const assistant = invocation.context.messages.find(
+    const assistant = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "assistant",
     );
     const call = assistant?.content?.[0] as { type: string; name: string };
@@ -1793,11 +1793,11 @@ describe("16: every known Responses tool-definition family", () => {
     );
     // The Client/BYOT mcp declaration becomes a Pi tool with its schema; MCP
     // server/authorization metadata never enters Pi.
-    expect(invocation.context.tools?.[0]).toMatchObject({
+    expect(invocation.invocation.pi.context.tools?.[0]).toMatchObject({
       name: "db_query",
       parameters: { type: "object", properties: { sql: { type: "string" } } },
     });
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("db-server");
     expect(serialized).not.toContain("server_label");
   });
@@ -1819,47 +1819,53 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    const serialized = JSON.stringify(invocation.context);
+    const serialized = JSON.stringify(invocation.invocation.pi.context);
     expect(serialized).not.toContain("hidden");
     expect(serialized).not.toContain("authorization");
   });
 
-  it("accepts SDK name-less shell/apply_patch forced tool choices as dropped controls", () => {
-    // The installed SDK models shell/apply_patch forced choices without a
-    // name; they are unsupported forced controls that drop with a notice,
-    // never an unknown-type error.
+  it("preserves SDK name-less shell/apply_patch forced tool choices for projection", () => {
     for (const choice of [{ type: "shell" }, { type: "apply_patch" }]) {
       const invocation = convertResponsesRequest(
         { model: "m", input: "x", tool_choice: choice },
         1,
         policy(),
       );
-      expect(invocation.context.tools).toBeUndefined();
-      expect(
-        invocation.notices.some(
-          (n) => n.code === "openai-responses_forced_tool_choice_dropped",
-        ),
-      ).toBe(true);
+      expect(invocation.invocation.pi.context.tools).toBeUndefined();
+      expect(invocation.invocation.supplement.tools?.choice).toEqual({
+        value: { kind: "hosted", toolType: choice.type },
+        requirement: "hard",
+      });
+      expect(invocation.client.notices).toEqual([]);
     }
   });
 
-  it("drops a declared-client mcp forced tool choice with a notice", () => {
+  it("preserves a declared-client mcp forced tool choice for projection", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
         input: "x",
         tools: [{ type: "mcp", name: "db_query", arguments: { type: "object" } }],
-        tool_choice: { type: "mcp", name: "db_query" },
+        tool_choice: {
+          type: "mcp",
+          server_label: "db-server",
+          name: "db_query",
+        },
       },
       1,
       policy(),
     );
-    expect(invocation.context.tools?.map((t) => t.name)).toEqual(["db_query"]);
-    expect(
-      invocation.notices.some(
-        (n) => n.code === "openai-responses_forced_tool_choice_dropped",
-      ),
-    ).toBe(true);
+    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["db_query"]);
+    expect(invocation.invocation.supplement.tools?.choice).toEqual({
+      value: {
+        kind: "hosted",
+        toolType: "mcp",
+        serverLabel: "db-server",
+        name: "db_query",
+      },
+      requirement: "hard",
+    });
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("errors on a forced tool choice depending on any dropped hosted tool", () => {
@@ -1920,7 +1926,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy({ unknownInputItem: "ignore" }),
     );
-    expect(ignored.context.messages).toHaveLength(1);
+    expect(ignored.invocation.pi.context.messages).toHaveLength(1);
     // A known family never becomes an unknown even under ignore.
     expect(() =>
       convertResponsesRequest(
@@ -1960,9 +1966,9 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy({ unknownInputItem: "ignore" }),
     );
-    expect(ignored.context.messages).toHaveLength(1);
+    expect(ignored.invocation.pi.context.messages).toHaveLength(1);
     expect(
-      ignored.notices.some(
+      ignored.client.notices.some(
         (n) => n.code === "openai-responses_unknown_input_item_ignored",
       ),
     ).toBe(true);
@@ -2040,8 +2046,8 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("keeps provider-hosted computer_call_output ordered transcript when call is not Client-owned", () => {
@@ -2063,8 +2069,8 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("maps an SDK mcp_call with an embedded output into a correlated ToolResult", () => {
@@ -2090,7 +2096,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    const messages = invocation.context.messages;
+    const messages = invocation.invocation.pi.context.messages;
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
     const result = messages.find((m) => m.role === "toolResult");
     expect(result).toMatchObject({
@@ -2125,7 +2131,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -2135,7 +2141,7 @@ describe("16: every known Responses tool-definition family", () => {
       content: [{ type: "text", text: "partial output" }],
     });
     // The raw error text is lifecycle metadata; it never enters Pi.
-    expect(JSON.stringify(invocation.context)).not.toContain("tool crashed");
+    expect(JSON.stringify(invocation.invocation.pi.context)).not.toContain("tool crashed");
   });
 
   it("accepts the SDK mcp_call status failed as a completed-with-error lifecycle", () => {
@@ -2165,7 +2171,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    const result = invocation.context.messages.find(
+    const result = invocation.invocation.pi.context.messages.find(
       (m) => m.role === "toolResult",
     );
     expect(result).toMatchObject({
@@ -2251,8 +2257,8 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("drops a hosted image_generation_call with the SDK status failed as lifecycle metadata", () => {
@@ -2277,8 +2283,8 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 
   it("drops a hosted code_interpreter_call with the SDK status failed as lifecycle metadata", () => {
@@ -2301,7 +2307,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.context.messages).toHaveLength(1);
-    expect(invocation.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.tools).toBeUndefined();
   });
 });

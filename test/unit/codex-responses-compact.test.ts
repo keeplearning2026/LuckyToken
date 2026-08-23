@@ -272,6 +272,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
       expect(selected).toBe(target);
       expect(JSON.stringify(context)).toContain(CODEX_COMPACT_PROMPT);
       expect(options.sessionId).toBe(sessionId);
+      await options.onPayload?.({});
       return summaryMessage(target, "SUMMARY BODY");
     });
     const handler = createOpenAIResponsesCompactHandler({

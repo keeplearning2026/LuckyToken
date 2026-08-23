@@ -14,9 +14,12 @@ import { bindCredentialActivityToExecutionFacts } from "../../credentials/activi
 import {
   execute,
   ExecutionAbortedError,
-  freezePiInvocation,
   type ExecutionOperation,
 } from "../../execution.js";
+import {
+  executeSemanticConversion,
+  type SemanticConversionResult,
+} from "../../semantic-conversion/execution.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,
@@ -40,9 +43,11 @@ import {
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
   type ResponsesEchoTool,
+  type ResponsesEchoToolChoice,
   type ResponsesRenderState,
   type ResponsesResponseObject,
 } from "./response.js";
+import type { SemanticToolChoice } from "../../semantic-conversion/supplement/contract.js";
 import {
   ResponseStateConversionFailure,
   type ResponseSessionState,
@@ -189,10 +194,10 @@ function boundedInvocationSnapshot(
       });
     });
   };
-  if (invocation.context.messages.length > MAX_SNAPSHOT_MESSAGES) {
+  if (invocation.invocation.pi.context.messages.length > MAX_SNAPSHOT_MESSAGES) {
     truncated = true;
   }
-  const messages = invocation.context.messages
+  const messages = invocation.invocation.pi.context.messages
     .slice(0, MAX_SNAPSHOT_MESSAGES)
     .map((message) => {
       const safe = message as unknown as Readonly<Record<string, unknown>>;
@@ -209,8 +214,8 @@ function boundedInvocationSnapshot(
       id: boundedText(model.id),
       api: boundedText(model.api),
     }),
-    systemPrompt: boundedText(invocation.context.systemPrompt),
-    messageCount: invocation.context.messages.length,
+    systemPrompt: boundedText(invocation.invocation.pi.context.systemPrompt),
+    messageCount: invocation.invocation.pi.context.messages.length,
     messages: Object.freeze(messages),
     options: Object.freeze({
       maxTokens: options.maxTokens,
@@ -230,7 +235,7 @@ function boundedInvocationSnapshot(
           id: boundedText(model.id),
           api: boundedText(model.api),
         },
-        messageCount: invocation.context.messages.length,
+        messageCount: invocation.invocation.pi.context.messages.length,
         completeness: "counts_only_due_to_byte_bound",
       }),
     );
@@ -355,10 +360,10 @@ function renderResponsesJson(target: ResponsesResponseObject): PreparedHttpRespo
 }
 
 function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
-  const state = invocation.renderState;
+  const state = invocation.client.renderState;
   const freeformNames = state.freeformToolNames;
   const namespaceReverse = state.namespaceReverse;
-  const catalog = invocation.context.tools;
+  const catalog = invocation.invocation.pi.context.tools;
   if (catalog === undefined || catalog.length === 0) return [];
   const seen = new Set<string>();
   const tools: ResponsesEchoTool[] = [];
@@ -396,6 +401,7 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
 
 function buildRenderState(
   invocation: ResponsesInvocation,
+  projection: SemanticConversionResult,
   unknownPiContent: "error" | "ignore",
   notice: (notice: {
     readonly adapter: string;
@@ -405,22 +411,42 @@ function buildRenderState(
     readonly action: "ignore" | "degrade" | "xrepair";
   }) => void,
 ): ResponsesRenderState {
-  const state = invocation.renderState;
+  const state = invocation.client.renderState;
   const tools = buildEchoTools(invocation);
   const freeformNames = state.freeformToolNames;
   const namespaceReverse = state.namespaceReverse;
+  const applied = (control: string): boolean =>
+    projection.supplementOutcomes.some(
+      (entry) =>
+        entry.control === control &&
+        (entry.outcome.kind === "pi-native" ||
+          entry.outcome.kind === "payload-projected"),
+    );
+  const temperatureControl = invocation.invocation.supplement.sampling?.temperature;
+  const topPControl = invocation.invocation.supplement.sampling?.topP;
+  const parallelControl = invocation.invocation.supplement.tools?.parallelCalls;
+  const choiceControl = invocation.invocation.supplement.tools?.choice;
   const temperature =
-    typeof invocation.options.temperature === "number"
-      ? invocation.options.temperature
+    temperatureControl !== undefined && applied("sampling.temperature")
+      ? temperatureControl.value
       : undefined;
   const topP =
-    typeof invocation.options.samplingParams?.top_p === "number"
-      ? (invocation.options.samplingParams.top_p as number)
+    topPControl !== undefined && applied("sampling.topP")
+      ? topPControl.value
+      : undefined;
+  const parallelToolCalls =
+    parallelControl !== undefined && applied("tools.parallelCalls")
+      ? parallelControl.value
+      : true;
+  const toolChoice =
+    choiceControl !== undefined && applied("tools.choice")
+      ? toResponsesEchoToolChoice(choiceControl.value)
       : undefined;
   return Object.freeze({
     clientModel: state.clientModel,
     stream: state.stream,
-    ...(state.toolChoice === undefined ? {} : { toolChoice: state.toolChoice }),
+    ...(toolChoice === undefined ? {} : { toolChoice }),
+    parallelToolCalls,
     ...(freeformNames === undefined || freeformNames.size === 0
       ? {}
       : { freeformToolNames: freeformNames }),
@@ -436,10 +462,59 @@ function buildRenderState(
   });
 }
 
+function toResponsesEchoToolChoice(
+  choice: SemanticToolChoice,
+): ResponsesEchoToolChoice {
+  if (
+    choice.kind === "auto" ||
+    choice.kind === "none" ||
+    choice.kind === "required"
+  ) {
+    return choice.kind;
+  }
+  if (choice.kind === "named") {
+    return Object.freeze({
+      type: choice.toolType,
+      name: choice.name,
+    });
+  }
+  if (choice.kind === "allowed") {
+    return Object.freeze({
+      type: "allowed_tools",
+      mode: choice.mode,
+      tools: Object.freeze(
+        choice.tools.map((tool) =>
+          Object.freeze(
+            tool.toolType === "function" || tool.toolType === "custom"
+              ? { type: tool.toolType, name: tool.name }
+              : tool.toolType === "mcp"
+                ? {
+                    type: "mcp",
+                    server_label: tool.serverLabel,
+                    ...(tool.name === undefined ? {} : { name: tool.name }),
+                  }
+                : { type: tool.toolType },
+          ),
+        ),
+      ),
+    });
+  }
+  if (choice.kind !== "hosted") return "auto";
+  return Object.freeze(
+    choice.toolType === "mcp"
+      ? {
+          type: "mcp",
+          server_label: choice.serverLabel,
+          ...(choice.name === undefined ? {} : { name: choice.name }),
+        }
+      : { type: choice.toolType },
+  );
+}
+
 function assertProviderRepresentableHistory(
   invocation: ResponsesInvocation,
 ): void {
-  for (const message of invocation.context.messages) {
+  for (const message of invocation.invocation.pi.context.messages) {
     if (message.role !== "assistant") continue;
     for (const block of message.content) {
       if (block.type === "toolCall" && block.namespace !== undefined) {
@@ -466,7 +541,7 @@ function composeInvocationOptions(
   routerDefaults: RouterOptionDefaults,
 ): ModelsSimpleStreamOptions {
   return composeOptions(
-    { ...invocation.options },
+    { ...invocation.invocation.pi.options },
     infrastructure,
     routerDefaults,
   );
@@ -537,7 +612,7 @@ export async function executeSemanticResponses(
       );
       throw error;
     }
-    for (const notice of invocation.notices) {
+    for (const notice of invocation.client.notices) {
       observeClientConversionNotice(options.journey, notice);
     }
     const finalizeLocation = {
@@ -562,7 +637,6 @@ export async function executeSemanticResponses(
         },
         options.routerDefaults,
       );
-      freezePiInvocation(options.model, invocation.context, piOptions);
       if (options.journey !== undefined) {
         try {
           const snapshot = boundedInvocationSnapshot(
@@ -705,15 +779,23 @@ export async function executeSemanticResponses(
       "p4.create_pi_stream",
       createStreamLocation,
     );
-    let message;
+    let semanticResult: SemanticConversionResult;
     try {
-      message = await executeOperation(
-        options.models,
-        options.model,
-        invocation.context,
-        piOptions,
-        executionFacts,
-      );
+      semanticResult = await executeSemanticConversion({
+        models: options.models,
+        model: options.model,
+        invocation: Object.freeze({
+          ...invocation.invocation,
+          pi: Object.freeze({
+            context: invocation.invocation.pi.context,
+            options: piOptions,
+          }),
+        }),
+        infrastructure: {
+          executeOperation,
+          factsSink: executionFacts,
+        },
+      });
       completeSemanticJourneyStep(
         options.journey,
         "p4.create_pi_stream",
@@ -730,9 +812,11 @@ export async function executeSemanticResponses(
       throw error;
     }
     options.request.signal.throwIfAborted();
+    const message = semanticResult.message;
 
     const renderState = buildRenderState(
       invocation,
+      semanticResult,
       options.configuration.conversion.response.unknownPiContent,
       (notice) => {
         observeClientConversionNotice(options.journey, notice);
@@ -746,7 +830,7 @@ export async function executeSemanticResponses(
       typeof previousResponseId === "string" ? previousResponseId : undefined,
     );
     await rememberAfterSuccess(options, rendered);
-    const prepared = invocation.renderState.stream
+    const prepared = invocation.client.renderState.stream
       ? renderResponsesSse(rendered)
       : renderResponsesJson(rendered);
     options.request.signal.throwIfAborted();

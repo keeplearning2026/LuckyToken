@@ -12,6 +12,30 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ClientConversionResult } from "../../semantic-conversion/contract.js";
+import type {
+  HistoricalReasoning,
+  ReasoningContinuityAttachment,
+  ReasoningEffortIntent,
+  ReasoningEffortLevel,
+  ReasoningSemantics,
+  ReasoningSummaryIntent,
+  ReasoningSummaryPreference,
+} from "../../semantic-conversion/reasoning/contract.js";
+import type {
+  ProjectionSupplement,
+  SemanticToolChoice,
+} from "../../semantic-conversion/supplement/contract.js";
+import {
+  InvalidResponsesProjectionSupplement,
+  parseResponsesProjectionSupplement,
+  parseSemanticToolChoice,
+} from "./projection-supplement.js";
+import {
+  decodeResponsesContinuity,
+  RESPONSES_CONTINUITY_FIELD,
+  type WireContinuityAttachment,
+} from "./reasoning-continuity.js";
 
 export class InvalidRequest extends Error {
   readonly kind = "InvalidRequest";
@@ -59,11 +83,7 @@ export const DEFAULT_REFERENCE_LIMITS = Object.freeze({
   maxRedirects: 5,
 });
 
-export interface ResponsesInvocation {
-  selector: string;
-  context: Context;
-  options: ModelsSimpleStreamOptions;
-  renderState: {
+export interface ResponsesClientRenderState {
     clientModel: string;
     stream: boolean;
     /** Effective tool_choice that actually took effect (auto/none). */
@@ -77,9 +97,9 @@ export interface ResponsesInvocation {
     /** Source metadata retained only for request-local response echo. Never
      *  placed into model context. */
     metadataEcho?: Readonly<Record<string, string>>;
-  };
-  notices: readonly ConversionNotice[];
 }
+
+export type ResponsesInvocation = ClientConversionResult<ResponsesClientRenderState>;
 
 export interface ValidatedResponsesRequest {
   selector: string;
@@ -93,7 +113,7 @@ export interface ValidatedResponsesRequest {
   metadataUserId?: string;
   reasoning?: string;
   tools?: Tool[];
-  toolChoice?: string;
+  toolChoice?: SemanticToolChoice;
   background: boolean;
   conversationPresent: boolean;
   promptPresent: boolean;
@@ -103,13 +123,9 @@ export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
 export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
 
 export const FUTURE_EFFORT_NOTICE_CODE = "openai-responses_future_effort";
-export const EFFORT_NONE_OMITTED_NOTICE_CODE =
-  "openai-responses_effort_none_omitted";
 export const ULTRA_ALIAS_NOTICE_CODE = "openai-responses_effort_ultra_alias";
 export const UNKNOWN_INPUT_ITEM_IGNORED_NOTICE_CODE =
   "openai-responses_unknown_input_item_ignored";
-export const FORCED_TOOL_CHOICE_DROPPED_NOTICE_CODE =
-  "openai-responses_forced_tool_choice_dropped";
 export const REFERENCE_UNRESOLVED_NOTICE_CODE =
   "openai-responses_reference_unresolved";
 export const INPUT_FILE_DROPPED_NOTICE_CODE =
@@ -132,23 +148,10 @@ export const NAMESPACE_SEPARATOR = "__";
 /** Responses-owned marker id for the versioned textSignature envelope.
  *  `phase` is preserved here, never injected into model-visible text. */
 export const RESPONSES_TEXT_SIGNATURE_ID = "openai-responses";
-/** Responses-owned authority for reasoning continuity envelopes. Only an
- *  envelope with this authority may restore `encrypted_content`; a foreign
- *  arbitrary Provider signature is never treated as Responses continuity. */
-export const RESPONSES_CONTINUITY_AUTHORITY = "openai-responses";
-
 export interface ResponsesTextSignatureV1 {
   readonly v: 1;
   readonly id: typeof RESPONSES_TEXT_SIGNATURE_ID;
   readonly phase: string;
-}
-
-export interface ResponsesContinuityEnvelopeV1 {
-  readonly v: 1;
-  readonly id: typeof RESPONSES_CONTINUITY_AUTHORITY;
-  readonly authority: typeof RESPONSES_CONTINUITY_AUTHORITY;
-  readonly item_id?: string;
-  readonly encrypted_content: string;
 }
 
 const DEFAULT_POLICY: ResponseRequestConversionPolicy = Object.freeze({
@@ -229,26 +232,36 @@ function requestNotice(
   });
 }
 
-function parseContentParts(content: unknown): TextContent[] {
+function parseContentParts(
+  content: unknown,
+  wireTextParts?: Map<number, TextContent>,
+): TextContent[] {
   if (typeof content === "string") {
-    return content.length === 0 ? [] : [{ type: "text", text: content }];
+    if (content.length === 0) return [];
+    const block: TextContent = { type: "text", text: content };
+    wireTextParts?.set(0, block);
+    return [block];
   }
   if (!Array.isArray(content)) return [];
   const parts: TextContent[] = [];
-  for (const raw of content) {
+  for (const [wirePartIndex, raw] of content.entries()) {
     if (!isRecord(raw)) continue;
     const type = raw.type;
     if (
       (type === "input_text" || type === "text" || type === "output_text") &&
       typeof raw.text === "string"
     ) {
-      parts.push({ type: "text", text: raw.text });
+      const block: TextContent = { type: "text", text: raw.text };
+      parts.push(block);
+      wireTextParts?.set(wirePartIndex, block);
       continue;
     }
     // A refusal carries visible text semantics; preserve it as deterministic
     // textual degradation rather than silently dropping the refusal.
     if (type === "refusal" && typeof raw.refusal === "string") {
-      parts.push({ type: "text", text: raw.refusal });
+      const block: TextContent = { type: "text", text: raw.refusal };
+      parts.push(block);
+      wireTextParts?.set(wirePartIndex, block);
     }
   }
   return parts;
@@ -679,38 +692,123 @@ function convertTools(
  *   max              → max
  *   future unknown   → futureReasoningEffort policy (max|omit|error), notice on max/omit
  */
+interface ConvertedReasoningRequest {
+  readonly piReasoning?: ReasoningEffortLevel;
+  readonly intent: Readonly<{
+    effort: ReasoningEffortIntent;
+    summary: ReasoningSummaryIntent;
+  }>;
+}
+
+const REASONING_SUMMARY_PREFERENCES = new Set<ReasoningSummaryPreference>([
+  "auto",
+  "concise",
+  "detailed",
+]);
+
+function parseReasoningSummary(
+  value: Readonly<Record<string, unknown>>,
+): ReasoningSummaryIntent {
+  const current = value.summary;
+  const deprecated = value.generate_summary;
+  for (const [field, candidate] of [
+    ["reasoning.summary", current],
+    ["reasoning.generate_summary", deprecated],
+  ] as const) {
+    if (candidate === undefined || candidate === null) continue;
+    if (
+      typeof candidate !== "string" ||
+      !REASONING_SUMMARY_PREFERENCES.has(candidate as ReasoningSummaryPreference)
+    ) {
+      throw new InvalidRequest(
+        `${field} must be auto, concise, or detailed when present`,
+      );
+    }
+  }
+  if (
+    current !== undefined &&
+    current !== null &&
+    deprecated !== undefined &&
+    deprecated !== null &&
+    current !== deprecated
+  ) {
+    throw new InvalidRequest(
+      "reasoning.summary and reasoning.generate_summary must agree when both are present",
+    );
+  }
+  const selected = current ?? deprecated;
+  return selected === undefined || selected === null
+    ? Object.freeze({ kind: "provider-default" })
+    : Object.freeze({
+        kind: "requested",
+        value: selected as ReasoningSummaryPreference,
+      });
+}
+
 function convertReasoning(
   value: unknown,
   futureReasoningEffort: ResponseRequestConversionPolicy["futureReasoningEffort"],
   notices: ConversionNotice[],
-): string | undefined {
-  if (value === undefined || value === null) return undefined;
+): ConvertedReasoningRequest {
+  const providerDefaultEffort = Object.freeze({
+    kind: "provider-default",
+  } as const);
+  const providerDefaultSummary = Object.freeze({
+    kind: "provider-default",
+  } as const);
+  if (value === undefined || value === null) {
+    return Object.freeze({
+      intent: Object.freeze({
+        effort: providerDefaultEffort,
+        summary: providerDefaultSummary,
+      }),
+    });
+  }
   if (!isRecord(value)) {
     throw new InvalidRequest("reasoning must be an object when present");
   }
+  const summary = parseReasoningSummary(value);
   const effort = value.effort;
-  if (effort === undefined || effort === null) return undefined;
+  if (effort === undefined || effort === null) {
+    return Object.freeze({
+      intent: Object.freeze({ effort: providerDefaultEffort, summary }),
+    });
+  }
   if (typeof effort !== "string" || effort.trim().length === 0) {
     throw new InvalidRequest(
       "reasoning.effort must be a non-empty string when present",
     );
   }
   if (effort === "none") {
-    // Documented explicit-off degradation: omission is not claimed to be an
-    // explicit Provider off, and the caller asked for none.
-    notices.push(
-      requestNotice(EFFORT_NONE_OMITTED_NOTICE_CODE, "degrade", "$.reasoning.effort"),
-    );
-    return undefined;
+    return Object.freeze({
+      intent: Object.freeze({
+        effort: Object.freeze({ kind: "disabled" }),
+        summary,
+      }),
+    });
   }
   if (effort === "ultra") {
     notices.push(
       requestNotice(ULTRA_ALIAS_NOTICE_CODE, "degrade", "$.reasoning.effort"),
     );
-    return "max";
+    return Object.freeze({
+      piReasoning: "max",
+      intent: Object.freeze({
+        effort: Object.freeze({ kind: "enabled", level: "max" }),
+        summary,
+      }),
+    });
   }
-  if (effort === "max") return "max";
-  if (KNOWN_EFFORTS.has(effort)) return effort;
+  if (effort === "max" || KNOWN_EFFORTS.has(effort)) {
+    const level = effort as ReasoningEffortLevel;
+    return Object.freeze({
+      piReasoning: level,
+      intent: Object.freeze({
+        effort: Object.freeze({ kind: "enabled", level }),
+        summary,
+      }),
+    });
+  }
   // Future unknown effort value.
   if (futureReasoningEffort === "error") {
     throw new InvalidRequest(
@@ -720,36 +818,29 @@ function convertReasoning(
   notices.push(
     requestNotice(FUTURE_EFFORT_NOTICE_CODE, "degrade", "$.reasoning.effort"),
   );
-  return futureReasoningEffort === "max" ? "max" : undefined;
+  if (futureReasoningEffort === "max") {
+    return Object.freeze({
+      piReasoning: "max",
+      intent: Object.freeze({
+        effort: Object.freeze({ kind: "enabled", level: "max" }),
+        summary,
+      }),
+    });
+  }
+  return Object.freeze({
+    intent: Object.freeze({ effort: providerDefaultEffort, summary }),
+  });
 }
 
-function parseToolChoice(value: unknown): string | undefined {
-  // "none" | "auto" | "required" | {type:"allowed"|"function"|...}
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === "string") {
-    if (value === "none" || value === "auto" || value === "required") {
-      return value;
+function parseToolChoice(value: unknown): SemanticToolChoice | undefined {
+  try {
+    return parseSemanticToolChoice(value);
+  } catch (error) {
+    if (error instanceof InvalidResponsesProjectionSupplement) {
+      throw new InvalidRequest(error.message);
     }
-    throw new InvalidRequest(`unsupported tool_choice: ${value}`);
+    throw error;
   }
-  if (!isRecord(value)) {
-    throw new InvalidRequest("tool_choice must be a string or object when present");
-  }
-  const type = value.type;
-  if (type === "allowed") {
-    return "allowed";
-  }
-  if (
-    type === "function" ||
-    type === "custom" ||
-    type === "namespace" ||
-    type === "mcp" ||
-    type === "shell" ||
-    type === "apply_patch"
-  ) {
-    return "forced";
-  }
-  throw new InvalidRequest(`unsupported tool_choice.type: ${String(type)}`);
 }
 
 /**
@@ -781,7 +872,10 @@ export function validateResponsesRequest(
     throw new InvalidRequest("Request body must be a JSON object");
   }
   const selector = nonEmptyString(value.model, "model");
-  const input = value.input;
+  const input =
+    value.input === undefined && typeof value.instructions === "string"
+      ? []
+      : value.input;
   if (typeof input !== "string" && !Array.isArray(input)) {
     throw new InvalidRequest("input must be a string or an array");
   }
@@ -803,50 +897,14 @@ export function validateResponsesRequest(
   ) {
     throw new InvalidRequest("store must be a boolean when present");
   }
-  if (value.tool_choice !== undefined && value.tool_choice !== null) {
-    const toolChoice = value.tool_choice;
-    if (
-      typeof toolChoice !== "string" &&
-      (typeof toolChoice !== "object" ||
-        toolChoice === null ||
-        Array.isArray(toolChoice))
-    ) {
-      throw new InvalidRequest(
-        "tool_choice must be a string or object when present",
-      );
-    }
-    if (
-      isRecord(toolChoice) &&
-      toolChoice.type === "allowed" &&
-      !Array.isArray(toolChoice.allowed_tools)
-    ) {
-      throw new InvalidRequest(
-        "tool_choice.allowed_tools must be an array when present",
-      );
-    }
-    if (
-      isRecord(toolChoice) &&
-      toolChoice.type === "allowed" &&
-      Array.isArray(toolChoice.allowed_tools) &&
-      toolChoice.allowed_tools.some((entry) => typeof entry !== "string")
-    ) {
-      throw new InvalidRequest(
-        "tool_choice.allowed_tools must contain only strings",
-      );
-    }
-  }
+  const toolChoice = parseToolChoice(value.tool_choice);
   validateReasoningShape(value.reasoning);
-  if (value.background === true) {
-    throw new InvalidRequest(
-      "background=true is not supported by Core conversion v1",
-    );
-  }
-  if (value.conversation !== undefined) {
+  if (value.conversation !== undefined && value.conversation !== null) {
     throw new InvalidRequest(
       "conversation is not supported by Core conversion v1",
     );
   }
-  if (value.prompt !== undefined) {
+  if (value.prompt !== undefined && value.prompt !== null) {
     throw new InvalidRequest("prompt is not supported by Core conversion v1");
   }
   const maxOutputTokens = optionalNonNegativeInt(
@@ -864,11 +922,11 @@ export function validateResponsesRequest(
   const cacheRetentionValue = value.prompt_cache_retention;
   let cacheRetention: "short" | "long" | undefined;
   if (cacheRetentionValue !== undefined && cacheRetentionValue !== null) {
-    if (cacheRetentionValue === "in-memory") cacheRetention = "short";
+    if (cacheRetentionValue === "in_memory") cacheRetention = "short";
     else if (cacheRetentionValue === "24h") cacheRetention = "long";
     else {
       throw new InvalidRequest(
-        "prompt_cache_retention must be in-memory or 24h when present",
+        "prompt_cache_retention must be in_memory or 24h when present",
       );
     }
   }
@@ -887,10 +945,9 @@ export function validateResponsesRequest(
     metadataUserId = userValue;
   }
   const tools = convertTools(value.tools, freeformNames, namespaceReverse);
-  const toolChoice = parseToolChoice(value.tool_choice);
   const background = optionalBoolean(value.background, "background") ?? false;
-  const conversationPresent = value.conversation !== undefined;
-  const promptPresent = value.prompt !== undefined;
+  const conversationPresent = value.conversation !== undefined && value.conversation !== null;
+  const promptPresent = value.prompt !== undefined && value.prompt !== null;
   const instructions =
     value.instructions === undefined || value.instructions === null
       ? undefined
@@ -935,6 +992,182 @@ function validateReasoningShape(value: unknown): void {
   }
 }
 
+interface HistoricalReasoningCandidate {
+  readonly block: ThinkingContent;
+  readonly summaryText: string;
+  readonly sourceItemId?: string;
+  readonly source?: HistoricalReasoning["source"];
+}
+
+type InternalReasoningContinuityCandidate =
+  | WireContinuityAttachment
+  | {
+      readonly source: ReasoningContinuityAttachment["source"];
+      readonly target: "thinking";
+      readonly kind: "responses-reasoning-item";
+      readonly value: string;
+    };
+
+interface ReasoningContinuityCandidate {
+  readonly block: ThinkingContent | TextContent | ToolCall;
+  readonly sourceItemId?: string;
+  readonly wire: InternalReasoningContinuityCandidate;
+}
+
+function resolveHistoricalReasoning(
+  messages: readonly Message[],
+  candidates: readonly HistoricalReasoningCandidate[],
+): readonly HistoricalReasoning[] {
+  if (candidates.length === 0) return Object.freeze([]);
+  const byBlock = new Map(
+    candidates.map((candidate) => [candidate.block, candidate] as const),
+  );
+  const resolved: HistoricalReasoning[] = [];
+  for (const [messageIndex, message] of messages.entries()) {
+    if (message.role !== "assistant") continue;
+    for (const [contentIndex, block] of message.content.entries()) {
+      if (block.type !== "thinking") continue;
+      const candidate = byBlock.get(block);
+      if (candidate === undefined) continue;
+      resolved.push(
+        Object.freeze({
+          attachment: Object.freeze({
+            messageIndex,
+            contentIndex,
+            ...(candidate.sourceItemId === undefined
+              ? {}
+              : { sourceItemId: candidate.sourceItemId }),
+          }),
+          summaryText: candidate.summaryText,
+          ...(candidate.source === undefined ? {} : { source: candidate.source }),
+        }),
+      );
+    }
+  }
+  return Object.freeze(resolved);
+}
+
+function serializeResponsesReasoningReplayItem(
+  item: Readonly<Record<string, unknown>>,
+): string | undefined {
+  if (
+    typeof item.id !== "string" ||
+    item.id.length === 0 ||
+    typeof item.encrypted_content !== "string" ||
+    item.encrypted_content.length === 0
+  ) {
+    return undefined;
+  }
+  const replay: Record<string, unknown> = {
+    type: "reasoning",
+    id: item.id,
+  };
+  if (item.status !== undefined) {
+    if (item.status !== "completed") return undefined;
+    replay.status = item.status;
+  }
+  if (item.summary !== undefined) {
+    if (
+      !Array.isArray(item.summary) ||
+      !item.summary.every(
+        (part) =>
+          isRecord(part) &&
+          part.type === "summary_text" &&
+          typeof part.text === "string",
+      )
+    ) {
+      return undefined;
+    }
+    replay.summary = item.summary.map((part) => ({
+      type: "summary_text",
+      text: (part as Record<string, unknown>).text,
+    }));
+  }
+  if (item.content !== undefined) {
+    if (
+      !Array.isArray(item.content) ||
+      !item.content.every(
+        (part) =>
+          isRecord(part) &&
+          part.type === "reasoning_text" &&
+          typeof part.text === "string",
+      )
+    ) {
+      return undefined;
+    }
+    replay.content = item.content.map((part) => ({
+      type: "reasoning_text",
+      text: (part as Record<string, unknown>).text,
+    }));
+  }
+  replay.encrypted_content = item.encrypted_content;
+  return JSON.stringify(replay);
+}
+
+function resolveReasoningContinuity(
+  messages: readonly Message[],
+  candidates: readonly ReasoningContinuityCandidate[],
+): readonly ReasoningContinuityAttachment[] {
+  if (candidates.length === 0) return Object.freeze([]);
+  const byBlock = new Map<
+    ThinkingContent | TextContent | ToolCall,
+    ReasoningContinuityCandidate[]
+  >();
+  for (const candidate of candidates) {
+    const current = byBlock.get(candidate.block);
+    if (current === undefined) byBlock.set(candidate.block, [candidate]);
+    else current.push(candidate);
+  }
+  const resolved: ReasoningContinuityAttachment[] = [];
+  for (const [messageIndex, message] of messages.entries()) {
+    if (message.role !== "assistant") continue;
+    for (const [contentIndex, block] of message.content.entries()) {
+      const blockCandidates = byBlock.get(block);
+      if (blockCandidates === undefined) continue;
+      for (const candidate of blockCandidates) {
+        const common = {
+          source: candidate.wire.source,
+          kind: candidate.wire.kind,
+          value: candidate.wire.value,
+          ...(candidate.wire.target === "thinking" &&
+          candidate.wire.kind === "opaque-signature" &&
+          candidate.wire.representation === "redacted"
+            ? { representation: "redacted" as const }
+            : {}),
+        } as const;
+        if (candidate.wire.target === "toolCall") {
+          resolved.push(
+            Object.freeze({
+              attachment: Object.freeze({
+                target: "toolCall",
+                messageIndex,
+                contentIndex,
+                callId: candidate.wire.callId,
+              }),
+              ...common,
+            }),
+          );
+          continue;
+        }
+        resolved.push(
+          Object.freeze({
+            attachment: Object.freeze({
+              target: candidate.wire.target,
+              messageIndex,
+              contentIndex,
+              ...(candidate.sourceItemId === undefined
+                ? {}
+                : { sourceItemId: candidate.sourceItemId }),
+            }),
+            ...common,
+          }),
+        );
+      }
+    }
+  }
+  return Object.freeze(resolved);
+}
+
 function convertMessages(
   input: unknown,
   selector: string,
@@ -944,6 +1177,8 @@ function convertMessages(
   notices: ConversionNotice[],
   executableNames?: ReadonlySet<string>,
   namespaceReverse?: Readonly<Record<string, { namespace: string; child: string }>>,
+  historicalReasoningCandidates: HistoricalReasoningCandidate[] = [],
+  reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [],
 ): Message[] {
   const messages: Message[] = [];
   const pendingReasoning: ThinkingContent[] = [];
@@ -1106,7 +1341,8 @@ function convertMessages(
             `input_image ${unresolvableImages[0]?.path} requires a trusted Responses-owned resolver`,
           );
         }
-        const content = parseContentParts(rawItem.content);
+        const wireTextParts = new Map<number, TextContent>();
+        const content = parseContentParts(rawItem.content, wireTextParts);
         const images = parseInlineImages(rawItem.content);
         if (role === "system" || role === "developer") {
           const text = content.map((part) => part.text).join("");
@@ -1208,7 +1444,45 @@ function convertMessages(
               phase,
             };
             const signature = JSON.stringify(envelope);
-            content[0] = { ...content[0], textSignature: signature } as TextContent;
+            const previousFirstBlock = content[0];
+            content[0] = {
+              ...previousFirstBlock,
+              textSignature: signature,
+            } as TextContent;
+            const firstWirePart = [...wireTextParts.entries()].find(
+              ([, block]) => block === previousFirstBlock,
+            );
+            if (firstWirePart !== undefined) {
+              wireTextParts.set(firstWirePart[0], content[0]);
+            }
+          }
+          const decodedContinuity = decodeResponsesContinuity(rawItem, {
+            type: "message",
+            contentPartCount: Array.isArray(rawItem.content)
+              ? rawItem.content.length
+              : content.length,
+          });
+          notices.push(...decodedContinuity.notices);
+          for (const wire of decodedContinuity.attachments) {
+            if (wire.target !== "text") continue;
+            const block = wireTextParts.get(wire.partIndex);
+            if (block === undefined) {
+              notices.push(
+                requestNotice(
+                  "openai-responses_continuity_attachment_invalid",
+                  "ignore",
+                  `$.input[?type=message].${RESPONSES_CONTINUITY_FIELD}`,
+                ),
+              );
+              continue;
+            }
+            reasoningContinuityCandidates.push({
+              block,
+              wire,
+              ...(typeof rawItem.id === "string"
+                ? { sourceItemId: rawItem.id }
+                : {}),
+            });
           }
           const blocks: Array<TextContent | ThinkingContent | ToolCall> = [
             ...pendingReasoning,
@@ -1270,42 +1544,47 @@ function convertMessages(
         const thinking = summary || content;
         if (thinking.length > 0 || typeof rawItem.encrypted_content === "string") {
           const block: ThinkingContent = { type: "thinking", thinking };
-          // Responses-native continuity state enters a versioned
-          // provenance-bearing envelope. Only this adapter's authority may
-          // restore `encrypted_content`; an arbitrary foreign signature never
-          // does. An envelope that claims a foreign authority blocks the
-          // restore: the opaque state is not re-wrapped as Responses
-          // continuity.
-          const encrypted = rawItem.encrypted_content;
-          const sourceEnvelope = rawItem.envelope;
-          // Without a Lucky-owned envelope, encrypted_content is the SDK's
-          // native Responses field and is trusted. When an envelope is
-          // present it must verify: the Responses authority, schema version
-          // 1, and the Responses id. A foreign authority, a wrong version, a
-          // wrong id, or a structurally invalid envelope is never verified;
-          // its encrypted_content is not restored as Responses continuity.
-          const verifiedEnvelope =
-            sourceEnvelope === undefined ||
-            sourceEnvelope === null ||
-            (isRecord(sourceEnvelope) &&
-              sourceEnvelope.v === 1 &&
-              sourceEnvelope.id === RESPONSES_CONTINUITY_AUTHORITY &&
-              sourceEnvelope.authority === RESPONSES_CONTINUITY_AUTHORITY);
-          if (
-            typeof encrypted === "string" &&
-            encrypted.length > 0 &&
-            verifiedEnvelope
-          ) {
-            const envelope: ResponsesContinuityEnvelopeV1 = {
-              v: 1,
-              id: RESPONSES_CONTINUITY_AUTHORITY,
-              authority: RESPONSES_CONTINUITY_AUTHORITY,
+          const decodedContinuity = decodeResponsesContinuity(rawItem, {
+            type: "reasoning",
+          });
+          notices.push(...decodedContinuity.notices);
+          historicalReasoningCandidates.push({
+            block,
+            summaryText: thinking,
+            ...(typeof rawItem.id === "string"
+              ? { sourceItemId: rawItem.id }
+              : {}),
+            ...(decodedContinuity.source === undefined
+              ? {}
+              : { source: decodedContinuity.source }),
+          });
+          for (const wire of decodedContinuity.attachments) {
+            reasoningContinuityCandidates.push({
+              block,
+              wire,
               ...(typeof rawItem.id === "string"
-                ? { item_id: rawItem.id }
-                : {}),
-              encrypted_content: encrypted,
-            };
-            block.thinkingSignature = JSON.stringify(envelope);
+                ? { sourceItemId: rawItem.id }
+              : {}),
+            });
+          }
+          if (
+            decodedContinuity.source !== undefined
+          ) {
+            const replayItem = serializeResponsesReasoningReplayItem(rawItem);
+            if (replayItem !== undefined) {
+              reasoningContinuityCandidates.push({
+                block,
+                ...(typeof rawItem.id === "string"
+                  ? { sourceItemId: rawItem.id }
+                  : {}),
+                wire: {
+                  source: decodedContinuity.source,
+                  target: "thinking",
+                  kind: "responses-reasoning-item",
+                  value: replayItem,
+                },
+              });
+            }
           }
           // Trailing reasoning after an assistant message attaches to that
           // assistant turn and never disappears.
@@ -1462,6 +1741,14 @@ function convertMessages(
             ? { namespace: wireNamespace }
             : {}),
         };
+        const decodedContinuity = decodeResponsesContinuity(rawItem, {
+          type: "toolCall",
+          callId,
+        });
+        notices.push(...decodedContinuity.notices);
+        for (const wire of decodedContinuity.attachments) {
+          reasoningContinuityCandidates.push({ block: toolCall, wire });
+        }
         // Find or create the assistant container.
         const last = messages.at(-1);
         if (last?.role === "assistant") {
@@ -1999,7 +2286,7 @@ async function resolveLuckyReferences(
       for (const image of resolvableImages) {
         try {
           const resolved = await resolver.resolveItemReference(image.raw, {
-            authority: RESPONSES_CONTINUITY_AUTHORITY,
+            authority: "openai-responses",
             ...(signal === undefined ? {} : { signal }),
             limits: limits ?? DEFAULT_REFERENCE_LIMITS,
           });
@@ -2097,27 +2384,21 @@ async function resolveLuckyReferences(
 }
 
 function applyToolChoiceFilter(
-  value: unknown,
   mergedTools: Tool[] | undefined,
-  toolChoice: string | undefined,
-  freeformNames: Set<string>,
-  notices: ConversionNotice[],
+  toolChoice: SemanticToolChoice | undefined,
 ): { tools: Tool[] | undefined; effective: string | undefined } {
   let effectiveTools = mergedTools;
   let effectiveToolChoice: string | undefined;
-  if (toolChoice === "none") {
+  if (toolChoice?.kind === "none") {
     effectiveTools = undefined;
     effectiveToolChoice = "none";
-  } else if (toolChoice === "allowed") {
-    const allowed = (value as Record<string, unknown>).tool_choice as
-      | Record<string, unknown>
-      | undefined;
+  } else if (toolChoice?.kind === "allowed") {
     const names = new Set(
-      Array.isArray(allowed?.allowed_tools)
-        ? allowed.allowed_tools.filter(
-            (entry): entry is string => typeof entry === "string",
-          )
-        : [],
+      toolChoice.tools.flatMap((entry) =>
+        entry.toolType === "function" || entry.toolType === "custom"
+          ? [entry.name]
+          : [],
+      ),
     );
     effectiveTools =
       effectiveTools === undefined
@@ -2127,15 +2408,9 @@ function applyToolChoiceFilter(
     // tool_choice has no bare "allowed" string (only
     // 'none'|'auto'|'required' or the ToolChoiceAllowed object), so the
     // effective echo is "auto" with the already-filtered catalog.
-    effectiveToolChoice = "auto";
-  } else if (toolChoice === "forced") {
-    // Unsupported forced control: drop unless it requires an unavailable tool.
-    // This is an explicit hard-control degradation, so it emits a notice.
-    const choice = (value as Record<string, unknown>).tool_choice as
-      | Record<string, unknown>
-      | undefined;
-    const requiredName = choice?.name;
-    if (typeof requiredName === "string") {
+    effectiveToolChoice = toolChoice.mode;
+  } else if (toolChoice?.kind === "named") {
+    const requiredName = toolChoice.name;
       const catalogNames = new Set(
         effectiveTools === undefined ? [] : effectiveTools.map((t) => t.name),
       );
@@ -2144,17 +2419,12 @@ function applyToolChoiceFilter(
           `tool_choice requires an unavailable tool: ${requiredName}`,
         );
       }
-    }
-    notices.push(
-      requestNotice(
-        FORCED_TOOL_CHOICE_DROPPED_NOTICE_CODE,
-        "degrade",
-        "$.tool_choice",
-      ),
-    );
-    // Dropped: no generic Pi control. effectiveToolChoice stays unset.
+    effectiveToolChoice = "required";
+  } else if (toolChoice?.kind === "required") {
+    effectiveToolChoice = "required";
+  } else if (toolChoice?.kind === "auto") {
+    effectiveToolChoice = "auto";
   }
-  void freeformNames;
   return { tools: effectiveTools, effective: effectiveToolChoice };
 }
 
@@ -2164,6 +2434,8 @@ function buildInvocation(
   freeformNames: Set<string>,
   additionalTools: unknown[],
   messages: Message[],
+  reasoning: ReasoningSemantics,
+  supplement: ProjectionSupplement,
   notices: ConversionNotice[],
   policy: ResponseRequestConversionPolicy,
   inputForPromotion: unknown = validated.input,
@@ -2204,11 +2476,8 @@ function buildInvocation(
           ...(convertTools(additionalTools, freeformNames, namespaceReverse, notices) ?? []),
         ];
   const filtered = applyToolChoiceFilter(
-    value,
     mergedTools,
     validated.toolChoice,
-    freeformNames,
-    notices,
   );
   if (filtered.tools !== undefined && filtered.tools.length > 0) {
     context.tools = filtered.tools;
@@ -2233,36 +2502,59 @@ function buildInvocation(
     const reasoning = validated.reasoning as ModelsSimpleStreamOptions["reasoning"];
     if (reasoning !== undefined) options.reasoning = reasoning;
   }
-  return {
+  return Object.freeze({
     selector: validated.selector,
-    context,
-    options,
-    renderState: {
-      clientModel: validated.selector,
-      stream: validated.stream,
-      ...(filtered.effective === undefined
-        ? {}
-        : { toolChoice: filtered.effective }),
-      ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
-      ...(Object.keys(namespaceReverse).length > 0
-        ? { namespaceReverse: Object.freeze(namespaceReverse) }
-        : {}),
-      ...(metadataEcho === undefined ? {} : { metadataEcho }),
-    },
-    notices: Object.freeze(notices),
-  };
+    invocation: Object.freeze({
+      pi: Object.freeze({ context, options }),
+      reasoning,
+      supplement,
+    }),
+    client: Object.freeze({
+      renderState: Object.freeze({
+        clientModel: validated.selector,
+        stream: validated.stream,
+        ...(filtered.effective === undefined
+          ? {}
+          : { toolChoice: filtered.effective }),
+        ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
+        ...(Object.keys(namespaceReverse).length > 0
+          ? { namespaceReverse: Object.freeze(namespaceReverse) }
+          : {}),
+        ...(metadataEcho === undefined ? {} : { metadataEcho }),
+      }),
+      notices: Object.freeze(notices),
+    }),
+  });
 }
 
-/** Retain only safely-echoable string metadata for the local response. */
+/** Validate and retain Responses metadata for request-local response echo. */
 function collectMetadataEcho(value: unknown): Readonly<Record<string, string>> | undefined {
   if (!isRecord(value)) return undefined;
   const metadata = value.metadata;
-  if (!isRecord(metadata)) return undefined;
+  if (metadata === undefined || metadata === null) return undefined;
+  if (!isRecord(metadata)) {
+    throw new InvalidRequest("metadata must be an object when present");
+  }
+  const entries = Object.entries(metadata);
+  if (entries.length > 16) {
+    throw new InvalidRequest("metadata must contain at most 16 entries");
+  }
   // A null-prototype object: hostile keys such as "__proto__" or
   // "constructor" from JSON.parse input can never pollute its prototype.
   const echo: Record<string, string> = Object.create(null);
-  for (const [key, entry] of Object.entries(metadata)) {
-    if (typeof entry === "string") echo[key] = entry;
+  for (const [key, entry] of entries) {
+    if (key.length > 64) {
+      throw new InvalidRequest("metadata keys must be at most 64 characters");
+    }
+    if (typeof entry !== "string") {
+      throw new InvalidRequest("metadata values must be strings");
+    }
+    if (entry.length > 512) {
+      throw new InvalidRequest(
+        "metadata values must be at most 512 characters",
+      );
+    }
+    echo[key] = entry;
   }
   return Object.keys(echo).length === 0 ? undefined : Object.freeze(echo);
 }
@@ -2287,14 +2579,27 @@ export function convertResponsesRequest(
     freeformNames,
     namespaceReverse,
   );
+  let supplement: ProjectionSupplement;
+  try {
+    supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof InvalidResponsesProjectionSupplement) {
+      throw new InvalidRequest(error.message);
+    }
+    throw error;
+  }
   const notices: ConversionNotice[] = [];
-  const reasoning = convertReasoning(
+  const convertedReasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
     policy.futureReasoningEffort,
     notices,
   );
-  if (reasoning !== undefined) validated.reasoning = reasoning;
+  if (convertedReasoning.piReasoning !== undefined) {
+    validated.reasoning = convertedReasoning.piReasoning;
+  }
   const additionalTools: unknown[] = [];
+  const historicalReasoningCandidates: HistoricalReasoningCandidate[] = [];
+  const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
     value,
     freeformNames,
@@ -2309,13 +2614,28 @@ export function convertResponsesRequest(
     notices,
     executableNames,
     namespaceReverse,
+    historicalReasoningCandidates,
+    reasoningContinuityCandidates,
   );
+  const reasoning: ReasoningSemantics = Object.freeze({
+    request: convertedReasoning.intent,
+    history: resolveHistoricalReasoning(
+      messages,
+      historicalReasoningCandidates,
+    ),
+    continuity: resolveReasoningContinuity(
+      messages,
+      reasoningContinuityCandidates,
+    ),
+  });
   return buildInvocation(
     value,
     validated,
     freeformNames,
     additionalTools,
     messages,
+    reasoning,
+    supplement,
     notices,
     policy,
     validated.input,
@@ -2350,14 +2670,27 @@ export async function convertResponsesRequestAsync(
     freeformNames,
     namespaceReverse,
   );
+  let supplement: ProjectionSupplement;
+  try {
+    supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof InvalidResponsesProjectionSupplement) {
+      throw new InvalidRequest(error.message);
+    }
+    throw error;
+  }
   const notices: ConversionNotice[] = [];
-  const reasoning = convertReasoning(
+  const convertedReasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
     policy.futureReasoningEffort,
     notices,
   );
-  if (reasoning !== undefined) validated.reasoning = reasoning;
+  if (convertedReasoning.piReasoning !== undefined) {
+    validated.reasoning = convertedReasoning.piReasoning;
+  }
   const additionalTools: unknown[] = [];
+  const historicalReasoningCandidates: HistoricalReasoningCandidate[] = [];
+  const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
     value,
     freeformNames,
@@ -2383,13 +2716,28 @@ export async function convertResponsesRequestAsync(
     notices,
     executableNames,
     namespaceReverse,
+    historicalReasoningCandidates,
+    reasoningContinuityCandidates,
   );
+  const reasoning: ReasoningSemantics = Object.freeze({
+    request: convertedReasoning.intent,
+    history: resolveHistoricalReasoning(
+      messages,
+      historicalReasoningCandidates,
+    ),
+    continuity: resolveReasoningContinuity(
+      messages,
+      reasoningContinuityCandidates,
+    ),
+  });
   return buildInvocation(
     value,
     validated,
     freeformNames,
     additionalTools,
     messages,
+    reasoning,
+    supplement,
     notices,
     policy,
     expandedItems,

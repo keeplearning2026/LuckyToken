@@ -1,30 +1,30 @@
 /**
- * Online OpenAI Responses suite.
+ * Shared direct-Provider OpenAI Responses semantic-certification harness.
  *
- * Drives the REAL CommandCode provider through the local LuckyToken
- * `/v1/responses` endpoint with genuine Codex-style incremental requests:
- * `previous_response_id` chaining, durable snapshot recovery across a
- * simulated process restart, atomic SSE, tool round-trips, cancellation,
- * and concurrent isolation.
+ * It constructs protocol requests itself and drives a real Provider through
+ * LuckyToken's local `/v1/responses` endpoint. Provider-specific entrypoints
+ * select the fixed Provider/model/key tuple. This harness certifies only
+ * complete-history semantic conversion and never claims Codex client state or
+ * lifecycle behavior.
  *
- * Reads the API key file (git-ignored) into memory only. Defaults to the
- * CommandCode provider (`CommandcodeAPIKey.txt`); pass `--provider
- * opencode-go --api-key-file <path> --model deepseek-v4-flash` to certify
- * the built-in OpenCode Go provider through the same Responses client
- * protocol and LuckyToken stack.
+ * Real Agent/client behavior belongs in separate runners such as
+ * `run-codex-cli.ts`; only those runners may certify `previous_response_id`,
+ * restart recovery, and other client-owned stateful behavior.
+ *
+ * API key files are git-ignored and read into memory only.
  */
 import {
-  InMemoryCredentialStore,
   type AuthInteraction,
   type AuthPrompt,
   type FetchFunction,
 } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createOnlinePublicModelAuthority,
@@ -36,6 +36,13 @@ import {
   type ConfiguredLuckyTokenDataPlane,
 } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
+import { loginOnlineProvider } from "./provider-login.js";
+import {
+  expectsForcedToolChoicePredispatchFailure,
+  readOnlineProviderMessages,
+  requireOnlineOpenAICompletionsProjection,
+  requireOnlineReasoningReplay,
+} from "./provider-wire.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 const DEFAULT_CONCURRENCY = 5;
@@ -148,9 +155,8 @@ interface OnlineSummary {
   attemptedRequests: number;
   successfulJson: number;
   successfulSse: number;
-  successfulChain: number;
-  successfulRestartRecovery: number;
-  confirmedCancellations: number;
+  successfulFullHistory: number;
+  successfulProjectionProbes: number;
   markerRetries: number;
   failures: Record<string, number>;
   latenciesMs: number[];
@@ -192,12 +198,13 @@ interface ResponsesOutputItem {
   readonly name?: string;
   readonly arguments?: string;
   readonly output?: unknown;
+  readonly summary?: Array<{ readonly type: string; readonly text?: string }>;
+  readonly luckytoken_continuity?: unknown;
 }
 
 interface ResponsesResult {
   readonly id: string;
   readonly status: string;
-  readonly previous_response_id?: string;
   readonly output: readonly ResponsesOutputItem[];
   readonly usage?: {
     readonly input_tokens?: number;
@@ -222,6 +229,54 @@ function responsesText(result: ResponsesResult): string {
 
 function responsesHasReasoning(result: ResponsesResult): boolean {
   return result.output.some((item) => item.type === "reasoning");
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function responsesReasoningReplay(input: {
+  readonly result: ResponsesResult;
+  readonly api: string;
+}): { readonly summary: string; readonly fieldSelector?: string } {
+  const { result } = input;
+  const summary = result.output
+    .filter((item) => item.type === "reasoning")
+    .flatMap((item) => item.summary ?? [])
+    .filter((part) => part.type === "summary_text")
+    .map((part) => part.text ?? "")
+    .join("\n");
+  if (summary.length === 0) {
+    throw new Error("online_missing_reasoning_summary");
+  }
+  if (input.api === "commandcode-private") return { summary };
+  if (input.api !== "openai-completions") {
+    throw new Error(`online_${input.api}_reasoning_shape`);
+  }
+  const selectors = new Set<string>();
+  for (const item of result.output) {
+    if (item.type !== "reasoning" || !isRecord(item.luckytoken_continuity)) {
+      continue;
+    }
+    const attachments = item.luckytoken_continuity.attachments;
+    if (!Array.isArray(attachments)) continue;
+    for (const attachment of attachments) {
+      if (
+        isRecord(attachment) &&
+        attachment.target === "thinking" &&
+        attachment.kind === "reasoning-field-selector" &&
+        (attachment.value === "reasoning_content" ||
+          attachment.value === "reasoning" ||
+          attachment.value === "reasoning_text")
+      ) {
+        selectors.add(attachment.value);
+      }
+    }
+  }
+  if (selectors.size !== 1) {
+    throw new Error("online_reasoning_selector_missing");
+  }
+  return { summary, fieldSelector: [...selectors][0]! };
 }
 
 function validateResponsesResult(
@@ -262,6 +317,28 @@ async function postResponses(
     throw new Error(`online_http_${response.status}: ${error.slice(0, 200)}`);
   }
   return (await response.json()) as ResponsesResult;
+}
+
+async function postResponsesExpectFailure(
+  origin: string,
+  token: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<{ readonly status: number; readonly body: string }> {
+  const response = await fetch(`${origin}/v1/responses`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const responseBody = await response.text();
+  if (response.status === 200) {
+    throw new Error("online_expected_projection_failure_missing");
+  }
+  return Object.freeze({ status: response.status, body: responseBody });
 }
 
 interface SseFrame {
@@ -305,103 +382,6 @@ async function postResponsesSse(
     throw new Error("online_missing_sse_terminal");
   }
   return { frames, result: completed.response };
-}
-
-interface DispatchProbe {
-  readonly dispatched: Promise<void>;
-  readonly aborted: Promise<void>;
-}
-
-interface MutableDispatchProbe extends DispatchProbe {
-  markDispatched(): void;
-  markAborted(): void;
-}
-
-function createDispatchObserver(upstream: FetchFunction): {
-  readonly fetch: FetchFunction;
-  forSession(sessionId: string): DispatchProbe;
-} {
-  const probes = new Map<string, MutableDispatchProbe>();
-  const mutableProbe = (sessionId: string): MutableDispatchProbe => {
-    const existing = probes.get(sessionId);
-    if (existing !== undefined) return existing;
-    let markDispatched: (() => void) | undefined;
-    let markAborted: (() => void) | undefined;
-    const dispatched = new Promise<void>((resolvePromise) => {
-      markDispatched = resolvePromise;
-    });
-    const aborted = new Promise<void>((resolvePromise) => {
-      markAborted = resolvePromise;
-    });
-    const probe: MutableDispatchProbe = {
-      dispatched,
-      aborted,
-      markDispatched: () => markDispatched?.(),
-      markAborted: () => markAborted?.(),
-    };
-    probes.set(sessionId, probe);
-    return probe;
-  };
-  const fetch: FetchFunction = async (input, init) => {
-    // Do NOT rebuild the Request: `new Request(input, {signal})` creates a
-    // fresh AbortSignal that does not reliably follow the provider's signal
-    // in Node. Read the signal from the original input/init directly.
-    const signal =
-      input instanceof Request ? input.signal : init?.signal;
-    const request = input instanceof Request ? input : new Request(input as RequestInfo, init);
-    const sessionId = request.headers.get("x-session-id");
-    if (sessionId === null) throw new Error("online_missing_upstream_session");
-    const probe = mutableProbe(sessionId);
-    probe.markDispatched();
-    const markAborted = () => probe.markAborted();
-    signal?.addEventListener("abort", markAborted, { once: true });
-    try {
-      return await upstream(request);
-    } finally {
-      signal?.removeEventListener("abort", markAborted);
-      if (signal?.aborted === true) probe.markAborted();
-    }
-  };
-  return { fetch, forSession: (sessionId) => mutableProbe(sessionId) };
-}
-
-/**
- * Wrap a fetch so each request hangs (until aborted or timeout) before
- * forwarding. Gives cancellation tests a reliable window to abort upstream.
- */
-function createHangingFetch(
-  upstream: FetchFunction,
-  hangMs: number,
-): FetchFunction {
-  return async (input, init) => {
-    const signal =
-      input instanceof Request ? input.signal : init?.signal;
-    const request =
-      input instanceof Request ? input : new Request(input as RequestInfo, init);
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      const timeoutId = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolvePromise();
-      }, hangMs);
-      const onAbort = (): void => {
-        clearTimeout(timeoutId);
-        rejectPromise(signal?.reason ?? new Error("aborted"));
-      };
-      if (signal?.aborted === true) {
-        clearTimeout(timeoutId);
-        rejectPromise(signal.reason ?? new Error("aborted"));
-        return;
-      }
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-    return upstream(request);
-  };
-}
-
-function isAbortFailure(error: unknown, reason: unknown): boolean {
-  if (error === reason) return true;
-  if (!(error instanceof Error)) return false;
-  return /abort|cancel/iu.test(`${error.name} ${error.message}`);
 }
 
 async function runJsonJob(
@@ -504,96 +484,8 @@ async function runSseJob(
   }
 }
 
-async function runCancellationJob(
-  cancellationOrigin: string,
-  recoveryOrigin: string,
-  token: string,
-  model: string,
-  marker: string,
-  totalSignal: AbortSignal,
-  summary: OnlineSummary,
-): Promise<void> {
-  const controller = new AbortController();
-  const cancellationReason = new Error("authorized online cancellation");
-  // Client-side abort: cancel the request after a short delay. The abort
-  // propagates into LuckyToken and upstream; we verify the client sees the
-  // cancellation and the server stays healthy for the recovery turn.
-  const timer = setTimeout(() => {
-    if (!controller.signal.aborted) controller.abort(cancellationReason);
-  }, 300);
-  const cancellationSignal = AbortSignal.any([
-    controller.signal,
-    requestSignal(totalSignal),
-  ]);
-  summary.attemptedRequests += 1;
-  const pendingOutcome = postResponses(
-    cancellationOrigin,
-    token,
-    {
-      model: model,
-      input: promptFor(`${marker}_CANCEL`),
-      max_output_tokens: 4_096,
-    },
-    cancellationSignal,
-  ).then(
-    (result) => ({ status: "fulfilled" as const, result }),
-    (error: unknown) => ({ status: "rejected" as const, error }),
-  );
-  try {
-    const outcome = await pendingOutcome;
-    clearTimeout(timer);
-    if (outcome.status === "fulfilled") {
-      recordFailure(summary, "cancellation_completed_as_success");
-    } else if (isAbortFailure(outcome.error, cancellationReason)) {
-      summary.confirmedCancellations += 1;
-    } else {
-      recordFailure(summary, failureCategory(outcome.error, totalSignal));
-    }
-  } catch (error) {
-    clearTimeout(timer);
-    controller.abort(cancellationReason);
-    await pendingOutcome;
-    recordFailure(summary, failureCategory(error, totalSignal));
-  }
-
-  const recoveryStartedAt = performance.now();
-  summary.attemptedRequests += 1;
-  try {
-    const recoveryMarker = `${marker}_RECOVERY`;
-    let result: ResponsesResult | undefined;
-    for (let attempt = 1; attempt <= 2 && result === undefined; attempt += 1) {
-      try {
-        const candidate = await postResponses(
-          recoveryOrigin,
-          token,
-          {
-            model: model,
-            input: promptFor(recoveryMarker),
-            max_output_tokens: SUCCESS_MAX_TOKENS,
-          },
-          requestSignal(totalSignal),
-        );
-        validateResponsesResult(candidate, recoveryMarker);
-        result = candidate;
-      } catch (error) {
-        if (attempt === 2) throw error;
-      }
-    }
-    if (result === undefined) {
-      throw new Error("online_recovery_retries_exhausted");
-    }
-    summary.latenciesMs.push(performance.now() - recoveryStartedAt);
-  } catch (error) {
-    const category = `recovery_${failureCategory(error, totalSignal)}`;
-    process.stderr.write(
-      `[recovery job ${marker}] error: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
-    );
-    recordFailure(summary, category);
-  }
-}
-
 interface OnlineTestJob {
-  readonly kind: "json" | "sse" | "cancel-recovery";
+  readonly kind: "json" | "sse";
   readonly marker: string;
 }
 
@@ -610,7 +502,6 @@ function createOnlineTestPlan(): readonly OnlineTestJob[] {
   return Object.freeze([
     ...jobs("json", 36),
     ...jobs("sse", 14),
-    ...jobs("cancel-recovery", 5),
   ]);
 }
 
@@ -644,10 +535,62 @@ function latencySummary(values: readonly number[]): Record<string, number> {
   };
 }
 
+function publishOnlineReport(input: {
+  readonly model: string;
+  readonly concurrency: number;
+  readonly summary: OnlineSummary;
+}): void {
+  const report = {
+    model: input.model,
+    concurrency: input.concurrency,
+    scope: "semantic-complete-history",
+    attemptedRequests: input.summary.attemptedRequests,
+    successfulJson: input.summary.successfulJson,
+    successfulSse: input.summary.successfulSse,
+    successfulFullHistory: input.summary.successfulFullHistory,
+    successfulProjectionProbes: input.summary.successfulProjectionProbes,
+    markerRetries: input.summary.markerRetries,
+    failures: input.summary.failures,
+    latencyMs: latencySummary(input.summary.latenciesMs),
+  };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  if (Object.keys(input.summary.failures).length > 0) process.exitCode = 1;
+}
+
 interface CapturedUpstreamRequest {
   readonly url: string;
   readonly body: string;
   readonly signal: AbortSignal;
+}
+
+function describeCapturedExchanges(
+  exchanges: readonly CapturedUpstreamRequest[],
+  markers: readonly string[],
+): string {
+  return JSON.stringify(
+    exchanges.map((exchange) => {
+      let keys: readonly string[] = [];
+      let model: unknown;
+      try {
+        const parsed = JSON.parse(exchange.body) as unknown;
+        if (isRecord(parsed)) {
+          keys = Object.keys(parsed).sort();
+          model = parsed.model;
+        }
+      } catch {
+        // The structural diagnostic below remains useful for non-JSON bodies.
+      }
+      return {
+        pathname: new URL(exchange.url).pathname,
+        bodyBytes: Buffer.byteLength(exchange.body),
+        keys,
+        ...(typeof model === "string" ? { model } : {}),
+        markers: Object.fromEntries(
+          markers.map((marker) => [marker, exchange.body.includes(marker)]),
+        ),
+      };
+    }),
+  );
 }
 
 function createCapturingFetch(base: FetchFunction): {
@@ -658,11 +601,14 @@ function createCapturingFetch(base: FetchFunction): {
   return {
     fetch: async (input, init) => {
       const request = new Request(input, init);
-      exchanges.push({
-        url: request.url,
-        body: await request.clone().text(),
-        signal: request.signal,
-      });
+      const hostname = new URL(request.url).hostname;
+      if (hostname !== "127.0.0.1" && hostname !== "localhost") {
+        exchanges.push({
+          url: request.url,
+          body: await request.clone().text(),
+          signal: request.signal,
+        });
+      }
       return base(request);
     },
     exchanges,
@@ -680,6 +626,7 @@ export async function runOpenAIResponsesOnlineSuite(
   const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-online-"));
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
   let composition: ConfiguredLuckyTokenDataPlane | undefined;
+  let restoreGlobalFetch: (() => void) | undefined;
   try {
     const stateDirectory = join(directory, ".luckytoken");
     const piDirectory = join(stateDirectory, "pi");
@@ -707,11 +654,12 @@ export async function runOpenAIResponsesOnlineSuite(
       "utf8",
     );
     const config = await loadLuckyTokenCliConfig(configPath);
-    const dispatchObserver = createDispatchObserver(globalThis.fetch);
     // Real login first: the composition's served catalog owns the provider
     // registration, so login runs through the served Models and persists into
     // the same store the composition will use for request-time auth.
-    const credentials = new InMemoryCredentialStore();
+    const credentialRecordStore = createInMemoryProviderCredentialRecordStore({
+      createRevision: randomUUID,
+    });
     const preLogin = await createConfiguredPiModels({
       piDirectory: config.pi.directory,
       ...(config.pi.modelsJson === undefined
@@ -719,24 +667,24 @@ export async function runOpenAIResponsesOnlineSuite(
         : { modelsJsonPath: config.pi.modelsJson }),
       providerPackages: config.providerPackages,
       fetch: globalThis.fetch,
-      credentialSeedStore: credentials,
+      credentialRecordStore,
     });
     try {
-      await preLogin.models.login(
+      await loginOnlineProvider({
+        models: preLogin.models,
+        providerAuthBindings: preLogin.providerAuthBindings,
+        credentialManagement: preLogin.credentialManagement,
         providerId,
-        "api_key",
-        keyFileLoginInteraction(apiKey),
-      );
+        authType: "api_key",
+        displayName: "Online test",
+        interaction: keyFileLoginInteraction(apiKey),
+      });
     } catch (error) {
       throw new Error(
         `Provider login failed for ${providerId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
-    const stored = await credentials.read(providerId);
-    if (stored?.type !== "api_key" || stored.key !== apiKey) {
-      throw new Error(`Provider login did not persist a credential for ${providerId}`);
     }
     const aliasTarget = aliasTargetFor(providerId, model);
     const publicModelAuthority =
@@ -754,8 +702,8 @@ export async function runOpenAIResponsesOnlineSuite(
           });
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentialSeedStore: credentials,
-      fetch: dispatchObserver.fetch,
+      credentialRecordStore,
+      fetch: globalThis.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
     if (publicModelAuthority !== undefined) {
@@ -765,6 +713,14 @@ export async function runOpenAIResponsesOnlineSuite(
         providerId,
       );
     }
+    const resolvedProviderModel = composition.catalog.models.getModel(
+      aliasTarget.provider,
+      aliasTarget.model,
+    );
+    if (resolvedProviderModel === undefined) {
+      throw new Error("online_resolved_provider_model_missing");
+    }
+    const providerApi = resolvedProviderModel.api;
     server = await startLuckyTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
@@ -799,50 +755,13 @@ export async function runOpenAIResponsesOnlineSuite(
       attemptedRequests: 0,
       successfulJson: 0,
       successfulSse: 0,
-      successfulChain: 0,
-      successfulRestartRecovery: 0,
-      confirmedCancellations: 0,
+      successfulFullHistory: 0,
+      successfulProjectionProbes: 0,
       markerRetries: 0,
       failures: {},
       latenciesMs: [],
     };
-    // Cancellation needs a hanging upstream so the abort lands mid-flight.
-    const hangingFetch = createHangingFetch(globalThis.fetch, 60_000);
-    const hangingComposition = await createConfiguredLuckyTokenDataPlane({
-      config,
-      credentialSeedStore: credentials,
-      fetch: hangingFetch,
-      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
-    });
-    const hangingServer = await startLuckyTokenHttpServer({
-      runtime: hangingComposition.runtime,
-      host: "127.0.0.1",
-      port: config.server.port,
-    });
-    const hangingOrigin = hangingServer.origin;
-    const cancellationJobs = createOnlineTestPlan().filter(
-      (job) => job.kind === "cancel-recovery",
-    );
-    await runPool(
-      cancellationJobs,
-      (job) =>
-        runCancellationJob(
-          hangingOrigin,
-          origin,
-          responsesToken,
-          selector,
-          job.marker,
-          totalSignal,
-          summary,
-        ),
-      concurrency,
-    );
-    await hangingServer.close();
-    await hangingComposition.close();
-
-    const pressureJobs = createOnlineTestPlan().filter(
-      (job) => job.kind !== "cancel-recovery",
-    );
+    const pressureJobs = createOnlineTestPlan();
     await runPool(
       pressureJobs,
       (job) => {
@@ -851,8 +770,6 @@ export async function runOpenAIResponsesOnlineSuite(
             return runJsonJob(origin, responsesToken, selector, job.marker, totalSignal, summary);
           case "sse":
             return runSseJob(origin, responsesToken, selector, job.marker, totalSignal, summary);
-          case "cancel-recovery":
-            return Promise.resolve();
         }
       },
       concurrency,
@@ -863,10 +780,17 @@ export async function runOpenAIResponsesOnlineSuite(
     server = undefined;
     await composition.close();
     composition = undefined;
-    const capture = createCapturingFetch(globalThis.fetch);
+    const originalGlobalFetch = globalThis.fetch;
+    const capture = createCapturingFetch(originalGlobalFetch);
+    globalThis.fetch = capture.fetch as typeof globalThis.fetch;
+    restoreGlobalFetch = () => {
+      if (globalThis.fetch === capture.fetch) {
+        globalThis.fetch = originalGlobalFetch;
+      }
+    };
     composition = await createConfiguredLuckyTokenDataPlane({
       config,
-      credentialSeedStore: credentials,
+      credentialRecordStore,
       fetch: capture.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
@@ -877,240 +801,217 @@ export async function runOpenAIResponsesOnlineSuite(
     });
     const conformanceOrigin = server.origin;
 
-    // Incremental chain: turn 1 then turn 2 with previous_response_id.
-    const chainMarker1 = "LT_RESP_CHAIN_01";
-    const chainMarker2 = "LT_RESP_CHAIN_02";
-    const turn1 = await postResponses(
+    // Full-history reasoning replay: unlike the incremental chain above, the
+    // client sends the complete prior Responses output and no
+    // previous_response_id. The final Provider request must restore the
+    // visible summary at that Provider's certified reasoning attachment point.
+    const fullHistoryMarker1 = "LT_RESP_FULL_HISTORY_01";
+    const fullHistoryMarker2 = "LT_RESP_FULL_HISTORY_02";
+    const fullHistoryTurn1 = await postResponses(
       conformanceOrigin,
       responsesToken,
       {
         model: selector,
-        input: promptFor(chainMarker1),
+        input: promptFor(fullHistoryMarker1),
         max_output_tokens: SUCCESS_MAX_TOKENS,
+        reasoning: { effort: "high", summary: "auto" },
       },
       requestSignal(totalSignal),
     );
-    validateResponsesResult(turn1, chainMarker1);
-    const turn2 = await postResponses(
-      conformanceOrigin,
-      responsesToken,
-      {
-        model: selector,
-        input: promptFor(chainMarker2),
-        previous_response_id: turn1.id,
-        max_output_tokens: SUCCESS_MAX_TOKENS,
-      },
-      requestSignal(totalSignal),
-    );
-    validateResponsesResult(turn2, chainMarker2);
-    if (turn2.previous_response_id !== turn1.id) {
-      throw new Error("online_chain_echo_missing");
-    }
-    const chainUpstream = capture.exchanges.filter((exchange) =>
-      exchange.body.includes(chainMarker2),
-    );
-    if (chainUpstream.length === 0) {
-      throw new Error("online_chain_upstream_missing");
-    }
-    const chainBody = JSON.parse(chainUpstream[0]?.body ?? "{}") as {
-      params?: { messages?: Array<{ role: string }> };
-    };
-    const chainRoles = chainBody.params?.messages?.map((entry) => entry.role) ?? [];
-    if (
-      !chainRoles.includes("assistant") ||
-      !JSON.stringify(chainBody).includes(chainMarker1)
-    ) {
-      throw new Error("online_chain_expansion_missing");
-    }
-    summary.successfulChain += 1;
-
-    // Tool round-trip: provider emits a function_call; we reply with a
-    // function_call_output and verify the model consumes it.
-    const toolMarker = "LT_RESP_TOOL_01";
-    const toolResultMarker = "LT_RESP_TOOL_RESULT_01";
-    let toolTurn: ResponsesResult | undefined;
-    let toolCall: ResponsesOutputItem | undefined;
-    for (let attempt = 1; attempt <= 3 && toolCall === undefined; attempt += 1) {
-      const probe = await postResponses(
-        conformanceOrigin,
-        responsesToken,
-        {
-          model: selector,
-          input: `Call online_lookup exactly once with value ${toolMarker}_${attempt}. Do not answer in text.`,
-          max_output_tokens: SUCCESS_MAX_TOKENS,
-          tools: [
-            {
-              type: "function",
-              name: "online_lookup",
-              description:
-                "Call this tool when explicitly requested. Return the exact marker in value.",
-              parameters: {
-                type: "object",
-                properties: { value: { type: "string" } },
-                required: ["value"],
-                additionalProperties: false,
-              },
-            },
-          ],
-        },
-        requestSignal(totalSignal),
-      );
-      toolTurn = probe;
-      toolCall = probe.output.find((item) => item.type === "function_call");
-    }
-    if (toolTurn === undefined || toolCall === undefined) {
-      throw new Error("online_provider_tool_call_not_observed");
-    }
-    const callId = toolCall.call_id;
-    if (callId === undefined || callId.length === 0) {
-      throw new Error("online_tool_call_identity");
-    }
-    const toolResultTurn = await postResponses(
+    validateResponsesResult(fullHistoryTurn1, fullHistoryMarker1);
+    const replay = responsesReasoningReplay({
+      result: fullHistoryTurn1,
+      api: providerApi,
+    });
+    const fullHistoryTurn2 = await postResponses(
       conformanceOrigin,
       responsesToken,
       {
         model: selector,
         input: [
-          {
-            type: "function_call_output",
-            call_id: callId,
-            output: `result for ${toolResultMarker}`,
-          },
+          ...fullHistoryTurn1.output,
           {
             type: "message",
             role: "user",
-            content: `Reply with exactly ${toolResultMarker}.`,
+            content: promptFor(fullHistoryMarker2),
           },
         ],
-        previous_response_id: toolTurn.id,
         max_output_tokens: SUCCESS_MAX_TOKENS,
+        reasoning: { effort: "high", summary: "auto" },
       },
       requestSignal(totalSignal),
     );
-    validateResponsesResult(toolResultTurn, toolResultMarker);
-    const toolResultUpstream = capture.exchanges.filter((exchange) =>
-      exchange.body.includes(callId),
+    validateResponsesResult(fullHistoryTurn2, fullHistoryMarker2);
+    const fullHistoryUpstream = capture.exchanges.filter((exchange) =>
+      exchange.body.includes(fullHistoryMarker2),
     );
-    if (
-      toolResultUpstream.length === 0 ||
-      !JSON.stringify(toolResultUpstream.at(-1)?.body).includes(
-        `result for ${toolResultMarker}`,
-      )
-    ) {
-      throw new Error("online_tool_result_round_trip");
+    if (fullHistoryUpstream.length === 0) {
+      throw new Error(
+        `online_full_history_upstream_missing: ${describeCapturedExchanges(
+          capture.exchanges,
+          [fullHistoryMarker1, fullHistoryMarker2],
+        )}`,
+      );
+    }
+    const fullHistoryBody = JSON.parse(
+      fullHistoryUpstream.at(-1)?.body ?? "{}",
+    ) as unknown;
+    const fullHistoryMessages = readOnlineProviderMessages(
+      providerApi,
+      fullHistoryBody,
+    );
+    requireOnlineReasoningReplay(
+      providerApi,
+      fullHistoryMessages,
+      replay.summary,
+      replay.fieldSelector,
+    );
+    summary.successfulFullHistory += 1;
+
+    if (providerApi === "openai-completions") {
+      const toolName = "online_projection_lookup";
+      const toolMarker = "LT_RESP_PROJECT_TOOL_01";
+      const toolRequest = {
+        model: selector,
+        input: `Call ${toolName} exactly once with value ${toolMarker}.`,
+        max_output_tokens: SUCCESS_MAX_TOKENS,
+        tools: [
+          {
+            type: "function",
+            name: toolName,
+            description: "Return the requested marker through a tool call.",
+            parameters: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+              additionalProperties: false,
+            },
+            strict: false,
+          },
+        ],
+        tool_choice: { type: "function", name: toolName },
+        parallel_tool_calls: false,
+      };
+      if (
+        expectsForcedToolChoicePredispatchFailure(
+          providerId,
+          resolvedProviderModel.id,
+        )
+      ) {
+        const failure = await postResponsesExpectFailure(
+          conformanceOrigin,
+          responsesToken,
+          toolRequest,
+          requestSignal(totalSignal),
+        );
+        if (
+          !failure.body.includes(
+            "thinking mode does not support forced tool_choice",
+          )
+        ) {
+          throw new Error(
+            `online_projection_wrong_failure_${failure.status}: ${failure.body.slice(0, 200)}`,
+          );
+        }
+        if (
+          capture.exchanges.some((exchange) => exchange.body.includes(toolMarker))
+        ) {
+          throw new Error("online_projection_failure_dispatched_upstream");
+        }
+      } else {
+        const toolResult = await postResponses(
+          conformanceOrigin,
+          responsesToken,
+          toolRequest,
+          requestSignal(totalSignal),
+        );
+        const toolCall = toolResult.output.find(
+          (item) => item.type === "function_call" && item.name === toolName,
+        );
+        if (
+          (toolResult.status !== "completed" &&
+            toolResult.status !== "incomplete") ||
+          toolCall === undefined ||
+          typeof toolCall.call_id !== "string" ||
+          toolCall.call_id.length === 0
+        ) {
+          throw new Error("online_projection_tool_behavior_missing");
+        }
+        const toolExchange = capture.exchanges.findLast((exchange) =>
+          exchange.body.includes(toolMarker),
+        );
+        if (toolExchange === undefined) {
+          throw new Error("online_projection_tool_upstream_missing");
+        }
+        requireOnlineOpenAICompletionsProjection(
+          JSON.parse(toolExchange.body) as unknown,
+          {
+            toolName,
+            parallelToolCalls: false,
+            maxOutputTokens: SUCCESS_MAX_TOKENS,
+          },
+        );
+      }
+      summary.successfulProjectionProbes += 1;
+
+      const schemaName = "online_projection_answer";
+      const formatMarker = "LT_RESP_PROJECT_FORMAT_01";
+      const formatResult = await postResponses(
+        conformanceOrigin,
+        responsesToken,
+        {
+          model: selector,
+          input: `Return a JSON object whose marker property is exactly ${formatMarker}.`,
+          max_output_tokens: SUCCESS_MAX_TOKENS,
+          text: {
+            format: {
+              type: "json_schema",
+              name: schemaName,
+              schema: {
+                type: "object",
+                properties: { marker: { type: "string" } },
+                required: ["marker"],
+                additionalProperties: false,
+              },
+              strict: true,
+            },
+          },
+        },
+        requestSignal(totalSignal),
+      );
+      const formatted = responsesText(formatResult);
+      let parsedFormat: unknown;
+      try {
+        parsedFormat = JSON.parse(formatted) as unknown;
+      } catch {
+        throw new Error("online_projection_format_behavior_invalid");
+      }
+      if (!isRecord(parsedFormat) || parsedFormat.marker !== formatMarker) {
+        throw new Error("online_projection_format_behavior_mismatch");
+      }
+      const formatExchange = capture.exchanges.findLast((exchange) =>
+        exchange.body.includes(formatMarker),
+      );
+      if (formatExchange === undefined) {
+        throw new Error("online_projection_format_upstream_missing");
+      }
+      requireOnlineOpenAICompletionsProjection(
+        JSON.parse(formatExchange.body) as unknown,
+        { schemaName, maxOutputTokens: SUCCESS_MAX_TOKENS },
+      );
+      summary.successfulProjectionProbes += 1;
     }
 
-    // The default `honor` policy obeys store:false: the response remains
-    // usable for the current call, but its id cannot seed a later chain.
-    const storeFalseTurn = await postResponses(
-      conformanceOrigin,
-      responsesToken,
-      {
-        model: selector,
-        input: promptFor("LT_RESP_STORE_FALSE"),
-        store: false,
-        max_output_tokens: SUCCESS_MAX_TOKENS,
-      },
-      requestSignal(totalSignal),
-    );
-    validateResponsesResult(storeFalseTurn, "LT_RESP_STORE_FALSE");
-    const dispatchedBeforeStoreFalseFollowUp = capture.exchanges.length;
-    const storeFalseFollowUp = await fetch(`${conformanceOrigin}/v1/responses`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${responsesToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: selector,
-        input: promptFor("LT_RESP_STORE_FALSE_NEXT"),
-        previous_response_id: storeFalseTurn.id,
-        max_output_tokens: SUCCESS_MAX_TOKENS,
-      }),
-      signal: requestSignal(totalSignal),
-    });
-    const storeFalseError = (await storeFalseFollowUp.json()) as {
-      error?: { type?: string; message?: string };
-    };
-    if (
-      storeFalseFollowUp.status !== 400 ||
-      storeFalseError.error?.type !== "invalid_request_error" ||
-      !storeFalseError.error.message?.includes("not a known local response")
-    ) {
-      throw new Error("online_store_false_was_saved");
-    }
-    if (capture.exchanges.length !== dispatchedBeforeStoreFalseFollowUp) {
-      throw new Error("online_store_false_follow_up_dispatched");
-    }
-
-    // Restart recovery: close server, create a fresh composition on the SAME
-    // state file, and reference turn1's response id.
-    await server.close();
-    server = undefined;
-    await composition.close();
-    composition = undefined;
-    composition = await createConfiguredLuckyTokenDataPlane({
-      config,
-      credentialSeedStore: credentials,
-      fetch: dispatchObserver.fetch,
-      ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
-    });
-    server = await startLuckyTokenHttpServer({
-      runtime: composition.runtime,
-      host: "127.0.0.1",
-      port: config.server.port,
-    });
-    const restartMarker = "LT_RESP_RESTART_01";
-    const restartResult = await postResponses(
-      server.origin,
-      responsesToken,
-      {
-        model: selector,
-        input: promptFor(restartMarker),
-        previous_response_id: turn1.id,
-        max_output_tokens: SUCCESS_MAX_TOKENS,
-      },
-      requestSignal(totalSignal),
-    );
-    validateResponsesResult(restartResult, restartMarker);
-    if (restartResult.previous_response_id !== turn1.id) {
-      throw new Error("online_restart_chain_echo_missing");
-    }
-    summary.successfulRestartRecovery += 1;
-
-    const report = {
+    publishOnlineReport({
       model: selector,
       concurrency,
-      attemptedRequests: summary.attemptedRequests,
-      successfulJson: summary.successfulJson,
-      successfulSse: summary.successfulSse,
-      successfulChain: summary.successfulChain,
-      successfulRestartRecovery: summary.successfulRestartRecovery,
-      confirmedCancellations: summary.confirmedCancellations,
-      markerRetries: summary.markerRetries,
-      failures: summary.failures,
-      latencyMs: latencySummary(summary.latenciesMs),
-    };
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    if (Object.keys(summary.failures).length > 0) process.exitCode = 1;
+      summary,
+    });
   } finally {
     await server?.close();
     await composition?.close();
+    restoreGlobalFetch?.();
     await rm(directory, { recursive: true, force: true });
   }
 }
-
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  void runOpenAIResponsesOnlineSuite(process.argv.slice(2)).catch((error: unknown) => {
-    const category = failureCategory(error, new AbortController().signal);
-    const detail =
-      error instanceof Error ? error.stack ?? error.message : String(error);
-    process.stderr.write(`Online suite failed: ${category}\n${detail}\n`);
-    process.exitCode = 1;
-  });
-}
-
 

@@ -256,8 +256,15 @@ describe("Request Journey successful conversation compaction", () => {
       api: "fixture-api",
       id: "summary-model",
     };
-    const executeOperation = (async () =>
-      semanticMessage(model)) as ExecutionOperation;
+    const executeOperation = (async (
+      _models,
+      _model,
+      _context,
+      options,
+    ) => {
+      await options.onPayload?.({}, model);
+      return semanticMessage(model);
+    }) as ExecutionOperation;
     const handler = createOpenAIResponsesCompactHandler({
       models: { getModels: () => [model] } as unknown as Models,
       executeOperation,
