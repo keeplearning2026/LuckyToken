@@ -12,6 +12,7 @@ import {
   COMMANDCODE_GOAT_PROVIDER_ID,
 } from "./constants.js";
 import { COMMANDCODE_GOAT_MODELS } from "./models.js";
+import { bindUpstreamFailureDiagnostics } from "./stream-diagnostics.js";
 
 export interface CommandCodeGoatProviderOptions {
   /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
@@ -90,7 +91,9 @@ export function createCommandCodeGoatProvider(
         },
       },
     },
-    api: bindFetch(openAICompletionsApi(), options.fetch),
+    api: bindUpstreamFailureDiagnostics(
+      bindFetch(openAICompletionsApi(), options.fetch),
+    ),
   });
 }
 

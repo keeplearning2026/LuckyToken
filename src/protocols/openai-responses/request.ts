@@ -124,9 +124,10 @@ export const NAMESPACE_COLLISION_NOTICE_CODE =
   "openai-responses_namespace_collision";
 
 /** Separator for the reversible Responses-owned namespace flattening scheme.
- *  A flattened name is `<namespace>.<child>`; the reverse map in render state
- *  recovers the original namespace/child pair for output rendering. */
-export const NAMESPACE_SEPARATOR = ".";
+ *  A flattened name is `<namespace>__<child>`; the separator stays inside the
+ *  OpenAI function-name alphabet and the reverse map in render state recovers
+ *  the original namespace/child pair for output rendering. */
+export const NAMESPACE_SEPARATOR = "__";
 
 /** Responses-owned marker id for the versioned textSignature envelope.
  *  `phase` is preserved here, never injected into model-visible text. */
@@ -474,7 +475,7 @@ function convertTools(
     tools.push(tool);
   };
 
-  /** Flatten one namespace child under `<namespace>.<child>`, recording the
+  /** Flatten one namespace child under `<namespace>__<child>`, recording the
    *  reverse mapping in request-local render state. */
   const pushNamespaceChild = (
     namespace: string,

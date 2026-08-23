@@ -524,6 +524,33 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
   });
 
   describe("namespace tools use a reversible Responses-owned naming scheme", () => {
+    it("keeps flattened Codex namespace children inside the OpenAI tool-name alphabet", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [
+            {
+              type: "namespace",
+              name: "multi_agent_v1",
+              tools: [
+                {
+                  type: "function",
+                  name: "spawn_agent",
+                  parameters: { type: "object" },
+                },
+              ],
+            },
+          ],
+        },
+        1,
+        policy(),
+      );
+      const names = invocation.context.tools?.map((tool) => tool.name) ?? [];
+      expect(names).toEqual(["multi_agent_v1__spawn_agent"]);
+      expect(names.every((name) => /^[a-zA-Z0-9_-]+$/u.test(name))).toBe(true);
+    });
+
     it("flattens namespace function children into Pi tools with reversible names", () => {
       const invocation = convertResponsesRequest(
         {
@@ -548,7 +575,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         1,
         policy(),
       );
-      expect(invocation.context.tools?.map((t) => t.name)).toEqual(["mcp.read"]);
+      expect(invocation.context.tools?.map((t) => t.name)).toEqual(["mcp__read"]);
       const tool = invocation.context.tools?.[0];
       expect(tool?.description).toBe("read a resource");
       expect(tool?.parameters).toEqual({ type: "object", properties: {} });
@@ -597,7 +624,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       expect(assistant?.content).toContainEqual({
         type: "toolCall",
         id: "call_1",
-        name: "crm.read",
+        name: "crm__read",
         arguments: {},
       });
     });
@@ -657,14 +684,14 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         policy(),
       );
       expect(invocation.context.tools?.map((t) => t.name)).toEqual([
-        "mcp.freeform_child",
+        "mcp__freeform_child",
       ]);
       expect(invocation.context.tools?.[0]?.parameters).toMatchObject({
         type: "object",
         properties: { input: { type: "string" } },
       });
       expect(invocation.renderState.freeformToolNames).toEqual(
-        new Set(["mcp.freeform_child"]),
+        new Set(["mcp__freeform_child"]),
       );
     });
 
@@ -688,7 +715,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
               },
               {
                 type: "function",
-                name: "a.b",
+                name: "a__b",
                 parameters: { type: "object" },
               },
             ],
@@ -723,7 +750,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       );
       expect(invocation.renderState.namespaceReverse).toBeDefined();
       expect(invocation.renderState.namespaceReverse).toEqual({
-        "mcp.read": { namespace: "mcp", child: "read" },
+        "mcp__read": { namespace: "mcp", child: "read" },
       });
       // The reverse metadata must never enter model context or options.
       expect(invocation.context).not.toHaveProperty("namespaceReverse");
@@ -1306,12 +1333,12 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       for (const [i, invocation] of results.entries()) {
         const tools = invocation.context.tools?.map((t) => t.name) ?? [];
         expect(tools).toContain(`custom_${i}`);
-        expect(tools).toContain(`ns_${i}.child`);
+        expect(tools).toContain(`ns_${i}__child`);
         expect(invocation.renderState.freeformToolNames).toEqual(
           new Set([`custom_${i}`]),
         );
         expect(invocation.renderState.namespaceReverse).toEqual({
-          [`ns_${i}.child`]: { namespace: `ns_${i}`, child: "child" },
+          [`ns_${i}__child`]: { namespace: `ns_${i}`, child: "child" },
         });
         // No cross-request leakage of another conversion's names.
         for (const [j, other] of results.entries()) {
@@ -1319,7 +1346,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
           const otherNames = Object.keys(
             other.renderState.namespaceReverse ?? {},
           );
-          expect(otherNames).not.toContain(`ns_${i}.child`);
+          expect(otherNames).not.toContain(`ns_${i}__child`);
         }
         const image = (
           invocation.context.messages[0]?.content as Array<{
@@ -1718,7 +1745,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
               {
                 type: "toolCall",
                 id: "call_conflict",
-                name: "crm.read",
+                name: "crm__read",
                 namespace: "finance",
                 arguments: {},
               },
@@ -1728,7 +1755,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             clientModel: "m",
             stream: false,
             namespaceReverse: {
-              "crm.read": { namespace: "crm", child: "read" },
+              "crm__read": { namespace: "crm", child: "read" },
             },
           },
           "resp_conflict",
@@ -1781,13 +1808,13 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         policy(),
       );
       expect(invocation.context.tools?.map((t) => t.name)).toEqual([
-        "crm.freeform",
+        "crm__freeform",
       ]);
       expect(invocation.renderState.namespaceReverse).toEqual({
-        "crm.freeform": { namespace: "crm", child: "freeform" },
+        "crm__freeform": { namespace: "crm", child: "freeform" },
       });
       expect(invocation.renderState.freeformToolNames).toEqual(
-        new Set(["crm.freeform"]),
+        new Set(["crm__freeform"]),
       );
       // The reverse metadata stays out of model context and options.
       expect(invocation.context).not.toHaveProperty("namespaceReverse");
@@ -1800,7 +1827,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             {
               type: "toolCall",
               id: "call_nsc",
-              name: "crm.freeform",
+              name: "crm__freeform",
               arguments: { input: "raw" },
             },
           ],
@@ -1858,15 +1885,15 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
         policy(),
       );
       expect(invocation.context.tools?.map((t) => t.name)).toEqual([
-        "server.list",
-        "server.freeform",
+        "server__list",
+        "server__freeform",
       ]);
       expect(invocation.renderState.namespaceReverse).toEqual({
-        "server.list": { namespace: "server", child: "list" },
-        "server.freeform": { namespace: "server", child: "freeform" },
+        "server__list": { namespace: "server", child: "list" },
+        "server__freeform": { namespace: "server", child: "freeform" },
       });
       expect(invocation.renderState.freeformToolNames).toEqual(
-        new Set(["server.freeform"]),
+        new Set(["server__freeform"]),
       );
     });
   });

@@ -382,7 +382,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     expect(invocation.context.tools?.map((t) => t.name)).toEqual([
       "shell_command",
       "apply_patch",
-      "mcp.inner_tool",
+      "mcp__inner_tool",
     ]);
     const shell = invocation.context.tools?.[0];
     expect(shell?.parameters).toMatchObject({ type: "object" });

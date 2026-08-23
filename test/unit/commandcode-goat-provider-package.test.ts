@@ -1,5 +1,6 @@
 import { providerPackage } from "@luckytoken/provider-commandcode-goat";
 import type { FetchFunction } from "@earendil-works/pi-ai";
+import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import { describe, expect, it } from "vitest";
 
 function openAICompletion(text: string): Response {
@@ -183,4 +184,45 @@ describe("CommandCode Goat Provider Package", () => {
       source: "stored credential",
     });
   });
+
+  it("attaches the Pi adapter error as a neutral upstream-stream failure", async () => {
+    const provider = providerPackage.createProvider({
+      configuration: {},
+      configurationPath:
+        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+      host: {
+        fetch: async () =>
+          new Response(
+            'data: {"id":"chatcmpl-truncated","object":"chat.completion.chunk","created":1,"model":"deepseek/deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          ),
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000105",
+      },
+    });
+    const model = provider
+      .getModels()
+      .find((entry) => entry.id === "deepseek/deepseek-v4-flash");
+    expect(model).toBeDefined();
+
+    const events = [];
+    for await (const event of provider.streamSimple(
+      model!,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { apiKey: "goat-secret", maxTokens: 32 },
+    )) {
+      events.push(event);
+    }
+    const terminal = events.at(-1);
+    expect(terminal?.type).toBe("error");
+    if (terminal?.type !== "error") throw new Error("expected error terminal");
+    expect(terminal.error.errorMessage).toContain(
+      "Stream ended without finish_reason",
+    );
+    expect(findUpstreamFailureFact(terminal.error.diagnostics)).toMatchObject({
+      kind: "upstream_stream",
+      message: terminal.error.errorMessage,
+    });
+  });
+
 });

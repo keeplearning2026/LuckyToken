@@ -1540,7 +1540,7 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(ns.context.tools?.map((t) => t.name)).toEqual(["ns.child"]);
+    expect(ns.context.tools?.map((t) => t.name)).toEqual(["ns__child"]);
   });
 
   it("classifies every installed tool-definition family explicitly", () => {
@@ -1614,7 +1614,7 @@ describe("16: every known Responses tool-definition family", () => {
     expect(invocation.context.tools?.map((t) => t.name)).toEqual([
       "fn",
       "custom_tool",
-      "ns.child",
+      "ns__child",
       "local_shell",
       "shell",
       "apply_patch",
