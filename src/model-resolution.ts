@@ -17,7 +17,8 @@ export class ModelResolutionFailure extends Error {
  * first slash is the model id (which may itself contain slashes). If the
  * selector format ever changes, this tool is the only place that needs to
  * change: `parse` (split) and `format` (join) are the two directions of the
- * same format knowledge; matching semantics stay in `resolveModel`.
+ * same format knowledge, and `displayName` owns its presentation projection;
+ * matching semantics stay in `resolveModel`.
  */
 export interface ParsedModelSelector {
   readonly provider: string | undefined;
@@ -39,6 +40,14 @@ export const selectorTool = {
   /** Join a provider and a model id into a canonical selector string. */
   format(provider: string, modelId: string): string {
     return `${provider}/${modelId}`;
+  },
+  /** Project a qualified selector as a compact model-first display name. */
+  displayName(selector: string): string {
+    const { provider, modelId } = selectorTool.parse(selector);
+    if (provider === undefined || provider.length === 0 || modelId.length === 0) {
+      return selector;
+    }
+    return `${modelId} [${provider}]`;
   },
 };
 

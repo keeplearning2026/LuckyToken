@@ -49,6 +49,17 @@ describe("Credential Profile public wire", () => {
       note: "Primary",
       expectedRevision: "revision-a",
     });
+    expect(decodeCredentialProfilesCommand({
+      command: "reorder_profiles",
+      providerId: "fixture-provider",
+      credentialIds: ["credential-b", "credential-a"],
+      expectedRevision: "revision-a",
+    })).toEqual({
+      command: "reorder_profiles",
+      providerId: "fixture-provider",
+      credentialIds: ["credential-b", "credential-a"],
+      expectedRevision: "revision-a",
+    });
     expect(decodeProviderProfileAuthCommand({
       command: "login",
       providerId: "fixture-provider",

@@ -1,5 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Star } from "lucide-react";
+import {
+  ChevronRight,
+  GripVertical,
+  KeyRound,
+  Layers,
+  ListRestart,
+  MoreHorizontal,
+  Pencil,
+  Power,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  ShieldCheck,
+  Star,
+  Trash2,
+  UserRoundCheck,
+  UserRoundPlus,
+  X,
+} from "lucide-react";
 
 import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
 
@@ -22,14 +40,7 @@ type ExternalAuthEvent = Extract<
 >;
 type InlineAuthEvent = Exclude<AuthEvent, ExternalAuthEvent>;
 type CatalogResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeCatalog"]>>;
-type ProviderSource = ProviderOption["source"];
 type AuthType = "oauth" | "api_key";
-
-const SOURCE_LABELS: Readonly<Record<ProviderSource, string>> = Object.freeze({
-  pi_builtin: "Built in",
-  luckytoken_bundled: "LuckyToken",
-  user: "Custom",
-});
 
 export interface ProviderModelRow {
   readonly providerId: string;
@@ -91,12 +102,17 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [editingProfileNote, setEditingProfileNote] = useState("");
   const [notice, setNotice] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
+  const [profilesProviderId, setProfilesProviderId] = useState<string>();
+  const [profileActionsId, setProfileActionsId] = useState<string>();
   const [modelsProviderId, setModelsProviderId] = useState<string>();
+  const [modelSearch, setModelSearch] = useState("");
   const [editingRow, setEditingRow] = useState<ProviderModelRow>();
   const [modelNameValue, setModelNameValue] = useState("");
   const [modelNameBusy, setModelNameBusy] = useState(false);
   const [modelNameError, setModelNameError] = useState<string>();
   const seenCatalogVersion = useRef(-1);
+  const draggingModelId = useRef<string | undefined>(undefined);
+  const draggingProfileId = useRef<string | undefined>(undefined);
 
   const queryPageFacts = (): void => {
     setLoading(true);
@@ -636,6 +652,72 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     }
   };
 
+  const reorderProviderModels = async (
+    providerId: string,
+    sourceModelId: string,
+    targetModelId: string,
+  ): Promise<void> => {
+    const state = publicModels?.state;
+    if (state === undefined || sourceModelId === targetModelId) return;
+    const provider = state.providers.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    if (provider === undefined) return;
+    const modelIds = provider.models.map((model) => model.target);
+    const sourceIndex = modelIds.indexOf(sourceModelId);
+    const targetIndex = modelIds.indexOf(targetModelId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const [moved] = modelIds.splice(sourceIndex, 1);
+    if (moved === undefined) return;
+    modelIds.splice(targetIndex, 0, moved);
+
+    const result = await api.control.executePublicModels({
+      command: "reorder_models",
+      revision: state.revision,
+      providerId,
+      modelIds,
+    });
+    setPublicModels(result);
+    setNotice(
+      result.outcome === "ok"
+        ? "Model order saved."
+        : result.outcome === "conflict"
+          ? "Model order changed. Reopen Models and try again."
+          : "Model order could not be saved.",
+    );
+  };
+
+  const reorderProviderProfiles = async (
+    provider: ProviderProfiles,
+    sourceCredentialId: string,
+    targetCredentialId: string,
+  ): Promise<void> => {
+    if (
+      provider.revision === undefined ||
+      sourceCredentialId === targetCredentialId
+    ) {
+      return;
+    }
+    const credentialIds = [...provider.profiles]
+      .sort(
+        (left, right) =>
+          left.priority - right.priority || left.createdAt - right.createdAt,
+      )
+      .map((profile) => profile.credentialId);
+    const sourceIndex = credentialIds.indexOf(sourceCredentialId);
+    const targetIndex = credentialIds.indexOf(targetCredentialId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const [moved] = credentialIds.splice(sourceIndex, 1);
+    if (moved === undefined) return;
+    credentialIds.splice(targetIndex, 0, moved);
+    await executeProfileCommand({
+      command: "reorder_profiles",
+      providerId: provider.providerId,
+      credentialIds,
+      expectedRevision: provider.revision,
+    });
+  };
+
   if (loading) {
     return (
       <section className="page-card">
@@ -701,10 +783,36 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     modelsProviderId === undefined
       ? undefined
       : allProviders.find((provider) => provider.providerId === modelsProviderId);
-  const selectedModelRows =
+  const selectedProfilesProvider =
+    profilesProviderId === undefined
+      ? undefined
+      : allProviders.find((provider) => provider.providerId === profilesProviderId);
+  const selectedProfilesState =
+    profilesProviderId === undefined
+      ? undefined
+      : profileByProvider.get(profilesProviderId);
+  const profileActions =
+    profileActionsId === undefined
+      ? undefined
+      : selectedProfilesState?.profiles.find(
+          (profile) => profile.credentialId === profileActionsId,
+        );
+  const profileActionsMethod = selectedProfilesProvider?.authMethods.find(
+    (method) => method.authType === profileActions?.authType,
+  );
+  const ProfileActionsAuthIcon =
+    profileActions?.authType === "oauth" ? UserRoundCheck : KeyRound;
+  const selectedProviderModelRows =
     modelsProviderId === undefined
       ? []
       : modelRows.filter((row) => row.providerId === modelsProviderId);
+  const normalizedModelSearch = modelSearch.trim().toLowerCase();
+  const selectedModelRows = selectedProviderModelRows.filter(
+    (row) =>
+      normalizedModelSearch.length === 0 ||
+      row.modelName.toLowerCase().includes(normalizedModelSearch) ||
+      row.modelId.toLowerCase().includes(normalizedModelSearch),
+  );
   const authProvider =
     authModal === undefined
       ? undefined
@@ -713,31 +821,59 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     (method) => method.authType === authModal?.authType,
   );
 
-  const renderProviderCard = (provider: ProviderOption): React.ReactElement => {
+  const renderCompactProviderCard = (
+    provider: ProviderOption,
+  ): React.ReactElement => {
     const managed = profileByProvider.get(provider.providerId);
     const availability = catalogByProvider.get(provider.providerId);
     const publicProvider = publicProviderById.get(provider.providerId);
     const availableModels =
-      availability?.models.filter(
-        (model) => model.availability === "available",
-      ).length ?? 0;
-    const knownModels = publicProvider?.models.length ?? 0;
-    const publishedModels = publicProvider?.models.filter((model) => model.on).length ?? 0;
+      availability?.models.filter((model) => model.availability === "available")
+        .length ?? 0;
+    const publishedModels =
+      publicProvider?.models.filter((model) => model.on).length ?? 0;
     const active = managed?.profiles.find(
       (profile) => profile.credentialId === managed.activeCredentialId,
     );
-    const isConnected =
-      active !== undefined && active.health !== "reconnect_required";
     const providerOn = publicProvider?.on ?? false;
     const providerFavorite = publicProvider?.favorite ?? false;
     const catalogFailed = availability?.state === "failed";
+    const hasError =
+      catalogFailed ||
+      managed?.recordError !== undefined ||
+      managed?.implementationAvailable === false;
+    const statusTone = hasError
+      ? "error"
+      : active?.health === "ready"
+        ? "good"
+        : active?.health === "reconnect_required"
+          ? "error"
+          : (managed?.profiles.length ?? 0) > 0
+            ? "warning"
+            : "neutral";
+    const statusLabel = hasError
+      ? "Provider error"
+      : active?.health === "ready"
+        ? "Provider available"
+        : active?.health === "reconnect_required"
+          ? "Reconnect required"
+          : (managed?.profiles.length ?? 0) > 0
+            ? "Select or verify a Profile"
+            : "Not connected";
+    const supportsApiKey = provider.authMethods.some(
+      (method) => method.authType === "api_key",
+    );
+    const supportsOauth = provider.authMethods.some(
+      (method) => method.authType === "oauth",
+    );
+    const fallbackOn =
+      (supportsApiKey && managed?.switchPolicy?.apiKeyOn429 === true) ||
+      (supportsOauth && managed?.switchPolicy?.oauthOn429 === true);
+
     return (
-      <article className="page-card provider-card" key={provider.providerId}>
+      <article className="page-card provider-card compact" key={provider.providerId}>
         <div className="provider-title">
-          <div>
-            <h3>{provider.name}</h3>
-            <p className="provider-source">{SOURCE_LABELS[provider.source]}</p>
-          </div>
+          <h3>{provider.name}</h3>
           <div className="provider-title-actions">
             <button
               type="button"
@@ -750,299 +886,154 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
               title="Favorite providers are pinned within their current group."
             >
               <Star
-                size={17}
+                size={19}
                 fill={providerFavorite ? "currentColor" : "none"}
                 aria-hidden="true"
               />
             </button>
-            <span className={`badge ${isConnected ? "good" : "warning"}`}>
-              {managed?.recordError !== undefined
-                ? "Stored record error"
-                : managed?.implementationAvailable === false
-                  ? "Provider unavailable"
-                  : active?.health === "reconnect_required"
-                    ? "Reconnect required"
-                    : active !== undefined
-                      ? `Active: ${active.displayName}`
-                      : (managed?.profiles.length ?? 0) > 0
-                        ? "Select a Profile"
-                        : managed?.ambient !== undefined
-                          ? "External auth available"
-                          : "Not connected"}
-            </span>
             <button
               type="button"
-              className="provider-publish-toggle"
+              className={`switch-control${providerOn ? " on" : ""}`}
               aria-label={`${providerOn ? "Hide" : "Publish"} ${provider.name}`}
-              title="Hidden providers are removed from discovery, but a known model alias remains directly callable."
               aria-pressed={providerOn}
-              disabled={publicProvider === undefined || (!providerOn && !isConnected)}
+              disabled={
+                publicProvider === undefined ||
+                (!providerOn && active === undefined)
+              }
               onClick={() => void setProviderOn(provider.providerId, !providerOn)}
+              title="Publish this Provider in model discovery."
             >
-              {providerOn ? "Published" : "Hidden"}
+              <span aria-hidden="true" />
             </button>
           </div>
         </div>
-        <p>
-          {knownModels === 0
-            ? "Models unavailable"
-            : `${publishedModels} published · ${availableModels} currently available`}
-        </p>
-        {catalogFailed ? (
-          <p className="error-text">
-            {availability?.error ?? "Provider refresh failed"}
-          </p>
-        ) : null}
-        {managed?.recordError === undefined ? null : (
-          <p className="error-text" role="alert">{managed.recordError.message}</p>
-        )}
-        {(managed?.profiles.length ?? 0) === 0 ? (
-          <p>
-            {managed?.ambient?.message ??
-              "Add a named Provider credential Profile to manage it in LuckyToken."}
-          </p>
-        ) : (
-          <ul className="credential-profile-list">
-            {managed!.profiles.map((profile) => {
-              const editing = editingProfileId === profile.credentialId;
-              const method = provider.authMethods.find(
-                (candidate) => candidate.authType === profile.authType,
-              );
-              return (
-                <li className="credential-profile-row" key={profile.credentialId}>
-                  {editing ? (
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void saveProfileMetadata(managed!, profile);
-                      }}
-                    >
-                      <label>
-                        <span>Profile name</span>
-                        <input
-                          value={editingProfileName}
-                          maxLength={64}
-                          onChange={(event) =>
-                            setEditingProfileName(event.currentTarget.value)}
-                        />
-                      </label>
-                      <label>
-                        <span>Note</span>
-                        <textarea
-                          value={editingProfileNote}
-                          maxLength={200}
-                          onChange={(event) =>
-                            setEditingProfileNote(event.currentTarget.value)}
-                        />
-                      </label>
-                      <div className="button-row compact">
-                        <button type="submit">Save</button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => setEditingProfileId(undefined)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <>
-                      <div>
-                        <strong>{profile.displayName}</strong>
-                        <span className="provider-source">
-                          {profile.authMethodLabel}
-                          {profile.identityHint === undefined
-                            ? ""
-                            : ` · ${profile.identityHint}`}
-                          {profile.credentialId === managed!.activeCredentialId
-                            ? " · Active"
-                            : ""}
-                          {` · ${profile.health.replaceAll("_", " ")}`}
-                        </span>
-                        {profile.note === undefined ? null : <p>{profile.note}</p>}
-                        {profile.lastUsedAt === undefined ? null : (
-                          <span className="provider-source">
-                            Last used {new Date(profile.lastUsedAt).toLocaleString()}
-                            {profile.lastSucceededAt === undefined
-                              ? ""
-                              : ` · Last success ${new Date(profile.lastSucceededAt).toLocaleString()}`}
-                          </span>
-                        )}
-                      </div>
-                      <div className="button-row compact">
-                        {profile.credentialId === managed!.activeCredentialId ||
-                        !profile.enabled ? null : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void executeProfileCommand({
-                                command: "activate",
-                                providerId: provider.providerId,
-                                credentialId: profile.credentialId,
-                                expectedRevision: managed!.revision!,
-                              })}
-                          >
-                            Use now
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() =>
-                            void executeProfileCommand({
-                              command: "set_enabled",
-                              providerId: provider.providerId,
-                              credentialId: profile.credentialId,
-                              expectedRevision: managed!.revision!,
-                              enabled: !profile.enabled,
-                            })}
-                        >
-                          {profile.enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => {
-                            setEditingProfileId(profile.credentialId);
-                            setEditingProfileName(profile.displayName);
-                            setEditingProfileNote(profile.note ?? "");
-                          }}
-                        >
-                          Rename / note
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          aria-label={`Move ${profile.displayName} earlier`}
-                          onClick={() =>
-                            void executeProfileCommand({
-                              command: "set_priority",
-                              providerId: provider.providerId,
-                              credentialId: profile.credentialId,
-                              expectedRevision: managed!.revision!,
-                              priority: profile.priority - 1,
-                            })}
-                        >
-                          Earlier
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          aria-label={`Move ${profile.displayName} later`}
-                          onClick={() =>
-                            void executeProfileCommand({
-                              command: "set_priority",
-                              providerId: provider.providerId,
-                              credentialId: profile.credentialId,
-                              expectedRevision: managed!.revision!,
-                              priority: profile.priority + 1,
-                            })}
-                        >
-                          Later
-                        </button>
-                        {method?.interactive === true ? (
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => openReconnect(provider, profile)}
-                          >
-                            Reconnect
-                          </button>
-                        ) : null}
-                        {profile.credentialId === managed!.activeCredentialId ? (
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() =>
-                              void executeProfileCommand({
-                                command: "recheck",
-                                providerId: provider.providerId,
-                                credentialId: profile.credentialId,
-                                expectedRevision: managed!.revision!,
-                              })}
-                          >
-                            Recheck
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => void removeProfile(managed!, profile)}
-                        >
-                          {profile.authType === "oauth"
-                            ? "Disconnect from LuckyToken"
-                            : "Remove from LuckyToken"}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {managed?.switchPolicy === undefined || managed.revision === undefined ? null : (
-          <fieldset className="credential-switch-settings">
-            <legend>HTTP 429 switching</legend>
-            {provider.authMethods.map((method) => (
-              <label key={method.authType}>
-                <input
-                  type="checkbox"
-                  checked={
-                    method.authType === "api_key"
-                      ? managed.switchPolicy!.apiKeyOn429
-                      : managed.switchPolicy!.oauthOn429
-                  }
-                  onChange={(event) =>
-                    void executeProfileCommand({
-                      command: "set_switch_policy",
-                      providerId: provider.providerId,
-                      expectedRevision: managed.revision!,
-                      apiKeyOn429:
-                        method.authType === "api_key"
-                          ? event.currentTarget.checked
-                          : managed.switchPolicy!.apiKeyOn429,
-                      oauthOn429:
-                        method.authType === "oauth"
-                          ? event.currentTarget.checked
-                          : managed.switchPolicy!.oauthOn429,
-                    })}
-                />
-                Try the next {method.authMethodLabel} after HTTP 429
-              </label>
-            ))}
-          </fieldset>
-        )}
-        <div className="button-row">
-          {provider.authMethods.filter((method) => method.interactive).map((method) => (
-            <button
-              key={method.authType}
-              type="button"
-              disabled={busyProvider !== undefined}
-              onClick={() => openAdd(provider, method.authType)}
-            >
-              Add {method.authMethodLabel}
-            </button>
-          ))}
+
+        {(managed?.profiles.length ?? 0) > 0 ? (
           <button
             type="button"
-            className="secondary"
+            className="provider-profile-summary"
+            aria-label={`Manage ${provider.name} profiles`}
+            onClick={() => {
+              setProfileActionsId(undefined);
+              setProfilesProviderId(provider.providerId);
+            }}
+          >
+            <span
+              className={`status-dot ${statusTone}`}
+              role="img"
+              aria-label={statusLabel}
+              title={statusLabel}
+            />
+            <span className="provider-profile-name">
+              {active?.displayName ?? "Select a Profile"}
+              {active === undefined ? "" : " (active)"}
+            </span>
+            <span aria-hidden="true" className="metric-separator">·</span>
+            <span
+              className="provider-model-ratio"
+              aria-label={`${publishedModels} published, ${availableModels} currently available`}
+              title={`${publishedModels} published · ${availableModels} currently available`}
+            >
+              {publishedModels}/{availableModels}
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        ) : (
+          <div className="provider-metrics">
+            <span
+              className={`status-dot ${statusTone}`}
+              role="img"
+              aria-label={statusLabel}
+              title={statusLabel}
+            />
+            <span
+              className="provider-model-ratio"
+              aria-label={`${publishedModels} published, ${availableModels} currently available`}
+              title={`${publishedModels} published · ${availableModels} currently available`}
+            >
+              {publishedModels}/{availableModels}
+            </span>
+          </div>
+        )}
+
+        {hasError ? (
+          <p className="provider-card-error" role="alert">
+            {managed?.recordError?.message ??
+              availability?.error ??
+              "Provider refresh failed"}
+          </p>
+        ) : null}
+
+        <div className="provider-card-actions">
+          <button
+            type="button"
+            className={`card-icon-button${fallbackOn ? " active" : ""}`}
+            aria-label={`${fallbackOn ? "Disable" : "Enable"} HTTP 429 fallback for ${provider.name}`}
+            aria-pressed={fallbackOn}
+            disabled={managed?.switchPolicy === undefined || managed.revision === undefined}
+            title={`${fallbackOn ? "Disable" : "Enable"} HTTP 429 fallback`}
+            onClick={() => {
+              if (managed?.switchPolicy === undefined || managed.revision === undefined) {
+                return;
+              }
+              void executeProfileCommand({
+                command: "set_switch_policy",
+                providerId: provider.providerId,
+                expectedRevision: managed.revision,
+                apiKeyOn429: supportsApiKey
+                  ? !fallbackOn
+                  : managed.switchPolicy.apiKeyOn429,
+                oauthOn429: supportsOauth
+                  ? !fallbackOn
+                  : managed.switchPolicy.oauthOn429,
+              });
+            }}
+          >
+            <ListRestart size={21} aria-hidden="true" />
+          </button>
+          <span className="card-action-divider" aria-hidden="true" />
+          {provider.authMethods
+            .filter((method) => method.interactive)
+            .map((method) => {
+              const Icon =
+                method.authType === "api_key" ? KeyRound : UserRoundPlus;
+              return (
+                <button
+                  key={method.authType}
+                  type="button"
+                  className="card-icon-button"
+                  aria-label={`Add ${method.authMethodLabel}`}
+                  title={method.authType === "api_key" ? "Add API key" : "Add OAuth account"}
+                  disabled={busyProvider !== undefined}
+                  onClick={() => openAdd(provider, method.authType)}
+                >
+                  <Icon size={21} aria-hidden="true" />
+                </button>
+              );
+            })}
+          <button
+            type="button"
+            className="card-icon-button"
+            aria-label={`Manage ${provider.name} models`}
+            title="Manage models"
             onClick={() => {
               setEditingRow(undefined);
+              setModelSearch("");
               setModelsProviderId(provider.providerId);
             }}
           >
-            Models{knownModels === 0 ? "" : ` ${knownModels}`}
+            <Layers size={21} aria-hidden="true" />
           </button>
           {catalogFailed ? (
             <button
               type="button"
-              className="secondary"
+              className="card-icon-button"
+              aria-label={`Retry ${provider.name} models`}
+              title="Retry models"
               disabled={refreshing}
               onClick={() => void refresh()}
             >
-              Retry models
+              <RefreshCw size={20} aria-hidden="true" />
             </button>
           ) : null}
         </div>
@@ -1058,8 +1049,19 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           <h2>Providers</h2>
           <p>Find a provider, connect it, and manage the model names you use.</p>
         </div>
-        <button type="button" disabled={refreshing} onClick={() => void refresh()}>
-          {refreshing ? "Refreshing…" : "Refresh models"}
+        <button
+          type="button"
+          className="card-icon-button provider-refresh-button"
+          aria-label="Refresh models"
+          title="Refresh models"
+          disabled={refreshing}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw
+            className={refreshing ? "spinning" : undefined}
+            size={20}
+            aria-hidden="true"
+          />
         </button>
       </div>
 
@@ -1099,7 +1101,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <section className="provider-group">
               <h3 className="provider-group-title">Connected</h3>
               <div className="provider-grid">
-                {connected.map((provider) => renderProviderCard(provider))}
+                {connected.map((provider) => renderCompactProviderCard(provider))}
               </div>
             </section>
           )}
@@ -1108,11 +1110,369 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             <section className="provider-group">
               <h3 className="provider-group-title">Available</h3>
               <div className="provider-grid">
-                {available.map((provider) => renderProviderCard(provider))}
+                {available.map((provider) => renderCompactProviderCard(provider))}
               </div>
             </section>
           )}
         </>
+      )}
+
+      {profilesProviderId === undefined ||
+      selectedProfilesProvider === undefined ||
+      selectedProfilesState === undefined ? null : (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="page-card task-modal secondary-card-modal profiles-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedProfilesProvider.name} profiles`}
+          >
+            <div className="task-modal-header">
+              <div>
+                <h3>Profiles</h3>
+                <p>
+                  {selectedProfilesProvider.name} · {selectedProfilesState.profiles.length}{" "}
+                  {selectedProfilesState.profiles.length === 1 ? "profile" : "profiles"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close profiles"
+                onClick={() => {
+                  setEditingProfileId(undefined);
+                  setProfileActionsId(undefined);
+                  setProfilesProviderId(undefined);
+                }}
+              >
+                <X size={19} aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="secondary-card-modal-body">
+              {selectedProfilesState.profiles.length === 0 ? (
+                <p>No Profiles have been added to this Provider.</p>
+              ) : (
+                <ul className="secondary-card-list profile-card-list">
+                  {[...selectedProfilesState.profiles]
+                    .sort(
+                      (left, right) =>
+                        left.priority - right.priority ||
+                        left.createdAt - right.createdAt,
+                    )
+                    .map((profile) => {
+                      const editing = editingProfileId === profile.credentialId;
+                      const actionsOpen =
+                        profileActionsId === profile.credentialId;
+                      const active =
+                        selectedProfilesState.activeCredentialId ===
+                        profile.credentialId;
+                      const AuthIcon =
+                        profile.authType === "api_key" ? KeyRound : UserRoundCheck;
+                      const authLabel =
+                        profile.authType === "api_key" ? "API key" : "OAuth account";
+                      const healthTone =
+                        profile.health === "ready"
+                          ? "good"
+                          : profile.health === "reconnect_required"
+                            ? "error"
+                            : profile.health === "disabled"
+                              ? "neutral"
+                              : "warning";
+                      return (
+                        <li
+                          className={`secondary-card profile-card${active ? " active" : ""}`}
+                          data-profile-id={profile.credentialId}
+                          draggable={!editing}
+                          onDragStart={(event) => {
+                            if (editing) {
+                              event.preventDefault();
+                              return;
+                            }
+                            draggingProfileId.current = profile.credentialId;
+                            if (event.dataTransfer !== undefined) {
+                              event.dataTransfer.effectAllowed = "move";
+                            }
+                          }}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            if (event.dataTransfer !== undefined) {
+                              event.dataTransfer.dropEffect = "move";
+                            }
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const sourceCredentialId = draggingProfileId.current;
+                            draggingProfileId.current = undefined;
+                            if (sourceCredentialId !== undefined) {
+                              void reorderProviderProfiles(
+                                selectedProfilesState,
+                                sourceCredentialId,
+                                profile.credentialId,
+                              );
+                            }
+                          }}
+                          onDragEnd={() => {
+                            draggingProfileId.current = undefined;
+                          }}
+                          key={profile.credentialId}
+                        >
+                          <span
+                            className="drag-handle"
+                            aria-label={`Drag ${profile.displayName} to reorder`}
+                            title="Drag to reorder"
+                          >
+                            <GripVertical size={20} aria-hidden="true" />
+                          </span>
+
+                          {editing ? (
+                            <form
+                              className="profile-metadata-editor"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void saveProfileMetadata(selectedProfilesState, profile);
+                              }}
+                            >
+                              <label>
+                                <span>Profile name</span>
+                                <input
+                                  value={editingProfileName}
+                                  maxLength={64}
+                                  onChange={(event) =>
+                                    setEditingProfileName(event.currentTarget.value)}
+                                />
+                              </label>
+                              <label>
+                                <span>Note</span>
+                                <textarea
+                                  value={editingProfileNote}
+                                  maxLength={200}
+                                  onChange={(event) =>
+                                    setEditingProfileNote(event.currentTarget.value)}
+                                />
+                              </label>
+                              <div className="button-row compact">
+                                <button type="submit">Save</button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  onClick={() => setEditingProfileId(undefined)}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <>
+                              <div className="secondary-card-copy">
+                                <strong>{profile.displayName}</strong>
+                                <span className="secondary-card-meta">
+                                  <AuthIcon size={16} aria-hidden="true" />
+                                  {authLabel}
+                                  {profile.identityHint === undefined
+                                    ? ""
+                                    : ` · ${profile.identityHint}`}
+                                </span>
+                                <span className="secondary-card-meta">
+                                  <span
+                                    className={`status-dot ${healthTone}`}
+                                    role="img"
+                                    aria-label={profile.health.replaceAll("_", " ")}
+                                    title={profile.health.replaceAll("_", " ")}
+                                  />
+                                  {profile.lastSucceededAt === undefined
+                                    ? profile.health.replaceAll("_", " ")
+                                    : `Last success ${new Date(profile.lastSucceededAt).toLocaleString()}`}
+                                </span>
+                              </div>
+
+                              <label className="profile-active-choice">
+                                <span className="sr-only">
+                                  Use {profile.displayName} for new requests
+                                </span>
+                                <input
+                                  type="radio"
+                                  name={`active-profile-${selectedProfilesProvider.providerId}`}
+                                  checked={active}
+                                  disabled={!profile.enabled}
+                                  onChange={() => {
+                                    if (
+                                      active ||
+                                      selectedProfilesState.revision === undefined
+                                    ) {
+                                      return;
+                                    }
+                                    void executeProfileCommand({
+                                      command: "activate",
+                                      providerId: selectedProfilesProvider.providerId,
+                                      credentialId: profile.credentialId,
+                                      expectedRevision: selectedProfilesState.revision,
+                                    });
+                                  }}
+                                />
+                              </label>
+
+                              <div className="profile-menu-wrap">
+                                <button
+                                  type="button"
+                                  className="card-icon-button"
+                                  aria-label={`More actions for ${profile.displayName}`}
+                                  aria-expanded={actionsOpen}
+                                  aria-controls="profile-actions-dialog"
+                                  title="Profile actions"
+                                  onClick={() =>
+                                    setProfileActionsId(
+                                      actionsOpen
+                                        ? undefined
+                                        : profile.credentialId,
+                                    )}
+                                >
+                                  <MoreHorizontal size={20} aria-hidden="true" />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {profileActions === undefined ||
+      selectedProfilesProvider === undefined ||
+      selectedProfilesState === undefined ? null : (
+        <div className="modal-backdrop profile-actions-backdrop" role="presentation">
+          <section
+            id="profile-actions-dialog"
+            className="page-card task-modal profile-actions-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Actions for ${profileActions.displayName}`}
+          >
+            <div className="profile-actions-header">
+              <div>
+                <p className="eyebrow">PROFILE ACTIONS</p>
+                <h3>{profileActions.displayName}</h3>
+                <p className="profile-actions-auth">
+                  <ProfileActionsAuthIcon size={16} aria-hidden="true" />
+                  {profileActions.authType === "api_key"
+                    ? "API key"
+                    : "OAuth account"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close Profile actions"
+                onClick={() => setProfileActionsId(undefined)}
+              >
+                <X size={19} aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="profile-actions-list">
+              <button
+                type="button"
+                aria-label="Rename / note"
+                onClick={() => {
+                  setProfileActionsId(undefined);
+                  setEditingProfileId(profileActions.credentialId);
+                  setEditingProfileName(profileActions.displayName);
+                  setEditingProfileNote(profileActions.note ?? "");
+                }}
+              >
+                <Pencil size={18} aria-hidden="true" />
+                <span>
+                  <strong>Rename / note</strong>
+                  <small>Edit Profile-owned labels</small>
+                </span>
+              </button>
+              {profileActionsMethod?.interactive === true ? (
+                <button
+                  type="button"
+                  aria-label="Reconnect"
+                  onClick={() => {
+                    setProfileActionsId(undefined);
+                    openReconnect(selectedProfilesProvider, profileActions);
+                  }}
+                >
+                  <RefreshCw size={18} aria-hidden="true" />
+                  <span>
+                    <strong>Reconnect</strong>
+                    <small>Replace this Profile's sign-in</small>
+                  </span>
+                </button>
+              ) : null}
+              {selectedProfilesState.activeCredentialId ===
+              profileActions.credentialId ? (
+                <button
+                  type="button"
+                  aria-label="Recheck"
+                  onClick={() => {
+                    setProfileActionsId(undefined);
+                    if (selectedProfilesState.revision === undefined) return;
+                    void executeProfileCommand({
+                      command: "recheck",
+                      providerId: selectedProfilesProvider.providerId,
+                      credentialId: profileActions.credentialId,
+                      expectedRevision: selectedProfilesState.revision,
+                    });
+                  }}
+                >
+                  <ShieldCheck size={18} aria-hidden="true" />
+                  <span>
+                    <strong>Recheck</strong>
+                    <small>Verify this Profile now</small>
+                  </span>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                aria-label={profileActions.enabled ? "Disable" : "Enable"}
+                onClick={() => {
+                  setProfileActionsId(undefined);
+                  if (selectedProfilesState.revision === undefined) return;
+                  void executeProfileCommand({
+                    command: "set_enabled",
+                    providerId: selectedProfilesProvider.providerId,
+                    credentialId: profileActions.credentialId,
+                    expectedRevision: selectedProfilesState.revision,
+                    enabled: !profileActions.enabled,
+                  });
+                }}
+              >
+                <Power size={18} aria-hidden="true" />
+                <span>
+                  <strong>{profileActions.enabled ? "Disable" : "Enable"}</strong>
+                  <small>
+                    {profileActions.enabled
+                      ? "Stop using this Profile"
+                      : "Allow this Profile to be used"}
+                  </small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="danger-menu-item"
+                aria-label="Remove"
+                onClick={() => {
+                  setProfileActionsId(undefined);
+                  void removeProfile(selectedProfilesState, profileActions);
+                }}
+              >
+                <Trash2 size={18} aria-hidden="true" />
+                <span>
+                  <strong>Remove</strong>
+                  <small>Disconnect from LuckyToken</small>
+                </span>
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {authModal === undefined || authProvider === undefined ? null : (
@@ -1298,10 +1658,8 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
           >
             <div className="task-modal-header">
               <div>
-                <p className="eyebrow">MODELS</p>
-                <h3>{selectedModelsProvider.name}</h3>
-                <p>{selectedModelRows.length} model{selectedModelRows.length === 1 ? "" : "s"}</p>
-                <p>Hidden models leave discovery but remain callable by a known alias.</p>
+                <h3>Models</h3>
+                <p>{selectedModelsProvider.name}</p>
               </div>
               <button
                 type="button"
@@ -1309,33 +1667,98 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 aria-label="Close models"
                 onClick={() => {
                   setEditingRow(undefined);
+                  setModelSearch("");
                   setModelsProviderId(undefined);
                 }}
               >
-                ×
+                <X size={19} aria-hidden="true" />
               </button>
             </div>
 
             <div className="models-modal-body">
+              <label className="model-search">
+                <span className="sr-only">Search models</span>
+                <input
+                  type="search"
+                  aria-label="Search models"
+                  placeholder="Search models…"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.currentTarget.value)}
+                />
+              </label>
               {selectedModelRows.length === 0 ? (
                 <p>No models are currently available for this provider.</p>
               ) : (
-                <ul className="provider-model-list">
+                <ul className="secondary-card-list model-card-list">
                   {selectedModelRows.map((row) => {
                   const editing =
                     editingRow?.providerId === row.providerId &&
                     editingRow.modelId === row.modelId;
                   return (
-                    <li className="provider-model-row" key={`${row.providerId}\u0000${row.modelId}`}>
-                      <div className="provider-model-copy">
-                        <strong>{row.modelName ?? "Model name unavailable"}</strong>
+                    <li
+                      className="secondary-card model-card"
+                      data-model-id={row.modelId}
+                      draggable={normalizedModelSearch.length === 0}
+                      onDragStart={(event) => {
+                        if (normalizedModelSearch.length !== 0) {
+                          event.preventDefault();
+                          return;
+                        }
+                        draggingModelId.current = row.modelId;
+                        if (event.dataTransfer !== undefined) {
+                          event.dataTransfer.effectAllowed = "move";
+                        }
+                      }}
+                      onDragOver={(event) => {
+                        if (normalizedModelSearch.length === 0) {
+                          event.preventDefault();
+                          if (event.dataTransfer !== undefined) {
+                            event.dataTransfer.dropEffect = "move";
+                          }
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const sourceModelId = draggingModelId.current;
+                        draggingModelId.current = undefined;
+                        if (sourceModelId !== undefined) {
+                          void reorderProviderModels(
+                            row.providerId,
+                            sourceModelId,
+                            row.modelId,
+                          );
+                        }
+                      }}
+                      onDragEnd={() => {
+                        draggingModelId.current = undefined;
+                      }}
+                      key={`${row.providerId}\u0000${row.modelId}`}
+                    >
+                      <span
+                        className="drag-handle"
+                        aria-label={`Drag ${row.modelName} to reorder`}
+                        title={
+                          normalizedModelSearch.length === 0
+                            ? "Drag to reorder"
+                            : "Clear search to reorder"
+                        }
+                      >
+                        <GripVertical size={20} aria-hidden="true" />
+                      </span>
+                      <div className="secondary-card-copy">
+                        <strong className="model-card-title">
+                          <span
+                            className={`status-dot ${row.availability === "available" ? "good" : "neutral"}`}
+                            role="img"
+                            aria-label={`${row.modelName} is ${row.availability}`}
+                            title={row.availability}
+                          />
+                          <span>{row.modelName}</span>
+                        </strong>
                         {row.modelName === row.modelId ? null : (
                           <span className="canonical-model-id">Original model: {row.modelId}</span>
                         )}
                       </div>
-                      <span className={`badge ${row.availability === "available" ? "good" : "neutral"}`}>
-                        {row.availability}
-                      </span>
                       <button
                         type="button"
                         className={`favorite-button${row.favorite ? " active" : ""}`}
@@ -1352,13 +1775,13 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                       </button>
                       <button
                         type="button"
-                        className="provider-publish-toggle"
+                        className={`switch-control${row.on ? " on" : ""}`}
                         aria-label={`${row.on ? "Hide" : "Publish"} ${row.modelName}`}
                         title="Hidden models are removed from discovery, but a known alias remains directly callable."
                         aria-pressed={row.on}
                         onClick={() => void setModelOn(row, !row.on)}
                       >
-                        {row.on ? "Published" : "Hidden"}
+                        <span aria-hidden="true" />
                       </button>
                       {editing ? (
                         <form
@@ -1383,37 +1806,49 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                           {modelNameError === undefined ? null : (
                             <p className="error-text" role="alert">{modelNameError}</p>
                           )}
-                          <div className="button-row compact">
-                            <button type="submit" disabled={modelNameBusy || modelNameValue.trim().length === 0}>
-                              {modelNameBusy ? "Saving…" : "Save"}
+                          <div className="model-name-editor-actions">
+                            <button
+                              type="submit"
+                              className="card-icon-button model-editor-save"
+                              aria-label="Save model name"
+                              aria-busy={modelNameBusy}
+                              title="Save model name"
+                              disabled={modelNameBusy || modelNameValue.trim().length === 0}
+                            >
+                              <Save size={18} aria-hidden="true" />
                             </button>
                             <button
                               type="button"
-                              className="secondary"
+                              className="card-icon-button"
+                              aria-label="Cancel editing"
+                              title="Cancel editing"
                               disabled={modelNameBusy}
                               onClick={() => setEditingRow(undefined)}
                             >
-                              Cancel
+                              <X size={19} aria-hidden="true" />
                             </button>
                             <button
                               type="button"
-                              className="secondary"
+                              className="card-icon-button"
+                              aria-label="Restore default name"
+                              title="Restore default name"
                               disabled={modelNameBusy}
                               onClick={() => void restoreModelName(row)}
                             >
-                              Restore default
+                              <RotateCcw size={18} aria-hidden="true" />
                             </button>
                           </div>
                         </form>
                       ) : (
                         <button
                           type="button"
-                          className="secondary"
+                          className="card-icon-button"
                           aria-label={`Rename ${row.modelName ?? row.modelId}`}
+                          title="Rename model"
                           disabled={row.modelName === undefined}
                           onClick={() => openModelEditor(row)}
                         >
-                          Rename
+                          <Pencil size={18} aria-hidden="true" />
                         </button>
                       )}
                     </li>

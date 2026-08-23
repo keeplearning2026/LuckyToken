@@ -275,6 +275,9 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
       case "set_priority":
         mutation = await options.management.setPriority(command);
         break;
+      case "reorder_profiles":
+        mutation = await options.management.reorderProfiles(command);
+        break;
       case "remove":
         mutation = await options.management.remove(command);
         break;

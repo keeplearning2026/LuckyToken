@@ -1073,6 +1073,24 @@ export function decodePublicModelsCommand(
       favorite: value.favorite,
     };
   }
+  if (value.command === "reorder_models") {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      !Array.isArray(value.modelIds) ||
+      value.modelIds.some(
+        (modelId) => typeof modelId !== "string" || modelId.length === 0,
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      command: "reorder_models",
+      revision,
+      providerId: value.providerId,
+      modelIds: Object.freeze([...value.modelIds] as string[]),
+    };
+  }
   if (
     (value.command === "rename_model" ||
       value.command === "restore_model_name") &&

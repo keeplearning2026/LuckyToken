@@ -4,6 +4,7 @@ import {
   type Models,
 } from "@earendil-works/pi-ai";
 
+import { selectorTool } from "../../model-resolution.js";
 import type { CodexCatalogBuildResult } from "./integration.js";
 
 export interface CodexCatalogAliasEntry {
@@ -120,7 +121,7 @@ function codexEntry(
   const contextWindow = safeContextWindow(model);
   return Object.freeze({
     slug,
-    display_name: slug,
+    display_name: selectorTool.displayName(slug),
     description: `LuckyToken model: ${slug}`,
     supported_reasoning_levels: reasoningLevels,
     shell_type: "shell_command",

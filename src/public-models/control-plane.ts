@@ -80,6 +80,15 @@ export function createPublicModelsControlPlaneHandler(
         }),
       );
     }
+    if (command.command === "reorder_models") {
+      return projectResult(
+        await authority.reorderModels({
+          revision: command.revision,
+          providerId: command.providerId,
+          modelIds: command.modelIds,
+        }),
+      );
+    }
     if (command.command === "rename_model") {
       return projectResult(
         await authority.renameModel({

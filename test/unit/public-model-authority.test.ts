@@ -298,6 +298,61 @@ describe("PublicModelAuthority", () => {
     });
   });
 
+  it("persists an explicit Provider model order and projects discovery in that order", async () => {
+    const memory = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem: memory.fileSystem });
+    const ready = await authority.reconcile(runtime);
+
+    const reordered = await authority.reorderModels({
+      revision: ready.revision,
+      providerId: "anthropic",
+      modelIds: ["claude/sonnet", "claude/opus"],
+    });
+
+    expect(reordered.outcome).toBe("ok");
+    expect(
+      reordered.state.snapshot.providers[0]?.models.map((model) => model.target),
+    ).toEqual(["claude/sonnet", "claude/opus"]);
+    expect(
+      reordered.state.snapshot.publishedModels().map((model) => model.modelId),
+    ).toEqual(["claude/sonnet", "claude/opus"]);
+    expect(
+      Object.values(
+        JSON.parse(memory.files.get(path) ?? "null").providers.anthropic.models,
+      ).map((model) => (model as { target: string }).target),
+    ).toEqual(["claude/sonnet", "claude/opus"]);
+  });
+
+  it("keeps the persisted model order while renaming and restoring an alias", async () => {
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+    const ready = await authority.reconcile(runtime);
+    const reordered = await authority.reorderModels({
+      revision: ready.revision,
+      providerId: "anthropic",
+      modelIds: ["claude/sonnet", "claude/opus"],
+    });
+
+    const renamed = await authority.renameModel({
+      revision: reordered.state.revision,
+      providerId: "anthropic",
+      modelId: "claude/sonnet",
+      modelName: "daily-sonnet",
+    });
+    expect(
+      renamed.state.snapshot.providers[0]?.models.map((model) => model.target),
+    ).toEqual(["claude/sonnet", "claude/opus"]);
+
+    const restored = await authority.restoreModelName({
+      revision: renamed.state.revision,
+      providerId: "anthropic",
+      modelId: "claude/sonnet",
+    });
+    expect(
+      restored.state.snapshot.providers[0]?.models.map((model) => model.target),
+    ).toEqual(["claude/sonnet", "claude/opus"]);
+  });
+
   it("preserves existing provider/model choices, adds only new targets, and does not rewrite unchanged state", async () => {
     let writes = 0;
     const initial = {

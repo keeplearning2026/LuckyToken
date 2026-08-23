@@ -103,6 +103,29 @@ describe("selectorTool.format", () => {
   });
 });
 
+describe("selectorTool.displayName", () => {
+  it("puts the model name first and qualifies it with the provider", () => {
+    expect(selectorTool.displayName("anthropic/claude-opus")).toBe(
+      "claude-opus [anthropic]",
+    );
+    expect(
+      selectorTool.displayName(
+        "commandcode-private/deepseek/deepseek-v4-flash",
+      ),
+    ).toBe("deepseek/deepseek-v4-flash [commandcode-private]");
+  });
+
+  it("preserves selectors that do not contain a complete qualified identity", () => {
+    expect(selectorTool.displayName("deepseek-v4-flash")).toBe(
+      "deepseek-v4-flash",
+    );
+    expect(selectorTool.displayName("/deepseek-v4-flash")).toBe(
+      "/deepseek-v4-flash",
+    );
+    expect(selectorTool.displayName("deepseek/")).toBe("deepseek/");
+  });
+});
+
 describe("resolveModel", () => {
   it("resolves exact unique ids and exact provider-qualified selectors", () => {
     const first = model("first", "shared");

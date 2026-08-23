@@ -344,7 +344,7 @@ test(
       );
 
       // 1. Fresh packaged product: the Providers page shows CommandCode
-      // Private (LuckyToken-bundled) plus Pi built-ins.
+      // Private plus Pi built-ins without implementation-source labels.
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Providers" }).click();
@@ -352,12 +352,12 @@ test(
         .locator("article.provider-card")
         .filter({ has: page.getByRole("heading", { name: "CommandCode Private", exact: true }) });
       await commandCodeCard.waitFor();
-      assert.match(await commandCodeCard.textContent(), /LuckyToken/u);
+      assert.doesNotMatch(await commandCodeCard.textContent(), /LuckyToken/u);
       const anthropicCard = page
         .locator("article.provider-card")
         .filter({ has: page.getByRole("heading", { name: "Anthropic", exact: true }) });
       await anthropicCard.waitFor();
-      assert.match(await anthropicCard.textContent(), /Built in/u);
+      assert.doesNotMatch(await anthropicCard.textContent(), /Built in/u);
 
       // 2. Stop the Gateway: Provider discovery, Profile query, Catalog query
       // and the visible Providers product surface remain usable.
@@ -373,7 +373,9 @@ test(
 
       // 3. Complete a CommandCode API-key login while the Gateway is
       // stopped. API-key entry is scoped to a modal card.
-      await commandCodeCard.getByRole("button", { name: "API key" }).click();
+      await commandCodeCard
+        .getByRole("button", { name: /Add .*API key/u })
+        .click();
       const commandCodeLogin = page.getByRole("dialog", {
         name: "CommandCode Private sign in",
       });
@@ -401,16 +403,16 @@ test(
 
       // 4. Models are opened from the Provider card. Publication is explicit:
       // hiding affects discovery while a known alias remains callable.
-      await commandCodeCard.getByRole("button", { name: /^Models/u }).click();
+      await commandCodeCard
+        .getByRole("button", { name: "Manage CommandCode Private models" })
+        .click();
       const commandCodeModels = page.getByRole("dialog", {
         name: "CommandCode Private models",
       });
       await commandCodeModels.waitFor();
-      await commandCodeModels
-        .getByText("Hidden models leave discovery but remain callable by a known alias.")
-        .waitFor();
+      await commandCodeModels.getByRole("searchbox", { name: "Search models" }).waitFor();
       const modelRow = commandCodeModels
-        .locator("li.provider-model-row")
+        .locator("li[data-model-id]")
         .filter({
           has: page.getByText(
             "Original model: deepseek/deepseek-v4-flash",
@@ -434,7 +436,7 @@ test(
       await modelNameInput.fill(COMMANDCODE_CUSTOM_MODEL_NAME);
       await modelNameEditor.getByRole("button", { name: "Save" }).click();
       await commandCodeModels
-        .locator("li.provider-model-row")
+        .locator("li[data-model-id]")
         .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
         .waitFor();
       await commandCodeModels.getByRole("button", { name: "Close models" }).click();
@@ -455,12 +457,14 @@ test(
             exact: true,
           }),
         });
-      await reopenedCommandCodeCard.getByRole("button", { name: /^Models/u }).click();
+      await reopenedCommandCodeCard
+        .getByRole("button", { name: "Manage CommandCode Private models" })
+        .click();
       const reopenedCommandCodeModels = page.getByRole("dialog", {
         name: "CommandCode Private models",
       });
       await reopenedCommandCodeModels
-        .locator("li.provider-model-row")
+        .locator("li[data-model-id]")
         .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
         .waitFor();
       await reopenedCommandCodeModels
@@ -508,7 +512,9 @@ test(
       // Provider, and rename its model through the same Models card.
       const started = await client.executeRuntimeCommand("start");
       assert.equal(started.outcome, "completed");
-      await reopenedAnthropicCard.getByRole("button", { name: "API key" }).click();
+      await reopenedAnthropicCard
+        .getByRole("button", { name: /Add .*API key/u })
+        .click();
       const anthropicLogin = page.getByRole("dialog", {
         name: "Anthropic sign in",
       });
@@ -522,10 +528,12 @@ test(
       await anthropicLogin.getByText("Connected", { exact: true }).waitFor();
       await anthropicLogin.getByRole("button", { name: "Close", exact: true }).click();
 
-      await reopenedAnthropicCard.getByRole("button", { name: /^Models/u }).click();
+      await reopenedAnthropicCard
+        .getByRole("button", { name: "Manage Anthropic models" })
+        .click();
       const anthropicModels = page.getByRole("dialog", { name: "Anthropic models" });
       const anthropicRow = anthropicModels
-        .locator("li.provider-model-row")
+        .locator("li[data-model-id]")
         .filter({ hasText: TEST_MODEL });
       await anthropicRow.waitFor();
       await anthropicRow.getByRole("button", { name: /rename/i }).click();
@@ -533,7 +541,7 @@ test(
       await anthropicModelNameInput.fill(CUSTOM_MODEL_NAME);
       await anthropicRow.getByRole("button", { name: "Save" }).click();
       await anthropicModels
-        .locator("li.provider-model-row")
+        .locator("li[data-model-id]")
         .filter({ hasText: CUSTOM_MODEL_NAME })
         .waitFor();
       await anthropicModels.getByRole("button", { name: "Close models" }).click();

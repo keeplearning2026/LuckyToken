@@ -72,6 +72,12 @@ export interface SetProfilePriorityInput extends ProfileTargetInput {
   readonly priority: number;
 }
 
+export interface ReorderProfilesInput {
+  readonly providerId: string;
+  readonly expectedRevision: string;
+  readonly credentialIds: readonly string[];
+}
+
 export interface SetProviderSwitchPolicyInput {
   readonly providerId: string;
   readonly expectedRevision: string;
@@ -112,6 +118,7 @@ export interface CredentialProfileManagement {
   activate(input: ActivateProfileInput): Promise<ProfileMutationResult>;
   setEnabled(input: SetProfileEnabledInput): Promise<ProfileMutationResult>;
   setPriority(input: SetProfilePriorityInput): Promise<ProfileMutationResult>;
+  reorderProfiles(input: ReorderProfilesInput): Promise<ProfileMutationResult>;
   remove(input: RemoveProfileInput): Promise<ProfileMutationResult>;
   setSwitchPolicy(input: SetProviderSwitchPolicyInput): Promise<ProfileMutationResult>;
 }

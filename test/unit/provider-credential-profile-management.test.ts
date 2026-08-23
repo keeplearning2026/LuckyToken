@@ -19,6 +19,88 @@ import { createBrowserOAuthProvider } from "../support/auth-login-fixture.js";
 import { createFixtureProvider } from "../support/credential-fixture.js";
 
 describe("CredentialProfileManagement", () => {
+  it("atomically persists a complete Profile order and normalizes priorities", async () => {
+    const revisions = ["revision-initial", "revision-reordered"];
+    const provider = createFixtureProvider();
+    const store = createInMemoryProviderCredentialRecordStore({
+      createRevision: () => revisions.shift() ?? "unexpected-revision",
+    });
+    await store.modifyManagement(
+      provider.id,
+      NO_PROVIDER_RECORD_REVISION,
+      () => ({
+        kind: "commit" as const,
+        record: {
+          schemaVersion: 1 as const,
+          providerId: provider.id,
+          revision: NO_PROVIDER_RECORD_REVISION,
+          selectionGeneration: "selection-a",
+          activeCredentialId: "credential-a",
+          switchPolicy: { apiKeyOn429: true, oauthOn429: false },
+          profiles: [
+            {
+              credentialId: "credential-a",
+              credentialGeneration: "generation-a",
+              authType: "api_key" as const,
+              authMethodLabel: "Fixture credentials",
+              displayName: "Profile A",
+              enabled: true,
+              priority: 12,
+              createdAt: 1,
+              updatedAt: 1,
+              credential: { type: "api_key" as const, key: "secret-a" },
+            },
+            {
+              credentialId: "credential-b",
+              credentialGeneration: "generation-b",
+              authType: "api_key" as const,
+              authMethodLabel: "Fixture credentials",
+              displayName: "Profile B",
+              enabled: true,
+              priority: -4,
+              createdAt: 2,
+              updatedAt: 2,
+              credential: { type: "api_key" as const, key: "secret-b" },
+            },
+          ],
+        },
+        value: undefined,
+      }),
+    );
+    const profiles = createProviderCredentialProfiles({
+      recordStore: store,
+      providers: () => [provider],
+      createId: () => "unused-id",
+      now: () => 1_786_400_000_000,
+    });
+
+    const reordered = await profiles.management.reorderProfiles({
+      providerId: provider.id,
+      credentialIds: ["credential-b", "credential-a"],
+      expectedRevision: "revision-initial",
+    });
+
+    expect(reordered).toMatchObject({
+      outcome: "ok",
+      provider: {
+        revision: "revision-reordered",
+        activeCredentialId: "credential-a",
+        switchPolicy: { apiKeyOn429: true, oauthOn429: false },
+        profiles: [
+          { credentialId: "credential-b", priority: 0 },
+          { credentialId: "credential-a", priority: 1 },
+        ],
+      },
+    });
+    expect((await store.read(provider.id))?.profiles.map((profile) => ({
+      credentialId: profile.credentialId,
+      priority: profile.priority,
+    }))).toEqual([
+      { credentialId: "credential-b", priority: 0 },
+      { credentialId: "credential-a", priority: 1 },
+    ]);
+  });
+
   it("fails closed before publication on a compromised file lock and surfaces release failure", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-profile-lock-"));
     const providerId = "lock-provider";

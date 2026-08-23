@@ -112,6 +112,7 @@ const catalog = () => ({
         state: "succeeded" as const,
         models: [
           { id: "model-a", dynamic: true, availability: "available" as const },
+          { id: "model-b", dynamic: true, availability: "unavailable" as const },
         ],
       },
     ],
@@ -137,6 +138,12 @@ const publicModels = () => ({
             on: true,
             favorite: false,
           },
+          {
+            alias: "aws-provider/model-beta",
+            target: "model-b",
+            on: false,
+            favorite: true,
+          },
         ],
       },
     ],
@@ -161,6 +168,7 @@ async function render(options: {
   readonly profiles?: ProfilesResult;
   readonly executeCredentialProfiles?: DesktopControlPlaneApi["executeCredentialProfiles"];
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
+  readonly executePublicModels?: DesktopControlPlaneApi["executePublicModels"];
 } = {}): Promise<void> {
   const initial = options.profiles ?? emptyProfiles();
   const api = createFakeDesktopApi({
@@ -175,7 +183,8 @@ async function render(options: {
           ...(initial.options === undefined ? {} : { options: initial.options }),
         })),
       executeCatalog: async () => catalog(),
-      executePublicModels: async () => publicModels(),
+      executePublicModels:
+        options.executePublicModels ?? (async () => publicModels()),
       respondAuth: async () => undefined,
     },
   });
@@ -196,9 +205,24 @@ function button(name: string): HTMLButtonElement {
   return found;
 }
 
+function ariaButton(name: string): HTMLButtonElement {
+  const found = container.querySelector(`button[aria-label="${name}"]`);
+  if (!(found instanceof HTMLButtonElement)) {
+    throw new Error(`Missing aria button: ${name}`);
+  }
+  return found;
+}
+
 async function click(name: string): Promise<void> {
   await act(async () => {
     button(name).click();
+    await Promise.resolve();
+  });
+}
+
+async function clickAria(name: string): Promise<void> {
+  await act(async () => {
+    ariaButton(name).click();
     await Promise.resolve();
   });
 }
@@ -213,16 +237,194 @@ function setInput(input: HTMLInputElement | HTMLTextAreaElement, value: string):
 }
 
 describe("Providers Profile product slice", () => {
-  it("renders Backend auth labels, named Profiles, notes, and health without API-key ontology", async () => {
+  it("keeps Provider facts on the outer card and Profile facts in secondary cards", async () => {
     await render({ profiles: managedProfiles() });
+    const providerCard = container.querySelector(".provider-card");
+    expect(providerCard?.textContent).not.toContain("Built in");
+    expect(providerCard?.textContent).not.toContain("Release traffic");
+    expect(providerCard?.textContent).not.toContain("AWS organization sign-in");
+    expect(
+      providerCard?.querySelector('[aria-label="1 published, 1 currently available"]'),
+    ).not.toBeNull();
 
-    expect(container.textContent).toContain("AWS credentials or bearer token");
+    const manageProfiles = providerCard?.querySelector(
+      'button[aria-label="Manage AWS Provider profiles"]',
+    );
+    expect(manageProfiles).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => {
+      (manageProfiles as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelectorAll("[data-profile-id]")).toHaveLength(2);
+    expect(container.textContent).toContain("API key");
+    expect(container.textContent).toContain("OAuth account");
+    expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(2);
+    expect(container.textContent).not.toContain("Use now");
+    expect(container.textContent).not.toContain("Earlier");
+    expect(container.textContent).not.toContain("Later");
+  });
+
+  it("persists a dragged Profile order through one typed authority command", async () => {
+    const executeCredentialProfiles = vi.fn(async () => managedProfiles());
+    await render({ profiles: managedProfiles(), executeCredentialProfiles });
+    await clickAria("Manage AWS Provider profiles");
+    const source = container.querySelector('[data-profile-id="credential-b"]');
+    const target = container.querySelector('[data-profile-id="credential-a"]');
+
+    await act(async () => {
+      source?.dispatchEvent(new Event("dragstart", { bubbles: true }));
+      target?.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
+      target?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(executeCredentialProfiles).toHaveBeenCalledWith({
+      command: "reorder_profiles",
+      providerId: "aws-provider",
+      credentialIds: ["credential-b", "credential-a"],
+      expectedRevision: "revision-a",
+    });
+  });
+
+  it("opens a searchable Models card list from the Provider icon action", async () => {
+    await render({ profiles: managedProfiles() });
+    const manageModels = container.querySelector(
+      'button[aria-label="Manage AWS Provider models"]',
+    );
+    expect(manageModels).toBeInstanceOf(HTMLButtonElement);
+
+    await act(async () => {
+      (manageModels as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    const modelSearch = container.querySelector(
+      'input[aria-label="Search models"]',
+    );
+    expect(modelSearch).toBeInstanceOf(HTMLInputElement);
+
+    await act(async () => setInput(modelSearch as HTMLInputElement, "beta"));
+    expect(container.textContent).toContain("model-beta");
+    expect(container.textContent).not.toContain("model-a");
+    expect(
+      container.querySelector('[data-model-id="model-b"]')?.getAttribute("draggable"),
+    ).toBe("false");
+  });
+
+  it("uses the shared secondary-card UI for model-specific controls", async () => {
+    await render({ profiles: managedProfiles() });
+    await clickAria("Manage AWS Provider models");
+
+    expect(container.querySelectorAll(".secondary-card[data-model-id]")).toHaveLength(2);
+    expect(
+      container.querySelector('[aria-label="Drag model-beta to reorder"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="model-a is available"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-model-id="model-a"] .model-card-title [aria-label="model-a is available"]',
+      ),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Hide model-a"]')).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Rename model-beta"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("Rename");
+    expect(container.textContent).not.toContain("Published");
+  });
+
+  it("uses icon-only actions while editing a model name", async () => {
+    await render({ profiles: managedProfiles() });
+    await clickAria("Manage AWS Provider models");
+    await clickAria("Rename model-beta");
+
+    const editor = container.querySelector(".model-name-editor");
+    expect(editor).not.toBeNull();
+    expect(editor?.querySelector('button[aria-label="Save model name"]')).not.toBeNull();
+    expect(editor?.querySelector('button[aria-label="Cancel editing"]')).not.toBeNull();
+    expect(editor?.querySelector('button[aria-label="Restore default name"]')).not.toBeNull();
+    expect(
+      [...(editor?.querySelectorAll("button") ?? [])].map((entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["", "", ""]);
+    expect(editor?.textContent).not.toContain("Save");
+    expect(editor?.textContent).not.toContain("Cancel");
+    expect(editor?.textContent).not.toContain("Restore default");
+  });
+
+  it("persists a dragged model order through the typed Public Models command", async () => {
+    const executePublicModels = vi.fn(async () => publicModels());
+    await render({ profiles: managedProfiles(), executePublicModels });
+    const manageModels = container.querySelector(
+      'button[aria-label="Manage AWS Provider models"]',
+    ) as HTMLButtonElement;
+
+    await act(async () => {
+      manageModels.click();
+      await Promise.resolve();
+    });
+    const source = container.querySelector('[data-model-id="model-b"]');
+    const target = container.querySelector('[data-model-id="model-a"]');
+    expect(source).toBeInstanceOf(HTMLLIElement);
+    expect(target).toBeInstanceOf(HTMLLIElement);
+
+    await act(async () => {
+      source?.dispatchEvent(new Event("dragstart", { bubbles: true }));
+      target?.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
+      target?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(executePublicModels).toHaveBeenCalledWith({
+      command: "reorder_models",
+      revision: 1,
+      providerId: "aws-provider",
+      modelIds: ["model-b", "model-a"],
+    });
+  });
+
+  it("renders named Profiles with generic credential types and health in the secondary cards", async () => {
+    await render({ profiles: managedProfiles() });
+    await clickAria("Manage AWS Provider profiles");
+
     expect(container.textContent).toContain("Production role");
-    expect(container.textContent).toContain("Release traffic");
     expect(container.textContent).toContain("Incident account");
+    expect(container.textContent).toContain("API key");
+    expect(container.textContent).toContain("OAuth account");
     expect(container.textContent).toContain("reconnect required");
     expect(container.textContent).not.toContain("Use API key");
     expect(container.textContent).not.toContain("Account 1");
+  });
+
+  it("opens Profile actions in a separate tall tertiary card", async () => {
+    await render({ profiles: managedProfiles() });
+    await clickAria("Manage AWS Provider profiles");
+    await clickAria("More actions for Incident account");
+
+    const incidentCard = container.querySelector('[data-profile-id="credential-b"]');
+    const actionsDialog = container.querySelector(
+      '.profile-actions-modal[role="dialog"][aria-label="Actions for Incident account"]',
+    );
+    expect(actionsDialog).not.toBeNull();
+    expect(incidentCard?.contains(actionsDialog)).toBe(false);
+    expect(incidentCard?.querySelector(".profile-actions-card")).toBeNull();
+    expect(actionsDialog?.textContent).toContain("Incident account");
+    expect(actionsDialog?.textContent).toContain("OAuth account");
+    expect(actionsDialog?.textContent).toContain("Rename / note");
+    expect(actionsDialog?.textContent).toContain("Reconnect");
+    expect(actionsDialog?.textContent).toContain("Remove");
+
+    await clickAria("Close Profile actions");
+    await clickAria("More actions for Production role");
+    expect(
+      container.querySelector('[aria-label="Actions for Incident account"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Actions for Production role"]'),
+    ).not.toBeNull();
   });
 
   it("searches sanitized Profile names, notes, labels, and identity hints", async () => {
@@ -242,7 +444,7 @@ describe("Providers Profile product slice", () => {
     const executeProviderProfileAuth = vi.fn(async () => managedProfiles());
     await render({ executeProviderProfileAuth });
 
-    await click("Add AWS credentials or bearer token");
+    await clickAria("Add AWS credentials or bearer token");
     const name = container.querySelector('input[maxlength="64"]');
     const note = container.querySelector('textarea[maxlength="200"]');
     expect(name).toBeInstanceOf(HTMLInputElement);
@@ -273,7 +475,9 @@ describe("Providers Profile product slice", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     await render({ profiles: managedProfiles(), executeCredentialProfiles });
 
-    await click("Disable");
+    await clickAria("Manage AWS Provider profiles");
+    await clickAria("More actions for Production role");
+    await clickAria("Disable");
     expect(executeCredentialProfiles).toHaveBeenCalledWith({
       command: "set_enabled",
       providerId: "aws-provider",
@@ -282,7 +486,8 @@ describe("Providers Profile product slice", () => {
       enabled: false,
     });
 
-    await click("Disconnect from LuckyToken");
+    await clickAria("More actions for Incident account");
+    await clickAria("Remove");
     expect(confirm).toHaveBeenCalledWith(
       expect.stringMatching(/may remain valid at the Provider.*revoke it/iu),
     );
@@ -294,24 +499,73 @@ describe("Providers Profile product slice", () => {
     });
   });
 
-  it("uses Provider labels in independent HTTP 429 settings", async () => {
-    const executeCredentialProfiles = vi.fn(async () => managedProfiles());
+  it("uses one visibly stateful icon toggle for the Provider HTTP 429 fallback policy", async () => {
+    const executeCredentialProfiles = vi.fn(async (command) => {
+      const result = managedProfiles();
+      if (command.command !== "set_switch_policy") return result;
+      return {
+        ...result,
+        state: {
+          providers: result.state.providers.map((provider) => ({
+            ...provider,
+            switchPolicy: {
+              apiKeyOn429: command.apiKeyOn429,
+              oauthOn429: command.oauthOn429,
+            },
+          })),
+        },
+      };
+    });
     await render({ profiles: managedProfiles(), executeCredentialProfiles });
-    const setting = [...container.querySelectorAll("label")].find((label) =>
-      label.textContent?.includes(
-        "Try the next AWS credentials or bearer token after HTTP 429",
-      ),
-    )?.querySelector('input[type="checkbox"]');
-    expect(setting).toBeInstanceOf(HTMLInputElement);
-    await act(async () => (setting as HTMLInputElement).click());
+    const fallback = ariaButton("Enable HTTP 429 fallback for AWS Provider");
+    expect(fallback.getAttribute("aria-pressed")).toBe("false");
+    const initialTitle = fallback.getAttribute("title");
+    await clickAria("Enable HTTP 429 fallback for AWS Provider");
 
     expect(executeCredentialProfiles).toHaveBeenCalledWith({
       command: "set_switch_policy",
       providerId: "aws-provider",
       expectedRevision: "revision-a",
       apiKeyOn429: true,
-      oauthOn429: false,
+      oauthOn429: true,
     });
+    const enabledFallback = ariaButton("Disable HTTP 429 fallback for AWS Provider");
+    expect(enabledFallback.getAttribute("aria-pressed")).toBe("true");
+    expect(enabledFallback.classList.contains("active")).toBe(true);
+    expect(initialTitle).toBe("Enable HTTP 429 fallback");
+    expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 fallback");
+  });
+
+  it("keeps Provider icon tooltips generic", async () => {
+    await render({ profiles: managedProfiles() });
+    const providerCard = container.querySelector(".provider-card");
+    const titledButtons = [...(providerCard?.querySelectorAll("button[title]") ?? [])];
+
+    expect(titledButtons.map((entry) => entry.getAttribute("title"))).toEqual(
+      expect.arrayContaining([
+        "Enable HTTP 429 fallback",
+        "Add API key",
+        "Add OAuth account",
+        "Manage models",
+      ]),
+    );
+    expect(
+      titledButtons.some((entry) => entry.getAttribute("title")?.includes("AWS Provider")),
+    ).toBe(false);
+    expect(
+      ariaButton("Add AWS organization sign-in").querySelector(
+        ".lucide-user-round-plus",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("uses an icon-only action to refresh Provider models", async () => {
+    await render({ profiles: managedProfiles() });
+    const refreshModels = ariaButton("Refresh models");
+
+    expect(refreshModels.getAttribute("title")).toBe("Refresh models");
+    expect(refreshModels.textContent?.trim()).toBe("");
+    expect(refreshModels.querySelector("svg")).not.toBeNull();
   });
 
   it("keeps orphaned persisted Profiles visible and removable", async () => {
@@ -330,7 +584,9 @@ describe("Providers Profile product slice", () => {
     await render({ profiles: orphanState });
 
     expect(container.textContent).toContain("removed-provider");
-    expect(container.textContent).toContain("Provider unavailable");
-    expect(container.textContent).toContain("Remove from LuckyToken");
+    expect(container.querySelector('[aria-label="Provider error"]')).not.toBeNull();
+    await clickAria("Manage removed-provider profiles");
+    await clickAria("More actions for Incident account");
+    expect(container.textContent).toContain("Remove");
   });
 });

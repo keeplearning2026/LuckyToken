@@ -132,6 +132,11 @@ export interface PublicModelAuthority {
     readonly modelId: string;
     readonly favorite: boolean;
   }): Promise<PublicModelCommandResult>;
+  reorderModels(input: {
+    readonly revision: number;
+    readonly providerId: string;
+    readonly modelIds: readonly string[];
+  }): Promise<PublicModelCommandResult>;
   renameModel(input: {
     readonly revision: number;
     readonly providerId: string;
@@ -273,6 +278,18 @@ function parseDocument(raw: string): {
 
 function targetKey(providerId: string, modelId: string): string {
   return `${providerId}\u0000${modelId}`;
+}
+
+function replaceModelAlias(
+  models: Readonly<Record<string, StoredPublicModel>>,
+  currentAlias: string,
+  nextAlias: string,
+): Record<string, StoredPublicModel> {
+  const next: Record<string, StoredPublicModel> = {};
+  for (const [alias, model] of Object.entries(models)) {
+    next[alias === currentAlias ? nextAlias : alias] = model;
+  }
+  return next;
 }
 
 function sameRuntimeFacts(
@@ -767,6 +784,60 @@ export function createPublicModelAuthority(
         return commitUserDocument(next, true);
       });
     },
+    reorderModels(
+      input: Parameters<PublicModelAuthority["reorderModels"]>[0],
+    ): Promise<PublicModelCommandResult> {
+      return serialize(async () => {
+        if (loaded === undefined || input.revision !== revision) {
+          return Object.freeze({ outcome: "conflict", state: currentState() });
+        }
+        const provider = loaded.providers[input.providerId];
+        if (provider === undefined) {
+          return Object.freeze({ outcome: "unavailable", state: currentState() });
+        }
+        const entries = Object.entries(provider.models);
+        if (
+          input.modelIds.length !== entries.length ||
+          new Set(input.modelIds).size !== input.modelIds.length
+        ) {
+          return Object.freeze({ outcome: "invalid", state: currentState() });
+        }
+        const byTarget = new Map(entries.map((entry) => [entry[1].target, entry] as const));
+        if (
+          byTarget.size !== entries.length ||
+          input.modelIds.some((modelId) => !byTarget.has(modelId))
+        ) {
+          return Object.freeze({ outcome: "invalid", state: currentState() });
+        }
+        const currentOrder = entries.map(([, model]) => model.target);
+        const changed = input.modelIds.some(
+          (modelId, index) => currentOrder[index] !== modelId,
+        );
+        if (!changed) return commitUserDocument(loaded, false);
+
+        const models: Record<string, StoredPublicModel> = {};
+        for (const modelId of input.modelIds) {
+          const entry = byTarget.get(modelId);
+          if (entry === undefined) {
+            return Object.freeze({ outcome: "invalid", state: currentState() });
+          }
+          models[entry[0]] = entry[1];
+        }
+        const next: PublicModelsDocument = {
+          schemaVersion: 2,
+          endpoint: loaded.endpoint,
+          providers: {
+            ...loaded.providers,
+            [input.providerId]: {
+              enabled: provider.enabled,
+              favorite: provider.favorite,
+              models,
+            },
+          },
+        };
+        return commitUserDocument(next, true);
+      });
+    },
     renameModel(
       input: Parameters<PublicModelAuthority["renameModel"]>[0],
     ): Promise<PublicModelCommandResult> {
@@ -787,7 +858,7 @@ export function createPublicModelAuthority(
         if (entry === undefined) {
           return Object.freeze({ outcome: "unavailable", state: currentState() });
         }
-        const [currentAlias, model] = entry;
+        const [currentAlias] = entry;
         const alias = `${input.providerId}/${input.modelName}`;
         if (alias === currentAlias) {
           return commitUserDocument(loaded, false);
@@ -795,9 +866,7 @@ export function createPublicModelAuthority(
         if (provider.models[alias] !== undefined) {
           return Object.freeze({ outcome: "invalid", state: currentState() });
         }
-        const models: Record<string, StoredPublicModel> = { ...provider.models };
-        delete models[currentAlias];
-        models[alias] = model;
+        const models = replaceModelAlias(provider.models, currentAlias, alias);
         const next: PublicModelsDocument = {
           schemaVersion: 2,
           endpoint: loaded.endpoint,
@@ -830,16 +899,14 @@ export function createPublicModelAuthority(
         if (entry === undefined) {
           return Object.freeze({ outcome: "unavailable", state: currentState() });
         }
-        const [currentAlias, model] = entry;
+        const [currentAlias] = entry;
         const occupied = new Set(Object.keys(provider.models));
         occupied.delete(currentAlias);
         const alias = allocateDefaultAlias(input.providerId, input.modelId, occupied);
         if (alias === currentAlias) {
           return commitUserDocument(loaded, false);
         }
-        const models: Record<string, StoredPublicModel> = { ...provider.models };
-        delete models[currentAlias];
-        models[alias] = model;
+        const models = replaceModelAlias(provider.models, currentAlias, alias);
         const next: PublicModelsDocument = {
           schemaVersion: 2,
           endpoint: loaded.endpoint,

@@ -119,7 +119,7 @@ The bundled catalog is authoritative for native rows and current Codex vocabular
 | Field | Required shape | LuckyToken value |
 | --- | --- | --- |
 | `slug` | non-empty string | Public Model alias; skip an invalid/colliding alias |
-| `display_name` | string | Same alias; never use Pi marketing `name` as public identity |
+| `display_name` | string | `<modelName> [<provider>]`, derived from the Public Model alias's single `/`; never use Pi marketing `name` |
 | `supported_reasoning_levels` | array | Always present; exact policy in section 4 |
 | `shell_type` | accepted shell enum | `"shell_command"` |
 | `visibility` | accepted visibility enum | `"list"` for routed aliases |

@@ -41,6 +41,7 @@ import {
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
   type ProviderCredentialStateProjection,
+  type ReorderProfilesInput,
   type RemoveProfileInput,
   type SetProfileEnabledInput,
   type SetProfilePriorityInput,
@@ -1009,6 +1010,72 @@ export function createProviderCredentialProfiles(options: {
           record: { ...current, profiles: nextProfiles },
         };
       });
+    },
+
+    async reorderProfiles(input: ReorderProfilesInput): Promise<ProfileMutationResult> {
+      try {
+        const result = await options.recordStore.modifyManagement(
+          input.providerId,
+          input.expectedRevision,
+          (current) => {
+            if (current === undefined) {
+              return { kind: "unchanged", value: "unknown_provider" as const };
+            }
+            if (
+              input.credentialIds.length !== current.profiles.length ||
+              new Set(input.credentialIds).size !== input.credentialIds.length
+            ) {
+              return { kind: "unchanged", value: "invalid" as const };
+            }
+            const byId = new Map(
+              current.profiles.map((profile) => [profile.credentialId, profile] as const),
+            );
+            if (input.credentialIds.some((credentialId) => !byId.has(credentialId))) {
+              return { kind: "unchanged", value: "invalid" as const };
+            }
+            const changed = input.credentialIds.some(
+              (credentialId, index) =>
+                current.profiles[index]?.credentialId !== credentialId ||
+                current.profiles[index]?.priority !== index,
+            );
+            if (!changed) {
+              return { kind: "unchanged", value: "ok" as const };
+            }
+            const profiles = input.credentialIds.map((credentialId, priority) => {
+              const profile = byId.get(credentialId)!;
+              return {
+                ...profile,
+                priority,
+                updatedAt:
+                  profile.priority === priority ? profile.updatedAt : options.now(),
+              };
+            });
+            return {
+              kind: "commit",
+              record: { ...current, profiles },
+              value: "ok" as const,
+            };
+          },
+        );
+        if (result.kind === "revision_conflict") {
+          return Object.freeze({ outcome: "conflict" });
+        }
+        if (result.value !== "ok") {
+          return Object.freeze({ outcome: result.value });
+        }
+        return Object.freeze({
+          outcome: "ok",
+          provider: projectProviderRecord(
+            result.record!,
+            providerFor(input.providerId) !== undefined,
+          ),
+        });
+      } catch {
+        return Object.freeze({
+          outcome: "storage_failure",
+          error: "Provider credential state could not be updated",
+        });
+      }
     },
 
     async remove(input: RemoveProfileInput): Promise<ProfileMutationResult> {

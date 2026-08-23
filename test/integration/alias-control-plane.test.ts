@@ -34,7 +34,9 @@ async function createFixture(): Promise<Fixture> {
   });
   await authority.reconcile({
     version: 1,
-    providers: [{ providerId: "openai", usable: true, models: ["gpt-4o"] }],
+    providers: [
+      { providerId: "openai", usable: true, models: ["gpt-4o", "gpt-4.1"] },
+    ],
   });
   const endpoint: ControlPlaneEndpoint = {
     address: `\\\\.\\pipe\\luckytoken-public-model-plane-${process.pid}-${++nextPipe}`,
@@ -102,5 +104,22 @@ describe("Public Models commands through the Control Plane", () => {
     });
     expect(port.outcome).toBe("ok");
     expect(port.state.endpoint.port).toBe(4317);
+  });
+
+  it("persists a complete model order through the typed Control Plane command", async () => {
+    const fixture = await createFixture();
+    const queried = await fixture.client.executePublicModelsCommand({ command: "query" });
+
+    const reordered = await fixture.client.executePublicModelsCommand({
+      command: "reorder_models",
+      revision: queried.state.revision,
+      providerId: "openai",
+      modelIds: ["gpt-4.1", "gpt-4o"],
+    });
+
+    expect(reordered.outcome).toBe("ok");
+    expect(
+      reordered.state.providers[0]?.models.map((model) => model.target),
+    ).toEqual(["gpt-4.1", "gpt-4o"]);
   });
 });

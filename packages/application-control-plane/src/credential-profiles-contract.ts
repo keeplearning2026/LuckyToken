@@ -90,6 +90,12 @@ export type CredentialProfilesCommand =
       readonly command: "set_priority";
       readonly priority: number;
     })
+  | {
+      readonly command: "reorder_profiles";
+      readonly providerId: string;
+      readonly credentialIds: readonly string[];
+      readonly expectedRevision: string;
+    }
   | (ProfileMutationCommandBase & { readonly command: "remove" })
   | {
       readonly command: "set_switch_policy";

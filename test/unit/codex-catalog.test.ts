@@ -76,7 +76,7 @@ describe("Codex catalog projection", () => {
     expect(parsed.models[0]).toEqual(native);
     expect(parsed.models[1]).toMatchObject({
       slug: "anthropic/claude-opus",
-      display_name: "anthropic/claude-opus",
+      display_name: "claude-opus [anthropic]",
       context_window: 180_000,
       input_modalities: ["text", "image"],
       base_instructions: "You are Codex, a coding agent powered by the selected model.",
@@ -93,7 +93,7 @@ describe("Codex catalog projection", () => {
     expect(result.modelCount).toBe(2);
   });
 
-  it("uses the alias, not Pi model.name, as the only Codex-facing identity for injected models", () => {
+  it("derives the picker display name from the alias instead of Pi model.name", () => {
     const routed = model({ provider: "commandcode-private", id: "deepseek/deepseek-v4-flash" });
 
     const result = buildCodexCatalog({
@@ -114,7 +114,7 @@ describe("Codex catalog projection", () => {
     expect(parsed.models).toContainEqual(
       expect.objectContaining({
         slug: "commandcode-private/deepseek-deepseek-v4-flash",
-        display_name: "commandcode-private/deepseek-deepseek-v4-flash",
+        display_name: "deepseek-deepseek-v4-flash [commandcode-private]",
       }),
     );
     expect(result.content).not.toContain("marketing:deepseek/deepseek-v4-flash");

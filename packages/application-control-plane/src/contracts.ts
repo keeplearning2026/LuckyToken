@@ -429,6 +429,12 @@ export type PublicModelsCommand =
       readonly favorite: boolean;
     }
   | {
+      readonly command: "reorder_models";
+      readonly revision: number;
+      readonly providerId: string;
+      readonly modelIds: readonly string[];
+    }
+  | {
       readonly command: "rename_model";
       readonly revision: number;
       readonly providerId: string;

@@ -94,6 +94,14 @@ export function decodeCredentialProfilesCommand(
         typeof value.priority === "number" && Number.isSafeInteger(value.priority)
         ? value as unknown as CredentialProfilesCommand
         : undefined;
+    case "reorder_profiles":
+      return exactKeys(
+        value,
+        ["command", "providerId", "credentialIds", "expectedRevision"],
+      ) && providerId(value.providerId) && opaqueId(value.expectedRevision) &&
+        Array.isArray(value.credentialIds) && value.credentialIds.every(opaqueId)
+        ? value as unknown as CredentialProfilesCommand
+        : undefined;
     case "set_switch_policy":
       return exactKeys(
         value,
