@@ -1,4 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -12,6 +15,7 @@ import {
 } from "../support/openai-responses-serving.js";
 import { createRecordingRequestLedger } from "../support/recording-request-ledger.js";
 import type { RequestLedger } from "../../src/request-ledger/index.js";
+import { createCodexLocalCredentialAuthority } from "../../src/integrations/codex/local-auth.js";
 
 function codexAuthority(token = "codex-token"): CodexLocalCredentialAuthority {
   return Object.freeze({
@@ -105,6 +109,7 @@ describe("Codex-native Responses routing", () => {
     fetch: FetchFunction;
     modelId?: string;
     requestLedger?: RequestLedger;
+    codexLocalAuth?: CodexLocalCredentialAuthority;
   }) {
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -112,7 +117,7 @@ describe("Codex-native Responses routing", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       modelId: options.modelId ?? "deepseek/deepseek-v4-flash",
       fetch: options.fetch,
-      codexLocalAuth: codexAuthority(),
+      codexLocalAuth: options.codexLocalAuth ?? codexAuthority(),
       codexNativeModels: nativeModels("gpt-native"),
       ...(options.requestLedger === undefined
         ? {}
@@ -146,7 +151,7 @@ describe("Codex-native Responses routing", () => {
     });
   });
 
-  it("records native Codex passthrough usage through the shared Request Ledger contract", async () => {
+  it("attributes native Codex usage to its local provider and account Profile", async () => {
     const recorded = createRecordingRequestLedger();
     const { runtime } = await start({
       requestLedger: recorded.ledger,
@@ -159,10 +164,18 @@ describe("Codex-native Responses routing", () => {
     expect(recorded.models).toEqual([
       {
         externalAlias: "gpt-native",
-        providerId: "openai-codex",
+        providerId: "codex-local",
         realModelId: "gpt-native",
       },
     ]);
+    expect(recorded.profiles).toEqual([
+      {
+        profileId:
+          "codex-local:5f7693616d756e8790eaf918d349e8aa2f2804faef32c528a0070778ac472610",
+        displayName: "Codex …-local",
+      },
+    ]);
+    expect(JSON.stringify(recorded.profiles)).not.toContain("acct-local");
     expect(recorded.terminalUsage).toHaveLength(1);
     expect(recorded.terminalUsage[0]).toMatchObject({
       api: "openai-codex-responses",
@@ -219,6 +232,48 @@ describe("Codex-native Responses routing", () => {
     ]);
   });
 
+  it("splits the same native model across the current auth.json account Profiles", async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), "luckytoken-codex-profile-"));
+    try {
+      const authPath = join(codexHome, "auth.json");
+      await writeFile(authPath, JSON.stringify({
+        tokens: { access_token: "codex-token-a", account_id: "acct-111111" },
+      }));
+      const recorded = createRecordingRequestLedger();
+      const { runtime } = await start({
+        requestLedger: recorded.ledger,
+        codexLocalAuth: createCodexLocalCredentialAuthority({ codexHome }),
+        fetch: async () => responsesJson("gpt-native", "native answer"),
+      });
+
+      expect((await runtime.handle(request("gpt-native", "codex-token-a"))).status).toBe(200);
+      await writeFile(authPath, JSON.stringify({
+        tokens: { access_token: "codex-token-b", account_id: "acct-222222" },
+      }));
+      expect((await runtime.handle(request("gpt-native", "codex-token-b"))).status).toBe(200);
+
+      expect(recorded.profiles).toEqual([
+        {
+          profileId:
+            "codex-local:34e7a864b1ca64a2068df3f275a33850b8a8f4f21bdf9570eb2e3b86abea65a8",
+          displayName: "Codex …111111",
+        },
+        {
+          profileId:
+            "codex-local:6aa0cdbebce613c00a5a1e91039b4d0f29bb401251992f6151caf76fbe034575",
+          displayName: "Codex …222222",
+        },
+      ]);
+      expect(new Set(recorded.models.map((model) => model.providerId))).toEqual(
+        new Set(["codex-local"]),
+      );
+      expect(JSON.stringify(recorded.profiles)).not.toContain("acct-111111");
+      expect(JSON.stringify(recorded.profiles)).not.toContain("acct-222222");
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("accepts the zstd-compressed request bodies emitted by native Codex", async () => {
     const calls: Request[] = [];
     const { runtime } = await start({
@@ -254,8 +309,10 @@ describe("Codex-native Responses routing", () => {
 
   it("does not fall through when a local native model is claimed but its credential is unavailable", async () => {
     const calls: Request[] = [];
+    const recorded = createRecordingRequestLedger();
     const { runtime } = await start({
       modelId: "gpt-native",
+      requestLedger: recorded.ledger,
       fetch: async (input, init) => {
         calls.push(new Request(input, init));
         return commandCodeText("must not execute");
@@ -266,6 +323,8 @@ describe("Codex-native Responses routing", () => {
 
     expect(response.status).toBe(401);
     expect(calls).toHaveLength(0);
+    expect(recorded.models[0]?.providerId).toBe("codex-local");
+    expect(recorded.profiles).toEqual([]);
     await expect(response.json()).resolves.toMatchObject({
       error: { type: "authentication_error" },
     });

@@ -14,6 +14,7 @@ import {
   type AnalyticsGroupBy,
   type AnalyticsGroupRow,
   type AnalyticsOptionsResult,
+  type AnalyticsProfileOption,
   type AnalyticsResult,
   type AnalyticsSummary,
 } from "./analytics-contract.js";
@@ -29,6 +30,7 @@ const RESULT_KEYS: ReadonlySet<string> = new Set([
   "omittedGroupRequests",
   "buckets",
   "providers",
+  "profiles",
   "models",
   "protocols",
   "sessions",
@@ -207,6 +209,15 @@ export function decodeAnalyticsSummary(
   // The aggregate quotient, never an average.
   const numerator = cacheHitNumerator as number;
   const denominator = cacheHitDenominator as number;
+  const expectedDenominator =
+    (inputTokens as number) + (cacheReadTokens as number);
+  if (
+    numerator !== cacheReadTokens ||
+    !Number.isSafeInteger(expectedDenominator) ||
+    denominator !== expectedDenominator
+  ) {
+    return undefined;
+  }
   if (denominator === 0) {
     if (cacheHitRate !== undefined) return undefined;
   } else if (
@@ -296,6 +307,32 @@ function decodeStringArray(value: unknown): readonly string[] | undefined {
   return Object.freeze(output);
 }
 
+function decodeProfileOptions(
+  value: unknown,
+): readonly AnalyticsProfileOption[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_ANALYTICS_OPTIONS_VALUES) {
+    return undefined;
+  }
+  const output: AnalyticsProfileOption[] = [];
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).length !== 3 ||
+      boundedText(entry.profileId, 256) === undefined ||
+      boundedText(entry.displayName, 256) === undefined ||
+      boundedText(entry.providerId, 256) === undefined
+    ) {
+      return undefined;
+    }
+    output.push(Object.freeze({
+      profileId: entry.profileId as string,
+      displayName: entry.displayName as string,
+      providerId: entry.providerId as string,
+    }));
+  }
+  return Object.freeze(output);
+}
+
 /**
  * Strict decode of an `analytics_result` frame payload: the allowed key set
  * is exact (a monetary key can never appear), the version is fixed, nested
@@ -353,7 +390,7 @@ export function decodeAnalyticsResult(
       return undefined;
     }
     return Object.freeze({
-      version: 1 as const,
+      version: ANALYTICS_CONTRACT_VERSION,
       command: "summary" as const,
       totals,
       ...(rows === undefined ? {} : { rows }),
@@ -369,12 +406,14 @@ export function decodeAnalyticsResult(
   }
   if (value.command === "options") {
     const providers = decodeStringArray(value.providers);
+    const profiles = decodeProfileOptions(value.profiles);
     const models = decodeStringArray(value.models);
     const protocols = decodeStringArray(value.protocols);
     const sessions = decodeStringArray(value.sessions);
     const outcomes = decodeStringArray(value.outcomes);
     if (
       providers === undefined ||
+      profiles === undefined ||
       models === undefined ||
       protocols === undefined ||
       sessions === undefined ||
@@ -384,9 +423,10 @@ export function decodeAnalyticsResult(
       return undefined;
     }
     return Object.freeze({
-      version: 1 as const,
+      version: ANALYTICS_CONTRACT_VERSION,
       command: "options" as const,
       providers,
+      profiles,
       models,
       protocols,
       sessions,

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnalyticsQuery,
   AnalyticsQueryResult,
+  RequestLedgerQuery,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
 
@@ -28,9 +29,21 @@ const status: StatusSnapshot = {
 function analyticsResult(query: AnalyticsQuery): AnalyticsQueryResult {
   if (query.command === "options") {
     return {
-      version: 1,
+      version: 2,
       command: "options",
-      providers: ["anthropic"],
+      providers: ["anthropic", "codex-local"],
+      profiles: [
+        {
+          profileId: "profile-anthropic",
+          displayName: "Production",
+          providerId: "anthropic",
+        },
+        {
+          profileId: "codex-local:account-digest",
+          displayName: "Codex …a83f2c",
+          providerId: "codex-local",
+        },
+      ],
       models: ["claude-sonnet-4-5"],
       protocols: ["anthropic-messages"],
       sessions: ["20000000-0000-4000-8000-000000000041"],
@@ -38,7 +51,7 @@ function analyticsResult(query: AnalyticsQuery): AnalyticsQueryResult {
     };
   }
   return {
-    version: 1,
+    version: 2,
     command: "summary",
     totals: {
       total: 12,
@@ -60,8 +73,8 @@ function analyticsResult(query: AnalyticsQuery): AnalyticsQueryResult {
       outputTokensPerSecond: 28.5,
       normalizedTokenTotal: 2_160,
       cacheHitNumerator: 340,
-      cacheHitDenominator: 1_600,
-      cacheHitRate: 340 / 1_600,
+      cacheHitDenominator: 1_540,
+      cacheHitRate: 340 / 1_540,
     },
   };
 }
@@ -92,6 +105,7 @@ async function flush(): Promise<void> {
 describe("Overview analytics", () => {
   it("renders six summary cards, defaults to the local today range, and re-queries when filters change", async () => {
     const analyticsQueries: AnalyticsQuery[] = [];
+    const ledgerQueries: Array<RequestLedgerQuery | undefined> = [];
     const getAnalytics = vi.fn(async (query: AnalyticsQuery) => {
       analyticsQueries.push(query);
       return analyticsResult(query);
@@ -101,7 +115,10 @@ describe("Overview analytics", () => {
         getBackendState: async () => ({ revision: 1, kind: "ready", status }),
         onBackendState: () => () => undefined,
         getAnalytics,
-        getRequestLedger: async () => ({ records: [], hasMore: false }),
+        getRequestLedger: async (query) => {
+          ledgerQueries.push(query);
+          return { records: [], hasMore: false };
+        },
         onRequestLedger: () => () => undefined,
       },
     });
@@ -118,12 +135,12 @@ describe("Overview analytics", () => {
       "Cache read340",
       "Output560",
       "Token speed28.5 t/s",
-      "Success75.0%",
+      "Cache hit22.1%",
     ]);
 
     await act(async () => {
-      const filters = container.querySelector('button[aria-label="Show request filters"]');
-      if (!(filters instanceof HTMLButtonElement)) throw new Error("request filter control missing");
+      const filters = container.querySelector('button[aria-label="Show overview filters"]');
+      if (!(filters instanceof HTMLButtonElement)) throw new Error("overview filter control missing");
       filters.click();
     });
 
@@ -144,12 +161,26 @@ describe("Overview analytics", () => {
     expect(container.querySelector('select[aria-label="Model filter"]')?.textContent).toContain(
       "claude-sonnet-4-5",
     );
+    expect(container.querySelector('select[aria-label="Provider filter"]')?.textContent).toContain(
+      "Codex Local",
+    );
+    expect(container.querySelector('select[aria-label="Profile filter"]')?.textContent).toContain(
+      "Production",
+    );
 
     await act(async () => {
-      const protocol = container.querySelector('select[aria-label="Protocol filter"]');
-      if (!(protocol instanceof HTMLSelectElement)) throw new Error("Protocol filter missing");
-      protocol.value = "anthropic-messages";
-      protocol.dispatchEvent(new Event("change", { bubbles: true }));
+      const provider = container.querySelector('select[aria-label="Provider filter"]');
+      if (!(provider instanceof HTMLSelectElement)) throw new Error("Provider filter missing");
+      provider.value = "anthropic";
+      provider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => {
+      const profile = container.querySelector('select[aria-label="Profile filter"]');
+      if (!(profile instanceof HTMLSelectElement)) throw new Error("Profile filter missing");
+      profile.value = "profile-anthropic";
+      profile.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await flush();
 
@@ -158,7 +189,26 @@ describe("Overview analytics", () => {
     );
     expect(summaries.length).toBeGreaterThanOrEqual(2);
     expect(summaries.at(-1)?.filters).toEqual({
-      protocols: ["anthropic-messages"],
+      providers: ["anthropic"],
+      profiles: ["profile-anthropic"],
     });
+    expect(ledgerQueries.at(-1)).toMatchObject({
+      providerId: "anthropic",
+      profileId: "profile-anthropic",
+    });
+
+    await act(async () => {
+      const provider = container.querySelector('select[aria-label="Provider filter"]');
+      if (!(provider instanceof HTMLSelectElement)) throw new Error("Provider filter missing");
+      provider.value = "codex-local";
+      provider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect((container.querySelector('select[aria-label="Profile filter"]') as HTMLSelectElement).value).toBe("");
+    expect(analyticsQueries.filter((query) => query.command === "summary").at(-1)).toMatchObject({
+      filters: { providers: ["codex-local"] },
+    });
+    expect(ledgerQueries.at(-1)).toMatchObject({ providerId: "codex-local" });
+    expect(ledgerQueries.at(-1)).not.toHaveProperty("profileId");
   });
 });

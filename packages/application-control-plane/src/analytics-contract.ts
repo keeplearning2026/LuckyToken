@@ -17,14 +17,14 @@
  * usage completeness. Token semantics (AC-5/6): only requests whose
  * normalized terminal usage is Complete contribute to token/cache sums;
  * `reasoning` is an output subset and is never added to any total; the
- * aggregate `cacheHitRate` is ΣcacheRead / Σ(input+cacheRead+cacheWrite),
+ * aggregate `cacheHitRate` is ΣcacheRead / Σ(input+cacheRead),
  * never an average of per-request rates. No cost, price, subscription, or
  * billing value exists anywhere in this contract (AC-8); the wire decoders
  * reject unknown keys, so such a field can never cross the boundary.
  */
 
 /** One versioned analytics result/query namespace. */
-export const ANALYTICS_CONTRACT_VERSION = 1 as const;
+export const ANALYTICS_CONTRACT_VERSION = 2 as const;
 
 /** Single-dimension group-by choices over ledger snapshot columns. */
 export type AnalyticsGroupBy =
@@ -57,6 +57,8 @@ export const MAX_ANALYTICS_DAY_SERIES_SPAN_MS = 366 * DAY_MS;
 export interface AnalyticsFilter {
   /** Real provider ids (ledger `providerId` snapshots). */
   readonly providers?: readonly string[];
+  /** Stable request-time statistical Profile ids. */
+  readonly profiles?: readonly string[];
   /** Real model ids (ledger `realModelId` snapshots). */
   readonly models?: readonly string[];
   /** Client protocol ids (ledger `protocolId`). */
@@ -69,7 +71,7 @@ export interface AnalyticsFilter {
 
 export type AnalyticsQuery =
   | {
-      readonly version: 1;
+      readonly version: 2;
       readonly command: "summary";
       /** Inclusive acceptedAt bound (safe integer ≥ 0). */
       readonly from: number;
@@ -82,7 +84,7 @@ export type AnalyticsQuery =
       readonly series?: { readonly granularity: AnalyticsSeriesGranularity };
     }
   | {
-      readonly version: 1;
+      readonly version: 2;
       readonly command: "options";
       /** Optional acceptedAt lower bound; absent = unbounded. */
       readonly from?: number;
@@ -157,7 +159,7 @@ export interface AnalyticsBucket {
 }
 
 export interface AnalyticsResult {
-  readonly version: 1;
+  readonly version: 2;
   readonly command: "summary";
   /** Full-scope aggregate, independent of rows/buckets. */
   readonly totals: AnalyticsSummary;
@@ -173,11 +175,18 @@ export interface AnalyticsResult {
   readonly buckets?: readonly AnalyticsBucket[];
 }
 
+export interface AnalyticsProfileOption {
+  readonly profileId: string;
+  readonly displayName: string;
+  readonly providerId: string;
+}
+
 export interface AnalyticsOptionsResult {
-  readonly version: 1;
+  readonly version: 2;
   readonly command: "options";
   /** Distinct ledger facts within the range, ascending; never the catalog. */
   readonly providers: readonly string[];
+  readonly profiles: readonly AnalyticsProfileOption[];
   readonly models: readonly string[];
   readonly protocols: readonly string[];
   readonly sessions: readonly string[];
@@ -211,6 +220,7 @@ const GROUP_BY_VALUES: readonly AnalyticsGroupBy[] = Object.freeze([
 
 const FILTER_KEYS: ReadonlySet<string> = new Set([
   "providers",
+  "profiles",
   "models",
   "protocols",
   "sessions",
@@ -261,6 +271,8 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
   if (Object.keys(value).length === 0) return undefined;
   const providers =
     value.providers === undefined ? undefined : decodeFilterArray(value.providers);
+  const profiles =
+    value.profiles === undefined ? undefined : decodeFilterArray(value.profiles);
   const models =
     value.models === undefined ? undefined : decodeFilterArray(value.models);
   const protocols =
@@ -273,6 +285,7 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
     value.outcomes === undefined ? undefined : decodeFilterArray(value.outcomes);
   if (
     (value.providers !== undefined && providers === undefined) ||
+    (value.profiles !== undefined && profiles === undefined) ||
     (value.models !== undefined && models === undefined) ||
     (value.protocols !== undefined && protocols === undefined) ||
     (value.sessions !== undefined && sessions === undefined) ||
@@ -282,6 +295,7 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
   }
   return Object.freeze({
     ...(providers === undefined ? {} : { providers }),
+    ...(profiles === undefined ? {} : { profiles }),
     ...(models === undefined ? {} : { models }),
     ...(protocols === undefined ? {} : { protocols }),
     ...(sessions === undefined ? {} : { sessions }),
@@ -299,7 +313,11 @@ function decodeFilters(value: unknown): AnalyticsFilter | undefined {
 export function normalizeAnalyticsQuery(
   value: unknown,
 ): AnalyticsQuery | undefined {
-  if (!isRecord(value) || value.version !== 1 || typeof value.command !== "string") {
+  if (
+    !isRecord(value) ||
+    value.version !== ANALYTICS_CONTRACT_VERSION ||
+    typeof value.command !== "string"
+  ) {
     return undefined;
   }
   if (value.command === "summary") {
@@ -343,7 +361,7 @@ export function normalizeAnalyticsQuery(
       series = { granularity };
     }
     return Object.freeze({
-      version: 1 as const,
+      version: ANALYTICS_CONTRACT_VERSION,
       command: "summary" as const,
       from: from as number,
       to: to as number,
@@ -368,7 +386,7 @@ export function normalizeAnalyticsQuery(
       return undefined;
     }
     return Object.freeze({
-      version: 1 as const,
+      version: ANALYTICS_CONTRACT_VERSION,
       command: "options" as const,
       ...(from === undefined ? {} : { from: from as number }),
       ...(to === undefined ? {} : { to: to as number }),

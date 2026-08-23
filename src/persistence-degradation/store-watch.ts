@@ -267,6 +267,7 @@ export function createUnavailableRequestLedgerStore(
       aliasCaptured: () => undefined,
       authorized: () => undefined,
       modelResolved: () => undefined,
+      profileAttributed: () => undefined,
       executing: () => undefined,
       rendering: () => undefined,
       terminal: () => undefined,

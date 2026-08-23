@@ -91,9 +91,10 @@ describe("desktop command-router shell", () => {
         },
         getAnalytics: async (query) => query.command === "options"
           ? {
-              version: 1,
+              version: 2,
               command: "options",
               providers: [],
+              profiles: [],
               models: [],
               protocols: [],
               projects: [],
@@ -101,7 +102,7 @@ describe("desktop command-router shell", () => {
               outcomes: [],
             }
           : {
-              version: 1,
+              version: 2,
               command: "summary",
               totals: {
                 total: 0,
@@ -217,9 +218,10 @@ describe("desktop command-router shell", () => {
     const onRequestLedger = vi.fn(() => () => undefined);
     const getAnalytics = vi.fn(async (query) => query.command === "options"
       ? {
-          version: 1 as const,
+          version: 2 as const,
           command: "options" as const,
           providers: [],
+          profiles: [],
           models: [],
           protocols: [],
           projects: [],
@@ -227,7 +229,7 @@ describe("desktop command-router shell", () => {
           outcomes: [],
         }
       : {
-          version: 1 as const,
+          version: 2 as const,
           command: "summary" as const,
           totals: {
             total: 0,
@@ -376,9 +378,10 @@ describe("desktop command-router shell", () => {
         getAnalytics: async (query) =>
           query.command === "options"
             ? {
-                version: 1,
+                version: 2,
                 command: "options",
                 providers: [],
+                profiles: [],
                 models: [],
                 protocols: [],
                 projects: [],
@@ -386,7 +389,7 @@ describe("desktop command-router shell", () => {
                 outcomes: [],
               }
             : {
-                version: 1,
+                version: 2,
                 command: "summary",
                 totals: {
                   total: 0,

@@ -25,6 +25,12 @@ export interface CredentialActivitySink {
   credentialAttempt(attempt: CredentialActivityAttempt): void;
 }
 
+/** Stable, secret-free request attribution used only for observation. */
+export interface LedgerProfileAttribution {
+  readonly profileId: string;
+  readonly displayName: string;
+}
+
 // The public execution contract remains the neutral ExecutionFactsSink.
 // Composition records the associated credential-observation capability in
 // this consumer-owned registry instead of relying on undeclared properties.
@@ -62,6 +68,7 @@ export interface RequestLedgerEntry extends CredentialActivitySink {
     readonly providerId: string;
     readonly realModelId: string;
   }): void;
+  profileAttributed(attribution: LedgerProfileAttribution): void;
   executing(): void;
   rendering(): void;
   terminal(
@@ -101,6 +108,7 @@ export function createNoopRequestLedger(): RequestLedger {
       authorized: () => undefined,
       aliasCaptured: () => undefined,
       modelResolved: () => undefined,
+      profileAttributed: () => undefined,
       executing: () => undefined,
       rendering: () => undefined,
       terminal: () => undefined,

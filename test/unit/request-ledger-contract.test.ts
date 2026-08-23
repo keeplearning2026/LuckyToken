@@ -228,6 +228,10 @@ describe("Request Ledger wire contract", () => {
           },
           persistenceWarnings: 3,
           piStopReason: "stop",
+          profileAttribution: {
+            profileId: "credential-backup",
+            displayName: "Backup",
+          },
           credentialCapture: {
             credentialId: "credential-primary",
             displayName: "Production",
@@ -256,6 +260,10 @@ describe("Request Ledger wire contract", () => {
       failure: { classification: "runtime-failure" },
       persistenceWarnings: 3,
       piStopReason: "stop",
+      profileAttribution: {
+        profileId: "credential-backup",
+        displayName: "Backup",
+      },
       credentialCapture: { displayName: "Production" },
       credentialAttempts: [{ displayName: "Backup", outcome: "success" }],
     });
@@ -307,6 +315,7 @@ describe("Request Ledger wire contract", () => {
         limit: 20,
         protocolId: "anthropic-messages",
         providerId: "commandcode-private",
+        profileId: "credential-backup",
         realModelId: "claude-fixture",
         outcome: "failed",
         from: 100,
@@ -316,6 +325,7 @@ describe("Request Ledger wire contract", () => {
       afterId: 5,
       limit: 20,
       protocolId: "anthropic-messages",
+      profileId: "credential-backup",
       outcome: "failed",
       from: 100,
       to: 200,

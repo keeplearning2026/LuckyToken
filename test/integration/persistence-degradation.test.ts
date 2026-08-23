@@ -318,13 +318,13 @@ describe("Persistence degradation store watchers and fallbacks (Ticket 23)", () 
     });
     expect(
       fallback.analyze({
-        version: 1,
+        version: 2,
         command: "summary",
         from: 0,
         to: 1,
       }),
     ).toMatchObject({
-      version: 1,
+      version: 2,
       command: "summary",
       totals: { total: 0, totalRequests: 0, participating: 0, excluded: 0 },
     });

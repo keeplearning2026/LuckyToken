@@ -92,6 +92,7 @@ interface FixtureRow {
   readonly protocolId: string;
   readonly providerId?: string;
   readonly realModelId?: string;
+  readonly profile?: { readonly profileId: string; readonly displayName: string };
   readonly outcome: "success" | "failed" | "aborted" | "unknown-alias" | "rejected-auth";
   readonly usage?: NormalizedTerminalUsage;
 }
@@ -102,6 +103,7 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "anthropic-messages",
     providerId: "anthropic",
     realModelId: "claude-x",
+    profile: { profileId: "profile-anthropic", displayName: "Anthropic Old" },
     outcome: "success",
     usage: completeUsage(5, 3, 2, 2, 1),
   },
@@ -110,6 +112,7 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "anthropic-messages",
     providerId: "anthropic",
     realModelId: "claude-x",
+    profile: { profileId: "profile-anthropic", displayName: "Anthropic Current" },
     outcome: "failed",
     usage: partialUsage(7, 1, 0, 0, "failed"),
   },
@@ -126,6 +129,7 @@ const FIXTURE: readonly FixtureRow[] = Object.freeze([
     protocolId: "openai-responses",
     providerId: "openai",
     realModelId: "gpt-r",
+    profile: { profileId: "profile-openai", displayName: "OpenAI Production" },
     outcome: "aborted",
     usage: partialUsage(2, 1, 0, 0, "aborted"),
   },
@@ -204,6 +208,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
           providerId: row.providerId,
           realModelId: row.realModelId ?? "model",
         });
+        if (row.profile !== undefined) entry.profileAttributed(row.profile);
       }
       setClock(row.acceptedAt + 5 * MINUTE);
       entry.executing();
@@ -231,7 +236,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -278,7 +283,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     await commitFixture(store, setClock);
     for (const outcomes of [["failed"], ["aborted"], ["unknown-alias", "rejected-auth"]]) {
       const totals = summary(store, {
-        version: 1,
+        version: 2,
         command: "summary",
         from: at(10),
         to: at(17),
@@ -308,7 +313,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -383,7 +388,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const byModel = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -396,7 +401,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
       "cc-mini",
     ]);
     const byProtocol = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -409,7 +414,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(byProtocol.rows?.[0]?.summary.total).toBe(4); // r1, r2, r3, r7
     expect(byProtocol.rows?.[1]?.summary.total).toBe(3); // r4, r5, r6
     const byOutcome = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -430,7 +435,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     // Hour series over [10:00, 15:00): r6 (15:00) is excluded; r1's usage
     // landed at 18:30, after `to`, but r1 still fills its 10:00 bucket.
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(15),
@@ -456,7 +461,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(9),
       to: at(13),
@@ -479,7 +484,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(12),
@@ -492,7 +497,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const byProvider = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -503,7 +508,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(byProvider.inputTokens).toBe(5);
     expect(byProvider.cacheHitRate).toBeCloseTo(3 / 8, 12);
     const byProtocol = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -516,7 +521,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(byProtocol.participating).toBe(1);
     expect(byProtocol.inputTokens).toBe(4);
     const byModelAndOutcome = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(10),
       to: at(17),
@@ -526,11 +531,54 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     expect(byModelAndOutcome.participating).toBe(0);
   });
 
+  it("filters token statistics by stable Profile id and returns the latest time-range label", async () => {
+    const { store, setClock } = await openStore();
+    await commitFixture(store, setClock);
+    const filtered = store.analyze({
+      version: 2,
+      command: "summary",
+      from: at(10),
+      to: at(17),
+      filters: { profiles: ["profile-anthropic"] },
+    } as unknown as AnalyticsQuery);
+    expect(filtered.command).toBe("summary");
+    if (filtered.command !== "summary") return;
+    expect(filtered.version).toBe(2);
+    expect(filtered.totals).toMatchObject({
+      totalRequests: 2,
+      participating: 1,
+      inputTokens: 5,
+      cacheReadTokens: 3,
+      outputTokens: 2,
+    });
+
+    const options = store.analyze({
+      version: 2,
+      command: "options",
+      from: at(10),
+      to: at(17),
+    } as unknown as AnalyticsQuery);
+    expect(options.command).toBe("options");
+    if (options.command !== "options") return;
+    expect(options.profiles).toEqual([
+      {
+        profileId: "profile-anthropic",
+        displayName: "Anthropic Current",
+        providerId: "anthropic",
+      },
+      {
+        profileId: "profile-openai",
+        displayName: "OpenAI Production",
+        providerId: "openai",
+      },
+    ]);
+  });
+
   it("returns zero totals for an empty range without invented rates", async () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const result = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: at(17),
       to: at(18),
@@ -554,7 +602,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     const { store, setClock } = await openStore();
     await commitFixture(store, setClock);
     const all = await store.analyze({
-      version: 1,
+      version: 2,
       command: "options",
     });
     expect(all.command).toBe("options");
@@ -571,7 +619,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
     ]);
     expect(all.truncated).toBeUndefined();
     const ranged = await store.analyze({
-      version: 1,
+      version: 2,
       command: "options",
       from: at(12),
       to: at(17),
@@ -597,7 +645,7 @@ describe("Request Ledger analytics aggregation (Ticket 21)", () => {
       expect(entry.requestId).toMatch(/^[0-9a-f-]{36}$/u);
     }
     const totals = summary(store, {
-      version: 1,
+      version: 2,
       command: "summary",
       from: base,
       to: base + 1_250 * MINUTE,

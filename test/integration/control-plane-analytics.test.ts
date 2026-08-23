@@ -112,6 +112,10 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       providerId: "anthropic",
       realModelId: "claude-x",
     });
+    entry.profileAttributed({
+      profileId: "profile-anthropic",
+      displayName: "Anthropic Primary",
+    });
     clock = T0 + 10 * HOUR + 1_000;
     entry.executing();
     clock = T0 + 10 * HOUR + 3_000;
@@ -131,6 +135,10 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       externalAlias: "alpha",
       providerId: "anthropic",
       realModelId: "claude-x",
+    });
+    entry.profileAttributed({
+      profileId: "profile-anthropic",
+      displayName: "Anthropic Current",
     });
     clock = T0 + 11 * HOUR + 1_000;
     entry.executing();
@@ -171,7 +179,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     await client.hello(2);
 
     const result = await client.getAnalytics({
-      version: 1,
+      version: 2,
       command: "summary",
       from: T0 + 10 * HOUR,
       to: T0 + 12 * HOUR,
@@ -198,7 +206,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     expect(result.totals.total).toBe(2);
 
     const grouped = await client.getAnalytics({
-      version: 1,
+      version: 2,
       command: "summary",
       from: T0 + 10 * HOUR,
       to: T0 + 12 * HOUR,
@@ -230,15 +238,20 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     await client.hello(2);
 
     const result = await client.getAnalytics({
-      version: 1,
+      version: 2,
       command: "options",
       from: T0 + 10 * HOUR,
       to: T0 + 12 * HOUR,
     });
     expect(result).toEqual({
-      version: 1,
+      version: 2,
       command: "options",
       providers: ["anthropic"],
+      profiles: [{
+        profileId: "profile-anthropic",
+        displayName: "Anthropic Current",
+        providerId: "anthropic",
+      }],
       models: ["claude-x"],
       protocols: ["anthropic-messages"],
       sessions: [SESSION_ALPHA, SESSION_BETA],
@@ -266,7 +279,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     await client.hello(2);
 
     const result = await client.getAnalytics({
-      version: 1,
+      version: 2,
       command: "summary",
       from: T0 + 10 * HOUR,
       to: T0 + 12 * HOUR,
@@ -302,13 +315,13 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     });
     await client.hello(2);
 
-    // Unknown top-level key, version !== 1, empty range.
+    // Unknown top-level key, version !== 2, empty range.
     const analytics = client as unknown as {
       getAnalytics(query: unknown): Promise<unknown>;
     };
     await expect(
       analytics.getAnalytics({
-        version: 1,
+        version: 2,
         command: "summary",
         from: 0,
         to: 1,
@@ -316,10 +329,10 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
       }),
     ).rejects.toThrow("invalid_request");
     await expect(
-      analytics.getAnalytics({ version: 2, command: "summary", from: 0, to: 1 }),
+      analytics.getAnalytics({ version: 1, command: "summary", from: 0, to: 1 }),
     ).rejects.toThrow("invalid_request");
     await expect(
-      analytics.getAnalytics({ version: 1, command: "summary", from: 10, to: 10 }),
+      analytics.getAnalytics({ version: 2, command: "summary", from: 10, to: 10 }),
     ).rejects.toThrow("invalid_request");
     await client.close();
   });
@@ -342,7 +355,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     });
     await client.hello(2);
     await expect(
-      client.getAnalytics({ version: 1, command: "summary", from: 0, to: 1 }),
+      client.getAnalytics({ version: 2, command: "summary", from: 0, to: 1 }),
     ).rejects.toThrow("unknown_command");
     // The legacy ledger surface is unaffected.
     const ledger = await client.getRequestLedger(undefined);
@@ -378,7 +391,7 @@ describe("Control Plane analytics surface (Ticket 21)", () => {
     // The strict wire decoder rejects the frame before the client ever sees
     // it: the response is malformed/absent, never a cost-bearing result.
     await expect(
-      client.getAnalytics({ version: 1, command: "summary", from: T0 + 10 * HOUR, to: T0 + 12 * HOUR }),
+      client.getAnalytics({ version: 2, command: "summary", from: T0 + 10 * HOUR, to: T0 + 12 * HOUR }),
     ).rejects.toThrow(/malformed|request failed/u);
     await client.close();
   });

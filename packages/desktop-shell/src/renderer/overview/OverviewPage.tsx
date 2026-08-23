@@ -34,6 +34,8 @@ interface OverviewFilters {
   readonly protocol: string;
   readonly session: string;
   readonly model: string;
+  readonly provider: string;
+  readonly profile: string;
 }
 
 function defaultFilters(): OverviewFilters {
@@ -47,6 +49,8 @@ function defaultFilters(): OverviewFilters {
     protocol: "",
     session: "",
     model: "",
+    provider: "",
+    profile: "",
   };
 }
 
@@ -67,6 +71,8 @@ function analyticsFilter(filters: OverviewFilters): AnalyticsFilter | undefined 
     ...(filters.protocol === "" ? {} : { protocols: [filters.protocol] }),
     ...(filters.session === "" ? {} : { sessions: [filters.session] }),
     ...(filters.model === "" ? {} : { models: [filters.model] }),
+    ...(filters.provider === "" ? {} : { providers: [filters.provider] }),
+    ...(filters.profile === "" ? {} : { profiles: [filters.profile] }),
   };
   return Object.keys(value).length === 0 ? undefined : value;
 }
@@ -79,6 +85,8 @@ function ledgerQuery(filters: OverviewFilters): RequestLedgerQuery {
     ...(filters.protocol === "" ? {} : { protocolId: filters.protocol }),
     ...(filters.session === "" ? {} : { clientSessionId: filters.session }),
     ...(filters.model === "" ? {} : { realModelId: filters.model }),
+    ...(filters.provider === "" ? {} : { providerId: filters.provider }),
+    ...(filters.profile === "" ? {} : { profileId: filters.profile }),
   };
 }
 
@@ -87,7 +95,16 @@ function matchesRecord(record: RequestLedgerRecord, filters: OverviewFilters): b
   if (filters.protocol !== "" && record.protocolId !== filters.protocol) return false;
   if (filters.session !== "" && record.clientSessionId !== filters.session) return false;
   if (filters.model !== "" && record.realModelId !== filters.model) return false;
+  if (filters.provider !== "" && record.providerId !== filters.provider) return false;
+  if (
+    filters.profile !== "" &&
+    record.facts?.profileAttribution?.profileId !== filters.profile
+  ) return false;
   return true;
+}
+
+function providerDisplayName(providerId: string): string {
+  return providerId === "codex-local" ? "Codex Local" : providerId;
 }
 
 function mergeRecords(
@@ -162,7 +179,10 @@ function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefi
         ? "-"
         : formatTokensPerSecond(summary.outputTokensPerSecond).replace(" tokens/s", " t/s"),
     ],
-    ["Success", summary === undefined ? "-" : formatPercent(summary.successRate)],
+    [
+      "Cache hit",
+      summary?.cacheHitRate === undefined ? "-" : formatPercent(summary.cacheHitRate),
+    ],
   ] as const;
   return (
     <section className="overview-stats" aria-label="Overview statistics">
@@ -181,12 +201,14 @@ function FilterSelect({
   value,
   values,
   allLabel,
+  displayValue = (entry) => entry,
   onChange,
 }: {
   readonly label: string;
   readonly value: string;
   readonly values: readonly string[];
   readonly allLabel: string;
+  readonly displayValue?: (value: string) => string;
   readonly onChange: (value: string) => void;
 }) {
   return (
@@ -195,7 +217,7 @@ function FilterSelect({
       <select aria-label={`${label} filter`} value={value} onChange={(event) => onChange(event.currentTarget.value)}>
         <option value="">{allLabel}</option>
         {values.map((entry) => (
-          <option key={entry} value={entry}>{entry}</option>
+          <option key={entry} value={entry}>{displayValue(entry)}</option>
         ))}
       </select>
     </label>
@@ -231,6 +253,12 @@ export function OverviewPage({
   const validRange = filters.from < filters.to;
   const summaryFilters = useMemo(() => analyticsFilter(filters), [filters]);
   const requestQuery = useMemo(() => ledgerQuery(filters), [filters]);
+  const profileOptions = useMemo(
+    () => (options?.profiles ?? []).filter(
+      (profile) => filters.provider === "" || profile.providerId === filters.provider,
+    ),
+    [filters.provider, options?.profiles],
+  );
 
   useEffect(() => {
     saveRequestColumnWidths(getRequestColumnStorage(), columnWidths);
@@ -245,7 +273,7 @@ export function OverviewPage({
     }
     let active = true;
     void api.control.getAnalytics({
-      version: 1,
+      version: 2,
       command: "summary",
       from: filters.from,
       to: filters.to,
@@ -267,7 +295,7 @@ export function OverviewPage({
     }
     let active = true;
     void api.control.getAnalytics({
-      version: 1,
+      version: 2,
       command: "options",
       from: filters.from,
       to: filters.to,
@@ -337,6 +365,24 @@ export function OverviewPage({
 
   const updateFilter = <K extends keyof OverviewFilters>(key: K, value: OverviewFilters[K]): void => {
     setFilters((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateProvider = (provider: string): void => {
+    setFilters((current) => {
+      const selectedProfile = options?.profiles.find(
+        (profile) => profile.profileId === current.profile,
+      );
+      return {
+        ...current,
+        provider,
+        profile:
+          current.profile !== "" &&
+          provider !== "" &&
+          selectedProfile?.providerId !== provider
+            ? ""
+            : current.profile,
+      };
+    });
   };
 
   const setColumnWidth = (id: RequestColumnId, width: number): void => {
@@ -414,16 +460,16 @@ export function OverviewPage({
           <button
             type="button"
             className={`overview-filter-toggle${filtersOpen ? " active" : ""}`}
-            aria-label={filtersOpen ? "Hide request filters" : "Show request filters"}
+            aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"}
             aria-expanded={filtersOpen}
-            title={filtersOpen ? "Hide request filters" : "Show request filters"}
+            title={filtersOpen ? "Hide overview filters" : "Show overview filters"}
             onClick={() => setFiltersOpen((current) => !current)}
           >
             <SlidersHorizontal size={17} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
 
-        {filtersOpen ? <div className="overview-filters" aria-label="Request filters">
+        {filtersOpen ? <div className="overview-filters" aria-label="Overview filters">
         <label className="overview-filter-field overview-filter-time">
           <span>From</span>
           <input
@@ -451,6 +497,8 @@ export function OverviewPage({
         <FilterSelect label="Protocol" value={filters.protocol} values={options?.protocols ?? []} allLabel="All protocols" onChange={(value) => updateFilter("protocol", value)} />
         <FilterSelect label="Session" value={filters.session} values={options?.sessions ?? []} allLabel="All sessions" onChange={(value) => updateFilter("session", value)} />
         <FilterSelect label="Model" value={filters.model} values={options?.models ?? []} allLabel="All models" onChange={(value) => updateFilter("model", value)} />
+        <FilterSelect label="Provider" value={filters.provider} values={options?.providers ?? []} allLabel="All providers" displayValue={providerDisplayName} onChange={updateProvider} />
+        <FilterSelect label="Profile" value={filters.profile} values={profileOptions.map((profile) => profile.profileId)} allLabel="All profiles" displayValue={(profileId) => profileOptions.find((profile) => profile.profileId === profileId)?.displayName ?? profileId} onChange={(value) => updateFilter("profile", value)} />
         </div> : null}
 
         <div className="overview-table-scroll">
@@ -502,6 +550,17 @@ export function OverviewPage({
               ) : records.map((record) => {
                 const row = projectRequestLedgerDetail(record);
                 const expanded = expandedRequestId === row.requestId;
+                const attributedAttempt = row.profileAttribution === undefined
+                  ? undefined
+                  : row.credentialAttempts.findLast(
+                    (attempt) => attempt.credentialId === row.profileAttribution?.profileId,
+                  );
+                const attributedCredential = attributedAttempt ?? (
+                  row.profileAttribution !== undefined &&
+                  row.credentialCapture?.credentialId === row.profileAttribution.profileId
+                    ? row.credentialCapture
+                    : undefined
+                );
                 const cause = row.failure === undefined
                   ? "No sanitized failure classification was recorded."
                   : row.failure.stage === undefined
@@ -552,39 +611,44 @@ export function OverviewPage({
                             <section>
                               <strong>Suggested action</strong>
                               <p>{suggestedAction(row.status)}</p>
-                              <span>{row.providerId === "-" ? row.protocolName : row.providerId}</span>
+                              <span>{row.providerId === "-" ? row.protocolName : providerDisplayName(row.providerId)}</span>
                             </section>
-                            {row.credentialCapture !== undefined ? (
-                              <section>
-                                <strong>Provider Profile</strong>
-                                <p>
-                                  {row.credentialCapture.displayName} · {row.credentialCapture.authMethodLabel}
-                                </p>
-                                <span>
-                                  {row.credentialCapture.lane === "provider_native"
+                            <section>
+                              <strong>Profile</strong>
+                              <p>
+                                {row.profileAttribution?.displayName ?? "(No profile)"}
+                                {attributedCredential === undefined
+                                  ? ""
+                                  : ` · ${attributedCredential.authMethodLabel}`}
+                              </p>
+                              <span>
+                                {attributedCredential === undefined
+                                  ? row.providerId === "-"
+                                    ? row.protocolName
+                                    : providerDisplayName(row.providerId)
+                                  : attributedCredential.lane === "provider_native"
                                     ? "Provider Native"
                                     : "Semantic Conversion"}
-                                </span>
-                                {row.credentialAttempts.length > 0 ? (
-                                  <ol className="credential-activity-trail">
-                                    {row.credentialAttempts.map((attempt) => (
-                                      <li key={`${attempt.attempt}-${attempt.credentialId}`}>
-                                        {attempt.displayName} — {attempt.outcome === "http_429"
-                                          ? "HTTP 429"
-                                          : attempt.outcome === "success"
-                                            ? "Success"
-                                            : attempt.outcome === "aborted"
-                                              ? "Aborted"
-                                              : "Failed"}
-                                        {attempt.selectionReason === "http_429_switch"
-                                          ? " · HTTP 429 failover"
-                                          : ""}
-                                      </li>
-                                    ))}
-                                  </ol>
-                                ) : null}
-                              </section>
-                            ) : null}
+                              </span>
+                              {row.credentialAttempts.length > 0 ? (
+                                <ol className="credential-activity-trail">
+                                  {row.credentialAttempts.map((attempt) => (
+                                    <li key={`${attempt.attempt}-${attempt.credentialId}`}>
+                                      {attempt.displayName} — {attempt.outcome === "http_429"
+                                        ? "HTTP 429"
+                                        : attempt.outcome === "success"
+                                          ? "Success"
+                                          : attempt.outcome === "aborted"
+                                            ? "Aborted"
+                                            : "Failed"}
+                                      {attempt.selectionReason === "http_429_switch"
+                                        ? " · HTTP 429 failover"
+                                        : ""}
+                                    </li>
+                                  ))}
+                                </ol>
+                              ) : null}
+                            </section>
                           </div>
                         </td>
                       </tr>

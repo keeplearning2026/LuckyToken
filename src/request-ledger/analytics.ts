@@ -13,7 +13,7 @@
  *  - token/cache sums include only requests whose normalized terminal usage
  *    is Complete (AC-5);
  *  - `reasoning` is a subset of `output` and is never added to any total;
- *  - the aggregate cacheHitRate is ΣcacheRead / Σ(input+cacheRead+cacheWrite)
+ *  - the aggregate cacheHitRate is ΣcacheRead / Σ(input+cacheRead)
  *    over Complete snapshots — a quotient, never an average (AC-6);
  *  - attribution is by `acceptedAt` (half-open `[from, to)` and bucket
  *    indices derived from `from`), so a request whose completion/usage lands
@@ -31,6 +31,7 @@ import {
   type AnalyticsGroupBy,
   type AnalyticsGroupRow,
   type AnalyticsOptionsResult,
+  type AnalyticsProfileOption,
   type AnalyticsQuery,
   type AnalyticsQueryResult,
   type AnalyticsResult,
@@ -203,6 +204,13 @@ function matchesFilters(
     return false;
   }
   if (
+    filters.profiles !== undefined &&
+    (record.facts?.profileAttribution === undefined ||
+      !filters.profiles.includes(record.facts.profileAttribution.profileId))
+  ) {
+    return false;
+  }
+  if (
     filters.models !== undefined &&
     (record.realModelId === undefined ||
       !filters.models.includes(record.realModelId))
@@ -356,7 +364,7 @@ function finishSummaryState(state: SummaryState): AnalyticsResult {
     );
   }
   return Object.freeze({
-    version: 1 as const,
+    version: 2 as const,
     command: "summary" as const,
     totals,
     ...(rows === undefined ? {} : { rows }),
@@ -370,6 +378,11 @@ function finishSummaryState(state: SummaryState): AnalyticsResult {
 interface OptionsState {
   readonly query: Extract<AnalyticsQuery, { readonly command: "options" }>;
   providers: Set<string>;
+  profiles: Map<string, {
+    readonly option: AnalyticsProfileOption;
+    readonly acceptedAt: number;
+    readonly recordId: number;
+  }>;
   models: Set<string>;
   protocols: Set<string>;
   sessions: Set<string>;
@@ -382,6 +395,7 @@ function createOptionsState(
   return {
     query,
     providers: new Set(),
+    profiles: new Map(),
     models: new Set(),
     protocols: new Set(),
     sessions: new Set(),
@@ -394,6 +408,28 @@ function addToOptionsState(state: OptionsState, record: RequestLedgerRecord): vo
   if (query.from !== undefined && record.acceptedAt < query.from) return;
   if (query.to !== undefined && record.acceptedAt >= query.to) return;
   if (record.providerId !== undefined) state.providers.add(record.providerId);
+  if (
+    record.providerId !== undefined &&
+    record.facts?.profileAttribution !== undefined
+  ) {
+    const attribution = record.facts.profileAttribution;
+    const previous = state.profiles.get(attribution.profileId);
+    if (
+      previous === undefined ||
+      record.acceptedAt > previous.acceptedAt ||
+      (record.acceptedAt === previous.acceptedAt && record.id > previous.recordId)
+    ) {
+      state.profiles.set(attribution.profileId, Object.freeze({
+        option: Object.freeze({
+          profileId: attribution.profileId,
+          displayName: attribution.displayName,
+          providerId: record.providerId,
+        }),
+        acceptedAt: record.acceptedAt,
+        recordId: record.id,
+      }));
+    }
+  }
   if (record.realModelId !== undefined) state.models.add(record.realModelId);
   state.protocols.add(record.protocolId);
   if (record.clientSessionId !== undefined) state.sessions.add(record.clientSessionId);
@@ -405,20 +441,37 @@ function finishOptionsState(state: OptionsState): AnalyticsOptionsResult {
   const sorted = (values: ReadonlySet<string>): readonly string[] =>
     Object.freeze([...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
   const providers = sorted(state.providers);
+  const profiles = [...state.profiles.values()]
+    .map((entry) => entry.option)
+    .sort((left, right) => {
+      const byName = left.displayName < right.displayName
+        ? -1
+        : left.displayName > right.displayName
+          ? 1
+          : 0;
+      if (byName !== 0) return byName;
+      return left.profileId < right.profileId
+        ? -1
+        : left.profileId > right.profileId
+          ? 1
+          : 0;
+    });
   const models = sorted(state.models);
   const protocols = sorted(state.protocols);
   const sessions = sorted(state.sessions);
   const outcomes = sorted(state.outcomes);
   const truncated =
     state.providers.size > cap ||
+    state.profiles.size > cap ||
     state.models.size > cap ||
     state.protocols.size > cap ||
     state.sessions.size > cap ||
     state.outcomes.size > cap;
   return Object.freeze({
-    version: 1 as const,
+    version: 2 as const,
     command: "options" as const,
     providers: Object.freeze(providers.slice(0, cap)),
+    profiles: Object.freeze(profiles.slice(0, cap)),
     models: Object.freeze(models.slice(0, cap)),
     protocols: Object.freeze(protocols.slice(0, cap)),
     sessions: Object.freeze(sessions.slice(0, cap)),

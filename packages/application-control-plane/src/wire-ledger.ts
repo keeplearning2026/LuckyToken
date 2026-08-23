@@ -5,6 +5,7 @@ import type {
   LedgerFailureSummary,
   LedgerNotice,
   LedgerPhase,
+  LedgerProfileAttribution,
   LedgerOutcome,
   RequestLedgerEvent,
   RequestLedgerQuery,
@@ -35,6 +36,7 @@ const LEDGER_QUERY_KEYS: ReadonlySet<string> = new Set([
   "limit",
   "protocolId",
   "providerId",
+  "profileId",
   "realModelId",
   "clientSessionId",
   "outcome",
@@ -68,6 +70,7 @@ const LEDGER_FACTS_KEYS: ReadonlySet<string> = new Set([
   "failure",
   "persistenceWarnings",
   "piStopReason",
+  "profileAttribution",
   "credentialCapture",
   "credentialAttempts",
 ]);
@@ -93,6 +96,11 @@ const LEDGER_FAILURE_KEYS: ReadonlySet<string> = new Set([
   "classification",
   "stage",
   "messageHash",
+]);
+
+const LEDGER_PROFILE_ATTRIBUTION_KEYS: ReadonlySet<string> = new Set([
+  "profileId",
+  "displayName",
 ]);
 
 const LEDGER_CREDENTIAL_CAPTURE_KEYS: ReadonlySet<string> = new Set([
@@ -296,6 +304,19 @@ function decodeCredentialCapture(
   });
 }
 
+function decodeProfileAttribution(
+  value: unknown,
+): LedgerProfileAttribution | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const key of Object.keys(value)) {
+    if (!LEDGER_PROFILE_ATTRIBUTION_KEYS.has(key)) return undefined;
+  }
+  const profileId = boundedText(value.profileId, 256);
+  const displayName = boundedText(value.displayName, 256);
+  if (profileId === undefined || displayName === undefined) return undefined;
+  return Object.freeze({ profileId, displayName });
+}
+
 function decodeCredentialAttempt(value: unknown): LedgerCredentialAttempt | undefined {
   const capture = decodeCredentialCapture(value, LEDGER_CREDENTIAL_ATTEMPT_KEYS);
   if (
@@ -338,6 +359,7 @@ function decodeFacts(value: unknown): Readonly<{
   failure?: LedgerFailureSummary;
   persistenceWarnings?: number;
   piStopReason?: string;
+  profileAttribution?: LedgerProfileAttribution;
   credentialCapture?: LedgerCredentialCapture;
   credentialAttempts?: readonly LedgerCredentialAttempt[];
 }> | undefined {
@@ -354,6 +376,9 @@ function decodeFacts(value: unknown): Readonly<{
   const credentialCapture = value.credentialCapture === undefined
     ? undefined
     : decodeCredentialCapture(value.credentialCapture);
+  const profileAttribution = value.profileAttribution === undefined
+    ? undefined
+    : decodeProfileAttribution(value.profileAttribution);
   const credentialAttempts = value.credentialAttempts === undefined
     ? undefined
     : decodeCredentialAttemptArray(value.credentialAttempts);
@@ -361,6 +386,7 @@ function decodeFacts(value: unknown): Readonly<{
     (value.notices !== undefined && notices === undefined) ||
     (value.attempts !== undefined && attempts === undefined) ||
     (value.failure !== undefined && failure === undefined) ||
+    (value.profileAttribution !== undefined && profileAttribution === undefined) ||
     (value.credentialCapture !== undefined && credentialCapture === undefined) ||
     (value.credentialAttempts !== undefined && credentialAttempts === undefined)
   ) {
@@ -388,6 +414,7 @@ function decodeFacts(value: unknown): Readonly<{
       failure === undefined &&
       persistenceWarnings === undefined &&
       piStopReason === undefined &&
+      profileAttribution === undefined &&
       credentialCapture === undefined &&
       credentialAttempts === undefined)
   ) {
@@ -401,6 +428,7 @@ function decodeFacts(value: unknown): Readonly<{
       ? {}
       : { persistenceWarnings: persistenceWarnings as number }),
     ...(piStopReason === undefined ? {} : { piStopReason }),
+    ...(profileAttribution === undefined ? {} : { profileAttribution }),
     ...(credentialCapture === undefined ? {} : { credentialCapture }),
     ...(credentialAttempts === undefined ? {} : { credentialAttempts }),
   });
@@ -590,6 +618,10 @@ export function decodeRequestLedgerQuery(
     value.providerId === undefined
       ? undefined
       : boundedText(value.providerId, 256);
+  const profileId =
+    value.profileId === undefined
+      ? undefined
+      : boundedText(value.profileId, 256);
   const realModelId =
     value.realModelId === undefined
       ? undefined
@@ -601,6 +633,7 @@ export function decodeRequestLedgerQuery(
   if (
     (value.protocolId !== undefined && protocolId === undefined) ||
     (value.providerId !== undefined && providerId === undefined) ||
+    (value.profileId !== undefined && profileId === undefined) ||
     (value.realModelId !== undefined && realModelId === undefined) ||
     (value.clientSessionId !== undefined && clientSessionId === undefined)
   ) {
@@ -632,6 +665,7 @@ export function decodeRequestLedgerQuery(
     ...(limit === undefined ? {} : { limit }),
     ...(protocolId === undefined ? {} : { protocolId }),
     ...(providerId === undefined ? {} : { providerId }),
+    ...(profileId === undefined ? {} : { profileId }),
     ...(realModelId === undefined ? {} : { realModelId }),
     ...(clientSessionId === undefined ? {} : { clientSessionId }),
     ...(outcome === undefined ? {} : { outcome }),

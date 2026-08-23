@@ -74,9 +74,10 @@ function recordWithoutSession(id: number): RequestLedgerRecord {
 function analytics(query: AnalyticsQuery) {
   if (query.command === "options") {
     return {
-      version: 1 as const,
+      version: 2 as const,
       command: "options" as const,
       providers: [],
+      profiles: [],
       models: ["claude-sonnet-4-5"],
       protocols: ["anthropic-messages"],
       sessions: [CLIENT_SESSION],
@@ -84,7 +85,7 @@ function analytics(query: AnalyticsQuery) {
     };
   }
   return {
-    version: 1 as const,
+    version: 2 as const,
     command: "summary" as const,
     totals: {
       total: 0,
@@ -157,6 +158,10 @@ describe("Overview request table", () => {
       clientHttpStatus: 503,
       externalAlias: "external-sonnet",
       facts: {
+        profileAttribution: {
+          profileId: "credential-backup",
+          displayName: "Backup",
+        },
         failure: {
           classification: "upstream-failure",
           stage: "provider-request",
@@ -185,7 +190,7 @@ describe("Overview request table", () => {
             credentialId: "credential-backup",
             displayName: "Backup",
             authType: "oauth",
-            authMethodLabel: "Anthropic (Claude Pro/Max)",
+            authMethodLabel: "Anthropic Backup OAuth",
             lane: "provider_native",
             selectionReason: "http_429_switch",
             attempt: 2,
@@ -269,10 +274,19 @@ describe("Overview request table", () => {
     expect(container.textContent).toContain("Suggested action");
     expect(container.textContent).toContain("upstream-failure");
     expect(container.textContent).toContain("provider-request");
-    expect(container.textContent).toContain("Provider Profile");
-    expect(container.textContent).toContain("Production · Anthropic (Claude Pro/Max)");
+    expect(container.textContent).toContain("Profile");
+    expect(container.textContent).toContain("Backup · Anthropic Backup OAuth");
     expect(container.textContent).toContain("Production — HTTP 429");
     expect(container.textContent).toContain("Backup — Failed · HTTP 429 failover");
+
+    await act(async () => {
+      const details = container.querySelector(
+        `button[aria-label="Show details for request ${second.requestId}"]`,
+      );
+      if (!(details instanceof HTMLButtonElement)) throw new Error("request details control missing");
+      details.click();
+    });
+    expect(container.textContent).toContain("(No profile)");
 
     await act(async () => {
       const loadMore = [...container.querySelectorAll("button")].find(

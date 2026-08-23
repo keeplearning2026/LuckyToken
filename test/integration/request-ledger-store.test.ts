@@ -121,6 +121,11 @@ describe("Request Ledger store public seam", () => {
     const store = await factory(configuration).open();
     stores.push(store);
     const entry = store.begin("openai-responses");
+    entry.modelResolved({
+      externalAlias: "gpt-fixture",
+      providerId: "openai",
+      realModelId: "gpt-fixture",
+    });
     entry.credentialCaptured({
       credentialId: "credential-primary",
       displayName: "Production",
@@ -152,6 +157,10 @@ describe("Request Ledger store public seam", () => {
     entry.completed(200);
 
     expect(store.query(undefined).records[0]?.facts).toMatchObject({
+      profileAttribution: {
+        profileId: "credential-backup",
+        displayName: "Backup",
+      },
       credentialCapture: {
         credentialId: "credential-primary",
         displayName: "Production",
@@ -183,6 +192,23 @@ describe("Request Ledger store public seam", () => {
         lastUsedAt: 1_700_000_000_000,
       },
     ]);
+
+    const capturedOnly = store.begin("openai-responses");
+    capturedOnly.modelResolved({
+      externalAlias: "gpt-fixture",
+      providerId: "openai",
+      realModelId: "gpt-fixture",
+    });
+    capturedOnly.credentialCaptured({
+      credentialId: "credential-not-attempted",
+      displayName: "Not Attempted",
+      authType: "api_key",
+      authMethodLabel: "OpenAI API key",
+      lane: "provider_native",
+      selectionReason: "active",
+    });
+    capturedOnly.completed(503);
+    expect(store.query(undefined).records[0]?.facts?.profileAttribution).toBeUndefined();
   });
 
   it("creates a consistent self-contained backup snapshot through the store seam", async () => {
@@ -318,6 +344,17 @@ describe("Request Ledger store public seam", () => {
           realModelId: "model-a",
         });
       }
+      if (index % 4 === 0) {
+        entry.profileAttributed({
+          profileId: "profile-a",
+          displayName: "Profile A",
+        });
+      } else if (index % 5 === 0) {
+        entry.profileAttributed({
+          profileId: "profile-b",
+          displayName: "Profile B",
+        });
+      }
       entry.executing();
       entry.terminal(index % 2 === 0 ? "failed" : "success", {
         clientHttpStatus: index % 2 === 0 ? 500 : 200,
@@ -349,6 +386,16 @@ describe("Request Ledger store public seam", () => {
     const modelB = store.query({ realModelId: "model-b", limit: 2 });
     expect(modelB.records.map((record) => record.id)).toEqual([12, 9]);
     expect(modelB.hasMore).toBe(true);
+    const profileFirstPage = store.query({ profileId: "profile-a", limit: 2 });
+    expect(profileFirstPage.records.map((record) => record.id)).toEqual([12, 8]);
+    expect(profileFirstPage.hasMore).toBe(true);
+    const profileSecondPage = store.query({
+      profileId: "profile-a",
+      afterId: profileFirstPage.records[1]!.id,
+      limit: 2,
+    });
+    expect(profileSecondPage.records.map((record) => record.id)).toEqual([4]);
+    expect(profileSecondPage.hasMore).toBe(false);
     const protocol = store.query({ protocolId: "anthropic-messages" });
     expect(protocol.records.map((record) => record.id)).toEqual([
       11, 9, 7, 5, 3, 1,

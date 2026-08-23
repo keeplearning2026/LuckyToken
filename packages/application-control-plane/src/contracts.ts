@@ -698,6 +698,7 @@ export type {
   LedgerOutcome,
   LedgerPersistenceFailure,
   LedgerPhase,
+  LedgerProfileAttribution,
   LedgerTerminalFacts,
   LedgerTerminalOutcome,
   RequestLedger,

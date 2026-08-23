@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { LocalResponsesLane } from "../../protocols/openai-responses/handler.js";
 import type {
   CodexFetchFunction,
@@ -20,6 +22,22 @@ export interface CreateCodexLocalResponsesLaneOptions {
   readonly credentials: CodexLocalCredentialAuthority;
   readonly models: CodexNativeModelSource;
   readonly fetch: CodexFetchFunction;
+}
+
+const LOCAL_PROFILE_DOMAIN = "luckytoken:codex-local-account:v1:";
+
+function localProfile(accountId: string): {
+  readonly profileId: string;
+  readonly displayName: string;
+} {
+  const digest = createHash("sha256")
+    .update(`${LOCAL_PROFILE_DOMAIN}${accountId}`)
+    .digest("hex");
+  const suffix = accountId.length > 6 ? accountId.slice(-6) : digest.slice(-6);
+  return Object.freeze({
+    profileId: `codex-local:${digest}`,
+    displayName: `Codex …${suffix}`,
+  });
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -99,7 +117,7 @@ export function createCodexLocalResponsesLane(
     ): Promise<Response> {
       input.ledger.modelResolved({
         externalAlias: input.selector,
-        providerId: "openai-codex",
+        providerId: "codex-local",
         realModelId: input.selector,
       });
       const forwardAuth = await options.credentials.resolveForwardAuth(
@@ -114,6 +132,9 @@ export function createCodexLocalResponsesLane(
             "Local Codex credential is unavailable",
           ),
         );
+      }
+      if (forwardAuth.accountId !== undefined) {
+        input.ledger.profileAttributed(localProfile(forwardAuth.accountId));
       }
       return executeWithAuth(input, forwardAuth, options.fetch);
     },

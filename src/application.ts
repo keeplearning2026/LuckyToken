@@ -679,7 +679,7 @@ async function startNormalApplication(options: {
       persistence: () => persistenceAuthority.projection(),
       requestFailureCount: (from, to) => {
         const result = ownedLedgerStore.analyze({
-          version: 1,
+          version: 2,
           command: "summary",
           from,
           to,

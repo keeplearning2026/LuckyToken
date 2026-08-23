@@ -39,6 +39,7 @@ import {
   type LedgerOutcome,
   type LedgerPersistenceFailure,
   type LedgerPhase,
+  type LedgerProfileAttribution,
   type LedgerTerminalFacts,
   type LedgerTerminalOutcome,
   type RequestLedgerEntry,
@@ -115,6 +116,7 @@ interface DraftFacts {
   readonly failure?: LedgerFailureSummary;
   readonly persistenceWarnings: number;
   readonly piStopReason?: string;
+  readonly profileAttribution?: LedgerProfileAttribution;
   readonly credentialCapture?: LedgerCredentialCapture;
   readonly credentialAttempts: readonly LedgerCredentialAttempt[];
 }
@@ -240,6 +242,9 @@ function encodeFacts(facts: DraftFacts): string | null {
   if (facts.piStopReason !== undefined) {
     output.piStopReason = facts.piStopReason;
   }
+  if (facts.profileAttribution !== undefined) {
+    output.profileAttribution = facts.profileAttribution;
+  }
   if (facts.credentialCapture !== undefined) {
     output.credentialCapture = facts.credentialCapture;
   }
@@ -275,6 +280,12 @@ function decodeFacts(value: unknown): Readonly<LedgerFacts> | undefined {
     ...(facts.piStopReason === undefined
       ? {}
       : { piStopReason: facts.piStopReason as string }),
+    ...(facts.profileAttribution === undefined
+      ? {}
+      : {
+          profileAttribution:
+            facts.profileAttribution as LedgerProfileAttribution,
+        }),
     ...(facts.credentialCapture === undefined
       ? {}
       : { credentialCapture: facts.credentialCapture as LedgerCredentialCapture }),
@@ -396,6 +407,22 @@ function sanitizeCredentialCapture(
     authMethodLabel: safeText(capture.authMethodLabel, 256, scrub),
     lane: capture.lane,
     selectionReason: capture.selectionReason,
+  });
+}
+
+function sanitizeProfileAttribution(
+  attribution: LedgerProfileAttribution,
+  scrub: ((value: string) => string) | undefined,
+): LedgerProfileAttribution {
+  if (typeof attribution.profileId !== "string" || attribution.profileId.length === 0) {
+    throw new Error("profile attribution id must be a non-empty string");
+  }
+  if (typeof attribution.displayName !== "string" || attribution.displayName.length === 0) {
+    throw new Error("profile attribution display name must be a non-empty string");
+  }
+  return Object.freeze({
+    profileId: safeText(attribution.profileId, 256, scrub),
+    displayName: safeText(attribution.displayName, 256, scrub),
   });
 }
 
@@ -803,6 +830,24 @@ export function createRequestLedgerStoreFactory(
               }
               persistEntry(entry);
             },
+            profileAttributed(attribution: LedgerProfileAttribution): void {
+              try {
+                if (entry.providerId === undefined) {
+                  throw new Error("profile attribution requires a resolved provider");
+                }
+                entry.facts = Object.freeze({
+                  ...entry.facts,
+                  profileAttribution: sanitizeProfileAttribution(
+                    attribution,
+                    attachedScrub,
+                  ),
+                });
+              } catch (error) {
+                countEntryFault(entry, error);
+                return;
+              }
+              persistEntry(entry);
+            },
             executing(): void {
               try {
                 entry.phase = "execution";
@@ -963,6 +1008,9 @@ export function createRequestLedgerStoreFactory(
             credentialAttempt(attempt: LedgerCredentialAttempt): void {
               if (entry.facts.credentialAttempts.length >= MAX_ATTEMPTS) return;
               try {
+                if (entry.providerId === undefined) {
+                  throw new Error("credential attempt requires a resolved provider");
+                }
                 if (!Number.isSafeInteger(attempt.attempt) || attempt.attempt < 1) {
                   throw new Error("credential attempt must be a positive integer");
                 }
@@ -974,12 +1022,20 @@ export function createRequestLedgerStoreFactory(
                 ) {
                   throw new Error("credential attempt outcome is invalid");
                 }
+                const capture = sanitizeCredentialCapture(
+                  attempt,
+                  attachedScrub,
+                );
                 entry.facts = Object.freeze({
                   ...entry.facts,
+                  profileAttribution: Object.freeze({
+                    profileId: capture.credentialId,
+                    displayName: capture.displayName,
+                  }),
                   credentialAttempts: Object.freeze([
                     ...entry.facts.credentialAttempts,
                     Object.freeze({
-                      ...sanitizeCredentialCapture(attempt, attachedScrub),
+                      ...capture,
                       attempt: attempt.attempt,
                       outcome: attempt.outcome,
                     }),
@@ -1057,10 +1113,6 @@ export function createRequestLedgerStoreFactory(
                 );
           const conditions: string[] = [];
           const params: Array<number | string> = [];
-          if (afterId !== undefined) {
-            conditions.push("id < ?");
-            params.push(afterId);
-          }
           if (query?.protocolId !== undefined) {
             conditions.push("protocol_id = ?");
             params.push(safeName(query.protocolId, "query.protocolId"));
@@ -1108,11 +1160,53 @@ export function createRequestLedgerStoreFactory(
           ) {
             throw new Error("query.from must not exceed query.to");
           }
-          const where =
-            conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`;
-          const rows = database
-            .prepare(`${selectBase}${where} ORDER BY id DESC LIMIT ?`)
-            .all(...params, limit + 1) as unknown as Row[];
+          const profileId = query?.profileId === undefined
+            ? undefined
+            : safeText(query.profileId, 256, attachedScrub);
+          let rows: Row[];
+          if (profileId === undefined) {
+            const directConditions = [...conditions];
+            const directParams = [...params];
+            if (afterId !== undefined) {
+              directConditions.push("id < ?");
+              directParams.push(afterId);
+            }
+            const where = directConditions.length === 0
+              ? ""
+              : ` WHERE ${directConditions.join(" AND ")}`;
+            rows = database
+              .prepare(`${selectBase}${where} ORDER BY id DESC LIMIT ?`)
+              .all(...directParams, limit + 1) as unknown as Row[];
+          } else {
+            const matches: Row[] = [];
+            let cursor = afterId;
+            const pageSize = 1_000;
+            for (;;) {
+              const scanConditions = [...conditions];
+              const scanParams = [...params];
+              if (cursor !== undefined) {
+                scanConditions.push("id < ?");
+                scanParams.push(cursor);
+              }
+              const where = scanConditions.length === 0
+                ? ""
+                : ` WHERE ${scanConditions.join(" AND ")}`;
+              const page = database
+                .prepare(`${selectBase}${where} ORDER BY id DESC LIMIT ?`)
+                .all(...scanParams, pageSize) as unknown as Row[];
+              for (const row of page) {
+                if (rowToRecord(row).facts?.profileAttribution?.profileId === profileId) {
+                  matches.push(row);
+                  if (matches.length > limit) break;
+                }
+              }
+              if (matches.length > limit || page.length < pageSize) break;
+              const last = page[page.length - 1];
+              if (last === undefined) break;
+              cursor = last.id;
+            }
+            rows = matches;
+          }
           const hasMore = rows.length > limit;
           const visible = rows.slice(0, limit);
           return Object.freeze({

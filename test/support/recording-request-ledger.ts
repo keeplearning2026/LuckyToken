@@ -3,6 +3,10 @@ import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usag
 
 export function createRecordingRequestLedger() {
   const terminalUsage: NormalizedTerminalUsage[] = [];
+  const profiles: Array<{
+    profileId: string;
+    displayName: string;
+  }> = [];
   const models: Array<{
     externalAlias: string;
     providerId: string;
@@ -18,6 +22,10 @@ export function createRecordingRequestLedger() {
         providerId: string;
         realModelId: string;
       }) => models.push(snapshot),
+      profileAttributed: (attribution: {
+        profileId: string;
+        displayName: string;
+      }) => profiles.push(attribution),
       executing: () => undefined,
       rendering: () => undefined,
       terminal: () => undefined,
@@ -30,5 +38,5 @@ export function createRecordingRequestLedger() {
     query: () => ({ records: [], total: 0, limit: 0, offset: 0 }),
     subscribe: () => ({ unsubscribe: () => undefined }),
   } as unknown as RequestLedger;
-  return { ledger, terminalUsage, models };
+  return { ledger, terminalUsage, models, profiles };
 }

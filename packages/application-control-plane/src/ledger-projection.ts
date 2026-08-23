@@ -25,6 +25,7 @@ import type {
   LedgerNotice,
   LedgerOutcome,
   LedgerPhase,
+  LedgerProfileAttribution,
   RequestLedgerRecord,
 } from "./ledger-contract.js";
 import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
@@ -144,7 +145,7 @@ export function formatTokensPerSecond(tokensPerSecond: number): string {
 
 /**
  * Cache Hit is a rate, not a boolean: the authoritative Ticket 20
- * `cacheHitRate` (cacheRead / (input + cacheRead + cacheWrite)), rendered
+ * `cacheHitRate` (cacheRead / (input + cacheRead)), rendered
  * as a human percentage. The UI never recomputes it; a present validated
  * rate formats here, an absent/unvalidated one renders `-`.
  */
@@ -367,6 +368,7 @@ export interface RequestLedgerDetailProjection extends RequestLedgerListProjecti
   readonly failure?: Readonly<LedgerFailureSummary>;
   readonly notices: readonly LedgerNotice[];
   readonly attempts: readonly LedgerAttempt[];
+  readonly profileAttribution?: Readonly<LedgerProfileAttribution>;
   readonly credentialCapture?: Readonly<LedgerCredentialCapture>;
   readonly credentialAttempts: readonly LedgerCredentialAttempt[];
 }
@@ -400,6 +402,9 @@ export function projectRequestLedgerDetail(
       : { failure: record.facts.failure }),
     notices: record.facts?.notices ?? Object.freeze([]),
     attempts: record.facts?.attempts ?? Object.freeze([]),
+    ...(record.facts?.profileAttribution === undefined
+      ? {}
+      : { profileAttribution: record.facts.profileAttribution }),
     ...(record.facts?.credentialCapture === undefined
       ? {}
       : { credentialCapture: record.facts.credentialCapture }),

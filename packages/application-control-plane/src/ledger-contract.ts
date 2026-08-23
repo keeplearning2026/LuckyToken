@@ -117,6 +117,12 @@ export interface LedgerCredentialUsage {
   readonly lastSucceededAt?: number;
 }
 
+/** Stable, secret-free request attribution used only for observation. */
+export interface LedgerProfileAttribution {
+  readonly profileId: string;
+  readonly displayName: string;
+}
+
 /** Safe failure summary: bounded classification/stage plus a hash of the
  *  error message. Raw error text never enters the ledger or the wire. */
 export interface LedgerFailureSummary {
@@ -133,6 +139,7 @@ export interface LedgerFacts {
   readonly failure?: LedgerFailureSummary;
   readonly persistenceWarnings?: number;
   readonly piStopReason?: string;
+  readonly profileAttribution?: LedgerProfileAttribution;
   readonly credentialCapture?: LedgerCredentialCapture;
   readonly credentialAttempts?: readonly LedgerCredentialAttempt[];
 }
@@ -185,6 +192,7 @@ export interface RequestLedgerQuery {
   readonly limit?: number;
   readonly protocolId?: string;
   readonly providerId?: string;
+  readonly profileId?: string;
   readonly realModelId?: string;
   readonly clientSessionId?: string;
   readonly outcome?: LedgerOutcome;
@@ -251,6 +259,7 @@ export interface RequestLedgerEntry {
    *  never inferred). */
   aliasCaptured(fact: LedgerAliasFact): void;
   modelResolved(snapshot: LedgerModelSnapshot): void;
+  profileAttributed(attribution: LedgerProfileAttribution): void;
   executing(): void;
   rendering(): void;
   /** Records the terminal outcome at its determination moment. */
