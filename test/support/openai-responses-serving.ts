@@ -9,9 +9,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { RequestLedger } from "../../src/request-ledger/index.js";
-import type { DeepCaptureAuthority } from "../../src/deep-diagnostics/index.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
+import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/contract.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "../../src/protocols/openai-responses/session-state.js";
@@ -25,7 +24,6 @@ import {
   type LuckyTokenRuntime,
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
-import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import type {
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
@@ -47,13 +45,7 @@ export interface OpenAIResponsesServingTestOptions {
   /** Reuse a fixed runtime directory (restart simulation). */
   directory?: string;
   configuration?: OpenAIResponsesConfiguration;
-  invocationDiagnostics?: InvocationDiagnosticsFactory;
-  /** Ticket 18 Request Lifecycle Ledger observer; absent means the handler
-   *  uses its no-op observer. */
-  requestLedger?: RequestLedger;
-  /** Ticket 22 Deep Diagnostics capture authority; absent means the handler
-   *  uses its no-op authority. */
-  deepCapture?: DeepCaptureAuthority;
+  diagnostics?: RequestJourneyObservationAuthority;
   /** Codex-native request test seam. Production composition wires the same
    *  authority into Client Auth and the native passthrough branch. */
   codexLocalAuth?: CodexLocalCredentialAuthority;
@@ -139,15 +131,6 @@ export async function createOpenAIResponsesServingTestComposition(
     ...(options.configuration === undefined
       ? {}
       : { configuration: options.configuration }),
-    ...(options.invocationDiagnostics === undefined
-      ? {}
-      : { invocationDiagnostics: options.invocationDiagnostics }),
-    ...(options.requestLedger === undefined
-      ? {}
-      : { requestLedger: options.requestLedger }),
-    ...(options.deepCapture === undefined
-      ? {}
-      : { deepCapture: options.deepCapture }),
     ...(localNativeLane === undefined ? {} : { localNativeLane }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
@@ -157,6 +140,9 @@ export async function createOpenAIResponsesServingTestComposition(
   });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [handler, modelsHandler],
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
   });
   return Object.freeze({
     runtime,

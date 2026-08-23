@@ -111,56 +111,12 @@ export function createConfiguredBackupAuthority(
   });
 }
 
-function rawSnapshot(
-  id: string,
-  contract: string,
-  version: number,
-  category: "history" | "capture",
-  path: string,
-): BackupSnapshotSource {
-  return Object.freeze({
-    id,
-    contract,
-    version,
-    category,
-    sourcePath: path,
-    optional: true,
-    async snapshot(signal: AbortSignal): Promise<Uint8Array> {
-      signal.throwIfAborted();
-      const bytes = await readFile(path);
-      signal.throwIfAborted();
-      return bytes;
-    },
-  });
-}
-
-/** Recovery mode never opens or interprets incompatible SQLite stores. A
- * separately confirmed full-sensitive backup may copy their exact dormant
- * bytes so the user can recover them externally. */
+/** Recovery mode has no configured store snapshots. Live unified Diagnostics
+ * owns its consistent SQLite snapshot and the Application injects that source
+ * into normal backups; this module never discovers or copies legacy stores. */
 export function recoveryBackupSnapshots(
   config: LuckyTokenCliConfig,
 ): readonly BackupSnapshotSource[] {
-  return Object.freeze([
-    rawSnapshot(
-      "request-ledger",
-      "luckytoken-request-ledger-sqlite",
-      3,
-      "history",
-      join(config.requestLedger.directory, "ledger.sqlite3"),
-    ),
-    rawSnapshot(
-      "runtime-diagnostics",
-      "luckytoken-runtime-diagnostics-sqlite",
-      1,
-      "history",
-      join(config.runtimeDiagnostics.directory, "diagnostics.sqlite3"),
-    ),
-    rawSnapshot(
-      "deep-capture",
-      "luckytoken-deep-capture-sqlite",
-      1,
-      "capture",
-      join(config.deepDiagnostics.directory, "capture.sqlite3"),
-    ),
-  ]);
+  void config;
+  return Object.freeze([]);
 }

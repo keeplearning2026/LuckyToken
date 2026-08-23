@@ -1,25 +1,7 @@
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import {
-  resolveRequestIdentity,
-} from "../../request-identity.js";
-import {
-  createNoopInvocationDiagnosticsFactory,
-  type InvocationDiagnostics,
-  type InvocationDiagnosticsFactory,
-} from "../../invocation-diagnostics/index.js";
-import {
-  createNoopRequestLedger,
-  type RequestLedger,
-  type RequestLedgerEntry,
-} from "../../request-ledger/handler-seam.js";
-import {
-  createNoopDeepCaptureAuthority,
-  createNoopCaptureEntry,
-  type DeepCaptureAuthority,
-  type DeepCaptureEntry,
-} from "../../deep-diagnostics/handler-seam.js";
+import { resolveRequestIdentity } from "../../request-identity.js";
 import {
   bindOpenAIResponsesConfiguration,
   parseOpenAIResponsesConfiguration,
@@ -30,7 +12,16 @@ import {
   ExecutionAbortedError,
 } from "../../execution.js";
 import type { ExecutionOperation } from "../../execution.js";
-import type { ClientProtocolHandler } from "../../http.js";
+import type {
+  ClientProtocolHandler,
+  ClientProtocolRequestContext,
+} from "../../http.js";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+  RequestJourneyOperation,
+} from "../../diagnostics/contract.js";
 import { ModelResolutionFailure } from "../../model-resolution.js";
 import {
   resolveDataPlanePublicModel,
@@ -63,18 +54,12 @@ import {
 } from "./native-response.js";
 import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";
 import { executeSemanticResponses } from "./semantic.js";
-import type { ProviderResponsesLane } from "../../provider-native-responses/contract.js";
+import type {
+  ProviderResponsesLane,
+  ProviderResponsesObservationContext,
+} from "../../provider-native-responses/contract.js";
 
 export const openaiResponsesProtocolId = "openai-responses";
-
-/**
- * Ticket 18 correlation: the accepted ledger request id of every request
- * currently being handled (weak: entries vanish with the Request object).
- * The HTTP boundary reads it only to correlate a transport-synthesized
- * error response with the persisted ledger row; the ledger module never
- * enters the transport layer.
- */
-const requestIds = new WeakMap<Request, string>();
 
 export interface LocalResponsesLane {
   claims(selector: string): boolean;
@@ -83,8 +68,7 @@ export interface LocalResponsesLane {
     readonly rawBody: string;
     readonly selector: string;
     readonly streamRequested: boolean;
-    readonly diagnostics: InvocationDiagnostics;
-    readonly ledger: RequestLedgerEntry;
+    readonly journey?: RequestJourneyObserver;
   }): Promise<Response>;
 }
 
@@ -94,7 +78,6 @@ export interface OpenAIResponsesHandlerOptions {
   readonly providerNativeLane?: ProviderResponsesLane;
   readonly createSessionId?: () => string;
   readonly configuration?: OpenAIResponsesConfiguration;
-  readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly stateFile: string;
   /**
    * Optional injected session state (test seam). When omitted, the handler
@@ -104,20 +87,6 @@ export interface OpenAIResponsesHandlerOptions {
   /** Backend-lifetime Public Model source. When absent, direct handler tests
    * use the canonical provider/model selector seam. */
   readonly publicModels?: PublicModelSource;
-  /**
-   * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
-   * handler-local entry at acceptance, drives the lifecycle transitions,
-   * and attaches the request id to every response. Absent means the no-op
-   * observer (the header contract still holds).
-   */
-  readonly requestLedger?: RequestLedger;
-  /**
-   * Ticket 22 Deep Diagnostics capture authority: the wrapper reads one
-   * immutable acceptance-time enable snapshot per request and collects
-   * raw request/response artifacts while enabled. Absent means the no-op
-   * authority (no capture ever begins).
-   */
-  readonly deepCapture?: DeepCaptureAuthority;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -141,9 +110,6 @@ interface OpenAIResponsesDependencies {
   readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly createSessionId: () => string;
   readonly configuration: OpenAIResponsesConfiguration;
-  readonly invocationDiagnostics: InvocationDiagnosticsFactory;
-  readonly requestLedger: RequestLedger;
-  readonly deepCapture: DeepCaptureAuthority;
   readonly sessionState: ResponseSessionState;
   readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
@@ -160,68 +126,220 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   });
 }
 
-/** Every Data Plane response of this handler carries the ledger request id
- *  exactly once (success, error, and passthrough alike). */
-function attachRequestId(response: Response, requestId: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set("x-luckytoken-request-id", requestId);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
+function observeResponsesJourney(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // Request serving remains authoritative over observation failure.
+  }
+}
+
+function enterResponsesJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeResponsesJourney(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
   });
 }
 
-/** Own-data header facts for the capture observer: the universal redaction
- *  choke point is the safety net; nothing is pre-filtered here. */
-function headerRecord(headers: Headers): Record<string, string> {
-  return Object.fromEntries(headers.entries());
+function completeResponsesJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  protocol?: string,
+  operation?: RequestJourneyOperation,
+): void {
+  observeResponsesJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion: "success",
+    location,
+    ...(protocol === undefined ? {} : { protocol }),
+    ...(operation === undefined ? {} : { operation }),
+  });
 }
 
-const textDecoder = new TextDecoder();
+function failResponsesJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  completion: "failed" | "aborted" = "failed",
+): void {
+  observeResponsesJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion,
+    location,
+  });
+}
 
-/** Ticket 22 isolation: capture infrastructure must never affect request
- *  handling. A hostile/throwing authority falls back to the safe disabled
- *  entry; the request id correlation always survives. */
-function beginCapture(
-  dependencies: OpenAIResponsesDependencies,
-  request: Request,
+interface ResponsesEarlyFailure {
+  readonly stepInstanceId: string;
+  readonly location: RequestJourneyLocation;
+  readonly classification: string;
+  readonly origin: "client" | "luckytoken";
+}
+
+function observeResponsesEarlyFailure(
+  journey: RequestJourneyObserver | undefined,
   requestId: string,
-): DeepCaptureEntry {
-  try {
-    return dependencies.deepCapture.begin({
-      requestId,
-      protocolId: openaiResponsesProtocolId,
-      requestHeaders: headerRecord(request.headers),
-    });
-  } catch {
-    return createNoopCaptureEntry(requestId);
-  }
+  response: Response,
+  failure: ResponsesEarlyFailure,
+): Response {
+  observeResponsesJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId: failure.stepInstanceId,
+    completion: "failed",
+    protocol: openaiResponsesProtocolId,
+    operation: "model_generation",
+    location: failure.location,
+  });
+  observeResponsesJourney(journey, {
+    kind: "failure_detected",
+    failureId: `${requestId}:${failure.classification}`,
+    role: "primary",
+    classification: failure.classification,
+    origin: failure.origin,
+    originPrecision: "exact",
+    location: failure.location,
+  });
+
+  const presentationLocation = {
+    phase: "client_response_preparation",
+    step: "prepare_openai_responses_error_response",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p6.prepare_openai_responses_error_response",
+    presentationLocation,
+  );
+  observeResponsesJourney(journey, {
+    kind: "client_response_prepared",
+    status: response.status,
+    ...(response.headers.get("content-type") === null
+      ? {}
+      : { mediaType: response.headers.get("content-type")! }),
+    location: presentationLocation,
+  });
+  completeResponsesJourneyStep(
+    journey,
+    "p6.prepare_openai_responses_error_response",
+    presentationLocation,
+    openaiResponsesProtocolId,
+    "model_generation",
+  );
+
+  const outcomeLocation = {
+    phase: "outcome_commit",
+    step: "commit_request_outcome",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p7.commit_request_outcome",
+    outcomeLocation,
+  );
+  observeResponsesJourney(journey, {
+    kind: "work_outcome_committed",
+    outcome: "failed",
+    terminalAuthority: "openai_responses_handler",
+    location: outcomeLocation,
+  });
+  completeResponsesJourneyStep(
+    journey,
+    "p7.commit_request_outcome",
+    outcomeLocation,
+    openaiResponsesProtocolId,
+    "model_generation",
+  );
+  return response;
 }
 
-/** Ticket 22 isolation: the delivered response is cloned and read only when
- *  the acceptance decision enabled capture (zero cost while disabled), and
- *  any clone/read/callback failure degrades to a partial capture — it can
- *  never replace or change the model response. */
-async function captureDeliveredResponse(
-  capture: DeepCaptureEntry,
+function observeResponsesWireArtifact(
+  journey: RequestJourneyObserver | undefined,
+  input: Readonly<{
+    artifactId: string;
+    artifactKind: string;
+    bytes: Uint8Array;
+    mediaType?: string;
+    location: RequestJourneyLocation;
+  }>,
+): void {
+  const capturedBytes = Math.min(input.bytes.byteLength, 256 * 1_024);
+  observeResponsesJourney(journey, {
+    kind: "artifact_observed",
+    artifactId: input.artifactId,
+    artifactKind: input.artifactKind,
+    state: capturedBytes < input.bytes.byteLength ? "partial" : "captured",
+    ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    bytes: input.bytes.slice(0, capturedBytes),
+    originalBytes: input.bytes.byteLength,
+    capturedBytes,
+    truncated: capturedBytes < input.bytes.byteLength,
+    location: input.location,
+  });
+}
+
+function observeProviderNativeTerminalResponse(
+  journey: RequestJourneyObserver | undefined,
   response: Response,
-): Promise<void> {
-  if (!capture.decision.enabled) return;
-  try {
-    const responseBytes = await response.clone().arrayBuffer();
-    capture.response(
-      response.status,
-      headerRecord(new Headers(response.headers)),
-      textDecoder.decode(responseBytes),
-    );
-  } catch {
-    try {
-      capture.fail("response-capture-failed");
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-  }
+  outcome: "success" | "failed",
+): void {
+  const presentationLocation = {
+    phase: "client_response_preparation",
+    lane: "provider_native",
+    step:
+      outcome === "success"
+        ? "prepare_provider_native_response"
+        : "prepare_provider_native_error_response",
+  } as const;
+  const presentationStep =
+    outcome === "success"
+      ? "p6.prepare_provider_native_response"
+      : "p6.prepare_provider_native_error_response";
+  enterResponsesJourneyStep(journey, presentationStep, presentationLocation);
+  observeResponsesJourney(journey, {
+    kind: "client_response_prepared",
+    status: response.status,
+    ...(response.headers.get("content-type") === null
+      ? {}
+      : { mediaType: response.headers.get("content-type")! }),
+    location: presentationLocation,
+  });
+  completeResponsesJourneyStep(
+    journey,
+    presentationStep,
+    presentationLocation,
+  );
+
+  const outcomeLocation = {
+    phase: "outcome_commit",
+    lane: "provider_native",
+    step: "commit_request_outcome",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p7.commit_request_outcome",
+    outcomeLocation,
+  );
+  observeResponsesJourney(journey, {
+    kind: "work_outcome_committed",
+    outcome,
+    requestOutcome: outcome,
+    terminalAuthority: "openai_responses_provider_native_lane",
+    location: outcomeLocation,
+  });
+  completeResponsesJourneyStep(
+    journey,
+    "p7.commit_request_outcome",
+    outcomeLocation,
+  );
 }
 
 async function raceWithRequestSignal<T>(
@@ -251,123 +369,324 @@ function hasJsonContentType(headers: Headers): boolean {
 async function handleOpenAIResponses(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
-  diagnostics: InvocationDiagnostics,
-  ledger: RequestLedgerEntry,
-  capture: DeepCaptureEntry,
+  requestId: string,
+  journey: RequestJourneyObserver | undefined,
 ): Promise<Response> {
+  let activeEarlyStep: Readonly<{
+    stepInstanceId: string;
+    location: RequestJourneyLocation;
+  }> | undefined;
   try {
     request.signal.throwIfAborted();
-    diagnostics.checkpoint({ stage: "client-validation" });
+    const mediaLocation = {
+      phase: "protocol_ingress",
+      step: "validate_media_and_encoding",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.validate_media_and_encoding",
+      location: mediaLocation,
+    };
+    enterResponsesJourneyStep(
+      journey,
+      "p1.validate_media_and_encoding",
+      mediaLocation,
+    );
     if (!hasJsonContentType(request.headers)) {
-      ledger.terminal("failed", { clientHttpStatus: 415 });
-      return toResponse(
-        renderResponsesError(
-          415,
-          "invalid_request_error",
-          "Content-Type must be application/json",
+      observeResponsesJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "unavailable",
+        ...(request.headers.get("content-type") === null
+          ? {}
+          : { mediaType: request.headers.get("content-type")! }),
+        reason: "body_not_read_due_to_media_type",
+        location: mediaLocation,
+      });
+      return observeResponsesEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderResponsesError(
+            415,
+            "invalid_request_error",
+            "Content-Type must be application/json",
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "unsupported_media_type",
+          origin: "client",
+        },
       );
     }
+    completeResponsesJourneyStep(
+      journey,
+      "p1.validate_media_and_encoding",
+      mediaLocation,
+      openaiResponsesProtocolId,
+      "model_generation",
+    );
+    activeEarlyStep = undefined;
 
+    const identityLocation = {
+      phase: "protocol_ingress",
+      step: "establish_request_identity",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.establish_request_identity",
+      location: identityLocation,
+    };
+    enterResponsesJourneyStep(
+      journey,
+      "p1.establish_request_identity",
+      identityLocation,
+    );
     const requestIdentity = resolveRequestIdentity(
       request.headers,
       dependencies.createSessionId,
     );
-    ledger.authorized({
+    observeResponsesJourney(journey, {
+      kind: "request_identity_established",
       effectiveSessionId: requestIdentity.effectiveSessionId,
       ...(requestIdentity.clientSessionId === undefined
         ? {}
         : { clientSessionId: requestIdentity.clientSessionId }),
+      location: identityLocation,
     });
+    completeResponsesJourneyStep(
+      journey,
+      "p1.establish_request_identity",
+      identityLocation,
+    );
+    activeEarlyStep = undefined;
 
+    const bodyLocation = {
+      phase: "protocol_ingress",
+      step: "read_and_decode_body",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.read_and_decode_body",
+      location: bodyLocation,
+    };
+    enterResponsesJourneyStep(
+      journey,
+      "p1.read_and_decode_body",
+      bodyLocation,
+    );
     const decodedBody = await readResponsesRequestBody(
       request,
       dependencies.maxRequestBytes,
     );
     const rawBody = decodedBody.text;
-    // Ticket 22: the raw request body is collected for the capture observer
-    // exactly as the request path produced it; sanitization happens at the
-    // one store choke point before commit. A throwing capture seam is
-    // isolated — it can only degrade the capture, never the request.
-    try {
-      capture.requestBody(rawBody);
-    } catch {
-      try {
-        capture.fail("request-body-capture-failed");
-      } catch {
-        // The capture seam must never affect the request path.
-      }
-    }
     const body: unknown = decodedBody.json;
+    const rawRequestBytes = new TextEncoder().encode(rawBody);
+    observeResponsesJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: "client_request_wire",
+      artifactKind: "client_request_wire",
+      state: "captured",
+      mediaType: "application/json",
+      bytes: rawRequestBytes,
+      originalBytes: rawRequestBytes.byteLength,
+      capturedBytes: rawRequestBytes.byteLength,
+      truncated: false,
+      location: bodyLocation,
+    });
+    completeResponsesJourneyStep(
+      journey,
+      "p1.read_and_decode_body",
+      bodyLocation,
+    );
+    activeEarlyStep = undefined;
 
     // Native passthrough selection happens before any conversion or local
     // state expansion: a model declared Responses-wire-compatible forwards
     // the raw request verbatim to the upstream endpoint, never through Pi.
+    const selectorLocation = {
+      phase: "request_resolution",
+      step: "extract_model_selector",
+    } as const;
+    enterResponsesJourneyStep(
+      journey,
+      "p2.extract_model_selector",
+      selectorLocation,
+    );
+    activeEarlyStep = {
+      stepInstanceId: "p2.extract_model_selector",
+      location: selectorLocation,
+    };
     const selector = extractResponsesModelSelector(body);
+    completeResponsesJourneyStep(
+      journey,
+      "p2.extract_model_selector",
+      selectorLocation,
+      openaiResponsesProtocolId,
+      "model_generation",
+    );
+    activeEarlyStep = undefined;
     const streamRequested = (body as { readonly stream?: unknown }).stream === true;
-    diagnostics.checkpoint({ stage: "model-resolution", selector });
-    if (dependencies.localNativeLane?.claims(selector) === true) {
-      return dependencies.localNativeLane.execute({
-        request,
-        rawBody,
-        selector,
-        streamRequested,
-        diagnostics,
-        ledger,
-      });
+    if (dependencies.localNativeLane !== undefined) {
+      const localRecognitionLocation = {
+        phase: "request_resolution",
+        lane: "local_native",
+        step: "recognize_local_native",
+      } as const;
+      enterResponsesJourneyStep(
+        journey,
+        "p2.recognize_local_native",
+        localRecognitionLocation,
+      );
+      const localClaimed = dependencies.localNativeLane.claims(selector);
+      completeResponsesJourneyStep(
+        journey,
+        "p2.recognize_local_native",
+        localRecognitionLocation,
+      );
+      if (localClaimed) {
+        observeResponsesJourney(journey, {
+          kind: "lane_committed",
+          lane: "local_native",
+          location: {
+            phase: "request_resolution",
+            lane: "local_native",
+            step: "commit_lane",
+          },
+        });
+        return dependencies.localNativeLane.execute({
+          request,
+          rawBody,
+          selector,
+          streamRequested,
+          ...(journey === undefined ? {} : { journey }),
+        });
+      }
     }
+    const resolutionLocation = {
+      phase: "request_resolution",
+      step: "resolve_public_model",
+    } as const;
+    enterResponsesJourneyStep(
+      journey,
+      "p2.resolve_public_model",
+      resolutionLocation,
+    );
+    activeEarlyStep = {
+      stepInstanceId: "p2.resolve_public_model",
+      location: resolutionLocation,
+    };
     const resolution = await resolveDataPlanePublicModel(
       dependencies.models,
       dependencies.publicModels,
       selector,
     );
     if (resolution.kind === "unknown") {
-      ledger.aliasCaptured({ externalAlias: selector });
-      ledger.terminal("unknown-alias", { clientHttpStatus: 400 });
-      return toResponse(
-        renderResponsesError(
-          400,
-          "invalid_request_error",
-          `Unknown model: ${selector}`,
-          "unknown_model",
+      return observeResponsesEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderResponsesError(
+            400,
+            "invalid_request_error",
+            `Unknown model: ${selector}`,
+            "unknown_model",
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "unknown_model",
+          origin: "client",
+        },
       );
     }
     if (resolution.kind === "unavailable") {
-      ledger.aliasCaptured({ externalAlias: selector });
-      ledger.terminal("unavailable-alias", { clientHttpStatus: 503 });
-      return toResponse(
-        renderResponsesError(
-          503,
-          "api_error",
-          "The requested model is not currently available",
-          "model_unavailable",
+      return observeResponsesEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderResponsesError(
+            503,
+            "api_error",
+            "The requested model is not currently available",
+            "model_unavailable",
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "model_unavailable",
+          origin: "luckytoken",
+        },
       );
     }
     const model = resolution.model;
-    ledger.modelResolved({
-      externalAlias: resolution.alias,
+    observeResponsesJourney(journey, {
+      kind: "model_resolved",
       providerId: model.provider,
-      realModelId: model.id,
+      modelId: model.id,
+      location: resolutionLocation,
     });
+    completeResponsesJourneyStep(
+      journey,
+      "p2.resolve_public_model",
+      resolutionLocation,
+    );
+    activeEarlyStep = undefined;
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
       dependencies.publicModels === undefined ? undefined : resolution.alias;
-    if (dependencies.providerNativeLane?.claims(model, "responses") === true) {
-      return providerNativeBranch(
-        dependencies,
-        request,
-        model,
-        rawBody,
-        streamRequested,
-        requestIdentity.effectiveSessionId,
-        diagnostics,
-        ledger,
-        projectAlias,
+    if (dependencies.providerNativeLane !== undefined) {
+      const providerRecognitionLocation = {
+        phase: "request_resolution",
+        lane: "provider_native",
+        step: "recognize_provider_native",
+      } as const;
+      enterResponsesJourneyStep(
+        journey,
+        "p2.recognize_provider_native",
+        providerRecognitionLocation,
       );
+      const providerNativeClaimed = dependencies.providerNativeLane.claims(
+        model,
+        "responses",
+      );
+      completeResponsesJourneyStep(
+        journey,
+        "p2.recognize_provider_native",
+        providerRecognitionLocation,
+      );
+      if (providerNativeClaimed) {
+        observeResponsesJourney(journey, {
+          kind: "lane_committed",
+          lane: "provider_native",
+          location: {
+            phase: "request_resolution",
+            lane: "provider_native",
+            step: "commit_lane",
+          },
+        });
+        return providerNativeBranch(
+          dependencies,
+          request,
+          model,
+          rawBody,
+          streamRequested,
+          requestIdentity.effectiveSessionId,
+          projectAlias,
+          journey,
+        );
+      }
     }
+
+    observeResponsesJourney(journey, {
+      kind: "lane_committed",
+      lane: "semantic_conversion",
+      location: {
+        phase: "request_resolution",
+        lane: "semantic_conversion",
+        step: "commit_lane",
+      },
+    });
 
     return executeSemanticResponses({
       request,
@@ -381,15 +700,131 @@ async function handleOpenAIResponses(
       createResponseId: dependencies.createResponseId,
       now: dependencies.now,
       executeOperation: dependencies.executeOperation,
-      diagnostics,
-      ledger,
+      ...(journey === undefined ? {} : { journey }),
     });
   } catch (error) {
     if (request.signal.aborted || error instanceof ExecutionAbortedError) {
       throw new ExecutionAbortedError(request.signal.reason);
     }
+    if (activeEarlyStep !== undefined) {
+      const failure = activeEarlyStep;
+      if (error instanceof ResponsesRequestBodyTooLargeError) {
+        observeResponsesJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "client_request_wire",
+          artifactKind: "client_request_wire",
+          state: "unavailable",
+          reason: "request_body_exceeds_limit",
+          location: failure.location,
+        });
+        return observeResponsesEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderResponsesError(
+              413,
+              "request_too_large",
+              "Request exceeds the configured maximum size",
+            ),
+          ),
+          {
+            ...failure,
+            classification: "request_body_too_large",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof UnsupportedResponsesContentEncodingError) {
+        observeResponsesJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "client_request_wire",
+          artifactKind: "client_request_wire",
+          state: "unavailable",
+          reason: "unsupported_content_encoding",
+          location: failure.location,
+        });
+        return observeResponsesEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderResponsesError(
+              415,
+              "invalid_request_error",
+              "Unsupported Content-Encoding",
+            ),
+          ),
+          {
+            ...failure,
+            classification: "unsupported_content_encoding",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof SyntaxError) {
+        return observeResponsesEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderResponsesError(
+              400,
+              "invalid_request_error",
+              "Request body is not valid JSON",
+            ),
+          ),
+          {
+            ...failure,
+            classification: "invalid_json",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof InvalidRequest) {
+        return observeResponsesEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderResponsesError(400, "invalid_request_error", error.message),
+          ),
+          {
+            ...failure,
+            classification: "invalid_request",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof ModelResolutionFailure) {
+        return observeResponsesEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderResponsesError(404, "not_found_error", error.message),
+          ),
+          {
+            ...failure,
+            classification: "unknown_model",
+            origin: "client",
+          },
+        );
+      }
+      const hasContentEncoding =
+        request.headers.get("content-encoding")?.trim().length !== 0 &&
+        request.headers.get("content-encoding") !== null;
+      return observeResponsesEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderResponsesError(500, "api_error", "Internal server error"),
+        ),
+        {
+          ...failure,
+          classification: hasContentEncoding
+            ? "request_body_decode_failed"
+            : "protocol_ingress_failed",
+          origin: hasContentEncoding ? "client" : "luckytoken",
+        },
+      );
+    }
     if (error instanceof ResponsesRequestBodyTooLargeError) {
-      ledger.terminal("failed", { clientHttpStatus: 413 });
       return toResponse(
         renderResponsesError(
           413,
@@ -399,7 +834,6 @@ async function handleOpenAIResponses(
       );
     }
     if (error instanceof UnsupportedResponsesContentEncodingError) {
-      ledger.terminal("failed", { clientHttpStatus: 415 });
       return toResponse(
         renderResponsesError(
           415,
@@ -409,7 +843,6 @@ async function handleOpenAIResponses(
       );
     }
     if (error instanceof SyntaxError) {
-      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(
           400,
@@ -419,19 +852,16 @@ async function handleOpenAIResponses(
       );
     }
     if (error instanceof InvalidRequest) {
-      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
     }
     if (error instanceof ResponseStateConversionFailure) {
-      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
     }
     if (error instanceof ModelResolutionFailure) {
-      ledger.terminal("failed", { clientHttpStatus: 404 });
       return toResponse(
         renderResponsesError(404, "not_found_error", error.message),
       );
@@ -454,8 +884,6 @@ async function handleOpenAIResponses(
       };
       if (execution.failure !== undefined) {
         const mapping = mapUpstreamFailureFact(execution.failure);
-        ledger.terminal("failed", { clientHttpStatus: mapping.status });
-        ledger.fail({ classification: "runtime-failure", error });
         return renderResponsesErrorResponse({
           status: mapping.status,
           type: mapping.type,
@@ -473,92 +901,13 @@ async function handleOpenAIResponses(
       "reason" in error &&
       error.reason === "error"
     ) {
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
         renderResponsesError(502, "api_error", "Upstream provider failed"),
       );
     }
-    ledger.terminal("failed", { clientHttpStatus: 500 });
     return toResponse(
       renderResponsesError(500, "api_error", "Internal server error"),
     );
-  }
-}
-
-async function handleOpenAIResponsesWithDiagnostics(
-  dependencies: OpenAIResponsesDependencies,
-  request: Request,
-): Promise<Response> {
-  const diagnostics = dependencies.invocationDiagnostics.begin(openaiResponsesProtocolId);
-  // Ticket 18: the handler assigns the safe unique request id and records an
-  // accepted request at handler entry, before content-type/body/auth/model
-  // validation and before Pi execution. The correlation is published before
-  // the first await so a transport-synthesized error response can still
-  // carry the exact id of this accepted request.
-  const ledger = dependencies.requestLedger.begin(openaiResponsesProtocolId);
-  requestIds.set(request, ledger.requestId);
-  // Ticket 22: the capture observer reads the one global enable snapshot at
-  // the same acceptance line and keeps it immutable for this request; the
-  // request id is the ledger's — capture never mints its own. begin is
-  // isolated: a throwing authority falls back to the safe disabled entry.
-  const capture = beginCapture(dependencies, request, ledger.requestId);
-  try {
-    const response = await handleOpenAIResponses(dependencies, request, diagnostics, ledger, capture);
-    if (response.status >= 400) {
-      await diagnostics.fail({
-        classification: response.status >= 500 ? "runtime-failure" : "client-failure",
-        clientStatus: response.status,
-      });
-    } else {
-      await diagnostics.succeed();
-    }
-    // Terminal response preparation: the final Response exists (rendered +
-    // request id attached below), so the ledger commits the terminal row.
-    ledger.completed(response.status);
-    // The request id header is attached first: the captured bytes are the
-    // exact response the client receives, and the request id survives as a
-    // safe correlation fact (never treated as a client credential).
-    const delivered = attachRequestId(response, ledger.requestId);
-    await captureDeliveredResponse(capture, delivered);
-    try {
-      capture.finalize();
-    } catch {
-      // Capture finalize must never affect the response path.
-    }
-    return delivered;
-  } catch (error) {
-    const aborted =
-      request.signal.aborted ||
-      error instanceof ExecutionAbortedError;
-    // The truthful terminal outcome is recorded before the diagnostics seam
-    // runs, so a throwing diagnostics seam can never lose it. An unexpected
-    // failure still reaches the client as a transport-synthesized 500 (when
-    // the client is live), so the status is recorded too.
-    ledger.fail({
-      classification: aborted ? "caller-cancellation" : "unhandled-failure",
-      error,
-    });
-    ledger.terminal(
-      aborted ? "aborted" : "failed",
-      aborted ? undefined : { clientHttpStatus: 500 },
-    );
-    try {
-      capture.fail(aborted ? "aborted" : "unhandled-failure");
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-    try {
-      capture.finalize();
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-    await diagnostics.fail({
-      classification: aborted ? "caller-cancellation" : "unhandled-failure",
-      cancellation: request.signal.aborted,
-      error,
-    });
-    throw error;
   }
 }
 
@@ -572,15 +921,32 @@ async function providerNativeBranch(
   rawBody: string,
   streamRequested: boolean,
   sessionId: string,
-  diagnostics: InvocationDiagnostics,
-  ledger: RequestLedgerEntry,
   alias: string | undefined,
+  journey: RequestJourneyObserver | undefined,
 ): Promise<Response> {
   const lane = dependencies.providerNativeLane;
   if (lane === undefined) throw new Error("Provider Native lane is unavailable");
+  let finalAttempt = 1;
+  const observation: ProviderResponsesObservationContext | undefined =
+    journey === undefined
+      ? undefined
+      : {
+          requestId: journey.requestId,
+          journey,
+          finalResponseAttempt: (attempt: number) => {
+            if (Number.isSafeInteger(attempt) && attempt > 0) {
+              finalAttempt = attempt;
+            }
+          },
+        };
   let upstream: NativeResponsesResult;
+  const bufferLocation = {
+    phase: "lane_response_processing",
+    lane: "provider_native",
+    step: "buffer_provider_native_response",
+  } as const;
+  let bufferEntered = false;
   try {
-    ledger.executing();
     const response = await raceWithRequestSignal(
       lane.execute({
         model,
@@ -588,26 +954,58 @@ async function providerNativeBranch(
         signal: request.signal,
         sessionId,
         operation: "responses",
-        credentialActivity: ledger,
+        ...(observation === undefined ? {} : { observation }),
       }),
       request.signal,
     );
+    enterResponsesJourneyStep(
+      journey,
+      "p5.buffer_provider_native_response",
+      bufferLocation,
+    );
+    bufferEntered = true;
     upstream = await bufferNativeResponsesResponse(response, request.signal);
-  } catch (error) {
-    if (request.signal.aborted) throw error;
-    ledger.terminal("failed", { clientHttpStatus: 502 });
-    ledger.fail({ classification: "runtime-failure", error });
-    await diagnostics.fail({
-      classification: "runtime-failure",
-      stage: "native-passthrough",
-      clientStatus: 502,
-      error,
+    observeResponsesWireArtifact(journey, {
+      artifactId: `provider_native_upstream_response_wire.${finalAttempt}`,
+      artifactKind: "provider_native_upstream_response_wire",
+      bytes: upstream.body,
+      ...(upstream.headers["content-type"] === undefined
+        ? {}
+        : { mediaType: upstream.headers["content-type"] }),
+      location: bufferLocation,
     });
-    return toResponse(
+    completeResponsesJourneyStep(
+      journey,
+      "p5.buffer_provider_native_response",
+      bufferLocation,
+    );
+  } catch (error) {
+    if (bufferEntered) {
+      failResponsesJourneyStep(
+        journey,
+        "p5.buffer_provider_native_response",
+        bufferLocation,
+        request.signal.aborted ? "aborted" : "failed",
+      );
+    }
+    if (request.signal.aborted) throw error;
+    const failureResponse = toResponse(
       renderResponsesError(502, "api_error", "Upstream provider request failed"),
     );
+    observeProviderNativeTerminalResponse(journey, failureResponse, "failed");
+    return failureResponse;
   }
   request.signal.throwIfAborted();
+  const usageLocation = {
+    phase: "lane_response_processing",
+    lane: "provider_native",
+    step: "observe_provider_native_usage",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p5.observe_provider_native_usage",
+    usageLocation,
+  );
   const terminalUsage = extractResponsesPassthroughUsage(
     upstream.body,
     upstream.headers["content-type"] ?? "",
@@ -616,41 +1014,66 @@ async function providerNativeBranch(
       ? "event-stream"
       : "json",
   );
-  if (terminalUsage !== undefined) ledger.terminalUsage(terminalUsage);
-  if (upstream.status >= 400 && alias === undefined) {
-    // Legacy handler seam: upstream error responses pass through verbatim.
-    ledger.terminal("failed", { clientHttpStatus: upstream.status });
-    await diagnostics.fail({
-      classification: "runtime-failure",
-      stage: "native-passthrough",
-      clientStatus: upstream.status,
-      ...(upstream.headers["request-id"] === undefined
-        ? {}
-        : { safeIds: { requestId: upstream.headers["request-id"] } }),
+  if (terminalUsage !== undefined) {
+    observeResponsesJourney(journey, {
+      kind: "terminal_usage_observed",
+      usage: terminalUsage,
+      location: usageLocation,
     });
   }
+  completeResponsesJourneyStep(
+    journey,
+    "p5.observe_provider_native_usage",
+    usageLocation,
+  );
   if (upstream.status >= 400 && alias !== undefined) {
     // Alias mode never forwards upstream error bytes: arbitrary upstream
     // error text or headers could name the canonical target. The client
     // receives a legal fixed value-free error instead.
-    ledger.terminal("failed", { clientHttpStatus: 502 });
-    await diagnostics.fail({
-      classification: "runtime-failure",
-      stage: "native-passthrough",
-      clientStatus: upstream.status,
-      ...(upstream.headers["request-id"] === undefined
-        ? {}
-        : { safeIds: { requestId: upstream.headers["request-id"] } }),
-    });
-    return toResponse(
+    const failureResponse = toResponse(
       renderResponsesError(502, "api_error", "Upstream provider failed"),
     );
+    const preserveLocation = {
+      phase: "lane_response_processing",
+      lane: "provider_native",
+      step: "preserve_provider_response",
+    } as const;
+    enterResponsesJourneyStep(
+      journey,
+      "p5.preserve_provider_response",
+      preserveLocation,
+    );
+    observeResponsesJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: "provider_native_preserved_response_wire",
+      artifactKind: "provider_native_preserved_response_wire",
+      state: "unavailable",
+      reason: "upstream_error_replaced_for_alias_safety",
+      location: preserveLocation,
+    });
+    completeResponsesJourneyStep(
+      journey,
+      "p5.preserve_provider_response",
+      preserveLocation,
+    );
+    observeProviderNativeTerminalResponse(journey, failureResponse, "failed");
+    return failureResponse;
   }
   // Ticket 15 symmetry: a successful upstream response must expose the
   // requested alias, never the canonical model id. The buffered body is
   // projected before any byte is committed; an unprojectable shape fails
   // safely (no upstream bytes, no canonical identity).
   let body = upstream.body;
+  const preserveLocation = {
+    phase: "lane_response_processing",
+    lane: "provider_native",
+    step: "preserve_provider_response",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p5.preserve_provider_response",
+    preserveLocation,
+  );
   if (alias !== undefined) {
     const projected = projectNativeResponsesBody(
       body,
@@ -659,32 +1082,56 @@ async function providerNativeBranch(
     );
     if ("error" in projected) {
       // The detailed projection reason is value-free and useful for
-      // diagnostics; the client sees only the fixed safe envelope.
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error: projected.error });
-      await diagnostics.fail({
-        classification: "runtime-failure",
-        stage: "native-passthrough",
-        clientStatus: 502,
-        error: new Error(projected.error),
+      // investigation; the client sees only the fixed safe envelope.
+      failResponsesJourneyStep(
+        journey,
+        "p5.preserve_provider_response",
+        preserveLocation,
+      );
+      observeResponsesJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "provider_native_preserved_response_wire",
+        artifactKind: "provider_native_preserved_response_wire",
+        state: "unavailable",
+        reason: "response_projection_failed",
+        location: preserveLocation,
       });
-      return toResponse(
+      const failureResponse = toResponse(
         renderResponsesError(
           502,
           "api_error",
           "Upstream response could not be projected safely",
         ),
       );
+      observeProviderNativeTerminalResponse(journey, failureResponse, "failed");
+      return failureResponse;
     }
     body = projected.body;
   }
-  if (upstream.status < 400) {
-    ledger.terminal("success", { clientHttpStatus: upstream.status });
-  }
-  return new Response(body, {
+  observeResponsesWireArtifact(journey, {
+    artifactId: "provider_native_preserved_response_wire",
+    artifactKind: "provider_native_preserved_response_wire",
+    bytes: body,
+    ...(upstream.headers["content-type"] === undefined
+      ? {}
+      : { mediaType: upstream.headers["content-type"] }),
+    location: preserveLocation,
+  });
+  completeResponsesJourneyStep(
+    journey,
+    "p5.preserve_provider_response",
+    preserveLocation,
+  );
+  const response = new Response(body, {
     status: upstream.status,
     headers: { ...upstream.headers },
   });
+  observeProviderNativeTerminalResponse(
+    journey,
+    response,
+    upstream.status >= 400 ? "failed" : "success",
+  );
+  return response;
 }
 
 function dependenciesConfiguration(
@@ -712,10 +1159,6 @@ export function createOpenAIResponsesHandler(
     providerNativeLane: options.providerNativeLane,
     createSessionId: options.createSessionId ?? randomUUID,
     configuration,
-    invocationDiagnostics:
-      options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
-    requestLedger: options.requestLedger ?? createNoopRequestLedger(),
-    deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     sessionState,
     publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
@@ -727,8 +1170,12 @@ export function createOpenAIResponsesHandler(
   return Object.freeze({
     method: "POST",
     pathname: "/v1/responses",
-    handle: (request: Request) =>
-      handleOpenAIResponsesWithDiagnostics(dependencies, request),
-    requestIdFor: (request: Request) => requestIds.get(request),
+    handle: (request: Request, context?: ClientProtocolRequestContext) =>
+      handleOpenAIResponses(
+        dependencies,
+        request,
+        context?.requestId ?? randomUUID(),
+        context?.journey,
+      ),
   });
 }

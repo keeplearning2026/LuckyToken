@@ -11,9 +11,13 @@ import type {
   ModelsCommand,
   PublicModelsCommand,
   ProviderProfileAuthCommand,
-  RequestLedgerQuery,
+  RequestArtifactGetInput,
+  RequestJourneyGetInput,
+  RequestJourneyQuery,
+  RequestJourneySummary,
+  RuntimeEventQuery,
+  RuntimeEventRecord,
   RuntimeCommand,
-  RuntimeDiagnosticQuery,
   SettingsCommand,
 } from "@luckytoken/application-control-plane/control-plane";
 
@@ -62,54 +66,92 @@ export function registerDesktopIpcHandlers(options: {
   readonly isTrustedSender: (senderId: number) => boolean;
 }): DesktopIpcBridge {
   const { registrar, session, platform, isTrustedSender } = options;
-  interface LedgerSubscription {
+  interface RendererSubscription {
     readonly event: DesktopIpcEvent;
     generation: number;
     stop: (() => Promise<void>) | undefined;
   }
-  const ledgerSubscriptions = new Map<number, LedgerSubscription>();
   const channels = new Set<string>();
 
-  const unbindLedger = async (subscription: LedgerSubscription): Promise<void> => {
-    subscription.generation += 1;
-    const stop = subscription.stop;
-    subscription.stop = undefined;
-    await stop?.().catch(() => undefined);
+  const createSubscriptionRegistry = <T>(
+    eventChannel: string,
+    subscribe: (listener: (record: T) => void) => Promise<() => Promise<void>>,
+  ) => {
+    const subscriptions = new Map<number, RendererSubscription>();
+    const unbind = async (subscription: RendererSubscription): Promise<void> => {
+      subscription.generation += 1;
+      const stop = subscription.stop;
+      subscription.stop = undefined;
+      await stop?.().catch(() => undefined);
+    };
+    const bind = async (subscription: RendererSubscription): Promise<void> => {
+      await unbind(subscription);
+      if (session.state().kind !== "ready") return;
+      const bindingGeneration = subscription.generation;
+      let stop: (() => Promise<void>) | undefined;
+      try {
+        stop = await subscribe((record) => {
+          if (
+            subscription.generation === bindingGeneration &&
+            session.state().kind === "ready"
+          ) {
+            subscription.event.send(eventChannel, record);
+          }
+        });
+      } catch {
+        return;
+      }
+      if (subscription.generation !== bindingGeneration) {
+        await stop().catch(() => undefined);
+        return;
+      }
+      subscription.stop = stop;
+    };
+    return Object.freeze({
+      async add(event: DesktopIpcEvent): Promise<void> {
+        const previous = subscriptions.get(event.senderId);
+        if (previous !== undefined) await unbind(previous);
+        const subscription: RendererSubscription = {
+          event,
+          generation: 0,
+          stop: undefined,
+        };
+        subscriptions.set(event.senderId, subscription);
+        await bind(subscription);
+      },
+      async remove(senderId: number): Promise<void> {
+        const subscription = subscriptions.get(senderId);
+        subscriptions.delete(senderId);
+        if (subscription !== undefined) await unbind(subscription);
+      },
+      backendAvailabilityChanged(available: boolean): void {
+        for (const subscription of subscriptions.values()) {
+          if (available) void bind(subscription);
+          else void unbind(subscription);
+        }
+      },
+      senderIds(): readonly number[] {
+        return [...subscriptions.keys()];
+      },
+    });
   };
 
-  const bindLedger = async (subscription: LedgerSubscription): Promise<void> => {
-    await unbindLedger(subscription);
-    if (session.state().kind !== "ready") return;
-    const bindingGeneration = subscription.generation;
-    let stop: (() => Promise<void>) | undefined;
-    try {
-      stop = await session.client().subscribeRequestLedger((ledgerEvent) => {
-        if (
-          subscription.generation === bindingGeneration &&
-          session.state().kind === "ready"
-        ) {
-          subscription.event.send(desktopIpcChannels.ledgerEvent, ledgerEvent);
-        }
-      });
-    } catch {
-      return;
-    }
-    if (subscription.generation !== bindingGeneration) {
-      await stop().catch(() => undefined);
-      return;
-    }
-    subscription.stop = stop;
-  };
+  const requestJourneys = createSubscriptionRegistry<RequestJourneySummary>(
+    desktopIpcChannels.requestJourneysEvent,
+    (listener) => session.client().subscribeRequestJourneys(listener),
+  );
+  const runtimeEvents = createSubscriptionRegistry<RuntimeEventRecord>(
+    desktopIpcChannels.runtimeEventsEvent,
+    (listener) => session.client().subscribeRuntimeEvents(listener),
+  );
 
   let backendAvailable = session.state().kind === "ready";
   const unsubscribeSessionState = session.subscribeState((state) => {
     const nextAvailable = state.kind === "ready";
     if (nextAvailable === backendAvailable) return;
     backendAvailable = nextAvailable;
-    for (const subscription of ledgerSubscriptions.values()) {
-      if (backendAvailable) void bindLedger(subscription);
-      else void unbindLedger(subscription);
-    }
+    requestJourneys.backendAvailabilityChanged(backendAvailable);
+    runtimeEvents.backendAvailabilityChanged(backendAvailable);
   });
 
   const register = (channel: string, handler: DesktopIpcHandler): void => {
@@ -157,25 +199,32 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.agentIntegrations, (_event, ...args) =>
     session.client().executeAgentIntegrationsCommand(first<AgentIntegrationsCommand>(args)),
   );
-  register(desktopIpcChannels.ledgerGet, (_event, ...args) =>
-    session.client().getRequestLedger(first<RequestLedgerQuery | undefined>(args)),
+  register(desktopIpcChannels.requestJourneysQuery, (_event, ...args) =>
+    session.client().queryRequestJourneys(
+      first<RequestJourneyQuery | undefined>(args),
+    ),
   );
-  register(desktopIpcChannels.ledgerSubscribe, async (event) => {
-    const previous = ledgerSubscriptions.get(event.senderId);
-    if (previous !== undefined) await unbindLedger(previous);
-    const subscription: LedgerSubscription = {
-      event,
-      generation: 0,
-      stop: undefined,
-    };
-    ledgerSubscriptions.set(event.senderId, subscription);
-    await bindLedger(subscription);
-  });
-  register(desktopIpcChannels.ledgerUnsubscribe, async (event) => {
-    const subscription = ledgerSubscriptions.get(event.senderId);
-    ledgerSubscriptions.delete(event.senderId);
-    if (subscription !== undefined) await unbindLedger(subscription);
-  });
+  register(desktopIpcChannels.requestJourneyGet, (_event, ...args) =>
+    session.client().getRequestJourney(first<RequestJourneyGetInput>(args)),
+  );
+  register(desktopIpcChannels.requestArtifactGet, (_event, ...args) =>
+    session.client().getRequestArtifact(first<RequestArtifactGetInput>(args)),
+  );
+  register(desktopIpcChannels.requestJourneysSubscribe, (event) =>
+    requestJourneys.add(event),
+  );
+  register(desktopIpcChannels.requestJourneysUnsubscribe, (event) =>
+    requestJourneys.remove(event.senderId),
+  );
+  register(desktopIpcChannels.runtimeEventsQuery, (_event, ...args) =>
+    session.client().queryRuntimeEvents(first<RuntimeEventQuery | undefined>(args)),
+  );
+  register(desktopIpcChannels.runtimeEventsSubscribe, (event) =>
+    runtimeEvents.add(event),
+  );
+  register(desktopIpcChannels.runtimeEventsUnsubscribe, (event) =>
+    runtimeEvents.remove(event.senderId),
+  );
   register(desktopIpcChannels.analytics, (_event, ...args) =>
     session.client().getAnalytics(first<AnalyticsQuery>(args)),
   );
@@ -194,17 +243,11 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.historyDeleteConfirm, (_event, ...args) =>
     session.client().confirmHistoryDelete(first<string>(args)),
   );
-  register(desktopIpcChannels.persistenceAcknowledge, () =>
-    session.client().acknowledgePersistence(),
-  );
   register(desktopIpcChannels.backup, (_event, ...args) =>
     session.client().executeBackup(first<BackupCreateCommand>(args)),
   );
   register(desktopIpcChannels.backupConfirm, (_event, ...args) =>
     session.client().confirmBackup(first<string>(args)),
-  );
-  register(desktopIpcChannels.diagnostics, (_event, ...args) =>
-    session.client().getDiagnostics(first<RuntimeDiagnosticQuery | undefined>(args)),
   );
 
   register(desktopIpcChannels.autoStartGet, () => platform.getAutoStart());
@@ -243,17 +286,22 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.desktopVersion, () => platform.getDesktopVersion());
 
   const releaseSender = async (senderId: number): Promise<void> => {
-    const subscription = ledgerSubscriptions.get(senderId);
-    ledgerSubscriptions.delete(senderId);
-    if (subscription !== undefined) await unbindLedger(subscription);
+    await Promise.all([
+      requestJourneys.remove(senderId),
+      runtimeEvents.remove(senderId),
+    ]);
   };
 
   return Object.freeze({
     releaseSender,
     async dispose(): Promise<void> {
       unsubscribeSessionState();
+      const senderIds = new Set([
+        ...requestJourneys.senderIds(),
+        ...runtimeEvents.senderIds(),
+      ]);
       await Promise.allSettled(
-        [...ledgerSubscriptions.keys()].map((senderId) => releaseSender(senderId)),
+        [...senderIds].map((senderId) => releaseSender(senderId)),
       );
       for (const channel of channels) registrar.removeHandler(channel);
       channels.clear();

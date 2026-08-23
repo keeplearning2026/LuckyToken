@@ -17,8 +17,10 @@ import {
   type AnalyticsProfileOption,
   type AnalyticsResult,
   type AnalyticsSummary,
+  type AnalyticsManagementResult,
 } from "./analytics-contract.js";
 import { isRecord } from "./wire.js";
+import { decodeDiagnosticsUnavailableResult } from "./wire-request-diagnostics.js";
 
 const RESULT_KEYS: ReadonlySet<string> = new Set([
   "version",
@@ -435,4 +437,10 @@ export function decodeAnalyticsResult(
     });
   }
   return undefined;
+}
+
+export function decodeAnalyticsManagementResult(
+  value: unknown,
+): AnalyticsManagementResult | undefined {
+  return decodeDiagnosticsUnavailableResult(value) ?? decodeAnalyticsResult(value);
 }

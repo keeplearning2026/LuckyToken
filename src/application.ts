@@ -39,11 +39,11 @@ import {
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createCredentialProfilesControlPlaneHandlers } from "./credentials/profile-control-plane.js";
 import {
-  bindDeepDiagnosticsConfiguration,
-  createDeepCaptureAuthority,
-  createDeepCaptureStoreFactory,
-  type DeepCaptureStore,
-} from "./deep-diagnostics/index.js";
+  createDiagnosticsAuthority,
+  createUnavailableDiagnosticsAuthority,
+  type DiagnosticsConfiguration,
+  type DiagnosticsManagementAuthority,
+} from "./diagnostics/index.js";
 import {
   createDesktopOwnerLeaseAuthority,
   executeDesktopOwnerLeaseCommand,
@@ -69,28 +69,11 @@ import {
   inspectOwnedCompatibility,
   recoveryProjection,
 } from "./owned-storage/index.js";
-import {
-  createPersistenceDegradationAuthority,
-  createUnavailableDeepCaptureStore,
-  createUnavailableDiagnosticsStore,
-  createUnavailableRequestLedgerStore,
-  observeDiagnosticsStore,
-} from "./persistence-degradation/index.js";
 import { createCatalogCacheStore } from "./providers/catalog-cache.js";
 import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { createProviderRuntime } from "./providers/runtime.js";
 import { providerReadiness } from "./providers/readiness.js";
-import {
-  bindRequestLedgerConfiguration,
-  createRequestLedgerStoreFactory,
-  type RequestLedgerStore,
-} from "./request-ledger/index.js";
-import {
-  bindRuntimeDiagnosticsConfiguration,
-  createRuntimeDiagnosticsStoreFactory,
-  type RuntimeDiagnosticsStore,
-} from "./runtime-diagnostics/index.js";
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
@@ -150,6 +133,15 @@ export interface LuckyTokenApplicationEvents {
   readonly onExit?: (exit: ApplicationExit) => void;
 }
 
+export interface DiagnosticsAuthorityFactoryInput {
+  readonly configuration: DiagnosticsConfiguration;
+  readonly runtimeId: string;
+}
+
+export type DiagnosticsAuthorityFactory = (
+  input: DiagnosticsAuthorityFactoryInput,
+) => Promise<DiagnosticsManagementAuthority>;
+
 export interface StartLuckyTokenApplicationOptions {
   readonly configPath: string;
   readonly descriptorOverride?: string;
@@ -164,6 +156,8 @@ export interface StartLuckyTokenApplicationOptions {
   /** Internal process-boundary test seam. Production always validates with
    * an installed Codex CLI before publishing integration files. */
   readonly codexCatalogValidator?: CodexCatalogValidator;
+  /** @internal Backend-lifetime diagnostics construction seam for tests. */
+  readonly diagnosticsAuthorityFactory?: DiagnosticsAuthorityFactory;
 }
 
 function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint {
@@ -435,6 +429,7 @@ async function startNormalApplication(options: {
   readonly buildId?: string;
   readonly events?: LuckyTokenApplicationEvents;
   readonly codexCatalogValidator?: CodexCatalogValidator;
+  readonly diagnosticsAuthorityFactory?: DiagnosticsAuthorityFactory;
 }): Promise<StartLuckyTokenApplicationResult> {
   const { config } = options;
   const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
@@ -442,10 +437,10 @@ async function startNormalApplication(options: {
   let publication: DiscoveryPublication | undefined;
   let supervisor: Awaited<ReturnType<typeof createDataPlaneRuntimeSupervisor>> | undefined;
   let controlPlane: Awaited<ReturnType<typeof startControlPlane>> | undefined;
-  let diagnosticsStore: RuntimeDiagnosticsStore | undefined;
-  let requestLedgerStore: RequestLedgerStore | undefined;
-  let deepCaptureStore: DeepCaptureStore | undefined;
-  let attentionLedgerSubscription: { readonly unsubscribe: () => void } | undefined;
+  let diagnosticsAuthority: DiagnosticsManagementAuthority | undefined;
+  let attentionDiagnosticsSubscription:
+    | { readonly unsubscribe: () => void }
+    | undefined;
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledLuckyTokenApplication | undefined;
@@ -458,6 +453,7 @@ async function startNormalApplication(options: {
     | ReturnType<typeof createPublicModelAuthority>
     | undefined;
   let restoreAgentsForCleanup: (() => Promise<void>) | undefined;
+  const recentRequestFailures: number[] = [];
   let lastPublishedStatus: ApplicationStatus = Object.freeze({
     modelDataPlane: "stopped",
     provider: "unconfigured",
@@ -474,11 +470,11 @@ async function startNormalApplication(options: {
       desktopOwnerLeaseTimer = undefined;
     }
     try {
-      attentionLedgerSubscription?.unsubscribe();
+      attentionDiagnosticsSubscription?.unsubscribe();
     } catch (error) {
       failures.push(error);
     }
-    attentionLedgerSubscription = undefined;
+    attentionDiagnosticsSubscription = undefined;
     await restoreAgentsForCleanup?.().catch((error: unknown) => failures.push(error));
     if (supervisor !== undefined) {
       await supervisor
@@ -496,14 +492,10 @@ async function startNormalApplication(options: {
     await publicModelAuthorityForCleanup
       ?.flush()
       .catch((error: unknown) => failures.push(error));
-    const storageResults = await Promise.allSettled([
-      diagnosticsStore?.close() ?? Promise.resolve(),
-      requestLedgerStore?.close() ?? Promise.resolve(),
-      deepCaptureStore?.close() ?? Promise.resolve(),
-    ]);
-    for (const result of storageResults) {
-      if (result.status === "rejected") failures.push(result.reason);
-    }
+    await diagnosticsAuthority
+      ?.close()
+      .catch((error: unknown) => failures.push(error));
+    diagnosticsAuthority = undefined;
     await options.instanceLease.close().catch((error: unknown) => failures.push(error));
     return Object.freeze(failures);
   };
@@ -517,62 +509,19 @@ async function startNormalApplication(options: {
   });
 
   try {
-    let diagnosticsOpenFailed = false;
+    const diagnosticsFactory =
+      options.diagnosticsAuthorityFactory ??
+      ((input: DiagnosticsAuthorityFactoryInput) =>
+        createDiagnosticsAuthority(input));
     try {
-      diagnosticsStore = await createRuntimeDiagnosticsStoreFactory({
-        configuration: bindRuntimeDiagnosticsConfiguration(config.runtimeDiagnostics),
-      }).open();
+      diagnosticsAuthority = await diagnosticsFactory({
+        configuration: config.diagnostics,
+        runtimeId: randomUUID(),
+      });
     } catch {
-      diagnosticsOpenFailed = true;
+      diagnosticsAuthority = createUnavailableDiagnosticsAuthority();
     }
-
-    const persistenceAuthority = createPersistenceDegradationAuthority({
-      ...(diagnosticsStore === undefined ? {} : { diagnosticsStore }),
-      onStateChange: () => {
-        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
-      },
-    });
-    if (diagnosticsOpenFailed) {
-      persistenceAuthority.reportFailure("diagnostics");
-      diagnosticsStore = createUnavailableDiagnosticsStore(persistenceAuthority);
-    } else {
-      diagnosticsStore = observeDiagnosticsStore(
-        diagnosticsStore as RuntimeDiagnosticsStore,
-        persistenceAuthority,
-      );
-    }
-    const ownedDiagnosticsStore = diagnosticsStore;
-
-    try {
-      requestLedgerStore = await createRequestLedgerStoreFactory({
-        configuration: bindRequestLedgerConfiguration(config.requestLedger),
-        onPersistenceFailure: (failure) => {
-          persistenceAuthority.reportFailure("requestLedger", {
-            ...(failure.requestId.length === 0
-              ? {}
-              : { requestId: failure.requestId }),
-            messageHash: failure.messageHash,
-          });
-        },
-        onPersistenceRecovery: () => {
-          persistenceAuthority.reportRecovery("requestLedger");
-        },
-      }).open();
-    } catch {
-      requestLedgerStore = createUnavailableRequestLedgerStore();
-      persistenceAuthority.reportFailure("requestLedger");
-    }
-    const ownedLedgerStore = requestLedgerStore;
-
-    try {
-      deepCaptureStore = await createDeepCaptureStoreFactory({
-        configuration: bindDeepDiagnosticsConfiguration(config.deepDiagnostics),
-      }).open();
-    } catch {
-      deepCaptureStore = createUnavailableDeepCaptureStore();
-      persistenceAuthority.reportFailure("capture");
-    }
-    const ownedCaptureStore = deepCaptureStore;
+    const ownedDiagnosticsAuthority = diagnosticsAuthority;
     const controlPipe = await createProductionControlPipe();
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
@@ -583,11 +532,6 @@ async function startNormalApplication(options: {
     });
     const settingsRegistry = createSettingsRegistry(
       createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
-      {
-        initial: {
-          "diagnostics.deepCapture.enabled": config.deepDiagnostics.enabled,
-        },
-      },
     );
     await settingsRegistry.load();
     const publicModelAuthority = createPublicModelAuthority({
@@ -611,7 +555,7 @@ async function startNormalApplication(options: {
     const catalogController = createCatalogRefreshController({
       store: catalogCacheStore,
       authority: modelsAuthority,
-      diagnostics: ownedDiagnosticsStore,
+      diagnostics: ownedDiagnosticsAuthority,
       now: Date.now,
       onSnapshot: () => {
         // Provider Activation (Spec v1.0 §14): the coarse Provider
@@ -642,27 +586,22 @@ async function startNormalApplication(options: {
       userProviderPackages: config.providerPackages,
       fetch: globalThis.fetch,
       modelsStore: catalogCacheStore,
-      onInvalidModelsJson: (error) => {
-        ownedDiagnosticsStore.append({
+      onInvalidModelsJson: () => {
+        ownedDiagnosticsAuthority.observeRuntime({
           level: "warning",
-          text: "models.json is not loadable; Provider composition keeps compatible built-in Providers until the file is fixed.",
-          details: Object.freeze({
-            kind:
-              typeof error === "object" && error !== null && "kind" in error
-                ? String((error as { readonly kind?: unknown }).kind)
-                : "load",
-          }),
+          classification: "provider_models_json_invalid",
+          safeMessage:
+            "models.json is not loadable; Provider composition keeps compatible built-in Providers until the file is fixed.",
         });
       },
       onCredentialStoreDegraded: () => {
-        ownedDiagnosticsStore.append({
+        ownedDiagnosticsAuthority.observeRuntime({
           level: "warning",
-          text: "Provider credential storage lock release was degraded after a completed operation.",
-          details: Object.freeze({ kind: "lock_release" }),
+          classification: "provider_credential_lock_release_degraded",
+          safeMessage:
+            "Provider credential storage lock release was degraded after a completed operation.",
         });
       },
-      credentialUsage: (credentialIds) =>
-        ownedLedgerStore.credentialUsage(credentialIds),
     });
     const credentialManagement = providerRuntime.credentialManagement;
     const reconcilePublicModels = (
@@ -676,18 +615,9 @@ async function startNormalApplication(options: {
     const operationalAttention = createOperationalAttentionAuthority({
       now: Date.now,
       credentials: () => credentialManagement.snapshot(),
-      persistence: () => persistenceAuthority.projection(),
-      requestFailureCount: (from, to) => {
-        const result = ownedLedgerStore.analyze({
-          version: 2,
-          command: "summary",
-          from,
-          to,
-        });
-        return result.command === "summary"
-          ? result.totals.failed + result.totals.other
-          : 0;
-      },
+      diagnosticsAvailable: () => ownedDiagnosticsAuthority.diagnosticsAvailable(),
+      requestFailureCount: (from, to) =>
+        recentRequestFailures.filter((time) => time >= from && time < to).length,
     });
     const profileControlPlane = createCredentialProfilesControlPlaneHandlers({
       models: providerRuntime.models,
@@ -731,29 +661,6 @@ async function startNormalApplication(options: {
     await reconcilePublicModels(catalogController.snapshot());
     const codexHome = resolveCodexHome();
     const codexLocalAuth = createCodexLocalCredentialAuthority({ codexHome });
-    const scrubSensitiveText = (value: string): string =>
-      codexLocalAuth.scrub(providerRuntime.scrubCredentialText(value));
-    ownedDiagnosticsStore.attachScrub(scrubSensitiveText);
-    ownedLedgerStore.attachScrub(scrubSensitiveText);
-    ownedCaptureStore.attachScrub(scrubSensitiveText);
-    const deepCapture = createDeepCaptureAuthority({
-      store: ownedCaptureStore,
-      readEnabled: () => {
-        const setting = settingsRegistry.query([
-          "diagnostics.deepCapture.enabled",
-        ])["diagnostics.deepCapture.enabled"];
-        return setting?.value === true;
-      },
-      onWriteFailure: (failure) => {
-        persistenceAuthority.reportFailure("capture", {
-          ...(failure.requestId.length === 0
-            ? {}
-            : { requestId: failure.requestId }),
-          code: failure.code,
-        });
-      },
-      onWriteRecovery: () => persistenceAuthority.reportRecovery("capture"),
-    });
     const publicModels = Object.freeze({
       requestSnapshot: async () => publicModelAuthority.snapshot(),
     });
@@ -873,67 +780,32 @@ async function startNormalApplication(options: {
     };
     restoreAgentsForCleanup = restoreAgentsBeforeShutdown;
 
+    const diagnosticsManagement = ownedDiagnosticsAuthority;
     const historyAuthority = createHistoryAuthority({
-      sources: {
-        ledger: ownedLedgerStore,
-        diagnostics: ownedDiagnosticsStore,
-        capture: ownedCaptureStore,
-      },
-      persistence: persistenceAuthority,
+      diagnostics: diagnosticsManagement,
       applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
       ownedRoots: [
         resolve(dirname(options.configPath)),
         resolve(config.pi.directory),
         resolve(dirname(config.pi.modelsJson)),
-        resolve(
-          bindRuntimeDiagnosticsConfiguration(config.runtimeDiagnostics).directory,
-        ),
-        resolve(bindRequestLedgerConfiguration(config.requestLedger).directory),
-        resolve(bindDeepDiagnosticsConfiguration(config.deepDiagnostics).directory),
+        resolve(config.diagnostics.directory),
       ],
-      onSourceFailure: (authority, fact) => {
-        persistenceAuthority.reportFailure(authority, fact);
-      },
     });
     const backupAuthority = createConfiguredBackupAuthority({
       configPath: options.configPath,
       config,
       applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
-      snapshots: [
+      snapshots: Object.freeze([
         {
-          id: "request-ledger",
-          contract: "luckytoken-request-ledger-sqlite",
-          version: ownedLedgerStore.schemaVersion,
-          category: "history",
-          sourcePath: join(
-            bindRequestLedgerConfiguration(config.requestLedger).directory,
-            "ledger.sqlite3",
-          ),
-          snapshot: (signal) => ownedLedgerStore.createBackupSnapshot(signal),
+          id: "request-diagnostics",
+          contract: "luckytoken-diagnostics-sqlite",
+          version: 1,
+          category: "history" as const,
+          sourcePath: join(config.diagnostics.directory, "diagnostics.sqlite3"),
+          snapshot: (signal: AbortSignal) =>
+            diagnosticsManagement.createBackupSnapshot(signal),
         },
-        {
-          id: "runtime-diagnostics",
-          contract: "luckytoken-runtime-diagnostics-sqlite",
-          version: ownedDiagnosticsStore.schemaVersion,
-          category: "history",
-          sourcePath: join(
-            bindRuntimeDiagnosticsConfiguration(config.runtimeDiagnostics).directory,
-            "diagnostics.sqlite3",
-          ),
-          snapshot: (signal) => ownedDiagnosticsStore.createBackupSnapshot(signal),
-        },
-        {
-          id: "deep-capture",
-          contract: "luckytoken-deep-capture-sqlite",
-          version: ownedCaptureStore.schemaVersion,
-          category: "capture",
-          sourcePath: join(
-            bindDeepDiagnosticsConfiguration(config.deepDiagnostics).directory,
-            "capture.sqlite3",
-          ),
-          snapshot: (signal) => ownedCaptureStore.createBackupSnapshot(signal),
-        },
-      ],
+      ]),
     });
 
     // The provider readiness already reflects the bound Catalog snapshot
@@ -961,10 +833,8 @@ async function startNormalApplication(options: {
             models: providerRuntime.models,
             providerAuthBindings: providerRuntime.providerAuthBindings,
             publicModels,
-            requestLedger: ownedLedgerStore,
-            deepCapture,
+            diagnostics: ownedDiagnosticsAuthority,
             isProtocolEnabled,
-            scrubSensitiveText,
             fetch: globalThis.fetch,
             shutdownSignal: shutdownController.signal,
             codexLocalAuth,
@@ -975,6 +845,7 @@ async function startNormalApplication(options: {
             host: address.host,
             port: address.port,
             shutdownController,
+            diagnostics: ownedDiagnosticsAuthority,
           });
           dataPlaneStartedOnce = true;
           for (const route of composition.runtime.routes) {
@@ -1102,14 +973,21 @@ async function startNormalApplication(options: {
       },
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
-      requestLedger: ownedLedgerStore,
-      analyticsHandler: (query) => ownedLedgerStore.analyze(query),
-      capture: ownedCaptureStore,
-      historyCommandHandler: (command, signal) =>
-        historyAuthority.handle(command, signal),
+      diagnostics: ownedDiagnosticsAuthority,
+      ...(diagnosticsManagement.getAnalytics === undefined
+        ? {}
+        : {
+            analyticsHandler: (query) =>
+              diagnosticsManagement.getAnalytics!(query),
+          }),
+      ...(historyAuthority === undefined
+        ? {}
+        : {
+            historyCommandHandler: (command, signal) =>
+              historyAuthority.handle(command, signal),
+          }),
       backupCommandHandler: (command, signal) =>
         backupAuthority.handle(command, signal),
-      persistenceProjection: () => persistenceAuthority.projection(),
       attentionProjection: (status) => operationalAttention.project(status),
       modelsCommandHandler: createModelsControlPlaneHandler(modelsAuthority),
       modelsProjection: () => modelsAuthority.snapshot(),
@@ -1250,20 +1128,25 @@ async function startNormalApplication(options: {
       },
       pipeServerFactory: controlPipe.pipeServerFactory,
       access: controlPipe.access,
-      diagnostics: ownedDiagnosticsStore,
     });
     publication = await options.discovery.publish(endpoint);
 
-    attentionLedgerSubscription = ownedLedgerStore.subscribe((event) => {
-      if (
-        event.record.completedAt !== undefined &&
-        event.record.outcome !== "success" &&
-        event.record.outcome !== "running" &&
-        event.record.outcome !== "aborted"
-      ) {
-        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
-      }
-    });
+    attentionDiagnosticsSubscription =
+      ownedDiagnosticsAuthority.subscribeRequestJourneys((record) => {
+        if (
+          record.closedAt !== undefined &&
+          (record.outcome === "failed" || record.outcome === "interrupted")
+        ) {
+          recentRequestFailures.push(record.closedAt);
+          if (recentRequestFailures.length > 1_000) {
+            recentRequestFailures.splice(
+              0,
+              recentRequestFailures.length - 1_000,
+            );
+          }
+          controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+        }
+      });
     let attentionRefreshInFlight = false;
     attentionRefreshTimer = setInterval(() => {
       if (attentionRefreshInFlight) return;
@@ -1417,6 +1300,9 @@ export async function startLuckyTokenApplication(
       ...(options.codexCatalogValidator === undefined
         ? {}
         : { codexCatalogValidator: options.codexCatalogValidator }),
+      ...(options.diagnosticsAuthorityFactory === undefined
+        ? {}
+        : { diagnosticsAuthorityFactory: options.diagnosticsAuthorityFactory }),
     });
   } catch (error) {
     await instanceLease.close().catch(() => undefined);

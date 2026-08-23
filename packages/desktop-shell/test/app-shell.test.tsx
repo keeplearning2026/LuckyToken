@@ -4,8 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  RequestLedgerEvent,
-  RequestLedgerRecord,
+  RequestJourneySummary,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
 
@@ -26,14 +25,20 @@ const runningStatus: StatusSnapshot = {
   },
 };
 
-function ledgerRecord(id: number, outcome: RequestLedgerRecord["outcome"]): RequestLedgerRecord {
+function journeySummary(
+  id: number,
+  outcome: RequestJourneySummary["outcome"],
+): RequestJourneySummary {
   return {
     id,
+    runtimeId: "52000000-0000-4000-8000-000000000001",
     requestId: `10000000-0000-4000-8000-000000000${String(id).padStart(3, "0")}`,
-    protocolId: "anthropic-messages",
-    phase: outcome === "running" ? "execution" : "terminal-preparation",
+    operation: "model_generation",
+    protocol: "anthropic-messages",
     outcome,
-    acceptedAt: 1_700_000_000_000 + id,
+    completeness: "complete",
+    createdAt: 1_700_000_000_000 + id,
+    ...(outcome === "running" ? {} : { closedAt: 1_700_000_001_000 + id }),
   };
 }
 
@@ -59,9 +64,9 @@ async function flush(): Promise<void> {
 
 describe("desktop command-router shell", () => {
   it("switches the three color pages and keeps endpoint, runtime state, active count, and start/stop control in the header", async () => {
-    const ledgerListeners = new Set<(event: RequestLedgerEvent) => void>();
+    const journeyListeners = new Set<(record: RequestJourneySummary) => void>();
     const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
-    let runningRecords = [ledgerRecord(1, "running"), ledgerRecord(2, "running")];
+    let runningRecords = [journeySummary(1, "running"), journeySummary(2, "running")];
     const executeRuntime = vi.fn(async (command: "start" | "stop" | "restart") => ({
       command,
       outcome: "completed" as const,
@@ -79,15 +84,13 @@ describe("desktop command-router shell", () => {
           return () => backendStateListeners.delete(listener);
         },
         executeRuntime,
-        getRequestLedger: async (query) => ({
-          records: query?.outcome === "running"
-            ? runningRecords
-            : [],
-          hasMore: false,
+        queryRequestJourneys: async () => ({
+          outcome: "ok",
+          result: { records: runningRecords, hasMore: false },
         }),
-        onRequestLedger: (listener) => {
-          ledgerListeners.add(listener);
-          return () => ledgerListeners.delete(listener);
+        onRequestJourneys: (listener) => {
+          journeyListeners.add(listener);
+          return () => journeyListeners.delete(listener);
         },
         getAnalytics: async (query) => query.command === "options"
           ? {
@@ -179,14 +182,14 @@ describe("desktop command-router shell", () => {
     expect(container.textContent).toContain("Stopped");
 
     act(() => {
-      const record = ledgerRecord(3, "running");
-      for (const listener of ledgerListeners) listener({ type: "request_ledger", record });
+      const record = journeySummary(3, "running");
+      for (const listener of journeyListeners) listener(record);
     });
     expect(container.querySelector(".active-request-count")?.textContent).toBe("3");
 
     act(() => {
-      const record = ledgerRecord(3, "success");
-      for (const listener of ledgerListeners) listener({ type: "request_ledger", record });
+      const record = journeySummary(3, "success");
+      for (const listener of journeyListeners) listener(record);
     });
     expect(container.querySelector(".active-request-count")?.textContent).toBe("2");
 
@@ -214,8 +217,11 @@ describe("desktop command-router shell", () => {
 
   it("keeps Backend observation active across ready status updates", async () => {
     const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
-    const getRequestLedger = vi.fn(async () => ({ records: [], hasMore: false }));
-    const onRequestLedger = vi.fn(() => () => undefined);
+    const queryRequestJourneys = vi.fn(async () => ({
+      outcome: "ok" as const,
+      result: { records: [], hasMore: false },
+    }));
+    const onRequestJourneys = vi.fn(() => () => undefined);
     const getAnalytics = vi.fn(async (query) => query.command === "options"
       ? {
           version: 2 as const,
@@ -259,16 +265,16 @@ describe("desktop command-router shell", () => {
           backendStateListeners.add(listener);
           return () => backendStateListeners.delete(listener);
         },
-        getRequestLedger,
-        onRequestLedger,
+        queryRequestJourneys,
+        onRequestJourneys,
         getAnalytics,
       },
     });
 
     await act(async () => root.render(<App api={api} />));
     await flush();
-    const ledgerQueries = getRequestLedger.mock.calls.length;
-    const ledgerSubscriptions = onRequestLedger.mock.calls.length;
+    const journeyQueries = queryRequestJourneys.mock.calls.length;
+    const journeySubscriptions = onRequestJourneys.mock.calls.length;
     const analyticsQueries = getAnalytics.mock.calls.length;
 
     act(() => {
@@ -282,8 +288,8 @@ describe("desktop command-router shell", () => {
     });
     await flush();
 
-    expect(getRequestLedger).toHaveBeenCalledTimes(ledgerQueries);
-    expect(onRequestLedger).toHaveBeenCalledTimes(ledgerSubscriptions);
+    expect(queryRequestJourneys).toHaveBeenCalledTimes(journeyQueries);
+    expect(onRequestJourneys).toHaveBeenCalledTimes(journeySubscriptions);
     expect(getAnalytics).toHaveBeenCalledTimes(analyticsQueries);
     expect(container.textContent).toContain("Stopped");
   });
@@ -373,8 +379,11 @@ describe("desktop command-router shell", () => {
         onBackendState: () => () => undefined,
         executePublicModels,
         executeAgentIntegrations,
-        getRequestLedger: async () => ({ records: [], hasMore: false }),
-        onRequestLedger: () => () => undefined,
+        queryRequestJourneys: async () => ({
+          outcome: "ok",
+          result: { records: [], hasMore: false },
+        }),
+        onRequestJourneys: () => () => undefined,
         getAnalytics: async (query) =>
           query.command === "options"
             ? {
@@ -497,8 +506,11 @@ describe("desktop command-router shell", () => {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
         executeAgentIntegrations,
-        getRequestLedger: async () => ({ records: [], hasMore: false }),
-        onRequestLedger: () => () => undefined,
+        queryRequestJourneys: async () => ({
+          outcome: "ok",
+          result: { records: [], hasMore: false },
+        }),
+        onRequestJourneys: () => () => undefined,
       },
     });
 
@@ -561,8 +573,11 @@ describe("desktop command-router shell", () => {
                 ],
               }
             : { outcome: "ok", state, results: [] },
-        getRequestLedger: async () => ({ records: [], hasMore: false }),
-        onRequestLedger: () => () => undefined,
+        queryRequestJourneys: async () => ({
+          outcome: "ok",
+          result: { records: [], hasMore: false },
+        }),
+        onRequestJourneys: () => () => undefined,
       },
     });
 
@@ -632,8 +647,11 @@ describe("desktop command-router shell", () => {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
         executeAgentIntegrations,
-        getRequestLedger: async () => ({ records: [], hasMore: false }),
-        onRequestLedger: () => () => undefined,
+        queryRequestJourneys: async () => ({
+          outcome: "ok",
+          result: { records: [], hasMore: false },
+        }),
+        onRequestJourneys: () => () => undefined,
       },
     });
 

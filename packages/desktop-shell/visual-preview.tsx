@@ -260,8 +260,12 @@ const api = createFakeDesktopApi({
       },
       results: [],
     } as any),
-    getRequestLedger: async () => ({ records: [], hasMore: false }),
-    onRequestLedger: () => () => undefined,
+    queryRequestJourneys: async () => ({ outcome: "ok", records: [], hasMore: false } as any),
+    getRequestJourney: async () => ({ outcome: "unavailable", code: "diagnostics_unavailable" } as any),
+    getRequestArtifact: async () => ({ outcome: "unavailable", code: "diagnostics_unavailable" } as any),
+    queryRuntimeEvents: async () => ({ outcome: "ok", records: [], hasMore: false } as any),
+    onRequestJourneys: () => () => undefined,
+    onRuntimeEvents: () => () => undefined,
   },
 });
 

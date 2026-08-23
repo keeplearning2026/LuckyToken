@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,7 @@ import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createSeededCredentialRecordStore,
+  type TestConfiguredDataPlane,
 } from "../support/configured-data-plane.js";
 
 /**
@@ -23,16 +24,12 @@ describe("credential canary hygiene across public surfaces", () => {
   const CANARY_IMPORT_KEY = "sk-import-canary-555";
 
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
+  const compositions: TestConfiguredDataPlane[] = [];
 
   afterEach(async () => {
-    compositions
-      .splice(0)
-      .forEach((composition) => {
-        composition.diagnosticsStore.close();
-        composition.requestLedger.close();
-        composition.deepCaptureStore.close();
-      });
+    await Promise.allSettled(
+      compositions.splice(0).map((composition) => composition.close()),
+    );
     await Promise.all(
       directories
         .splice(0)
@@ -65,14 +62,13 @@ describe("credential canary hygiene across public surfaces", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
         },
         pi: { directory: "pi", modelsJson: "pi/models.json" },
-        failureLogging: { detail: "full", directory: "logs/failed-requests" },
-        runtimeDiagnostics: { directory: "diagnostics" },
+        diagnostics: { directory: "state/request-diagnostics" },
       }),
       "utf8",
     );
@@ -98,30 +94,11 @@ describe("credential canary hygiene across public surfaces", () => {
       now: () => 1_786_400_000_000,
     });
     compositions.push(composition);
-    return { composition, stateDirectory };
+    return { composition };
   }
 
-  async function readdirRecursive(root: string): Promise<string[]> {
-    const { readdir } = await import("node:fs/promises");
-    const out: string[] = [];
-    const walk = async (entry: string): Promise<void> => {
-      const entries = await readdir(entry, { withFileTypes: true });
-      for (const child of entries) {
-        const path = join(entry, child.name);
-        if (child.isDirectory()) await walk(path);
-        else if (child.isFile()) out.push(path);
-      }
-    };
-    try {
-      await walk(root);
-    } catch {
-      return out;
-    }
-    return out;
-  }
-
-  it("keeps stored credential canaries out of status, events, diagnostics and journals", async () => {
-    const { composition, stateDirectory } = await serve();
+  it("keeps stored credential canaries out of credential status projections", async () => {
+    const { composition } = await serve();
     const management = composition.credentialManagement;
 
     // The sanitized projection never carries the raw or resolved values.
@@ -130,26 +107,6 @@ describe("credential canary hygiene across public surfaces", () => {
     expect(projection).not.toContain(CANARY_ENV_VALUE);
     expect(projection).not.toContain(CANARY_ENV);
     expect(projection).toContain("secret-gw");
-
-    // The known-value scrub attached to the Diagnostics store redacts the
-    // stored credential values (raw and env-resolved) from records.
-    composition.diagnosticsStore.append({
-      level: "error",
-      text: `request failed with ${CANARY_KEY} and ${CANARY_ENV_VALUE}`,
-    });
-    const records = await composition.diagnosticsStore.query({ limit: 10 });
-    const diagnosticsText = JSON.stringify(records);
-    expect(diagnosticsText).not.toContain(CANARY_KEY);
-    expect(diagnosticsText).not.toContain(CANARY_ENV_VALUE);
-    expect(diagnosticsText).toContain("[REDACTED]");
-
-    // Diagnostics DB/WAL on disk contain no canary bytes.
-    const files = await readdirRecursive(join(stateDirectory, "diagnostics"));
-    for (const file of files) {
-      const bytes = await readFile(file, "utf8");
-      expect(bytes).not.toContain(CANARY_KEY);
-      expect(bytes).not.toContain(CANARY_ENV_VALUE);
-    }
 
     expect(projection).not.toContain(CANARY_IMPORT_KEY);
   });

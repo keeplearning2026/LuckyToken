@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
+import {
+  createConfiguredLuckyTokenDataPlane,
+  type TestConfiguredDataPlane,
+} from "../support/configured-data-plane.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
 /**
@@ -23,14 +26,12 @@ import { composeEffectiveCatalog } from "../../src/providers/effective-compositi
  */
 describe("composed Provider-facing headers on the native passthrough wire", () => {
   const directories: string[] = [];
-  const compositions: Array<{ diagnosticsStore: { close(): void }; requestLedger: { close(): void }; deepCaptureStore: { close(): void } }> = [];
+  const compositions: TestConfiguredDataPlane[] = [];
 
   afterEach(async () => {
-    compositions.splice(0).forEach((composition) => {
-      composition.diagnosticsStore.close();
-      composition.requestLedger.close();
-        composition.deepCaptureStore.close();
-    });
+    await Promise.allSettled(
+      compositions.splice(0).map((composition) => composition.close()),
+    );
     await Promise.all(
       directories.splice(0).map((directory) =>
         rm(directory, { recursive: true, force: true }),
@@ -66,7 +67,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},

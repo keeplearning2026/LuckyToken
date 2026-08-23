@@ -18,7 +18,7 @@ import type {
   BackupManifestSummary,
   BackupResult,
 } from "@luckytoken/application-control-plane/control-plane";
-import { redactDiagnostic } from "../runtime-diagnostics/redaction.js";
+import { redactDiagnostic } from "../diagnostics/value-redaction.js";
 import {
   ensureDestinationDirectory,
   inspectDestination,
@@ -27,7 +27,7 @@ import { validateCanonicalExportDestination } from "../history/path-safety.js";
 
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 const FULL_CONFIRMATION =
-  "This full-sensitive backup includes raw LuckyToken configuration, Provider credentials, Client token secrets, permanent history, and Deep Diagnostics capture. Store it as a secret and confirm to continue.";
+  "This full-sensitive backup includes raw LuckyToken configuration, Provider credentials, Client token secrets, and unified request diagnostic history with captured artifacts. Store it as a secret and confirm to continue.";
 
 export interface BackupFileSource {
   readonly id: string;
@@ -44,7 +44,7 @@ export interface BackupSnapshotSource {
   readonly id: string;
   readonly contract: string;
   readonly version: string | number;
-  readonly category: "history" | "capture" | "credentials";
+  readonly category: "history" | "credentials";
   /** Optional explicit owned path used only to prove this snapshot belongs
    * to the configured LuckyToken root before invoking the store owner. */
   readonly sourcePath?: string;

@@ -1,9 +1,12 @@
 import type { Model, Models } from "@earendil-works/pi-ai";
 
 import type { ExecutionOperation } from "../../execution.js";
-import { createNoopInvocationDiagnosticsFactory } from "../../invocation-diagnostics/index.js";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+} from "../../diagnostics/contract.js";
 import type { RequestIdentity } from "../../request-identity.js";
-import { createNoopRequestLedger } from "../../request-ledger/handler-seam.js";
 import type { RouterOptionDefaults } from "../options.js";
 import type { OpenAIResponsesConfiguration } from "./configuration.js";
 import {
@@ -31,6 +34,7 @@ export interface SemanticCompactOptions {
   readonly executeOperation?: ExecutionOperation;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
+  readonly journey?: RequestJourneyObserver;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -42,6 +46,121 @@ function toResponse(prepared: PreparedHttpResponse): Response {
 
 function errorResponse(status: number, message: string): Response {
   return toResponse(renderResponsesError(status, "api_error", message));
+}
+
+function observeSemanticCompact(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // Compact execution and response remain authoritative over diagnostics.
+  }
+}
+
+function semanticExecutionJourney(
+  journey: RequestJourneyObserver | undefined,
+): RequestJourneyObserver | undefined {
+  if (journey === undefined) return undefined;
+  return Object.freeze({
+    requestId: journey.requestId,
+    observe(observation: RequestJourneyObservationInput): void {
+      if (
+        observation.kind === "client_response_prepared" ||
+        observation.kind === "work_outcome_committed"
+      ) {
+        return;
+      }
+      observeSemanticCompact(journey, observation);
+    },
+    close: () => undefined,
+  });
+}
+
+function observeSemanticCompactTerminal(
+  journey: RequestJourneyObserver | undefined,
+  response: Response,
+  outcome: "success" | "failed",
+): void {
+  const presentationLocation = {
+    phase: "client_response_preparation",
+    lane: "semantic_conversion",
+    step: "prepare_semantic_compact_response",
+  } as const;
+  observeSemanticCompact(journey, {
+    kind: "step_entered",
+    stepInstanceId: "p6.prepare_semantic_compact_response",
+    location: presentationLocation,
+  });
+  observeSemanticCompact(journey, {
+    kind: "client_response_prepared",
+    status: response.status,
+    ...(response.headers.get("content-type") === null
+      ? {}
+      : { mediaType: response.headers.get("content-type")! }),
+    location: presentationLocation,
+  });
+  observeSemanticCompact(journey, {
+    kind: "step_completed",
+    stepInstanceId: "p6.prepare_semantic_compact_response",
+    completion: "success",
+    operation: "conversation_compaction",
+    protocol: "openai-responses",
+    location: presentationLocation,
+  });
+  const outcomeLocation = {
+    phase: "outcome_commit",
+    lane: "semantic_conversion",
+    step: "commit_request_outcome",
+  } as const;
+  observeSemanticCompact(journey, {
+    kind: "step_entered",
+    stepInstanceId: "p7.commit_request_outcome",
+    location: outcomeLocation,
+  });
+  observeSemanticCompact(journey, {
+    kind: "work_outcome_committed",
+    outcome,
+    terminalAuthority: "openai_responses_semantic_compact",
+    location: outcomeLocation,
+  });
+  observeSemanticCompact(journey, {
+    kind: "step_completed",
+    stepInstanceId: "p7.commit_request_outcome",
+    completion: "success",
+    operation: "conversation_compaction",
+    protocol: "openai-responses",
+    location: outcomeLocation,
+  });
+}
+
+function enterSemanticCompactStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeSemanticCompact(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+}
+
+function completeSemanticCompactStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  completion: "success" | "failed",
+): void {
+  observeSemanticCompact(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion,
+    operation: "conversation_compaction",
+    protocol: "openai-responses",
+    location,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,10 +261,7 @@ export async function executeSemanticCompact(
       },
     ],
   };
-  const diagnostics = createNoopInvocationDiagnosticsFactory().begin(
-    "openai-responses",
-  );
-  const ledger = createNoopRequestLedger().begin("openai-responses");
+  const executionJourney = semanticExecutionJourney(options.journey);
   const summarized = await executeSemanticResponses({
     request: options.request,
     body: internalBody,
@@ -157,26 +273,70 @@ export async function executeSemanticCompact(
     routerDefaults: options.routerDefaults,
     createResponseId: options.createResponseId,
     now: options.now,
+    ...(executionJourney === undefined ? {} : { journey: executionJourney }),
     ...(options.executeOperation === undefined
       ? {}
       : { executeOperation: options.executeOperation }),
-    diagnostics,
-    ledger,
   });
-  if (!summarized.ok) return summarized;
+  if (!summarized.ok) {
+    observeSemanticCompactTerminal(options.journey, summarized, "failed");
+    return summarized;
+  }
 
+  const extractLocation = {
+    phase: "lane_response_processing",
+    lane: "semantic_conversion",
+    direction: "pi_to_client",
+    step: "extract_compaction_summary",
+    subject: "content",
+  } as const;
+  enterSemanticCompactStep(
+    options.journey,
+    "p5.extract_compaction_summary",
+    extractLocation,
+  );
   let parsed: unknown;
   try {
     parsed = await summarized.json();
   } catch {
-    return errorResponse(502, "Compaction summary response was not valid JSON");
+    completeSemanticCompactStep(
+      options.journey,
+      "p5.extract_compaction_summary",
+      extractLocation,
+      "failed",
+    );
+    const response = errorResponse(
+      502,
+      "Compaction summary response was not valid JSON",
+    );
+    observeSemanticCompactTerminal(options.journey, response, "failed");
+    return response;
   }
   const summary = extractSummary(parsed);
   if (summary === undefined) {
-    return errorResponse(502, "Compaction summary response contained no text");
+    completeSemanticCompactStep(
+      options.journey,
+      "p5.extract_compaction_summary",
+      extractLocation,
+      "failed",
+    );
+    const response = errorResponse(
+      502,
+      "Compaction summary response contained no text",
+    );
+    observeSemanticCompactTerminal(options.journey, response, "failed");
+    return response;
   }
-  return new Response(
+  completeSemanticCompactStep(
+    options.journey,
+    "p5.extract_compaction_summary",
+    extractLocation,
+    "success",
+  );
+  const response = new Response(
     JSON.stringify({ output: buildCompactOutput(options.body.input, summary) }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+  observeSemanticCompactTerminal(options.journey, response, "success");
+  return response;
 }

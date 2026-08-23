@@ -11,11 +11,11 @@ import type {
   CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "./codex-native-seam.js";
-import type { DeepCaptureAuthority } from "./deep-diagnostics/handler-seam.js";
+import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import { createExecutionOperation } from "./execution.js";
 import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
+import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
-import { createInvocationDiagnosticsFactory } from "./invocation-diagnostics/index.js";
 import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
 import { createCodexLocalResponsesLane } from "./integrations/codex/local-responses.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
@@ -37,10 +37,6 @@ import {
   openaiResponsesProtocolId,
 } from "./protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "./protocols/openai-responses/session-state.js";
-import {
-  credentialActivityForExecutionFacts,
-  type RequestLedger,
-} from "./request-ledger/handler-seam.js";
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import { createSemanticProfileExecution } from "./semantic-conversion/profile-execution.js";
@@ -48,7 +44,7 @@ import { createSemanticProfileExecution } from "./semantic-conversion/profile-ex
 export type DataPlaneConfiguration = Readonly<
   Pick<
     LuckyTokenCliConfig,
-    "configPath" | "clientProtocols" | "limits" | "failureLogging"
+    "configPath" | "clientProtocols" | "limits"
   >
 >;
 
@@ -60,10 +56,8 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly models: Models;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly publicModels: PublicModelSource;
-  readonly requestLedger: RequestLedger;
-  readonly deepCapture: DeepCaptureAuthority;
+  readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
-  readonly scrubSensitiveText: (value: string) => string;
   readonly fetch: FetchFunction;
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
@@ -114,11 +108,6 @@ export async function createConfiguredLuckyTokenDataPlane(
     : undefined;
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const invocationDiagnostics = createInvocationDiagnosticsFactory({
-    configuration: config.failureLogging,
-    now,
-    scrub: options.scrubSensitiveText,
-  });
   const semanticExecution = createSemanticProfileExecution({
     bindings: options.providerAuthBindings,
     execute: createExecutionOperation(resolveUsageSemantics),
@@ -137,9 +126,6 @@ export async function createConfiguredLuckyTokenDataPlane(
     configuration: bindAnthropicConfiguration(
       anthropicConfig.adapterConfiguration,
     ),
-    invocationDiagnostics,
-    requestLedger: options.requestLedger,
-    deepCapture: options.deepCapture,
     providerNativeLane: anthropicProviderNativeLane,
     ...(options.createMessageId === undefined
       ? {}
@@ -202,9 +188,6 @@ export async function createConfiguredLuckyTokenDataPlane(
         models: options.models,
         createSessionId,
         configuration,
-        invocationDiagnostics,
-        requestLedger: options.requestLedger,
-        deepCapture: options.deepCapture,
         stateFile,
         sessionState,
         providerNativeLane,
@@ -241,6 +224,9 @@ export async function createConfiguredLuckyTokenDataPlane(
   const baseRuntime = createLuckyTokenRuntime({
     clientProtocols: handlers,
     requestTimeoutMs: config.limits.requestTimeoutMs,
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
     ...(options.shutdownSignal === undefined
       ? {}
       : { shutdownSignal: options.shutdownSignal }),

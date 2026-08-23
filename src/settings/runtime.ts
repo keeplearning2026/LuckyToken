@@ -1,4 +1,5 @@
 import type { LuckyTokenRuntime } from "../runtime.js";
+import type { ClientProtocolRequestContext } from "../http.js";
 export interface RegisteredProtocolRoute {
   readonly id: string;
   readonly method: string;
@@ -23,7 +24,10 @@ export function createProtocolAwareRuntime(
   const protocolRoutes = Object.freeze([...options.protocolRoutes]);
   return Object.freeze({
     ...options.runtime,
-    handle: async (request: Request): Promise<Response> => {
+    handle: async (
+      request: Request,
+      context?: ClientProtocolRequestContext,
+    ): Promise<Response> => {
       const pathname = new URL(request.url).pathname;
       const route = protocolRoutes.find(
         (candidate) =>
@@ -35,7 +39,7 @@ export function createProtocolAwareRuntime(
           return new Response(null, { status: 404 });
         }
       }
-      return options.runtime.handle(request);
+      return options.runtime.handle(request, context);
     },
   });
 }

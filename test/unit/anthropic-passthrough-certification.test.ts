@@ -1,12 +1,8 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
-import { createInvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 import {
@@ -19,7 +15,7 @@ import { identityRequestModelResolver } from "../../src/protocols/anthropic/opti
 /**
  * Ticket 11 certification supplement: behavior the earlier passthrough
  * contract tests did not cover — SSE fidelity, pre-commit body-read failure,
- * x-stainless-* approved headers, failure journal on final failure, and
+ * x-stainless-* approved headers and
  * cancellation at the HTTP boundary.
  */
 
@@ -214,54 +210,6 @@ describe("11: native Anthropic passthrough certification", () => {
         null,
       );
       expect(upstreamRequests[0]?.headers.get("x-stainless-lang")).toBe("js");
-    } finally {
-      restore();
-    }
-  });
-
-  it("writes one bounded failure journal for a final upstream failure", async () => {
-    const model = anthropicModel();
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-anthropic-pt-journal-"));
-    roots.push(root);
-    const journal = createInvocationDiagnosticsFactory({
-      configuration: parseFailureLoggingConfiguration(
-        {
-          directory: root,
-          detail: "safe",
-          maxFileBytes: 64 * 1024,
-          retentionDays: 1,
-          maxFiles: 10,
-          logCancellation: true,
-        },
-        root,
-      ),
-    });
-    const { restore, passthroughFetch } = captureFetch(async () =>
-      new Response('{"error":{"type":"rate_limit","message":"slow"}}', {
-        status: 429,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    try {
-      const response = await handleHttpRequest(
-        dependencies(
-          passthroughModels(model),
-          { invocationDiagnostics: journal },
-          passthroughFetch,
-        ),
-        request(
-          JSON.stringify({
-            model: "anthropic/claude-sonnet",
-            max_tokens: 32,
-            messages: [{ role: "user", content: "hi" }],
-          }),
-        ),
-      );
-      expect(response.status).toBe(429);
-      const days = await readdir(root);
-      const files = await readdir(join(root, days[0] ?? ""));
-      expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/^[0-9a-f-]{36}\.json$/u);
     } finally {
       restore();
     }

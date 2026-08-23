@@ -6,7 +6,7 @@ import { createSemanticProfileExecution } from "../../src/semantic-conversion/pr
 import {
   bindCredentialActivityToExecutionFacts,
   credentialActivityForExecutionFacts,
-} from "../../src/request-ledger/handler-seam.js";
+} from "../../src/credentials/activity.js";
 import type {
   ManagedProviderAuthBindingCapture,
   ProviderAuthBindingAuthority,

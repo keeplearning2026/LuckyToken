@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";

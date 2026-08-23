@@ -25,14 +25,11 @@ import {
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
   type ProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
-import {
-  bindDeepDiagnosticsConfiguration,
-  createDeepCaptureAuthority,
-  createDeepCaptureStoreFactory,
-  type CaptureWriteFailure,
-  type DeepCaptureAuthority,
-  type DeepCaptureStore,
-} from "../../src/deep-diagnostics/index.js";
+import type {
+  RequestJourneyBeginInput,
+  RequestJourneyObservationAuthority,
+  RequestJourneyObserver,
+} from "../../src/diagnostics/contract.js";
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import type { PublicModelAuthority } from "../../src/public-models/authority.js";
 import { resolveModel } from "../../src/model-resolution.js";
@@ -43,16 +40,6 @@ import {
   createProviderRuntime,
   type ProviderRuntime,
 } from "../../src/providers/runtime.js";
-import {
-  bindRequestLedgerConfiguration,
-  createRequestLedgerStoreFactory,
-  type RequestLedgerStore,
-} from "../../src/request-ledger/index.js";
-import {
-  bindRuntimeDiagnosticsConfiguration,
-  createRuntimeDiagnosticsStoreFactory,
-  type RuntimeDiagnosticsStore,
-} from "../../src/runtime-diagnostics/index.js";
 import type { SettingsRegistry } from "../../src/settings/catalog.js";
 
 export interface TestConfiguredDataPlaneOptions {
@@ -66,9 +53,7 @@ export interface TestConfiguredDataPlaneOptions {
   readonly createSessionId?: () => string;
   readonly now?: () => number;
   readonly shutdownSignal?: AbortSignal;
-  readonly diagnosticsStore?: RuntimeDiagnosticsStore;
-  readonly requestLedgerStore?: RequestLedgerStore;
-  readonly deepCaptureStore?: DeepCaptureStore;
+  readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly settingsRegistry?: SettingsRegistry;
   readonly onInvalidModelsJson?: (error: unknown) => void;
   readonly configValueAdapters?: ConfigValueAdapters;
@@ -77,22 +62,15 @@ export interface TestConfiguredDataPlaneOptions {
   readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
   readonly publicModelAuthority?: PublicModelAuthority;
-  readonly onCapturePersistenceFailure?: (fact: CaptureWriteFailure) => void;
-  readonly onCapturePersistenceRecovery?: (fact: {
-    readonly requestId: string;
-  }) => void;
   readonly providerRuntime?: ProviderRuntime;
 }
 
 export interface TestConfiguredDataPlane extends ProductionDataPlane {
   readonly userConfiguredProviderIds: readonly string[];
-  readonly diagnosticsStore: RuntimeDiagnosticsStore;
+  readonly diagnostics: RequestJourneyObservationAuthority;
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly catalog: ProviderRuntime["catalog"];
-  readonly requestLedger: RequestLedgerStore;
-  readonly deepCaptureStore: DeepCaptureStore;
-  readonly deepCapture: DeepCaptureAuthority;
 }
 
 export type ConfiguredLuckyTokenDataPlane = TestConfiguredDataPlane;
@@ -273,8 +251,21 @@ function directPublicModels(
   return Object.freeze({ requestSnapshot: async () => snapshot });
 }
 
+const NOOP_DIAGNOSTICS: RequestJourneyObservationAuthority = Object.freeze({
+  begin(input: RequestJourneyBeginInput): RequestJourneyObserver {
+    return Object.freeze({
+      requestId: input.requestId,
+      observe(): void {},
+      close(): void {},
+    });
+  },
+  observeRuntime(): void {},
+});
+
 /** Test-only convenience composition. It deliberately owns the broad setup
- * production removed, while the Data Plane itself receives only narrow facts. */
+ * production removed, while the Data Plane itself receives only narrow facts.
+ * Generic serving tests use a no-I/O Diagnostics observer unless they inject
+ * a real unified authority explicitly. */
 export async function createConfiguredLuckyTokenDataPlane(
   options: TestConfiguredDataPlaneOptions,
 ): Promise<TestConfiguredDataPlane> {
@@ -327,145 +318,61 @@ export async function createConfiguredLuckyTokenDataPlane(
     runtime,
   );
   const { userConfiguredProviderIds } = providerIds;
-  const scrubSensitiveText = (value: string): string => {
-    const providerScrubbed = runtime.scrubCredentialText(value);
-    return options.codexLocalAuth?.scrub(providerScrubbed) ?? providerScrubbed;
-  };
-  const diagnosticsStore =
-    options.diagnosticsStore ??
-    (await createRuntimeDiagnosticsStoreFactory({
-      configuration: bindRuntimeDiagnosticsConfiguration(
-        options.config.runtimeDiagnostics,
-      ),
-      now,
-      scrub: scrubSensitiveText,
-    }).open());
-  const requestLedger =
-    options.requestLedgerStore ??
-    (await createRequestLedgerStoreFactory({
-      configuration: bindRequestLedgerConfiguration(
-        options.config.requestLedger,
-      ),
-      now,
-      scrub: scrubSensitiveText,
-    }).open());
-  const deepCaptureStore =
-    options.deepCaptureStore ??
-    (await createDeepCaptureStoreFactory({
-      configuration: bindDeepDiagnosticsConfiguration(
-        options.config.deepDiagnostics,
-      ),
-      now,
-      scrub: scrubSensitiveText,
-    }).open());
-  diagnosticsStore.attachScrub(scrubSensitiveText);
-  requestLedger.attachScrub(scrubSensitiveText);
-  deepCaptureStore.attachScrub(scrubSensitiveText);
+  const diagnostics = options.diagnostics ?? NOOP_DIAGNOSTICS;
 
   if (options.settingsRegistry !== undefined) {
     await options.settingsRegistry.load();
   }
-  const deepCapture = createDeepCaptureAuthority({
-    store: deepCaptureStore,
-    now,
-    readEnabled: () => {
-      const setting = options.settingsRegistry?.query([
-        "diagnostics.deepCapture.enabled",
-      ])["diagnostics.deepCapture.enabled"];
-      return setting?.value === true ||
-        (setting === undefined && options.config.deepDiagnostics.enabled);
-    },
-    ...(options.onCapturePersistenceFailure === undefined
-      ? {}
-      : { onWriteFailure: options.onCapturePersistenceFailure }),
-    ...(options.onCapturePersistenceRecovery === undefined
-      ? {}
-      : { onWriteRecovery: options.onCapturePersistenceRecovery }),
-  });
   const publicModels =
     options.publicModelAuthority === undefined
       ? directPublicModels(runtime, providerIds.discoveryProviderIds)
       : Object.freeze({
           requestSnapshot: async () => options.publicModelAuthority!.snapshot(),
         });
-  let dataPlane: ProductionDataPlane;
-  try {
-    dataPlane = await createProductionDataPlane({
-      configuration: options.config,
-      models: runtime.models,
-      providerAuthBindings: runtime.providerAuthBindings,
-      publicModels,
-      requestLedger,
-      deepCapture,
-      isProtocolEnabled: (protocolId) => {
-        const setting = options.settingsRegistry?.query([
-          `protocols.${protocolId}.enabled`,
-        ])[`protocols.${protocolId}.enabled`];
-        return setting?.value !== false;
-      },
-      scrubSensitiveText,
-      fetch: options.fetch,
-      ...(options.codexLocalAuth === undefined
-        ? {}
-        : { codexLocalAuth: options.codexLocalAuth }),
-      ...(options.codexNativeModels === undefined
-        ? {}
-        : { codexNativeModels: options.codexNativeModels }),
-      ...(options.createMessageId === undefined
-        ? {}
-        : { createMessageId: options.createMessageId }),
-      ...(options.createSessionId === undefined
-        ? {}
-        : { createSessionId: options.createSessionId }),
-      ...(options.shutdownSignal === undefined
-        ? {}
-        : { shutdownSignal: options.shutdownSignal }),
-      now,
-    });
-  } catch (error) {
-    await Promise.allSettled([
-      options.diagnosticsStore === undefined
-        ? diagnosticsStore.close()
-        : Promise.resolve(),
-      options.requestLedgerStore === undefined
-        ? Promise.resolve(requestLedger.close())
-        : Promise.resolve(),
-      options.deepCaptureStore === undefined
-        ? Promise.resolve(deepCaptureStore.close())
-        : Promise.resolve(),
-    ]);
-    throw error;
-  }
+  const dataPlane = await createProductionDataPlane({
+    configuration: options.config,
+    models: runtime.models,
+    providerAuthBindings: runtime.providerAuthBindings,
+    publicModels,
+    diagnostics,
+    isProtocolEnabled: (protocolId) => {
+      const setting = options.settingsRegistry?.query([
+        `protocols.${protocolId}.enabled`,
+      ])[`protocols.${protocolId}.enabled`];
+      return setting?.value !== false;
+    },
+    fetch: options.fetch,
+    ...(options.codexLocalAuth === undefined
+      ? {}
+      : { codexLocalAuth: options.codexLocalAuth }),
+    ...(options.codexNativeModels === undefined
+      ? {}
+      : { codexNativeModels: options.codexNativeModels }),
+    ...(options.createMessageId === undefined
+      ? {}
+      : { createMessageId: options.createMessageId }),
+    ...(options.createSessionId === undefined
+      ? {}
+      : { createSessionId: options.createSessionId }),
+    ...(options.shutdownSignal === undefined
+      ? {}
+      : { shutdownSignal: options.shutdownSignal }),
+    now,
+  });
 
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
-    closePromise ??= (async () => {
-      await dataPlane.close();
-      await Promise.allSettled([
-        options.diagnosticsStore === undefined
-          ? diagnosticsStore.close()
-          : Promise.resolve(),
-        options.requestLedgerStore === undefined
-          ? Promise.resolve(requestLedger.close())
-          : Promise.resolve(),
-        options.deepCaptureStore === undefined
-          ? Promise.resolve(deepCaptureStore.close())
-          : Promise.resolve(),
-      ]);
-    })();
+    closePromise ??= dataPlane.close();
     return closePromise;
   };
   return Object.freeze({
     ...dataPlane,
     close,
     userConfiguredProviderIds,
-    diagnosticsStore,
+    diagnostics,
     credentialManagement: runtime.credentialManagement,
     providerAuthBindings: runtime.providerAuthBindings,
     catalog: runtime.catalog,
-    requestLedger,
-    deepCaptureStore,
-    deepCapture,
   });
 }
 

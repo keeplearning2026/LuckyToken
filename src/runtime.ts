@@ -1,11 +1,16 @@
 import {
   handleHttpRequest,
   type ClientProtocolHandler,
+  type ClientProtocolRequestContext,
   type HttpBoundaryDependencies,
 } from "./http.js";
+import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 
 export interface LuckyTokenRuntime {
-  handle(request: Request): Promise<Response>;
+  handle(
+    request: Request,
+    context?: ClientProtocolRequestContext,
+  ): Promise<Response>;
   /** Registered routes (method + pathname), for startup reporting and tests. */
   readonly routes: ReadonlyArray<Readonly<{ method: string; pathname: string }>>;
 }
@@ -14,6 +19,8 @@ export interface LuckyTokenRuntimeOptions {
   readonly clientProtocols: readonly ClientProtocolHandler[];
   readonly requestTimeoutMs?: number;
   readonly shutdownSignal?: AbortSignal;
+  readonly diagnostics?: RequestJourneyObservationAuthority;
+  readonly createRequestId?: () => string;
 }
 
 function snapshotClientProtocol(
@@ -29,7 +36,8 @@ function snapshotClientProtocol(
   return Object.freeze({
     method,
     pathname,
-    handle: (request: Request) => handle.call(protocol, request),
+    handle: (request: Request, context?: ClientProtocolRequestContext) =>
+      handle.call(protocol, request, context),
     ...(requestIdFor === undefined
       ? {}
       : { requestIdFor: (request: Request) => requestIdFor.call(protocol, request) }),
@@ -50,9 +58,16 @@ export function createLuckyTokenRuntime(
     clientProtocols: Object.freeze(clientProtocols),
     requestTimeoutMs: options.requestTimeoutMs,
     shutdownSignal: options.shutdownSignal,
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
+    ...(options.createRequestId === undefined
+      ? {}
+      : { createRequestId: options.createRequestId }),
   });
   return Object.freeze({
-    handle: (request: Request) => handleHttpRequest(dependencies, request),
+    handle: (request: Request, context?: ClientProtocolRequestContext) =>
+      handleHttpRequest(dependencies, request, context),
     routes: Object.freeze(
       clientProtocols.map((protocol) =>
         Object.freeze({

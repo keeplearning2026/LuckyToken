@@ -246,7 +246,7 @@ describe("LuckyToken CLI", () => {
           kind: "query",
           result: {
             range: command.range ?? "all",
-            counts: { requestLedger: 7, diagnostics: 5, capture: 2 },
+            counts: { requestJourneys: 7, runtimeEvents: 5 },
           },
         };
       },
@@ -270,7 +270,7 @@ describe("LuckyToken CLI", () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       range: "all",
-      counts: { requestLedger: 7, diagnostics: 5, capture: 2 },
+      counts: { requestJourneys: 7, runtimeEvents: 5 },
     });
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(capability);
   }, 30_000);
@@ -306,7 +306,7 @@ describe("LuckyToken CLI", () => {
               {
                 id: "config",
                 contract: "luckytoken-config",
-                version: "luckytoken-config-v1",
+                version: "luckytoken-config-v2",
                 sensitive: false,
               },
             ],
@@ -708,7 +708,7 @@ describe("LuckyToken CLI", () => {
             path: configPath,
             contract: "luckytoken-config",
             foundVersion: "luckytoken-config-v99",
-            expectedVersion: "luckytoken-config-v1",
+            expectedVersion: "luckytoken-config-v2",
           },
         ],
       },
@@ -744,7 +744,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -787,7 +787,7 @@ describe("LuckyToken CLI", () => {
       manifest: { sensitive: false },
     });
     const artifact = await readFile(destinationPath, "utf8");
-    expect(artifact).toContain("luckytoken-config-v1");
+    expect(artifact).toContain("luckytoken-config-v2");
     expect(artifact).not.toContain("incompatible-token-secret-canary");
 
     serve.stdin.end("stop\n");
@@ -814,7 +814,7 @@ describe("LuckyToken CLI", () => {
       await writeFile(
         configPath,
         JSON.stringify({
-          schemaVersion: "luckytoken-config-v1",
+          schemaVersion: "luckytoken-config-v2",
           server: { port: await reserveFreePort() },
           clientProtocols: {
             "anthropic-messages": {},
@@ -923,7 +923,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {},
@@ -986,7 +986,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: address.port },
         clientProtocols: {
           "anthropic-messages": {},

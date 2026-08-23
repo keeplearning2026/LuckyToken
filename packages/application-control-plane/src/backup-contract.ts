@@ -1,3 +1,5 @@
+import type { DiagnosticsUnavailableResult } from "./request-diagnostics-contract.js";
+
 /** Ticket 24 backup and recovery public contract. */
 
 export type BackupMode = "ordinary" | "full_sensitive";
@@ -48,6 +50,7 @@ export interface BackupResult {
   readonly manifest?: BackupManifestSummary;
   readonly failure?: BackupFailure;
 }
+export type BackupManagementResult = BackupResult | DiagnosticsUnavailableResult;
 
 export type BackupCommand =
   | ({ readonly command: "create" } & BackupCreateCommand)

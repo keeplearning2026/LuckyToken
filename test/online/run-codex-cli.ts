@@ -1503,7 +1503,7 @@ export async function runCodexCliOnlineSuite(
   await writeFile(
     configPath,
     JSON.stringify({
-      schemaVersion: "luckytoken-config-v1",
+      schemaVersion: "luckytoken-config-v2",
       server: { port: 0 },
       clientProtocols: {
         "anthropic-messages": {},

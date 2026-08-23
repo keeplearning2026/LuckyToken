@@ -41,7 +41,7 @@ Usage:
   luckytoken control profiles <query|add|reconnect|rename|activate|enable|disable|priority|remove|recheck|settings> ... --descriptor <path>
   luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   luckytoken control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
-  luckytoken control history <query|export|export-confirm|delete|delete-confirm|acknowledge> ... --descriptor <path>
+  luckytoken control history <query|export|export-confirm|delete|delete-confirm> ... --descriptor <path>
   luckytoken control backup <ordinary|full|confirm> ... --descriptor <path>
   luckytoken --help
 
@@ -55,7 +55,7 @@ Commands:
   control profiles ...  Manage Provider credential Profiles through the Control Plane
   control catalog query|refresh-background|refresh-manual  Read the active catalog snapshot or trigger a refresh
   control public-models ...  Read or change the live Public Model authority
-  control history query|export|export-confirm|delete|delete-confirm|acknowledge  Export, delete, or acknowledge permanent history state
+  control history query|export|export-confirm|delete|delete-confirm  Query, export, or delete unified diagnostic history
   control backup ordinary|full|confirm  Create a redacted or explicitly confirmed full-sensitive backup
 
 Options:
@@ -92,14 +92,13 @@ control public-models commands:
 
 control history commands:
   query [--all|--from <ms>|--to <ms>]
-                            Count eligible request, diagnostic, and capture records
-  export <file> (--all|--from <ms>|--to <ms>) [--include-capture] [--overwrite]
-                            Write one versioned export; capture is excluded by default
-  export-confirm <actionId> Confirm a pending sensitive-capture export
+                            Count Request Journeys and Runtime Events
+  export <file> (--all|--from <ms>|--to <ms>) [--overwrite]
+                            Prepare one complete unified diagnostic snapshot
+  export-confirm <actionId> Confirm a pending sensitive diagnostic export
   delete (--all|--from <ms>|--to <ms>)
                             Preview an irreversible history deletion
   delete-confirm <actionId> Confirm a pending irreversible deletion
-  acknowledge               Silence persistence urgency without claiming recovery
 `;
 
 interface ParsedCliArguments {
@@ -610,10 +609,9 @@ async function runControlPublicModelsCommand(args: readonly string[]): Promise<v
 
 function parseHistoryCommand(args: readonly string[]): {
   readonly descriptorPath: string;
-  readonly action: "query" | "export" | "export-confirm" | "delete" | "delete-confirm" | "acknowledge";
+  readonly action: "query" | "export" | "export-confirm" | "delete" | "delete-confirm";
   readonly range?: HistoryRange;
   readonly destinationPath?: string;
-  readonly includeCapture?: boolean;
   readonly overwrite?: boolean;
   readonly actionId?: string;
 } {
@@ -621,7 +619,6 @@ function parseHistoryCommand(args: readonly string[]): {
   let rangeFrom: number | undefined;
   let rangeTo: number | undefined;
   let all = false;
-  let includeCapture = false;
   let overwrite = false;
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -657,10 +654,6 @@ function parseHistoryCommand(args: readonly string[]): {
       all = true;
       continue;
     }
-    if (argument === "--include-capture") {
-      includeCapture = true;
-      continue;
-    }
     if (argument === "--overwrite") {
       overwrite = true;
       continue;
@@ -690,19 +683,14 @@ function parseHistoryCommand(args: readonly string[]): {
     const destinationPath = positional[1];
     if (
       destinationPath === undefined ||
-      positional.length > 2 ||
-      !all && rangeFrom === undefined && rangeTo === undefined
+      positional.length > 2
     ) {
-      throw new Error(
-        "history export requires a destination path and an explicit range (--all or --from/--to)",
-      );
+      throw new Error("history export requires a destination path");
     }
     return {
       descriptorPath,
       action: "export",
-      range,
       destinationPath: resolve(destinationPath),
-      includeCapture,
       overwrite,
     };
   }
@@ -728,12 +716,6 @@ function parseHistoryCommand(args: readonly string[]): {
     }
     return { descriptorPath, action: "delete-confirm", actionId };
   }
-  if (action === "acknowledge") {
-    if (positional.length > 1) {
-      throw new Error("history acknowledge takes no arguments");
-    }
-    return { descriptorPath, action: "acknowledge" };
-  }
   throw new Error(`Unknown history command: ${action ?? ""}`);
 }
 
@@ -751,8 +733,6 @@ async function runControlHistoryCommand(args: readonly string[]): Promise<void> 
       result = await client.queryHistory(parsed.range);
     } else if (parsed.action === "export") {
       result = await client.executeHistoryExport({
-        range: parsed.range as HistoryRange,
-        capture: parsed.includeCapture === true ? "included" : "excluded",
         destinationPath: parsed.destinationPath as string,
         overwrite: parsed.overwrite === true,
       });
@@ -764,8 +744,6 @@ async function runControlHistoryCommand(args: readonly string[]): Promise<void> 
       });
     } else if (parsed.action === "delete-confirm") {
       result = await client.confirmHistoryDelete(parsed.actionId as string);
-    } else {
-      result = await client.acknowledgePersistence();
     }
     stdout.write(`${JSON.stringify(result)}\n`);
   } finally {

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -48,14 +47,14 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
       path,
       contract: "luckytoken-config",
       foundVersion: "luckytoken-config-v999",
-      expectedVersion: "luckytoken-config-v1",
+      expectedVersion: "luckytoken-config-v2",
       validationError:
         "LuckyToken config schemaVersion is incompatible with this application build.",
     });
     expect(await readFile(path)).toEqual(bytes);
   });
 
-  it("reports incompatible durable schemas while ignoring obsolete client-auth files", async () => {
+  it("does not read or reinterpret dormant legacy diagnostics and client-auth files", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-preflight-"));
     roots.push(root);
     const configPath = join(root, "config.json");
@@ -63,7 +62,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         clientProtocols: {
           "anthropic-messages": {},
         },
@@ -81,31 +80,13 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     const ledgerDir = join(root, "state", "request-ledger");
     await mkdir(ledgerDir, { recursive: true });
     const ledgerPath = join(ledgerDir, "ledger.sqlite3");
-    const database = new DatabaseSync(ledgerPath);
-    database.exec(`
-      CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);
-      CREATE TABLE requests (id INTEGER PRIMARY KEY);
-      INSERT INTO meta (key, value) VALUES ('schema_name', 'luckytoken_request_ledger');
-      INSERT INTO meta (key, value) VALUES ('schema_version', 1);
-    `);
-    database.close();
+    await writeFile(ledgerPath, "dormant-legacy-ledger-canary");
     const beforeLedger = await readFile(ledgerPath);
     const beforeToken = await readFile(tokenPath);
 
     const config = await loadLuckyTokenCliConfig(configPath);
     const issues = await inspectOwnedCompatibility(config);
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        {
-          path: ledgerPath,
-          contract: "luckytoken-request-ledger",
-          foundVersion: 1,
-          expectedVersion: 3,
-          validationError:
-            "luckytoken-request-ledger version is incompatible with this LuckyToken build.",
-        },
-      ]),
-    );
+    expect(issues).toEqual([]);
     expect(sha256(await readFile(ledgerPath))).toBe(sha256(beforeLedger));
     expect(sha256(await readFile(tokenPath))).toBe(sha256(beforeToken));
     expect(issues.some((issue) => issue.path === tokenPath)).toBe(false);
@@ -118,7 +99,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         clientProtocols: {
           "anthropic-messages": {},
         },

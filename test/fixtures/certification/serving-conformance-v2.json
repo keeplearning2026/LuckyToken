@@ -42,7 +42,7 @@
         "test/integration/anthropic-ingress-order.test.ts",
         "test/integration/anthropic-atomic-sse.test.ts",
         "test/integration/anthropic-thinking-round-trip.test.ts",
-        "test/integration/provider-execution-boundary.test.ts"
+        "test/integration/request-journey-tracer.test.ts"
       ]
     },
     {
@@ -70,7 +70,7 @@
         "test/unit/openai-responses-session-state.test.ts",
         "test/integration/openai-responses-replay.test.ts",
         "test/integration/openai-responses-serving.test.ts",
-        "test/integration/provider-execution-boundary.test.ts"
+        "test/integration/request-journey-semantic-openai.test.ts"
       ]
     },
     {
@@ -103,7 +103,7 @@
         "test/integration/commandcode-response-lifecycle.test.ts",
         "test/integration/commandcode-attempts.test.ts",
         "test/integration/commandcode-http-failure.test.ts",
-        "test/integration/commandcode-failure-journal.test.ts"
+        "test/integration/request-journey-semantic-openai.test.ts"
       ]
     }
   ],
@@ -123,7 +123,7 @@
         "test/unit/invocation-options.test.ts",
         "test/unit/options.test.ts",
         "test/integration/pi-runtime-fidelity.test.ts",
-        "test/integration/provider-execution-boundary.test.ts",
+        "test/integration/request-journey-tracer.test.ts",
         "test/certification/protocol-boundaries.test.mjs"
       ]
     },
@@ -165,11 +165,11 @@
       "dimension": "serving-readiness-and-isolation",
       "tests": [
         "test/unit/serving-certification.test.ts",
-        "test/unit/invocation-diagnostics.test.ts",
-        "test/unit/invocation-diagnostics-ingress.test.ts",
+        "test/unit/unified-request-diagnostics-contract.test.ts",
+        "test/unit/anthropic-unified-diagnostics-boundary.test.ts",
         "test/integration/configured-composition.test.ts",
-        "test/integration/provider-execution-boundary.test.ts",
-        "test/integration/commandcode-failure-journal.test.ts"
+        "test/integration/backend-application-diagnostics-lifecycle.test.ts",
+        "test/integration/request-journey-non-interference.test.ts"
       ]
     },
     {
@@ -210,7 +210,9 @@
         "test/unit/semantic-profile-execution.test.ts",
         "test/unit/openai-responses-passthrough-architecture.test.ts",
         "test/integration/codex-native-responses.test.ts",
-        "test/integration/provider-execution-boundary.test.ts"
+        "test/integration/request-journey-local-native.test.ts",
+        "test/integration/request-journey-provider-native-openai.test.ts",
+        "test/integration/request-journey-semantic-openai.test.ts"
       ]
     }
   ],

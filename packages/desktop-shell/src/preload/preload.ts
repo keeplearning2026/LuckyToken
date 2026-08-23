@@ -18,19 +18,22 @@ type InvokeResults = {
   [desktopIpcChannels.catalog]: ReturnType<DesktopControlPlaneApi["executeCatalog"]>;
   [desktopIpcChannels.publicModels]: ReturnType<DesktopControlPlaneApi["executePublicModels"]>;
   [desktopIpcChannels.agentIntegrations]: ReturnType<DesktopControlPlaneApi["executeAgentIntegrations"]>;
-  [desktopIpcChannels.ledgerGet]: ReturnType<DesktopControlPlaneApi["getRequestLedger"]>;
-  [desktopIpcChannels.ledgerSubscribe]: Promise<void>;
-  [desktopIpcChannels.ledgerUnsubscribe]: Promise<void>;
+  [desktopIpcChannels.requestJourneysQuery]: ReturnType<DesktopControlPlaneApi["queryRequestJourneys"]>;
+  [desktopIpcChannels.requestJourneyGet]: ReturnType<DesktopControlPlaneApi["getRequestJourney"]>;
+  [desktopIpcChannels.requestArtifactGet]: ReturnType<DesktopControlPlaneApi["getRequestArtifact"]>;
+  [desktopIpcChannels.requestJourneysSubscribe]: Promise<void>;
+  [desktopIpcChannels.requestJourneysUnsubscribe]: Promise<void>;
+  [desktopIpcChannels.runtimeEventsQuery]: ReturnType<DesktopControlPlaneApi["queryRuntimeEvents"]>;
+  [desktopIpcChannels.runtimeEventsSubscribe]: Promise<void>;
+  [desktopIpcChannels.runtimeEventsUnsubscribe]: Promise<void>;
   [desktopIpcChannels.analytics]: ReturnType<DesktopControlPlaneApi["getAnalytics"]>;
   [desktopIpcChannels.historyQuery]: ReturnType<DesktopControlPlaneApi["queryHistory"]>;
   [desktopIpcChannels.historyExport]: ReturnType<DesktopControlPlaneApi["executeHistoryExport"]>;
   [desktopIpcChannels.historyExportConfirm]: ReturnType<DesktopControlPlaneApi["confirmHistoryExport"]>;
   [desktopIpcChannels.historyDelete]: ReturnType<DesktopControlPlaneApi["executeHistoryDelete"]>;
   [desktopIpcChannels.historyDeleteConfirm]: ReturnType<DesktopControlPlaneApi["confirmHistoryDelete"]>;
-  [desktopIpcChannels.persistenceAcknowledge]: ReturnType<DesktopControlPlaneApi["acknowledgePersistence"]>;
   [desktopIpcChannels.backup]: ReturnType<DesktopControlPlaneApi["executeBackup"]>;
   [desktopIpcChannels.backupConfirm]: ReturnType<DesktopControlPlaneApi["confirmBackup"]>;
-  [desktopIpcChannels.diagnostics]: ReturnType<DesktopControlPlaneApi["getDiagnostics"]>;
   [desktopIpcChannels.autoStartGet]: ReturnType<DesktopPlatformApi["getAutoStart"]>;
   [desktopIpcChannels.autoStartSet]: ReturnType<DesktopPlatformApi["setAutoStart"]>;
   [desktopIpcChannels.pickDirectory]: ReturnType<DesktopPlatformApi["pickDirectory"]>;
@@ -58,7 +61,8 @@ const onEvent = <T>(
   return () => ipcRenderer.removeListener(channel, wrapped);
 };
 
-let ledgerListenerCount = 0;
+let requestJourneyListenerCount = 0;
+let runtimeEventListenerCount = 0;
 
 const control: DesktopControlPlaneApi = {
   getBackendState: () => invoke(desktopIpcChannels.backendStateGet),
@@ -85,18 +89,46 @@ const control: DesktopControlPlaneApi = {
   executePublicModels: (command) => invoke(desktopIpcChannels.publicModels, command),
   executeAgentIntegrations: (command) =>
     invoke(desktopIpcChannels.agentIntegrations, command),
-  getRequestLedger: (query) => invoke(desktopIpcChannels.ledgerGet, query),
-  onRequestLedger(listener) {
-    const stop = onEvent(desktopIpcChannels.ledgerEvent, listener);
-    ledgerListenerCount += 1;
-    if (ledgerListenerCount === 1) void invoke(desktopIpcChannels.ledgerSubscribe);
+  queryRequestJourneys: (query) =>
+    invoke(desktopIpcChannels.requestJourneysQuery, query),
+  getRequestJourney: (input) =>
+    invoke(desktopIpcChannels.requestJourneyGet, input),
+  getRequestArtifact: (input) =>
+    invoke(desktopIpcChannels.requestArtifactGet, input),
+  queryRuntimeEvents: (query) =>
+    invoke(desktopIpcChannels.runtimeEventsQuery, query),
+  onRequestJourneys(listener) {
+    const stop = onEvent(desktopIpcChannels.requestJourneysEvent, listener);
+    requestJourneyListenerCount += 1;
+    if (requestJourneyListenerCount === 1) {
+      void invoke(desktopIpcChannels.requestJourneysSubscribe);
+    }
     let active = true;
     return () => {
       if (!active) return;
       active = false;
       stop();
-      ledgerListenerCount -= 1;
-      if (ledgerListenerCount === 0) void invoke(desktopIpcChannels.ledgerUnsubscribe);
+      requestJourneyListenerCount -= 1;
+      if (requestJourneyListenerCount === 0) {
+        void invoke(desktopIpcChannels.requestJourneysUnsubscribe);
+      }
+    };
+  },
+  onRuntimeEvents(listener) {
+    const stop = onEvent(desktopIpcChannels.runtimeEventsEvent, listener);
+    runtimeEventListenerCount += 1;
+    if (runtimeEventListenerCount === 1) {
+      void invoke(desktopIpcChannels.runtimeEventsSubscribe);
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      stop();
+      runtimeEventListenerCount -= 1;
+      if (runtimeEventListenerCount === 0) {
+        void invoke(desktopIpcChannels.runtimeEventsUnsubscribe);
+      }
     };
   },
   getAnalytics: (query) => invoke(desktopIpcChannels.analytics, query),
@@ -105,10 +137,8 @@ const control: DesktopControlPlaneApi = {
   confirmHistoryExport: (actionId) => invoke(desktopIpcChannels.historyExportConfirm, actionId),
   executeHistoryDelete: (command) => invoke(desktopIpcChannels.historyDelete, command),
   confirmHistoryDelete: (actionId) => invoke(desktopIpcChannels.historyDeleteConfirm, actionId),
-  acknowledgePersistence: () => invoke(desktopIpcChannels.persistenceAcknowledge),
   executeBackup: (command) => invoke(desktopIpcChannels.backup, command),
   confirmBackup: (actionId) => invoke(desktopIpcChannels.backupConfirm, actionId),
-  getDiagnostics: (query) => invoke(desktopIpcChannels.diagnostics, query),
 };
 
 const platform: DesktopPlatformApi = {

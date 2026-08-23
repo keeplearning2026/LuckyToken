@@ -2,15 +2,15 @@ import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { handleHttpRequest, type HttpBoundaryDependencies } from "../../src/http.js";
-import {
-  createOpenAIResponsesHandler,
-  type OpenAIResponsesHandlerOptions,
-} from "../../src/protocols/openai-responses/handler.js";
+import type {
+  RequestJourneyObservationAuthority,
+  RequestJourneyObservationInput,
+} from "../../src/diagnostics/contract.js";
+import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import {
   createProviderNativeResponses,
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
-import { createRecordingRequestLedger } from "../support/recording-request-ledger.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 function responsesModel(
@@ -52,7 +52,7 @@ function models(
 function dependencies(
   source: Models,
   fetch: FetchFunction,
-  extra: Partial<OpenAIResponsesHandlerOptions> = {},
+  diagnostics?: RequestJourneyObservationAuthority,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -65,13 +65,29 @@ function dependencies(
     maxRequestBytes: 1_000_000,
     createResponseId: () => "resp_test",
     now: () => 1,
-    ...extra,
   });
   return {
     clientProtocols: [handler],
     requestTimeoutMs: undefined,
     shutdownSignal: undefined,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
+}
+
+function recordingJourney(): {
+  readonly authority: RequestJourneyObservationAuthority;
+  readonly observations: RequestJourneyObservationInput[];
+} {
+  const observations: RequestJourneyObservationInput[] = [];
+  const authority: RequestJourneyObservationAuthority = {
+    begin: (input) => ({
+      requestId: input.requestId,
+      observe: (observation) => observations.push(observation),
+      close: () => undefined,
+    }),
+    observeRuntime: () => undefined,
+  };
+  return { authority, observations };
 }
 
 describe("Provider Native Responses contract", () => {
@@ -121,9 +137,9 @@ describe("Provider Native Responses contract", () => {
     );
   });
 
-  it("records native upstream usage through the Request Ledger", async () => {
+  it("observes native upstream usage through the Request Journey", async () => {
     const model = responsesModel();
-    const recorded = createRecordingRequestLedger();
+    const recorded = recordingJourney();
     const fetch: FetchFunction = async () =>
       new Response(
         JSON.stringify({
@@ -144,27 +160,29 @@ describe("Provider Native Responses contract", () => {
       );
 
     const response = await handleHttpRequest(
-      dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
+      dependencies(models(model), fetch, recorded.authority),
       request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
     );
 
     expect(response.status).toBe(200);
-    expect(recorded.terminalUsage).toHaveLength(1);
-    expect(recorded.terminalUsage[0]).toMatchObject({
-      api: "openai-responses",
-      completeness: "complete",
-      input: 12,
-      cacheRead: 5,
-      cacheWrite: 3,
-      output: 7,
-      reasoning: 2,
-      normalizedTotal: 27,
-    });
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "terminal_usage_observed",
+      usage: expect.objectContaining({
+        api: "openai-responses",
+        completeness: "complete",
+        input: 12,
+        cacheRead: 5,
+        cacheWrite: 3,
+        output: 7,
+        reasoning: 2,
+        normalizedTotal: 27,
+      }),
+    }));
   });
 
   it("records streamed usage when a successful Provider Native upstream omits Content-Type", async () => {
     const model = responsesModel();
-    const recorded = createRecordingRequestLedger();
+    const recorded = recordingJourney();
     const terminal = JSON.stringify({
       type: "response.completed",
       response: {
@@ -184,7 +202,7 @@ describe("Provider Native Responses contract", () => {
       new Response(new TextEncoder().encode(upstreamBody), { status: 200 });
 
     const response = await handleHttpRequest(
-      dependencies(models(model), fetch, { requestLedger: recorded.ledger }),
+      dependencies(models(model), fetch, recorded.authority),
       request(
         JSON.stringify({
           model: "openai/gpt-5",
@@ -197,8 +215,9 @@ describe("Provider Native Responses contract", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBeNull();
     await expect(response.text()).resolves.toBe(upstreamBody);
-    expect(recorded.terminalUsage).toEqual([
-      expect.objectContaining({
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "terminal_usage_observed",
+      usage: expect.objectContaining({
         api: "openai-responses",
         completeness: "complete",
         input: 12,
@@ -208,7 +227,7 @@ describe("Provider Native Responses contract", () => {
         reasoning: 2,
         normalizedTotal: 27,
       }),
-    ]);
+    }));
   });
 
   it("returns upstream SSE bytes unchanged when no alias projection is required", async () => {

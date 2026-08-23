@@ -44,6 +44,7 @@
     "pretest": "npm run build:packages",
     "test": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:inner",
     "test:inner": "node --test test/certification/*.test.mjs && vitest run && npm test --workspace @luckytoken/desktop-shell",
+    "pretest:release": "npm run build:packages",
     "test:release": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:release:inner",
     "test:release:inner": "node --test test/certification/*.test.mjs && vitest run --maxWorkers=4 && npm test --workspace @luckytoken/desktop-shell",
     "test:online": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online:inner",

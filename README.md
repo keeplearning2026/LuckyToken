@@ -83,8 +83,7 @@ credentials as separate authorities:
 ├── public-models.json                 # persisted Public Model enable/rename/endpoint state
 ├── state/
 │   ├── openai-responses.json           # durable Responses session history snapshot
-│   ├── diagnostics/                    # permanent Runtime Diagnostics SQLite/WAL store
-│   └── deep-diagnostics/               # bounded Deep Diagnostics capture SQLite/WAL store
+│   └── request-diagnostics/            # unified Request Journey and Runtime Event SQLite/WAL store
 └── pi/
     └── auth.json                       # mutable Provider credentials written by Pi login
 ```
@@ -102,63 +101,22 @@ owned by Pi/Provider credential authorities, while Local Native Codex requests
 preserve the Codex request credential on that native lane. The complete
 `.luckytoken/` directory and every `auth.json` are ignored by Git.
 
-## Globally Controlled Deep Diagnostics Capture
+## Unified Request Diagnostics
 
-LuckyToken can deliberately capture raw request/response artifacts for
-future requests while a single global switch is on. The switch is the
-registered hot-apply setting `diagnostics.deepCapture.enabled` (default
-`false`, config default under `deepDiagnostics.enabled`), controllable through
-the Control Plane settings command — the desktop Settings / Developer Lab
-toggle and `control settings set diagnostics.deepCapture.enabled true`.
+LuckyToken records Request Journeys, bounded redacted artifacts, and Runtime
+Events in one diagnostics-owned SQLite/WAL database under
+`.luckytoken/state/request-diagnostics/`. The Control Plane v3 exposes one
+strict management surface for journey queries/details/artifacts, Runtime Event
+queries, analytics, history, export, and backup. Records identify the exact
+phase, step, lane, outcome, and primary failure when those facts were observed.
 
-While enabled, every request accepted by a Client Protocol handler captures
-its original request body, the exact response bytes the client receives
-(including the `x-luckytoken-request-id` correlation header), safe header
-maps, and ordered event timing. The acceptance-time enable snapshot is
-immutable: enabling affects only subsequently accepted requests, and
-disabling never erases already captured data or interrupts an in-flight
-capture. Disabled capture costs nothing on the request path (no body clone
-or read) and capture faults never alter model responses.
-
-Every artifact passes the same Ticket 07 universal redaction choke point as
-Runtime Diagnostics (structural redaction for JSON bodies, the universal
-text/header sanitizers, and the credential-owner known-value scrubber; the
-capture store fails closed until the scrubber is attached). The complete
-persisted record is budgeted in UTF-8 bytes below the Control Plane frame
-ceiling (`maxCaptureBytes` per record, never above it), so every committed
-capture is retrievable through the framed Control Plane query
-(`get_capture`) — raw bodies never reach disk, events, or the wire
-unredacted.
-
-Retention is bounded by configurable age (`retentionAgeMs`, measured from
-the acceptance-time snapshot) and capacity (`maxCaptures`) under
-`deepDiagnostics`; eviction deletes capture rows only, writes a tiny
-tombstone, and never touches the permanent Request Ledger or diagnostics
-records. A request detail can truthfully distinguish `no-capture`,
-`captured`, `partial`, `failed`, and `expired` states. A capture write fault
-never changes a model response; it retries once with a minimal failed-state
-marker and otherwise reports only a sanitized critical diagnostic (request
-id + fixed code).
-
-## Permanent Runtime Diagnostics
-
-LuckyToken keeps a permanent, ordered stream of application-level
-info/warning/error/critical events in a diagnostics-owned versioned
-SQLite/WAL database (`.luckytoken/state/diagnostics/diagnostics.sqlite3` by
-default, configured under `runtimeDiagnostics.directory`). Records are never
-automatically aged out and survive application restarts. An event may carry a
-`requestId` for correlation only; it never becomes part of a Request Ledger.
-
-Every untrusted producer value passes through one recursive credential-
-redaction choke point before it is persisted, queried, or delivered: header
-names/values (Authorization, Proxy-Authorization, x-api-key, Cookie,
-Set-Cookie), Pi credential shapes (api_key/access/refresh), query/form
-credential keys, nested Errors/causes, cycles, accessors/proxies, and
-oversized values. Redacted records may preserve header names, authentication
-scheme/type, and a non-reversible keyed fingerprint, but never the original
-value. The same sanitized committed records are the only ones reachable
-through the Control Plane diagnostics query/typed-event surface (`get
-_diagnostics`, `diagnostics_subscribe`) and any fallback output.
+Diagnostics are fail-open observation only. Serving never awaits diagnostics
+I/O, accepts diagnostics backpressure, or changes routing, credentials,
+conversion, transport, response, or terminal outcome because observation
+failed. Management clients receive an explicit unavailable/degraded result
+instead of a false empty history. Artifacts are copied only at existing
+ownership seams, redacted before persistence, and bounded by the `diagnostics`
+configuration limits.
 
 Two CommandCode Providers are shipped as bundled product packages and registered
 automatically through the standard Pi Provider contract:

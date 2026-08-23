@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import {
-  bindRuntimeDiagnosticsConfiguration,
-  parseRuntimeDiagnosticsConfiguration,
-} from "../../src/runtime-diagnostics/index.js";
+  bindDiagnosticsConfiguration,
+  parseDiagnosticsConfiguration,
+} from "../../src/diagnostics/configuration.js";
 
-describe("Runtime Diagnostics configuration", () => {
+describe("unified diagnostics configuration", () => {
   const directories: string[] = [];
 
   afterEach(async () => {
@@ -21,96 +21,104 @@ describe("Runtime Diagnostics configuration", () => {
     );
   });
 
-  it("defaults the diagnostics directory under the config directory", () => {
+  it("defaults the single diagnostics snapshot under the config directory", () => {
     const root = resolve("config-root");
-    const configuration = parseRuntimeDiagnosticsConfiguration(
-      undefined,
-      root,
-    );
-    expect(configuration.directory).toBe(resolve(root, "state", "diagnostics"));
+    expect(parseDiagnosticsConfiguration(undefined, root)).toMatchObject({
+      directory: resolve(root, "state", "request-diagnostics"),
+      successArtifacts: { enabled: false },
+      maxJourneyArtifactBytes: 4_194_304,
+      artifactRetentionAgeMs: 604_800_000,
+      maxArtifactJourneys: 1_000,
+    });
   });
 
-  it("accepts only a diagnostics-owned snapshot", () => {
-    const configuration = parseRuntimeDiagnosticsConfiguration(
+  it("accepts and deeply freezes the current diagnostics contract", () => {
+    const configuration = parseDiagnosticsConfiguration(
+      {
+        directory: "state/diagnostics",
+        successArtifacts: { enabled: true },
+        maxJourneyArtifactBytes: 1_024,
+        artifactRetentionAgeMs: 2_000,
+        maxArtifactJourneys: 25,
+      },
+      "root",
+    );
+
+    expect(configuration).toMatchObject({
+      directory: resolve("root", "state", "diagnostics"),
+      successArtifacts: { enabled: true },
+      maxJourneyArtifactBytes: 1_024,
+      artifactRetentionAgeMs: 2_000,
+      maxArtifactJourneys: 25,
+    });
+    expect(Object.isFrozen(configuration)).toBe(true);
+    expect(Object.isFrozen(configuration.successArtifacts)).toBe(true);
+    expect(bindDiagnosticsConfiguration(configuration)).toBe(configuration);
+  });
+
+  it("accepts an authoritative snapshot across module boundaries", () => {
+    const parsed = parseDiagnosticsConfiguration(
       { directory: "state/diagnostics" },
       "root",
     );
-    expect(bindRuntimeDiagnosticsConfiguration(configuration)).toBe(
-      configuration,
-    );
+    const cloned = structuredClone(parsed);
+
+    expect(bindDiagnosticsConfiguration(cloned)).toEqual(parsed);
     expect(() =>
-      bindRuntimeDiagnosticsConfiguration({ directory: "elsewhere" }),
+      bindDiagnosticsConfiguration({
+        directory: parsed.directory,
+        successArtifacts: parsed.successArtifacts,
+        maxJourneyArtifactBytes: parsed.maxJourneyArtifactBytes,
+        artifactRetentionAgeMs: parsed.artifactRetentionAgeMs,
+        maxArtifactJourneys: parsed.maxArtifactJourneys,
+      }),
     ).toThrow(/diagnostics-owned snapshot/iu);
   });
 
-  it("accepts a structurally valid authoritative snapshot across module boundaries", () => {
-    // A configuration snapshot parsed in one module instance must bind in
-    // another: ownership is a versioned marker contract, not object identity.
-    const first = parseRuntimeDiagnosticsConfiguration(
-      { directory: "state/diagnostics" },
-      "root",
-    );
-    // structuredClone preserves the version marker across a module boundary
-    // (e.g. IPC or a fresh module instance).
-    const cloned = structuredClone(first);
-    expect(bindRuntimeDiagnosticsConfiguration(cloned)).toEqual(first);
-    // A plain structurally similar object without the marker is refused.
-    expect(() =>
-      bindRuntimeDiagnosticsConfiguration(
-        Object.freeze({ directory: first.directory }),
-      ),
-    ).toThrow();
-    expect(() =>
-      bindRuntimeDiagnosticsConfiguration(
-        Object.freeze({ directory: first.directory, retentionDays: 30 }),
-      ),
-    ).toThrow();
+  it.each([
+    [{ retentionDays: 30 }, "diagnostics.retentionDays is unknown"],
+    [
+      { successArtifacts: { extra: true } },
+      "diagnostics.successArtifacts.extra is unknown",
+    ],
+    [
+      { maxJourneyArtifactBytes: 4_194_305 },
+      "diagnostics.maxJourneyArtifactBytes",
+    ],
+    [{ artifactRetentionAgeMs: 0 }, "diagnostics.artifactRetentionAgeMs"],
+    [{ maxArtifactJourneys: 1_001 }, "diagnostics.maxArtifactJourneys"],
+  ] as const)("rejects invalid diagnostics input %#", (value, message) => {
+    expect(() => parseDiagnosticsConfiguration(value, "root")).toThrow(message);
   });
 
-  it("rejects unknown diagnostics fields", () => {
-    expect(() =>
-      parseRuntimeDiagnosticsConfiguration(
-        { directory: "state/diagnostics", retentionDays: 30 },
-        "root",
-      ),
-    ).toThrow(/unknown/iu);
-  });
-
-  it("parses runtimeDiagnostics through the strict CLI config", async () => {
+  it("parses only diagnostics through the config-v2 root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "luckytoken-diag-config-"));
     directories.push(directory);
     const path = join(directory, "config.json");
     await writeFile(
       path,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         clientProtocols: { fixture: {} },
         pi: { directory: "pi" },
-        runtimeDiagnostics: { directory: "custom/diagnostics" },
+        diagnostics: {
+          directory: "custom/diagnostics",
+          successArtifacts: { enabled: true },
+          maxJourneyArtifactBytes: 2_048,
+          artifactRetentionAgeMs: 3_000,
+          maxArtifactJourneys: 30,
+        },
       }),
       "utf8",
     );
 
     const config = await loadLuckyTokenCliConfig(path);
-    expect(config.runtimeDiagnostics.directory).toBe(
-      resolve(directory, "custom", "diagnostics"),
-    );
-  });
-
-  it("accepts the example config with the diagnostics key", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-diag-example-"));
-    directories.push(directory);
-    const path = join(directory, "config.json");
-    const example = JSON.parse(
-      await import("node:fs/promises").then((fs) =>
-        fs.readFile(join(process.cwd(), "luckytoken.config.example.json"), "utf8"),
-      ),
-    ) as Record<string, unknown>;
-    await writeFile(path, JSON.stringify(example), "utf8");
-
-    const config = await loadLuckyTokenCliConfig(path);
-    expect(config.runtimeDiagnostics.directory).toBe(
-      resolve(directory, "state", "diagnostics"),
-    );
+    expect(config.diagnostics).toMatchObject({
+      directory: resolve(directory, "custom", "diagnostics"),
+      successArtifacts: { enabled: true },
+      maxJourneyArtifactBytes: 2_048,
+      artifactRetentionAgeMs: 3_000,
+      maxArtifactJourneys: 30,
+    });
   });
 });

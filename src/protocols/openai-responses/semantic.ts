@@ -4,7 +4,12 @@ import type {
   Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import type {
+  ConversionNotice,
+  ExecutionFactsSink,
+  UpstreamFailureFact,
+} from "@luckytoken/provider-contract/diagnostics";
+import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
 
 import {
   execute,
@@ -12,12 +17,12 @@ import {
   freezePiInvocation,
   type ExecutionOperation,
 } from "../../execution.js";
-import type { InvocationDiagnostics } from "../../invocation-diagnostics/index.js";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+} from "../../diagnostics/contract.js";
 import type { RequestIdentity } from "../../request-identity.js";
-import {
-  bindCredentialActivityToExecutionFacts,
-  type RequestLedgerEntry,
-} from "../../request-ledger/handler-seam.js";
 import {
   composeOptions,
   type RouterOptionDefaults,
@@ -56,8 +61,282 @@ export interface SemanticResponsesExecutionOptions {
   readonly createResponseId: () => string;
   readonly now: () => number;
   readonly executeOperation?: ExecutionOperation;
-  readonly diagnostics: InvocationDiagnostics;
-  readonly ledger: RequestLedgerEntry;
+  readonly journey?: RequestJourneyObserver;
+}
+
+const MAX_INVOCATION_ARTIFACT_BYTES = 256 * 1_024;
+const MAX_SNAPSHOT_MESSAGES = 16;
+const MAX_SNAPSHOT_CONTENT_BLOCKS = 8;
+const MAX_SNAPSHOT_TEXT_CHARACTERS = 256;
+
+function observeSemanticJourney(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // Semantic execution remains authoritative over observation failure.
+  }
+}
+
+function enterSemanticJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeSemanticJourney(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+}
+
+function completeSemanticJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  completion: "success" | "failed" | "aborted",
+): void {
+  observeSemanticJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion,
+    location,
+  });
+}
+
+function observeClientConversionNotice(
+  journey: RequestJourneyObserver | undefined,
+  notice: ConversionNotice,
+): void {
+  const requestDirection = notice.direction === "request";
+  observeSemanticJourney(journey, {
+    kind: "conversion_notice_observed",
+    code: notice.code,
+    severity: notice.action === "ignore" ? "info" : "warning",
+    location: {
+      phase: requestDirection
+        ? "lane_request_preparation"
+        : "lane_response_processing",
+      lane: "semantic_conversion",
+      direction: requestDirection ? "client_to_pi" : "pi_to_client",
+      step: requestDirection
+        ? "apply_semantic_repairs"
+        : "validate_response_fidelity",
+      ...(notice.jsonPath === undefined
+        ? {}
+        : { sourcePath: notice.jsonPath }),
+    },
+  });
+}
+
+function observeProviderConversionNotice(
+  journey: RequestJourneyObserver | undefined,
+  notice: ConversionNotice,
+): void {
+  const requestDirection = notice.direction === "request";
+  observeSemanticJourney(journey, {
+    kind: "conversion_notice_observed",
+    code: notice.code,
+    severity: notice.action === "ignore" ? "info" : "warning",
+    location: {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: requestDirection ? "pi_to_provider" : "provider_to_pi",
+      step: requestDirection ? "convert_pi_request" : "decode_provider_events",
+      ...(notice.jsonPath === undefined
+        ? {}
+        : { sourcePath: notice.jsonPath }),
+    },
+  });
+}
+
+function boundedInvocationSnapshot(
+  invocation: ResponsesInvocation,
+  model: Model<string>,
+  options: ModelsSimpleStreamOptions,
+): { readonly bytes: Uint8Array<ArrayBuffer>; readonly truncated: boolean } {
+  let truncated = false;
+  const boundedText = (value: unknown): string | undefined => {
+    if (typeof value !== "string") return undefined;
+    if (value.length <= MAX_SNAPSHOT_TEXT_CHARACTERS) return value;
+    truncated = true;
+    return value.slice(0, MAX_SNAPSHOT_TEXT_CHARACTERS);
+  };
+  const boundedContent = (value: unknown): unknown => {
+    if (typeof value === "string") return boundedText(value);
+    if (!Array.isArray(value)) return undefined;
+    if (value.length > MAX_SNAPSHOT_CONTENT_BLOCKS) truncated = true;
+    return value.slice(0, MAX_SNAPSHOT_CONTENT_BLOCKS).map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        return Object.freeze({ type: typeof entry });
+      }
+      const block = entry as Readonly<Record<string, unknown>>;
+      const type = boundedText(block.type) ?? "unknown";
+      return Object.freeze({
+        type,
+        ...(type === "text" && boundedText(block.text) !== undefined
+          ? { text: boundedText(block.text)! }
+          : {}),
+        ...(type === "thinking" && boundedText(block.thinking) !== undefined
+          ? { thinking: boundedText(block.thinking)! }
+          : {}),
+        ...((type === "toolCall" || type === "toolResult") &&
+        boundedText(block.name) !== undefined
+          ? { name: boundedText(block.name)! }
+          : {}),
+      });
+    });
+  };
+  if (invocation.context.messages.length > MAX_SNAPSHOT_MESSAGES) {
+    truncated = true;
+  }
+  const messages = invocation.context.messages
+    .slice(0, MAX_SNAPSHOT_MESSAGES)
+    .map((message) => {
+      const safe = message as unknown as Readonly<Record<string, unknown>>;
+      return Object.freeze({
+        role: boundedText(safe.role) ?? "unknown",
+        content: boundedContent(safe.content),
+      });
+    });
+  const snapshot = Object.freeze({
+    schema: "luckytoken.pi_invocation_summary.v1",
+    selector: boundedText(invocation.selector),
+    model: Object.freeze({
+      provider: boundedText(model.provider),
+      id: boundedText(model.id),
+      api: boundedText(model.api),
+    }),
+    systemPrompt: boundedText(invocation.context.systemPrompt),
+    messageCount: invocation.context.messages.length,
+    messages: Object.freeze(messages),
+    options: Object.freeze({
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+    }),
+    completeness: "bounded_summary",
+  });
+  let bytes = new TextEncoder().encode(JSON.stringify(snapshot));
+  if (bytes.byteLength > MAX_INVOCATION_ARTIFACT_BYTES) {
+    truncated = true;
+    bytes = new TextEncoder().encode(
+      JSON.stringify({
+        schema: "luckytoken.pi_invocation_summary.v1",
+        selector: boundedText(invocation.selector),
+        model: {
+          provider: boundedText(model.provider),
+          id: boundedText(model.id),
+          api: boundedText(model.api),
+        },
+        messageCount: invocation.context.messages.length,
+        completeness: "counts_only_due_to_byte_bound",
+      }),
+    );
+  }
+  return Object.freeze({ bytes, truncated });
+}
+
+function trustedTerminalSummaryBytes(
+  failure: UpstreamFailureFact,
+): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      kind: failure.kind,
+      ...(failure.phase === undefined ? {} : { phase: failure.phase }),
+      ...(failure.status === undefined ? {} : { status: failure.status }),
+      ...(failure.statusText === undefined
+        ? {}
+        : { statusText: failure.statusText }),
+      ...(failure.providerType === undefined
+        ? {}
+        : { providerType: failure.providerType }),
+      ...(failure.providerCode === undefined
+        ? {}
+        : { providerCode: failure.providerCode }),
+      message: failure.message,
+      headers: { ...failure.headers },
+      ...(failure.retryable === undefined
+        ? {}
+        : { retryable: failure.retryable }),
+      ...(failure.attemptCount === undefined
+        ? {}
+        : { attemptCount: failure.attemptCount }),
+      ...(failure.snapshot === undefined
+        ? {}
+        : { snapshot: { ...failure.snapshot } }),
+      truncated: failure.truncated,
+    }),
+  );
+}
+
+function trustedExecutionFailureLocation(
+  failure: UpstreamFailureFact,
+  attempt: number | undefined,
+): RequestJourneyLocation {
+  const attemptField = attempt === undefined ? {} : { attempt };
+  if (failure.kind === "conversion") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "pi_to_provider",
+      step: "convert_pi_request",
+      subject: "envelope",
+      ...attemptField,
+    };
+  }
+  if (
+    (failure.kind === "protocol" || failure.kind === "upstream_stream") &&
+    failure.phase === "unexpected_eof"
+  ) {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "validate_pi_terminal",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "protocol" || failure.kind === "upstream_stream") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "provider_to_pi",
+      step:
+        failure.phase === "stream"
+          ? "construct_pi_terminal"
+          : "decode_provider_events",
+      subject: "envelope",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "transport" || failure.kind === "timeout") {
+    const dispatch =
+      failure.phase === "request" ||
+      failure.phase === "connect" ||
+      failure.phase === "request_body" ||
+      failure.phase === "retry_delay";
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: dispatch ? "dispatch_provider_request" : "read_provider_response",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "http") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "read_provider_response",
+      ...attemptField,
+    };
+  }
+  return {
+    phase: "upstream_execution",
+    lane: "semantic_conversion",
+    step: "validate_pi_terminal",
+    ...attemptField,
+  };
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -204,8 +483,7 @@ async function rememberAfterSuccess(
       code,
       action: "degrade" as const,
     };
-    options.diagnostics.notice(notice);
-    options.ledger.notice(notice);
+    observeClientConversionNotice(options.journey, notice);
   });
 }
 
@@ -213,6 +491,7 @@ export async function executeSemanticResponses(
   options: SemanticResponsesExecutionOptions,
 ): Promise<Response> {
   const executeOperation = options.executeOperation ?? execute;
+  let lastObservedAttempt = 0;
   try {
     const previousResponseId =
       typeof options.body === "object" && options.body !== null
@@ -223,65 +502,240 @@ export async function executeSemanticResponses(
         ? await options.sessionState.expand(options.body)
         : options.body;
 
-    const invocation = convertResponsesRequest(
-      expanded,
-      options.now(),
-      options.configuration.conversion.request,
+    const conversionLocation = {
+      phase: "lane_request_preparation",
+      lane: "semantic_conversion",
+      direction: "client_to_pi",
+      step: "convert_request_envelope",
+      subject: "envelope",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p3.convert_request_envelope",
+      conversionLocation,
     );
-    assertProviderRepresentableHistory(invocation);
-    for (const notice of invocation.notices) {
-      options.diagnostics.notice(notice);
-      options.ledger.notice(notice);
+    let invocation: ResponsesInvocation;
+    try {
+      invocation = convertResponsesRequest(
+        expanded,
+        options.now(),
+        options.configuration.conversion.request,
+      );
+      assertProviderRepresentableHistory(invocation);
+      completeSemanticJourneyStep(
+        options.journey,
+        "p3.convert_request_envelope",
+        conversionLocation,
+        "success",
+      );
+    } catch (error) {
+      completeSemanticJourneyStep(
+        options.journey,
+        "p3.convert_request_envelope",
+        conversionLocation,
+        "failed",
+      );
+      throw error;
     }
-    const piOptions = composeInvocationOptions(
-      invocation,
-      {
-        sessionId: options.requestIdentity.effectiveSessionId,
-        signal: options.request.signal,
-      },
-      options.routerDefaults,
+    for (const notice of invocation.notices) {
+      observeClientConversionNotice(options.journey, notice);
+    }
+    const finalizeLocation = {
+      phase: "lane_request_preparation",
+      lane: "semantic_conversion",
+      direction: "client_to_pi",
+      step: "finalize_pi_invocation",
+      subject: "envelope",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p3.finalize_pi_invocation",
+      finalizeLocation,
     );
-    options.diagnostics.checkpoint({
-      stage: "pi-execution",
-      selector: invocation.selector,
-    });
-    freezePiInvocation(options.model, invocation.context, piOptions);
-    options.ledger.executing();
-    const executionFacts = {
-      notice: (notice: Parameters<RequestLedgerEntry["notice"]>[0]) => {
-        options.diagnostics.notice(notice);
-        options.ledger.notice(notice);
+    let piOptions: ModelsSimpleStreamOptions;
+    try {
+      piOptions = composeInvocationOptions(
+        invocation,
+        {
+          sessionId: options.requestIdentity.effectiveSessionId,
+          signal: options.request.signal,
+        },
+        options.routerDefaults,
+      );
+      freezePiInvocation(options.model, invocation.context, piOptions);
+      if (options.journey !== undefined) {
+        try {
+          const snapshot = boundedInvocationSnapshot(
+            invocation,
+            options.model,
+            piOptions,
+          );
+          observeSemanticJourney(options.journey, {
+            kind: "artifact_observed",
+            artifactId: "pi_invocation_snapshot",
+            artifactKind: "pi_invocation_snapshot",
+            state: snapshot.truncated ? "partial" : "captured",
+            mediaType: "application/json",
+            bytes: snapshot.bytes,
+            originalBytes: snapshot.bytes.byteLength,
+            capturedBytes: snapshot.bytes.byteLength,
+            truncated: snapshot.truncated,
+            location: finalizeLocation,
+          });
+        } catch {
+          observeSemanticJourney(options.journey, {
+            kind: "artifact_observed",
+            artifactId: "pi_invocation_snapshot",
+            artifactKind: "pi_invocation_snapshot",
+            state: "unavailable",
+            reason: "snapshot_projection_failed",
+            location: finalizeLocation,
+          });
+        }
+      }
+      completeSemanticJourneyStep(
+        options.journey,
+        "p3.finalize_pi_invocation",
+        finalizeLocation,
+        "success",
+      );
+    } catch (error) {
+      completeSemanticJourneyStep(
+        options.journey,
+        "p3.finalize_pi_invocation",
+        finalizeLocation,
+        "failed",
+      );
+      throw error;
+    }
+    const executionFacts: ExecutionFactsSink = {
+      notice: (notice) => {
+        observeProviderConversionNotice(options.journey, notice);
       },
-      attempt: (attempt: Parameters<RequestLedgerEntry["attempt"]>[0]) => {
-        options.diagnostics.attempt(attempt);
-        options.ledger.attempt(attempt);
+      attempt: (attempt) => {
+        lastObservedAttempt = Math.max(lastObservedAttempt, attempt.attempt);
+        observeSemanticJourney(options.journey, {
+          kind: "attempt_observed",
+          attempt: attempt.attempt,
+          ...(attempt.status === undefined ? {} : { status: attempt.status }),
+          transition: attempt.status === undefined ? "terminal" : "response",
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "read_provider_response",
+            attempt: attempt.attempt,
+          },
+        });
       },
-      terminalUsage: (snapshot: Parameters<RequestLedgerEntry["terminalUsage"]>[0]) => {
-        options.ledger.terminalUsage(snapshot);
+      terminalUsage: (snapshot) => {
+        observeSemanticJourney(options.journey, {
+          kind: "terminal_usage_observed",
+          usage: snapshot,
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "normalize_terminal_usage",
+            subject: "usage",
+          },
+        });
       },
     };
-    bindCredentialActivityToExecutionFacts(executionFacts, options.ledger);
-    const message = await executeOperation(
-      options.models,
-      options.model,
-      invocation.context,
-      piOptions,
-      executionFacts,
-    );
-    options.request.signal.throwIfAborted();
-    options.ledger.terminal("success", { piStopReason: message.stopReason });
-    options.diagnostics.checkpoint({
-      stage: "client-render",
-      selector: invocation.selector,
+    bindCredentialActivityToExecutionFacts(executionFacts, {
+      credentialCaptured: (capture) => {
+        observeSemanticJourney(options.journey, {
+          kind: "profile_attributed",
+          profileId: capture.credentialId,
+          displayName: capture.displayName,
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "capture_semantic_profile",
+          },
+        });
+      },
+      credentialAttempt: (attempt) => {
+        observeSemanticJourney(options.journey, {
+          kind: "profile_attributed",
+          profileId: attempt.credentialId,
+          displayName: attempt.displayName,
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "attribute_semantic_profile_attempt",
+            attempt: attempt.attempt,
+          },
+        });
+      },
     });
-    options.ledger.rendering();
+    observeSemanticJourney(options.journey, {
+      kind: "artifact_observed",
+      artifactId: "pi_provider_outbound_request_evidence",
+      artifactKind: "pi_provider_outbound_request_evidence",
+      state: "unavailable",
+      reason: "provider_did_not_expose",
+      location: {
+        phase: "upstream_execution",
+        lane: "semantic_conversion",
+        direction: "pi_to_provider",
+        step: "convert_pi_request",
+        subject: "envelope",
+      },
+    });
+    observeSemanticJourney(options.journey, {
+      kind: "artifact_observed",
+      artifactId: "pi_provider_response_decode_evidence",
+      artifactKind: "pi_provider_response_decode_evidence",
+      state: "unavailable",
+      reason: "provider_did_not_expose",
+      location: {
+        phase: "upstream_execution",
+        lane: "semantic_conversion",
+        direction: "provider_to_pi",
+        step: "decode_provider_events",
+        subject: "envelope",
+      },
+    });
+    const createStreamLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "create_pi_stream",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p4.create_pi_stream",
+      createStreamLocation,
+    );
+    let message;
+    try {
+      message = await executeOperation(
+        options.models,
+        options.model,
+        invocation.context,
+        piOptions,
+        executionFacts,
+      );
+      completeSemanticJourneyStep(
+        options.journey,
+        "p4.create_pi_stream",
+        createStreamLocation,
+        "success",
+      );
+    } catch (error) {
+      completeSemanticJourneyStep(
+        options.journey,
+        "p4.create_pi_stream",
+        createStreamLocation,
+        options.request.signal.aborted ? "aborted" : "failed",
+      );
+      throw error;
+    }
+    options.request.signal.throwIfAborted();
 
     const renderState = buildRenderState(
       invocation,
       options.configuration.conversion.response.unknownPiContent,
       (notice) => {
-        options.diagnostics.notice(notice);
-        options.ledger.notice(notice);
+        observeClientConversionNotice(options.journey, notice);
       },
     );
     const rendered = convertAssistantMessageToResponses(
@@ -302,7 +756,6 @@ export async function executeSemanticResponses(
       throw new ExecutionAbortedError(options.request.signal.reason);
     }
     if (error instanceof InvalidRequest || error instanceof ResponseStateConversionFailure) {
-      options.ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );
@@ -319,10 +772,75 @@ export async function executeSemanticResponses(
         message: string;
       };
       if (execution.failure !== undefined) {
+        const terminalAttempt =
+          execution.failure.attemptCount ??
+          (lastObservedAttempt > 0 ? lastObservedAttempt : undefined);
+        const terminalLocation = trustedExecutionFailureLocation(
+          execution.failure,
+          terminalAttempt,
+        );
+        const terminalStep = `p4.${terminalLocation.step}`;
+        enterSemanticJourneyStep(
+          options.journey,
+          terminalStep,
+          terminalLocation,
+        );
+        completeSemanticJourneyStep(
+          options.journey,
+          terminalStep,
+          terminalLocation,
+          "failed",
+        );
+        if (options.journey !== undefined) {
+          try {
+            const terminalBytes = trustedTerminalSummaryBytes(
+              execution.failure,
+            );
+            observeSemanticJourney(options.journey, {
+              kind: "artifact_observed",
+              artifactId: "pi_terminal_summary",
+              artifactKind: "pi_terminal_summary",
+              state: "captured",
+              mediaType: "application/json",
+              bytes: terminalBytes,
+              originalBytes: terminalBytes.byteLength,
+              capturedBytes: terminalBytes.byteLength,
+              truncated: false,
+              location: terminalLocation,
+            });
+          } catch {
+            observeSemanticJourney(options.journey, {
+              kind: "artifact_observed",
+              artifactId: "pi_terminal_summary",
+              artifactKind: "pi_terminal_summary",
+              state: "unavailable",
+              reason: "snapshot_projection_failed",
+              location: terminalLocation,
+            });
+          }
+        }
+        observeSemanticJourney(options.journey, {
+          kind: "failure_detected",
+          failureId: `trusted_upstream_${execution.failure.kind}_failure${terminalAttempt === undefined ? "" : `:${terminalAttempt}`}`,
+          role: "primary",
+          classification: `trusted_upstream_${execution.failure.kind}_failure`,
+          origin: "provider",
+          originPrecision: "external_boundary",
+          safeMessage: execution.failure.message,
+          location: terminalLocation,
+        });
         const mapping = mapUpstreamFailureFact(execution.failure);
-        options.ledger.terminal("failed", { clientHttpStatus: mapping.status });
-        options.ledger.fail({ classification: "runtime-failure", error });
-        return renderResponsesErrorResponse({
+        const presentationLocation = {
+          phase: "client_response_preparation",
+          lane: "semantic_conversion",
+          step: "render_client_error",
+        } as const;
+        enterSemanticJourneyStep(
+          options.journey,
+          "p6.render_client_error",
+          presentationLocation,
+        );
+        const response = renderResponsesErrorResponse({
           status: mapping.status,
           type: mapping.type,
           message: mapping.message,
@@ -330,9 +848,44 @@ export async function executeSemanticResponses(
           param: mapping.param,
           safeHeaders: mapping.safeHeaders,
         });
+        completeSemanticJourneyStep(
+          options.journey,
+          "p6.render_client_error",
+          presentationLocation,
+          "success",
+        );
+        observeSemanticJourney(options.journey, {
+          kind: "client_response_prepared",
+          status: response.status,
+          ...(response.headers.get("content-type") === null
+            ? {}
+            : { mediaType: response.headers.get("content-type")! }),
+          location: presentationLocation,
+        });
+        const outcomeLocation = {
+          phase: "outcome_commit",
+          lane: "semantic_conversion",
+          step: "commit_request_outcome",
+        } as const;
+        enterSemanticJourneyStep(
+          options.journey,
+          "p7.commit_request_outcome",
+          outcomeLocation,
+        );
+        observeSemanticJourney(options.journey, {
+          kind: "work_outcome_committed",
+          outcome: "failed",
+          terminalAuthority: "pi_execution",
+          location: outcomeLocation,
+        });
+        completeSemanticJourneyStep(
+          options.journey,
+          "p7.commit_request_outcome",
+          outcomeLocation,
+          "success",
+        );
+        return response;
       }
-      options.ledger.terminal("failed", { clientHttpStatus: 502 });
-      options.ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
         renderResponsesError(502, "api_error", "Upstream provider failed"),
       );

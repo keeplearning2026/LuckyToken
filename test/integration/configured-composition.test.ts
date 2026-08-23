@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
 import { createConfiguredLuckyTokenDataPlane as createProductionDataPlane } from "../../src/composition.js";
+import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/contract.js";
 import {
   createConfiguredLuckyTokenDataPlane,
   createSeededCredentialRecordStore,
@@ -30,20 +31,12 @@ function commandCodeText(text: string): Response {
 
 describe("configured serving composition", () => {
   const directories: string[] = [];
-  const compositions: Array<{
-    diagnosticsStore: { close(): void };
-    requestLedger: { close(): void };
-    deepCaptureStore: { close(): void };
-  }> = [];
+  const compositions: Array<{ close(): Promise<void> }> = [];
 
   afterEach(async () => {
-    compositions
-      .splice(0)
-      .forEach((composition) => {
-        composition.diagnosticsStore.close();
-        composition.requestLedger.close();
-        composition.deepCaptureStore.close();
-      });
+    await Promise.all(
+      compositions.splice(0).map((composition) => composition.close()),
+    );
     await Promise.all(
       directories
         .splice(0)
@@ -64,12 +57,13 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
         },
         providerPackages: {},
+        diagnostics: { directory: "state/request-diagnostics" },
         pi: { directory: "pi" },
       }),
       "utf8",
@@ -99,10 +93,7 @@ describe("configured serving composition", () => {
       models,
       providerAuthBindings: {} as never,
       publicModels,
-      requestLedger: {} as never,
-      deepCapture: {} as never,
       isProtocolEnabled: () => true,
-      scrubSensitiveText: (value) => value,
       fetch: async () => new Response(),
     });
 
@@ -118,6 +109,18 @@ describe("configured serving composition", () => {
 
   it("registers the packaged CommandCode Provider hidden behind one Client Protocol", async () => {
     const upstreamRequests: Request[] = [];
+    const observedRequests: string[] = [];
+    const diagnostics: RequestJourneyObservationAuthority = {
+      begin(input) {
+        observedRequests.push(input.requestId);
+        return {
+          requestId: input.requestId,
+          observe(): void {},
+          close(): void {},
+        };
+      },
+      observeRuntime(): void {},
+    };
     const fetch: FetchFunction = async (input, init) => {
       if (String(input).includes("/provider/v1/models")) {
         return new Response(JSON.stringify({ object: "list", data: [] }), {
@@ -142,6 +145,7 @@ describe("configured serving composition", () => {
       createMessageId: () => "msg_configured",
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
       now: () => 1_786_400_000_000,
+      diagnostics,
     });
     compositions.push(composition);
 
@@ -150,15 +154,13 @@ describe("configured serving composition", () => {
       "certification",
       "close",
       "credentialManagement",
-      "deepCapture",
-      "deepCaptureStore",
-      "diagnosticsStore",
+      "diagnostics",
       "providerAuthBindings",
-      "requestLedger",
       "runtime",
       "userConfiguredProviderIds",
     ]);
     expect(composition.userConfiguredProviderIds).toEqual([]);
+    expect(composition.diagnostics).toBe(diagnostics);
     expect(Object.keys(composition.runtime).sort()).toEqual([
       "handle",
       "routes",
@@ -199,6 +201,7 @@ describe("configured serving composition", () => {
       content: [{ type: "text", text: "configured through Pi" }],
     });
     expect(upstreamRequests).toHaveLength(1);
+    expect(observedRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.headers.get("authorization")).toBe(
       "Bearer provider-secret",
     );
@@ -380,7 +383,7 @@ describe("configured serving composition", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -389,6 +392,7 @@ describe("configured serving composition", () => {
           },
         },
         providerPackages: {},
+        diagnostics: { directory: "state/request-diagnostics" },
         pi: { directory: "pi" },
       }),
       "utf8",

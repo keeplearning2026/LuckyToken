@@ -1,4 +1,9 @@
 import type { FetchFunction, Model } from "@earendil-works/pi-ai";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+} from "../diagnostics/contract.js";
 
 import {
   AnthropicNativeBodyProjectionError,
@@ -21,6 +26,9 @@ export interface PassthroughAnthropicRequestOptions {
   readonly bodyProjectionMode: AnthropicNativeBodyProjectionMode;
   readonly authMode: "api_key" | "oauth" | "github_copilot" | "ambient";
   readonly sessionId?: string;
+  readonly attempt: number;
+  readonly profileId?: string;
+  readonly journey?: RequestJourneyObserver;
   /**
    * Composed Provider-facing request facts (Ticket 10): the auth result's
    * merged headers (built-in static model headers, configured provider/
@@ -57,6 +65,43 @@ export function isAnthropicNativePassthroughModel(
     model.api === "anthropic-messages" &&
     CERTIFIED_ANTHROPIC_NATIVE_PROVIDERS.has(model.provider)
   );
+}
+
+function observeAnthropicNativeTransport(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // Provider Native transport remains authoritative over observation.
+  }
+}
+
+function enterAnthropicNativeTransportStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeAnthropicNativeTransport(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+}
+
+function completeAnthropicNativeTransportStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  completion: "success" | "failed" | "aborted",
+): void {
+  observeAnthropicNativeTransport(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion,
+    location,
+  });
 }
 
 const HOP_BY_HOP = new Set([
@@ -349,24 +394,122 @@ export async function passthroughAnthropicRequest(
       );
     }
   }
-  const endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
-  const forwardedBody = projectAnthropicNativeBody({
-    rawBody,
-    modelId: model.id,
-    mode: options.bodyProjectionMode,
-  }).body;
+  const projectionLocation = {
+    phase: "lane_request_preparation",
+    lane: "provider_native",
+    step: "project_native_body",
+    attempt: options.attempt,
+  } as const;
+  const projectionStep = `p3.project_native_body.${options.attempt}`;
+  enterAnthropicNativeTransportStep(
+    options.journey,
+    projectionStep,
+    projectionLocation,
+  );
+  let forwardedBody: string;
+  try {
+    forwardedBody = projectAnthropicNativeBody({
+      rawBody,
+      modelId: model.id,
+      mode: options.bodyProjectionMode,
+    }).body;
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      projectionStep,
+      projectionLocation,
+      "success",
+    );
+  } catch (error) {
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      projectionStep,
+      projectionLocation,
+      "failed",
+    );
+    throw error;
+  }
+
+  const envelopeLocation = {
+    phase: "lane_request_preparation",
+    lane: "provider_native",
+    step: "reconstruct_provider_envelope",
+    attempt: options.attempt,
+  } as const;
+  const envelopeStep = `p3.reconstruct_provider_envelope.${options.attempt}`;
+  enterAnthropicNativeTransportStep(
+    options.journey,
+    envelopeStep,
+    envelopeLocation,
+  );
+  let endpoint: string;
+  let headers: Record<string, string>;
+  try {
+    endpoint = joinEndpoint(model.baseUrl, "/v1/messages");
+    headers = buildUpstreamHeaders(
+      model,
+      rawBody,
+      apiKey,
+      options.authMode,
+      options.sessionId,
+      options.composedHeaders,
+    );
+    const outboundBytes = new TextEncoder().encode(forwardedBody);
+    const capturedBytes = Math.min(outboundBytes.byteLength, 256 * 1_024);
+    observeAnthropicNativeTransport(options.journey, {
+      kind: "artifact_observed",
+      artifactId: `provider_native_outbound_request_wire.${options.attempt}`,
+      artifactKind: "provider_native_outbound_request_wire",
+      state:
+        capturedBytes < outboundBytes.byteLength ? "partial" : "captured",
+      mediaType: "application/json",
+      bytes: outboundBytes.subarray(0, capturedBytes),
+      originalBytes: outboundBytes.byteLength,
+      capturedBytes,
+      truncated: capturedBytes < outboundBytes.byteLength,
+      location: envelopeLocation,
+    });
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      envelopeStep,
+      envelopeLocation,
+      "success",
+    );
+  } catch (error) {
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      envelopeStep,
+      envelopeLocation,
+      "failed",
+    );
+    throw error;
+  }
+
+  const dispatchLocation = {
+    phase: "upstream_execution",
+    lane: "provider_native",
+    step: "dispatch_provider_native",
+    attempt: options.attempt,
+  } as const;
+  const dispatchStep = `p4.dispatch_provider_native.${options.attempt}`;
+  enterAnthropicNativeTransportStep(
+    options.journey,
+    dispatchStep,
+    dispatchLocation,
+  );
+  observeAnthropicNativeTransport(options.journey, {
+    kind: "attempt_observed",
+    attempt: options.attempt,
+    ...(options.profileId === undefined
+      ? {}
+      : { profileId: options.profileId }),
+    transition: "started",
+    location: dispatchLocation,
+  });
   let upstream: Response;
   try {
     upstream = await fetchImpl(endpoint, {
       method: "POST",
-      headers: buildUpstreamHeaders(
-        model,
-        rawBody,
-        apiKey,
-        options.authMode,
-        options.sessionId,
-        options.composedHeaders,
-      ),
+      headers,
       body: forwardedBody,
       signal,
     });
@@ -377,9 +520,40 @@ export async function passthroughAnthropicRequest(
     // the handler turns it into a legal Anthropic error, never a raw
     // exception. Caller cancellation keeps its own identity so the handler
     // can rethrow it as cancellation rather than as a transport failure.
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      dispatchStep,
+      dispatchLocation,
+      signal.aborted ? "aborted" : "failed",
+    );
     if (signal.aborted) throw error;
     throw new AnthropicPassthroughTransportError(error);
   }
+  completeAnthropicNativeTransportStep(
+    options.journey,
+    dispatchStep,
+    dispatchLocation,
+    "success",
+  );
+
+  const readLocation = {
+    phase: "upstream_execution",
+    lane: "provider_native",
+    step: "read_provider_native_response",
+    attempt: options.attempt,
+  } as const;
+  const readStep = `p4.read_provider_native_response.${options.attempt}`;
+  enterAnthropicNativeTransportStep(options.journey, readStep, readLocation);
+  observeAnthropicNativeTransport(options.journey, {
+    kind: "attempt_observed",
+    attempt: options.attempt,
+    ...(options.profileId === undefined
+      ? {}
+      : { profileId: options.profileId }),
+    status: upstream.status,
+    transition: "response",
+    location: readLocation,
+  });
   let body: Uint8Array<ArrayBuffer>;
   try {
     body = new Uint8Array(await upstream.arrayBuffer());
@@ -389,9 +563,47 @@ export async function passthroughAnthropicRequest(
     // pre-commit error lifecycle as above. Caller cancellation keeps its own
     // identity so the handler can rethrow it as cancellation rather than as
     // a body failure.
+    observeAnthropicNativeTransport(options.journey, {
+      kind: "artifact_observed",
+      artifactId: `provider_native_upstream_response_wire.${options.attempt}`,
+      artifactKind: "provider_native_upstream_response_wire",
+      state: "unavailable",
+      ...(upstream.headers.get("content-type") === null
+        ? {}
+        : { mediaType: upstream.headers.get("content-type")! }),
+      reason: "response_body_read_failed",
+      location: readLocation,
+    });
+    completeAnthropicNativeTransportStep(
+      options.journey,
+      readStep,
+      readLocation,
+      signal.aborted ? "aborted" : "failed",
+    );
     if (signal.aborted) throw error;
     throw new AnthropicPassthroughBodyReadError(error);
   }
+  const capturedBytes = Math.min(body.byteLength, 256 * 1_024);
+  observeAnthropicNativeTransport(options.journey, {
+    kind: "artifact_observed",
+    artifactId: `provider_native_upstream_response_wire.${options.attempt}`,
+    artifactKind: "provider_native_upstream_response_wire",
+    state: capturedBytes < body.byteLength ? "partial" : "captured",
+    ...(upstream.headers.get("content-type") === null
+      ? {}
+      : { mediaType: upstream.headers.get("content-type")! }),
+    bytes: body.subarray(0, capturedBytes),
+    originalBytes: body.byteLength,
+    capturedBytes,
+    truncated: capturedBytes < body.byteLength,
+    location: readLocation,
+  });
+  completeAnthropicNativeTransportStep(
+    options.journey,
+    readStep,
+    readLocation,
+    "success",
+  );
   return {
     status: upstream.status,
     headers: filterHeaders(upstream.headers, isSafeResponseHeader),

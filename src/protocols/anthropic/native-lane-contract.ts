@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
-import type { CredentialActivitySink } from "../../request-ledger/handler-seam.js";
+import type { CredentialActivitySink } from "../../credentials/activity.js";
+import type { RequestJourneyObserver } from "../../diagnostics/contract.js";
 
 export interface AnthropicNativeDiagnostic {
   readonly upstreamStatus?: number;
@@ -32,5 +33,6 @@ export interface AnthropicProviderNativeLane {
     readonly sessionId?: string;
     readonly onExecutionStart: () => void;
     readonly credentialActivity?: CredentialActivitySink;
+    readonly journey?: RequestJourneyObserver;
   }): Promise<AnthropicNativeExecutionResult>;
 }

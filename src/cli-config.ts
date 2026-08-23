@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-import { parseFailureLoggingConfiguration, type FailureLoggingConfiguration } from "./invocation-diagnostics/configuration.js";
-import { parseRuntimeDiagnosticsConfiguration, type RuntimeDiagnosticsConfiguration } from "./runtime-diagnostics/configuration.js";
-import { parseRequestLedgerConfiguration, type RequestLedgerConfiguration } from "./request-ledger/configuration.js";
-import { parseDeepDiagnosticsConfiguration, type DeepDiagnosticsConfiguration } from "./deep-diagnostics/configuration.js";
+import {
+  parseDiagnosticsConfiguration,
+  type DiagnosticsConfiguration,
+} from "./diagnostics/configuration.js";
 import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
@@ -44,13 +44,7 @@ export interface LuckyTokenCliConfig {
     readonly requestTimeoutMs: number;
   };
   readonly providerPackages: Readonly<Record<string, unknown>>;
-  readonly failureLogging: FailureLoggingConfiguration;
-  /** Permanent Runtime Diagnostics configuration (Ticket 07). */
-  readonly runtimeDiagnostics: RuntimeDiagnosticsConfiguration;
-  /** Ticket 18 Request Ledger store configuration. */
-  readonly requestLedger: RequestLedgerConfiguration;
-  /** Ticket 22 Deep Diagnostics capture configuration. */
-  readonly deepDiagnostics: DeepDiagnosticsConfiguration;
+  readonly diagnostics: DiagnosticsConfiguration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -135,7 +129,7 @@ export async function loadLuckyTokenCliConfig(
   }
   assertKeys(
     root,
-    ["schemaVersion", "server", "clientProtocols", "providerPackages", "failureLogging", "runtimeDiagnostics", "requestLedger", "deepDiagnostics", "pi", "limits"],
+    ["schemaVersion", "server", "clientProtocols", "providerPackages", "diagnostics", "pi", "limits"],
     "LuckyToken config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
@@ -261,19 +255,7 @@ export async function loadLuckyTokenCliConfig(
       ),
     }),
     providerPackages: resolvedProviderPackages,
-    failureLogging: parseFailureLoggingConfiguration(root.failureLogging, directory),
-    runtimeDiagnostics: parseRuntimeDiagnosticsConfiguration(
-      root.runtimeDiagnostics,
-      directory,
-    ),
-    requestLedger: parseRequestLedgerConfiguration(
-      root.requestLedger,
-      directory,
-    ),
-    deepDiagnostics: parseDeepDiagnosticsConfiguration(
-      root.deepDiagnostics,
-      directory,
-    ),
+    diagnostics: parseDiagnosticsConfiguration(root.diagnostics, directory),
   };
   return Object.freeze(result);
 }

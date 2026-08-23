@@ -1,34 +1,26 @@
 import type {
-  RuntimeDiagnosticEvent,
-  RuntimeDiagnosticQuery,
-  RuntimeDiagnosticsQueryResult,
-} from "./diagnostics-contract.js";
+  RequestArtifactChunkReadResult,
+  RequestArtifactGetInput,
+  RequestJourneyDetailReadResult,
+  RequestJourneyGetInput,
+  RequestJourneyQuery,
+  RequestJourneyQueryReadResult,
+  RequestJourneySubscriber,
+  RuntimeEventQuery,
+  RuntimeEventQueryReadResult,
+  RuntimeEventSubscriber,
+} from "./request-diagnostics-contract.js";
+import type { AnalyticsManagementResult, AnalyticsQuery } from "./analytics-contract.js";
+import { decodeAnalyticsManagementResult } from "./wire-analytics.js";
 import type {
-  RequestLedgerEvent,
-  RequestLedgerQuery,
-  RequestLedgerQueryResult,
-} from "./ledger-contract.js";
-import type {
-  CaptureEvent,
-  CaptureQuery,
-  CaptureQueryResult,
-} from "./capture-contract.js";
-import type {
-  AnalyticsOptionsResult,
-  AnalyticsQuery,
-  AnalyticsResult,
-} from "./analytics-contract.js";
-import { decodeAnalyticsResult } from "./wire-analytics.js";
-import type {
-  HistoryAcknowledgeResult,
   HistoryDeleteCommand,
-  HistoryDeleteResult,
+  HistoryDeleteManagementResult,
   HistoryExportCommand,
-  HistoryExportResult,
-  HistoryQueryResult,
+  HistoryExportManagementResult,
+  HistoryQueryManagementResult,
   HistoryRange,
 } from "./history-contract.js";
-import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
+import type { BackupCreateCommand, BackupManagementResult } from "./backup-contract.js";
 import {
   assertControlPlaneEndpoint,
   type ApplicationCommand,
@@ -66,12 +58,11 @@ import {
   type ServerMessage,
 } from "./wire.js";
 import {
-  decodeHistoryAcknowledgeResult,
-  decodeHistoryDeleteResult,
-  decodeHistoryExportResult,
-  decodeHistoryQueryResult,
+  decodeHistoryDeleteManagementResult,
+  decodeHistoryExportManagementResult,
+  decodeHistoryQueryManagementResult,
 } from "./wire-history.js";
-import { decodeBackupResult } from "./wire-backup.js";
+import { decodeBackupManagementResult } from "./wire-backup.js";
 import type {
   CredentialProfilesCommand,
   CredentialProfilesCommandResult,
@@ -114,10 +105,8 @@ export async function connectApplicationControlPlane(
   const pendingAuth = new Map<string, PendingProfileAuthFlow>();
   let activeAuthRequestId: string | undefined;
   let listener: ((event: StatusEvent) => void) | undefined;
-  let diagnosticsListener:
-    ((event: RuntimeDiagnosticEvent) => void) | undefined;
-  let ledgerListener: ((event: RequestLedgerEvent) => void) | undefined;
-  let captureListener: ((event: CaptureEvent) => void) | undefined;
+  let requestJourneyListener: RequestJourneySubscriber | undefined;
+  let runtimeEventListener: RuntimeEventSubscriber | undefined;
   let settled = false;
   let closeRequested = false;
   let resolveDisconnect:
@@ -126,6 +115,18 @@ export async function connectApplicationControlPlane(
     resolveDisconnect = resolve;
   });
 
+  const deliverDiagnosticsEvent = <T>(
+    target: ((value: T) => void | PromiseLike<void>) | undefined,
+    value: T,
+  ): void => {
+    if (target === undefined) return;
+    try {
+      void Promise.resolve(target(value)).catch(() => undefined);
+    } catch {
+      // A subscriber is never allowed to tear down the transport read loop.
+    }
+  };
+
   const settle = (reason: ControlPlaneDisconnect["reason"], error: Error) => {
     if (settled) return;
     settled = true;
@@ -133,6 +134,9 @@ export async function connectApplicationControlPlane(
     pending.clear();
     for (const flow of pendingAuth.values()) flow.reject(error);
     pendingAuth.clear();
+    listener = undefined;
+    requestJourneyListener = undefined;
+    runtimeEventListener = undefined;
     resolveDisconnect?.({ reason });
   };
 
@@ -155,12 +159,10 @@ export async function connectApplicationControlPlane(
           throw new Error("Control Plane response is malformed");
         }
         if (message.type === "event") {
-          if (message.event.type === "diagnostic") {
-            diagnosticsListener?.(message.event);
-          } else if (message.event.type === "request_ledger") {
-            ledgerListener?.(message.event);
-          } else if (message.event.type === "capture_state_changed") {
-            captureListener?.(message.event);
+          if (message.event.type === "request_journey") {
+            deliverDiagnosticsEvent(requestJourneyListener, message.event.record);
+          } else if (message.event.type === "runtime_event") {
+            deliverDiagnosticsEvent(runtimeEventListener, message.event.record);
           } else {
             listener?.(message.event);
           }
@@ -266,14 +268,44 @@ export async function connectApplicationControlPlane(
       }
       return response.result;
     },
-    async getDiagnostics(
-      query: RuntimeDiagnosticQuery | undefined,
-    ): Promise<RuntimeDiagnosticsQueryResult> {
+    async queryRequestJourneys(
+      query: RequestJourneyQuery | undefined,
+    ): Promise<RequestJourneyQueryReadResult> {
       const response = await request({
-        type: "get_diagnostics",
+        type: "query_request_journeys",
         ...(query === undefined ? {} : { query }),
       });
-      if (response.type !== "diagnostics_result") {
+      if (response.type !== "request_journeys_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async getRequestJourney(
+      input: RequestJourneyGetInput,
+    ): Promise<RequestJourneyDetailReadResult> {
+      const response = await request({ type: "get_request_journey", input });
+      if (response.type !== "request_journey_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async getRequestArtifact(
+      input: RequestArtifactGetInput,
+    ): Promise<RequestArtifactChunkReadResult> {
+      const response = await request({ type: "get_request_artifact", input });
+      if (response.type !== "request_artifact_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async queryRuntimeEvents(
+      query: RuntimeEventQuery | undefined,
+    ): Promise<RuntimeEventQueryReadResult> {
+      const response = await request({
+        type: "query_runtime_events",
+        ...(query === undefined ? {} : { query }),
+      });
+      if (response.type !== "runtime_events_result") {
         throw new Error("Control Plane response is malformed");
       }
       return response.result;
@@ -393,60 +425,79 @@ export async function connectApplicationControlPlane(
     },
     async getAnalytics(
       query: AnalyticsQuery,
-    ): Promise<AnalyticsResult | AnalyticsOptionsResult> {
+    ): Promise<AnalyticsManagementResult> {
       const response = await request({ type: "get_analytics", query });
       if (response.type !== "analytics_result") {
         throw new Error("Control Plane response is malformed");
       }
       // Strict re-decode at the client boundary: an analytics result that
       // fails the allowlist (including any monetary key) is never trusted.
-      const result = decodeAnalyticsResult(response.result);
+      const result = decodeAnalyticsManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async getRequestLedger(
-      query: RequestLedgerQuery | undefined,
-    ): Promise<RequestLedgerQueryResult> {
-      const response = await request({
-        type: "get_request_ledger",
-        ...(query === undefined ? {} : { query }),
-      });
-      if (response.type !== "request_ledger_result") {
-        throw new Error("Control Plane response is malformed");
-      }
-      return response.result;
-    },
-    async subscribeRequestLedger(
-      next: (event: RequestLedgerEvent) => void,
+    async subscribeRequestJourneys(
+      next: RequestJourneySubscriber,
     ): Promise<() => Promise<void>> {
-      if (ledgerListener !== undefined) {
+      if (requestJourneyListener !== undefined) {
         throw new Error(
-          "Control Plane client is already subscribed to the request ledger",
+          "Control Plane client is already subscribed to Request Journeys",
         );
       }
-      ledgerListener = next;
+      requestJourneyListener = next;
       let response: ServerMessage;
       try {
-        response = await request({ type: "ledger_subscribe" });
+        response = await request({ type: "request_journeys_subscribe" });
       } catch (error) {
-        ledgerListener = undefined;
+        requestJourneyListener = undefined;
         throw error;
       }
       if (response.type !== "subscribed") {
-        ledgerListener = undefined;
+        requestJourneyListener = undefined;
         throw new Error("Control Plane response is malformed");
       }
       let subscribed = true;
       return async () => {
         if (!subscribed) return;
-        const result = await request({ type: "ledger_unsubscribe" });
+        const result = await request({ type: "request_journeys_unsubscribe" });
         if (result.type !== "unsubscribed") {
           throw new Error("Control Plane response is malformed");
         }
         subscribed = false;
-        ledgerListener = undefined;
+        requestJourneyListener = undefined;
+      };
+    },
+    async subscribeRuntimeEvents(
+      next: RuntimeEventSubscriber,
+    ): Promise<() => Promise<void>> {
+      if (runtimeEventListener !== undefined) {
+        throw new Error(
+          "Control Plane client is already subscribed to Runtime Events",
+        );
+      }
+      runtimeEventListener = next;
+      let response: ServerMessage;
+      try {
+        response = await request({ type: "runtime_events_subscribe" });
+      } catch (error) {
+        runtimeEventListener = undefined;
+        throw error;
+      }
+      if (response.type !== "subscribed") {
+        runtimeEventListener = undefined;
+        throw new Error("Control Plane response is malformed");
+      }
+      let subscribed = true;
+      return async () => {
+        if (!subscribed) return;
+        const result = await request({ type: "runtime_events_unsubscribe" });
+        if (result.type !== "unsubscribed") {
+          throw new Error("Control Plane response is malformed");
+        }
+        subscribed = false;
+        runtimeEventListener = undefined;
       };
     },
     async executeModelsCommand(
@@ -511,48 +562,7 @@ export async function connectApplicationControlPlane(
       }
       return result;
     },
-    async getCapture(query: CaptureQuery): Promise<CaptureQueryResult> {
-      const response = await request({
-        type: "get_capture",
-        query,
-      });
-      if (response.type !== "capture_result") {
-        throw new Error("Control Plane response is malformed");
-      }
-      return response.result;
-    },
-    async subscribeCapture(
-      next: (event: CaptureEvent) => void,
-    ): Promise<() => Promise<void>> {
-      if (captureListener !== undefined) {
-        throw new Error(
-          "Control Plane client is already subscribed to capture events",
-        );
-      }
-      captureListener = next;
-      let response: ServerMessage;
-      try {
-        response = await request({ type: "capture_subscribe" });
-      } catch (error) {
-        captureListener = undefined;
-        throw error;
-      }
-      if (response.type !== "subscribed") {
-        captureListener = undefined;
-        throw new Error("Control Plane response is malformed");
-      }
-      let subscribed = true;
-      return async () => {
-        if (!subscribed) return;
-        const result = await request({ type: "capture_unsubscribe" });
-        if (result.type !== "unsubscribed") {
-          throw new Error("Control Plane response is malformed");
-        }
-        subscribed = false;
-        captureListener = undefined;
-      };
-    },
-    async queryHistory(range?: HistoryRange): Promise<HistoryQueryResult> {
+    async queryHistory(range?: HistoryRange): Promise<HistoryQueryManagementResult> {
       const response = await request({
         type: "history_query",
         ...(range === undefined ? {} : { range }),
@@ -560,7 +570,7 @@ export async function connectApplicationControlPlane(
       if (response.type !== "history_query_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeHistoryQueryResult(response.result);
+      const result = decodeHistoryQueryManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
@@ -568,18 +578,18 @@ export async function connectApplicationControlPlane(
     },
     async executeHistoryExport(
       command: HistoryExportCommand,
-    ): Promise<HistoryExportResult> {
+    ): Promise<HistoryExportManagementResult> {
       const response = await request({ type: "history_export_command", command });
       if (response.type !== "history_export_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeHistoryExportResult(response.result);
+      const result = decodeHistoryExportManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async confirmHistoryExport(actionId: string): Promise<HistoryExportResult> {
+    async confirmHistoryExport(actionId: string): Promise<HistoryExportManagementResult> {
       const response = await request({
         type: "history_export_confirm",
         actionId,
@@ -587,7 +597,7 @@ export async function connectApplicationControlPlane(
       if (response.type !== "history_export_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeHistoryExportResult(response.result);
+      const result = decodeHistoryExportManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
@@ -595,18 +605,18 @@ export async function connectApplicationControlPlane(
     },
     async executeHistoryDelete(
       command: HistoryDeleteCommand,
-    ): Promise<HistoryDeleteResult> {
+    ): Promise<HistoryDeleteManagementResult> {
       const response = await request({ type: "history_delete_command", command });
       if (response.type !== "history_delete_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeHistoryDeleteResult(response.result);
+      const result = decodeHistoryDeleteManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult> {
+    async confirmHistoryDelete(actionId: string): Promise<HistoryDeleteManagementResult> {
       const response = await request({
         type: "history_delete_confirm",
         actionId,
@@ -614,24 +624,13 @@ export async function connectApplicationControlPlane(
       if (response.type !== "history_delete_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeHistoryDeleteResult(response.result);
+      const result = decodeHistoryDeleteManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async acknowledgePersistence(): Promise<HistoryAcknowledgeResult> {
-      const response = await request({ type: "history_acknowledge" });
-      if (response.type !== "history_acknowledge_result") {
-        throw new Error("Control Plane response is malformed");
-      }
-      const result = decodeHistoryAcknowledgeResult(response.result);
-      if (result === undefined) {
-        throw new Error("Control Plane response is malformed");
-      }
-      return result;
-    },
-    async executeBackup(command: BackupCreateCommand): Promise<BackupResult> {
+    async executeBackup(command: BackupCreateCommand): Promise<BackupManagementResult> {
       const response = await request({
         type: "backup_command",
         command: { command: "create", ...command },
@@ -639,13 +638,13 @@ export async function connectApplicationControlPlane(
       if (response.type !== "backup_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeBackupResult(response.result);
+      const result = decodeBackupManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
     },
-    async confirmBackup(actionId: string): Promise<BackupResult> {
+    async confirmBackup(actionId: string): Promise<BackupManagementResult> {
       const response = await request({
         type: "backup_command",
         command: { command: "confirm", actionId },
@@ -653,42 +652,11 @@ export async function connectApplicationControlPlane(
       if (response.type !== "backup_result") {
         throw new Error("Control Plane response is malformed");
       }
-      const result = decodeBackupResult(response.result);
+      const result = decodeBackupManagementResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }
       return result;
-    },
-    async subscribeDiagnostics(
-      next: (event: RuntimeDiagnosticEvent) => void,
-    ): Promise<() => Promise<void>> {
-      if (diagnosticsListener !== undefined) {
-        throw new Error(
-          "Control Plane client is already subscribed to diagnostics",
-        );
-      }
-      diagnosticsListener = next;
-      let response: ServerMessage;
-      try {
-        response = await request({ type: "diagnostics_subscribe" });
-      } catch (error) {
-        diagnosticsListener = undefined;
-        throw error;
-      }
-      if (response.type !== "subscribed") {
-        diagnosticsListener = undefined;
-        throw new Error("Control Plane response is malformed");
-      }
-      let subscribed = true;
-      return async () => {
-        if (!subscribed) return;
-        const result = await request({ type: "diagnostics_unsubscribe" });
-        if (result.type !== "unsubscribed") {
-          throw new Error("Control Plane response is malformed");
-        }
-        subscribed = false;
-        diagnosticsListener = undefined;
-      };
     },
     async subscribe(next): Promise<() => Promise<void>> {
       if (listener !== undefined) {

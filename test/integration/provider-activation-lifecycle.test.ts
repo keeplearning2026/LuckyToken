@@ -65,7 +65,7 @@ async function fixture(options: { readonly port?: number } = {}) {
   const configPath = join(root, "config.json");
   const descriptorPath = join(root, "control-plane.json");
   await writeFile(configPath, `${JSON.stringify({
-    schemaVersion: "luckytoken-config-v1",
+    schemaVersion: "luckytoken-config-v2",
     server: { port: options.port ?? (await freePort()) },
     clientProtocols: {
       "anthropic-messages": {
@@ -80,22 +80,7 @@ async function fixture(options: { readonly port?: number } = {}) {
       },
     },
     providerPackages: {},
-    failureLogging: {
-      directory: "logs/failed-requests",
-      detail: "safe",
-      maxFileBytes: 1_048_576,
-      retentionDays: 30,
-      maxFiles: 1_000,
-      logCancellation: true,
-    },
-    runtimeDiagnostics: { directory: "state/diagnostics" },
-    deepDiagnostics: {
-      directory: "state/deep-diagnostics",
-      enabled: false,
-      maxCaptureBytes: 4_194_304,
-      retentionAgeMs: 604_800_000,
-      maxCaptures: 1_000,
-    },
+    diagnostics: { directory: "state/request-diagnostics" },
     pi: { directory: "pi" },
     limits: { maxRequestBytes: 1_048_576, requestTimeoutMs: 120_000 },
   }, null, 2)}\n`, "utf8");

@@ -1,7 +1,3 @@
-import type {
-  RuntimeDiagnosticEvent,
-  RuntimeDiagnosticsQueryResult,
-} from "./diagnostics-contract.js";
 import {
   controlPlaneVersion,
   type ApplicationCommand,
@@ -49,11 +45,7 @@ import {
   type PublicModelsCommand,
   type PublicModelsCommandResult,
   type PublicModelsState,
-  type CaptureEvent,
-  type CaptureQueryResult,
   type RegisteredSetting,
-  type RequestLedgerEvent,
-  type RequestLedgerQueryResult,
   type RuntimeCommand,
   type RuntimeCommandConflict,
   type RuntimeCommandExecution,
@@ -64,49 +56,54 @@ import {
   type StatusSnapshot,
 } from "./contracts.js";
 import {
-  decodeDiagnosticEvent,
-  decodeDiagnosticRecord,
-} from "./wire-diagnostics.js";
-import {
-  decodeRequestLedgerEvent,
-  decodeRequestLedgerResult,
-} from "./wire-ledger.js";
-import {
-  decodeAnalyticsResult,
+  decodeAnalyticsManagementResult,
 } from "./wire-analytics.js";
 import {
   normalizeAnalyticsQuery,
-  type AnalyticsOptionsResult,
   type AnalyticsQuery,
-  type AnalyticsResult,
+  type AnalyticsManagementResult,
 } from "./analytics-contract.js";
+import type {
+  RequestArtifactChunkReadResult,
+  RequestArtifactGetInput,
+  RequestJourneyDetailReadResult,
+  RequestJourneyGetInput,
+  RequestJourneyQuery,
+  RequestJourneyQueryReadResult,
+  RuntimeEventQuery,
+  RuntimeEventQueryReadResult,
+  UnifiedDiagnosticsSubscriptionEvent,
+} from "./request-diagnostics-contract.js";
 import {
-  decodeCaptureEvent,
-  decodeCaptureQuery,
-  decodeCaptureQueryResult,
-} from "./wire-capture.js";
+  decodeRequestArtifactChunkReadResult,
+  decodeRequestArtifactGetInput,
+  decodeRequestJourneyDetailReadResult,
+  decodeRequestJourneyGetInput,
+  decodeRequestJourneyQuery,
+  decodeRequestJourneyQueryReadResult,
+  decodeRuntimeEventQuery,
+  decodeRuntimeEventQueryReadResult,
+  decodeUnifiedDiagnosticsSubscriptionEvent,
+} from "./wire-request-diagnostics.js";
 import {
-  decodeHistoryAcknowledgeResult,
   decodeHistoryDeleteCommand,
-  decodeHistoryDeleteResult,
+  decodeHistoryDeleteManagementResult,
   decodeHistoryExportCommand,
-  decodeHistoryExportResult,
-  decodeHistoryQueryResult,
+  decodeHistoryExportManagementResult,
+  decodeHistoryQueryManagementResult,
   decodeHistoryRange,
-  decodePersistenceProjection,
 } from "./wire-history.js";
 import type {
-  HistoryAcknowledgeResult,
   HistoryDeleteCommand,
   HistoryExportCommand,
-  HistoryExportResult,
-  HistoryDeleteResult,
-  HistoryQueryResult,
+  HistoryExportManagementResult,
+  HistoryDeleteManagementResult,
+  HistoryQueryManagementResult,
 } from "./history-contract.js";
-import type { BackupCommand, BackupResult } from "./backup-contract.js";
+import type { BackupCommand, BackupManagementResult } from "./backup-contract.js";
 import {
   decodeBackupCommand,
-  decodeBackupResult,
+  decodeBackupManagementResult,
   decodeRecoveryProjection,
 } from "./wire-backup.js";
 import { decodeAttentionProjection } from "./attention-contract.js";
@@ -141,31 +138,34 @@ export type ClientRequest =
     }
   | { readonly type: "get_status"; readonly requestId: string }
   | {
-      readonly type: "get_diagnostics";
+      readonly type: "query_request_journeys";
       readonly requestId: string;
-      readonly query?: unknown;
+      readonly query?: RequestJourneyQuery;
     }
-  | { readonly type: "diagnostics_subscribe"; readonly requestId: string }
-  | { readonly type: "diagnostics_unsubscribe"; readonly requestId: string }
   | {
-      readonly type: "get_request_ledger";
+      readonly type: "get_request_journey";
       readonly requestId: string;
-      readonly query?: unknown;
+      readonly input: RequestJourneyGetInput;
     }
+  | {
+      readonly type: "get_request_artifact";
+      readonly requestId: string;
+      readonly input: RequestArtifactGetInput;
+    }
+  | {
+      readonly type: "query_runtime_events";
+      readonly requestId: string;
+      readonly query?: RuntimeEventQuery;
+    }
+  | { readonly type: "request_journeys_subscribe"; readonly requestId: string }
+  | { readonly type: "request_journeys_unsubscribe"; readonly requestId: string }
+  | { readonly type: "runtime_events_subscribe"; readonly requestId: string }
+  | { readonly type: "runtime_events_unsubscribe"; readonly requestId: string }
   | {
       readonly type: "get_analytics";
       readonly requestId: string;
       readonly query: AnalyticsQuery;
     }
-  | { readonly type: "ledger_subscribe"; readonly requestId: string }
-  | { readonly type: "ledger_unsubscribe"; readonly requestId: string }
-  | {
-      readonly type: "get_capture";
-      readonly requestId: string;
-      readonly query?: unknown;
-    }
-  | { readonly type: "capture_subscribe"; readonly requestId: string }
-  | { readonly type: "capture_unsubscribe"; readonly requestId: string }
   | {
       readonly type: "history_query";
       readonly requestId: string;
@@ -191,7 +191,6 @@ export type ClientRequest =
       readonly requestId: string;
       readonly actionId: string;
     }
-  | { readonly type: "history_acknowledge"; readonly requestId: string }
   | {
       readonly type: "backup_command";
       readonly requestId: string;
@@ -270,49 +269,49 @@ export type ServerMessage =
       readonly result: RuntimeCommandResult;
     }
   | {
-      readonly type: "diagnostics_result";
+      readonly type: "request_journeys_result";
       readonly requestId: string;
-      readonly result: RuntimeDiagnosticsQueryResult;
+      readonly result: RequestJourneyQueryReadResult;
     }
   | {
-      readonly type: "request_ledger_result";
+      readonly type: "request_journey_result";
       readonly requestId: string;
-      readonly result: RequestLedgerQueryResult;
+      readonly result: RequestJourneyDetailReadResult;
+    }
+  | {
+      readonly type: "request_artifact_result";
+      readonly requestId: string;
+      readonly result: RequestArtifactChunkReadResult;
+    }
+  | {
+      readonly type: "runtime_events_result";
+      readonly requestId: string;
+      readonly result: RuntimeEventQueryReadResult;
     }
   | {
       readonly type: "analytics_result";
       readonly requestId: string;
-      readonly result: AnalyticsResult | AnalyticsOptionsResult;
-    }
-  | {
-      readonly type: "capture_result";
-      readonly requestId: string;
-      readonly result: CaptureQueryResult;
+      readonly result: AnalyticsManagementResult;
     }
   | {
       readonly type: "history_query_result";
       readonly requestId: string;
-      readonly result: HistoryQueryResult;
+      readonly result: HistoryQueryManagementResult;
     }
   | {
       readonly type: "history_export_result";
       readonly requestId: string;
-      readonly result: HistoryExportResult;
+      readonly result: HistoryExportManagementResult;
     }
   | {
       readonly type: "history_delete_result";
       readonly requestId: string;
-      readonly result: HistoryDeleteResult;
-    }
-  | {
-      readonly type: "history_acknowledge_result";
-      readonly requestId: string;
-      readonly result: HistoryAcknowledgeResult;
+      readonly result: HistoryDeleteManagementResult;
     }
   | {
       readonly type: "backup_result";
       readonly requestId: string;
-      readonly result: BackupResult;
+      readonly result: BackupManagementResult;
     }
   | {
       readonly type: "settings_command_result";
@@ -368,11 +367,7 @@ export type ServerMessage =
     }
   | {
       readonly type: "event";
-      readonly event:
-        | StatusEvent
-        | RuntimeDiagnosticEvent
-        | RequestLedgerEvent
-        | CaptureEvent;
+      readonly event: StatusEvent | UnifiedDiagnosticsSubscriptionEvent;
     };
 
 export type DecodedClientRequest =
@@ -385,6 +380,14 @@ export type DecodedClientRequest =
 
 export function isRecord(value: unknown): value is RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: RecordValue,
+  allowed: readonly string[],
+): boolean {
+  const keys = new Set(allowed);
+  return Object.keys(value).every((key) => keys.has(key));
 }
 
 export function decodeRequestId(value: unknown): string | undefined {
@@ -1941,30 +1944,75 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
   }
   if (
     value.type === "get_status" ||
-    value.type === "diagnostics_subscribe" ||
-    value.type === "diagnostics_unsubscribe" ||
+    value.type === "request_journeys_subscribe" ||
+    value.type === "request_journeys_unsubscribe" ||
+    value.type === "runtime_events_subscribe" ||
+    value.type === "runtime_events_unsubscribe" ||
     value.type === "subscribe" ||
     value.type === "unsubscribe"
   ) {
+    if (!hasOnlyKeys(value, ["type", "requestId"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
     return { type: "valid", request: { type: value.type, requestId } };
   }
-  if (value.type === "get_diagnostics") {
+  if (value.type === "query_request_journeys") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "query"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const query = decodeRequestJourneyQuery(value.query);
+    if (query === undefined && value.query !== undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
     return {
       type: "valid",
       request: {
-        type: "get_diagnostics",
+        type: "query_request_journeys",
         requestId,
-        ...(value.query === undefined ? {} : { query: value.query }),
+        ...(query === undefined ? {} : { query }),
       },
     };
   }
-  if (value.type === "get_request_ledger") {
+  if (value.type === "get_request_journey") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "input"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const input = decodeRequestJourneyGetInput(value.input);
+    if (input === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "get_request_journey", requestId, input },
+    };
+  }
+  if (value.type === "get_request_artifact") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "input"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const input = decodeRequestArtifactGetInput(value.input);
+    if (input === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "get_request_artifact", requestId, input },
+    };
+  }
+  if (value.type === "query_runtime_events") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "query"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const query = decodeRuntimeEventQuery(value.query);
+    if (query === undefined && value.query !== undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
     return {
       type: "valid",
       request: {
-        type: "get_request_ledger",
+        type: "query_runtime_events",
         requestId,
-        ...(value.query === undefined ? {} : { query: value.query }),
+        ...(query === undefined ? {} : { query }),
       },
     };
   }
@@ -1977,31 +2025,6 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       type: "valid",
       request: { type: "get_analytics", requestId, query },
     };
-  }
-  if (
-    value.type === "ledger_subscribe" ||
-    value.type === "ledger_unsubscribe"
-  ) {
-    return { type: "valid", request: { type: value.type, requestId } };
-  }
-  if (value.type === "get_capture") {
-    if (value.query === undefined) {
-      return { type: "invalid", requestId, code: "invalid_request" };
-    }
-    const query = decodeCaptureQuery(value.query);
-    if (query === undefined) {
-      return { type: "invalid", requestId, code: "invalid_request" };
-    }
-    return {
-      type: "valid",
-      request: { type: "get_capture", requestId, query },
-    };
-  }
-  if (
-    value.type === "capture_subscribe" ||
-    value.type === "capture_unsubscribe"
-  ) {
-    return { type: "valid", request: { type: value.type, requestId } };
   }
   if (value.type === "history_query") {
     if (value.range !== undefined) {
@@ -2068,12 +2091,6 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
         requestId,
         actionId: value.actionId,
       },
-    };
-  }
-  if (value.type === "history_acknowledge") {
-    return {
-      type: "valid",
-      request: { type: "history_acknowledge", requestId },
     };
   }
   if (value.type === "backup_command") {
@@ -2460,13 +2477,6 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
   ) {
     return undefined;
   }
-  const persistence =
-    isRecord(value) && value.persistence !== undefined
-      ? decodePersistenceProjection(value.persistence)
-      : undefined;
-  if (isRecord(value) && value.persistence !== undefined && persistence === undefined) {
-    return undefined;
-  }
   const recovery =
     isRecord(value) && value.recovery !== undefined
       ? decodeRecoveryProjection(value.recovery)
@@ -2485,7 +2495,6 @@ export function decodeSnapshot(value: unknown): StatusSnapshot | undefined {
     ...safeStatus,
     sequence,
     ...(ownership === undefined ? {} : { ownership }),
-    ...(persistence === undefined ? {} : { persistence }),
     ...(recovery === undefined ? {} : { recovery }),
     ...(attention === undefined ? {} : { attention }),
   };
@@ -2582,35 +2591,13 @@ function decodeRuntimeCommandResult(
   };
 }
 
-function decodeDiagnosticsResult(
-  value: unknown,
-): RuntimeDiagnosticsQueryResult | undefined {
-  if (!isRecord(value) || !Array.isArray(value.records)) return undefined;
-  const records = value.records
-    .map((entry) => decodeDiagnosticRecord(entry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  if (records.length !== value.records.length) return undefined;
-  if (typeof value.hasMore !== "boolean") return undefined;
-  return Object.freeze({
-    records: Object.freeze(records),
-    hasMore: value.hasMore,
-  });
-}
-
 export function decodeServerMessage(value: unknown): ServerMessage | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "event") {
-    const diagnostic = decodeDiagnosticEvent(value.event);
-    if (diagnostic !== undefined) {
-      return { type: "event", event: diagnostic };
-    }
-    const ledger = decodeRequestLedgerEvent(value.event);
-    if (ledger !== undefined) {
-      return { type: "event", event: ledger };
-    }
-    const capture = decodeCaptureEvent(value.event);
-    if (capture !== undefined) {
-      return { type: "event", event: capture };
+    if (!hasOnlyKeys(value, ["type", "event"])) return undefined;
+    const diagnosticsEvent = decodeUnifiedDiagnosticsSubscriptionEvent(value.event);
+    if (diagnosticsEvent !== undefined) {
+      return { type: "event", event: diagnosticsEvent };
     }
     const event = decodeEvent(value.event);
     return event === undefined ? undefined : { type: "event", event };
@@ -2629,56 +2616,60 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
       ? undefined
       : { type: "status_result", requestId, snapshot };
   }
-  if (value.type === "diagnostics_result") {
-    const result = decodeDiagnosticsResult(value.result);
+  if (value.type === "request_journeys_result") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;
+    const result = decodeRequestJourneyQueryReadResult(value.result);
     return result === undefined
       ? undefined
-      : { type: "diagnostics_result", requestId, result };
+      : { type: "request_journeys_result", requestId, result };
   }
-  if (value.type === "request_ledger_result") {
-    const result = decodeRequestLedgerResult(value.result);
+  if (value.type === "request_journey_result") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;
+    const result = decodeRequestJourneyDetailReadResult(value.result);
     return result === undefined
       ? undefined
-      : { type: "request_ledger_result", requestId, result };
+      : { type: "request_journey_result", requestId, result };
+  }
+  if (value.type === "request_artifact_result") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;
+    const result = decodeRequestArtifactChunkReadResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "request_artifact_result", requestId, result };
+  }
+  if (value.type === "runtime_events_result") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;
+    const result = decodeRuntimeEventQueryReadResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "runtime_events_result", requestId, result };
   }
   if (value.type === "analytics_result") {
-    const result = decodeAnalyticsResult(value.result);
+    const result = decodeAnalyticsManagementResult(value.result);
     return result === undefined
       ? undefined
       : { type: "analytics_result", requestId, result };
   }
-  if (value.type === "capture_result") {
-    const result = decodeCaptureQueryResult(value.result);
-    return result === undefined
-      ? undefined
-      : { type: "capture_result", requestId, result };
-  }
   if (value.type === "history_query_result") {
-    const result = decodeHistoryQueryResult(value.result);
+    const result = decodeHistoryQueryManagementResult(value.result);
     return result === undefined
       ? undefined
       : { type: "history_query_result", requestId, result };
   }
   if (value.type === "history_export_result") {
-    const result = decodeHistoryExportResult(value.result);
+    const result = decodeHistoryExportManagementResult(value.result);
     return result === undefined
       ? undefined
       : { type: "history_export_result", requestId, result };
   }
   if (value.type === "history_delete_result") {
-    const result = decodeHistoryDeleteResult(value.result);
+    const result = decodeHistoryDeleteManagementResult(value.result);
     return result === undefined
       ? undefined
       : { type: "history_delete_result", requestId, result };
   }
-  if (value.type === "history_acknowledge_result") {
-    const result = decodeHistoryAcknowledgeResult(value.result);
-    return result === undefined
-      ? undefined
-      : { type: "history_acknowledge_result", requestId, result };
-  }
   if (value.type === "backup_result") {
-    const result = decodeBackupResult(value.result);
+    const result = decodeBackupManagementResult(value.result);
     return result === undefined
       ? undefined
       : { type: "backup_result", requestId, result };

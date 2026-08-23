@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   connectControlPlane,
+  controlPlaneVersion,
   createNodePipeTransport,
   nodePipeFallbackAccess,
   startControlPlane,
@@ -188,7 +189,7 @@ describe("Application Control Plane public seam", () => {
     const serverSocket = await socketAccepted;
     expect(client.disconnected).toBeInstanceOf(Promise);
 
-    const pendingHello = client.hello(2);
+    const pendingHello = client.hello(controlPlaneVersion);
     serverSocket.destroy();
 
     await expect(
@@ -217,7 +218,7 @@ describe("Application Control Plane public seam", () => {
     });
     servers.push(server);
     const client = await connectControlPlane(server.endpoint, clientDependencies);
-    await client.hello(2);
+    await client.hello(controlPlaneVersion);
 
     const closeResult = await Promise.race([
       server.close().then(() => "closed"),
@@ -318,16 +319,16 @@ describe("Application Control Plane public seam", () => {
     servers.push(server);
     const client = await connectControlPlane(server.endpoint, clientDependencies);
 
-    await expect(client.hello(2)).resolves.toEqual({
+    await expect(client.hello(controlPlaneVersion)).resolves.toEqual({
       type: "compatible",
       application: { id: "luckytoken", version: "1.2.3-test", buildId },
-      contractVersion: 2,
+      contractVersion: controlPlaneVersion,
     });
     expect(JSON.stringify(await client.getStatus())).not.toContain(buildId);
     await client.close();
   });
 
-  it("negotiates exact v2 identity and rejects commands until a compatible hello", async () => {
+  it("negotiates exact v3 identity and rejects commands until a compatible hello", async () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
@@ -343,13 +344,13 @@ describe("Application Control Plane public seam", () => {
     await expect(client.hello(1)).resolves.toEqual({
       type: "incompatible",
       requestedVersion: 1,
-      supportedVersions: [2],
+      supportedVersions: [controlPlaneVersion],
     });
     await expect(client.getStatus()).rejects.toThrow("hello_required");
-    await expect(client.hello(2)).resolves.toEqual({
+    await expect(client.hello(controlPlaneVersion)).resolves.toEqual({
       type: "compatible",
       application: { id: "luckytoken", version: "1.2.3-test" },
-      contractVersion: 2,
+      contractVersion: controlPlaneVersion,
     });
     await expect(client.getStatus()).resolves.toEqual({
       sequence: 0,
@@ -367,7 +368,7 @@ describe("Application Control Plane public seam", () => {
     });
     expect(revokedEvents).toEqual([]);
     await expect(client.getStatus()).rejects.toThrow("hello_required");
-    await expect(client.hello(2)).resolves.toMatchObject({
+    await expect(client.hello(controlPlaneVersion)).resolves.toMatchObject({
       type: "compatible",
     });
     await expect(client.getStatus()).resolves.toMatchObject({
@@ -388,7 +389,7 @@ describe("Application Control Plane public seam", () => {
     });
     servers.push(server);
     const client = await connectControlPlane(server.endpoint, clientDependencies);
-    await client.hello(2);
+    await client.hello(controlPlaneVersion);
     const events: unknown[] = [];
     await client.subscribe((event) => events.push(event));
 
@@ -443,7 +444,7 @@ describe("Application Control Plane public seam", () => {
       server.endpoint,
       clientDependencies,
     );
-    await expect(client.hello(2)).resolves.toMatchObject({
+    await expect(client.hello(controlPlaneVersion)).resolves.toMatchObject({
       type: "compatible",
     });
     await expect(client.getStatus()).resolves.toMatchObject({
@@ -496,7 +497,7 @@ describe("Application Control Plane public seam", () => {
       clientDependencies,
     );
 
-    const error = await client.hello(2).catch((caught: unknown) => caught);
+    const error = await client.hello(controlPlaneVersion).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain("unauthorized");
     expect(String(error)).not.toContain(
@@ -524,7 +525,7 @@ describe("Application Control Plane public seam", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "raw-hello",
-        contractVersion: 2,
+        contractVersion: controlPlaneVersion,
         capability: target.capability,
       }),
     );
@@ -535,7 +536,7 @@ describe("Application Control Plane public seam", () => {
       result: {
         type: "compatible",
         application: { id: "luckytoken", version: "test" },
-        contractVersion: 2,
+        contractVersion: controlPlaneVersion,
       },
     });
     expect(JSON.stringify(hello)).not.toContain(target.capability);
@@ -564,7 +565,7 @@ describe("Application Control Plane public seam", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "raw-reauthorize",
-        contractVersion: 2,
+        contractVersion: controlPlaneVersion,
         capability: target.capability,
       }),
     );
@@ -577,7 +578,7 @@ describe("Application Control Plane public seam", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "wrong-capability-hello",
-        contractVersion: 2,
+        contractVersion: controlPlaneVersion,
         capability: "wrong-capability-secret-012345678901234567890",
       }),
     );
@@ -602,7 +603,7 @@ describe("Application Control Plane public seam", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "raw-second-reauthorize",
-        contractVersion: 2,
+        contractVersion: controlPlaneVersion,
         capability: target.capability,
       }),
     );
@@ -704,7 +705,7 @@ describe("Application Control Plane public seam", () => {
     await expect(oversized.read(1)).resolves.toBeNull();
 
     const healthy = await connectControlPlane(target, clientDependencies);
-    await expect(healthy.hello(2)).resolves.toMatchObject({
+    await expect(healthy.hello(controlPlaneVersion)).resolves.toMatchObject({
       type: "compatible",
     });
     await healthy.close();
@@ -774,7 +775,7 @@ describe("Application Control Plane public seam", () => {
       pipeConnector: faultablePipe,
     };
     const first = await connectControlPlane(server.endpoint, dependencies);
-    await first.hello(2);
+    await first.hello(controlPlaneVersion);
     await expect(first.getStatus()).resolves.toEqual({
       sequence: 0,
       modelDataPlane: "stopped",
@@ -800,7 +801,7 @@ describe("Application Control Plane public seam", () => {
     await first.close();
 
     const next = await connectControlPlane(server.endpoint, dependencies);
-    await next.hello(2);
+    await next.hello(controlPlaneVersion);
     await expect(next.getStatus()).resolves.toEqual({
       sequence: 2,
       modelDataPlane: "stopping",
@@ -830,7 +831,7 @@ describe("Application Control Plane public seam", () => {
     });
     servers.push(server);
     const client = await connectControlPlane(server.endpoint, clientDependencies);
-    await client.hello(2);
+    await client.hello(controlPlaneVersion);
     const sequences: number[] = [];
     const unsubscribe = await client.subscribe((event) =>
       sequences.push(event.sequence),

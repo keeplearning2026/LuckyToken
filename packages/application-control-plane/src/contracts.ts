@@ -1,25 +1,18 @@
 import type {
-  RuntimeDiagnosticEvent,
-  RuntimeDiagnosticQuery,
-  RuntimeDiagnosticsQueryResult,
-} from "./diagnostics-contract.js";
-import type {
-  RequestLedgerEvent,
-  RequestLedgerQuery,
-  RequestLedgerQueryResult,
-} from "./ledger-contract.js";
-import type {
-  CaptureEvent,
-  CaptureQuery,
-  CaptureQueryResult,
-} from "./capture-contract.js";
-import type {
-  AnalyticsOptionsResult,
-  AnalyticsQuery,
-  AnalyticsResult,
-} from "./analytics-contract.js";
+  RequestArtifactChunkReadResult,
+  RequestArtifactGetInput,
+  RequestJourneyDetailReadResult,
+  RequestJourneyGetInput,
+  RequestJourneyQuery,
+  RequestJourneyQueryReadResult,
+  RequestJourneySubscriber,
+  RuntimeEventQuery,
+  RuntimeEventQueryReadResult,
+  RuntimeEventSubscriber,
+} from "./request-diagnostics-contract.js";
+import type { AnalyticsManagementResult, AnalyticsQuery } from "./analytics-contract.js";
 import type { RecoveryProjection } from "./backup-contract.js";
-import type { BackupCreateCommand, BackupResult } from "./backup-contract.js";
+import type { BackupCreateCommand, BackupManagementResult } from "./backup-contract.js";
 import type { AttentionProjection } from "./attention-contract.js";
 import type {
   CredentialProfilesCommand,
@@ -29,7 +22,7 @@ import type {
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
 
-export const controlPlaneVersion = 2 as const;
+export const controlPlaneVersion = 3 as const;
 
 export interface ApplicationIdentity {
   readonly id: "luckytoken";
@@ -75,11 +68,6 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly sequence: number;
   /** Optional registered settings catalog projection (Ticket 06). */
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
-  /** Present while at least one history persistence authority is unavailable
-   *  (Ticket 23): the audit-unavailable state, visible in every snapshot
-   *  until acknowledged or demonstrated recovery. Acknowledgment never
-   *  claims storage recovered. */
-  readonly persistence?: PersistenceProjection;
   /** Ticket 24: present when one or more LuckyToken-owned files cannot be
    * safely interpreted. The local Control Plane remains usable while the
    * unsafe Data Plane stays stopped. */
@@ -669,127 +657,49 @@ export interface ControlPlaneEndpoint {
   readonly capability: string;
 }
 
-export type {
-  ControlPlaneDiagnostics,
-  RuntimeDiagnosticDraft,
-  RuntimeDiagnosticEvent,
-  RuntimeDiagnosticLevel,
-  RuntimeDiagnosticMessage,
-  RuntimeDiagnosticQuery,
-  RuntimeDiagnosticRecord,
-  RuntimeDiagnosticsQueryResult,
-  RuntimeDiagnosticsStore,
-  RuntimeDiagnosticsStoreFactory,
-} from "./diagnostics-contract.js";
-
-export type {
-  ControlPlaneRequestLedger,
-  LedgerAliasFact,
-  LedgerAttempt,
-  LedgerCredentialAttempt,
-  LedgerCredentialCapture,
-  LedgerCredentialUsage,
-  LedgerAuthFacts,
-  LedgerFailureInput,
-  LedgerFailureSummary,
-  LedgerFacts,
-  LedgerModelSnapshot,
-  LedgerNotice,
-  LedgerOutcome,
-  LedgerPersistenceFailure,
-  LedgerPhase,
-  LedgerProfileAttribution,
-  LedgerTerminalFacts,
-  LedgerTerminalOutcome,
-  RequestLedger,
-  RequestLedgerEntry,
-  RequestLedgerEvent,
-  RequestLedgerQuery,
-  RequestLedgerQueryResult,
-  RequestLedgerRecord,
-  RequestLedgerStore,
-  RequestLedgerStoreFactory,
-} from "./ledger-contract.js";
 export type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
-export {
-  LEDGER_OUTCOMES,
-  LEDGER_PHASES,
-  assertLedgerOutcome,
-  assertLedgerPhase,
-} from "./ledger-contract.js";
-export {
-  averageOutputSpeedUnavailableReason,
-  deriveRequestStatus,
-  formatDuration,
-  formatPercent,
-  formatTimestamp,
-  formatTokenCount,
-  formatTokensPerSecond,
-  formatCacheHitRate,
-  ledgerPhaseLabel,
-  projectAverageOutputTokensPerSecond,
-  projectRequestLedger,
-  projectRequestLedgerDetail,
-  projectRequestUsage,
-  protocolDisplayName,
-  type PrimaryStatus,
-  type RequestLedgerDetailProjection,
-  type RequestLedgerListProjection,
-  type RequestUsageProjection,
-} from "./ledger-projection.js";
 
 import type {
-  HistoryAcknowledgeResult,
   HistoryCommand,
   HistoryCommandHandler,
   HistoryCommandResult,
   HistoryCounts,
-  HistoryDeleteAuthorityFailure,
   HistoryDeleteCommand,
-  HistoryDeleteFailureCode,
-  HistoryDeleteOutcome,
+  HistoryDeleteFailure,
   HistoryDeletePreview,
   HistoryDeleteResult,
-  HistoryExportCaptureMode,
+  HistoryDeleteManagementResult,
   HistoryExportCommand,
   HistoryExportFailure,
   HistoryExportFailureCode,
   HistoryExportManifestSummary,
-  HistoryExportOutcome,
   HistoryExportResult,
+  HistoryExportManagementResult,
   HistoryQueryResult,
+  HistoryQueryManagementResult,
   HistoryRange,
-  PersistenceAuthorityId,
-  PersistenceAuthorityProjection,
-  PersistenceProjection,
 } from "./history-contract.js";
 
 export type {
-  HistoryAcknowledgeResult,
   HistoryCommand,
   HistoryCommandHandler,
   HistoryCommandResult,
   HistoryCounts,
-  HistoryDeleteAuthorityFailure,
   HistoryDeleteCommand,
-  HistoryDeleteFailureCode,
-  HistoryDeleteOutcome,
+  HistoryDeleteFailure,
   HistoryDeletePreview,
   HistoryDeleteResult,
-  HistoryExportCaptureMode,
+  HistoryDeleteManagementResult,
   HistoryExportCommand,
   HistoryExportFailure,
   HistoryExportFailureCode,
   HistoryExportManifestSummary,
-  HistoryExportOutcome,
   HistoryExportResult,
+  HistoryExportManagementResult,
   HistoryQueryResult,
+  HistoryQueryManagementResult,
   HistoryRange,
-  PersistenceAuthorityId,
-  PersistenceAuthorityProjection,
-  PersistenceProjection,
 };
-export { PERSISTENCE_AUTHORITY_IDS } from "./history-contract.js";
 
 export type {
   AttentionCategory,
@@ -809,33 +719,12 @@ export type {
   BackupManifestEntrySummary,
   BackupManifestSummary,
   BackupMode,
+  BackupManagementResult,
   BackupResult,
   CompatibilityIssue,
   RecoveryProjection,
 } from "./backup-contract.js";
 
-export type {
-  CaptureDraft,
-  CaptureEvent,
-  CaptureEventFact,
-  CaptureFailureDraft,
-  CapturePersistedState,
-  CaptureQuery,
-  CaptureQueryResult,
-  CaptureRangeQuery,
-  CaptureRangeQueryResult,
-  CaptureRecord,
-  CaptureState,
-  CaptureTimingEntry,
-  CaptureWriteFailure,
-  ControlPlaneCapture,
-  DeepCaptureStore,
-  DeepCaptureStoreFactory,
-} from "./capture-contract.js";
-export {
-  CAPTURE_STATES,
-  assertCaptureState,
-} from "./capture-contract.js";
 
 export type HelloResult =
   | {
@@ -1011,59 +900,49 @@ export interface ControlPlaneClient {
   executeAgentIntegrationsCommand(
     command: AgentIntegrationsCommand,
   ): Promise<AgentIntegrationsCommandResult>;
-  /** Ticket 18: bounded Request Ledger query (newest-first, pageable). */
-  getRequestLedger(
-    query?: RequestLedgerQuery,
-  ): Promise<RequestLedgerQueryResult>;
   /** Ticket 21: bounded, versioned analytics aggregation over the Request
    *  Ledger, computed at query time (summary and options commands). The
    *  host result is strictly re-decoded at the client boundary. */
   getAnalytics(
     query: AnalyticsQuery,
-  ): Promise<AnalyticsResult | AnalyticsOptionsResult>;
-  /** Ticket 18: opt-in typed ledger events; never delivered to status or
-   *  diagnostics subscribers. */
-  subscribeRequestLedger(
-    listener: (event: RequestLedgerEvent) => void,
+  ): Promise<AnalyticsManagementResult>;
+  queryRequestJourneys(
+    query?: RequestJourneyQuery,
+  ): Promise<RequestJourneyQueryReadResult>;
+  getRequestJourney(
+    input: RequestJourneyGetInput,
+  ): Promise<RequestJourneyDetailReadResult>;
+  getRequestArtifact(
+    input: RequestArtifactGetInput,
+  ): Promise<RequestArtifactChunkReadResult>;
+  queryRuntimeEvents(
+    query?: RuntimeEventQuery,
+  ): Promise<RuntimeEventQueryReadResult>;
+  subscribeRequestJourneys(
+    listener: RequestJourneySubscriber,
   ): Promise<() => Promise<void>>;
-  /** Ticket 22: one bounded capture query by the Ticket 18 request id. */
-  getCapture(query: CaptureQuery): Promise<CaptureQueryResult>;
-  /** Ticket 22: opt-in typed capture-state events (narrow facts only);
-   *  never delivered to status, diagnostics, or ledger subscribers. */
-  subscribeCapture(
-    listener: (event: CaptureEvent) => void,
+  subscribeRuntimeEvents(
+    listener: RuntimeEventSubscriber,
   ): Promise<() => Promise<void>>;
   /** Ticket 23: per-authority eligible-record counts over one history range
    *  (the preview used by export and irreversible deletion gates). */
-  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
-  /** Ticket 23: start (or gate) one versioned history export. A sensitive
-   *  capture-included export returns confirmation_required; an excluded
-   *  export runs immediately. */
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryManagementResult>;
+  /** Start (or gate) one versioned unified diagnostics-history export. */
   executeHistoryExport(
     command: HistoryExportCommand,
-  ): Promise<HistoryExportResult>;
+  ): Promise<HistoryExportManagementResult>;
   /** Ticket 23: executes the single-use sensitive export confirmation. */
-  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
+  confirmHistoryExport(actionId: string): Promise<HistoryExportManagementResult>;
   /** Ticket 23: gates an irreversible range/all deletion behind a count
    *  preview confirmation. */
-  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteManagementResult>;
   /** Ticket 23: executes the single-use irreversible deletion confirmation. */
-  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
-  /** Ticket 23: acknowledges the audit-unavailable state. Acknowledgment
-   *  only silences the urgent presentation; it never claims storage
-   *  recovered and never clears an authority that is still failing. */
-  acknowledgePersistence(): Promise<HistoryAcknowledgeResult>;
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteManagementResult>;
   /** Ticket 24: create an ordinary backup immediately or request the
    * explicit full-sensitive confirmation gate. */
-  executeBackup(command: BackupCreateCommand): Promise<BackupResult>;
+  executeBackup(command: BackupCreateCommand): Promise<BackupManagementResult>;
   /** Ticket 24: execute the single-use full-sensitive backup gate. */
-  confirmBackup(actionId: string): Promise<BackupResult>;
-  getDiagnostics(
-    query?: RuntimeDiagnosticQuery,
-  ): Promise<RuntimeDiagnosticsQueryResult>;
-  subscribeDiagnostics(
-    listener: (event: RuntimeDiagnosticEvent) => void,
-  ): Promise<() => Promise<void>>;
+  confirmBackup(actionId: string): Promise<BackupManagementResult>;
   subscribe(
     listener: (event: StatusEvent) => void,
   ): Promise<() => Promise<void>>;

@@ -1,3 +1,5 @@
+import type { DiagnosticsUnavailableResult } from "./request-diagnostics-contract.js";
+
 /**
  * Request Analytics contract (Ticket 21) — owned by the Control Plane
  * package as the public seam, mirroring the Diagnostics and Request Ledger
@@ -196,12 +198,15 @@ export interface AnalyticsOptionsResult {
 }
 
 export type AnalyticsQueryResult = AnalyticsResult | AnalyticsOptionsResult;
+export type AnalyticsManagementResult =
+  | AnalyticsQueryResult
+  | DiagnosticsUnavailableResult;
 
 /** One narrow host handle: the Control Plane serves analytics results from
  *  the ledger store's aggregation; it performs no business logic. */
 export type AnalyticsQueryHandler = (
   query: AnalyticsQuery,
-) => AnalyticsResult | AnalyticsOptionsResult;
+) => AnalyticsQueryResult | Promise<AnalyticsQueryResult>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

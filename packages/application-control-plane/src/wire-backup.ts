@@ -3,10 +3,12 @@ import type {
   BackupFailure,
   BackupManifestEntrySummary,
   BackupManifestSummary,
+  BackupManagementResult,
   BackupResult,
   CompatibilityIssue,
   RecoveryProjection,
 } from "./backup-contract.js";
+import { decodeDiagnosticsUnavailableResult } from "./wire-request-diagnostics.js";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -165,6 +167,10 @@ export function decodeBackupResult(value: unknown): BackupResult | undefined {
     destinationPath: input.destinationPath,
     manifest,
   });
+}
+
+export function decodeBackupManagementResult(value: unknown): BackupManagementResult | undefined {
+  return decodeDiagnosticsUnavailableResult(value) ?? decodeBackupResult(value);
 }
 
 function decodeIssue(value: unknown): CompatibilityIssue | undefined {

@@ -31,10 +31,10 @@ import { createModelsJsonAuthority } from "../../src/models-config/authority.js"
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 import { applyLuckyTokenProviderComposition } from "../../src/providers/catalog.js";
 import { createConfigValueResolver } from "../../src/providers/config-value.js";
-import {
-  createRuntimeDiagnosticsStoreFactory,
-  type RuntimeDiagnosticsStore,
-} from "../../src/runtime-diagnostics/index.js";
+import type {
+  RequestJourneyObservationAuthority,
+  RuntimeEventObservationInput,
+} from "../../src/diagnostics/contract.js";
 
 /**
  * Ticket 11 controller seam: the authoritative active catalog snapshot.
@@ -162,7 +162,10 @@ function dynamicModelFact(
 interface Fixture {
   readonly authority: ReturnType<typeof createModelsJsonAuthority>;
   readonly store: ReturnType<typeof createCatalogCacheStore>;
-  readonly diagnostics: RuntimeDiagnosticsStore;
+  readonly diagnostics: Pick<
+    RequestJourneyObservationAuthority,
+    "observeRuntime"
+  >;
   readonly files: Map<string, string>;
   readonly fileSystem: {
     readFile(path: string): Promise<string>;
@@ -176,7 +179,7 @@ interface Fixture {
   readonly now: () => number;
   readonly advance: (ms: number) => void;
   readonly scheduler: { schedule(fn: () => void): void; flush(): Promise<void> };
-  readonly warnings: Array<{ text: string; details?: Readonly<Record<string, unknown>> }>;
+  readonly warnings: RuntimeEventObservationInput[];
   readonly close: () => Promise<void>;
 }
 
@@ -239,20 +242,10 @@ async function createFixture(): Promise<Fixture> {
     },
   };
   const warnings: Fixture["warnings"] = [];
-  const diagnostics = await createRuntimeDiagnosticsStoreFactory({
-    configuration: { directory: root },
-    now,
-    scrub: (value: string) => value,
-  }).open();
-  diagnostics.subscribe((event) => {
-    if (event.record.level === "warning" || event.record.level === "error") {
-      warnings.push({
-        text: event.record.text,
-        ...(event.record.details === undefined
-          ? {}
-          : { details: event.record.details }),
-      });
-    }
+  const diagnostics = Object.freeze({
+    observeRuntime(input: RuntimeEventObservationInput): void {
+      warnings.push(structuredClone(input));
+    },
   });
   const fixture: Fixture = {
     authority,
@@ -267,7 +260,6 @@ async function createFixture(): Promise<Fixture> {
     scheduler,
     warnings,
     close: async () => {
-      diagnostics.close();
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -392,6 +384,58 @@ function createController(
 describe("catalog refresh controller", () => {
   afterEach(async () => {
     await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
+  });
+
+  it("keeps catalog failure behavior identical when unified runtime observation is enabled or throws", async () => {
+    type RuntimeObserver = Pick<
+      RequestJourneyObservationAuthority,
+      "observeRuntime"
+    >;
+    const run = async (diagnostics: RuntimeObserver) => {
+      const fixture = await createFixture();
+      writeModelsJson(fixture, {});
+      const controlled = createControlledProvider("dynamic-observed", {
+        fetchError: new Error("raw provider failure must stay private"),
+      });
+      const controller = createController(fixture, {
+        diagnostics,
+      });
+      await controller.bind(
+        createRuntimeHandle({
+          modelsStore: fixture.store,
+          providers: [controlled.provider],
+        }),
+      );
+      return {
+        report: await controller.refreshManual(),
+        snapshot: controller.snapshot(),
+      };
+    };
+
+    const observations: RuntimeEventObservationInput[] = [];
+    const disabled = await run({ observeRuntime: () => undefined });
+    const enabled = await run({
+      observeRuntime: (input) => {
+        observations.push(structuredClone(input));
+      },
+    });
+    const throwing = await run({
+      observeRuntime: () => {
+        throw new Error("diagnostics unavailable");
+      },
+    });
+
+    expect(enabled).toEqual(disabled);
+    expect(throwing).toEqual(disabled);
+    expect(observations).toEqual([
+      {
+        level: "warning",
+        classification: "catalog_provider_refresh_failed",
+        safeMessage:
+          'Model catalog refresh failed for provider "dynamic-observed"',
+      },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain("raw provider failure");
   });
 
   it("restores the cached dynamic catalog at startup before any network refresh", async () => {
@@ -526,12 +570,13 @@ describe("catalog refresh controller", () => {
     ).toBe(true);
     // A precise value-safe warning was recorded.
     const warning = fixture.warnings.find((entry) =>
-      entry.text.includes("dynamic-a"),
+      entry.safeMessage.includes("dynamic-a"),
     );
     expect(warning).toBeDefined();
-    expect(fixture.warnings.some((entry) => entry.text.includes(rawSecret))).toBe(
-      false,
-    );
+    expect(warning?.classification).toBe("catalog_provider_refresh_failed");
+    expect(
+      fixture.warnings.some((entry) => entry.safeMessage.includes(rawSecret)),
+    ).toBe(false);
     expect(JSON.stringify(fixture.warnings)).not.toContain(rawSecret);
   });
 
@@ -683,13 +728,16 @@ describe("catalog refresh controller", () => {
     expect(controller.snapshot().providers[0]?.state).toBe("known");
     expect(
       fixture.warnings.some((entry) =>
-        entry.text.includes("dynamic-a") && entry.text.includes("discard"),
+        entry.safeMessage.includes("dynamic-a") &&
+        entry.safeMessage.includes("discard"),
       ),
     ).toBe(true);
     // An unchanged broken cache file never re-emits the same warning.
     await controller.refreshManual();
     expect(
-      fixture.warnings.filter((entry) => entry.text.includes("discard")),
+      fixture.warnings.filter((entry) =>
+        entry.safeMessage.includes("discard"),
+      ),
     ).toHaveLength(1);
   });
 
@@ -1349,7 +1397,7 @@ describe("catalog refresh controller", () => {
     ).toBe("unavailable");
     expect(
       fixture.warnings.some((warning) =>
-        warning.text.includes("static-unconfigured"),
+        warning.safeMessage.includes("static-unconfigured"),
       ),
     ).toBe(false);
   });

@@ -161,7 +161,7 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
     join(stateRoot, "config.json"),
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: dataPlanePort },
         clientProtocols: {
           "anthropic-messages": {
@@ -189,21 +189,12 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
           },
         },
         providerPackages: {},
-        failureLogging: {
-          directory: "logs/failed-requests",
-          detail: "safe",
-          maxFileBytes: 1048576,
-          retentionDays: 30,
-          maxFiles: 1000,
-          logCancellation: true,
-        },
-        runtimeDiagnostics: { directory: "state/diagnostics" },
-        deepDiagnostics: {
-          directory: "state/deep-diagnostics",
-          enabled: false,
-          maxCaptureBytes: 4194304,
-          retentionAgeMs: 604800000,
-          maxCaptures: 1000,
+        diagnostics: {
+          directory: "state/request-diagnostics",
+          successArtifacts: { enabled: false },
+          maxJourneyArtifactBytes: 4194304,
+          artifactRetentionAgeMs: 604800000,
+          maxArtifactJourneys: 1000,
         },
         pi: { directory: "pi" },
         limits: { maxRequestBytes: 1048576, requestTimeoutMs: 120000 },

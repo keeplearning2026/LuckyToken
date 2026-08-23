@@ -1,26 +1,11 @@
 import type { Models } from "@earendil-works/pi-ai";
+import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
 import { randomUUID } from "node:crypto";
+import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
 
 import {
   resolveRequestIdentity,
 } from "../../request-identity.js";
-import {
-  createNoopInvocationDiagnosticsFactory,
-  type InvocationDiagnostics,
-  type InvocationDiagnosticsFactory,
-} from "../../invocation-diagnostics/index.js";
-import {
-  bindCredentialActivityToExecutionFacts,
-  createNoopRequestLedger,
-  type RequestLedger,
-  type RequestLedgerEntry,
-} from "../../request-ledger/handler-seam.js";
-import {
-  createNoopDeepCaptureAuthority,
-  createNoopCaptureEntry,
-  type DeepCaptureAuthority,
-  type DeepCaptureEntry,
-} from "../../deep-diagnostics/handler-seam.js";
 import {
   bindAnthropicConfiguration,
   parseAnthropicConfiguration,
@@ -35,8 +20,15 @@ import {
 } from "../../execution.js";
 import {
   type ClientProtocolHandler,
+  type ClientProtocolRequestContext,
   HttpRequestAbortedError,
 } from "../../http.js";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+  RequestJourneyOperation,
+} from "../../diagnostics/contract.js";
 import {
   ModelResolutionFailure,
 } from "../../model-resolution.js";
@@ -78,40 +70,248 @@ import type { AnthropicProviderNativeLane } from "./native-lane-contract.js";
 
 export const anthropicMessagesProtocolId = "anthropic-messages";
 
-/**
- * Ticket 18 correlation: the accepted ledger request id of every request
- * currently being handled (weak: entries vanish with the Request object).
- * The HTTP boundary reads it only to correlate a transport-synthesized
- * error response with the persisted ledger row; the ledger module never
- * enters the transport layer.
- */
+/** Request-edge correlation for requests currently being handled. The HTTP
+ * boundary reads it only when it must synthesize a transport error. */
 const requestIds = new WeakMap<Request, string>();
+
+function observeJourney(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // A caller-provided observer must never affect protocol handling.
+  }
+}
+
+function enterJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeJourney(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+}
+
+function completeJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  protocol?: string,
+  operation?: RequestJourneyOperation,
+): void {
+  observeJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion: "success",
+    location,
+    ...(protocol === undefined ? {} : { protocol }),
+    ...(operation === undefined ? {} : { operation }),
+  });
+}
+
+function failJourneyStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  protocol: string,
+  operation: RequestJourneyOperation,
+): void {
+  observeJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion: "failed",
+    location,
+    protocol,
+    operation,
+  });
+}
+
+interface AnthropicEarlyFailure {
+  readonly stepInstanceId: string;
+  readonly location: RequestJourneyLocation;
+  readonly classification: string;
+  readonly origin: "client" | "luckytoken";
+}
+
+function observeAnthropicEarlyFailure(
+  journey: RequestJourneyObserver | undefined,
+  requestId: string,
+  response: Response,
+  failure: AnthropicEarlyFailure,
+): Response {
+  failJourneyStep(
+    journey,
+    failure.stepInstanceId,
+    failure.location,
+    anthropicMessagesProtocolId,
+    "model_generation",
+  );
+  observeJourney(journey, {
+    kind: "failure_detected",
+    failureId: `${requestId}:${failure.classification}`,
+    role: "primary",
+    classification: failure.classification,
+    origin: failure.origin,
+    originPrecision: "exact",
+    location: failure.location,
+  });
+
+  const presentationLocation = {
+    phase: "client_response_preparation",
+    step: "prepare_anthropic_error_response",
+  } as const;
+  enterJourneyStep(
+    journey,
+    "p6.prepare_anthropic_error_response",
+    presentationLocation,
+  );
+  observeJourney(journey, {
+    kind: "client_response_prepared",
+    status: response.status,
+    ...(response.headers.get("content-type") === null
+      ? {}
+      : { mediaType: response.headers.get("content-type")! }),
+    location: presentationLocation,
+  });
+  completeJourneyStep(
+    journey,
+    "p6.prepare_anthropic_error_response",
+    presentationLocation,
+    anthropicMessagesProtocolId,
+    "model_generation",
+  );
+
+  const outcomeLocation = {
+    phase: "outcome_commit",
+    step: "commit_request_outcome",
+  } as const;
+  enterJourneyStep(journey, "p7.commit_request_outcome", outcomeLocation);
+  observeJourney(journey, {
+    kind: "work_outcome_committed",
+    outcome: "failed",
+    terminalAuthority: "anthropic_messages_handler",
+    location: outcomeLocation,
+  });
+  completeJourneyStep(
+    journey,
+    "p7.commit_request_outcome",
+    outcomeLocation,
+    anthropicMessagesProtocolId,
+    "model_generation",
+  );
+  return response;
+}
+
+function encodedBoundedSummary(value: unknown): Readonly<{
+  bytes: Uint8Array<ArrayBuffer>;
+  originalBytes: number;
+  truncated: boolean;
+}> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  if (bytes.byteLength <= 256 * 1_024) {
+    return Object.freeze({
+      bytes,
+      originalBytes: bytes.byteLength,
+      truncated: false,
+    });
+  }
+  const fallback = new TextEncoder().encode(
+    JSON.stringify({
+      schema: "luckytoken.bounded_summary.v1",
+      completeness: "counts_only_due_to_byte_bound",
+      originalBytes: bytes.byteLength,
+    }),
+  );
+  return Object.freeze({
+    bytes: fallback,
+    originalBytes: bytes.byteLength,
+    truncated: true,
+  });
+}
+
+function semanticFailureLocation(
+  failure: UpstreamFailureFact,
+): RequestJourneyLocation {
+  const attempt = failure.attemptCount;
+  const attemptField = attempt === undefined ? {} : { attempt };
+  if (failure.kind === "conversion") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "pi_to_provider",
+      step: "convert_pi_request",
+      subject: "envelope",
+      ...attemptField,
+    };
+  }
+  if (
+    (failure.kind === "protocol" || failure.kind === "upstream_stream") &&
+    failure.phase === "unexpected_eof"
+  ) {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "validate_pi_terminal",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "protocol" || failure.kind === "upstream_stream") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "provider_to_pi",
+      step:
+        failure.phase === "stream"
+          ? "construct_pi_terminal"
+          : "decode_provider_events",
+      subject: "envelope",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "transport" || failure.kind === "timeout") {
+    const dispatch =
+      failure.phase === "request" ||
+      failure.phase === "connect" ||
+      failure.phase === "request_body" ||
+      failure.phase === "retry_delay";
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: dispatch ? "dispatch_provider_request" : "read_provider_response",
+      ...attemptField,
+    };
+  }
+  if (failure.kind === "http") {
+    return {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "read_provider_response",
+      ...attemptField,
+    };
+  }
+  return {
+    phase: "upstream_execution",
+    lane: "semantic_conversion",
+    step: "validate_pi_terminal",
+    ...attemptField,
+  };
+}
 
 export interface AnthropicMessagesHandlerOptions {
   readonly models: Models;
   readonly createSessionId?: () => string;
   readonly configuration?: AnthropicConfiguration;
-  readonly invocationDiagnostics?: InvocationDiagnosticsFactory;
   readonly providerNativeLane?: AnthropicProviderNativeLane;
   readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
   /** Backend-lifetime Public Model source. When absent, direct handler tests
    * use the canonical provider/model selector seam. */
   readonly publicModels?: PublicModelSource;
-  /**
-   * Ticket 18 Request Lifecycle Ledger observer: the wrapper begins one
-   * handler-local entry at acceptance, drives the lifecycle transitions,
-   * and attaches the request id to every response. Absent means the no-op
-   * observer (the header contract still holds).
-   */
-  readonly requestLedger?: RequestLedger;
-  /**
-   * Ticket 22 Deep Diagnostics capture authority: the wrapper reads one
-   * immutable acceptance-time enable snapshot per request and collects
-   * raw request/response artifacts while enabled. Absent means the no-op
-   * authority (no capture ever begins).
-   */
-  readonly deepCapture?: DeepCaptureAuthority;
   /** Request body byte ceiling. Single source of truth: the composition root
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
@@ -132,9 +332,6 @@ interface AnthropicMessagesDependencies {
   readonly models: Models;
   readonly createSessionId: () => string;
   readonly configuration: AnthropicConfiguration;
-  readonly invocationDiagnostics: InvocationDiagnosticsFactory;
-  readonly requestLedger: RequestLedger;
-  readonly deepCapture: DeepCaptureAuthority;
   readonly providerNativeLane: AnthropicProviderNativeLane | undefined;
   readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
@@ -160,7 +357,7 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   });
 }
 
-/** Every Data Plane response of this handler carries the ledger request id
+/** Every Data Plane response of this handler carries the request-edge id
  *  exactly once (success, error, and passthrough alike). */
 function attachRequestId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
@@ -170,58 +367,6 @@ function attachRequestId(response: Response, requestId: string): Response {
     statusText: response.statusText,
     headers,
   });
-}
-
-/** Own-data header facts for the capture observer: the universal redaction
- *  choke point is the safety net; nothing is pre-filtered here. */
-function headerRecord(headers: Headers): Record<string, string> {
-  return Object.fromEntries(headers.entries());
-}
-
-const textDecoder = new TextDecoder();
-
-/** Ticket 22 isolation: capture infrastructure must never affect request
- *  handling. A hostile/throwing authority falls back to the safe disabled
- *  entry; the request id correlation always survives. */
-function beginCapture(
-  dependencies: AnthropicMessagesDependencies,
-  request: Request,
-  requestId: string,
-): DeepCaptureEntry {
-  try {
-    return dependencies.deepCapture.begin({
-      requestId,
-      protocolId: anthropicMessagesProtocolId,
-      requestHeaders: headerRecord(request.headers),
-    });
-  } catch {
-    return createNoopCaptureEntry(requestId);
-  }
-}
-
-/** Ticket 22 isolation: the delivered response is cloned and read only when
- *  the acceptance decision enabled capture (zero cost while disabled), and
- *  any clone/read/callback failure degrades to a partial capture — it can
- *  never replace or change the model response. */
-async function captureDeliveredResponse(
-  capture: DeepCaptureEntry,
-  response: Response,
-): Promise<void> {
-  if (!capture.decision.enabled) return;
-  try {
-    const responseBytes = await response.clone().arrayBuffer();
-    capture.response(
-      response.status,
-      headerRecord(new Headers(response.headers)),
-      textDecoder.decode(responseBytes),
-    );
-  } catch {
-    try {
-      capture.fail("response-capture-failed");
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-  }
 }
 
 async function raceWithRequestSignal<T>(
@@ -263,146 +408,344 @@ async function readRawBody(
 async function handleAnthropicMessages(
   dependencies: AnthropicMessagesDependencies,
   request: Request,
-  diagnostics: InvocationDiagnostics,
-  ledger: RequestLedgerEntry,
-  capture: DeepCaptureEntry,
+  requestId: string,
+  journey: RequestJourneyObserver | undefined,
 ): Promise<Response> {
+  let activeEarlyStep: Readonly<{
+    stepInstanceId: string;
+    location: RequestJourneyLocation;
+  }> | undefined;
+  let activeClientResponseStep:
+    | Readonly<{
+        stepInstanceId: string;
+        classification:
+          | "client_response_conversion_failed"
+          | "client_response_encoding_failed";
+        location: RequestJourneyLocation;
+      }>
+    | undefined;
   try {
     request.signal.throwIfAborted();
-    diagnostics.checkpoint({ stage: "client-validation" });
     const receivedAt = dependencies.now();
+    const mediaLocation = {
+      phase: "protocol_ingress",
+      step: "validate_media_and_encoding",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.validate_media_and_encoding",
+      location: mediaLocation,
+    };
+    enterJourneyStep(journey, "p1.validate_media_and_encoding", mediaLocation);
     if (!hasJsonContentType(request.headers)) {
-      ledger.terminal("failed", { clientHttpStatus: 415 });
-      return toResponse(
-        renderAnthropicError(
-          415,
-          "invalid_request_error",
-          "Content-Type must be application/json",
-          ledger.requestId,
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "unavailable",
+        ...(request.headers.get("content-type") === null
+          ? {}
+          : { mediaType: request.headers.get("content-type")! }),
+        reason: "body_not_read_due_to_media_type",
+        location: mediaLocation,
+      });
+      return observeAnthropicEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderAnthropicError(
+            415,
+            "invalid_request_error",
+            "Content-Type must be application/json",
+            requestId,
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "unsupported_media_type",
+          origin: "client",
+        },
       );
     }
+    completeJourneyStep(
+      journey,
+      "p1.validate_media_and_encoding",
+      mediaLocation,
+      anthropicMessagesProtocolId,
+      "model_generation",
+    );
+    activeEarlyStep = undefined;
 
+    const identityLocation = {
+      phase: "protocol_ingress",
+      step: "establish_request_identity",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.establish_request_identity",
+      location: identityLocation,
+    };
+    enterJourneyStep(journey, "p1.establish_request_identity", identityLocation);
     const requestIdentity = resolveRequestIdentity(
       request.headers,
       dependencies.createSessionId,
     );
-    ledger.authorized({
+    observeJourney(journey, {
+      kind: "request_identity_established",
       effectiveSessionId: requestIdentity.effectiveSessionId,
       ...(requestIdentity.clientSessionId === undefined
         ? {}
         : { clientSessionId: requestIdentity.clientSessionId }),
+      location: identityLocation,
     });
+    completeJourneyStep(
+      journey,
+      "p1.establish_request_identity",
+      identityLocation,
+    );
+    activeEarlyStep = undefined;
 
     const sourceProfile = resolveAnthropicSourceProfile(request.headers);
+    const bodyLocation = {
+      phase: "protocol_ingress",
+      step: "read_and_decode_body",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p1.read_and_decode_body",
+      location: bodyLocation,
+    };
+    enterJourneyStep(journey, "p1.read_and_decode_body", bodyLocation);
     const rawBody = await readRawBody(request, dependencies.maxRequestBytes);
     if (rawBody === undefined) {
-      ledger.terminal("failed", { clientHttpStatus: 413 });
-      return toResponse(
-        renderAnthropicError(
-          413,
-          "request_too_large",
-          "Request exceeds the configured maximum size",
-          ledger.requestId,
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "unavailable",
+        reason: "request_body_exceeds_limit",
+        location: bodyLocation,
+      });
+      return observeAnthropicEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderAnthropicError(
+            413,
+            "request_too_large",
+            "Request exceeds the configured maximum size",
+            requestId,
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "request_body_too_large",
+          origin: "client",
+        },
       );
     }
-    // Ticket 22: the raw request body is collected for the capture observer
-    // exactly as the request path produced it; sanitization happens at the
-    // one store choke point before commit. A throwing capture seam is
-    // isolated — it can only degrade the capture, never the request.
-    try {
-      capture.requestBody(rawBody);
-    } catch {
-      try {
-        capture.fail("request-body-capture-failed");
-      } catch {
-        // The capture seam must never affect the request path.
-      }
-    }
+    const rawRequestBytes = new TextEncoder().encode(rawBody);
+    const capturedRequestBytes = Math.min(
+      rawRequestBytes.byteLength,
+      256 * 1_024,
+    );
+    observeJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: "client_request_wire",
+      artifactKind: "client_request_wire",
+      state:
+        capturedRequestBytes < rawRequestBytes.byteLength
+          ? "partial"
+          : "captured",
+      ...(request.headers.get("content-type") === null
+        ? {}
+        : { mediaType: request.headers.get("content-type")! }),
+      bytes: rawRequestBytes.subarray(0, capturedRequestBytes),
+      originalBytes: rawRequestBytes.byteLength,
+      capturedBytes: capturedRequestBytes,
+      truncated: capturedRequestBytes < rawRequestBytes.byteLength,
+      location: bodyLocation,
+    });
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
+    completeJourneyStep(journey, "p1.read_and_decode_body", bodyLocation);
+    activeEarlyStep = undefined;
+
+    const resolutionLocation = {
+      phase: "request_resolution",
+      step: "resolve_public_model",
+    } as const;
+    activeEarlyStep = {
+      stepInstanceId: "p2.resolve_public_model",
+      location: resolutionLocation,
+    };
+    enterJourneyStep(journey, "p2.resolve_public_model", resolutionLocation);
     const selector = extractAnthropicModelSelector(body);
-    diagnostics.checkpoint({ stage: "model-resolution", selector });
     const resolution = await resolveDataPlanePublicModel(
       dependencies.models,
       dependencies.publicModels,
       selector,
     );
     if (resolution.kind === "unknown") {
-      ledger.aliasCaptured({ externalAlias: selector });
-      ledger.terminal("unknown-alias", { clientHttpStatus: 404 });
-      return toResponse(
-        renderAnthropicError(
-          404,
-          "not_found_error",
-          `Unknown model: ${selector}`,
-          ledger.requestId,
+      return observeAnthropicEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderAnthropicError(
+            404,
+            "not_found_error",
+            `Unknown model: ${selector}`,
+            requestId,
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "unknown_model",
+          origin: "client",
+        },
       );
     }
     if (resolution.kind === "unavailable") {
-      ledger.aliasCaptured({ externalAlias: selector });
-      ledger.terminal("unavailable-alias", { clientHttpStatus: 502 });
-      return toResponse(
-        renderAnthropicError(
-          502,
-          "api_error",
-          "The requested model is not currently available",
-          ledger.requestId,
+      return observeAnthropicEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderAnthropicError(
+            502,
+            "api_error",
+            "The requested model is not currently available",
+            requestId,
+          ),
         ),
+        {
+          ...activeEarlyStep,
+          classification: "model_unavailable",
+          origin: "luckytoken",
+        },
       );
     }
     const model = resolution.model;
-    ledger.modelResolved({
-      externalAlias: resolution.alias,
+    observeJourney(journey, {
+      kind: "model_resolved",
       providerId: model.provider,
-      realModelId: model.id,
+      modelId: model.id,
+      location: resolutionLocation,
     });
+    completeJourneyStep(journey, "p2.resolve_public_model", resolutionLocation);
+    activeEarlyStep = undefined;
     // Passthrough response projection is alias-only: the alias captured at
     // acceptance must be echoed symmetrically by the upstream response.
     const projectAlias =
       dependencies.publicModels === undefined ? undefined : resolution.alias;
-    if (dependencies.providerNativeLane?.claims(model) === true) {
-      const native = await dependencies.providerNativeLane.execute({
-        model,
-        rawBody,
-        request,
-        ...(projectAlias === undefined ? {} : { alias: projectAlias }),
-        requestId: ledger.requestId,
-        sessionId: requestIdentity.effectiveSessionId,
-        onExecutionStart: () => ledger.executing(),
-        credentialActivity: ledger,
-      });
-      if (native.outcome === "success") {
-        ledger.terminal("success", {
-          clientHttpStatus: native.response.status,
+    if (dependencies.providerNativeLane !== undefined) {
+      const nativeRecognitionLocation = {
+        phase: "request_resolution",
+        lane: "provider_native",
+        step: "recognize_provider_native",
+      } as const;
+      enterJourneyStep(
+        journey,
+        "p2.recognize_provider_native",
+        nativeRecognitionLocation,
+      );
+      const providerNativeClaimed =
+        dependencies.providerNativeLane.claims(model);
+      completeJourneyStep(
+        journey,
+        "p2.recognize_provider_native",
+        nativeRecognitionLocation,
+      );
+      if (providerNativeClaimed) {
+        observeJourney(journey, {
+          kind: "lane_committed",
+          lane: "provider_native",
+          location: {
+            phase: "request_resolution",
+            lane: "provider_native",
+            step: "commit_lane",
+          },
         });
-      } else {
-        ledger.terminal("failed", {
-          clientHttpStatus: native.response.status,
+        const native = await dependencies.providerNativeLane.execute({
+          model,
+          rawBody,
+          request,
+          ...(projectAlias === undefined ? {} : { alias: projectAlias }),
+          requestId,
+          sessionId: requestIdentity.effectiveSessionId,
+          onExecutionStart: () => undefined,
+          ...(journey === undefined ? {} : { journey }),
         });
-        if (native.diagnostic?.error !== undefined) {
-          ledger.fail({
-            classification: "runtime-failure",
-            error: native.diagnostic.error,
-          });
-        }
-        await diagnostics.fail({
-          classification: "runtime-failure",
-          stage: "native-passthrough",
-          clientStatus:
-            native.diagnostic?.upstreamStatus ?? native.response.status,
-          ...(native.diagnostic?.safeRequestId === undefined
+        const presentationLocation = {
+          phase: "client_response_preparation",
+          lane: "provider_native",
+          step:
+            native.outcome === "success"
+              ? "prepare_provider_native_response"
+              : "prepare_provider_native_error_response",
+        } as const;
+        enterJourneyStep(
+          journey,
+          native.outcome === "success"
+            ? "p6.prepare_provider_native_response"
+            : "p6.prepare_provider_native_error_response",
+          presentationLocation,
+        );
+        observeJourney(journey, {
+          kind: "client_response_prepared",
+          status: native.response.status,
+          ...(native.response.headers.get("content-type") === null
             ? {}
-            : { safeIds: { requestId: native.diagnostic.safeRequestId } }),
-          ...(native.diagnostic?.error === undefined
-            ? {}
-            : { error: native.diagnostic.error }),
+            : {
+                mediaType: native.response.headers.get("content-type")!,
+              }),
+          location: presentationLocation,
         });
+        completeJourneyStep(
+          journey,
+          native.outcome === "success"
+            ? "p6.prepare_provider_native_response"
+            : "p6.prepare_provider_native_error_response",
+          presentationLocation,
+        );
+        const outcomeLocation = {
+          phase: "outcome_commit",
+          lane: "provider_native",
+          step: "commit_request_outcome",
+        } as const;
+        enterJourneyStep(journey, "p7.commit_request_outcome", outcomeLocation);
+        observeJourney(journey, {
+          kind: "work_outcome_committed",
+          outcome: native.outcome,
+          terminalAuthority: "anthropic_provider_native_lane",
+          location: outcomeLocation,
+        });
+        completeJourneyStep(
+          journey,
+          "p7.commit_request_outcome",
+          outcomeLocation,
+        );
+        return native.response;
       }
-      return native.response;
     }
+    const laneLocation = {
+      phase: "request_resolution",
+      lane: "semantic_conversion",
+      step: "commit_lane",
+    } as const;
+    observeJourney(journey, {
+      kind: "lane_committed",
+      lane: "semantic_conversion",
+      location: laneLocation,
+    });
+    const requestConversionLocation = {
+      phase: "lane_request_preparation",
+      lane: "semantic_conversion",
+      direction: "client_to_pi",
+      step: "validate_client_semantics",
+      subject: "envelope",
+    } as const;
+    enterJourneyStep(
+      journey,
+      "p3.validate_client_semantics",
+      requestConversionLocation,
+    );
     const validatedRequest = validateAnthropicSourceRequest(body);
     assertAnthropicModelAwareValidity(
       validatedRequest,
@@ -410,16 +753,32 @@ async function handleAnthropicMessages(
       sourceProfile,
       dependencies.modelValidityPolicy,
     );
+    completeJourneyStep(
+      journey,
+      "p3.validate_client_semantics",
+      requestConversionLocation,
+    );
+    const invocationLocation = {
+      phase: "lane_request_preparation",
+      lane: "semantic_conversion",
+      direction: "client_to_pi",
+      step: "finalize_pi_invocation",
+      subject: "envelope",
+    } as const;
+    enterJourneyStep(journey, "p3.finalize_pi_invocation", invocationLocation);
     const invocation = convertValidatedAnthropicRequestWithPolicy(
       validatedRequest,
       receivedAt,
       dependencies.configuration.conversion.request,
     );
     for (const notice of invocation.notices) {
-      diagnostics.notice(notice);
-      ledger.notice(notice);
+      observeJourney(journey, {
+        kind: "conversion_notice_observed",
+        code: notice.code,
+        severity: notice.action === "ignore" ? "info" : "warning",
+        location: invocationLocation,
+      });
     }
-    diagnostics.checkpoint({ stage: "pi-composition", selector });
     const piOptions = composeOptions(
       invocation.options,
       {
@@ -429,32 +788,204 @@ async function handleAnthropicMessages(
       dependencies.routerDefaults,
     );
     freezePiInvocation(model, invocation.context, piOptions);
-    ledger.executing();
-    const executionFacts = {
-      notice: (notice: Parameters<RequestLedgerEntry["notice"]>[0]) => {
-        diagnostics.notice(notice);
-        ledger.notice(notice);
+    try {
+      const invocationSnapshot = encodedBoundedSummary({
+        schema: "luckytoken.pi_invocation_summary.v1",
+        selector: invocation.renderState.selector,
+        model: { provider: model.provider, id: model.id, api: model.api },
+        systemPrompt: invocation.context.systemPrompt,
+        messages: invocation.context.messages,
+        options: {
+          maxTokens: piOptions.maxTokens,
+          temperature: piOptions.temperature,
+        },
+      });
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_invocation_snapshot",
+        artifactKind: "pi_invocation_snapshot",
+        state: invocationSnapshot.truncated ? "partial" : "captured",
+        mediaType: "application/json",
+        bytes: invocationSnapshot.bytes,
+        originalBytes: invocationSnapshot.originalBytes,
+        capturedBytes: invocationSnapshot.bytes.byteLength,
+        truncated: invocationSnapshot.truncated,
+        location: invocationLocation,
+      });
+    } catch {
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_invocation_snapshot",
+        artifactKind: "pi_invocation_snapshot",
+        state: "unavailable",
+        reason: "snapshot_projection_failed",
+        location: invocationLocation,
+      });
+    }
+    completeJourneyStep(journey, "p3.finalize_pi_invocation", invocationLocation);
+    const executionLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      step: "create_pi_stream",
+    } as const;
+    const executionFacts: NonNullable<Parameters<ExecutionOperation>[4]> = {
+      notice: (notice) => {
+        observeJourney(journey, {
+          kind: "conversion_notice_observed",
+          code: notice.code,
+          severity: notice.action === "ignore" ? "info" : "warning",
+          location: executionLocation,
+        });
       },
-      attempt: (attempt: Parameters<RequestLedgerEntry["attempt"]>[0]) => {
-        diagnostics.attempt(attempt);
-        ledger.attempt(attempt);
+      attempt: (attempt) => {
+        observeJourney(journey, {
+          kind: "attempt_observed",
+          attempt: attempt.attempt,
+          ...(attempt.status === undefined ? {} : { status: attempt.status }),
+          location: {
+            ...executionLocation,
+            step: "observe_pi_attempt",
+            attempt: attempt.attempt,
+          },
+        });
       },
-      terminalUsage: (snapshot: Parameters<RequestLedgerEntry["terminalUsage"]>[0]) => {
-        ledger.terminalUsage(snapshot);
+      terminalUsage: (usage) => {
+        observeJourney(journey, {
+          kind: "terminal_usage_observed",
+          usage,
+          location: {
+            phase: "lane_response_processing",
+            lane: "semantic_conversion",
+            step: "observe_pi_terminal_usage",
+            subject: "usage",
+          },
+        });
       },
     };
-    bindCredentialActivityToExecutionFacts(executionFacts, ledger);
-    const message = await dependencies.executeOperation(
-      dependencies.models,
-      model,
-      invocation.context,
-      piOptions,
-      executionFacts,
-    );
+    bindCredentialActivityToExecutionFacts(executionFacts, {
+      credentialCaptured: (capture) => {
+        observeJourney(journey, {
+          kind: "profile_attributed",
+          profileId: capture.credentialId,
+          displayName: capture.displayName,
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "capture_semantic_profile",
+          },
+        });
+      },
+      credentialAttempt: (attempt) => {
+        observeJourney(journey, {
+          kind: "profile_attributed",
+          profileId: attempt.credentialId,
+          displayName: attempt.displayName,
+          location: {
+            phase: "upstream_execution",
+            lane: "semantic_conversion",
+            step: "attribute_semantic_profile_attempt",
+            attempt: attempt.attempt,
+          },
+        });
+      },
+    });
+    observeJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: "pi_provider_outbound_request_evidence",
+      artifactKind: "pi_provider_outbound_request_evidence",
+      state: "unavailable",
+      reason: "provider_did_not_expose",
+      location: {
+        phase: "upstream_execution",
+        lane: "semantic_conversion",
+        direction: "pi_to_provider",
+        step: "convert_pi_request",
+        subject: "envelope",
+      },
+    });
+    observeJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: "pi_provider_response_decode_evidence",
+      artifactKind: "pi_provider_response_decode_evidence",
+      state: "unavailable",
+      reason: "provider_did_not_expose",
+      location: {
+        phase: "upstream_execution",
+        lane: "semantic_conversion",
+        direction: "provider_to_pi",
+        step: "decode_provider_events",
+        subject: "envelope",
+      },
+    });
+    enterJourneyStep(journey, "p4.create_pi_stream", executionLocation);
+    let message;
+    try {
+      message = await dependencies.executeOperation(
+        dependencies.models,
+        model,
+        invocation.context,
+        piOptions,
+        executionFacts,
+      );
+    } catch (error) {
+      failJourneyStep(
+        journey,
+        "p4.create_pi_stream",
+        executionLocation,
+        anthropicMessagesProtocolId,
+        "model_generation",
+      );
+      throw error;
+    }
+    completeJourneyStep(journey, "p4.create_pi_stream", executionLocation);
+    try {
+      const terminalSummary = encodedBoundedSummary({
+        schema: "luckytoken.pi_terminal_summary.v1",
+        role: message.role,
+        stopReason: message.stopReason,
+        contentBlockCount: message.content.length,
+        usage: message.usage,
+      });
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_terminal_summary",
+        artifactKind: "pi_terminal_summary",
+        state: terminalSummary.truncated ? "partial" : "captured",
+        mediaType: "application/json",
+        bytes: terminalSummary.bytes,
+        originalBytes: terminalSummary.originalBytes,
+        capturedBytes: terminalSummary.bytes.byteLength,
+        truncated: terminalSummary.truncated,
+        location: executionLocation,
+      });
+    } catch {
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_terminal_summary",
+        artifactKind: "pi_terminal_summary",
+        state: "unavailable",
+        reason: "snapshot_projection_failed",
+        location: executionLocation,
+      });
+    }
     request.signal.throwIfAborted();
-    ledger.terminal("success", { piStopReason: message.stopReason });
-    diagnostics.checkpoint({ stage: "client-render", selector });
-    ledger.rendering();
+    const responseProjectionLocation = {
+      phase: "lane_response_processing",
+      lane: "semantic_conversion",
+      direction: "pi_to_client",
+      step: "validate_assistant_message",
+      subject: "message",
+    } as const;
+    activeClientResponseStep = {
+      stepInstanceId: "p5.validate_assistant_message",
+      classification: "client_response_conversion_failed",
+      location: responseProjectionLocation,
+    };
+    enterJourneyStep(
+      journey,
+      "p5.validate_assistant_message",
+      responseProjectionLocation,
+    );
     const responseConversion = convertAssistantMessageToAnthropicWithPolicy(
       message,
       {
@@ -464,60 +995,249 @@ async function handleAnthropicMessages(
       dependencies.configuration.conversion.response,
     );
     for (const notice of responseConversion.notices) {
-      diagnostics.notice(notice);
-      ledger.notice(notice);
+      observeJourney(journey, {
+        kind: "conversion_notice_observed",
+        code: notice.code,
+        severity: notice.action === "ignore" ? "info" : "warning",
+        location: responseProjectionLocation,
+      });
     }
     const target = responseConversion.message;
+    completeJourneyStep(
+      journey,
+      "p5.validate_assistant_message",
+      responseProjectionLocation,
+    );
+    const responseEncodingLocation = {
+      phase: "client_response_preparation",
+      lane: "semantic_conversion",
+      direction: "pi_to_client",
+      step: invocation.renderState.stream
+        ? "encode_atomic_sse"
+        : "encode_client_json",
+      subject: "envelope",
+    } as const;
+    activeClientResponseStep = {
+      stepInstanceId: "p6.encode_client_response",
+      classification: "client_response_encoding_failed",
+      location: responseEncodingLocation,
+    };
+    enterJourneyStep(journey, "p6.encode_client_response", responseEncodingLocation);
     const prepared = invocation.renderState.stream
       ? renderAnthropicAtomicSse(target)
       : renderAnthropicJsonSuccess(target);
     request.signal.throwIfAborted();
-    return toResponse(prepared);
+    const response = toResponse(prepared);
+    completeJourneyStep(
+      journey,
+      "p6.encode_client_response",
+      responseEncodingLocation,
+    );
+    activeClientResponseStep = undefined;
+    observeJourney(journey, {
+      kind: "client_response_prepared",
+      status: response.status,
+      ...(response.headers.get("content-type") === null
+        ? {}
+        : { mediaType: response.headers.get("content-type")! }),
+      location: responseEncodingLocation,
+    });
+    const outcomeLocation = {
+      phase: "outcome_commit",
+      lane: "semantic_conversion",
+      step: "commit_request_outcome",
+    } as const;
+    enterJourneyStep(journey, "p7.commit_request_outcome", outcomeLocation);
+    observeJourney(journey, {
+      kind: "work_outcome_committed",
+      outcome: "success",
+      terminalAuthority: "pi_execution",
+      location: outcomeLocation,
+    });
+    completeJourneyStep(
+      journey,
+      "p7.commit_request_outcome",
+      outcomeLocation,
+    );
+    return response;
   } catch (error) {
     if (request.signal.aborted || error instanceof HttpRequestAbortedError) {
       throw new HttpRequestAbortedError(request.signal.reason);
     }
+    if (activeClientResponseStep !== undefined) {
+      const failedStep = activeClientResponseStep;
+      failJourneyStep(
+        journey,
+        failedStep.stepInstanceId,
+        failedStep.location,
+        anthropicMessagesProtocolId,
+        "model_generation",
+      );
+      observeJourney(journey, {
+        kind: "failure_detected",
+        failureId: `${requestId}:${failedStep.classification}`,
+        role: "primary",
+        classification: failedStep.classification,
+        origin: "luckytoken",
+        originPrecision: "exact",
+        location: failedStep.location,
+      });
+      const response = toResponse(
+        renderAnthropicError(
+          500,
+          "api_error",
+          "Internal server error",
+          requestId,
+        ),
+      );
+      const presentationLocation = {
+        phase: "client_response_preparation",
+        lane: "semantic_conversion",
+        direction: "pi_to_client",
+        step: "prepare_anthropic_error_response",
+        subject: "envelope",
+      } as const;
+      observeJourney(journey, {
+        kind: "client_response_prepared",
+        status: response.status,
+        ...(response.headers.get("content-type") === null
+          ? {}
+          : { mediaType: response.headers.get("content-type")! }),
+        location: presentationLocation,
+      });
+      const outcomeLocation = {
+        phase: "outcome_commit",
+        lane: "semantic_conversion",
+        step: "commit_request_outcome",
+      } as const;
+      enterJourneyStep(journey, "p7.commit_request_outcome", outcomeLocation);
+      observeJourney(journey, {
+        kind: "work_outcome_committed",
+        outcome: "success",
+        terminalAuthority: "pi_execution",
+        location: outcomeLocation,
+      });
+      completeJourneyStep(
+        journey,
+        "p7.commit_request_outcome",
+        outcomeLocation,
+      );
+      return response;
+    }
+    if (activeEarlyStep !== undefined) {
+      const failure = activeEarlyStep;
+      if (error instanceof SyntaxError) {
+        return observeAnthropicEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderAnthropicError(
+              400,
+              "invalid_request_error",
+              "Request body is not valid JSON",
+              requestId,
+            ),
+          ),
+          {
+            ...failure,
+            classification: "invalid_json",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof InvalidRequest || error instanceof UnsupportedFeature) {
+        return observeAnthropicEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderAnthropicError(
+              400,
+              "invalid_request_error",
+              error.message,
+              requestId,
+            ),
+          ),
+          {
+            ...failure,
+            classification: "invalid_request",
+            origin: "client",
+          },
+        );
+      }
+      if (error instanceof ModelResolutionFailure) {
+        return observeAnthropicEarlyFailure(
+          journey,
+          requestId,
+          toResponse(
+            renderAnthropicError(
+              404,
+              "not_found_error",
+              error.message,
+              requestId,
+            ),
+          ),
+          {
+            ...failure,
+            classification: "unknown_model",
+            origin: "client",
+          },
+        );
+      }
+      return observeAnthropicEarlyFailure(
+        journey,
+        requestId,
+        toResponse(
+          renderAnthropicError(
+            500,
+            "api_error",
+            "Internal server error",
+            requestId,
+          ),
+        ),
+        {
+          ...failure,
+          classification: "protocol_ingress_failed",
+          origin: "luckytoken",
+        },
+      );
+    }
     if (error instanceof ExecutionAbortedError) {
-      ledger.terminal("aborted", { clientHttpStatus: 500 });
       return toResponse(
         renderAnthropicError(
           500,
           "api_error",
           "Model execution was aborted",
-          ledger.requestId,
+          requestId,
         ),
       );
     }
     if (error instanceof SyntaxError) {
-      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderAnthropicError(
           400,
           "invalid_request_error",
           "Request body is not valid JSON",
-          ledger.requestId,
+          requestId,
         ),
       );
     }
     if (error instanceof InvalidRequest || error instanceof UnsupportedFeature) {
-      ledger.terminal("failed", { clientHttpStatus: 400 });
       return toResponse(
         renderAnthropicError(
           400,
           "invalid_request_error",
           error.message,
-          ledger.requestId,
+          requestId,
         ),
       );
     }
     if (error instanceof ModelResolutionFailure) {
-      ledger.terminal("failed", { clientHttpStatus: 404 });
       return toResponse(
         renderAnthropicError(
           404,
           "not_found_error",
           error.message,
-          ledger.requestId,
+          requestId,
         ),
       );
     }
@@ -526,18 +1246,110 @@ async function handleAnthropicMessages(
       error.failure !== undefined &&
       error.failure.kind !== "caller_cancellation"
     ) {
+      const terminalLocation = semanticFailureLocation(error.failure);
+      const terminalStep = `p4.${terminalLocation.step}`;
+      enterJourneyStep(journey, terminalStep, terminalLocation);
+      failJourneyStep(
+        journey,
+        terminalStep,
+        terminalLocation,
+        anthropicMessagesProtocolId,
+        "model_generation",
+      );
+      try {
+        const terminalSummary = encodedBoundedSummary({
+          kind: error.failure.kind,
+          phase: error.failure.phase,
+          status: error.failure.status,
+          statusText: error.failure.statusText,
+          providerType: error.failure.providerType,
+          providerCode: error.failure.providerCode,
+          message: error.failure.message,
+          headers: error.failure.headers,
+          retryable: error.failure.retryable,
+          attemptCount: error.failure.attemptCount,
+          snapshot: error.failure.snapshot,
+          truncated: error.failure.truncated,
+        });
+        observeJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_terminal_summary",
+          artifactKind: "pi_terminal_summary",
+          state: terminalSummary.truncated ? "partial" : "captured",
+          mediaType: "application/json",
+          bytes: terminalSummary.bytes,
+          originalBytes: terminalSummary.originalBytes,
+          capturedBytes: terminalSummary.bytes.byteLength,
+          truncated: terminalSummary.truncated,
+          location: terminalLocation,
+        });
+      } catch {
+        observeJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_terminal_summary",
+          artifactKind: "pi_terminal_summary",
+          state: "unavailable",
+          reason: "snapshot_projection_failed",
+          location: terminalLocation,
+        });
+      }
+      observeJourney(journey, {
+        kind: "failure_detected",
+        failureId: `${requestId}:trusted_upstream_${error.failure.kind}_failure`,
+        role: "primary",
+        classification: `trusted_upstream_${error.failure.kind}_failure`,
+        origin: "provider",
+        originPrecision: "external_boundary",
+        safeMessage: error.failure.message,
+        location: terminalLocation,
+      });
       const mapping = mapUpstreamFailureFact(error.failure);
-      ledger.terminal("failed", { clientHttpStatus: mapping.status });
-      ledger.fail({ classification: "runtime-failure", error });
-      return toResponse(
+      const response = toResponse(
         renderAnthropicError(
           mapping.status,
           mapping.type,
           mapping.message,
-          requestIdFromFact(error.failure) ?? ledger.requestId,
+          requestIdFromFact(error.failure) ?? requestId,
           mapping.safeHeaders,
         ),
       );
+      const presentationLocation = {
+        phase: "client_response_preparation",
+        lane: "semantic_conversion",
+        step: "render_client_error",
+      } as const;
+      enterJourneyStep(journey, "p6.render_client_error", presentationLocation);
+      observeJourney(journey, {
+        kind: "client_response_prepared",
+        status: response.status,
+        ...(response.headers.get("content-type") === null
+          ? {}
+          : { mediaType: response.headers.get("content-type")! }),
+        location: presentationLocation,
+      });
+      completeJourneyStep(
+        journey,
+        "p6.render_client_error",
+        presentationLocation,
+      );
+      const outcomeLocation = {
+        phase: "outcome_commit",
+        lane: "semantic_conversion",
+        step: "commit_request_outcome",
+      } as const;
+      enterJourneyStep(journey, "p7.commit_request_outcome", outcomeLocation);
+      observeJourney(journey, {
+        kind: "work_outcome_committed",
+        outcome: "failed",
+        terminalAuthority: "pi_execution",
+        location: outcomeLocation,
+      });
+      completeJourneyStep(
+        journey,
+        "p7.commit_request_outcome",
+        outcomeLocation,
+      );
+      return response;
     }
     // A Provider failure without a trusted neutral fact has no authority for
     // a client-visible status, type, code, headers, or message. Structural
@@ -550,104 +1362,42 @@ async function handleAnthropicMessages(
       "reason" in error &&
       error.reason === "error"
     ) {
-      ledger.terminal("failed", { clientHttpStatus: 502 });
-      ledger.fail({ classification: "runtime-failure", error });
       return toResponse(
         renderAnthropicError(
           502,
           "api_error",
           "Upstream provider failed",
-          ledger.requestId,
+          requestId,
         ),
       );
     }
-    ledger.terminal("failed", { clientHttpStatus: 500 });
     return toResponse(
       renderAnthropicError(
         500,
         "api_error",
         "Internal server error",
-        ledger.requestId,
+        requestId,
       ),
     );
   }
 }
 
-async function handleAnthropicMessagesWithDiagnostics(
+async function handleAnthropicMessagesWithJourney(
   dependencies: AnthropicMessagesDependencies,
   request: Request,
+  context?: ClientProtocolRequestContext,
 ): Promise<Response> {
-  const diagnostics = dependencies.invocationDiagnostics.begin(anthropicMessagesProtocolId);
-  // Ticket 18: the handler assigns the safe unique request id and records an
-  // accepted request at handler entry, before content-type/body/auth/model
-  // validation and before Pi execution. The correlation is published before
-  // the first await so a transport-synthesized error response can still
-  // carry the exact id of this accepted request.
-  const ledger = dependencies.requestLedger.begin(anthropicMessagesProtocolId);
-  requestIds.set(request, ledger.requestId);
-  // Ticket 22: the capture observer reads the one global enable snapshot at
-  // the same acceptance line and keeps it immutable for this request; the
-  // request id is the ledger's — capture never mints its own. begin is
-  // isolated: a throwing authority falls back to the safe disabled entry.
-  const capture = beginCapture(dependencies, request, ledger.requestId);
-  try {
-    const response = await handleAnthropicMessages(dependencies, request, diagnostics, ledger, capture);
-    if (response.status >= 400) {
-      await diagnostics.fail({
-        classification: response.status >= 500 ? "runtime-failure" : "client-failure",
-        clientStatus: response.status,
-      });
-    } else {
-      await diagnostics.succeed();
-    }
-    // Terminal response preparation: the final Response exists (rendered +
-    // request id attached below), so the ledger commits the terminal row.
-    ledger.completed(response.status);
-    // The request id header is attached first: the captured bytes are the
-    // exact response the client receives, and the request id survives as a
-    // safe correlation fact (never treated as a client credential).
-    const delivered = attachRequestId(response, ledger.requestId);
-    await captureDeliveredResponse(capture, delivered);
-    try {
-      capture.finalize();
-    } catch {
-      // Capture finalize must never affect the response path.
-    }
-    return delivered;
-  } catch (error) {
-    const aborted =
-      request.signal.aborted ||
-      error instanceof HttpRequestAbortedError ||
-      error instanceof ExecutionAbortedError;
-    // The truthful terminal outcome is recorded before the diagnostics seam
-    // runs, so a throwing diagnostics seam can never lose it. An unexpected
-    // failure still reaches the client as a transport-synthesized 500 (when
-    // the client is live), so the status is recorded too.
-    ledger.fail({
-      classification: aborted ? "caller-cancellation" : "unhandled-failure",
-      error,
-    });
-    ledger.terminal(
-      aborted ? "aborted" : "failed",
-      aborted ? undefined : { clientHttpStatus: 500 },
-    );
-    try {
-      capture.fail(aborted ? "aborted" : "unhandled-failure");
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-    try {
-      capture.finalize();
-    } catch {
-      // The capture seam must never affect the response path.
-    }
-    await diagnostics.fail({
-      classification: aborted ? "caller-cancellation" : "unhandled-failure",
-      cancellation: request.signal.aborted,
-      error,
-    });
-    throw error;
-  }
+  const requestId = context?.requestId ?? randomUUID();
+  // Publish correlation before the first await so a transport-synthesized
+  // error response can still carry the exact request-edge id.
+  requestIds.set(request, requestId);
+  const response = await handleAnthropicMessages(
+    dependencies,
+    request,
+    requestId,
+    context?.journey,
+  );
+  return attachRequestId(response, requestId);
 }
 
 export function createAnthropicMessagesHandler(
@@ -680,10 +1430,6 @@ export function createAnthropicMessagesHandler(
       options.configuration === undefined
         ? parseAnthropicConfiguration()
         : bindAnthropicConfiguration(options.configuration),
-    invocationDiagnostics:
-      options.invocationDiagnostics ?? createNoopInvocationDiagnosticsFactory(),
-    requestLedger: options.requestLedger ?? createNoopRequestLedger(),
-    deepCapture: options.deepCapture ?? createNoopDeepCaptureAuthority(),
     providerNativeLane: options.providerNativeLane,
     modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
@@ -696,8 +1442,8 @@ export function createAnthropicMessagesHandler(
   return Object.freeze({
     method: "POST",
     pathname: "/v1/messages",
-    handle: (request: Request) =>
-      handleAnthropicMessagesWithDiagnostics(dependencies, request),
+    handle: (request: Request, context?: ClientProtocolRequestContext) =>
+      handleAnthropicMessagesWithJourney(dependencies, request, context),
     requestIdFor: (request: Request) => requestIds.get(request),
   });
 }

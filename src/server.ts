@@ -6,13 +6,26 @@ import {
 } from "node:http";
 import { type Duplex, Readable } from "node:stream";
 
-import { HttpRequestAbortedError } from "./http.js";
+import type {
+  RequestJourneyCloseInput,
+  RequestJourneyObservationAuthority,
+} from "./diagnostics/contract.js";
+import {
+  beginRequestJourney,
+  closeRequestJourney,
+  createRequestJourneyId,
+  HttpRequestAbortedError,
+  observeRequestJourney,
+  type ClientProtocolRequestContext,
+} from "./http.js";
 import type { LuckyTokenRuntime } from "./runtime.js";
 
 export interface LuckyTokenHttpServerOptions {
   readonly runtime: LuckyTokenRuntime;
   readonly host?: string;
   readonly port?: number;
+  readonly diagnostics?: RequestJourneyObservationAuthority;
+  readonly createRequestId?: () => string;
 }
 
 /** Deterministic time adapter for the quit drain (Ticket 05): production uses
@@ -63,7 +76,83 @@ function isWebSocketUpgrade(request: IncomingMessage): boolean {
   return request.headers.upgrade?.toLowerCase() === "websocket";
 }
 
-function rejectWebSocketUpgrade(socket: Duplex): void {
+function rejectWebSocketUpgrade(
+  socket: Duplex,
+  context: ClientProtocolRequestContext,
+): void {
+  const primaryLocation = {
+    phase: "protocol_ingress",
+    step: "reject_transport",
+  } as const;
+  const failureId = "p1.reject_transport.websocket";
+  observeRequestJourney(context, {
+    kind: "step_entered",
+    stepInstanceId: "p1.reject_transport",
+    location: primaryLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "step_completed",
+    stepInstanceId: "p1.reject_transport",
+    completion: "failed",
+    operation: "unsupported_transport",
+    location: primaryLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "failure_detected",
+    failureId,
+    role: "primary",
+    classification: "unsupported_websocket_transport",
+    origin: "client",
+    originPrecision: "exact",
+    location: primaryLocation,
+  });
+
+  const presentationLocation = {
+    phase: "client_response_preparation",
+    step: "render_transport_error",
+  } as const;
+  observeRequestJourney(context, {
+    kind: "step_entered",
+    stepInstanceId: "p6.render_transport_error",
+    location: presentationLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "client_response_prepared",
+    status: 426,
+    mediaType: "application/json; charset=utf-8",
+    location: presentationLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "step_completed",
+    stepInstanceId: "p6.render_transport_error",
+    completion: "success",
+    operation: "unsupported_transport",
+    location: presentationLocation,
+  });
+
+  const outcomeLocation = {
+    phase: "outcome_commit",
+    step: "commit_request_outcome",
+  } as const;
+  observeRequestJourney(context, {
+    kind: "step_entered",
+    stepInstanceId: "p7.commit_request_outcome",
+    location: outcomeLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "work_outcome_committed",
+    outcome: "failed",
+    terminalAuthority: "http_transport",
+    location: outcomeLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "step_completed",
+    stepInstanceId: "p7.commit_request_outcome",
+    completion: "success",
+    operation: "unsupported_transport",
+    location: outcomeLocation,
+  });
+
   const responseHead = [
     "HTTP/1.1 426 Upgrade Required",
     "Content-Type: application/json; charset=utf-8",
@@ -73,12 +162,76 @@ function rejectWebSocketUpgrade(socket: Duplex): void {
     "",
     "",
   ].join("\r\n");
-  socket.end(
-    Buffer.concat([
-      Buffer.from(responseHead, "ascii"),
-      WEBSOCKET_FALLBACK_BODY,
-    ]),
-  );
+  const responseBytes = Buffer.concat([
+    Buffer.from(responseHead, "ascii"),
+    WEBSOCKET_FALLBACK_BODY,
+  ]);
+  const handoffLocation = {
+    phase: "http_handoff",
+    step: "write_upgrade_response",
+  } as const;
+  const handoffStep = "p8.write_upgrade_response";
+  let settled = false;
+  const cleanup = (): void => {
+    socket.off("finish", onFinish);
+    socket.off("close", onClose);
+    socket.off("error", onError);
+  };
+  const settle = (outcome: "finished" | "closed" | "failed"): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    observeRequestJourney(context, {
+      kind: "handoff_observed",
+      outcome,
+      transport: "http",
+      writableFinished: socket.writableFinished,
+      location: handoffLocation,
+    });
+    observeRequestJourney(context, {
+      kind: "step_completed",
+      stepInstanceId: handoffStep,
+      completion: outcome === "finished" ? "success" : "failed",
+      location: handoffLocation,
+    });
+    closeRequestJourney(context, {
+      outcome: "failed",
+      primaryFailureId: failureId,
+      closeReason: "unsupported_websocket_transport",
+      lastKnownLocation: handoffLocation,
+    });
+  };
+  function onFinish(): void {
+    settle("finished");
+  }
+  function onClose(): void {
+    if (!socket.writableFinished) settle("closed");
+  }
+  function onError(): void {
+    settle("failed");
+  }
+
+  observeRequestJourney(context, {
+    kind: "step_entered",
+    stepInstanceId: handoffStep,
+    location: handoffLocation,
+  });
+  observeRequestJourney(context, {
+    kind: "handoff_observed",
+    outcome: "prepared",
+    transport: "http",
+    writableFinished: socket.writableFinished,
+    location: handoffLocation,
+  });
+  socket.once("finish", onFinish);
+  socket.once("close", onClose);
+  socket.once("error", onError);
+  try {
+    socket.end(responseBytes);
+  } catch {
+    settle("failed");
+    socket.destroy();
+  }
 }
 
 function requestHeaders(request: IncomingMessage): Headers {
@@ -111,14 +264,124 @@ function createWebRequest(
   });
 }
 
+type HandoffOutcome = "finished" | "closed" | "failed";
+
 async function writeWebResponse(
   target: ServerResponse,
   response: Response,
-): Promise<void> {
-  const body = Buffer.from(await response.arrayBuffer());
-  target.statusCode = response.status;
-  for (const [name, value] of response.headers) target.setHeader(name, value);
-  target.end(body);
+  context: ClientProtocolRequestContext,
+): Promise<HandoffOutcome> {
+  const location = {
+    phase: "http_handoff",
+    step: "write_http_response",
+  } as const;
+  const stepInstanceId = "p8.write_http_response";
+  let terminalObserved = false;
+  const observeTerminal = (outcome: HandoffOutcome): void => {
+    if (terminalObserved) return;
+    terminalObserved = true;
+    observeRequestJourney(context, {
+      kind: "handoff_observed",
+      outcome,
+      transport: "http",
+      writableFinished: target.writableFinished,
+      location,
+    });
+    observeRequestJourney(context, {
+      kind: "step_completed",
+      stepInstanceId,
+      completion: outcome === "finished" ? "success" : "failed",
+      location,
+    });
+  };
+
+  observeRequestJourney(context, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+  try {
+    // This is the existing single materialization seam. Diagnostics observes
+    // a bounded copy of these bytes and never clones or re-reads the Response.
+    const body = Buffer.from(await response.arrayBuffer());
+    const capturedBytes = Math.min(body.byteLength, 256 * 1_024);
+    observeRequestJourney(context, {
+      kind: "artifact_observed",
+      artifactId: "client_response_wire",
+      artifactKind: "client_response_wire",
+      state: capturedBytes < body.byteLength ? "partial" : "captured",
+      ...(response.headers.get("content-type") === null
+        ? {}
+        : { mediaType: response.headers.get("content-type")! }),
+      bytes: new Uint8Array(
+        body.buffer,
+        body.byteOffset,
+        capturedBytes,
+      ),
+      originalBytes: body.byteLength,
+      capturedBytes,
+      truncated: capturedBytes < body.byteLength,
+      location,
+    });
+    if (target.destroyed) {
+      observeTerminal("closed");
+      return "closed";
+    }
+    return await new Promise<HandoffOutcome>((resolve, reject) => {
+      let settled = false;
+      const cleanup = (): void => {
+        target.off("finish", onFinish);
+        target.off("close", onClose);
+        target.off("error", onError);
+      };
+      const settle = (
+        outcome: HandoffOutcome,
+        error?: unknown,
+      ): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        observeTerminal(outcome);
+        if (error === undefined) resolve(outcome);
+        else reject(error);
+      };
+      function onFinish(): void {
+        settle("finished");
+      }
+      function onClose(): void {
+        if (!target.writableFinished) settle("closed");
+      }
+      function onError(error: Error): void {
+        settle("failed", error);
+      }
+
+      target.once("finish", onFinish);
+      target.once("close", onClose);
+      target.once("error", onError);
+      try {
+        target.statusCode = response.status;
+        for (const [name, value] of response.headers) {
+          target.setHeader(name, value);
+        }
+        // Prepared means the complete response has been materialized and the
+        // atomic status/header/body write is ready, not that Node has already
+        // finished handing bytes to the socket.
+        observeRequestJourney(context, {
+          kind: "handoff_observed",
+          outcome: "prepared",
+          transport: "http",
+          writableFinished: target.writableFinished,
+          location,
+        });
+        target.end(body);
+      } catch (error) {
+        settle("failed", error);
+      }
+    });
+  } catch (error) {
+    observeTerminal("failed");
+    throw error;
+  }
 }
 
 function listen(server: Server, host: string, port: number): Promise<void> {
@@ -160,68 +423,302 @@ export async function startLuckyTokenHttpServer(
   const activeRequests = new Set<ActiveRequest>();
   let accepting = true;
   const server = createServer((request, response) => {
+    const controller = new AbortController();
+    const method = request.method ?? "GET";
+    const pathname = new URL(request.url ?? "/", origin).pathname;
+    const context = beginRequestJourney(options.diagnostics, {
+      requestId: createRequestJourneyId(options.createRequestId),
+      operationCandidate: "pending",
+      transport: "http",
+      method,
+      path: pathname,
+      acceptedAt: Date.now(),
+      cancellation: {
+        caller: "active",
+        shutdown: "not_bound",
+      },
+    });
+    observeRequestJourney(context, {
+      kind: "step_entered",
+      stepInstanceId: "p0.admit_http_request",
+      location: { phase: "http_admission", step: "admit_http_request" },
+    });
+    observeRequestJourney(context, {
+      kind: "step_completed",
+      stepInstanceId: "p0.admit_http_request",
+      completion: "success",
+      location: { phase: "http_admission", step: "admit_http_request" },
+    });
     if (!accepting) {
+      const failureLocation = {
+        phase: "http_admission",
+        step: "reject_server_draining",
+      } as const;
+      const failureId = `${context.requestId}:server_draining`;
+      observeRequestJourney(context, {
+        kind: "step_entered",
+        stepInstanceId: "p0.reject_server_draining",
+        location: failureLocation,
+      });
+      observeRequestJourney(context, {
+        kind: "step_completed",
+        stepInstanceId: "p0.reject_server_draining",
+        completion: "failed",
+        location: failureLocation,
+      });
+      observeRequestJourney(context, {
+        kind: "failure_detected",
+        failureId,
+        role: "primary",
+        classification: "server_draining",
+        origin: "luckytoken",
+        originPrecision: "exact",
+        location: failureLocation,
+      });
+      observeRequestJourney(context, {
+        kind: "client_response_prepared",
+        status: 503,
+        location: {
+          phase: "client_response_preparation",
+          step: "prepare_server_draining_response",
+        },
+      });
+      observeRequestJourney(context, {
+        kind: "work_outcome_committed",
+        outcome: "failed",
+        terminalAuthority: "http_server",
+        location: {
+          phase: "outcome_commit",
+          step: "commit_request_outcome",
+        },
+      });
       request.resume();
-      response.writeHead(503, { connection: "close" });
+      response.writeHead(503, {
+        connection: "close",
+        "x-luckytoken-request-id": context.requestId,
+      });
       response.end();
+      closeRequestJourney(context, {
+        outcome: "failed",
+        primaryFailureId: failureId,
+        closeReason: "server_draining",
+        lastKnownLocation: failureLocation,
+      });
       return;
     }
-    const controller = new AbortController();
     let settleCompletion: (() => void) | undefined;
     const completion = new Promise<void>((resolve) => {
       settleCompletion = resolve;
     });
     const activeRequest: ActiveRequest = { controller, response, completion };
     activeRequests.add(activeRequest);
+    let journeyClosed = false;
+    let handoffStarted = false;
+    let unstartedHandoffObserved = false;
+    const handoffLocation = {
+      phase: "http_handoff",
+      step: "write_http_response",
+    } as const;
+    let transportFailureObserved = false;
+    const observeTransportFailure = (
+      classification: "http_connection_aborted" | "http_response_handoff_failed",
+    ): void => {
+      if (transportFailureObserved) return;
+      transportFailureObserved = true;
+      observeRequestJourney(context, {
+        kind: "failure_detected",
+        failureId: `${context.requestId}:${classification}`,
+        role: "primary",
+        classification,
+        origin: classification === "http_connection_aborted" ? "client" : "network_os",
+        originPrecision: "boundary",
+        location: handoffLocation,
+      });
+    };
+    const closeJourneyOnce = (input: RequestJourneyCloseInput): void => {
+      if (journeyClosed) return;
+      journeyClosed = true;
+      closeRequestJourney(context, input);
+    };
+    const closeBeforeHandoff = (
+      handoffOutcome: "closed" | "failed",
+      closeOutcome: "aborted" | "failed",
+      closeReason: string,
+    ): void => {
+      if (handoffStarted) return;
+      if (!unstartedHandoffObserved) {
+        unstartedHandoffObserved = true;
+        observeRequestJourney(context, {
+          kind: "step_entered",
+          stepInstanceId: "p8.write_http_response",
+          location: handoffLocation,
+        });
+        observeRequestJourney(context, {
+          kind: "handoff_observed",
+          outcome: handoffOutcome,
+          transport: "http",
+          writableFinished: response.writableFinished,
+          location: handoffLocation,
+        });
+        observeRequestJourney(context, {
+          kind: "step_completed",
+          stepInstanceId: "p8.write_http_response",
+          completion: "failed",
+          location: handoffLocation,
+        });
+      }
+      observeTransportFailure(
+        closeReason === "http_connection_aborted"
+          ? "http_connection_aborted"
+          : "http_response_handoff_failed",
+      );
+      closeJourneyOnce({
+        outcome: closeOutcome,
+        closeReason,
+        lastKnownLocation: handoffLocation,
+      });
+    };
+    const writeResponse = (result: Response): Promise<HandoffOutcome> => {
+      handoffStarted = true;
+      return writeWebResponse(response, result, context);
+    };
     const abortRequest = (reason: unknown): void => {
       if (!controller.signal.aborted) controller.abort(reason);
     };
     const onRequestAborted = (): void => {
       abortRequest(new Error("Client request connection was aborted"));
+      closeBeforeHandoff(
+        response.destroyed ? "closed" : "failed",
+        "aborted",
+        "http_connection_aborted",
+      );
     };
     const onResponseClose = (): void => {
       if (!response.writableFinished) {
         abortRequest(new Error("Client response connection closed early"));
+        // Once the writer owns P8, only its finish/close/error settlement may
+        // publish the terminal handoff fact and seal the Journey. Before that
+        // point, this listener owns the truthful no-write closed outcome.
+        closeBeforeHandoff(
+          "closed",
+          "aborted",
+          "http_connection_aborted",
+        );
       }
     };
     request.once("aborted", onRequestAborted);
     response.once("close", onResponseClose);
-    void options.runtime
-      .handle(createWebRequest(request, origin, controller.signal))
-      .then(async (result) => {
-        if (!controller.signal.aborted && !response.destroyed) {
-          await writeWebResponse(response, result);
+    void (async () => {
+      try {
+        const result = await options.runtime.handle(
+          createWebRequest(request, origin, controller.signal),
+          context,
+        );
+        if (controller.signal.aborted || response.destroyed) {
+          closeBeforeHandoff(
+            response.destroyed ? "closed" : "failed",
+            "aborted",
+            "http_connection_aborted",
+          );
+          return;
         }
-      })
-      .catch((error: unknown) => {
-        // A live client (not disconnected, not destroyed) still receives a
-        // truthful 500 when the request was cancelled or the handler failed
-        // unexpectedly. A real accepted request keeps its exact ledger
-        // request id through the transport-synthesized response (Ticket 18
-        // correlation seam on the aborted-error rejection); a disconnected
-        // client cannot receive a response and never gets one.
-        if (!controller.signal.aborted && !response.destroyed) {
-          const requestId =
-            error instanceof HttpRequestAbortedError
-              ? error.requestId
-              : undefined;
-          if (!response.headersSent) {
-            response.writeHead(
-              500,
-              requestId === undefined
-                ? undefined
-                : { "x-luckytoken-request-id": requestId },
-            );
+        const handoff = await writeResponse(result);
+        if (handoff !== "finished") {
+          observeTransportFailure(
+            controller.signal.aborted || response.destroyed
+              ? "http_connection_aborted"
+              : "http_response_handoff_failed",
+          );
+        }
+        closeJourneyOnce({
+          outcome:
+            handoff === "finished"
+              ? result.status >= 400
+                ? "failed"
+                : "success"
+              : controller.signal.aborted || response.destroyed
+                ? "aborted"
+                : "failed",
+          lastKnownLocation: handoffLocation,
+        });
+      } catch (error) {
+        const requestWasAborted = error instanceof HttpRequestAbortedError;
+        // Only a still-writable edge may receive the transport-synthesized
+        // fallback. It goes through the same atomic P8 writer as every other
+        // response, so prepared/finished and Journey close reflect reality.
+        if (
+          !controller.signal.aborted &&
+          !response.destroyed &&
+          !response.headersSent
+        ) {
+          const fallback = new Response(null, {
+            status: 500,
+            headers: {
+              "x-luckytoken-request-id": context.requestId,
+            },
+          });
+          observeRequestJourney(context, {
+            kind: "client_response_prepared",
+            status: fallback.status,
+            location: {
+              phase: "client_response_preparation",
+              step: "prepare_transport_error_response",
+            },
+          });
+          try {
+            const handoff = await writeResponse(fallback);
+            if (handoff !== "finished") {
+              observeTransportFailure(
+                controller.signal.aborted || response.destroyed
+                  ? "http_connection_aborted"
+                  : "http_response_handoff_failed",
+              );
+            }
+            closeJourneyOnce({
+              outcome:
+                handoff === "finished" && requestWasAborted
+                  ? "aborted"
+                  : "failed",
+              closeReason: requestWasAborted
+                ? "request_lifecycle_aborted"
+                : "http_response_failed",
+              lastKnownLocation: handoffLocation,
+            });
+          } catch {
+            closeJourneyOnce({
+              outcome: controller.signal.aborted ? "aborted" : "failed",
+              closeReason: "http_response_failed",
+              lastKnownLocation: handoffLocation,
+            });
           }
-          response.end();
+        } else {
+          const aborted =
+            controller.signal.aborted || response.destroyed || requestWasAborted;
+          const closeReason =
+            controller.signal.aborted || response.destroyed
+              ? "http_connection_aborted"
+              : "http_response_failed";
+          if (!handoffStarted) {
+            closeBeforeHandoff(
+              response.destroyed ? "closed" : "failed",
+              aborted ? "aborted" : "failed",
+              closeReason,
+            );
+          } else {
+            closeJourneyOnce({
+              outcome: aborted ? "aborted" : "failed",
+              closeReason,
+              lastKnownLocation: handoffLocation,
+            });
+          }
         }
-      })
-      .finally(() => {
+      } finally {
         activeRequests.delete(activeRequest);
         request.off("aborted", onRequestAborted);
         response.off("close", onResponseClose);
         settleCompletion?.();
-      });
+      }
+    })();
   });
   server.on("upgrade", (request, socket) => {
     socket.once("error", () => socket.destroy());
@@ -229,7 +726,36 @@ export async function startLuckyTokenHttpServer(
       socket.destroy();
       return;
     }
-    rejectWebSocketUpgrade(socket);
+    const method = request.method ?? "GET";
+    const pathname = new URL(request.url ?? "/", origin).pathname;
+    const context = beginRequestJourney(options.diagnostics, {
+      requestId: createRequestJourneyId(options.createRequestId),
+      operationCandidate: "unsupported_transport",
+      transport: "http",
+      method,
+      path: pathname,
+      acceptedAt: Date.now(),
+      cancellation: {
+        caller: "active",
+        shutdown: "not_bound",
+      },
+    });
+    const admissionLocation = {
+      phase: "http_admission",
+      step: "admit_http_request",
+    } as const;
+    observeRequestJourney(context, {
+      kind: "step_entered",
+      stepInstanceId: "p0.admit_http_request",
+      location: admissionLocation,
+    });
+    observeRequestJourney(context, {
+      kind: "step_completed",
+      stepInstanceId: "p0.admit_http_request",
+      completion: "success",
+      location: admissionLocation,
+    });
+    rejectWebSocketUpgrade(socket, context);
   });
 
   await listen(server, host, requestedPort);

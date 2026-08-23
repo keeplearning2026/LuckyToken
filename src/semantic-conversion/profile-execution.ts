@@ -4,7 +4,7 @@ import {
   MAX_PROFILE_ATTEMPTS_PER_REQUEST,
   type ProviderAuthBindingAuthority,
 } from "../credentials/profile-contract.js";
-import type { CredentialActivitySink } from "../request-ledger/handler-seam.js";
+import type { CredentialActivitySink } from "../credentials/activity.js";
 
 function retryAfterMs(
   headers: Readonly<Record<string, string>>,

@@ -11,7 +11,7 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 
-import type { ConversionNotice } from "../../invocation-diagnostics/index.js";
+import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
 import { InvalidRequest, UnsupportedFeature } from "./failures.js";
 import {
   convertAnthropicTools,

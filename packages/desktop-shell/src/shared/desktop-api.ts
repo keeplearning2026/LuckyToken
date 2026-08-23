@@ -1,23 +1,21 @@
 import type {
-  AnalyticsOptionsResult,
+  AnalyticsManagementResult,
   AnalyticsQuery,
-  AnalyticsResult,
   AuthInteractionEvent,
   AuthInteractionResponse,
   BackupCreateCommand,
-  BackupResult,
+  BackupManagementResult,
   CatalogCommand,
   CatalogCommandResult,
   AgentIntegrationsCommand,
   AgentIntegrationsCommandResult,
   CredentialProfilesCommand,
   CredentialProfilesCommandResult,
-  HistoryAcknowledgeResult,
   HistoryDeleteCommand,
-  HistoryDeleteResult,
+  HistoryDeleteManagementResult,
   HistoryExportCommand,
-  HistoryExportResult,
-  HistoryQueryResult,
+  HistoryExportManagementResult,
+  HistoryQueryManagementResult,
   HistoryRange,
   ModelsCommand,
   ModelsCommandResult,
@@ -25,13 +23,18 @@ import type {
   PublicModelsCommandResult,
   ProviderProfileAuthCommand,
   ProviderProfileAuthCommandResult,
-  RequestLedgerEvent,
-  RequestLedgerQuery,
-  RequestLedgerQueryResult,
+  RequestArtifactChunkReadResult,
+  RequestArtifactGetInput,
+  RequestJourneyDetailReadResult,
+  RequestJourneyGetInput,
+  RequestJourneyQuery,
+  RequestJourneyQueryReadResult,
+  RequestJourneySubscriber,
+  RuntimeEventQuery,
+  RuntimeEventQueryReadResult,
+  RuntimeEventSubscriber,
   RuntimeCommand,
   RuntimeCommandResult,
-  RuntimeDiagnosticQuery,
-  RuntimeDiagnosticsQueryResult,
   SettingsCommand,
   SettingsCommandResult,
   StatusSnapshot,
@@ -43,20 +46,32 @@ export type {
   AnalyticsFilter,
   AnalyticsOptionsResult,
   AnalyticsSummary,
-  PrimaryStatus,
-  RequestLedgerQuery,
-  RequestLedgerRecord,
+  RequestArtifactReadResult,
+  RequestJourneyQuery,
+  RequestJourneyRecord,
+  RequestJourneySummary,
+  RuntimeEventQuery,
+  RuntimeEventRecord,
   RuntimeCommand,
   StatusSnapshot,
 } from "@luckytoken/application-control-plane/control-plane";
-export {
-  formatPercent,
-  formatTimestamp,
-  formatTokenCount,
-  formatTokensPerSecond,
-  projectRequestLedger,
-  projectRequestLedgerDetail,
-} from "@luckytoken/application-control-plane/ledger-projection";
+export function formatTimestamp(epochMs: number): string {
+  const date = new Date(epochMs);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function formatTokenCount(tokens: number): string {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(tokens);
+}
+
+export function formatPercent(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+export function formatTokensPerSecond(tokensPerSecond: number): string {
+  return tokensPerSecond === 0 ? "0 tokens/s" : `${tokensPerSecond.toFixed(1)} tokens/s`;
+}
 
 export type DesktopBackendState =
   | {
@@ -91,20 +106,21 @@ export interface DesktopControlPlaneApi {
     command: AgentIntegrationsCommand,
   ): Promise<AgentIntegrationsCommandResult>;
 
-  getRequestLedger(query?: RequestLedgerQuery): Promise<RequestLedgerQueryResult>;
-  onRequestLedger(listener: (event: RequestLedgerEvent) => void): () => void;
-  getAnalytics(query: AnalyticsQuery): Promise<AnalyticsResult | AnalyticsOptionsResult>;
+  queryRequestJourneys(query?: RequestJourneyQuery): Promise<RequestJourneyQueryReadResult>;
+  getRequestJourney(input: RequestJourneyGetInput): Promise<RequestJourneyDetailReadResult>;
+  getRequestArtifact(input: RequestArtifactGetInput): Promise<RequestArtifactChunkReadResult>;
+  queryRuntimeEvents(query?: RuntimeEventQuery): Promise<RuntimeEventQueryReadResult>;
+  onRequestJourneys(listener: RequestJourneySubscriber): () => void;
+  onRuntimeEvents(listener: RuntimeEventSubscriber): () => void;
+  getAnalytics(query: AnalyticsQuery): Promise<AnalyticsManagementResult>;
 
-  queryHistory(range?: HistoryRange): Promise<HistoryQueryResult>;
-  executeHistoryExport(command: HistoryExportCommand): Promise<HistoryExportResult>;
-  confirmHistoryExport(actionId: string): Promise<HistoryExportResult>;
-  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteResult>;
-  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteResult>;
-  acknowledgePersistence(): Promise<HistoryAcknowledgeResult>;
-
-  executeBackup(command: BackupCreateCommand): Promise<BackupResult>;
-  confirmBackup(actionId: string): Promise<BackupResult>;
-  getDiagnostics(query?: RuntimeDiagnosticQuery): Promise<RuntimeDiagnosticsQueryResult>;
+  queryHistory(range?: HistoryRange): Promise<HistoryQueryManagementResult>;
+  executeHistoryExport(command: HistoryExportCommand): Promise<HistoryExportManagementResult>;
+  confirmHistoryExport(actionId: string): Promise<HistoryExportManagementResult>;
+  executeHistoryDelete(command: HistoryDeleteCommand): Promise<HistoryDeleteManagementResult>;
+  confirmHistoryDelete(actionId: string): Promise<HistoryDeleteManagementResult>;
+  executeBackup(command: BackupCreateCommand): Promise<BackupManagementResult>;
+  confirmBackup(actionId: string): Promise<BackupManagementResult>;
 }
 
 export interface SaveFileOptions {

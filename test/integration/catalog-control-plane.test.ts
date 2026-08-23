@@ -24,9 +24,6 @@ import {
 } from "../../src/providers/catalog-refresh.js";
 import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
-import {
-  createRuntimeDiagnosticsStoreFactory,
-} from "../../src/runtime-diagnostics/index.js";
 
 /**
  * Ticket 11 Control Plane seam: versioned catalog commands and the
@@ -40,9 +37,6 @@ interface CatalogPlaneFixture {
   readonly host: RunningControlPlane;
   readonly client: Awaited<ReturnType<typeof connectControlPlane>>;
   readonly controller: CatalogRefreshController;
-  readonly diagnostics: Awaited<
-    ReturnType<ReturnType<typeof createRuntimeDiagnosticsStoreFactory>["open"]>
-  >;
   readonly close: () => Promise<void>;
 }
 
@@ -93,11 +87,9 @@ async function createCatalogPlane(options?: {
     path: join(root, "models-catalog-cache.json"),
     fileSystem,
   });
-  const diagnostics = await createRuntimeDiagnosticsStoreFactory({
-    configuration: { directory: root },
-    now: () => 1_700_000_000_000,
-    scrub: (value: string) => value,
-  }).open();
+  const diagnostics = Object.freeze({
+    observeRuntime: () => undefined,
+  });
   let statusProjection: CatalogStatusProjection = {
     version: 0,
     refreshing: false,
@@ -206,7 +198,7 @@ async function createCatalogPlane(options?: {
       createRequestId: () => `catalog-plane-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(2);
+    const hello = await client.hello(3);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }
@@ -214,9 +206,7 @@ async function createCatalogPlane(options?: {
       host,
       client,
       controller,
-      diagnostics,
       close: async () => {
-        diagnostics.close();
         await rm(root, { recursive: true, force: true });
       },
     };
@@ -266,7 +256,7 @@ async function createCatalogPlane(options?: {
     createRequestId: () => `catalog-plane-request-${++nextRequest}`,
     pipeConnector: createNodePipeTransport(),
   });
-  const hello = await client.hello(2);
+  const hello = await client.hello(3);
   if (hello.type !== "compatible") {
     throw new Error("Control Plane hello failed");
   }
@@ -274,9 +264,7 @@ async function createCatalogPlane(options?: {
     host,
     client,
     controller,
-    diagnostics,
     close: async () => {
-      diagnostics.close();
       await rm(root, { recursive: true, force: true });
     },
   };
@@ -385,7 +373,7 @@ describe("catalog commands through the Control Plane", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "raw-catalog-hello",
-        contractVersion: 2,
+        contractVersion: 3,
         capability: fixture.host.endpoint.capability,
       }),
     );

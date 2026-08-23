@@ -28,7 +28,6 @@ import {
   type AuthInteractionChannel,
   type AuthInteractionEvent,
   type HistoryCommandHandler,
-  type PersistenceProjection,
 } from "./contracts.js";
 import type {
   CredentialProfilesCommandHandler,
@@ -42,12 +41,11 @@ import type {
   RecoveryProjection,
 } from "./backup-contract.js";
 import type { AttentionProjection } from "./attention-contract.js";
-import {
-  type ControlPlaneDiagnostics,
-  normalizeDiagnosticQuery,
-} from "./diagnostics-contract.js";
-import type { ControlPlaneRequestLedger } from "./ledger-contract.js";
-import type { ControlPlaneCapture } from "./capture-contract.js";
+import type {
+  DiagnosticsReadResult,
+  DiagnosticsSubscription,
+  UnifiedDiagnosticsManagement,
+} from "./request-diagnostics-contract.js";
 import { readFrame, writeFrame } from "./framing.js";
 import {
   assertPipeAccess,
@@ -55,17 +53,15 @@ import {
   type PipeConnection,
   type PipeServerFactory,
 } from "./pipe-transport.js";
-import { decodeDiagnosticQuery } from "./wire-diagnostics.js";
 import {
-  decodeRequestLedgerQuery,
-  decodeRequestLedgerRecord,
-} from "./wire-ledger.js";
-import {
-  decodeCaptureQuery,
-  decodeCaptureQueryResult,
-  decodeCaptureRecord,
-} from "./wire-capture.js";
-import { decodeAnalyticsResult } from "./wire-analytics.js";
+  decodeRequestArtifactChunkReadResult,
+  decodeRequestJourneyDetailReadResult,
+  decodeRequestJourneyQueryReadResult,
+  decodeRequestJourneySummary,
+  decodeRuntimeEventQueryReadResult,
+  decodeRuntimeEventRecord,
+} from "./wire-request-diagnostics.js";
+import { decodeAnalyticsManagementResult } from "./wire-analytics.js";
 import type { AnalyticsQueryHandler } from "./analytics-contract.js";
 import {
   compatibleHello,
@@ -87,7 +83,7 @@ import {
   decodeProviderProfileAuthCommandResult,
 } from "./wire-credential-profiles.js";
 import { decodeHistoryCommandResult } from "./wire-history.js";
-import { decodeBackupResult } from "./wire-backup.js";
+import { decodeBackupManagementResult } from "./wire-backup.js";
 import type { HistoryCommand, HistoryCommandResult, HistoryRange } from "./history-contract.js";
 
 export interface StartControlPlaneOptions {
@@ -137,29 +133,8 @@ export interface StartControlPlaneOptions {
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
-  /**
-   * Explicit diagnostics ownership (Ticket 07): when present, the Control
-   * Plane serves bounded diagnostics queries and typed diagnostic events to
-   * subscribers that requested them. Status subscribers never receive
-   * diagnostic events.
-   */
-  readonly diagnostics?: ControlPlaneDiagnostics;
-  /**
-   * Explicit Request Ledger ownership (Ticket 18): when present, the
-   * Control Plane serves bounded ledger queries and opt-in typed committed-
-   * record events. Status and diagnostics subscribers never receive ledger
-   * events, and an absent ledger is served as `unknown_command` (legacy
-   * clients are unaffected).
-   */
-  readonly requestLedger?: ControlPlaneRequestLedger;
-  /**
-   * Explicit Deep Diagnostics capture ownership (Ticket 22): when present,
-   * the Control Plane serves bounded capture queries by request id and
-   * opt-in typed capture-state events (narrow facts only, never bodies).
-   * Status, diagnostics, and ledger subscribers never receive capture
-   * events, and an absent capture store is served as `unknown_command`.
-   */
-  readonly capture?: ControlPlaneCapture;
+  /** Unified Request Journey and Runtime diagnostics management authority. */
+  readonly diagnostics?: UnifiedDiagnosticsManagement;
   /**
    * Explicit Request Analytics ownership (Ticket 21): when present, the
    * Control Plane serves bounded, versioned analytics aggregates computed
@@ -178,10 +153,6 @@ export interface StartControlPlaneOptions {
    * after its client is gone.
    */
   readonly historyCommandHandler?: HistoryCommandHandler;
-  /** Live audit-unavailable persistence projection merged into every
-   *  published snapshot (Ticket 23); present only while at least one
-   *  authority is unavailable. */
-  readonly persistenceProjection?: () => PersistenceProjection | undefined;
   /** Ticket 24 backup command authority. */
   readonly backupCommandHandler?: BackupCommandHandler;
   /** Ticket 24 incompatible-owned-file projection. */
@@ -196,9 +167,8 @@ interface ConnectionState {
   readonly connection: PipeConnection;
   authorized: boolean;
   subscribed: boolean;
-  diagnosticsSubscribed: boolean;
-  ledgerSubscribed: boolean;
-  captureSubscribed: boolean;
+  requestJourneysSubscription: DiagnosticsSubscription | undefined;
+  runtimeEventsSubscription: DiagnosticsSubscription | undefined;
   /** One in-flight Provider-auth login flow on this connection (Ticket
    *  13); interaction events/prompt responses are routed by its id. */
   authFlow: AuthFlowState | undefined;
@@ -248,7 +218,6 @@ export async function startApplicationStatusHost(
     const modelsProjection = options.modelsProjection?.();
     const credentialProfilesProjection = options.credentialProfilesProjection?.();
     const catalogProjection = options.catalogProjection?.();
-    const persistenceProjection = options.persistenceProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
     const attentionProjection = options.attentionProjection?.(status);
     return {
@@ -266,9 +235,6 @@ export async function startApplicationStatusHost(
       ...(catalogProjection === undefined
         ? {}
         : { catalog: catalogProjection }),
-      ...(persistenceProjection === undefined
-        ? {}
-        : { persistence: persistenceProjection }),
       ...(recoveryProjection === undefined
         ? {}
         : { recovery: recoveryProjection }),
@@ -283,69 +249,54 @@ export async function startApplicationStatusHost(
   const states = new Set<ConnectionState>();
   const tasks = new Set<Promise<void>>();
   const diagnostics = options.diagnostics;
-  const ledger = options.requestLedger;
-  const capture = options.capture;
   const analyticsHandler = options.analyticsHandler;
-  const emitDiagnostics =
-    diagnostics === undefined
-      ? undefined
-      : () => {
-          const subscription = diagnostics.subscribe((event) => {
-            for (const state of states) {
-              if (!state.diagnosticsSubscribed) continue;
-              void writeFrame(state.connection, {
-                type: "event",
-                event: {
-                  type: "diagnostic",
-                  record: event.record,
-                },
-              }).catch(() => {
-                state.diagnosticsSubscribed = false;
-                void state.connection.close().catch(() => undefined);
-              });
-            }
-          });
-          return subscription.unsubscribe;
-        };
-  const emitLedger =
-    ledger === undefined
-      ? undefined
-      : () => {
-          const subscription = ledger.subscribe((event) => {
-            for (const state of states) {
-              if (!state.ledgerSubscribed) continue;
-              void writeFrame(state.connection, {
-                type: "event",
-                event: {
-                  type: "request_ledger",
-                  record: event.record,
-                },
-              }).catch(() => {
-                state.ledgerSubscribed = false;
-                void state.connection.close().catch(() => undefined);
-              });
-            }
-          });
-          return subscription.unsubscribe;
-        };
-  const emitCapture =
-    capture === undefined
-      ? undefined
-      : () => {
-          const subscription = capture.subscribe((event) => {
-            for (const state of states) {
-              if (!state.captureSubscribed) continue;
-              void writeFrame(state.connection, {
-                type: "event",
-                event,
-              }).catch(() => {
-                state.captureSubscribed = false;
-                void state.connection.close().catch(() => undefined);
-              });
-            }
-          });
-          return subscription.unsubscribe;
-        };
+  const unsubscribeRequestJourneys = (state: ConnectionState): void => {
+    const subscription = state.requestJourneysSubscription;
+    state.requestJourneysSubscription = undefined;
+    try {
+      subscription?.unsubscribe();
+    } catch {
+      // Diagnostics cleanup cannot disrupt the connection lifecycle.
+    }
+  };
+  const unsubscribeRuntimeEvents = (state: ConnectionState): void => {
+    const subscription = state.runtimeEventsSubscription;
+    state.runtimeEventsSubscription = undefined;
+    try {
+      subscription?.unsubscribe();
+    } catch {
+      // Diagnostics cleanup cannot disrupt the connection lifecycle.
+    }
+  };
+  const unsubscribeDiagnostics = (state: ConnectionState): void => {
+    unsubscribeRequestJourneys(state);
+    unsubscribeRuntimeEvents(state);
+  };
+  const diagnosticsUnavailable = Object.freeze({
+    outcome: "unavailable" as const,
+    error: Object.freeze({
+      code: "diagnostics_unavailable" as const,
+      classification: "diagnostics_storage_unavailable" as const,
+      message: "Diagnostics storage is unavailable" as const,
+    }),
+  });
+  const executeDiagnosticsRead = async <T>(
+    read: () => Promise<T>,
+    decode: (value: unknown) => DiagnosticsReadResult<T> | undefined,
+  ): Promise<DiagnosticsReadResult<T> | undefined> => {
+    try {
+      return decode({ outcome: "ok", result: await read() });
+    } catch (error) {
+      if (
+        isRecord(error) &&
+        error.code === "diagnostics_unavailable" &&
+        error.classification === "diagnostics_storage_unavailable"
+      ) {
+        return diagnosticsUnavailable;
+      }
+      return undefined;
+    }
+  };
   const sendError = async (
     connection: PipeConnection,
     requestId: string,
@@ -451,14 +402,14 @@ export async function startApplicationStatusHost(
         if (frame.type === "malformed") {
           state.authorized = false;
           state.subscribed = false;
-          state.diagnosticsSubscribed = false;
+          unsubscribeDiagnostics(state);
           await sendError(state.connection, "", "invalid_request");
           continue;
         }
         if (isRecord(frame.value) && frame.value.type === "hello") {
           state.authorized = false;
           state.subscribed = false;
-          state.diagnosticsSubscribed = false;
+          unsubscribeDiagnostics(state);
         }
         const decoded = decodeClientRequest(frame.value);
         if (decoded.type === "invalid") {
@@ -511,7 +462,7 @@ export async function startApplicationStatusHost(
             requestId: request.requestId,
             snapshot: current,
           });
-        } else if (request.type === "get_diagnostics") {
+        } else if (request.type === "query_request_journeys") {
           if (diagnostics === undefined) {
             await sendError(
               state.connection,
@@ -519,112 +470,151 @@ export async function startApplicationStatusHost(
               "unknown_command",
             );
           } else {
-            const query = decodeDiagnosticQuery(request.query);
-            if (query === undefined && request.query !== undefined) {
-              await sendError(
-                state.connection,
-                request.requestId,
-                "invalid_request",
-              );
-            } else {
-              await writeFrame(state.connection, {
-                type: "diagnostics_result",
-                requestId: request.requestId,
-                result: diagnostics.query(normalizeDiagnosticQuery(query)),
-              });
+            const result = await executeDiagnosticsRead(
+              () => diagnostics.queryRequestJourneys(request.query),
+              decodeRequestJourneyQueryReadResult,
+            );
+            if (result === undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
             }
-          }
-        } else if (request.type === "diagnostics_subscribe") {
-          if (diagnostics === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            state.diagnosticsSubscribed = true;
             await writeFrame(state.connection, {
-              type: "subscribed",
+              type: "request_journeys_result",
               requestId: request.requestId,
+              result,
             });
           }
-        } else if (request.type === "diagnostics_unsubscribe") {
-          state.diagnosticsSubscribed = false;
+        } else if (request.type === "get_request_journey") {
+          if (diagnostics === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const result = await executeDiagnosticsRead(
+              () => diagnostics.getRequestJourney(request.input),
+              decodeRequestJourneyDetailReadResult,
+            );
+            if (result === undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
+            }
+            await writeFrame(state.connection, {
+              type: "request_journey_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
+        } else if (request.type === "get_request_artifact") {
+          if (diagnostics === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const result = await executeDiagnosticsRead(
+              () => diagnostics.getRequestArtifact(request.input),
+              decodeRequestArtifactChunkReadResult,
+            );
+            if (result === undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
+            }
+            await writeFrame(state.connection, {
+              type: "request_artifact_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
+        } else if (request.type === "query_runtime_events") {
+          if (diagnostics === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const result = await executeDiagnosticsRead(
+              () => diagnostics.queryRuntimeEvents(request.query),
+              decodeRuntimeEventQueryReadResult,
+            );
+            if (result === undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
+            }
+            await writeFrame(state.connection, {
+              type: "runtime_events_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
+        } else if (request.type === "request_journeys_subscribe") {
+          if (diagnostics === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+            continue;
+          }
+          if (state.requestJourneysSubscription === undefined) {
+            try {
+              state.requestJourneysSubscription =
+                diagnostics.subscribeRequestJourneys((record) => {
+                  const decoded = decodeRequestJourneySummary(record);
+                  if (decoded === undefined) return;
+                  void writeFrame(state.connection, {
+                    type: "event",
+                    event: { type: "request_journey", record: decoded },
+                  }).catch(() => {
+                    unsubscribeRequestJourneys(state);
+                    void state.connection.close().catch(() => undefined);
+                  });
+                });
+            } catch {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
+            }
+          }
+          await writeFrame(state.connection, {
+            type: "subscribed",
+            requestId: request.requestId,
+          });
+        } else if (request.type === "request_journeys_unsubscribe") {
+          unsubscribeRequestJourneys(state);
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
           });
-        } else if (request.type === "get_request_ledger") {
-          if (ledger === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            const query = decodeRequestLedgerQuery(request.query);
-            if (query === undefined && request.query !== undefined) {
-              await sendError(
-                state.connection,
-                request.requestId,
-                "invalid_request",
+        } else if (request.type === "runtime_events_subscribe") {
+          if (diagnostics === undefined) {
+            await sendError(state.connection, request.requestId, "unknown_command");
+            continue;
+          }
+          if (state.runtimeEventsSubscription === undefined) {
+            try {
+              state.runtimeEventsSubscription = diagnostics.subscribeRuntimeEvents(
+                (record) => {
+                  const decoded = decodeRuntimeEventRecord(record);
+                  if (decoded === undefined) return;
+                  void writeFrame(state.connection, {
+                    type: "event",
+                    event: { type: "runtime_event", record: decoded },
+                  }).catch(() => {
+                    unsubscribeRuntimeEvents(state);
+                    void state.connection.close().catch(() => undefined);
+                  });
+                },
               );
-            } else {
-              let result;
-              try {
-                result = ledger.query(query);
-              } catch {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-              // Strict per-record validation at the wire boundary: a record
-              // with an unknown key, an invalid bounded value, or the
-              // effective session identity projected as the client id is
-              // rejected instead of delivered.
-              const records = result.records
-                .map((record) => decodeRequestLedgerRecord(record))
-                .filter(
-                  (record): record is NonNullable<typeof record> =>
-                    record !== undefined,
-                );
-              if (
-                records.length !== result.records.length ||
-                typeof result.hasMore !== "boolean"
-              ) {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-              await writeFrame(state.connection, {
-                type: "request_ledger_result",
-                requestId: request.requestId,
-                result: { records, hasMore: result.hasMore },
-              });
+            } catch {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
             }
           }
-        } else if (request.type === "ledger_subscribe") {
-          if (ledger === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            state.ledgerSubscribed = true;
-            await writeFrame(state.connection, {
-              type: "subscribed",
-              requestId: request.requestId,
-            });
-          }
-        } else if (request.type === "ledger_unsubscribe") {
-          state.ledgerSubscribed = false;
+          await writeFrame(state.connection, {
+            type: "subscribed",
+            requestId: request.requestId,
+          });
+        } else if (request.type === "runtime_events_unsubscribe") {
+          unsubscribeRuntimeEvents(state);
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -639,19 +629,27 @@ export async function startApplicationStatusHost(
           } else {
             let result;
             try {
-              result = analyticsHandler(request.query);
-            } catch {
-              await sendError(
-                state.connection,
-                request.requestId,
-                "invalid_request",
-              );
-              continue;
+              result = await analyticsHandler(request.query);
+            } catch (error) {
+              if (
+                isRecord(error) &&
+                error.code === "diagnostics_unavailable" &&
+                error.classification === "diagnostics_storage_unavailable"
+              ) {
+                result = diagnosticsUnavailable;
+              } else {
+                await sendError(
+                  state.connection,
+                  request.requestId,
+                  "invalid_request",
+                );
+                continue;
+              }
             }
             // Strict result validation at the wire boundary: a result with
             // an unknown key (including any monetary field), a broken
             // aggregation identity, or an unsafe integer is rejected.
-            if (decodeAnalyticsResult(result) === undefined) {
+            if (decodeAnalyticsManagementResult(result) === undefined) {
               await sendError(
                 state.connection,
                 request.requestId,
@@ -665,90 +663,12 @@ export async function startApplicationStatusHost(
               result,
             });
           }
-        } else if (request.type === "get_capture") {
-          if (capture === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            const query = decodeCaptureQuery(request.query);
-            if (query === undefined) {
-              await sendError(
-                state.connection,
-                request.requestId,
-                "invalid_request",
-              );
-            } else {
-              let result;
-              try {
-                result = capture.query(query);
-              } catch {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-              // Strict per-record validation at the wire boundary: a record
-              // with an unknown key or an invalid bounded value is rejected
-              // instead of delivered.
-              if (
-                result.record !== undefined &&
-                decodeCaptureRecord(result.record) === undefined
-              ) {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-              const decoded = decodeCaptureQueryResult(result);
-              if (decoded === undefined) {
-                await sendError(
-                  state.connection,
-                  request.requestId,
-                  "invalid_request",
-                );
-                continue;
-              }
-              await writeFrame(state.connection, {
-                type: "capture_result",
-                requestId: request.requestId,
-                result: decoded,
-              });
-            }
-          }
-        } else if (request.type === "capture_subscribe") {
-          if (capture === undefined) {
-            await sendError(
-              state.connection,
-              request.requestId,
-              "unknown_command",
-            );
-          } else {
-            state.captureSubscribed = true;
-            await writeFrame(state.connection, {
-              type: "subscribed",
-              requestId: request.requestId,
-            });
-          }
-        } else if (request.type === "capture_unsubscribe") {
-          state.captureSubscribed = false;
-          await writeFrame(state.connection, {
-            type: "unsubscribed",
-            requestId: request.requestId,
-          });
         } else if (
           request.type === "history_query" ||
           request.type === "history_export_command" ||
           request.type === "history_export_confirm" ||
           request.type === "history_delete_command" ||
-          request.type === "history_delete_confirm" ||
-          request.type === "history_acknowledge"
+          request.type === "history_delete_confirm"
         ) {
           if (options.historyCommandHandler === undefined) {
             await writeFrame(state.connection, {
@@ -776,13 +696,11 @@ export async function startApplicationStatusHost(
             };
           } else if (request.type === "history_delete_command") {
             command = { command: "delete" as const, ...request.command };
-          } else if (request.type === "history_delete_confirm") {
+          } else {
             command = {
               command: "delete_confirm" as const,
               actionId: request.actionId,
             };
-          } else {
-            command = { command: "acknowledge" as const };
           }
           let handled: HistoryCommandResult | undefined;
           try {
@@ -790,8 +708,26 @@ export async function startApplicationStatusHost(
               command,
               state.historyAbort.signal,
             );
-          } catch {
-            handled = undefined;
+          } catch (error) {
+            if (
+              isRecord(error) &&
+              error.code === "diagnostics_unavailable" &&
+              error.classification === "diagnostics_storage_unavailable"
+            ) {
+              await writeFrame(state.connection, {
+                type:
+                  command.command === "query"
+                    ? "history_query_result"
+                    : command.command === "export" || command.command === "export_confirm"
+                      ? "history_export_result"
+                      : "history_delete_result",
+                requestId: request.requestId,
+                result: diagnosticsUnavailable,
+              });
+              continue;
+            } else {
+              handled = undefined;
+            }
           }
           const decoded =
             handled === undefined
@@ -817,15 +753,9 @@ export async function startApplicationStatusHost(
               requestId: request.requestId,
               result: decoded.result,
             });
-          } else if (decoded.kind === "delete") {
-            await writeFrame(state.connection, {
-              type: "history_delete_result",
-              requestId: request.requestId,
-              result: decoded.result,
-            });
           } else {
             await writeFrame(state.connection, {
-              type: "history_acknowledge_result",
+              type: "history_delete_result",
               requestId: request.requestId,
               result: decoded.result,
             });
@@ -845,10 +775,15 @@ export async function startApplicationStatusHost(
               request.command,
               state.backupAbort.signal,
             );
-          } catch {
-            handled = undefined;
+          } catch (error) {
+            handled =
+              isRecord(error) &&
+              error.code === "diagnostics_unavailable" &&
+              error.classification === "diagnostics_storage_unavailable"
+                ? diagnosticsUnavailable
+                : undefined;
           }
-          const decoded = decodeBackupResult(handled);
+          const decoded = decodeBackupManagementResult(handled);
           if (decoded === undefined) {
             await writeFrame(state.connection, {
               type: "error",
@@ -1288,9 +1223,6 @@ export async function startApplicationStatusHost(
           });
         } else {
           state.subscribed = false;
-          state.diagnosticsSubscribed = false;
-          state.ledgerSubscribed = false;
-          state.captureSubscribed = false;
           await writeFrame(state.connection, {
             type: "unsubscribed",
             requestId: request.requestId,
@@ -1299,6 +1231,7 @@ export async function startApplicationStatusHost(
       }
     } finally {
       states.delete(state);
+      unsubscribeDiagnostics(state);
       // A closed/lost connection aborts any in-flight history command (e.g.
       // a long export), so it never publishes an artifact its requester can
       // no longer receive.
@@ -1331,9 +1264,8 @@ export async function startApplicationStatusHost(
         connection,
         authorized: false,
         subscribed: false,
-        diagnosticsSubscribed: false,
-        ledgerSubscribed: false,
-        captureSubscribed: false,
+        requestJourneysSubscription: undefined,
+        runtimeEventsSubscription: undefined,
         authFlow: undefined,
         historyAbort: new AbortController(),
         backupAbort: new AbortController(),
@@ -1379,19 +1311,12 @@ export async function startApplicationStatusHost(
     return publishQueue;
   };
 
-  const diagnosticsListener = emitDiagnostics?.();
-  const ledgerListener = emitLedger?.();
-  const captureListener = emitCapture?.();
-
   return {
     endpoint: options.endpoint,
     publishStatus,
     async close() {
       if (closed) return;
       closed = true;
-      diagnosticsListener?.();
-      ledgerListener?.();
-      captureListener?.();
       await publishQueue.catch(() => undefined);
       await Promise.all(
         [...states].map((state) =>

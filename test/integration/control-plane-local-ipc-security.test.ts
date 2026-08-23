@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   connectControlPlane,
+  controlPlaneVersion,
   createLocalIpcAddress,
   startControlPlane,
   type PipeConnection,
@@ -80,7 +81,7 @@ describe("capability-authenticated Control Plane over production local IPC", () 
         encodeFrame({
           type: "hello",
           requestId: "missing-capability",
-          contractVersion: 2,
+          contractVersion: controlPlaneVersion,
         }),
       );
       expect(await readFrame(raw)).toEqual({
@@ -93,7 +94,7 @@ describe("capability-authenticated Control Plane over production local IPC", () 
         encodeFrame({
           type: "hello",
           requestId: "wrong-capability",
-          contractVersion: 2,
+          contractVersion: controlPlaneVersion,
           capability: "wrong-capability-012345678901234567890123456789",
         }),
       );
@@ -121,7 +122,7 @@ describe("capability-authenticated Control Plane over production local IPC", () 
       });
 
     const first = await connect();
-    await first.hello(2);
+    await first.hello(controlPlaneVersion);
     const firstEvents: number[] = [];
     await first.subscribe((event) => firstEvents.push(event.sequence));
     await host.publishStatus({
@@ -139,7 +140,7 @@ describe("capability-authenticated Control Plane over production local IPC", () 
     expect(firstEvents).toEqual([1]);
 
     const second = await connect();
-    await second.hello(2);
+    await second.hello(controlPlaneVersion);
     await expect(second.getStatus()).resolves.toMatchObject({
       sequence: 2,
       modelDataPlane: "stopping",

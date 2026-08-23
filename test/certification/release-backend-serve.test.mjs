@@ -73,7 +73,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     configPath,
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -88,22 +88,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
           },
         },
         providerPackages: {},
-        failureLogging: {
-          directory: "logs/failed-requests",
-          detail: "safe",
-          maxFileBytes: 1048576,
-          retentionDays: 30,
-          maxFiles: 1000,
-          logCancellation: true,
-        },
-        runtimeDiagnostics: { directory: "state/diagnostics" },
-        deepDiagnostics: {
-          directory: "state/deep-diagnostics",
-          enabled: false,
-          maxCaptureBytes: 4194304,
-          retentionAgeMs: 604800000,
-          maxCaptures: 1000,
-        },
+        diagnostics: { directory: "state/request-diagnostics" },
         pi: { directory: "pi" },
         limits: { maxRequestBytes: 1048576, requestTimeoutMs: 120000 },
       },
@@ -153,7 +138,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     assert.ok(endpoint !== undefined, "serve must publish its descriptor");
 
     const installedConfig = JSON.parse(await readFile(configPath, "utf8"));
-    assert.equal(installedConfig.schemaVersion, "luckytoken-config-v1");
+    assert.equal(installedConfig.schemaVersion, "luckytoken-config-v2");
     assert.equal(installedConfig.server.port, port);
 
     let client;
@@ -172,10 +157,10 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     }
     assert.ok(client !== undefined, `connect failed: ${String(lastError)}`);
     try {
-      const hello = await client.hello(2);
+      const hello = await client.hello(3);
       assert.equal(hello.type, "compatible");
       assert.equal(hello.application.version, "0.1.0");
-      assert.equal(hello.contractVersion, 2);
+      assert.equal(hello.contractVersion, 3);
 
       let status;
       for (let attempt = 0; attempt < 200; attempt += 1) {

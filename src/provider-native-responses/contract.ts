@@ -1,5 +1,6 @@
 import type { AuthResult, FetchFunction, Model } from "@earendil-works/pi-ai";
-import type { CredentialActivitySink } from "../request-ledger/handler-seam.js";
+import type { RequestJourneyObserver } from "../diagnostics/contract.js";
+import type { CredentialActivitySink } from "../credentials/activity.js";
 
 export type ProviderResponsesOperation = "responses" | "compact";
 
@@ -10,11 +11,28 @@ export class ProviderResponsesNetworkError extends Error {
   }
 }
 
+/** Responses Provider Native owns these physical-attempt observations. The
+ * callback returns only the final physical attempt number to the protocol's
+ * one response-body ownership seam; it is observation-only and must be
+ * invoked fail-open by the lane. */
+export interface ProviderResponsesObservationContext {
+  readonly requestId: string;
+  readonly journey: RequestJourneyObserver;
+  finalResponseAttempt(attempt: number): void;
+}
+
+export interface ProviderResponsesPhysicalAttemptObservation {
+  readonly journey: RequestJourneyObserver;
+  readonly attempt: number;
+  readonly profileId?: string;
+}
+
 export type ProviderResponsesLaneInput = {
   readonly model: Model<string>;
   readonly rawBody: string;
   readonly signal: AbortSignal;
   readonly credentialActivity?: CredentialActivitySink;
+  readonly observation?: ProviderResponsesObservationContext;
 } & (
   | {
       readonly operation: "responses";
@@ -36,6 +54,7 @@ export interface ProviderResponsesSender {
     operation: ProviderResponsesOperation,
     rawBody: string,
     signal: AbortSignal,
+    observation?: ProviderResponsesPhysicalAttemptObservation,
   ): Promise<Response>;
 }
 

@@ -1,4 +1,5 @@
 import type { LuckyTokenRuntime } from "./runtime.js";
+import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import {
   startLuckyTokenHttpServer,
   type DrainOutcome,
@@ -25,6 +26,7 @@ export async function startRunningDataPlaneListener(options: {
   readonly port: number;
   readonly dataPlane: FinalizableDataPlane;
   readonly shutdownController: AbortController;
+  readonly diagnostics?: RequestJourneyObservationAuthority;
 }): Promise<RunningDataPlaneListener> {
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>>;
   try {
@@ -32,6 +34,9 @@ export async function startRunningDataPlaneListener(options: {
       runtime: options.dataPlane.runtime,
       host: options.host,
       port: options.port,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
     });
   } catch (error) {
     options.shutdownController.abort(

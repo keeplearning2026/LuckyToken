@@ -111,7 +111,7 @@ describe("catalog serve wiring", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {

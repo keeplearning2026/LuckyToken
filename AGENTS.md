@@ -6,7 +6,7 @@ Repository:
 keeplearning2026/LuckyToken
 ```
 
-LuckyToken serves client protocol wires through three independent data-plane lanes. Pi AI IR is the shared semantic-conversion boundary only for the Semantic Conversion lane; the two native preservation lanes bypass Pi AI IR and remain independent from each other:
+LuckyToken serves client protocol wires through three independent data-plane lanes. The Semantic Conversion lane uses a LuckyToken-owned `Semantic Conversion Invocation` as its shared request Interface. That Interface combines Pi AI IR for conversation/history with typed, protocol-neutral semantic controls and only the bounded request-local conversion facts required for correct final projection. The two native preservation lanes bypass this Interface and remain independent from each other:
 
 ```text
 Anthropic / OpenAI Responses / other client protocol wires
@@ -14,13 +14,17 @@ Anthropic / OpenAI Responses / other client protocol wires
              ┌────────────────┼────────────────┐
              │                │                │
              ▼                ▼                ▼
-      Local Native     Provider Native      Pi AI IR
-      Preservation      Preservation           │
-             │                │                ▼
-             │                │           Pi Providers
-             │                │                │
-             ▼                ▼                ▼
-      Local Upstream   Provider Upstream   Provider Wire
+      Local Native     Provider Native     Semantic Conversion
+      Preservation      Preservation          Invocation
+             │                │                  │
+             │                │                  ▼
+             │                │         LuckyToken Pi Wrapper
+             │                │                  │
+             │                │                  ▼
+             │                │             Pi Providers
+             │                │                  │
+             ▼                ▼                  ▼
+      Local Upstream   Provider Upstream     Provider Wire
 ```
 
 The three lanes may share only the minimum request-edge and lifecycle facts needed for routing and observation; they do not share execution, credential, transport, or semantic-conversion abstractions.
@@ -75,6 +79,18 @@ Prefer one authoritative representation of a fact at each lifecycle stage. Bound
 
 Keep model-visible semantics separate from credentials, transport details, logging, timing, request IDs, and other infrastructure state.
 
+## Diagnostics Non-Interference Principle
+
+Diagnostics are a fail-open observation path. Request serving and application work remain authoritative: diagnostics may observe bounded immutable facts, but they must never influence routing, lane selection, credentials, semantic conversion, transport, retry or Profile decisions, cancellation arbitration, HTTP status, headers, body, or terminal outcome.
+
+For diagnostics, Request Journey, capture, logging, telemetry, or request-history work, read `doc/Spec/LuckyTokenRequestJourneyDiagnosticsSpec.md` before designing or changing code.
+
+- Publish observations only through a narrow no-throw, non-blocking Interface. Request and application control paths must not await diagnostics I/O or accept diagnostics backpressure.
+- Contain observer validation, queue, worker, redaction, and persistence failures inside the diagnostics module. Such failures may reduce record completeness and raise operational health/attention, but they must not replace, delay, or modify the observed work.
+- Apply strict per-event, per-request, and process-wide bounds. Capture copies only at existing ownership seams; never re-read a consumed stream, retain mutable execution objects, inject a transport for observation, or expose credential values.
+- Keep lane-specific observation with the lane that owns the facts. Shared diagnostic vocabulary must not create shared execution, credential, transport, or semantic-conversion abstractions.
+- Prove non-interference with equivalence tests against diagnostics disabled, including a throwing observer, a saturated queue, and unavailable or slow persistence. The selected lane, outbound request, attempts, response, and terminal outcome must remain identical.
+
 ## Compatibility Policy
 
 Unless the user explicitly requests compatibility, implement only the current contract. Replace obsolete configuration, interfaces, state shapes, and code paths instead of adding migrations, shims, dual readers/writers, deprecated aliases, or fallback branches. Tests specify current behavior, not historical behavior.
@@ -92,37 +108,93 @@ Protocol conversion should preserve usability while always producing a valid tar
 For conversion from protocol A to protocol B:
 
 1. If a clear semantic mapping exists, convert it directly.
-2. If a recognized A field has no representation in B, omit it and emit a warning.
-3. If omitting it would make the result invalid or break security, permissions, tool-call relationships, or other critical semantics, fail the conversion.
-4. If B needs a value that A does not provide, use only a default explicitly defined by B or by the adapter contract.
-5. If an optional B field has no valid source or defined default, omit it.
-6. If a required B field still cannot be constructed, fail with an explicit error.
+2. If B cannot consume a recognized A fact but can validly carry it for a supported later conversion, preserve it through the Intermediate Carrier Principle below.
+3. If the fact has neither a direct B mapping nor a valid downstream carrier, omit it and emit a warning.
+4. If omitting it would make the result invalid or break security, permissions, tool-call relationships, required output constraints, or other critical semantics, fail the conversion.
+5. If B needs a value that A does not provide, use only a default explicitly defined by B or by the adapter contract.
+6. If an optional B field has no valid source or defined default, omit it.
+7. If a required B field still cannot be constructed, fail with an explicit error.
 
 Never invent defaults or repair malformed semantic state by guessing.
+
+### Intermediate Carrier Principle
+
+Evaluate conversion over the complete supported pipeline `A → B → C`, not only the adjacent `A → B` boundary. B's inability to consume a fact does not by itself justify losing it: when a supported B → C adapter can use that fact, A → B should preserve it so the final C request can restore the strongest valid equivalent.
+
+- Prefer a typed canonical B field when the fact has portable semantics. Otherwise use the smallest bounded, request-local preservation carrier with the original value, source provenance, semantic attachment point, and compatibility conditions needed by the later adapter.
+- A carrier transports information without claiming that B applied it. Effective-state responses, diagnostics, and tests must report a control as applied only when the final target builder emitted an equivalent C control.
+- The B → C adapter owns final projection. It consumes the preserved fact only for a proven target mapping; once the final target is known and has no valid mapping, apply the normal warning or failure rules above.
+- Preserve recognized and validated facts individually. A broad raw-body blob, unvalidated extension bag, Provider request object, or blind copy into B/C wire fields is not a semantic carrier.
+- Keep credentials, transport state, retry/lifecycle objects, and unrelated source fields outside the carrier. When B is the Semantic Conversion Invocation, conversation/history belongs in Pi AI IR, portable request behavior belongs in typed semantic controls, and only validated opaque continuity or projection provenance belongs in its narrow request-local conversion context. None belongs in model-visible Pi messages merely to survive conversion.
+
+Prove preservation with an end-to-end test that starts from the A request and asserts the final C Provider request. An intermediate B snapshot alone does not establish support.
+
+### End-to-End Round-Trip Invariant
+
+For every model-visible or replay-required Provider response fact whose Provider adapter contract maps it to a field or relationship in a later Provider request, treat the next full-history client request as the inverse boundary. Under the same resolved Provider/API/model, the final Provider request must restore the adapter-defined replay field, value, attachment point, relationships, and required provenance with semantics equivalent to direct Provider-native replay. Pi AI IR and the client wire are intermediate representations, not the correctness endpoint. A response mapping is incomplete when the client history it emits cannot produce that final Provider-request replay.
+
+This invariant does not apply to response-only observations such as usage, timing, transport status, or diagnostics unless a target protocol explicitly makes them replay semantics. When the resolved target has changed or cannot accept the original representation, preserve the portable model-visible meaning through the best valid target representation and discard only target-bound opaque state. Prove the invariant with an end-to-end response → client history → next Provider request test rather than independent one-way adapter tests alone.
+
+### Opaque Continuity Preservation
+
+When a Provider response contains opaque continuity metadata needed to replay that response in a later request, preserve only the metadata that protocol conversion would otherwise lose and that the Provider adapter requires for exact replay.
+
+- Preserve the source provenance and original attachment point needed to restore each opaque value. A signature attached to thinking, text, or a tool call must return to that same semantic block.
+- Prefer a client-wire opaque round-trip field when the client sends complete history. Do not add server-side session persistence unless the client wire cannot carry the required state and the product contract explicitly requires server-owned continuation.
+- Do not duplicate model-visible text, summaries, tool names, or arguments inside the opaque carrier. Do not preserve values that the resolved target adapter can reconstruct deterministically, such as a known reasoning field selector.
+- Restore opaque continuity only when its validated provenance and the resolved target Provider/API/model satisfy the adapter's replay contract. On mismatch, discard the opaque value while preserving visible reasoning through the best valid target representation, falling back to assistant content only when the target cannot accept historical thinking.
+- If the client protocol has no valid opaque carrier, apply the normal conversion rules above: omit with a warning, or fail when losing the state would break critical semantics.
 
 These rules apply to semantic-conversion paths in both directions:
 
 ```text
-Request:  Client Protocol → Pi AI IR → Pi Provider
-Response: Pi Provider → Pi AI IR → Client Protocol
+Request:  Client Protocol → Semantic Conversion Invocation → LuckyToken Pi Wrapper → Pi Provider → Provider Wire
+Response: Pi Provider → Pi AI IR (+ bounded projection provenance when required) → Client Protocol
 ```
 
 Native wire passthrough is a preservation path rather than protocol conversion and is governed by the Isolation Principle below.
 
 ## Isolation Principle
 
-Pi AI IR is the only shared semantic-conversion boundary between external client protocols and Pi Providers. It is the normal path whenever model-visible semantics must be translated between different wire contracts.
+The `Semantic Conversion Invocation` is the authoritative shared request Interface between external client-protocol adapters and Provider-side semantic projection. Pi AI IR remains authoritative for conversation content, history, thinking, and tool relationships, but it is not required to carry every request control. The Invocation may additionally contain `SemanticRequestControls` and the smallest immutable request-local conversion context needed for a proven end-to-end mapping.
 
-- On the semantic-conversion path, a client-protocol adapter owns only Client Wire ↔ Pi AI IR conversion.
-- On the semantic-conversion path, a provider adapter owns only Pi AI IR ↔ Provider Wire conversion.
-- Client-protocol code must not instantiate concrete providers or depend on provider-native semantic types.
-- Provider code must not depend on Anthropic, OpenAI Responses, or other client-protocol semantic types.
-- Provider-specific or client-protocol-specific fields must not leak into the common Pi AI IR merely for convenience.
-- Runtime and composition code may connect the two sides, but must not perform cross-side semantic conversion.
+- A client-protocol adapter owns Client Wire → Semantic Conversion Invocation and Pi AI response IR → Client Wire conversion. It maps request controls to protocol-neutral semantic values; it does not construct Provider payloads.
+- Provider-side semantic projection owns Semantic Conversion Invocation → Provider Wire. It maps the Invocation through Pi native options first and uses a Provider-specific payload projector only for a supported semantic that Pi options cannot express.
+- Client-protocol code must not instantiate concrete providers, depend on provider-native semantic types, create an `onPayload` callback, or capture raw Client Wire for later Provider mutation.
+- Provider payload projectors must not depend on client-protocol adapter types or raw Client Wire shapes. They consume only typed semantic controls, validated conversion context, resolved Pi Model/API/compatibility facts, and the Provider-native payload type owned by their target.
+- Provider-specific or client-protocol-specific fields must not leak into Pi AI IR or `SemanticRequestControls`. Opaque target-bound facts remain in the bounded conversion context with their provenance and compatibility conditions.
+- Runtime and composition code may resolve the model and connect the Invocation to the LuckyToken Pi execution wrapper, but it must not itself rewrite Client Wire, Pi AI IR content, semantic controls, or Provider Wire.
+
+### LuckyToken Pi Execution Wrapper
+
+Treat Pi AI as a pinned external dependency. Request-control projection must not modify the Pi AI package or `node_modules`; the LuckyToken wrapper extends Pi execution only through Pi's public options and payload callback seam.
+
+- The wrapper accepts the resolved Pi Model, Pi Context, typed semantic controls, bounded conversion context, and infrastructure options through one request-local Interface.
+- The wrapper selects a payload projector from the resolved `model.api` plus certified Provider/model compatibility facts. Client protocol identity alone must never select a projector.
+- The wrapper creates and owns `onPayload` after target resolution. The callback captures only normalized semantic controls and validated request-local facts; it never captures raw Client Wire or client-protocol-native objects.
+- Pi AI calls `onPayload` after constructing its Provider payload and before sending it. The projector validates the exact audited payload shape, returns a copied payload with only proven Provider-native mappings, and fails rather than guessing when the shape is incompatible.
+- Pi AI retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion. The wrapper must not duplicate those implementations.
+- An audited Pi native option takes precedence over payload projection. A semantic control must have exactly one authoritative final projection; the wrapper must not set it through both paths.
+- Unknown APIs and unaudited payload shapes cannot receive payload projection. Apply the normal warning or failure rules for every remaining control before execution can silently lose critical semantics.
+- End-to-end tests must start with the Client Wire request and assert the final Provider request captured by a test transport after `onPayload` has returned. Projector-only or intermediate payload assertions do not establish support. Every Pi AI dependency upgrade must rerun these wire-contract tests for each supported projector.
+
+### Narrow Cross-Layer Semantic Exceptions
+
+A cross-layer semantic dependency is permitted only when all of the following hold:
+
+1. A demonstrated end-to-end semantic requirement cannot be implemented correctly from the owning layer's local representation alone.
+2. Protocol specifications and the pinned Pi Provider adapter identify the exact source fact, target use, compatibility condition, and failure behavior.
+3. The dependency is expressed as the smallest immutable request-local fact or capability, not as a Provider instance, native request type, broad configuration, mutable state, or callback into another layer.
+4. Credentials, authentication, transport, retry, lifecycle ownership, and execution objects remain within their owning lane and layer.
+5. The exception has an explicit typed contract and end-to-end tests covering the supported path, incompatible target, malformed metadata, and model-switch fallback.
+
+Opaque reasoning continuity is a canonical exception: response projection may need the actual upstream Provider/API/model provenance to bind Pi signature fields into a client-carried opaque envelope, while request projection may need the resolved target adapter's replay capability to restore those fields or preserve only the visible reasoning. This does not permit direct Provider imports or weaken the separation between Local Native Preservation, Provider Native Preservation, and Semantic Conversion.
+
+The wrapper-owned `onPayload` function is an internal Provider-side seam, not a callback into the client-protocol layer and therefore not a cross-layer exception.
 
 ### Independent Data-Plane Lanes
 
-Pi AI IR is not required when no semantic conversion takes place. LuckyToken has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
+The Semantic Conversion Invocation, LuckyToken Pi wrapper, and Pi Provider execution are not used when no semantic conversion takes place. LuckyToken has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
 
 ```text
 1. Local Native Preservation
@@ -141,7 +213,8 @@ Pi AI IR is not required when no semantic conversion takes place. LuckyToken has
 
 3. Semantic Conversion
    Client Wire
-   → Pi AI IR
+   → Semantic Conversion Invocation
+   → LuckyToken Pi execution wrapper
    → Pi Provider
    → Provider Wire
 ```
@@ -150,7 +223,7 @@ These lanes must remain independent:
 
 - Local Native Preservation owns its own model recognition, local credential lookup, request construction, transport, and response handling. It must not depend on alias resolution, Pi `Models`, Provider Native Passthrough, Pi AI IR, or Pi Provider execution.
 - Provider Native Preservation may use alias/model resolution, the resolved Pi `Model`, `Models.getAuth()`, request-local effective model facts, and provider/protocol-specific transport rules. It must not enter Pi AI IR or Pi Provider execution, and it must not read or reuse Local Native credentials, model registries, transports, or execution abstractions.
-- Semantic Conversion owns Client Wire ↔ Pi AI IR conversion and Pi Provider execution. It must not import, call, or reuse either native passthrough lane's request builders, credential authorities, transports, or response handling.
+- Semantic Conversion owns Client Wire → Semantic Conversion Invocation, Pi AI response IR → Client Wire, the LuckyToken Pi execution wrapper, Provider payload projection, and Pi Provider execution. It must not import, call, or reuse either native passthrough lane's request builders, credential authorities, transports, or response handling.
 - The two native lanes must not be unified behind a shared native target, native credential, native executor, native transport, or fallback abstraction. Similar wire-construction code may remain duplicated when sharing it would couple credential ownership or lifecycle.
 - Runtime/composition or the Client Protocol edge may select a lane using only the minimum routing facts required by that lane. After a lane is selected and execution begins, failure in that lane must not fall through to another lane.
 - Local Native eligibility is established by that integration's explicit local model/capability contract. Provider Native eligibility is established by an explicit `(provider, api/protocol)` transport contract or equivalent model capability; fuzzy provider-name similarity or payload resemblance is not sufficient.
@@ -190,16 +263,16 @@ The CommandCode private provider must implement and register through the same Pi
 
 ## Reference Principle
 
-Before rebuilding an existing capability, inspect the `pi-ai` package in the repository's `pi-agent` source.
+Before rebuilding an existing capability, inspect both the pinned runtime `pi-ai` package and the repository's `pi-agent` mirror source. For payload projection, confirm that the selected Pi Provider implementation invokes `onPayload`, identify the exact object shape passed at that seam, and inspect its native option mapping and response parser.
 
 Pi AI implementations of:
 
 ```text
-Pi AI IR → provider-native request
+Pi AI IR + Pi options → provider-native request
 provider-native response → Pi AI IR
 ```
 
-are mirror references for LuckyToken's external protocol conversion. Do not assume the transformations are strictly reversible; check missing fields, explicit defaults, information loss, and semantic differences.
+are version-bound mirror references for LuckyToken's external protocol conversion and Provider payload projectors. Do not assume the transformations are strictly reversible or that payload shapes remain stable across dependency upgrades; check missing fields, explicit defaults, information loss, semantic differences, and final wire tests.
 
 Relevant external references project i:
 

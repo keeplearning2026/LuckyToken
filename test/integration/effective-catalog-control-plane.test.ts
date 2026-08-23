@@ -74,7 +74,7 @@ describe("effective catalog through the Control Plane", () => {
       createRequestId: () => `catalog-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(2);
+    const hello = await client.hello(3);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }

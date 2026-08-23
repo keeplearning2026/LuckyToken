@@ -3,8 +3,6 @@ import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import ts from "typescript";
-
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 async function exists(target) {
@@ -73,7 +71,8 @@ test("production serving receives narrow Provider capabilities and cannot create
   assert.match(composition, /readonly models:\s*Models/u);
   assert.match(
     composition,
-    /readonly scrubSensitiveText:\s*\(value:\s*string\)\s*=>\s*string/u,
+    /readonly diagnostics\?:\s*RequestJourneyObservationAuthority/u,
+    "Data Plane composition may receive only the narrow observation authority",
   );
   assert.match(
     application,
@@ -87,8 +86,8 @@ test("production serving receives narrow Provider capabilities and cannot create
   );
   assert.match(
     application,
-    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?scrubSensitiveText/u,
-    "Backend Application must assemble the narrow scrub capability",
+    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?diagnostics:\s*ownedDiagnosticsAuthority/u,
+    "Backend Application must assemble the one narrow diagnostics authority",
   );
   assert.match(
     application,

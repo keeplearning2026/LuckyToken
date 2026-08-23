@@ -4,20 +4,16 @@ export {
   type RequestIdentity,
 } from "./request-identity.js";
 export {
-  createRuntimeDiagnosticsStoreFactory,
-  parseRuntimeDiagnosticsConfiguration,
-  bindRuntimeDiagnosticsConfiguration,
-  redactDiagnosticTextValue,
-  type RuntimeDiagnosticDraft,
-  type RuntimeDiagnosticEvent,
-  type RuntimeDiagnosticLevel,
-  type RuntimeDiagnosticMessage,
-  type RuntimeDiagnosticQuery,
-  type RuntimeDiagnosticRecord,
-  type RuntimeDiagnosticsConfiguration,
-  type RuntimeDiagnosticsQueryResult,
-  type RuntimeDiagnosticsStore,
-} from "./runtime-diagnostics/index.js";
+  bindDiagnosticsConfiguration,
+  createDiagnosticsAuthority,
+  createUnavailableDiagnosticsAuthority,
+  DiagnosticsUnavailableError,
+  parseDiagnosticsConfiguration,
+  type DiagnosticsAuthority,
+  type DiagnosticsConfiguration,
+  type RequestJourneyObservationAuthority,
+  type RequestJourneyObserver,
+} from "./diagnostics/index.js";
 export {
   createLuckyTokenRuntime,
   type LuckyTokenRuntime,

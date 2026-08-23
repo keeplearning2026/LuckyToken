@@ -33,7 +33,13 @@ const CLIENT_SHARED_SEAMS = new Set([
   "execution.ts",
   "http.ts",
   "model-resolution.ts",
-  "invocation-diagnostics/index.ts",
+  // Request Journey observation is a protocol-neutral, synchronous no-throw
+  // vocabulary only. Persistence, Worker, query, and configuration modules
+  // remain outside both Client Protocol boundaries.
+  "diagnostics/contract.ts",
+  // Secret-free request-local Profile attribution facts. This narrow seam
+  // exposes no credential values, resolution, storage, or transport authority.
+  "credentials/activity.ts",
   "protocols/options.ts",
   // Public Model resolution is a narrow Pi/core-only data-plane seam shared
   // by both Client Protocols; it does not import Provider implementations or
@@ -48,12 +54,6 @@ const CLIENT_SHARED_SEAMS = new Set([
   // Request Lifecycle Ledger only through this narrow seam (observer
   // contract + safe no-op); persistence/configuration/store DTOs stay out
   // of the protocol boundary.
-  "request-ledger/handler-seam.ts",
-  // Ticket 22 neutral handler seam: both Client Protocols observe the one
-  // global Deep Diagnostics capture decision only through this narrow seam
-  // (authority contract + safe no-op); persistence/configuration/store
-  // DTOs stay out of the protocol boundary.
-  "deep-diagnostics/handler-seam.ts",
 ]);
 
 function slash(value) {
@@ -190,6 +190,7 @@ test("CommandCode Providers never import concrete Client Protocols or one anothe
       "@earendil-works/pi-ai/api/openai-completions.lazy",
       "@luckytoken/commandcode-model-catalog",
       "@luckytoken/provider-contract/package",
+      "@luckytoken/provider-contract/diagnostics",
     ]),
   );
 });

@@ -18,7 +18,7 @@ import type {
 } from "@luckytoken/application-control-plane/control-plane";
 
 import type { ModelsJsonAuthority } from "../models-config/authority.js";
-import type { RuntimeDiagnosticsStore } from "../runtime-diagnostics/index.js";
+import type { RequestJourneyObservationAuthority } from "../diagnostics/contract.js";
 import type {
   CatalogCacheStage,
   CatalogCacheStore,
@@ -101,8 +101,11 @@ export interface CatalogRefreshControllerOptions {
   readonly store: CatalogCacheStore;
   /** Authoritative models.json facts (validity, providers, file errors). */
   readonly authority: Pick<ModelsJsonAuthority, "query">;
-  /** Value-safe warning destination (existing Runtime Diagnostics seam). */
-  readonly diagnostics: RuntimeDiagnosticsStore;
+  /** Fail-open, value-safe runtime observation destination. */
+  readonly diagnostics: Pick<
+    RequestJourneyObservationAuthority,
+    "observeRuntime"
+  >;
   /** Deterministic clock. */
   readonly now: () => number;
   /** Deterministic background scheduling; defaults to microtasks. */
@@ -198,6 +201,32 @@ function safeFailureCode(error: unknown): string {
 
 function valueSafeFailureMessage(providerId: string): string {
   return VALUE_SAFE_FAILURE_TEMPLATE.replace("%s", providerId);
+}
+
+type CatalogRuntimeClassification =
+  | "catalog_cache_unproven"
+  | "catalog_stale_publish_rollback_failed"
+  | "catalog_restored_capture_failed"
+  | "catalog_failed_refresh_restore_failed"
+  | "catalog_exact_publish_failed"
+  | "catalog_provider_refresh_failed"
+  | "catalog_models_json_unavailable"
+  | "catalog_cached_model_facts_discarded";
+
+function observeCatalogWarning(
+  diagnostics: CatalogRefreshControllerOptions["diagnostics"],
+  classification: CatalogRuntimeClassification,
+  safeMessage: string,
+): void {
+  try {
+    diagnostics.observeRuntime({
+      level: "warning",
+      classification,
+      safeMessage,
+    });
+  } catch {
+    // Catalog serving and refresh remain authoritative over observation.
+  }
 }
 
 export function createCatalogRefreshController(
@@ -472,14 +501,11 @@ export function createCatalogRefreshController(
         ) {
           restorationQuarantine.add(provider.id);
           restoreFailures.push(provider.id);
-          options.diagnostics.append({
-            level: "warning",
-            text: valueSafeFailureMessage(provider.id),
-            details: Object.freeze({
-              providerId: provider.id,
-              code: "catalog_cache_unproven",
-            }),
-          });
+          observeCatalogWarning(
+            options.diagnostics,
+            "catalog_cache_unproven",
+            valueSafeFailureMessage(provider.id),
+          );
           continue;
         }
         try {
@@ -493,11 +519,11 @@ export function createCatalogRefreshController(
         } catch {
           restorationQuarantine.add(provider.id);
           restoreFailures.push(provider.id);
-          options.diagnostics.append({
-            level: "warning",
-            text: valueSafeFailureMessage(provider.id),
-            details: Object.freeze({ providerId: provider.id, code: "stale_publish_rollback" }),
-          });
+          observeCatalogWarning(
+            options.diagnostics,
+            "catalog_stale_publish_rollback_failed",
+            valueSafeFailureMessage(provider.id),
+          );
         }
       }
       if (restoreFailures.length === 0) {
@@ -511,14 +537,11 @@ export function createCatalogRefreshController(
           for (const provider of inScopeProviders) {
             restorationQuarantine.add(provider.id);
             restoreFailures.push(provider.id);
-            options.diagnostics.append({
-              level: "warning",
-              text: valueSafeFailureMessage(provider.id),
-              details: Object.freeze({
-                providerId: provider.id,
-                code: "restored_capture_failed",
-              }),
-            });
+            observeCatalogWarning(
+              options.diagnostics,
+              "catalog_restored_capture_failed",
+              valueSafeFailureMessage(provider.id),
+            );
           }
         }
       }
@@ -599,11 +622,11 @@ export function createCatalogRefreshController(
             );
           } catch {
             restorationQuarantine.add(provider.id);
-            options.diagnostics.append({
-              level: "warning",
-              text: valueSafeFailureMessage(provider.id),
-              details: Object.freeze({ providerId: provider.id, code: "failed_refresh_restore" }),
-            });
+            observeCatalogWarning(
+              options.diagnostics,
+              "catalog_failed_refresh_restore_failed",
+              valueSafeFailureMessage(provider.id),
+            );
           }
         }
         failures.push(
@@ -787,11 +810,11 @@ export function createCatalogRefreshController(
           }
           const discarded = await discardExactRun(unprovenCacheProviderIds);
           const providerId = run.providerIds[0]!;
-          options.diagnostics.append({
-            level: "warning",
-            text: valueSafeFailureMessage(providerId),
-            details: Object.freeze({ providerId, code: "exact_publish_failed" }),
-          });
+          observeCatalogWarning(
+            options.diagnostics,
+            "catalog_exact_publish_failed",
+            valueSafeFailureMessage(providerId),
+          );
           return new Map(discarded).set(providerId, {
             outcome: "failed",
             error: valueSafeFailureMessage(providerId),
@@ -805,33 +828,25 @@ export function createCatalogRefreshController(
     }
     // Precise value-safe warnings: fixed templates and safe codes only.
     for (const failure of failures) {
-      options.diagnostics.append({
-        level: "warning",
-        text: failure.message,
-        details: Object.freeze({
-          providerId: failure.providerId,
-          code: failure.code,
-        }),
-      });
+      observeCatalogWarning(
+        options.diagnostics,
+        "catalog_provider_refresh_failed",
+        failure.message,
+      );
     }
     if (modelsJsonError !== undefined) {
-      options.diagnostics.append({
-        level: "warning",
-        text: "models.json is not loadable; the effective catalog keeps only compatible built-in Providers until the file is fixed.",
-        details: Object.freeze({
-          kind: modelsJsonError.kind,
-        }),
-      });
+      observeCatalogWarning(
+        options.diagnostics,
+        "catalog_models_json_unavailable",
+        "models.json is not loadable; the effective catalog keeps only compatible built-in Providers until the file is fixed.",
+      );
     }
     for (const dropped of options.store.takeDroppedReport()) {
-      options.diagnostics.append({
-        level: "warning",
-        text: `Cached dynamic model facts were discarded for provider "${dropped.providerId}" and will be refetched on the next refresh.`,
-        details: Object.freeze({
-          providerId: dropped.providerId,
-          reason: dropped.reason,
-        }),
-      });
+      observeCatalogWarning(
+        options.diagnostics,
+        "catalog_cached_model_facts_discarded",
+        `Cached dynamic model facts were discarded for provider "${dropped.providerId}" and will be refetched on the next refresh.`,
+      );
     }
     return outcomes;
   };

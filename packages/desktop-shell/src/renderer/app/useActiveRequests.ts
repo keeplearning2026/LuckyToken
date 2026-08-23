@@ -7,12 +7,12 @@ const ACTIVE_PAGE_SIZE = 1_000;
 export function useActiveRequests(
   api: LuckyTokenDesktopApi,
   backendAvailable: boolean,
-): number {
-  const [count, setCount] = useState(0);
+): number | undefined {
+  const [count, setCount] = useState<number>();
 
   useEffect(() => {
     if (!backendAvailable) {
-      setCount(0);
+      setCount(undefined);
       return;
     }
     let active = true;
@@ -24,7 +24,7 @@ export function useActiveRequests(
       if (active) setCount(running.size);
     };
 
-    const unsubscribe = api.control.onRequestLedger(({ record }) => {
+    const unsubscribe = api.control.onRequestJourneys((record) => {
       if (!active) return;
       const isRunning = record.outcome === "running";
       if (!initialized) observedBeforeInitial.set(record.requestId, isRunning);
@@ -37,17 +37,21 @@ export function useActiveRequests(
       const initial = new Set<string>();
       let afterId: number | undefined;
       for (;;) {
-        const result = await api.control.getRequestLedger({
-          outcome: "running",
+        const response = await api.control.queryRequestJourneys({
           limit: ACTIVE_PAGE_SIZE,
           ...(afterId === undefined ? {} : { afterId }),
         });
+        if (response.outcome !== "ok") {
+          if (active) setCount(undefined);
+          return;
+        }
+        const result = response.result;
         for (const record of result.records) {
           if (record.outcome === "running") initial.add(record.requestId);
         }
-        const oldest = result.records.at(-1)?.id;
-        if (!result.hasMore || oldest === undefined) break;
-        afterId = oldest;
+        const newest = result.records.at(-1)?.id;
+        if (!result.hasMore || newest === undefined) break;
+        afterId = newest;
       }
       if (!active) return;
       running.clear();
@@ -61,6 +65,7 @@ export function useActiveRequests(
       publish();
     })().catch(() => {
       if (!active) return;
+      setCount(undefined);
       initialized = true;
       observedBeforeInitial.clear();
     });

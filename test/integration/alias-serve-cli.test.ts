@@ -111,7 +111,7 @@ describe("Public Model serve wiring", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port: initialPort },
         clientProtocols: { "anthropic-messages": {} },
         pi: { directory: "pi" },

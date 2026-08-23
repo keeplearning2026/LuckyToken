@@ -33,7 +33,7 @@ describe("Ticket 24 backup authority", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         providerPackages: { demo: { apiKey: CONFIG_SECRET } },
       }),
     );
@@ -106,18 +106,11 @@ describe("Ticket 24 backup authority", () => {
       ],
       snapshots: [
         {
-          id: "request-ledger",
-          contract: "luckytoken-request-ledger-sqlite",
-          version: 2,
+          id: "request-diagnostics",
+          contract: "luckytoken-request-diagnostics-sqlite",
+          version: 1,
           category: "history",
           snapshot: async () => Buffer.from(HISTORY_SECRET),
-        },
-        {
-          id: "deep-capture",
-          contract: "luckytoken-deep-capture-sqlite",
-          version: 1,
-          category: "capture",
-          snapshot: async () => Buffer.from("capture-sensitive-canary"),
         },
       ],
     });
@@ -173,8 +166,8 @@ describe("Ticket 24 backup authority", () => {
     });
     expect(requested.confirmationMessage).toContain("Provider credentials");
     expect(requested.confirmationMessage).toContain("Client token secrets");
-    expect(requested.confirmationMessage).toContain("permanent history");
-    expect(requested.confirmationMessage).toContain("Deep Diagnostics capture");
+    expect(requested.confirmationMessage).toContain("request diagnostic history");
+    expect(requested.confirmationMessage).toContain("captured artifacts");
 
     const confirmed = await authority.handle(
       { command: "confirm", actionId: "confirm-full-1" },
@@ -189,8 +182,7 @@ describe("Ticket 24 backup authority", () => {
       "settings",
       "provider-credentials",
       "client-tokens:anthropic-messages",
-      "request-ledger",
-      "deep-capture",
+      "request-diagnostics",
     ]);
     const artifact = await readFile(destination, "utf8");
     expect(artifact).toContain("FULL_SENSITIVE");
@@ -251,7 +243,7 @@ describe("Ticket 24 backup authority", () => {
     const { root, exportRoot, destination } = await fixture();
     const externalRoot = await mkdtemp(join(tmpdir(), "foreign-history-store-"));
     roots.push(externalRoot);
-    const externalDatabase = join(externalRoot, "ledger.sqlite3");
+    const externalDatabase = join(externalRoot, "diagnostics.sqlite3");
     await writeFile(externalDatabase, HISTORY_SECRET, "utf8");
     let invoked = false;
     const authority = createBackupAuthority({
@@ -261,9 +253,9 @@ describe("Ticket 24 backup authority", () => {
       files: [],
       snapshots: [
         {
-          id: "request-ledger",
-          contract: "luckytoken-request-ledger-sqlite",
-          version: 2,
+          id: "request-diagnostics",
+          contract: "luckytoken-request-diagnostics-sqlite",
+          version: 1,
           category: "history",
           sourcePath: externalDatabase,
           snapshot: async () => {

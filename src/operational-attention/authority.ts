@@ -3,14 +3,13 @@ import type {
   AttentionCondition,
   AttentionProjection,
   CredentialProfilesProjectionV1,
-  PersistenceProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 import { RECENT_REQUEST_FAILURE_WINDOW_MS } from "@luckytoken/application-control-plane/control-plane";
 
 export interface OperationalAttentionAuthorityOptions {
   readonly now?: () => number;
   readonly credentials: () => CredentialProfilesProjectionV1 | undefined;
-  readonly persistence: () => PersistenceProjection | undefined;
+  readonly diagnosticsAvailable?: () => boolean;
   readonly requestFailureCount: (from: number, to: number) => number;
 }
 
@@ -49,6 +48,19 @@ export function createOperationalAttentionAuthority(
     project(status: ApplicationStatus): AttentionProjection | undefined {
       const currentTime = safeNow(now);
       const candidates: Candidate[] = [];
+      let diagnosticsAvailable = true;
+      try {
+        diagnosticsAvailable = options.diagnosticsAvailable?.() !== false;
+      } catch {
+        diagnosticsAvailable = false;
+      }
+      if (!diagnosticsAvailable) {
+        candidates.push({
+          id: "persistence-critical",
+          category: "persistence-critical",
+          page: "diagnostics",
+        });
+      }
       const failureCode = status.dataPlane?.failure?.code;
       if (status.modelDataPlane === "failed" && failureCode === "start_failed") {
         candidates.push({
@@ -64,20 +76,6 @@ export function createOperationalAttentionAuthority(
           id: "port-conflict",
           category: "port-conflict",
           page: "dashboard",
-        });
-      }
-
-      let persistence: PersistenceProjection | undefined;
-      try {
-        persistence = options.persistence();
-      } catch {
-        persistence = undefined;
-      }
-      if (persistence?.auditUnavailable === true) {
-        candidates.push({
-          id: "persistence-critical",
-          category: "persistence-critical",
-          page: "diagnostics",
         });
       }
 

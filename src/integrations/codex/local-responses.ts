@@ -17,6 +17,11 @@ import {
   renderResponsesError,
   type PreparedHttpResponse,
 } from "../../protocols/openai-responses/response.js";
+import type {
+  RequestJourneyLocation,
+  RequestJourneyObservationInput,
+  RequestJourneyObserver,
+} from "../../diagnostics/contract.js";
 
 export interface CreateCodexLocalResponsesLaneOptions {
   readonly credentials: CodexLocalCredentialAuthority;
@@ -47,19 +52,88 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   });
 }
 
+function observeCodexLocalJourney(
+  journey: RequestJourneyObserver | undefined,
+  observation: RequestJourneyObservationInput,
+): void {
+  try {
+    journey?.observe(observation);
+  } catch {
+    // Local lane behavior is authoritative over observation failure.
+  }
+}
+
+function enterCodexLocalStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+): void {
+  observeCodexLocalJourney(journey, {
+    kind: "step_entered",
+    stepInstanceId,
+    location,
+  });
+}
+
+function completeCodexLocalStep(
+  journey: RequestJourneyObserver | undefined,
+  stepInstanceId: string,
+  location: RequestJourneyLocation,
+  completion: "success" | "failed",
+): void {
+  observeCodexLocalJourney(journey, {
+    kind: "step_completed",
+    stepInstanceId,
+    completion,
+    location,
+  });
+}
+
+function observeCodexLocalTerminal(
+  journey: RequestJourneyObserver | undefined,
+  response: Response,
+  outcome: "success" | "failed",
+  presentationStep: "prepare_local_response" | "render_local_error_response",
+): void {
+  observeCodexLocalJourney(journey, {
+    kind: "client_response_prepared",
+    status: response.status,
+    ...(response.headers.get("content-type") === null
+      ? {}
+      : { mediaType: response.headers.get("content-type")! }),
+    location: {
+      phase: "client_response_preparation",
+      lane: "local_native",
+      step: presentationStep,
+    },
+  });
+  observeCodexLocalJourney(journey, {
+    kind: "work_outcome_committed",
+    outcome,
+    terminalAuthority: "codex_local_responses_lane",
+    location: {
+      phase: "outcome_commit",
+      lane: "local_native",
+      step: "commit_request_outcome",
+    },
+  });
+}
+
 async function executeWithAuth(
   input: Parameters<LocalResponsesLane["execute"]>[0],
   forwardAuth: CodexForwardAuth,
+  profileId: string | undefined,
   fetch: CodexFetchFunction,
 ): Promise<Response> {
   try {
-    input.ledger.executing();
     const upstream = await passthroughCodexResponses({
       rawBody: input.rawBody,
       requestHeaders: input.request.headers,
       forwardAuth,
       signal: input.request.signal,
       fetch,
+      ...(input.journey === undefined ? {} : { journey: input.journey }),
+      ...(profileId === undefined ? {} : { profileId }),
     });
     input.request.signal.throwIfAborted();
     const usage = extractResponsesPassthroughUsage(
@@ -70,28 +144,50 @@ async function executeWithAuth(
         ? "event-stream"
         : "json",
     );
-    if (usage !== undefined) input.ledger.terminalUsage(usage);
-    input.ledger.terminal(upstream.status >= 400 ? "failed" : "success", {
-      clientHttpStatus: upstream.status,
-    });
-    return new Response(upstream.body, {
+    if (usage !== undefined) {
+      observeCodexLocalJourney(input.journey, {
+        kind: "terminal_usage_observed",
+        usage,
+        location: {
+          phase: "lane_response_processing",
+          lane: "local_native",
+          step: "observe_local_usage",
+        },
+      });
+    }
+    const responseLocation = {
+      phase: "lane_response_processing",
+      lane: "local_native",
+      step: "preserve_local_response",
+    } as const;
+    enterCodexLocalStep(
+      input.journey,
+      "p5.preserve_local_response",
+      responseLocation,
+    );
+    const response = new Response(upstream.body, {
       status: upstream.status,
       headers: { ...upstream.headers },
     });
+    completeCodexLocalStep(
+      input.journey,
+      "p5.preserve_local_response",
+      responseLocation,
+      "success",
+    );
+    observeCodexLocalTerminal(
+      input.journey,
+      response,
+      upstream.status >= 400 ? "failed" : "success",
+      "prepare_local_response",
+    );
+    return response;
   } catch (error) {
     if (
       error instanceof CodexResponsesPassthroughTransportError ||
       error instanceof CodexResponsesPassthroughBodyReadError
     ) {
-      input.ledger.fail({ classification: "runtime-failure", error });
-      input.ledger.terminal("failed", { clientHttpStatus: 502 });
-      await input.diagnostics.fail({
-        classification: "runtime-failure",
-        stage: "native-passthrough",
-        clientStatus: 502,
-        error,
-      });
-      return toResponse(
+      const response = toResponse(
         renderResponsesError(
           502,
           "api_error",
@@ -100,6 +196,13 @@ async function executeWithAuth(
             : "Upstream provider response could not be read",
         ),
       );
+      observeCodexLocalTerminal(
+        input.journey,
+        response,
+        "failed",
+        "render_local_error_response",
+      );
+      return response;
     }
     throw error;
   }
@@ -115,28 +218,68 @@ export function createCodexLocalResponsesLane(
     async execute(
       input: Parameters<LocalResponsesLane["execute"]>[0],
     ): Promise<Response> {
-      input.ledger.modelResolved({
-        externalAlias: input.selector,
+      observeCodexLocalJourney(input.journey, {
+        kind: "model_resolved",
         providerId: "codex-local",
-        realModelId: input.selector,
+        modelId: input.selector,
+        location: {
+          phase: "request_resolution",
+          lane: "local_native",
+          step: "recognize_local_model",
+        },
       });
+      const credentialLocation = {
+        phase: "lane_request_preparation",
+        lane: "local_native",
+        step: "resolve_local_credential",
+      } as const;
+      enterCodexLocalStep(
+        input.journey,
+        "p3.resolve_local_credential",
+        credentialLocation,
+      );
       const forwardAuth = await options.credentials.resolveForwardAuth(
         input.request.headers,
       );
       if (forwardAuth === undefined) {
-        input.ledger.terminal("failed", { clientHttpStatus: 401 });
-        return toResponse(
+        completeCodexLocalStep(
+          input.journey,
+          "p3.resolve_local_credential",
+          credentialLocation,
+          "failed",
+        );
+        const response = toResponse(
           renderResponsesError(
             401,
             "authentication_error",
             "Local Codex credential is unavailable",
           ),
         );
+        observeCodexLocalTerminal(
+          input.journey,
+          response,
+          "failed",
+          "render_local_error_response",
+        );
+        return response;
       }
+      completeCodexLocalStep(
+        input.journey,
+        "p3.resolve_local_credential",
+        credentialLocation,
+        "success",
+      );
+      let profileId: string | undefined;
       if (forwardAuth.accountId !== undefined) {
-        input.ledger.profileAttributed(localProfile(forwardAuth.accountId));
+        const profile = localProfile(forwardAuth.accountId);
+        profileId = profile.profileId;
+        observeCodexLocalJourney(input.journey, {
+          kind: "profile_attributed",
+          ...profile,
+          location: credentialLocation,
+        });
       }
-      return executeWithAuth(input, forwardAuth, options.fetch);
+      return executeWithAuth(input, forwardAuth, profileId, options.fetch);
     },
   });
 }

@@ -4,7 +4,6 @@ import type {
   ApplicationStatus,
   CredentialProfilesProjectionV1,
   ProviderCredentialProfilesProjectionV1,
-  PersistenceProjection,
 } from "@luckytoken/application-control-plane/control-plane";
 import { decodeAttentionProjection } from "@luckytoken/application-control-plane/control-plane";
 import { createOperationalAttentionAuthority } from "../../src/operational-attention/index.js";
@@ -25,13 +24,11 @@ function credentials(
 }
 
 describe("operational attention authority", () => {
-  it("derives only actionable gateway and persistence episodes and coalesces unchanged facts", () => {
+  it("derives only actionable gateway episodes and coalesces unchanged facts", () => {
     let now = 1_700_000_000_000;
-    let persistence: PersistenceProjection | undefined;
     const authority = createOperationalAttentionAuthority({
       now: () => now,
       credentials: () => undefined,
-      persistence: () => persistence,
       requestFailureCount: () => 0,
     });
 
@@ -82,21 +79,6 @@ describe("operational attention authority", () => {
     };
     expect(authority.project(stopFailed)).toBeUndefined();
 
-    persistence = {
-      auditUnavailable: true,
-      acknowledged: false,
-      authorities: [{ authority: "diagnostics", since: now - 10 }],
-    };
-    expect(authority.project(running)?.conditions).toEqual([
-      {
-        id: "persistence-critical",
-        category: "persistence-critical",
-        since: now,
-        page: "diagnostics",
-      },
-    ]);
-    persistence = undefined;
-    expect(authority.project(running)).toBeUndefined();
   });
 
   it("activates provider invalidation only after a previously effective credential becomes invalid", () => {
@@ -130,7 +112,6 @@ describe("operational attention authority", () => {
     const authority = createOperationalAttentionAuthority({
       now: () => now,
       credentials: () => projection,
-      persistence: () => undefined,
       requestFailureCount: () => 0,
     });
 
@@ -173,7 +154,6 @@ describe("operational attention authority", () => {
     const authority = createOperationalAttentionAuthority({
       now: () => 3_600_100,
       credentials: () => undefined,
-      persistence: () => undefined,
       requestFailureCount: (from, to) => {
         expect(from).toBe(100);
         expect(to).toBe(3_600_101);
@@ -185,6 +165,30 @@ describe("operational attention authority", () => {
       conditions: [],
       requestFailures: { count: 7, windowMs: 3_600_000 },
     });
+  });
+
+  it("projects diagnostics unavailability as one stable actionable episode", () => {
+    let unavailable = true;
+    let now = 500;
+    const authority = createOperationalAttentionAuthority({
+      now: () => now,
+      credentials: () => undefined,
+      diagnosticsAvailable: () => !unavailable,
+      requestFailureCount: () => 0,
+    });
+
+    expect(authority.project(running)?.conditions).toEqual([
+      {
+        id: "persistence-critical",
+        category: "persistence-critical",
+        since: 500,
+        page: "diagnostics",
+      },
+    ]);
+    now = 900;
+    expect(authority.project(running)?.conditions[0]?.since).toBe(500);
+    unavailable = false;
+    expect(authority.project(running)).toBeUndefined();
   });
 
   it("rejects unknown fields, malformed identities, and secret-bearing additions", () => {

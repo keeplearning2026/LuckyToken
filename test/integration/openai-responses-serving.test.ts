@@ -3,7 +3,6 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
-import type { InvocationDiagnosticsFactory } from "../../src/invocation-diagnostics/index.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
@@ -57,7 +56,6 @@ describe("OpenAI Responses serving", () => {
         directory?: string;
         stateFile?: string;
         configuration?: OpenAIResponsesConfiguration;
-        invocationDiagnostics?: InvocationDiagnosticsFactory;
         maxRequestBytes?: number;
       },
   ) {
@@ -293,45 +291,6 @@ describe("OpenAI Responses serving", () => {
     expect(upstreamText).toContain("MARKER_ONE");
     expect(upstreamText).toContain("MARKER_TWO");
     expect(upstreamText).toContain("MARKER_THREE");
-  });
-
-  it("emits a request-local notice when store:false=persist stores despite caller false", async () => {
-    const { parseOpenAIResponsesConfiguration } = await import(
-      "../../src/protocols/openai-responses/configuration.js"
-    );
-    const configuration = parseOpenAIResponsesConfiguration({
-      conversion: {
-        response: { storeFalse: "persist" },
-      },
-    });
-    const notices: string[] = [];
-    const factory = {
-      begin: () => ({
-        requestId: "req-test",
-        notice: (notice: { code: string }) => notices.push(notice.code),
-        attempt: () => undefined,
-        checkpoint: () => undefined,
-        succeed: async () => undefined,
-        fail: async () => undefined,
-      }),
-    };
-    const { runtime } = await start({
-      fetch: async () => commandCodeText("kept"),
-      configuration,
-      invocationDiagnostics: factory,
-    });
-    const response = await runtime.handle(
-      responsesRequest(
-        {
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
-          input: "secret turn",
-          store: false,
-        },
-        "client-token",
-      ),
-    );
-    expect(response.status).toBe(200);
-    expect(notices).toContain("openai-responses_store_false_persisted");
   });
 
   it("does not let Authorization affect unknown-model classification", async () => {
@@ -637,94 +596,6 @@ describe("OpenAI Responses serving", () => {
     expect(upstreamSignal?.aborted).toBe(true);
   });
 
-  it("writes one caller-cancellation journal record on client cancellation", async () => {
-    const { mkdtemp, readdir, readFile } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-cancel-journal-"));
-    const { createInvocationDiagnosticsFactory } = await import(
-      "../../src/invocation-diagnostics/index.js"
-    );
-    const { parseFailureLoggingConfiguration } = await import(
-      "../../src/invocation-diagnostics/configuration.js"
-    );
-    const configuration = parseFailureLoggingConfiguration(
-      {
-        directory,
-        maxFiles: 10,
-        maxFileBytes: 64 * 1024,
-        retentionDays: 1,
-        detail: "safe",
-        logCancellation: true,
-      },
-      directory,
-    );
-    const factory = createInvocationDiagnosticsFactory({
-      configuration,
-      createRequestId: () => "22222222-2222-4222-8222-222222222222",
-    });
-    let upstreamSignal: AbortSignal | undefined;
-    const fetch: FetchFunction = async (_input, init) => {
-      upstreamSignal = init?.signal as AbortSignal | undefined;
-      return await new Promise<Response>(() => undefined);
-    };
-    const { runtime } = await start({ fetch, invocationDiagnostics: factory });
-    const controller = new AbortController();
-    const handling = runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer client-token",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
-          input: "cancel me",
-        }),
-        signal: controller.signal,
-      }),
-    );
-    await new Promise<void>((resolve) => {
-      const check = (): void => {
-        if (upstreamSignal !== undefined) resolve();
-        else setTimeout(check, 5);
-      };
-      check();
-    });
-    controller.abort(new Error("client cancelled"));
-    await expect(handling).rejects.toMatchObject({
-      name: "HttpRequestAbortedError",
-    });
-
-    // Exactly one journal record, classified as caller-cancellation. The
-    // handler's diagnostics.fail() continues after the HTTP layer aborts the
-    // awaited handle(), so the record lands asynchronously: poll for it.
-    const expectedJournalName = "22222222-2222-4222-8222-222222222222.json";
-    let journalFile: string | undefined;
-    for (let attempt = 0; attempt < 40 && journalFile === undefined; attempt += 1) {
-      const days = await readdir(directory);
-      const day = days.find((entry) => /^\d{4}-\d{2}-\d{2}$/u.test(entry));
-      if (day !== undefined) {
-        const files = await readdir(join(directory, day));
-        if (files.includes(expectedJournalName)) {
-          journalFile = join(directory, day, expectedJournalName);
-        }
-      }
-      if (journalFile === undefined) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
-    expect(journalFile).toBeDefined();
-    expect(journalFile!.endsWith(expectedJournalName)).toBe(true);
-    const journal = JSON.parse(
-      await readFile(journalFile!, "utf8"),
-    ) as { classification: string; selector?: string };
-    expect(journal.classification).toBe("caller-cancellation");
-    expect(journal.selector).toContain("deepseek");
-    const { rm } = await import("node:fs/promises");
-    await rm(directory, { recursive: true, force: true });
-  });
-
   it("maps a non-2xx upstream HTTP failure to a status-mapped error", async () => {
     const fetch: FetchFunction = async () =>
       new Response(
@@ -843,65 +714,6 @@ describe("OpenAI Responses serving", () => {
     // Unsafe headers never survive.
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("authorization")).toBeNull();
-  });
-
-  it("writes exactly one Responses-local failure journal record on final failure", async () => {
-    const { mkdtemp, readdir, readFile } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-journal-"));
-    const { createInvocationDiagnosticsFactory } = await import(
-      "../../src/invocation-diagnostics/index.js"
-    );
-    const { parseFailureLoggingConfiguration } = await import(
-      "../../src/invocation-diagnostics/configuration.js"
-    );
-    const configuration = parseFailureLoggingConfiguration(
-      {
-        directory,
-        maxFiles: 10,
-        maxFileBytes: 64 * 1024,
-        retentionDays: 1,
-        detail: "safe",
-        logCancellation: true,
-      },
-      directory,
-    );
-    const factory = createInvocationDiagnosticsFactory({
-      configuration,
-      createRequestId: () => "11111111-1111-4111-8111-111111111111",
-    });
-    const fetch: FetchFunction = async () =>
-      new Response(JSON.stringify({ error: { message: "boom" } }), {
-        status: 500,
-        headers: { "content-type": "application/json" },
-      });
-    const { runtime } = await start({ fetch, invocationDiagnostics: factory });
-    const response = await runtime.handle(
-      responsesRequest(
-        {
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
-          input: "hello",
-        },
-        "client-token",
-      ),
-    );
-    expect(response.status).toBe(500);
-
-    // Exactly one journal file, named by the internal safe request ID.
-    const days = await readdir(directory);
-    const day = days.find((entry) => /^\d{4}-\d{2}-\d{2}$/u.test(entry));
-    expect(day).toBeDefined();
-    const files = await readdir(join(directory, day!));
-    expect(files).toEqual(["11111111-1111-4111-8111-111111111111.json"]);
-    const journal = JSON.parse(
-      await readFile(join(directory, day!, files[0]!), "utf8"),
-    ) as { classification: string; clientStatus: number; selector?: string };
-    expect(journal.classification).toBe("runtime-failure");
-    expect(journal.clientStatus).toBe(500);
-    expect(journal.selector).toContain("deepseek");
-    const { rm } = await import("node:fs/promises");
-    await rm(directory, { recursive: true, force: true });
   });
 
   it("emits atomic SSE with monotonic sequence numbers and the status-matching terminal", async () => {

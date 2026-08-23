@@ -10,9 +10,16 @@ import {
 } from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
+  ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesOperation,
   ProviderResponsesSender,
 } from "./contract.js";
+import {
+  completeProviderResponsesStep,
+  enterProviderResponsesStep,
+  observeProviderResponses,
+  observeProviderResponsesArtifact,
+} from "./observation.js";
 
 function assertTransportAuth(
   provider: string,
@@ -94,37 +101,178 @@ export function createOpenAIResponsesSender(
       operation: ProviderResponsesOperation,
       rawBody: string,
       signal: AbortSignal,
+      observation?: ProviderResponsesPhysicalAttemptObservation,
     ): Promise<Response> {
-      const rewritten = rewriteModelJson(rawBody, model.id);
-      const headers = new Headers({
-        accept: "application/json",
-        "content-type": "application/json",
-      });
-      const apiKey = options.auth.auth.apiKey;
-      if (apiKey !== undefined && apiKey.length > 0) {
-        headers.set("authorization", `Bearer ${apiKey}`);
+      const attempt = observation?.attempt ?? 1;
+      const projectionLocation = {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "project_native_body",
+        attempt,
+      } as const;
+      const projectionStep = `p3.project_native_body.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        projectionStep,
+        projectionLocation,
+      );
+      let rewritten: ReturnType<typeof rewriteModelJson>;
+      try {
+        rewritten = rewriteModelJson(rawBody, model.id);
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "success",
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "failed",
+        );
+        throw error;
       }
-      applyHeaders(headers, model.headers);
-      if (model.provider === "github-copilot") {
-        applyHeaders(headers, copilotDynamicHeaders(rewritten.parsed));
-      }
-      if (operation === "responses") {
-        if (options.sessionId === undefined) {
-          throw new Error("Provider Native Responses requires a session ID");
-        }
-        applySessionAffinityHeaders(headers, model, options.sessionId);
-      }
-      applyHeaders(headers, options.auth.auth.headers);
-      headers.set("content-type", "application/json");
 
-      const endpoint = operation === "compact" ? "/responses/compact" : "/responses";
-      const url = appendEndpoint(model.baseUrl, endpoint);
-      return executeProviderFetch(options.fetch, url, {
-        method: "POST",
-        headers,
-        body: rewritten.text,
-        signal,
+      const envelopeLocation = {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "reconstruct_provider_envelope",
+        attempt,
+      } as const;
+      const envelopeStep = `p3.reconstruct_provider_envelope.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        envelopeStep,
+        envelopeLocation,
+      );
+      let headers: Headers;
+      let url: string;
+      try {
+        headers = new Headers({
+          accept: "application/json",
+          "content-type": "application/json",
+        });
+        const apiKey = options.auth.auth.apiKey;
+        if (apiKey !== undefined && apiKey.length > 0) {
+          headers.set("authorization", `Bearer ${apiKey}`);
+        }
+        applyHeaders(headers, model.headers);
+        if (model.provider === "github-copilot") {
+          applyHeaders(headers, copilotDynamicHeaders(rewritten.parsed));
+        }
+        if (operation === "responses") {
+          if (options.sessionId === undefined) {
+            throw new Error("Provider Native Responses requires a session ID");
+          }
+          applySessionAffinityHeaders(headers, model, options.sessionId);
+        }
+        applyHeaders(headers, options.auth.auth.headers);
+        headers.set("content-type", "application/json");
+
+        const endpoint =
+          operation === "compact" ? "/responses/compact" : "/responses";
+        url = appendEndpoint(model.baseUrl, endpoint);
+        if (observation !== undefined) {
+          observeProviderResponsesArtifact(observation.journey, {
+            artifactId: `provider_native_outbound_request_wire.${attempt}`,
+            artifactKind: "provider_native_outbound_request_wire",
+            bytes: new TextEncoder().encode(rewritten.text),
+            mediaType: "application/json",
+            location: envelopeLocation,
+          });
+        }
+        completeProviderResponsesStep(
+          observation?.journey,
+          envelopeStep,
+          envelopeLocation,
+          "success",
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          envelopeStep,
+          envelopeLocation,
+          "failed",
+        );
+        throw error;
+      }
+
+      const dispatchLocation = {
+        phase: "upstream_execution",
+        lane: "provider_native",
+        step: "dispatch_provider_native",
+        attempt,
+      } as const;
+      const dispatchStep = `p4.dispatch_provider_native.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        dispatchStep,
+        dispatchLocation,
+      );
+      observeProviderResponses(observation?.journey, {
+        kind: "attempt_observed",
+        attempt,
+        ...(observation?.profileId === undefined
+          ? {}
+          : { profileId: observation.profileId }),
+        transition: "started",
+        location: dispatchLocation,
       });
+      let response: Response;
+      try {
+        response = await executeProviderFetch(options.fetch, url, {
+          method: "POST",
+          headers,
+          body: rewritten.text,
+          signal,
+        });
+        completeProviderResponsesStep(
+          observation?.journey,
+          dispatchStep,
+          dispatchLocation,
+          "success",
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          dispatchStep,
+          dispatchLocation,
+          signal.aborted ? "aborted" : "failed",
+        );
+        throw error;
+      }
+
+      const readLocation = {
+        phase: "upstream_execution",
+        lane: "provider_native",
+        step: "read_provider_native_response",
+        attempt,
+      } as const;
+      const readStep = `p4.read_provider_native_response.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        readStep,
+        readLocation,
+      );
+      observeProviderResponses(observation?.journey, {
+        kind: "attempt_observed",
+        attempt,
+        ...(observation?.profileId === undefined
+          ? {}
+          : { profileId: observation.profileId }),
+        status: response.status,
+        transition: "response",
+        location: readLocation,
+      });
+      completeProviderResponsesStep(
+        observation?.journey,
+        readStep,
+        readLocation,
+        "success",
+      );
+      return response;
     },
   });
 }

@@ -54,7 +54,7 @@ async function createFixture(): Promise<Fixture> {
     createRequestId: () => `public-model-plane-request-${++nextRequest}`,
     pipeConnector: createNodePipeTransport(),
   });
-  const hello = await client.hello(2);
+  const hello = await client.hello(3);
   if (hello.type !== "compatible") throw new Error("Control Plane hello failed");
   const fixture: Fixture = {
     host,

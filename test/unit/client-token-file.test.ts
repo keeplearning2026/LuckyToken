@@ -18,7 +18,7 @@ describe("removed Client Token file configuration", () => {
     await writeFile(
       path,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         clientProtocols: {
           "anthropic-messages": { authFile: "client-auth.json" },
         },

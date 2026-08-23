@@ -27,6 +27,17 @@ describe("LuckyTokenDesktopApi test seam", () => {
       status: { sequence: 8, modelDataPlane: "running" },
     });
     await expect(api.platform.getAutoStart()).resolves.toBe(true);
+    expect(api.control).toMatchObject({
+      queryRequestJourneys: expect.any(Function),
+      getRequestJourney: expect.any(Function),
+      getRequestArtifact: expect.any(Function),
+      queryRuntimeEvents: expect.any(Function),
+      onRequestJourneys: expect.any(Function),
+      onRuntimeEvents: expect.any(Function),
+    });
+    expect("getRequestLedger" in api.control).toBe(false);
+    expect("onRequestLedger" in api.control).toBe(false);
+    expect("getDiagnostics" in api.control).toBe(false);
     expect(api.contractVersion).toBe(1);
   });
 });

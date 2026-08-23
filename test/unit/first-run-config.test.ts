@@ -32,7 +32,7 @@ describe("desktop first-run configuration template", () => {
       readonly pi?: { readonly directory?: unknown };
       readonly limits?: { readonly maxRequestBytes?: unknown };
     };
-    expect(parsed.schemaVersion).toBe("luckytoken-config-v1");
+    expect(parsed.schemaVersion).toBe("luckytoken-config-v2");
     expect(parsed.server).toEqual({ port: 3000 });
     expect(parsed.clientProtocols).toHaveProperty("anthropic-messages");
     expect(parsed.clientProtocols).toHaveProperty("openai-responses");

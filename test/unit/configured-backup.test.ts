@@ -6,10 +6,39 @@ import { join } from "node:path";
 import {
   configuredBackupFiles,
   configuredCredentialProfileBackupSnapshot,
+  recoveryBackupSnapshots,
 } from "../../src/backup/configured.js";
 import type { LuckyTokenCliConfig } from "../../src/cli-config.js";
 
 describe("configured backup contract versions", () => {
+  it("recovery backup never reads or snapshots legacy diagnostics stores", () => {
+    const config = {
+      schemaVersion: "luckytoken-config-v2",
+      pi: {
+        directory: "C:\\luckytoken",
+        modelsJson: "C:\\luckytoken\\models.json",
+      },
+    } as Record<string, unknown>;
+    for (const name of [
+      "runtimeDiagnostics",
+      "requestLedger",
+      "deepDiagnostics",
+      "failureLogging",
+    ]) {
+      Object.defineProperty(config, name, {
+        get(): never {
+          throw new Error(`legacy config was read: ${name}`);
+        },
+      });
+    }
+
+    const snapshots = recoveryBackupSnapshots(
+      config as unknown as LuckyTokenCliConfig,
+    );
+    expect(snapshots).toEqual([]);
+    expect(Object.isFrozen(snapshots)).toBe(true);
+  });
+
   it("tracks models and replaces obsolete auth.json backup with Provider Profile records", () => {
     const config = {
       schemaVersion: 1,

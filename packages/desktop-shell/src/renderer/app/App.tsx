@@ -361,9 +361,9 @@ export function App({ api }: AppProps) {
             {runtimeLabel(status)}
           </span>
 
-          <span className="toolbar-group runtime-active" title={`${activeRequests} active requests`} aria-label={`${activeRequests} active requests`}>
+          <span className="toolbar-group runtime-active" title={activeRequests === undefined ? "Active requests unavailable" : `${activeRequests} active requests`} aria-label={activeRequests === undefined ? "Active requests unavailable" : `${activeRequests} active requests`}>
             <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} aria-hidden="true" />
-            <strong className="active-request-count">{activeRequests}</strong>
+            <strong className="active-request-count">{activeRequests ?? "-"}</strong>
           </span>
 
           <button

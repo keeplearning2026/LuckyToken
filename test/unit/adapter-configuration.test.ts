@@ -5,7 +5,6 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { parseFailureLoggingConfiguration } from "../../src/invocation-diagnostics/configuration.js";
 import {
   bindCommandCodeConfiguration,
   parseCommandCodeConfiguration,
@@ -98,16 +97,6 @@ describe("adapter-owned configuration", () => {
       commandCode.response.errorCapture,
     ]);
 
-    const failureLogging = parseFailureLoggingConfiguration({}, resolve("config-root"));
-    expect(failureLogging).toEqual({
-      directory: resolve("config-root", "logs", "failed-requests"),
-      detail: "safe",
-      maxFileBytes: 1_048_576,
-      retentionDays: 30,
-      maxFiles: 1_000,
-      logCancellation: true,
-    });
-    expectFrozen([failureLogging]);
   });
 
   it("accepts every frozen enum value", () => {
@@ -197,12 +186,6 @@ describe("adapter-owned configuration", () => {
         parseCommandCodeConfiguration({
           conversion: { response: { pauseTurn: value } },
         }).conversion.response.pauseTurn,
-      ).toBe(value);
-    }
-    for (const value of ["safe", "full"] as const) {
-      expect(
-        parseFailureLoggingConfiguration({ detail: value }, resolve("config-root"))
-          .detail,
       ).toBe(value);
     }
   });
@@ -484,11 +467,6 @@ describe("adapter-owned configuration", () => {
         }),
       "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response.unknownEvent",
     ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ detail: "debug" }, resolve("config-root")),
-      "failureLogging.detail",
-    ],
   ])("rejects every invalid enum at its precise path %#", (parse, path) => {
     expect(parse).toThrow(path);
   });
@@ -544,28 +522,6 @@ describe("adapter-owned configuration", () => {
       maxClientMessageChars: 65_536,
     });
 
-    const failureMinimum = parseFailureLoggingConfiguration(
-      { maxFileBytes: 1_024, retentionDays: 1, maxFiles: 1 },
-      resolve("config-root"),
-    );
-    expect(failureMinimum).toMatchObject({
-      maxFileBytes: 1_024,
-      retentionDays: 1,
-      maxFiles: 1,
-    });
-    const failureMaximum = parseFailureLoggingConfiguration(
-      {
-        maxFileBytes: 16 * 1024 * 1024,
-        retentionDays: 3_650,
-        maxFiles: 1_000_000,
-      },
-      resolve("config-root"),
-    );
-    expect(failureMaximum).toMatchObject({
-      maxFileBytes: 16 * 1024 * 1024,
-      retentionDays: 3_650,
-      maxFiles: 1_000_000,
-    });
   });
 
   it.each<InvalidCase>([
@@ -655,39 +611,6 @@ describe("adapter-owned configuration", () => {
         }),
       "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
     ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ maxFileBytes: 1_023 }, resolve("config-root")),
-      "failureLogging.maxFileBytes",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration(
-          { maxFileBytes: 16 * 1024 * 1024 + 1 },
-          resolve("config-root"),
-        ),
-      "failureLogging.maxFileBytes",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ retentionDays: 0 }, resolve("config-root")),
-      "failureLogging.retentionDays",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ retentionDays: 3_651 }, resolve("config-root")),
-      "failureLogging.retentionDays",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ maxFiles: 0 }, resolve("config-root")),
-      "failureLogging.maxFiles",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ maxFiles: 1_000_001 }, resolve("config-root")),
-      "failureLogging.maxFiles",
-    ],
   ])("rejects every numeric field outside its safe range %#", (parse, path) => {
     expect(parse).toThrow(path);
   });
@@ -735,49 +658,7 @@ describe("adapter-owned configuration", () => {
         }),
       "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
     ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ maxFileBytes: 1.5 }, resolve("config-root")),
-      "failureLogging.maxFileBytes",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ retentionDays: "30" }, resolve("config-root")),
-      "failureLogging.retentionDays",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ maxFiles: Number.NaN }, resolve("config-root")),
-      "failureLogging.maxFiles",
-    ],
   ])("rejects unsafe numeric types at their precise paths %#", (parse, path) => {
-    expect(parse).toThrow(path);
-  });
-
-  it.each<InvalidCase>([
-    [
-      () => parseFailureLoggingConfiguration([], resolve("config-root")),
-      "failureLogging",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ extra: true }, resolve("config-root")),
-      "failureLogging.extra",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration({ directory: "" }, resolve("config-root")),
-      "failureLogging.directory",
-    ],
-    [
-      () =>
-        parseFailureLoggingConfiguration(
-          { logCancellation: "yes" },
-          resolve("config-root"),
-        ),
-      "failureLogging.logCancellation",
-    ],
-  ])("rejects failure logging shapes and unknown values %#", (parse, path) => {
     expect(parse).toThrow(path);
   });
 
@@ -818,7 +699,7 @@ describe("adapter-owned configuration", () => {
       await writeFile(
         configPath,
         JSON.stringify({
-          schemaVersion: "luckytoken-config-v1",
+          schemaVersion: "luckytoken-config-v2",
           clientProtocols: {
             "anthropic-messages": {
               conversion: {
@@ -871,13 +752,12 @@ describe("adapter-owned configuration", () => {
               },
             },
           },
-          failureLogging: {
-            directory: "diagnostics/failures",
-            detail: "full",
-            maxFileBytes: 8_192,
-            retentionDays: 7,
-            maxFiles: 25,
-            logCancellation: false,
+          diagnostics: {
+            directory: "diagnostics",
+            successArtifacts: { enabled: true },
+            maxJourneyArtifactBytes: 8_192,
+            artifactRetentionAgeMs: 7_000,
+            maxArtifactJourneys: 25,
           },
           pi: { directory: "pi", modelsJson: "pi/models.json" },
         }),
@@ -894,13 +774,12 @@ describe("adapter-owned configuration", () => {
         directory: join(configDirectory, "pi"),
         modelsJson: join(configDirectory, "pi", "models.json"),
       });
-      expect(loaded.failureLogging).toEqual({
-        directory: join(configDirectory, "diagnostics", "failures"),
-        detail: "full",
-        maxFileBytes: 8_192,
-        retentionDays: 7,
-        maxFiles: 25,
-        logCancellation: false,
+      expect(loaded.diagnostics).toMatchObject({
+        directory: join(configDirectory, "diagnostics"),
+        successArtifacts: { enabled: true },
+        maxJourneyArtifactBytes: 8_192,
+        artifactRetentionAgeMs: 7_000,
+        maxArtifactJourneys: 25,
       });
 
       expect(
@@ -966,7 +845,8 @@ describe("adapter-owned configuration", () => {
         loaded.clientProtocols["anthropic-messages"],
         loaded.clientProtocols["openai-responses"],
         loaded.providerPackages,
-        loaded.failureLogging,
+        loaded.diagnostics,
+        loaded.diagnostics.successArtifacts,
       ]);
     } finally {
       await rm(root, { force: true, recursive: true });

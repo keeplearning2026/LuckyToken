@@ -1,6 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -9,15 +7,10 @@ import {
   createNodePipeTransport,
   nodePipeFallbackAccess,
   startControlPlane,
-  type ControlPlaneDiagnostics,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
   type StatusEvent,
 } from "@luckytoken/application-control-plane/control-plane";
-import {
-  createRuntimeDiagnosticsStoreFactory,
-  parseRuntimeDiagnosticsConfiguration,
-} from "../../../src/runtime-diagnostics/index.js";
 import { createSettingsControlPlaneHandler } from "../../../src/settings/control-plane.js";
 import { resolveEffectiveSettings } from "../../../src/settings/data-plane.js";
 
@@ -79,14 +72,12 @@ describe("settings through the Control Plane and real HTTP seams", () => {
   const hosts: RunningControlPlane[] = [];
   const httpServers: RunningLuckyTokenHttpServer[] = [];
   const roots: string[] = [];
-  const stores: Array<{ close(): void }> = [];
   let nextPipe = 0;
   let nextRequest = 0;
 
   afterEach(async () => {
     await Promise.all(hosts.splice(0).map((host) => host.close()));
     await Promise.all(httpServers.splice(0).map((server) => server.close()));
-    stores.splice(0).forEach((store) => store.close());
     await Promise.all(
       roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
     );
@@ -95,7 +86,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
   async function startSettingsControlPlane(options: {
     readonly port?: number;
     readonly onStart?: () => void;
-    readonly diagnostics?: ControlPlaneDiagnostics;
     readonly settingsStore?: SettingsStore;
   }): Promise<{
     readonly host: RunningControlPlane;
@@ -146,9 +136,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       runtimeCommandHandler: supervisor.execute,
       settingsCommandHandler: createSettingsControlPlaneHandler(registry),
       settingsProjection: () => registry.snapshot(),
-      ...(options.diagnostics === undefined
-        ? {}
-        : { diagnostics: options.diagnostics }),
       pipeServerFactory: createNodePipeTransport(),
       access: nodePipeFallbackAccess,
     });
@@ -157,7 +144,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       createRequestId: () => `settings-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(2);
+    await client.hello(3);
     return { host, registry, client, endpoint };
   }
 
@@ -170,7 +157,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     expect(Object.keys(settings)).toEqual([
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
-      "diagnostics.deepCapture.enabled",
       "application.quitDrainTimeoutMs",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
@@ -188,12 +174,12 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     await client.subscribe((event) => events.push(event));
     await client.executeSettingsCommand({
       command: "set",
-      key: "diagnostics.deepCapture.enabled",
-      value: true,
+      key: "application.quitDrainTimeoutMs",
+      value: 2500,
     });
     expect(events.length).toBe(1);
-    expect(events[0]?.snapshot.settings?.["diagnostics.deepCapture.enabled"]).toMatchObject({
-      value: true,
+    expect(events[0]?.snapshot.settings?.["application.quitDrainTimeoutMs"]).toMatchObject({
+      value: 2500,
       applyMode: "hot-apply",
     });
   });
@@ -362,54 +348,4 @@ describe("settings through the Control Plane and real HTTP seams", () => {
     expect(JSON.stringify(catalog)).not.toContain("internal.experimental.flag");
   });
 
-  it("keeps settings, status, and diagnostics subscriptions isolated on one host", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-settings-diag-"));
-    roots.push(root);
-    const configuration = parseRuntimeDiagnosticsConfiguration(
-      { directory: root },
-      root,
-    );
-    const store = await createRuntimeDiagnosticsStoreFactory({
-      configuration,
-      now: () => 1_700_000_000_000,
-      scrub: (value: string) => value,
-    }).open();
-    stores.push(store);
-    const { client } = await startSettingsControlPlane({
-      diagnostics: store,
-    });
-
-    const statusEvents: unknown[] = [];
-    const diagnosticsEvents: unknown[] = [];
-    await client.subscribe((event) => statusEvents.push(event));
-    await client.subscribeDiagnostics((event) => diagnosticsEvents.push(event));
-
-    // A settings command publishes a status_changed event.
-    await client.executeSettingsCommand({
-      command: "set",
-      key: "protocols.anthropic-messages.enabled",
-      value: false,
-    });
-    await expect.poll(() => statusEvents).toHaveLength(1);
-    expect(statusEvents[0]).toMatchObject({ type: "status_changed" });
-    expect(JSON.stringify(statusEvents[0])).toContain("settings");
-
-    // A diagnostic append publishes a typed diagnostic event only.
-    store.append({
-      level: "warning",
-      text: "cross-feature canary diagnostic",
-      details: { headers: [["cookie", "canary-cross-cookie-1234"]] },
-    });
-    await expect.poll(() => diagnosticsEvents).toHaveLength(1);
-    expect(diagnosticsEvents[0]).toMatchObject({ type: "diagnostic" });
-    expect(JSON.stringify(diagnosticsEvents[0])).not.toContain(
-      "canary-cross-cookie-1234",
-    );
-
-    // Isolation: settings never reach diagnostics subscribers and vice versa.
-    expect(JSON.stringify(diagnosticsEvents)).not.toContain("settings");
-    expect(JSON.stringify(statusEvents)).not.toContain("cross-feature canary");
-    await client.close();
-    store.close();
-  });
 });

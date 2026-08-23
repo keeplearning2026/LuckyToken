@@ -42,7 +42,7 @@ async function writeConfig(home, port) {
     join(root, "config.json"),
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v1",
+        schemaVersion: "luckytoken-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -70,21 +70,12 @@ async function writeConfig(home, port) {
           },
         },
         providerPackages: {},
-        failureLogging: {
-          directory: "logs/failed-requests",
-          detail: "safe",
-          maxFileBytes: 1048576,
-          retentionDays: 30,
-          maxFiles: 1000,
-          logCancellation: true,
-        },
-        runtimeDiagnostics: { directory: "state/diagnostics" },
-        deepDiagnostics: {
-          directory: "state/deep-diagnostics",
-          enabled: false,
-          maxCaptureBytes: 4194304,
-          retentionAgeMs: 604800000,
-          maxCaptures: 1000,
+        diagnostics: {
+          directory: "state/request-diagnostics",
+          successArtifacts: { enabled: false },
+          maxJourneyArtifactBytes: 4194304,
+          artifactRetentionAgeMs: 604800000,
+          maxArtifactJourneys: 1000,
         },
         pi: { directory: "pi" },
         limits: { maxRequestBytes: 1048576, requestTimeoutMs: 120000 },
@@ -272,34 +263,21 @@ test(
       const dataPlaneResponse = await fetch(`${origin}/v1/models`);
       assert.ok(dataPlaneResponse.status >= 100, "Data Plane must remain reachable while UI is closed");
 
-      const enabled = await client.executeSettingsCommand({
-        command: "set",
-        key: "diagnostics.deepCapture.enabled",
-        value: true,
-      });
-      assert.equal(enabled.settings["diagnostics.deepCapture.enabled"]?.value, true);
-
       const second = await openWindow(application);
       second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
       await second.getByRole("tab", { name: "Advanced" }).click();
-      await second.getByRole("button", { name: "Disable deep diagnostics" }).waitFor();
+      await second.getByRole("heading", { name: "Recent Runtime Events" }).waitFor();
       assert.equal(application.windows().length, 1);
 
       await second.close();
       await waitForNoWindows(application);
-      const disabled = await client.executeSettingsCommand({
-        command: "set",
-        key: "diagnostics.deepCapture.enabled",
-        value: false,
-      });
-      assert.equal(disabled.settings["diagnostics.deepCapture.enabled"]?.value, false);
 
       const third = await openWindow(application);
       third.setDefaultTimeout(10_000);
       await third.getByRole("button", { name: "Settings" }).click();
       await third.getByRole("tab", { name: "Advanced" }).click();
-      await third.getByRole("button", { name: "Enable deep diagnostics" }).waitFor();
+      await third.getByRole("heading", { name: "Recent Runtime Events" }).waitFor();
       assert.equal(application.windows().length, 1, "reopen must create exactly one fresh renderer");
       await third.close();
       await waitForNoWindows(application);
