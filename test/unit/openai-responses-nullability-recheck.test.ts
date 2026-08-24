@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   convertResponsesRequest,
-  validateResponsesRequest,
   type ResponseRequestConversionPolicy,
 } from "../../src/protocols/openai-responses/request.js";
 
@@ -71,10 +70,18 @@ describe("13 recheck: null means absence per frozen contract", () => {
 
   it("still rejects wrong non-null types", () => {
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", temperature: "hot" }),
+      convertResponsesRequest(
+        { model: "m", input: "x", temperature: "hot" },
+        1,
+        policy(),
+      ),
     ).toThrow(/temperature/);
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", stream: "yes" }),
+      convertResponsesRequest(
+        { model: "m", input: "x", stream: "yes" },
+        1,
+        policy(),
+      ),
     ).toThrow(/stream/);
   });
 });
@@ -101,8 +108,6 @@ describe("13 recheck: max_output_tokens and prompt_cache_retention nullability",
 
 describe("13 recheck: store nullability", () => {
   it("accepts store: null as absence (normal storage policy)", () => {
-    const validated = validateResponsesRequest({ model: "m", input: "x", store: null });
-    expect(validated).toBeDefined();
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", store: null },
       1,
@@ -149,13 +154,21 @@ describe("13 recheck: previous_response_id nullability", () => {
 describe("13 recheck: max_output_tokens must be positive", () => {
   it("rejects max_output_tokens: 0 as a client invalid request", () => {
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", max_output_tokens: 0 }),
+      convertResponsesRequest(
+        { model: "m", input: "x", max_output_tokens: 0 },
+        1,
+        policy(),
+      ),
     ).toThrow(/max_output_tokens/);
   });
 
   it("rejects negative max_output_tokens", () => {
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", max_output_tokens: -1 }),
+      convertResponsesRequest(
+        { model: "m", input: "x", max_output_tokens: -1 },
+        1,
+        policy(),
+      ),
     ).toThrow(/max_output_tokens/);
   });
 

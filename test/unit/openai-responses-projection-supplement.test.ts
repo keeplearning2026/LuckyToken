@@ -79,13 +79,16 @@ describe("OpenAI Responses Provider projection supplement", () => {
         truncation: { value: "disabled" },
       },
     });
-    expect(result.client.notices.map((notice) => notice.code)).toEqual(
-      expect.arrayContaining([
-        "openai-responses_top_logprobs_omitted",
-        "openai-responses_context_management_omitted",
-        "openai-responses_stream_options_omitted",
-      ]),
-    );
+    expect(result.client.notices).toHaveLength(4);
+    expect(result.client.notices.every(
+      (notice) => notice.code === "openai-responses_unconsumed_request_field_ignored",
+    )).toBe(true);
+    expect(result.client.notices.map((notice) => notice.jsonPath)).toEqual([
+      "$.top_logprobs",
+      "$.background",
+      "$.context_management",
+      "$.stream_options",
+    ]);
   });
 
   it("emits an empty immutable supplement when no extra controls are present", () => {
@@ -122,6 +125,36 @@ describe("OpenAI Responses Provider projection supplement", () => {
     if (schema?.type !== "json_schema") throw new Error("expected schema");
     expect(Object.isFrozen(schema.schema)).toBe(true);
     expect(Object.isFrozen(schema.schema.properties)).toBe(true);
+  });
+
+  it("ignores unconsumed text siblings while preserving consumed format facts", () => {
+    const result = convertResponsesRequest(
+      {
+        model: "client-selector",
+        input: "hello",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "answer",
+            description: "Structured answer",
+            schema: { type: "object" },
+            strict: true,
+            future_format_option: true,
+          },
+          future_text_option: "ignored",
+        },
+      },
+      1,
+    );
+
+    expect(result.invocation.supplement.output?.format?.value).toEqual({
+      type: "json_schema",
+      name: "answer",
+      description: "Structured answer",
+      schema: { type: "object" },
+      strict: true,
+    });
+    expect(result.client.notices).toEqual([]);
   });
 
   it("accepts current SDK null absence and in_memory cache spelling", () => {

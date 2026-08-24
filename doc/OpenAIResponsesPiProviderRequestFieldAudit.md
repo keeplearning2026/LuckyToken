@@ -4,6 +4,8 @@ Date: 2026-08-23
 
 Status: historical source/target evidence baseline captured before commit `3fdd8d2`; current ownership target is defined by the OpenAI Responses protocol specification and decoupling plan.
 
+Current correction: Semantic Conversion now uses demand-driven extraction. Historical target-capability evidence below remains useful, but a source field with no declared Responses consumer is not read or validated merely because it appears in the official request schema.
+
 Scope: the pinned `pi-agent/packages/ai/src` implementation and the LuckyToken Semantic Conversion request path at the time of the audit. Re-audit final wire behavior after every Pi dependency upgrade.
 
 Primary protocol source: the pinned official OpenAI TypeScript SDK 6.40.0.
@@ -156,7 +158,7 @@ The final command emits max tokens and temperature, model-specific reasoning fie
 
 The Pi Messages wire explicitly carries temperature, max tokens, reasoning, cache retention, session ID, and `auto|none|required|named-function` tool choice ([pi-messages.ts:31](../pi-agent/packages/ai/src/api/pi-messages.ts#L31), [pi-messages.ts:365](../pi-agent/packages/ai/src/api/pi-messages.ts#L365)). Its `streamSimple()` explicitly reads a runtime direct `toolChoice`, so this is achievable without changing that builder, but the property is still absent from the common TypeScript contract ([pi-messages.ts:421](../pi-agent/packages/ai/src/api/pi-messages.ts#L421)). No other audited Responses control is included in the Pi Messages request payload.
 
-## LuckyToken current behavior and concrete losses
+## LuckyToken behavior and concrete losses
 
 LuckyToken validates and constructs `ModelsSimpleStreamOptions` in the Responses client adapter ([request.ts:775](../src/protocols/openai-responses/request.ts#L775), [request.ts:2161](../src/protocols/openai-responses/request.ts#L2161)). The current behavior is:
 
@@ -176,11 +178,11 @@ LuckyToken validates and constructs `ModelsSimpleStreamOptions` in the Responses
 | `prompt_cache_retention` | Maps `"in-memory"` and `"24h"` to Pi short/long. | Bug: pinned official SDK spells the first value `"in_memory"`; current code rejects the valid spelling and accepts the wrong one ([request.ts:864](../src/protocols/openai-responses/request.ts#L864), [responses.d.ts:6236](../node_modules/openai/resources/responses/responses.d.ts#L6236)). |
 | `metadata` | String entries are retained for local response echo. | Correct as response annotation, but not Provider metadata. Do not conflate it with model-visible semantics ([request.ts:2256](../src/protocols/openai-responses/request.ts#L2256)). |
 | `user` / `safety_identifier` | Mapped to `options.metadata.user_id`. | Reaches Anthropic only; silently ignored by other adapters ([request.ts:875](../src/protocols/openai-responses/request.ts#L875), [request.ts:2229](../src/protocols/openai-responses/request.ts#L2229)). |
-| `background:true` | Owned by Responses execution preparation and excluded from the Provider projection Supplement. | Semantic Conversion has no deferred fetch/cancel lifecycle, so it executes synchronously and publishes a Responses request degradation notice before projection rather than fabricating a Provider field. |
+| `background` | Claimed by neither Responses request consumer. | The value remains unread, is excluded from the Supplement, and receives the bounded generic unconsumed-field warning; it does not block Provider dispatch. |
 | `store` | Type-checked; Responses-owned session state applies local persistence policy rather than forwarding it to the model Provider. | Correct layer ownership for semantic conversion; this is not a Pi model request option ([session-state.ts:484](../src/protocols/openai-responses/session-state.ts#L484)). |
-| `conversation` / `prompt` | Any defined value is an explicit conversion error. | Rejecting non-null values is correct until local resolution or native preservation owns them; rejecting `null` is a parser bug because the SDK defines null as absence. |
+| `conversation` / `prompt` | Claimed by neither Responses request consumer. | Their values remain unread and receive generic unconsumed-field warnings. A request containing only `prompt` still fails because the minimum consumed Pi input is missing, not because `prompt` is classified as unsupported. |
 | `include`, `text.verbosity` | Validated and retained as projection candidates because certified target mappings exist. | Correct Supplement ownership; an Adapter consumes only a proven target mapping and central disposition warns for an unconsumed candidate. |
-| `top_logprobs`, `context_management`, `stream_options` | Validated outside the Supplement and reported through Responses-owned request notices when the requested behavior is unavailable. | Correct non-Provider ownership: these facts have no current certified Provider-request consumer and therefore do not enter target projection. |
+| `top_logprobs`, `context_management`, `stream_options` | Claimed by neither Responses request consumer. | Their values and nested shapes remain unread; each present top-level key receives the bounded generic unconsumed-field warning and cannot prevent dispatch by itself. |
 | hosted tools (`web_search`, `file_search`, `computer`, MCP, shell, etc.) | Most are skipped because Pi `Tool` represents caller-executed function/schema/grammar tools only. | Intentional capability degradation must be reported; a hosted Provider tool cannot be advertised as a locally executable Pi tool ([types.ts:480](../pi-agent/packages/ai/src/types.ts#L480), [request.ts:661](../src/protocols/openai-responses/request.ts#L661)). |
 
 The boundary correctly rejects malformed `max_output_tokens:0`. For a valid positive ceiling, certified target fields are preserved or repaired to no more than the Client value. Targets such as Codex that have no certified ceiling field retain availability by omitting the control with a warning; they are not rejected solely for that loss.

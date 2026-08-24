@@ -34,8 +34,10 @@ import {
 import type { OpenAIResponsesConfiguration } from "./configuration.js";
 import { mapUpstreamFailureFact } from "./error-rendering.js";
 import {
+  ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE,
   convertResponsesRequest,
   InvalidRequest,
+  UNCONSUMED_REQUEST_FIELD_IGNORED_NOTICE_CODE,
   type ResponsesInvocation,
 } from "./request.js";
 import {
@@ -117,10 +119,17 @@ function observeClientConversionNotice(
   notice: ConversionNotice,
 ): void {
   const requestDirection = notice.direction === "request";
+  const isUnconsumedRequestFieldWarning =
+    notice.code === UNCONSUMED_REQUEST_FIELD_IGNORED_NOTICE_CODE ||
+    notice.code ===
+      ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE;
   observeSemanticJourney(journey, {
     kind: "conversion_notice_observed",
     code: notice.code,
-    severity: notice.action === "ignore" ? "info" : "warning",
+    severity:
+      isUnconsumedRequestFieldWarning || notice.action !== "ignore"
+        ? "warning"
+        : "info",
     location: {
       phase: requestDirection
         ? "lane_request_preparation"

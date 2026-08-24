@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   convertResponsesRequest,
   convertResponsesRequestAsync,
-  validateResponsesRequest,
   type ResponseRequestConversionPolicy,
 } from "../../src/protocols/openai-responses/request.js";
 
@@ -50,12 +49,123 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
   });
 
   it("validates the request shape strictly", () => {
-    expect(() => validateResponsesRequest({ input: "x" })).toThrow(
+    expect(() => convertResponsesRequest({ input: "x" }, 1, policy())).toThrow(
       "model must be a non-empty string",
     );
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", max_output_tokens: -1 }),
+      convertResponsesRequest(
+        { model: "m", input: "x", max_output_tokens: -1 },
+        1,
+        policy(),
+      ),
     ).toThrow("max_output_tokens must be a positive safe integer");
+  });
+
+  it("ignores an unconsumed Codex stream option without reading its value", () => {
+    const body: Record<string, unknown> = {
+      model: "commandcode-goat/deepseek-v4-flash",
+      input: "hello",
+      stream: true,
+    };
+    Object.defineProperty(body, "stream_options", {
+      enumerable: true,
+      get(): never {
+        throw new Error("stream_options must remain unread");
+      },
+    });
+
+    const invocation = convertResponsesRequest(body, 1, policy());
+
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_unconsumed_request_field_ignored",
+      jsonPath: "$.stream_options",
+      action: "ignore",
+    });
+  });
+
+  it("uses the same demand-driven extraction in the async conversion entry", async () => {
+    const body: Record<string, unknown> = { model: "m", input: "hello" };
+    Object.defineProperty(body, "future_extension", {
+      enumerable: true,
+      get(): never {
+        throw new Error("future_extension must remain unread");
+      },
+    });
+
+    const invocation = await convertResponsesRequestAsync(
+      body,
+      1,
+      policy(),
+      { resolveItemReference: async () => [] },
+    );
+
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_unconsumed_request_field_ignored",
+      jsonPath: "$.future_extension",
+      action: "ignore",
+    });
+  });
+
+  it("bounds unconsumed top-level field warnings deterministically", () => {
+    const body: Record<string, unknown> = { model: "m", input: "hello" };
+    for (let index = 0; index < 20; index += 1) {
+      body[`future_${index}`] = index;
+    }
+
+    const invocation = convertResponsesRequest(body, 1, policy());
+
+    expect(invocation.client.notices).toHaveLength(16);
+    expect(invocation.client.notices.slice(0, 15).map((notice) => notice.jsonPath)).toEqual(
+      Array.from({ length: 15 }, (_, index) => `$.future_${index}`),
+    );
+    expect(invocation.client.notices[15]).toEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_additional_unconsumed_request_fields_ignored",
+      action: "ignore",
+    });
+  });
+
+  it("uses bracket JSONPath syntax for non-identifier request keys", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "hello", "future.option": true },
+      1,
+      policy(),
+    );
+
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_unconsumed_request_field_ignored",
+      jsonPath: '$["future.option"]',
+      action: "ignore",
+    });
+  });
+
+  it("produces equivalent sync and async invocations from the same consumer views", async () => {
+    const body = {
+      model: "m",
+      input: "hello",
+      reasoning: { effort: "medium" },
+      max_output_tokens: 256,
+      text: { format: { type: "text" } },
+      future_transport_control: true,
+    };
+
+    const syncInvocation = convertResponsesRequest(body, 1, policy());
+    const asyncInvocation = await convertResponsesRequestAsync(
+      body,
+      1,
+      policy(),
+      { resolveItemReference: async () => [] },
+    );
+
+    expect(asyncInvocation).toEqual(syncInvocation);
   });
 
   it("attaches reasoning items to the next assistant message", () => {
@@ -330,13 +440,25 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
 
   it("rejects malformed previous_response_id, store, and tool_choice shapes", () => {
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", previous_response_id: 42 }),
+      convertResponsesRequest(
+        { model: "m", input: "x", previous_response_id: 42 },
+        1,
+        policy(),
+      ),
     ).toThrow("previous_response_id must be a non-empty string");
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", store: "yes" }),
+      convertResponsesRequest(
+        { model: "m", input: "x", store: "yes" },
+        1,
+        policy(),
+      ),
     ).toThrow("store must be a boolean");
     expect(() =>
-      validateResponsesRequest({ model: "m", input: "x", tool_choice: 42 }),
+      convertResponsesRequest(
+        { model: "m", input: "x", tool_choice: 42 },
+        1,
+        policy(),
+      ),
     ).toThrow("tool_choice must be auto, none, required, or an object");
   });
 
@@ -651,7 +773,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
-      code: "openai-responses_context_management_omitted",
+      code: "openai-responses_unconsumed_request_field_ignored",
       jsonPath: "$.context_management",
       action: "ignore",
     });
@@ -670,7 +792,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
-      code: "openai-responses_top_logprobs_omitted",
+      code: "openai-responses_unconsumed_request_field_ignored",
       jsonPath: "$.top_logprobs",
       action: "ignore",
     });
@@ -822,7 +944,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/tool_choice requires/);
   });
 
-  it("keeps background out of Provider projection and degrades true to synchronous", () => {
+  it("keeps unconsumed background out of Provider projection", () => {
     const background = convertResponsesRequest(
       { model: "m", input: "x", background: true },
       1,
@@ -832,9 +954,9 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(background.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
-      code: "openai-responses_background_synchronous",
+      code: "openai-responses_unconsumed_request_field_ignored",
       jsonPath: "$.background",
-      action: "degrade",
+      action: "ignore",
     });
     const sync = convertResponsesRequest(
       { model: "m", input: "x", background: false },
@@ -842,20 +964,44 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       policy(),
     );
     expect(sync.client.renderState.stream).toBe(false);
-    expect(sync.client.notices).toEqual([]);
+    expect(sync.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_unconsumed_request_field_ignored",
+      jsonPath: "$.background",
+      action: "ignore",
+    });
   });
 
-  it("rejects conversation, prompt, external item_reference, and foreign encrypted compaction", () => {
+  it("ignores unconsumed conversation and prompt when the main request is complete", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        conversation: "conv_1",
+        prompt: { id: "prompt_1" },
+      },
+      1,
+      policy(),
+    );
+
+    expect(invocation.client.notices.map((notice) => notice.jsonPath)).toEqual([
+      "$.conversation",
+      "$.prompt",
+    ]);
+  });
+
+  it("rejects a prompt-only request because the minimum Pi input is missing", () => {
     expect(() =>
       convertResponsesRequest(
-        { model: "m", input: "x", conversation: "conv_1" },
+        { model: "m", prompt: { id: "prompt_1" } },
         1,
         policy(),
       ),
-    ).toThrow(/conversation/);
-    expect(() =>
-      convertResponsesRequest({ model: "m", input: "x", prompt: "prompt_1" }, 1, policy()),
-    ).toThrow(/prompt/);
+    ).toThrow("input must be a string or an array");
+  });
+
+  it("rejects external item_reference and foreign encrypted compaction", () => {
     expect(() =>
       convertResponsesRequest(
         {

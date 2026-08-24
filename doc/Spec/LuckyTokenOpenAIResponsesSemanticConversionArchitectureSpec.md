@@ -1,6 +1,6 @@
 # LuckyToken OpenAI Responses Semantic Conversion Architecture Specification
 
-Status: **TARGET PROTOCOL CONTRACT — DEMAND-DRIVEN REQUEST EXTRACTION PENDING**
+Status: **LOCAL IMPLEMENTATION COMPLETE — ONLINE CERTIFICATION PENDING**
 Date: **2026-08-24**
 Scope: OpenAI Responses as the Client Protocol on the Semantic Conversion lane. This specification does not govern Responses Native Preservation, Anthropic Messages Semantic Conversion, or any other Client Protocol.
 
@@ -16,7 +16,7 @@ OpenAI Responses Client Wire
 → OpenAI Responses Client Wire
 ```
 
-The locality rules remain authoritative in [LuckyToken Semantic Conversion Architecture Specification](./LuckyTokenSemanticConversionArchitectureSpec.md). Request field evidence remains authoritative in [OpenAI Responses → Pi Provider Request Field Audit](../OpenAIResponsesPiProviderRequestFieldAudit.md). The protocol-local migration is accepted by offline architecture and final-wire certification. The demand-driven request-extraction correction in this specification remains pending, and separate per-target online Provider certification remains required before a release-level support claim.
+The locality rules remain authoritative in [LuckyToken Semantic Conversion Architecture Specification](./LuckyTokenSemanticConversionArchitectureSpec.md). Request field evidence remains authoritative in [OpenAI Responses → Pi Provider Request Field Audit](../OpenAIResponsesPiProviderRequestFieldAudit.md). The protocol-local migration and demand-driven request extraction are implemented locally and accepted by offline architecture and final-wire certification. Separate per-target online Provider certification remains required before a release-level support claim.
 
 ## 1. Decision
 
@@ -148,6 +148,8 @@ truncation
 The allowlists deliberately overlap for `tool_choice`, `max_output_tokens`, `temperature`, `top_p`, `prompt_cache_retention`, `safety_identifier`, and `user`. The main consumer gives Pi the strongest available representation; the Supplement preserves the same fact only to verify or repair the final Provider request under a certified target mapping.
 
 The conversion operation selects own properties for each consumer before invoking either parser. A key present in neither allowlist is not read, parsed, shape-validated, projected, guessed, or used as a dispatch condition. This includes `stream_options`, `top_logprobs`, `context_management`, `background`, `conversation`, `prompt`, and future Client extensions while they have no consumer. Such a key is omitted with a bounded request-local warning derived from the request keys minus the union of both allowlists; this derived observation is not a third semantic list.
+
+Each exact top-level omission uses `action:"ignore"` and code `openai-responses_unconsumed_request_field_ignored`. The converter reports at most the first 15 present keys in deterministic request-key order; when more exist, one final `openai-responses_additional_unconsumed_request_fields_ignored` notice makes 16 the absolute maximum. Identifier keys use `$.field`; other keys use safely quoted bracket JSONPath. The converter does not traverse an unconsumed value, and unclaimed siblings inside a consumed object do not receive separate notices.
 
 For a claimed object, its consumer validates only the paths it reads. Unclaimed sibling keys are ignored. A consumed discriminator or required child remains validated: an unknown value that prevents construction of a claimed semantic is not guessed. A missing or malformed minimum request fact, malformed consumed value, security or permission constraint, invalid tool-call/result relationship, or invalid final payload remains an explicit error.
 

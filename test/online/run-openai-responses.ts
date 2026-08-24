@@ -437,6 +437,9 @@ async function runSseJob(
         input: promptFor(marker),
         max_output_tokens: SUCCESS_MAX_TOKENS,
         stream: true,
+        stream_options: {
+          reasoning_summary_delivery: "sequential_cutoff",
+        },
       },
       requestSignal(totalSignal),
     );

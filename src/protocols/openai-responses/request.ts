@@ -30,6 +30,7 @@ import {
   InvalidResponsesProjectionSupplement,
   parseResponsesProjectionSupplement,
   parseResponsesToolChoice,
+  SUPPLEMENT_REQUEST_FIELDS,
 } from "./semantic/supplement/request.js";
 import {
   decodeResponsesContinuity,
@@ -101,7 +102,7 @@ export interface ResponsesClientRenderState {
 
 export type ResponsesInvocation = ResponsesConversionResult<ResponsesClientRenderState>;
 
-export interface ValidatedResponsesRequest {
+interface ValidatedResponsesRequest {
   selector: string;
   instructions?: string;
   input: unknown;
@@ -114,9 +115,6 @@ export interface ValidatedResponsesRequest {
   reasoning?: string;
   tools?: Tool[];
   toolChoice?: ResponsesToolChoice;
-  background: boolean;
-  conversationPresent: boolean;
-  promptPresent: boolean;
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
@@ -138,14 +136,10 @@ export const OUTPUT_IMAGE_UNRESOLVED_NOTICE_CODE =
   "openai-responses_output_image_unresolved";
 export const NAMESPACE_COLLISION_NOTICE_CODE =
   "openai-responses_namespace_collision";
-export const TOP_LOGPROBS_OMITTED_NOTICE_CODE =
-  "openai-responses_top_logprobs_omitted";
-export const BACKGROUND_SYNCHRONOUS_NOTICE_CODE =
-  "openai-responses_background_synchronous";
-export const CONTEXT_MANAGEMENT_OMITTED_NOTICE_CODE =
-  "openai-responses_context_management_omitted";
-export const STREAM_OPTIONS_OMITTED_NOTICE_CODE =
-  "openai-responses_stream_options_omitted";
+export const UNCONSUMED_REQUEST_FIELD_IGNORED_NOTICE_CODE =
+  "openai-responses_unconsumed_request_field_ignored";
+export const ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE =
+  "openai-responses_additional_unconsumed_request_fields_ignored";
 
 /** Separator for the reversible Responses-owned namespace flattening scheme.
  *  A flattened name is `<namespace>__<child>`; the separator stays inside the
@@ -240,50 +234,87 @@ function requestNotice(
   });
 }
 
-function appendNonProjectionControlNotices(
-  value: unknown,
-  notices: ConversionNotice[],
-): void {
-  if (!isRecord(value)) return;
-  if (typeof value.top_logprobs === "number" && value.top_logprobs > 0) {
+const MAIN_REQUEST_FIELDS = Object.freeze([
+  "model",
+  "input",
+  "instructions",
+  "stream",
+  "metadata",
+  "previous_response_id",
+  "store",
+  "reasoning",
+  "tools",
+  "tool_choice",
+  "max_output_tokens",
+  "temperature",
+  "top_p",
+  "prompt_cache_retention",
+  "safety_identifier",
+  "user",
+] as const);
+
+const CONSUMED_REQUEST_FIELDS = new Set<string>([
+  ...MAIN_REQUEST_FIELDS,
+  ...SUPPLEMENT_REQUEST_FIELDS,
+]);
+const MAX_EXACT_UNCONSUMED_FIELD_NOTICES = 15;
+
+interface ResponsesConsumerViews {
+  readonly mainRequest: Readonly<Record<string, unknown>>;
+  readonly supplementRequest: Readonly<Record<string, unknown>>;
+  readonly notices: ConversionNotice[];
+}
+
+function requestFieldJsonPath(key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key)
+    ? `$.${key}`
+    : `$[${JSON.stringify(key)}]`;
+}
+
+function pickOwnFields(
+  value: Readonly<Record<string, unknown>>,
+  fields: readonly string[],
+): Readonly<Record<string, unknown>> {
+  const selected: Record<string, unknown> = Object.create(null);
+  for (const field of fields) {
+    if (Object.hasOwn(value, field)) selected[field] = value[field];
+  }
+  return Object.freeze(selected);
+}
+
+function selectResponsesConsumerViews(value: unknown): ResponsesConsumerViews {
+  if (!isRecord(value)) {
+    throw new InvalidRequest("Request body must be a JSON object");
+  }
+  const notices: ConversionNotice[] = [];
+  let additionalUnconsumedFields = false;
+  for (const key of Object.keys(value)) {
+    if (CONSUMED_REQUEST_FIELDS.has(key)) continue;
+    if (notices.length < MAX_EXACT_UNCONSUMED_FIELD_NOTICES) {
+      notices.push(
+        requestNotice(
+          UNCONSUMED_REQUEST_FIELD_IGNORED_NOTICE_CODE,
+          "ignore",
+          requestFieldJsonPath(key),
+        ),
+      );
+    } else {
+      additionalUnconsumedFields = true;
+    }
+  }
+  if (additionalUnconsumedFields) {
     notices.push(
       requestNotice(
-        TOP_LOGPROBS_OMITTED_NOTICE_CODE,
+        ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE,
         "ignore",
-        "$.top_logprobs",
       ),
     );
   }
-  if (value.background === true) {
-    notices.push(
-      requestNotice(
-        BACKGROUND_SYNCHRONOUS_NOTICE_CODE,
-        "degrade",
-        "$.background",
-      ),
-    );
-  }
-  if (Array.isArray(value.context_management) && value.context_management.length > 0) {
-    notices.push(
-      requestNotice(
-        CONTEXT_MANAGEMENT_OMITTED_NOTICE_CODE,
-        "ignore",
-        "$.context_management",
-      ),
-    );
-  }
-  if (
-    isRecord(value.stream_options) &&
-    value.stream_options.include_obfuscation !== undefined
-  ) {
-    notices.push(
-      requestNotice(
-        STREAM_OPTIONS_OMITTED_NOTICE_CODE,
-        "ignore",
-        "$.stream_options.include_obfuscation",
-      ),
-    );
-  }
+  return Object.freeze({
+    mainRequest: pickOwnFields(value, MAIN_REQUEST_FIELDS),
+    supplementRequest: pickOwnFields(value, SUPPLEMENT_REQUEST_FIELDS),
+    notices,
+  });
 }
 
 function parseContentParts(
@@ -902,9 +933,8 @@ function parseToolChoice(value: unknown): ResponsesToolChoice | undefined {
  *
  * This deliberately performs no semantic validation beyond a JSON object
  * shape and a non-empty `model` string: passthrough must forward the raw
- * body verbatim, so upstream-accepted fields that LuckyToken conversion
- * would reject (conversation, prompt, background, hosted tools, future
- * fields) must not block the passthrough branch.
+ * body verbatim. Semantic Conversion independently selects only the facts
+ * consumed by its Responses-owned request and supplement views.
  */
 export function extractResponsesModelSelector(value: unknown): string {
   if (!isRecord(value)) {
@@ -917,7 +947,7 @@ export function extractResponsesModelSelector(value: unknown): string {
   return model;
 }
 
-export function validateResponsesRequest(
+function validateMainRequest(
   value: unknown,
   freeformNames?: Set<string>,
   namespaceReverse?: Record<string, { namespace: string; child: string }>,
@@ -953,47 +983,6 @@ export function validateResponsesRequest(
   }
   const toolChoice = parseToolChoice(value.tool_choice);
   validateReasoningShape(value.reasoning);
-  if (
-    value.top_logprobs !== undefined &&
-    value.top_logprobs !== null &&
-    (!Number.isSafeInteger(value.top_logprobs) ||
-      (value.top_logprobs as number) < 0 ||
-      (value.top_logprobs as number) > 20)
-  ) {
-    throw new InvalidRequest(
-      "top_logprobs must be an integer within 0 through 20",
-    );
-  }
-  if (
-    value.context_management !== undefined &&
-    value.context_management !== null &&
-    (!Array.isArray(value.context_management) ||
-      value.context_management.some((entry) => !isRecord(entry)))
-  ) {
-    throw new InvalidRequest("context_management must be an array of objects");
-  }
-  if (
-    value.stream_options !== undefined &&
-    value.stream_options !== null &&
-    (!isRecord(value.stream_options) ||
-      Object.keys(value.stream_options).some(
-        (key) => key !== "include_obfuscation",
-      ) ||
-      (value.stream_options.include_obfuscation !== undefined &&
-        typeof value.stream_options.include_obfuscation !== "boolean"))
-  ) {
-    throw new InvalidRequest(
-      "stream_options must contain only a boolean include_obfuscation",
-    );
-  }
-  if (value.conversation !== undefined && value.conversation !== null) {
-    throw new InvalidRequest(
-      "conversation is not supported by Core conversion v1",
-    );
-  }
-  if (value.prompt !== undefined && value.prompt !== null) {
-    throw new InvalidRequest("prompt is not supported by Core conversion v1");
-  }
   const maxOutputTokens = optionalNonNegativeInt(
     value.max_output_tokens,
     "max_output_tokens",
@@ -1032,9 +1021,6 @@ export function validateResponsesRequest(
     metadataUserId = userValue;
   }
   const tools = convertTools(value.tools, freeformNames, namespaceReverse);
-  const background = optionalBoolean(value.background, "background") ?? false;
-  const conversationPresent = value.conversation !== undefined && value.conversation !== null;
-  const promptPresent = value.prompt !== undefined && value.prompt !== null;
   const instructions =
     value.instructions === undefined || value.instructions === null
       ? undefined
@@ -1048,9 +1034,6 @@ export function validateResponsesRequest(
     selector,
     input,
     stream,
-    background,
-    conversationPresent,
-    promptPresent,
   };
   if (instructions !== undefined) validated.instructions = instructions;
   if (maxOutputTokens !== undefined) validated.maxOutputTokens = maxOutputTokens;
@@ -2647,7 +2630,7 @@ function collectMetadataEcho(value: unknown): Readonly<Record<string, string>> |
 }
 
 /**
- * Convert a validated Responses request into the Pi invocation.
+ * Select and validate the consumed Responses facts, then build a Pi invocation.
  *
  * Without a resolver, Lucky-owned references/envelopes are a conversion
  * error (no fail-open). Use {@link convertResponsesRequestAsync} with a
@@ -2658,27 +2641,28 @@ export function convertResponsesRequest(
   receivedAt: number,
   policy: ResponseRequestConversionPolicy = DEFAULT_POLICY,
 ): ResponsesInvocation {
+  const selected = selectResponsesConsumerViews(value);
+  const mainRequest = selected.mainRequest;
   const freeformNames = new Set<string>();
   const namespaceReverse: Record<string, { namespace: string; child: string }> =
     Object.create(null);
-  const validated = validateResponsesRequest(
-    value,
+  const validated = validateMainRequest(
+    mainRequest,
     freeformNames,
     namespaceReverse,
   );
   let supplement: ResponsesProjectionSupplement;
   try {
-    supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
+    supplement = parseResponsesProjectionSupplement(selected.supplementRequest);
   } catch (error) {
     if (error instanceof InvalidResponsesProjectionSupplement) {
       throw new InvalidRequest(error.message);
     }
     throw error;
   }
-  const notices: ConversionNotice[] = [];
-  appendNonProjectionControlNotices(value, notices);
+  const notices = selected.notices;
   const convertedReasoning = convertReasoning(
-    isRecord(value) ? value.reasoning : undefined,
+    mainRequest.reasoning,
     policy.futureReasoningEffort,
     notices,
   );
@@ -2689,7 +2673,7 @@ export function convertResponsesRequest(
   const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
-    value,
+    mainRequest,
     freeformNames,
     namespaceReverse,
   );
@@ -2717,7 +2701,7 @@ export function convertResponsesRequest(
     ),
   });
   return buildInvocation(
-    value,
+    mainRequest,
     validated,
     freeformNames,
     additionalTools,
@@ -2750,27 +2734,28 @@ export async function convertResponsesRequestAsync(
   }>,
 ): Promise<ResponsesInvocation> {
   validateResolverLimits(limits);
+  const selected = selectResponsesConsumerViews(value);
+  const mainRequest = selected.mainRequest;
   const freeformNames = new Set<string>();
   const namespaceReverse: Record<string, { namespace: string; child: string }> =
     Object.create(null);
-  const validated = validateResponsesRequest(
-    value,
+  const validated = validateMainRequest(
+    mainRequest,
     freeformNames,
     namespaceReverse,
   );
   let supplement: ResponsesProjectionSupplement;
   try {
-    supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
+    supplement = parseResponsesProjectionSupplement(selected.supplementRequest);
   } catch (error) {
     if (error instanceof InvalidResponsesProjectionSupplement) {
       throw new InvalidRequest(error.message);
     }
     throw error;
   }
-  const notices: ConversionNotice[] = [];
-  appendNonProjectionControlNotices(value, notices);
+  const notices = selected.notices;
   const convertedReasoning = convertReasoning(
-    isRecord(value) ? value.reasoning : undefined,
+    mainRequest.reasoning,
     policy.futureReasoningEffort,
     notices,
   );
@@ -2781,7 +2766,7 @@ export async function convertResponsesRequestAsync(
   const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
-    value,
+    mainRequest,
     freeformNames,
     namespaceReverse,
   );
@@ -2820,7 +2805,7 @@ export async function convertResponsesRequestAsync(
     ),
   });
   return buildInvocation(
-    value,
+    mainRequest,
     validated,
     freeformNames,
     additionalTools,

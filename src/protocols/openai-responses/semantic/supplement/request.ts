@@ -6,6 +6,22 @@ import type {
   ResponsesStructuredOutputFormat,
 } from "./contract.js";
 
+export const SUPPLEMENT_REQUEST_FIELDS = Object.freeze([
+  "text",
+  "include",
+  "parallel_tool_calls",
+  "tool_choice",
+  "max_output_tokens",
+  "temperature",
+  "top_p",
+  "prompt_cache_key",
+  "prompt_cache_retention",
+  "safety_identifier",
+  "user",
+  "service_tier",
+  "truncation",
+] as const);
+
 function candidate<T>(value: T): ResponsesProjectionCandidate<T> {
   return Object.freeze({ value });
 }
@@ -57,11 +73,6 @@ function parseFormat(value: unknown): ResponsesStructuredOutputFormat | undefine
     throw new InvalidResponsesProjectionSupplement("text.format must be an object");
   }
   if (value.type === "text" || value.type === "json_object") {
-    if (Object.keys(value).some((key) => key !== "type")) {
-      throw new InvalidResponsesProjectionSupplement(
-        `text.format ${value.type} contains unsupported fields`,
-      );
-    }
     return Object.freeze({ type: value.type });
   }
   if (value.type !== "json_schema") {
@@ -88,12 +99,6 @@ function parseFormat(value: unknown): ResponsesStructuredOutputFormat | undefine
   if (value.strict !== undefined && typeof value.strict !== "boolean") {
     throw new InvalidResponsesProjectionSupplement(
       "text.format.strict must be a boolean when present",
-    );
-  }
-  const known = new Set(["type", "name", "description", "schema", "strict"]);
-  if (Object.keys(value).some((key) => !known.has(key))) {
-    throw new InvalidResponsesProjectionSupplement(
-      "text.format.json_schema contains unsupported fields",
     );
   }
   return Object.freeze({

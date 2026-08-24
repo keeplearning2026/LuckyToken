@@ -183,7 +183,7 @@ The implementation must encode this boundary in types and orchestration:
 - every unconsumed candidate becomes `omitted + warning` unless a named bounded degradation applies;
 - malformed requests and genuinely non-degradable guarantees are rejected by Responses validation or the authoritative Pi/main-call contract before this best-effort seam.
 - `max_output_tokens` is repaired on every certified target ceiling field; a target without that field records `omitted + warning` and still dispatches.
-- `background:true` is handled before Provider projection by Responses execution preparation, which warns, dispatches synchronously, and never fabricates deferred fetch/cancel state.
+- a raw request field with no Responses consumer, including `background`, remains unread and receives only the bounded unconsumed-field warning.
 
 ## 8. Implementation slices
 
@@ -251,11 +251,25 @@ Gate: the complete Responses suite passes through the local Module and the old s
 5. Prove a named bounded fallback records `degraded` and publishes an honest warning without claiming exact application.
 6. Narrow the Supplement outcome type so `failed` cannot be constructed, and remove Supplement-failure handling from semantic execution.
 7. Keep payload-shape, duplicate-ownership, and invalid-final-payload exceptions as internal-contract failures rather than availability outcomes.
-8. Add final-wire tests proving excessive certified output ceilings are repaired, unsupported output ceilings dispatch with warning, and `background:true` is degraded to synchronous execution before projection.
+8. Add final-wire tests proving excessive certified output ceilings are repaired and unsupported output ceilings dispatch with warning.
 
 Gate: Supplement presence never causes unconditional projection or request rejection; Adapters contain only positive mappings, while unconsumed candidates dispatch with centrally generated `omitted + warning` or a named bounded `degraded` outcome.
 
-### Slice 7 — Certification
+### Slice 7 — Demand-Driven Request Extraction
+
+This is a local corrective slice after the protocol-local migration; it does not reopen or repeat the decoupling work.
+
+1. Add one private extraction operation in `request.ts`, shared by the synchronous and asynchronous conversion entries.
+2. Select frozen own-property views for the main Responses consumer and the Supplement consumer before either parser runs.
+3. Remove reverse validation and field-specific state for request keys claimed by neither consumer, including `stream_options`, `top_logprobs`, `context_management`, `background`, `conversation`, and `prompt`.
+4. Derive bounded generic omission notices from present top-level keys minus the union of both consumer declarations without reading unconsumed values.
+5. Allow unclaimed siblings in claimed nested objects such as `text.format`, while retaining validation of consumed discriminators, required children, and consumed value types.
+6. Keep `validateMainRequest` and its validated shape private; retain only the synchronous and asynchronous conversion operations as module Interfaces.
+7. Prove the real Codex `stream_options.reasoning_summary_delivery` shape dispatches once without reaching Provider Wire, and prove throwing diagnostics cannot alter the selected lane, Provider Wire, response status, or response body.
+
+Gate: unconsumed request fields cannot affect dispatch; malformed consumed facts and missing minimum request facts still fail.
+
+### Slice 8 — Certification
 
 Run guarded lint, typecheck, unit, integration, certification, and full tests. Then run the independent Responses online scripts for CommandCode Private, CommandCode GOAT, and OpenCode GO when credentials and environment are available.
 

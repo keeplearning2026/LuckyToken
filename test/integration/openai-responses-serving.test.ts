@@ -2,6 +2,10 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type {
+  RequestJourneyObservationAuthority,
+  RequestJourneyObservationInput,
+} from "../../src/diagnostics/contract.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
 import {
   createOpenAIResponsesServingTestComposition,
@@ -57,6 +61,10 @@ describe("OpenAI Responses serving", () => {
         stateFile?: string;
         configuration?: OpenAIResponsesConfiguration;
         maxRequestBytes?: number;
+        diagnostics?: RequestJourneyObservationAuthority;
+        createResponseId?: () => string;
+        createSessionId?: () => string;
+        now?: () => number;
       },
   ) {
     const composition = await createOpenAIResponsesServingTestComposition({
@@ -316,12 +324,28 @@ describe("OpenAI Responses serving", () => {
     expect(response.status).toBe(400);
   });
 
-  it("serves the request while omitting an unsupported supplement fact", async () => {
+  it("dispatches a Codex stream option as an unconsumed-field warning", async () => {
     let dispatches = 0;
+    const upstreamBodies: unknown[] = [];
+    const observations: RequestJourneyObservationInput[] = [];
+    const diagnostics: RequestJourneyObservationAuthority = {
+      begin(input) {
+        return {
+          requestId: input.requestId,
+          observe(observation) {
+            observations.push(observation);
+          },
+          close() {},
+        };
+      },
+      observeRuntime() {},
+    };
     const { runtime } = await start({
-      fetch: async () => {
+      diagnostics,
+      fetch: async (input, init) => {
         dispatches += 1;
-        return commandCodeText("served without background projection");
+        upstreamBodies.push(JSON.parse(await new Request(input, init).text()));
+        return commandCodeText("served without stream option projection");
       },
     });
 
@@ -330,7 +354,10 @@ describe("OpenAI Responses serving", () => {
         {
           model: "commandcode-private/deepseek/deepseek-v4-flash",
           input: "hello",
-          background: true,
+          stream: true,
+          stream_options: {
+            reasoning_summary_delivery: "sequential_cutoff",
+          },
         },
         "client-token",
       ),
@@ -338,6 +365,101 @@ describe("OpenAI Responses serving", () => {
 
     expect(response.status).toBe(200);
     expect(dispatches).toBe(1);
+    expect(JSON.stringify(upstreamBodies[0])).not.toContain("stream_options");
+    const notice = observations.find(
+      (observation) =>
+        observation.kind === "conversion_notice_observed" &&
+        observation.code ===
+          "openai-responses_unconsumed_request_field_ignored",
+    );
+    expect(notice).toMatchObject({
+      severity: "warning",
+      location: expect.objectContaining({
+        lane: "semantic_conversion",
+        sourcePath: "$.stream_options",
+      }),
+    });
+    expect(notice).not.toHaveProperty("providerDispatched");
+  });
+
+  it("keeps semantic serving identical when diagnostics are disabled or throw", async () => {
+    const recordedObservations: RequestJourneyObservationInput[] = [];
+    const recordingDiagnostics: RequestJourneyObservationAuthority = {
+      begin(input) {
+        return {
+          requestId: input.requestId,
+          observe(observation) {
+            recordedObservations.push(observation);
+          },
+          close() {},
+        };
+      },
+      observeRuntime() {},
+    };
+    const throwingDiagnostics: RequestJourneyObservationAuthority = {
+      begin(input) {
+        return {
+          requestId: input.requestId,
+          observe() {
+            throw new Error("diagnostics observer unavailable");
+          },
+          close() {
+            throw new Error("diagnostics observer unavailable");
+          },
+        };
+      },
+      observeRuntime() {
+        throw new Error("diagnostics observer unavailable");
+      },
+    };
+
+    async function serve(
+      diagnostics: RequestJourneyObservationAuthority | undefined,
+    ): Promise<{
+      readonly status: number;
+      readonly body: string;
+      readonly providerWire: unknown;
+    }> {
+      const upstreamBodies: unknown[] = [];
+      const { runtime } = await start({
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+        createResponseId: () => "resp_diagnostics_equivalence",
+        createSessionId: () => "00000000-0000-4000-8000-000000000001",
+        now: () => 1_700_000_000_000,
+        fetch: async (input, init) => {
+          upstreamBodies.push(JSON.parse(await new Request(input, init).text()));
+          return commandCodeText("diagnostics do not control serving");
+        },
+      });
+      const response = await runtime.handle(
+        responsesRequest(
+          {
+            model: "commandcode-private/deepseek/deepseek-v4-flash",
+            input: "hello",
+            future_transport_control: { enabled: true },
+          },
+          "client-token",
+        ),
+      );
+      return {
+        status: response.status,
+        body: await response.text(),
+        providerWire: upstreamBodies[0],
+      };
+    }
+
+    const withoutDiagnostics = await serve(undefined);
+    const withRecordingDiagnostics = await serve(recordingDiagnostics);
+    const withThrowingDiagnostics = await serve(throwingDiagnostics);
+
+    expect(withRecordingDiagnostics).toEqual(withoutDiagnostics);
+    expect(withThrowingDiagnostics).toEqual(withoutDiagnostics);
+    expect(recordedObservations).toContainEqual(
+      expect.objectContaining({
+        kind: "lane_committed",
+        lane: "semantic_conversion",
+      }),
+    );
   });
 
   it("returns 400 for a non-JSON request body", async () => {

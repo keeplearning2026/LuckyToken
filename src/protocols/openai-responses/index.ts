@@ -14,11 +14,9 @@ export {
 export {
   convertResponsesRequest,
   convertResponsesRequestAsync,
-  validateResponsesRequest,
   type ResponseReferenceResolver,
   type ResponseRequestConversionPolicy,
   type ResponsesInvocation,
-  type ValidatedResponsesRequest,
 } from "./request.js";
 export {
   convertAssistantMessageToResponses,
