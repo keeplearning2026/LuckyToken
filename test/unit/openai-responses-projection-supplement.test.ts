@@ -157,6 +157,61 @@ describe("OpenAI Responses Provider projection supplement", () => {
     expect(result.client.notices).toEqual([]);
   });
 
+  it.each<
+    readonly [
+      name: string,
+      format: Readonly<Record<string, unknown>>,
+      expected: string | RegExp,
+    ]
+  >([
+    [
+      "unknown discriminator",
+      { type: "future_format" },
+      "unsupported text.format.type: future_format",
+    ],
+    [
+      "missing JSON Schema name",
+      { type: "json_schema", schema: { type: "object" } },
+      "text.format.name must be a non-empty string",
+    ],
+    [
+      "missing JSON Schema body",
+      { type: "json_schema", name: "answer" },
+      "text.format.schema must be an object",
+    ],
+    [
+      "invalid description",
+      {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        description: 42,
+      },
+      "text.format.description must be a string when present",
+    ],
+    [
+      "invalid strict flag",
+      {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+        strict: "yes",
+      },
+      "text.format.strict must be a boolean when present",
+    ],
+  ])("rejects the consumed text.format path: %s", (_name, format, expected) => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "client-selector",
+          input: "hello",
+          text: { format },
+        },
+        1,
+      ),
+    ).toThrow(expected);
+  });
+
   it("accepts current SDK null absence and in_memory cache spelling", () => {
     const result = convertResponsesRequest(
       {

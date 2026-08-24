@@ -418,7 +418,7 @@ describe("OpenAI Responses serving", () => {
     ): Promise<{
       readonly status: number;
       readonly body: string;
-      readonly providerWire: unknown;
+      readonly providerWires: readonly unknown[];
     }> {
       const upstreamBodies: unknown[] = [];
       const { runtime } = await start({
@@ -444,7 +444,7 @@ describe("OpenAI Responses serving", () => {
       return {
         status: response.status,
         body: await response.text(),
-        providerWire: upstreamBodies[0],
+        providerWires: Object.freeze([...upstreamBodies]),
       };
     }
 
@@ -452,12 +452,27 @@ describe("OpenAI Responses serving", () => {
     const withRecordingDiagnostics = await serve(recordingDiagnostics);
     const withThrowingDiagnostics = await serve(throwingDiagnostics);
 
+    expect(withoutDiagnostics.providerWires).toHaveLength(1);
     expect(withRecordingDiagnostics).toEqual(withoutDiagnostics);
     expect(withThrowingDiagnostics).toEqual(withoutDiagnostics);
     expect(recordedObservations).toContainEqual(
       expect.objectContaining({
         kind: "lane_committed",
         lane: "semantic_conversion",
+      }),
+    );
+    expect(recordedObservations).toContainEqual(
+      expect.objectContaining({
+        kind: "attempt_observed",
+        attempt: 1,
+        transition: "response",
+        status: 200,
+      }),
+    );
+    expect(recordedObservations).toContainEqual(
+      expect.objectContaining({
+        kind: "handoff_observed",
+        outcome: "finished",
       }),
     );
   });

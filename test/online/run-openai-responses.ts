@@ -235,6 +235,17 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function containsObjectKey(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsObjectKey(entry, key));
+  }
+  if (!isRecord(value)) return false;
+  return (
+    Object.hasOwn(value, key) ||
+    Object.values(value).some((entry) => containsObjectKey(entry, key))
+  );
+}
+
 function responsesReasoningReplay(input: {
   readonly result: ResponsesResult;
   readonly api: string;
@@ -781,6 +792,40 @@ export async function runOpenAIResponsesOnlineSuite(
       port: config.server.port,
     });
     const conformanceOrigin = server.origin;
+
+    const streamOptionsMarker = "LT_RESP_STREAM_OPTIONS_01";
+    const { result: streamOptionsResult } = await postResponsesSse(
+      conformanceOrigin,
+      responsesToken,
+      {
+        model: selector,
+        input: promptFor(streamOptionsMarker),
+        max_output_tokens: SUCCESS_MAX_TOKENS,
+        stream: true,
+        stream_options: {
+          reasoning_summary_delivery: "sequential_cutoff",
+        },
+      },
+      requestSignal(totalSignal),
+    );
+    validateResponsesResult(streamOptionsResult, streamOptionsMarker);
+    const streamOptionsExchange = capture.exchanges.findLast((exchange) =>
+      exchange.body.includes(streamOptionsMarker),
+    );
+    if (streamOptionsExchange === undefined) {
+      throw new Error("online_stream_options_upstream_missing");
+    }
+    if (
+      containsObjectKey(
+        JSON.parse(streamOptionsExchange.body) as unknown,
+        "reasoning_summary_delivery",
+      )
+    ) {
+      throw new Error(
+        "online_stream_options_reasoning_summary_delivery_reached_provider_wire",
+      );
+    }
+    summary.successfulProjectionProbes += 1;
 
     // Full-history reasoning replay: unlike the incremental chain above, the
     // client sends the complete prior Responses output and no
