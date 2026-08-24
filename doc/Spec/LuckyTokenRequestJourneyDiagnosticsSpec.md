@@ -7,7 +7,7 @@
 
 This document establishes the request-processing map and observation contract implemented by LuckyToken's unified Request Journey diagnostics system.
 
-It does not create a shared execution path. Local Native Preservation, Provider Native Preservation, and Semantic Conversion remain independent. They share only request-edge and lifecycle observation facts allowed by the architecture.
+It does not create a shared execution path. Direct Mode, Provider Native Preservation, and Semantic Conversion remain independent. They share only request-edge and lifecycle observation facts allowed by the architecture.
 
 Normative sources:
 
@@ -32,12 +32,14 @@ Application-level Runtime Diagnostics facts that have no Request Journey owner, 
 | Operation | Current route | Lane behavior |
 |---|---|---|
 | `model_generation` | `POST /v1/messages` | Provider Native or Semantic Conversion |
-| `model_generation` | `POST /v1/responses` | Local Native, Provider Native, or Semantic Conversion |
-| `conversation_compaction` | `POST /v1/responses/compact` | Local Native, Provider Native, or Semantic Conversion |
+| `model_generation` | `POST /v1/responses` | Direct Mode, Provider Native, or Semantic Conversion |
+| `conversation_compaction` | `POST /v1/responses/compact` | Direct Mode, Provider Native, or Semantic Conversion |
 | `model_discovery` | `GET /v1/models` | No execution lane; Backend-owned metadata query |
-| `web_search` | `POST /v1/alpha/search` | Local Native Preservation through the Codex-owned credential and transport boundary |
+| `web_search` | `POST /v1/alpha/search` | Direct Mode through the Codex-owned caller-envelope and transport boundary; upstream owns authentication |
+| `image_generation` | `POST /v1/images/generations`, `POST /v1/images/edits` | Direct Mode through the Codex-owned Images module |
+| `realtime_session` | `POST /v1/live`, `POST /v1/realtime/calls`, supported Realtime WebSocket upgrades | Direct Mode through the Codex-owned Realtime module |
 | `unmatched_request` | any unmatched method/path | No execution lane; HTTP routing rejection |
-| `unsupported_transport` | WebSocket upgrade | No execution lane; HTTP transport rejection |
+| `unsupported_transport` | unsupported WebSocket upgrade | No execution lane; HTTP transport rejection |
 
 Implementation may proceed in vertical slices beginning with `model_generation`, but completion requires every operation in this table to enter the same Journey authority from HTTP admission.
 
@@ -92,29 +94,31 @@ When only an external boundary is known, the origin precision is `external_bound
 | 7 | P1 | `establish_request_identity` | serving/compaction operations | effective session ID and optional client session ID | invalid identity carrier handled per protocol contract |
 | 8 | P1 | `validate_client_wire` | serving/compaction operations | protocol validation result | missing required fields, invalid known shapes |
 | 9 | P2 | `extract_model_selector` | model-bound operations | opaque client selector | missing/invalid selector |
-| 10 | P2 | `recognize_local_native` | operations supporting Local Native | explicit local capability result | local recognition authority unavailable |
+| 10 | P2 | `recognize_direct` | operations supporting Direct Mode | explicit local capability result | local recognition authority unavailable |
 | 11 | P2 | `resolve_public_model` | requests not claimed locally | alias/provider/real-model snapshot | unknown or unavailable alias/model |
 | 12 | P2 | `recognize_provider_native` | resolved compatible operations | explicit provider/API/operation capability result | invalid or absent capability contract |
 | 13 | P2 | `commit_lane` | model-bound operations | exactly one lane or explicit failure | no valid execution contract |
 
-Local Native recognition occurs before Public Model resolution where the protocol exposes that lane. Provider Native recognition occurs only after a Pi model has been resolved. Once `commit_lane` succeeds, failure cannot fall through to another lane.
+Direct Mode recognition occurs before Public Model resolution where the protocol exposes that lane. Provider Native recognition occurs only after a Pi model has been resolved. Once `commit_lane` succeeds, failure cannot fall through to another lane.
 
-Request Identity is correlation/session information. It is not Client authorization. Lane credential resolution occurs only after a lane owns the request.
+Request Identity is correlation/session information. It is not Client authorization. Direct Mode preserves caller credentials as unobserved Client Wire; Provider Native resolves its independent Provider credential only after that lane owns the request.
 
-## 4. Local Native Preservation steps
+## 4. Direct Mode steps
 
 | Order | Phase | Lane Step | Input | Output/artifact | Failure source examples |
 |---:|---|---|---|---|---|
 | 1 | P3 | `recognize_local_model` | opaque selector | local model/capability fact | model registry/capability authority |
-| 2 | P3 | `resolve_local_credential` | Client headers and local authority | request-local forward auth, safe account attribution | missing, invalid, or unavailable local credential |
+| 2 | P3 | `preserve_caller_envelope` | authoritative Client Wire | bounded transport-ready caller envelope; credentials remain unobserved | request read/cancellation failure |
 | 3 | P3 | `project_local_request` | authoritative Client Wire | boundary-required model/header projection | invalid boundary projection |
-| 4 | P3 | `construct_local_envelope` | projected request and local auth | endpoint, method, headers, encoding | endpoint/header construction failure |
-| 5 | P4 | `dispatch_local_transport` | local upstream envelope | upstream response handle | DNS/connect/TLS/write/timeout/cancellation |
-| 6 | P4 | `read_local_response` | upstream response handle | bounded upstream response artifact | body read, stream, unexpected EOF |
-| 7 | P5 | `preserve_local_response` | compatible upstream wire | Client Wire response candidate | incompatible or malformed preserved response |
+| 4 | P3 | `construct_direct_envelope` | preserved request | fixed endpoint, method, headers, encoding | endpoint/header construction failure |
+| 5 | P4 | `dispatch_direct_transport` | local upstream envelope | upstream response handle | DNS/connect/TLS/write/timeout/cancellation |
+| 6 | P4 | `read_direct_response` | upstream response handle | bounded upstream response artifact | body read, stream, unexpected EOF |
+| 7 | P5 | `preserve_direct_response` | compatible upstream wire | Client Wire response candidate | incompatible or malformed preserved response |
 | 8 | P5 | `observe_local_usage` | preserved response | optional normalized usage | malformed optional usage; never change response outcome |
 
-The Local Native lane does not depend on Public Model alias resolution, Provider Profiles, Pi AI IR, or Pi Provider execution.
+Images uses `commit_direct_images_lane`; Realtime HTTP and WebSocket use `commit_direct_realtime_lane`. A Realtime WebSocket Journey records admission with `transport=websocket`, enters `relay_realtime_frames` only after the upstream handshake succeeds, and remains active until both socket directions settle. Its P5 terminal step is `preserve_realtime_close`; normal close commits `success`, caller-abnormal or shutdown close commits `aborted`, and upstream connection/frame failure commits `failed`. P8 records the WebSocket close handoff. Observations never include credentials, account IDs, SDP, audio, or complete frame payloads.
+
+The Direct Mode lane does not depend on Public Model alias resolution, Provider Profiles, Pi AI IR, or Pi Provider execution.
 
 ## 5. Provider Native Preservation steps
 
@@ -132,7 +136,7 @@ The Local Native lane does not depend on Public Model alias resolution, Provider
 | 10 | P5 | `preserve_provider_response` | compatible provider wire | Client Wire response candidate | protocol incompatibility |
 | 11 | P5 | `observe_provider_native_usage` | preserved response | optional normalized usage | malformed optional usage; never change response outcome |
 
-This lane never enters Pi AI IR or Pi Provider semantic execution. Its credential, request construction, retry, transport, and response processing remain independent from Local Native and Semantic Conversion.
+This lane never enters Pi AI IR or Pi Provider semantic execution. Its credential, request construction, retry, transport, and response processing remain independent from Direct Mode and Semantic Conversion.
 
 ## 6. Semantic Conversion request direction: Client Wire to Pi IR
 
@@ -231,18 +235,18 @@ Current implementation gap: `GET /v1/models` has no Request Journey record or re
 
 ### 9.3 Routing and transport rejection
 
-Unmatched routes, drain rejection, and WebSocket rejection terminate before lane selection. They still require a Request Journey Record when the HTTP server has enough facts to identify an admitted request. A malformed connection that never becomes an HTTP request is a runtime transport incident rather than a Request Journey.
+Unmatched routes, drain rejection, and unsupported WebSocket upgrades terminate before lane selection. Supported Codex Realtime upgrades instead commit the Direct Mode lane and remain in one Journey through session close. All admitted upgrades use `transport=websocket`; a rejected upgrade may still write an HTTP 426 or pre-101 error envelope at P8. A malformed connection that never becomes an HTTP request is a runtime transport incident rather than a Request Journey.
 
 ## 10. Request Artifact matrix
 
 Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_applicable`. Captured artifacts also declare redaction, truncation, original byte count when known, captured byte count, media type, and integrity hash when safe.
 
-| Artifact | Owner | Local Native | Provider Native | Semantic Conversion | Required on failure |
+| Artifact | Owner | Direct Mode | Provider Native | Semantic Conversion | Required on failure |
 |---|---|---:|---:|---:|---:|
 | Client Request Wire | Client Protocol edge | yes | yes | yes | yes, bounded and redacted |
 | Parsed Client Request summary | Client Protocol adapter | yes | yes | yes | yes when parsing succeeded |
 | Lane decision | request resolution | yes | yes | yes | yes |
-| Local outbound request wire | Local Native | yes | n/a | n/a | yes when constructed |
+| Local outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
 | Provider Native outbound request wire | Provider Native | n/a | yes | n/a | yes when constructed |
 | Pi invocation snapshot | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
 | Pi Provider outbound request evidence | selected Pi Provider | n/a | n/a | provider-exposed | when safely exposed |
@@ -261,7 +265,7 @@ Credential values, cookies, authorization capabilities, raw local credential sta
 |---|---|---|
 | Client | P0-P3 | protocol, source path, invalid value class, Client status |
 | LuckyToken request edge | P0-P2, P6-P8 | module/step, invariant, exception fingerprint, handoff state |
-| Local credential/integration | P3-P5 Local Native | local module, credential availability class, transport phase |
+| Direct integration | P3-P5 Direct Mode | owning module and transport phase; never caller credential values |
 | Provider credential/profile authority | P3-P4 Provider Native/Semantic | provider, safe Profile attribution, auth/setup phase, attempt |
 | Pi Client conversion | P3/P5 Semantic | direction, adapter, Lane Step, semantic subject, source path, notice/repair policy |
 | Pi Provider conversion | P4 Semantic | direction, provider/API, Lane Step, semantic subject, trusted failure fact |
@@ -286,7 +290,7 @@ interface RequestJourneyLocation {
     | "outcome_commit"
     | "http_handoff";
   readonly lane?:
-    | "local_native"
+    | "direct"
     | "provider_native"
     | "semantic_conversion";
   readonly direction?:
@@ -593,8 +597,8 @@ The eventual unified record must be certified against at least these scenarios:
 | unsupported media type or encoding | P1 `validate_media_and_encoding` |
 | oversized or invalid JSON body | P1 `read_and_decode_body` |
 | unknown/unavailable model | P2 `resolve_public_model` |
-| Local Native credential unavailable | P3 Local `resolve_local_credential` |
-| Local Native transport/body-read failure | P4 Local dispatch/read step |
+| Direct Mode upstream rejects caller credential | P4/P5 Local upstream response preservation |
+| Direct Mode transport/body-read failure | P4 Local dispatch/read step |
 | Provider Native auth failure | P3 Provider Native `resolve_provider_auth` |
 | Anthropic OAuth body projection failure | P3 Provider Native `project_native_body` |
 | Provider Native final 429/Profile switch | P4 retry/profile steps with ordered attempts |

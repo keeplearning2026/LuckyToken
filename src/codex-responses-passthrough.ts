@@ -1,4 +1,4 @@
-import type { CodexFetchFunction, CodexForwardAuth } from "./codex-native-seam.js";
+import type { CodexFetchFunction } from "./codex-native-seam.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,
@@ -11,18 +11,18 @@ export const CODEX_RESPONSES_COMPACT_URL =
 
 export interface CodexResponsesPassthroughResult {
   readonly status: number;
-  readonly headers: Readonly<Record<string, string>>;
+  readonly statusText: string;
+  readonly headers: Headers;
   readonly body: Uint8Array<ArrayBuffer>;
 }
 
 export interface CodexResponsesPassthroughOptions {
-  readonly rawBody: string;
+  readonly rawBody: Uint8Array<ArrayBuffer>;
+  readonly requestUrl: string;
   readonly requestHeaders: Headers;
-  readonly forwardAuth: CodexForwardAuth;
   readonly signal: AbortSignal;
   readonly fetch: CodexFetchFunction;
   readonly journey?: RequestJourneyObserver;
-  readonly profileId?: string;
 }
 
 const HOP_BY_HOP = new Set([
@@ -36,62 +36,59 @@ const HOP_BY_HOP = new Set([
   "upgrade",
   "host",
   "content-length",
+  "proxy-connection",
+  "expect",
+]);
+
+const STALE_RESPONSE_REPRESENTATION_HEADERS = new Set([
   "content-encoding",
+  "content-md5",
+  "digest",
+  "content-digest",
+  "repr-digest",
 ]);
 
-const RESPONSE_FORBIDDEN = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "proxy-authorization",
-  "www-authenticate",
-]);
-
-const EXACT_FORWARD_HEADERS = new Set([
-  "chatgpt-account-id",
-  "openai-beta",
-  "originator",
-  "session_id",
-  "session-id",
-  "thread-id",
-  "x-client-request-id",
-  "x-oai-attestation",
-  "x-openai-subagent",
-  "x-responsesapi-include-timing-metrics",
-]);
-
-function shouldForwardRequestHeader(name: string): boolean {
-  const lower = name.toLowerCase();
-  return EXACT_FORWARD_HEADERS.has(lower) || lower.startsWith("x-codex-");
-}
-
-function buildRequestHeaders(source: Headers, auth: CodexForwardAuth): Headers {
-  const headers = new Headers({
-    "content-type": "application/json",
-    authorization: auth.authorization,
-  });
+function buildRequestHeaders(source: Headers): Headers {
+  const connectionHeaders = new Set(
+    (source.get("connection") ?? "")
+      .split(",")
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => name.length > 0),
+  );
+  const headers = new Headers();
   for (const [name, value] of source) {
     const lower = name.toLowerCase();
-    if (!shouldForwardRequestHeader(lower)) continue;
+    if (HOP_BY_HOP.has(lower) || connectionHeaders.has(lower)) continue;
     headers.set(lower, value);
   }
-  if (
-    headers.get("chatgpt-account-id") === null &&
-    auth.accountId !== undefined
-  ) {
-    headers.set("chatgpt-account-id", auth.accountId);
-  }
+  headers.set("accept-encoding", "identity");
   return headers;
 }
 
-function responseHeaders(source: Headers): Readonly<Record<string, string>> {
-  const result: Record<string, string> = {};
+function responseHeaders(source: Headers): Headers {
+  const contentEncoding = source.get("content-encoding")?.trim().toLowerCase();
+  const representationWasDecoded =
+    contentEncoding === "gzip" ||
+    contentEncoding === "x-gzip" ||
+    contentEncoding === "deflate" ||
+    contentEncoding === "br";
+  const connectionHeaders = new Set(
+    (source.get("connection") ?? "")
+      .split(",")
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => name.length > 0),
+  );
+  const result = new Headers();
   for (const [name, value] of source) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP.has(lower) || RESPONSE_FORBIDDEN.has(lower)) continue;
-    result[lower] = value;
+    if (
+      HOP_BY_HOP.has(lower) ||
+      (representationWasDecoded && STALE_RESPONSE_REPRESENTATION_HEADERS.has(lower)) ||
+      connectionHeaders.has(lower)
+    ) continue;
+    result.append(lower, value);
   }
-  return Object.freeze(result);
+  return result;
 }
 
 export class CodexResponsesPassthroughTransportError extends Error {
@@ -156,7 +153,7 @@ async function passthroughCodexRequest(
 ): Promise<CodexResponsesPassthroughResult> {
   const projectionLocation = {
     phase: "lane_request_preparation",
-    lane: "local_native",
+    lane: "direct",
     step: "project_local_request",
   } as const;
   enterLocalTransportStep(
@@ -164,7 +161,7 @@ async function passthroughCodexRequest(
     "p3.project_local_request",
     projectionLocation,
   );
-  const outboundBytes = new TextEncoder().encode(options.rawBody);
+  const outboundBytes = options.rawBody;
   completeLocalTransportStep(
     options.journey,
     "p3.project_local_request",
@@ -173,18 +170,15 @@ async function passthroughCodexRequest(
   );
   const envelopeLocation = {
     phase: "lane_request_preparation",
-    lane: "local_native",
-    step: "construct_local_envelope",
+    lane: "direct",
+    step: "construct_direct_envelope",
   } as const;
   enterLocalTransportStep(
     options.journey,
-    "p3.construct_local_envelope",
+    "p3.construct_direct_envelope",
     envelopeLocation,
   );
-  const headers = buildRequestHeaders(
-    options.requestHeaders,
-    options.forwardAuth,
-  );
+  const headers = buildRequestHeaders(options.requestHeaders);
   observeLocalTransportJourney(options.journey, {
     kind: "artifact_observed",
     artifactId: "local_outbound_request_wire",
@@ -199,44 +193,42 @@ async function passthroughCodexRequest(
   });
   completeLocalTransportStep(
     options.journey,
-    "p3.construct_local_envelope",
+    "p3.construct_direct_envelope",
     envelopeLocation,
     "success",
   );
 
   const dispatchLocation = {
     phase: "upstream_execution",
-    lane: "local_native",
-    step: "dispatch_local_transport",
+    lane: "direct",
+    step: "dispatch_direct_transport",
     attempt: 1,
   } as const;
   enterLocalTransportStep(
     options.journey,
-    "p4.dispatch_local_transport",
+    "p4.dispatch_direct_transport",
     dispatchLocation,
   );
   observeLocalTransportJourney(options.journey, {
     kind: "attempt_observed",
     attempt: 1,
-    ...(options.profileId === undefined
-      ? {}
-      : { profileId: options.profileId }),
     transition: "started",
     location: dispatchLocation,
   });
   let response: Response;
   try {
-    response = await options.fetch(url, {
+    response = await options.fetch(`${url}${new URL(options.requestUrl).search}`, {
       method: "POST",
       headers,
       body: options.rawBody,
       signal: options.signal,
+      redirect: "manual",
     });
   } catch (error) {
     if (options.signal.aborted) throw error;
     completeLocalTransportStep(
       options.journey,
-      "p4.dispatch_local_transport",
+      "p4.dispatch_direct_transport",
       dispatchLocation,
       "failed",
     );
@@ -245,7 +237,7 @@ async function passthroughCodexRequest(
       artifactId: "local_upstream_response_wire",
       artifactKind: "local_upstream_response_wire",
       state: "unavailable",
-      reason: "local_transport_failed",
+      reason: "direct_transport_failed",
       location: dispatchLocation,
     });
     observeLocalTransportJourney(options.journey, {
@@ -261,28 +253,25 @@ async function passthroughCodexRequest(
   }
   completeLocalTransportStep(
     options.journey,
-    "p4.dispatch_local_transport",
+    "p4.dispatch_direct_transport",
     dispatchLocation,
     "success",
   );
 
   const readLocation = {
     phase: "upstream_execution",
-    lane: "local_native",
-    step: "read_local_response",
+    lane: "direct",
+    step: "read_direct_response",
     attempt: 1,
   } as const;
   enterLocalTransportStep(
     options.journey,
-    "p4.read_local_response",
+    "p4.read_direct_response",
     readLocation,
   );
   observeLocalTransportJourney(options.journey, {
     kind: "attempt_observed",
     attempt: 1,
-    ...(options.profileId === undefined
-      ? {}
-      : { profileId: options.profileId }),
     status: response.status,
     transition: "response",
     location: readLocation,
@@ -305,7 +294,7 @@ async function passthroughCodexRequest(
     });
     completeLocalTransportStep(
       options.journey,
-      "p4.read_local_response",
+      "p4.read_direct_response",
       readLocation,
       "failed",
     );
@@ -336,12 +325,13 @@ async function passthroughCodexRequest(
   });
   completeLocalTransportStep(
     options.journey,
-    "p4.read_local_response",
+    "p4.read_direct_response",
     readLocation,
     "success",
   );
   return Object.freeze({
     status: response.status,
+    statusText: response.statusText,
     headers: responseHeaders(response.headers),
     body,
   });

@@ -24,6 +24,7 @@ export class UnsupportedResponsesContentEncodingError extends Error {
 }
 
 export interface ResponsesRequestBody {
+  readonly wireBytes: Uint8Array<ArrayBuffer>;
   readonly text: string;
   readonly json: unknown;
 }
@@ -147,5 +148,5 @@ export async function readResponsesRequestBody(
     throw new ResponsesRequestBodyTooLargeError(decoded.byteLength, maximumBytes);
   }
   const text = new TextDecoder().decode(decoded);
-  return Object.freeze({ text, json: JSON.parse(text) as unknown });
+  return Object.freeze({ wireBytes: raw, text, json: JSON.parse(text) as unknown });
 }

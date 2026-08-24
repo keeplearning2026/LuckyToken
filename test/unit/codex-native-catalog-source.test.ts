@@ -35,7 +35,7 @@ describe("Codex native catalog source", () => {
           },
           {
             slug: "anthropic/claude-opus",
-            display_name: "Routed row must not become Local Native",
+            display_name: "Routed row must not become Direct Mode",
           },
         ],
       }),

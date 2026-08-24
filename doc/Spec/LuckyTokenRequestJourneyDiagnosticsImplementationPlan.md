@@ -101,13 +101,13 @@ The edge owns request identity and final Journey close. Handlers may refine the 
 
 For each lane, publish step entry immediately before owned work and step completion only after truthful completion.
 
-#### Local Native Preservation
+#### Direct Mode
 
 - local model recognition and lane commitment;
-- local credential resolution and envelope construction;
+- caller-envelope preservation and direct envelope construction;
 - dispatch and response read;
 - native response preservation and real terminal usage extraction;
-- local failures located only in Local Native steps.
+- local failures located only in Direct Mode steps.
 
 #### Provider Native Preservation
 
@@ -214,7 +214,7 @@ Run the complete scenario matrix in the diagnostics specification, including:
 
 - ingress/media/body failures;
 - unknown model and cancellation before lane commitment;
-- Local Native credential, dispatch, and body-read failures;
+- Direct Mode envelope, dispatch, and body-read failures;
 - Provider Native auth, OAuth projection, final 429/Profile switch, and alias projection failures;
 - all four Semantic Conversion directions and tool lifecycle failures;
 - response encoding, client rendering, and P8 disconnect failures;

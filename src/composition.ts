@@ -7,18 +7,22 @@ import {
   certifyCoreServingComposition,
   type CoreServingCertificationManifest,
 } from "./core-serving-certification.js";
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "./codex-native-seam.js";
+import type { CodexNativeModelSource } from "./codex-native-seam.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import { createExecutionOperation } from "./execution.js";
 import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
 import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
-import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
-import { createCodexLocalResponsesLane } from "./integrations/codex/local-responses.js";
-import { createCodexLocalSearchHandler } from "./integrations/codex/local-search.js";
+import { createCodexDirectCompactLane } from "./integrations/codex/local-compact.js";
+import { createCodexDirectResponsesLane } from "./integrations/codex/local-responses.js";
+import { createCodexDirectSearchHandler } from "./integrations/codex/local-search.js";
+import {
+  createCodexDirectImagesEditsHandler,
+  createCodexDirectImagesGenerationsHandler,
+} from "./integrations/codex/local-images.js";
+import {
+  createCodexDirectRealtimeModule,
+} from "./integrations/codex/local-realtime.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import type { PublicModelSource } from "./public-model-seam.js";
 import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/index.js";
@@ -41,6 +45,7 @@ import { createResponseSessionState } from "./protocols/openai-responses/session
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import { createProfileBoundPiExecution } from "./credentials/profile-bound-pi-execution.js";
+import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
 
 export type DataPlaneConfiguration = Readonly<
   Pick<
@@ -60,7 +65,6 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly fetch: FetchFunction;
-  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
@@ -71,6 +75,7 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
 export interface ConfiguredLuckyTokenDataPlane {
   readonly runtime: LuckyTokenRuntime;
   readonly certification: CoreServingCertificationManifest;
+  readonly webSocketUpgrade?: WebSocketUpgradeHandler;
   /** Finalize protocol-owned resources after request execution is quiescent. */
   close(): Promise<void>;
 }
@@ -144,15 +149,23 @@ export async function createConfiguredLuckyTokenDataPlane(
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   ];
-  if (options.codexLocalAuth !== undefined) {
-    handlers.push(
-      createCodexLocalSearchHandler({
-        credentials: options.codexLocalAuth,
-        fetch: options.fetch,
-        maxRequestBytes: config.limits.maxRequestBytes,
-      }),
-    );
-  }
+  const realtime = createCodexDirectRealtimeModule({ fetch: options.fetch });
+  const webSocketUpgrade = realtime.webSocketUpgrade;
+  handlers.push(
+    createCodexDirectSearchHandler({
+      fetch: options.fetch,
+      maxRequestBytes: config.limits.maxRequestBytes,
+    }),
+    createCodexDirectImagesGenerationsHandler({
+      fetch: options.fetch,
+      maxRequestBytes: config.limits.maxRequestBytes,
+    }),
+    createCodexDirectImagesEditsHandler({
+      fetch: options.fetch,
+      maxRequestBytes: config.limits.maxRequestBytes,
+    }),
+    ...realtime.httpHandlers,
+  );
 
   let finalizeResponsesState: (() => Promise<void>) | undefined;
   if (responsesConfig !== undefined) {
@@ -167,21 +180,17 @@ export async function createConfiguredLuckyTokenDataPlane(
         responsesConfig.providerNativeConfiguration,
       ),
     });
-    const localNativeLane =
-      options.codexLocalAuth === undefined ||
+    const directLane =
       options.codexNativeModels === undefined
         ? undefined
-        : createCodexLocalResponsesLane({
-            credentials: options.codexLocalAuth,
+        : createCodexDirectResponsesLane({
             models: options.codexNativeModels,
             fetch: options.fetch,
           });
-    const localCompactLane =
-      options.codexLocalAuth === undefined ||
+    const directCompactLane =
       options.codexNativeModels === undefined
         ? undefined
-        : createCodexLocalCompactLane({
-            credentials: options.codexLocalAuth,
+        : createCodexDirectCompactLane({
             models: options.codexNativeModels,
             fetch: options.fetch,
           });
@@ -205,14 +214,14 @@ export async function createConfiguredLuckyTokenDataPlane(
         maxRequestBytes: config.limits.maxRequestBytes,
         now,
         executeOperation: semanticExecution,
-        ...(localNativeLane === undefined ? {} : { localNativeLane }),
+        ...(directLane === undefined ? {} : { directLane }),
       }),
       createOpenAIResponsesCompactHandler({
         models: options.models,
         publicModels: options.publicModels,
-        ...(localCompactLane === undefined
+        ...(directCompactLane === undefined
           ? {}
-          : { localNativeLane: localCompactLane }),
+          : { directLane: directCompactLane }),
         providerNativeLane,
         configuration,
         stateFile,
@@ -266,6 +275,7 @@ export async function createConfiguredLuckyTokenDataPlane(
   return Object.freeze({
     runtime,
     certification,
+    ...(webSocketUpgrade === undefined ? {} : { webSocketUpgrade }),
     close(): Promise<void> {
       closePromise ??= finalizeResponsesState?.() ?? Promise.resolve();
       return closePromise;

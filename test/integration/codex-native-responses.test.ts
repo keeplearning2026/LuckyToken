@@ -2,30 +2,15 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
-
-function codexAuthority(token = "codex-token"): CodexLocalCredentialAuthority {
-  return Object.freeze({
-    isAvailable: async () => true,
-    authorizeToken: async (candidate: string) =>
-      candidate === token ? Object.freeze({}) : undefined,
-    resolveForwardAuth: async (headers: Headers) =>
-      headers.get("authorization") === `Bearer ${token}`
-        ? Object.freeze({
-            authorization: `Bearer ${token}`,
-            accountId: "acct-local",
-          })
-        : undefined,
-    scrub: (value: string) => value.split(token).join("[REDACTED]"),
-  });
-}
+import {
+  startLuckyTokenHttpServer,
+  type RunningLuckyTokenHttpServer,
+} from "../../src/server.js";
 
 function nativeModels(...ids: string[]): CodexNativeModelSource {
   const set = new Set(ids);
@@ -87,6 +72,9 @@ function request(model: string, token: string, stream = false): Request {
       authorization: `Bearer ${token}`,
       "chatgpt-account-id": "acct-from-request",
       "x-client-request-id": "00000000-0000-4000-8000-000000000777",
+      cookie: "caller=session",
+      "x-api-key": "caller-api-key",
+      "x-codex-future": "preserve-me",
       "content-type": "application/json",
     },
     body: JSON.stringify({ model, input: "hello", ...(stream ? { stream: true } : {}) }),
@@ -95,14 +83,15 @@ function request(model: string, token: string, stream = false): Request {
 
 describe("Codex-native Responses routing", () => {
   const compositions: OpenAIResponsesServingTestComposition[] = [];
+  const servers: RunningLuckyTokenHttpServer[] = [];
   afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => server.close()));
     await Promise.all(compositions.splice(0).map((composition) => composition.close()));
   });
 
   async function start(options: {
     fetch: FetchFunction;
     modelId?: string;
-    codexLocalAuth?: CodexLocalCredentialAuthority;
   }) {
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -110,7 +99,6 @@ describe("Codex-native Responses routing", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       modelId: options.modelId ?? "deepseek/deepseek-v4-flash",
       fetch: options.fetch,
-      codexLocalAuth: options.codexLocalAuth ?? codexAuthority(),
       codexNativeModels: nativeModels("gpt-native"),
     });
     compositions.push(composition);
@@ -134,6 +122,9 @@ describe("Codex-native Responses routing", () => {
     expect(calls[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer codex-token");
     expect(calls[0]?.headers.get("chatgpt-account-id")).toBe("acct-from-request");
+    expect(calls[0]?.headers.get("cookie")).toBe("caller=session");
+    expect(calls[0]?.headers.get("x-api-key")).toBe("caller-api-key");
+    expect(calls[0]?.headers.get("x-codex-future")).toBe("preserve-me");
     await expect(calls[0]?.json()).resolves.toMatchObject({ model: "gpt-native" });
     await expect(response.json()).resolves.toMatchObject({
       object: "response",
@@ -167,14 +158,72 @@ describe("Codex-native Responses routing", () => {
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers.get("content-encoding")).toBeNull();
-    await expect(calls[0]?.json()).resolves.toEqual({
-      model: "gpt-native",
-      input: "compressed",
+    expect(calls[0]?.headers.get("content-encoding")).toBe("zstd");
+    expect(
+      Array.from(new Uint8Array(await calls[0]!.arrayBuffer())),
+    ).toEqual(Array.from(encoded));
+  });
+
+  it("preserves the raw query when replacing the Responses URL", async () => {
+    let upstreamUrl: string | undefined;
+    const { runtime } = await start({
+      fetch: async (input) => {
+        upstreamUrl = String(input);
+        return responsesJson("gpt-native", "native answer");
+      },
+    });
+
+    await runtime.handle(
+      new Request(
+        "http://luckytoken.test/v1/responses?bare&item=a%2Fb&item=two&token=query-secret",
+        {
+          method: "POST",
+          headers: { authorization: "Bearer caller-token", "content-type": "application/json" },
+          body: '{ "model": "gpt-native", "input": "hello" }',
+        },
+      ),
+    );
+
+    expect(upstreamUrl).toBe(
+      "https://chatgpt.com/backend-api/codex/responses?bare&item=a%2Fb&item=two&token=query-secret",
+    );
+  });
+
+  it("preserves a Direct Mode upstream status text through the Node handoff", async () => {
+    const upstreamHeaders = new Headers({ "content-type": "text/plain" });
+    upstreamHeaders.append("set-cookie", "first=1; Path=/");
+    upstreamHeaders.append("set-cookie", "second=2; Path=/");
+    const { runtime } = await start({
+      fetch: async () => new Response("busy", {
+        status: 429,
+        statusText: "Codex Busy",
+        headers: upstreamHeaders,
+      }),
+    });
+    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    servers.push(server);
+
+    const response = await fetch(`${server.origin}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer caller-token",
+        "content-type": "application/json",
+      },
+      body: '{"model":"gpt-native","input":"hello"}',
+    });
+
+    expect({
+      status: response.status,
+      statusText: response.statusText,
+      setCookies: response.headers.getSetCookie(),
+    }).toEqual({
+      status: 429,
+      statusText: "Codex Busy",
+      setCookies: ["first=1; Path=/", "second=2; Path=/"],
     });
   });
 
-  it("does not fall through when a local native model is claimed but its credential is unavailable", async () => {
+  it("forwards caller auth after a direct model is claimed", async () => {
     const calls: Request[] = [];
     const { runtime } = await start({
       modelId: "gpt-native",
@@ -186,11 +235,11 @@ describe("Codex-native Responses routing", () => {
 
     const response = await runtime.handle(request("gpt-native", "not-the-local-codex-token"));
 
-    expect(response.status).toBe(401);
-    expect(calls).toHaveLength(0);
-    await expect(response.json()).resolves.toMatchObject({
-      error: { type: "authentication_error" },
-    });
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers.get("authorization")).toBe(
+      "Bearer not-the-local-codex-token",
+    );
   });
 
   it("lets a Codex-authenticated request use an ordinary Pi model when its model is not native", async () => {

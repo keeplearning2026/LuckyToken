@@ -20,7 +20,7 @@ For the **Semantic Conversion lane**, the existing Pi boundary remains authorita
 Client Wire ↔ Client Protocol adapter ↔ Pi AI IR ↔ Pi Provider ↔ Upstream Wire
 ```
 
-Current LuckyToken also has independent Local Native and Provider Native preservation lanes; this Provider Activation specification does not redefine those lane contracts.
+Current LuckyToken also has independent Direct Mode and Provider Native preservation lanes; this Provider Activation specification does not redefine those lane contracts.
 
 The problem addressed here is not protocol conversion. The current Electron product can start, render pages, and expose typed management APIs, but Provider discovery/authentication is coupled to the HTTP Data Plane lifetime. In a fresh or failed/stopped Gateway state the user therefore cannot reliably discover or log in to Providers. In addition, the shipped `@luckytoken/provider-commandcode-private` package is installed in the release Backend but is not part of the default product Provider composition.
 

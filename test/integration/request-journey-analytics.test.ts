@@ -88,7 +88,7 @@ interface FixtureJourney {
   readonly requestId: string;
   readonly acceptedAt: number;
   readonly protocol: "anthropic-messages" | "openai-responses";
-  readonly lane?: "local_native" | "provider_native" | "semantic_conversion";
+  readonly lane?: "direct" | "provider_native" | "semantic_conversion";
   readonly providerId?: string;
   readonly modelId?: string;
   readonly clientSessionId?: string;
@@ -231,11 +231,11 @@ describe("Request Journey Worker analytics projection", () => {
           location: {
             phase: "request_resolution",
             step:
-              fixture.lane === "local_native"
+              fixture.lane === "direct"
                 ? "recognize_local_model"
                 : "resolve_public_model",
-            ...(fixture.lane === "local_native"
-              ? { lane: "local_native" as const }
+            ...(fixture.lane === "direct"
+              ? { lane: "direct" as const }
               : {}),
           },
         });
@@ -260,8 +260,8 @@ describe("Request Journey Worker analytics projection", () => {
             phase: "lane_request_preparation",
             lane: fixture.lane,
             step:
-              fixture.lane === "local_native"
-                ? "resolve_local_credential"
+              fixture.lane === "direct"
+                ? "preserve_caller_envelope"
                 : fixture.lane === "provider_native"
                   ? "capture_provider_profile"
                   : "capture_semantic_profile",
@@ -281,8 +281,8 @@ describe("Request Journey Worker analytics projection", () => {
             phase: "upstream_execution",
             lane: fixture.lane,
             step:
-              fixture.lane === "local_native"
-                ? "dispatch_local_transport"
+              fixture.lane === "direct"
+                ? "dispatch_direct_transport"
                 : fixture.lane === "provider_native"
                   ? "dispatch_provider_native"
                   : "create_pi_stream",
@@ -303,7 +303,7 @@ describe("Request Journey Worker analytics projection", () => {
             step:
               fixture.lane === "semantic_conversion"
                 ? "normalize_terminal_usage"
-                : fixture.lane === "local_native"
+                : fixture.lane === "direct"
                   ? "observe_local_usage"
                   : "observe_provider_native_usage",
             subject: "usage",
@@ -390,7 +390,7 @@ describe("Request Journey Worker analytics projection", () => {
         requestId: "82000000-0000-4000-8000-000000000003",
         acceptedAt: at(12),
         protocol: "anthropic-messages",
-        lane: "local_native",
+        lane: "direct",
         providerId: "commandcode-private",
         modelId: "cc-mini",
         clientSessionId: SESSION_BETA,

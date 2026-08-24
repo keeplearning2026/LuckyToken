@@ -1,33 +1,17 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-function codexAuthority(): CodexLocalCredentialAuthority {
-  return Object.freeze({
-    resolveForwardAuth: async (headers: Headers) =>
-      headers.get("authorization") === "Bearer codex-token"
-        ? Object.freeze({
-            authorization: "Bearer codex-token",
-            accountId: "acct-local",
-          })
-        : undefined,
-    scrub: (value: string) => value.replaceAll("codex-token", "[REDACTED]"),
-  });
-}
-
 const noNativeModels: CodexNativeModelSource = Object.freeze({
   has: () => false,
 });
 
-describe("Codex Local Native web search", () => {
+describe("Codex Direct Mode web search", () => {
   const compositions: OpenAIResponsesServingTestComposition[] = [];
 
   afterEach(async () => {
@@ -36,7 +20,7 @@ describe("Codex Local Native web search", () => {
     );
   });
 
-  it("preserves opaque request and response body bytes", async () => {
+  it("forwards caller credentials without consulting local Codex auth", async () => {
     const requestBytes = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xff]);
     const responseBytes = Uint8Array.from([0x00, 0x80, 0xff, 0x41]);
     let outbound: Request | undefined;
@@ -53,7 +37,6 @@ describe("Codex Local Native web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch,
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -62,7 +45,8 @@ describe("Codex Local Native web search", () => {
       new Request("http://luckytoken.test/v1/alpha/search", {
         method: "POST",
         headers: {
-          authorization: "Bearer codex-token",
+          authorization: "Bearer caller-owned-token",
+          "chatgpt-account-id": "acct-caller",
           "content-type": "application/octet-stream",
         },
         body: requestBytes,
@@ -72,6 +56,8 @@ describe("Codex Local Native web search", () => {
     expect({
       status: response.status,
       upstreamUrl: outbound?.url,
+      upstreamAuthorization: outbound?.headers.get("authorization"),
+      upstreamAccountId: outbound?.headers.get("chatgpt-account-id"),
       upstreamBody:
         outbound === undefined
           ? undefined
@@ -80,6 +66,8 @@ describe("Codex Local Native web search", () => {
     }).toEqual({
       status: 207,
       upstreamUrl: "https://chatgpt.com/backend-api/codex/alpha/search",
+      upstreamAuthorization: "Bearer caller-owned-token",
+      upstreamAccountId: "acct-caller",
       upstreamBody: Array.from(requestBytes),
       responseBody: Array.from(responseBytes),
     });
@@ -100,7 +88,6 @@ describe("Codex Local Native web search", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -140,7 +127,6 @@ describe("Codex Local Native web search", () => {
         return new Response("{}", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -161,7 +147,7 @@ describe("Codex Local Native web search", () => {
     );
   });
 
-  it("forwards end-to-end headers while rebuilding the credential envelope", async () => {
+  it("forwards caller end-to-end headers and rebuilds only transport headers", async () => {
     let outbound: Request | undefined;
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -172,7 +158,6 @@ describe("Codex Local Native web search", () => {
         return new Response("{}", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -207,23 +192,25 @@ describe("Codex Local Native web search", () => {
       connection: outbound?.headers.get("connection"),
       namedByConnection: outbound?.headers.get("x-remove-me"),
       host: outbound?.headers.get("host"),
+      acceptEncoding: outbound?.headers.get("accept-encoding"),
       redirect: outbound?.redirect,
     }).toEqual({
       authorization: "Bearer codex-token",
-      accountId: "acct-local",
+      accountId: "acct-untrusted",
       contentType: "application/vnd.codex.search+json",
       future: "preserve-me",
       acceptLanguage: "zh-CN",
-      cookie: null,
+      cookie: "session=untrusted",
       proxyAuthorization: null,
       connection: null,
       namedByConnection: null,
       host: null,
+      acceptEncoding: "identity",
       redirect: "manual",
     });
   });
 
-  it("preserves upstream error responses without exposing credential headers", async () => {
+  it("preserves upstream error responses and end-to-end response headers", async () => {
     const upstreamBody = Uint8Array.from([0x7b, 0x22, 0xff, 0x22, 0x7d]);
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -240,7 +227,6 @@ describe("Codex Local Native web search", () => {
           },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -264,13 +250,13 @@ describe("Codex Local Native web search", () => {
       status: 429,
       contentType: "application/problem+json",
       retryAfter: "7",
-      setCookie: null,
-      authenticate: null,
+      setCookie: "chatgpt-secret=do-not-forward",
+      authenticate: "Bearer upstream-secret",
       body: Array.from(upstreamBody),
     });
   });
 
-  it("rejects an invalid local Codex bearer without contacting ChatGPT", async () => {
+  it("lets ChatGPT reject caller credentials", async () => {
     let contacted = false;
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -278,10 +264,12 @@ describe("Codex Local Native web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => {
         contacted = true;
-        return new Response("must not execute", { status: 200 });
+        return new Response(
+          JSON.stringify({ error: { message: "upstream rejected token" } }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -302,11 +290,10 @@ describe("Codex Local Native web search", () => {
     }).toEqual({
       status: 401,
       contentType: "application/json",
-      contacted: false,
+      contacted: true,
       body: {
         error: {
-          type: "authentication_error",
-          message: "Local Codex credential is unavailable",
+          message: "upstream rejected token",
         },
       },
     });
@@ -324,7 +311,6 @@ describe("Codex Local Native web search", () => {
       },
       modelId: "deepseek/deepseek-v4-flash",
       maxRequestBytes: 4,
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -355,7 +341,6 @@ describe("Codex Local Native web search", () => {
         throw new Error("socket failed with codex-token");
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -397,7 +382,6 @@ describe("Codex Local Native web search", () => {
           { status: 200 },
         ),
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
@@ -438,7 +422,6 @@ describe("Codex Local Native web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => new Response("must not execute", { status: 200 }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: codexAuthority(),
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import type {
   CodexFetchFunction,
-  CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
 import type {
@@ -13,7 +12,7 @@ import type {
   RequestJourneyObservationInput,
 } from "../../src/diagnostics/index.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexLocalCompactLane } from "../../src/integrations/codex/local-compact.js";
+import { createCodexDirectCompactLane } from "../../src/integrations/codex/local-compact.js";
 import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
 import type { ProviderResponsesLane } from "../../src/provider-native-responses/contract.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
@@ -51,7 +50,7 @@ function recordingAuthority(): {
 }
 
 function compactRequest(model: string): Request {
-  return new Request("http://luckytoken.test/v1/responses/compact", {
+  return new Request("http://luckytoken.test/v1/responses/compact?bare&token=caller-query", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -103,21 +102,16 @@ function semanticMessage(model: Model<string>): AssistantMessage {
 }
 
 describe("Request Journey successful conversation compaction", () => {
-  it("keeps the Local Native compact lane observable through final in-process handoff", async () => {
+  it("keeps the Direct Mode compact lane observable through final in-process handoff", async () => {
     const recording = recordingAuthority();
-    const credentials: CodexLocalCredentialAuthority = {
-      resolveForwardAuth: async () => ({
-        authorization: "Bearer local-secret",
-        accountId: "local-account",
-      }),
-      scrub: (value) => value,
-    };
     const nativeModels: CodexNativeModelSource = {
       has: (selector) => selector === "gpt-native",
     };
     const outbound: string[] = [];
+    const outboundUrls: string[] = [];
     const fetch: CodexFetchFunction = async (input, init) => {
       const request = new Request(input, init);
+      outboundUrls.push(request.url);
       outbound.push(await request.text());
       return new Response(
         JSON.stringify({ object: "response.compaction", output: [] }),
@@ -126,13 +120,12 @@ describe("Request Journey successful conversation compaction", () => {
     };
     const models = new Proxy({} as Models, {
       get() {
-        throw new Error("Local Native compact must not touch Pi Models");
+        throw new Error("Direct Mode compact must not touch Pi Models");
       },
     });
     const handler = createOpenAIResponsesCompactHandler({
       models,
-      localNativeLane: createCodexLocalCompactLane({
-        credentials,
+      directLane: createCodexDirectCompactLane({
         models: nativeModels,
         fetch,
       }),
@@ -147,13 +140,16 @@ describe("Request Journey successful conversation compaction", () => {
 
     expect(response.status).toBe(200);
     expect(outbound).toHaveLength(1);
+    expect(outboundUrls).toEqual([
+      "https://chatgpt.com/backend-api/codex/responses/compact?bare&token=caller-query",
+    ]);
     expect(recording.journeys).toHaveLength(1);
     const journey = recording.journeys[0]!;
     expect(journey.observations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "lane_committed",
-          lane: "local_native",
+          lane: "direct",
         }),
         expect.objectContaining({
           kind: "artifact_observed",
@@ -173,12 +169,12 @@ describe("Request Journey successful conversation compaction", () => {
         expect.objectContaining({
           kind: "client_response_prepared",
           status: 200,
-          location: expect.objectContaining({ lane: "local_native" }),
+          location: expect.objectContaining({ lane: "direct" }),
         }),
         expect.objectContaining({
           kind: "work_outcome_committed",
           outcome: "success",
-          terminalAuthority: "codex_local_compact_lane",
+          terminalAuthority: "codex_direct_compact_lane",
         }),
         expect.objectContaining({
           kind: "handoff_observed",

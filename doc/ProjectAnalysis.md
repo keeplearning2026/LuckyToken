@@ -28,7 +28,7 @@
 - Electron + React Desktop Shell；
 - Application Control Plane；
 - Anthropic Messages 与 OpenAI Responses Client Protocol；
-- Local Native、Provider Native、Semantic Conversion 三条独立 Data Plane lane；
+- Direct Mode、Provider Native、Semantic Conversion 三条独立 Data Plane lane；
 - Pi AI runtime / Provider system；
 - CommandCode Private Provider package；
 - Provider credential、Catalog、Public Model、Diagnostics、History、Backup、Codex integration 等 Backend-lifetime authority。
@@ -47,7 +47,7 @@ Client Request
       ▼
 route / model resolution
       │
-      ├── Local Native Preservation
+      ├── Direct Mode
       │     └── local Codex/native credential + native wire transport
       │
       ├── Provider Native Preservation
@@ -61,8 +61,8 @@ route / model resolution
 
 - 三条 lane 不互相 fallback；
 - 不允许 native → Pi → native re-entry；
-- Local Native 不依赖 Pi Models / Provider Native / semantic conversion；
-- Provider Native 不依赖 Local Native / Client Protocol conversion；
+- Direct Mode 不依赖 Pi Models / Provider Native / semantic conversion；
+- Provider Native 不依赖 Direct Mode / Client Protocol conversion；
 - Semantic Conversion 继续遵守 `Client Wire ↔ Pi` 与 `Pi ↔ Provider Wire` 两侧隔离；
 - concrete Provider vocabulary 不进入 Client Protocol；Client Wire vocabulary 不进入 Provider。
 
@@ -248,7 +248,7 @@ status.ownership.owner.kind === "desktop"
 
 ```text
 Request Identity
-Local Native credential
+Direct Mode caller credential envelope
 Provider credential
 Control Plane capability
 ```
@@ -266,9 +266,9 @@ clientSessionId?
 
 Semantic Conversion 可将 `effectiveSessionId` 投影到 Pi `Options.sessionId`。
 
-### Local Native credential
+### Direct Mode caller credential envelope
 
-例如 Codex Local Native：request Bearer credential 只在该 native lane 的 credential authority 内验证和转发；不进入 Pi AI IR 或 Provider credential store。
+例如 Codex Direct Mode：request Bearer、account、Cookie、API-key 类头与 query 不经本地验证，直接转发到固定 upstream；它们不进入 Pi AI IR 或 Provider credential store。
 
 ### Provider credential
 

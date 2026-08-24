@@ -24,12 +24,16 @@ import {
   type LuckyTokenRuntime,
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
-import { createCodexLocalResponsesLane } from "../../src/integrations/codex/local-responses.js";
-import { createCodexLocalSearchHandler } from "../../src/integrations/codex/local-search.js";
+import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexDirectSearchHandler } from "../../src/integrations/codex/local-search.js";
+import {
+  createCodexDirectImagesEditsHandler,
+  createCodexDirectImagesGenerationsHandler,
+} from "../../src/integrations/codex/local-images.js";
+import {
+  createCodexDirectRealtimeModule,
+} from "../../src/integrations/codex/local-realtime.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;
@@ -47,9 +51,6 @@ export interface OpenAIResponsesServingTestOptions {
   directory?: string;
   configuration?: OpenAIResponsesConfiguration;
   diagnostics?: RequestJourneyObservationAuthority;
-  /** Codex-native request test seam. Production composition wires the same
-   *  authority into Client Auth and the native passthrough branch. */
-  codexLocalAuth?: CodexLocalCredentialAuthority;
   codexNativeModels?: CodexNativeModelSource;
 }
 
@@ -111,11 +112,10 @@ export async function createOpenAIResponsesServingTestComposition(
         ? "honor"
         : options.configuration.conversion.response.storeFalse,
   });
-  const localNativeLane =
-    options.codexLocalAuth === undefined || options.codexNativeModels === undefined
+  const directLane =
+    options.codexNativeModels === undefined
       ? undefined
-      : createCodexLocalResponsesLane({
-          credentials: options.codexLocalAuth,
+      : createCodexDirectResponsesLane({
           models: options.codexNativeModels,
           fetch: options.fetch,
         });
@@ -132,26 +132,35 @@ export async function createOpenAIResponsesServingTestComposition(
     ...(options.configuration === undefined
       ? {}
       : { configuration: options.configuration }),
-    ...(localNativeLane === undefined ? {} : { localNativeLane }),
+    ...(directLane === undefined ? {} : { directLane }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,
     providerIds: [commandCodePrivateProviderId],
     ...(options.now === undefined ? {} : { now: options.now }),
   });
-  const searchHandler =
-    options.codexLocalAuth === undefined
-      ? undefined
-      : createCodexLocalSearchHandler({
-          credentials: options.codexLocalAuth,
-          fetch: options.fetch,
-          maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
-        });
+  const searchHandler = createCodexDirectSearchHandler({
+    fetch: options.fetch,
+    maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+  });
+  const imagesHandlers = [
+    createCodexDirectImagesGenerationsHandler({
+      fetch: options.fetch,
+      maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+    }),
+    createCodexDirectImagesEditsHandler({
+      fetch: options.fetch,
+      maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+    }),
+  ];
+  const realtime = createCodexDirectRealtimeModule({ fetch: options.fetch });
   const runtime = createLuckyTokenRuntime({
     clientProtocols: [
       handler,
       modelsHandler,
-      ...(searchHandler === undefined ? [] : [searchHandler]),
+      searchHandler,
+      ...imagesHandlers,
+      ...realtime.httpHandlers,
     ],
     ...(options.diagnostics === undefined
       ? {}

@@ -1,11 +1,7 @@
-import { createHash } from "node:crypto";
-
-import type { LocalResponsesLane } from "../../protocols/openai-responses/handler.js";
+import type { DirectResponsesLane } from "../../protocols/openai-responses/handler.js";
 import type {
   CodexFetchFunction,
-  CodexLocalCredentialAuthority,
   CodexNativeModelSource,
-  CodexForwardAuth,
 } from "../../codex-native-seam.js";
 import {
   CodexResponsesPassthroughBodyReadError,
@@ -22,27 +18,11 @@ import type {
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "../../diagnostics/contract.js";
+import { preserveDirectStatusText } from "../../local-native-http-response.js";
 
-export interface CreateCodexLocalResponsesLaneOptions {
-  readonly credentials: CodexLocalCredentialAuthority;
+export interface CreateCodexDirectResponsesLaneOptions {
   readonly models: CodexNativeModelSource;
   readonly fetch: CodexFetchFunction;
-}
-
-const LOCAL_PROFILE_DOMAIN = "luckytoken:codex-local-account:v1:";
-
-function localProfile(accountId: string): {
-  readonly profileId: string;
-  readonly displayName: string;
-} {
-  const digest = createHash("sha256")
-    .update(`${LOCAL_PROFILE_DOMAIN}${accountId}`)
-    .digest("hex");
-  const suffix = accountId.length > 6 ? accountId.slice(-6) : digest.slice(-6);
-  return Object.freeze({
-    profileId: `codex-local:${digest}`,
-    displayName: `Codex …${suffix}`,
-  });
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -52,7 +32,7 @@ function toResponse(prepared: PreparedHttpResponse): Response {
   });
 }
 
-function observeCodexLocalJourney(
+function observeCodexDirectJourney(
   journey: RequestJourneyObserver | undefined,
   observation: RequestJourneyObservationInput,
 ): void {
@@ -63,25 +43,25 @@ function observeCodexLocalJourney(
   }
 }
 
-function enterCodexLocalStep(
+function enterCodexDirectStep(
   journey: RequestJourneyObserver | undefined,
   stepInstanceId: string,
   location: RequestJourneyLocation,
 ): void {
-  observeCodexLocalJourney(journey, {
+  observeCodexDirectJourney(journey, {
     kind: "step_entered",
     stepInstanceId,
     location,
   });
 }
 
-function completeCodexLocalStep(
+function completeCodexDirectStep(
   journey: RequestJourneyObserver | undefined,
   stepInstanceId: string,
   location: RequestJourneyLocation,
   completion: "success" | "failed",
 ): void {
-  observeCodexLocalJourney(journey, {
+  observeCodexDirectJourney(journey, {
     kind: "step_completed",
     stepInstanceId,
     completion,
@@ -89,13 +69,13 @@ function completeCodexLocalStep(
   });
 }
 
-function observeCodexLocalTerminal(
+function observeCodexDirectTerminal(
   journey: RequestJourneyObserver | undefined,
   response: Response,
   outcome: "success" | "failed",
-  presentationStep: "prepare_local_response" | "render_local_error_response",
+  presentationStep: "prepare_direct_response" | "render_direct_error_response",
 ): void {
-  observeCodexLocalJourney(journey, {
+  observeCodexDirectJourney(journey, {
     kind: "client_response_prepared",
     status: response.status,
     ...(response.headers.get("content-type") === null
@@ -103,85 +83,83 @@ function observeCodexLocalTerminal(
       : { mediaType: response.headers.get("content-type")! }),
     location: {
       phase: "client_response_preparation",
-      lane: "local_native",
+      lane: "direct",
       step: presentationStep,
     },
   });
-  observeCodexLocalJourney(journey, {
+  observeCodexDirectJourney(journey, {
     kind: "work_outcome_committed",
     outcome,
-    terminalAuthority: "codex_local_responses_lane",
+    terminalAuthority: "codex_direct_responses_lane",
     location: {
       phase: "outcome_commit",
-      lane: "local_native",
+      lane: "direct",
       step: "commit_request_outcome",
     },
   });
 }
 
-async function executeWithAuth(
-  input: Parameters<LocalResponsesLane["execute"]>[0],
-  forwardAuth: CodexForwardAuth,
-  profileId: string | undefined,
+async function executeDirect(
+  input: Parameters<DirectResponsesLane["execute"]>[0],
   fetch: CodexFetchFunction,
 ): Promise<Response> {
   try {
     const upstream = await passthroughCodexResponses({
       rawBody: input.rawBody,
+      requestUrl: input.request.url,
       requestHeaders: input.request.headers,
-      forwardAuth,
       signal: input.request.signal,
       fetch,
       ...(input.journey === undefined ? {} : { journey: input.journey }),
-      ...(profileId === undefined ? {} : { profileId }),
     });
     input.request.signal.throwIfAborted();
     const usage = extractResponsesPassthroughUsage(
       upstream.body,
-      upstream.headers["content-type"] ?? "",
+      upstream.headers.get("content-type") ?? "",
       "openai-codex-responses",
       upstream.status >= 200 && upstream.status < 300 && input.streamRequested
         ? "event-stream"
         : "json",
     );
     if (usage !== undefined) {
-      observeCodexLocalJourney(input.journey, {
+      observeCodexDirectJourney(input.journey, {
         kind: "terminal_usage_observed",
         usage,
         location: {
           phase: "lane_response_processing",
-          lane: "local_native",
+          lane: "direct",
           step: "observe_local_usage",
         },
       });
     }
     const responseLocation = {
       phase: "lane_response_processing",
-      lane: "local_native",
-      step: "preserve_local_response",
+      lane: "direct",
+      step: "preserve_direct_response",
     } as const;
-    enterCodexLocalStep(
+    enterCodexDirectStep(
       input.journey,
-      "p5.preserve_local_response",
+      "p5.preserve_direct_response",
       responseLocation,
     );
     const response = new Response(upstream.body, {
       status: upstream.status,
-      headers: { ...upstream.headers },
+      statusText: upstream.statusText,
+      headers: upstream.headers,
     });
-    completeCodexLocalStep(
+    completeCodexDirectStep(
       input.journey,
-      "p5.preserve_local_response",
+      "p5.preserve_direct_response",
       responseLocation,
       "success",
     );
-    observeCodexLocalTerminal(
+    observeCodexDirectTerminal(
       input.journey,
       response,
       upstream.status >= 400 ? "failed" : "success",
-      "prepare_local_response",
+      "prepare_direct_response",
     );
-    return response;
+    return preserveDirectStatusText(response);
   } catch (error) {
     if (
       error instanceof CodexResponsesPassthroughTransportError ||
@@ -196,11 +174,11 @@ async function executeWithAuth(
             : "Upstream provider response could not be read",
         ),
       );
-      observeCodexLocalTerminal(
+      observeCodexDirectTerminal(
         input.journey,
         response,
         "failed",
-        "render_local_error_response",
+        "render_direct_error_response",
       );
       return response;
     }
@@ -208,78 +186,43 @@ async function executeWithAuth(
   }
 }
 
-export function createCodexLocalResponsesLane(
-  options: CreateCodexLocalResponsesLaneOptions,
-): LocalResponsesLane {
+export function createCodexDirectResponsesLane(
+  options: CreateCodexDirectResponsesLaneOptions,
+): DirectResponsesLane {
   return Object.freeze({
     claims(selector: string): boolean {
       return options.models.has(selector);
     },
     async execute(
-      input: Parameters<LocalResponsesLane["execute"]>[0],
+      input: Parameters<DirectResponsesLane["execute"]>[0],
     ): Promise<Response> {
-      observeCodexLocalJourney(input.journey, {
+      observeCodexDirectJourney(input.journey, {
         kind: "model_resolved",
         providerId: "codex-local",
         modelId: input.selector,
         location: {
           phase: "request_resolution",
-          lane: "local_native",
+          lane: "direct",
           step: "recognize_local_model",
         },
       });
-      const credentialLocation = {
+      const envelopeLocation = {
         phase: "lane_request_preparation",
-        lane: "local_native",
-        step: "resolve_local_credential",
+        lane: "direct",
+        step: "preserve_caller_envelope",
       } as const;
-      enterCodexLocalStep(
+      enterCodexDirectStep(
         input.journey,
-        "p3.resolve_local_credential",
-        credentialLocation,
+        "p3.preserve_caller_envelope",
+        envelopeLocation,
       );
-      const forwardAuth = await options.credentials.resolveForwardAuth(
-        input.request.headers,
-      );
-      if (forwardAuth === undefined) {
-        completeCodexLocalStep(
-          input.journey,
-          "p3.resolve_local_credential",
-          credentialLocation,
-          "failed",
-        );
-        const response = toResponse(
-          renderResponsesError(
-            401,
-            "authentication_error",
-            "Local Codex credential is unavailable",
-          ),
-        );
-        observeCodexLocalTerminal(
-          input.journey,
-          response,
-          "failed",
-          "render_local_error_response",
-        );
-        return response;
-      }
-      completeCodexLocalStep(
+      completeCodexDirectStep(
         input.journey,
-        "p3.resolve_local_credential",
-        credentialLocation,
+        "p3.preserve_caller_envelope",
+        envelopeLocation,
         "success",
       );
-      let profileId: string | undefined;
-      if (forwardAuth.accountId !== undefined) {
-        const profile = localProfile(forwardAuth.accountId);
-        profileId = profile.profileId;
-        observeCodexLocalJourney(input.journey, {
-          kind: "profile_attributed",
-          ...profile,
-          location: credentialLocation,
-        });
-      }
-      return executeWithAuth(input, forwardAuth, profileId, options.fetch);
+      return executeDirect(input, options.fetch);
     },
   });
 }

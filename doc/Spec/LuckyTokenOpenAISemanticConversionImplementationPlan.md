@@ -237,7 +237,7 @@ Gate: a genuinely terminal reasoning or internal-contract failure causes zero Pr
 
 1. Update `src/protocols/openai-responses/semantic.ts` to call the local executor.
 2. Update Responses request, response, and error-rendering imports to local types.
-3. Keep Local Native and Provider Native branches unchanged.
+3. Keep Direct Mode and Provider Native branches unchanged.
 4. Remove every Responses import from `src/semantic-conversion/**` in the same slice; do not retain a fallback or dual path.
 
 Gate: the complete Responses suite passes through the local Module and the old shared files have no production caller.

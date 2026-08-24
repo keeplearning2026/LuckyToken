@@ -61,11 +61,11 @@ import type {
 
 export const openaiResponsesProtocolId = "openai-responses";
 
-export interface LocalResponsesLane {
+export interface DirectResponsesLane {
   claims(selector: string): boolean;
   execute(input: {
     readonly request: Request;
-    readonly rawBody: string;
+    readonly rawBody: Uint8Array<ArrayBuffer>;
     readonly selector: string;
     readonly streamRequested: boolean;
     readonly journey?: RequestJourneyObserver;
@@ -74,7 +74,7 @@ export interface LocalResponsesLane {
 
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
-  readonly localNativeLane?: LocalResponsesLane;
+  readonly directLane?: DirectResponsesLane;
   readonly providerNativeLane?: ProviderResponsesLane;
   readonly createSessionId?: () => string;
   readonly configuration?: OpenAIResponsesConfiguration;
@@ -106,7 +106,7 @@ export interface OpenAIResponsesHandlerOptions {
 
 interface OpenAIResponsesDependencies {
   readonly models: Models;
-  readonly localNativeLane: LocalResponsesLane | undefined;
+  readonly directLane: DirectResponsesLane | undefined;
   readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly createSessionId: () => string;
   readonly configuration: OpenAIResponsesConfiguration;
@@ -480,7 +480,7 @@ async function handleOpenAIResponses(
     );
     const rawBody = decodedBody.text;
     const body: unknown = decodedBody.json;
-    const rawRequestBytes = new TextEncoder().encode(rawBody);
+    const rawRequestBytes = decodedBody.wireBytes;
     observeResponsesJourney(journey, {
       kind: "artifact_observed",
       artifactId: "client_request_wire",
@@ -526,36 +526,36 @@ async function handleOpenAIResponses(
     );
     activeEarlyStep = undefined;
     const streamRequested = (body as { readonly stream?: unknown }).stream === true;
-    if (dependencies.localNativeLane !== undefined) {
+    if (dependencies.directLane !== undefined) {
       const localRecognitionLocation = {
         phase: "request_resolution",
-        lane: "local_native",
-        step: "recognize_local_native",
+        lane: "direct",
+        step: "recognize_direct",
       } as const;
       enterResponsesJourneyStep(
         journey,
-        "p2.recognize_local_native",
+        "p2.recognize_direct",
         localRecognitionLocation,
       );
-      const localClaimed = dependencies.localNativeLane.claims(selector);
+      const localClaimed = dependencies.directLane.claims(selector);
       completeResponsesJourneyStep(
         journey,
-        "p2.recognize_local_native",
+        "p2.recognize_direct",
         localRecognitionLocation,
       );
       if (localClaimed) {
         observeResponsesJourney(journey, {
           kind: "lane_committed",
-          lane: "local_native",
+          lane: "direct",
           location: {
             phase: "request_resolution",
-            lane: "local_native",
+            lane: "direct",
             step: "commit_lane",
           },
         });
-        return dependencies.localNativeLane.execute({
+        return dependencies.directLane.execute({
           request,
-          rawBody,
+          rawBody: decodedBody.wireBytes,
           selector,
           streamRequested,
           ...(journey === undefined ? {} : { journey }),
@@ -1155,7 +1155,7 @@ export function createOpenAIResponsesHandler(
     });
   const dependencies: OpenAIResponsesDependencies = Object.freeze({
     models: options.models,
-    localNativeLane: options.localNativeLane,
+    directLane: options.directLane,
     providerNativeLane: options.providerNativeLane,
     createSessionId: options.createSessionId ?? randomUUID,
     configuration,

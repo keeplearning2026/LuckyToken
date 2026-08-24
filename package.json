@@ -87,7 +87,8 @@
     "@luckytoken/application-control-plane": "0.1.0",
     "jsonc-parser": "3.3.1",
     "proper-lockfile": "4.1.2",
-    "typebox": "1.3.7"
+    "typebox": "1.3.7",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.91.1",
@@ -95,6 +96,7 @@
     "@luckytoken/provider-commandcode-goat": "0.1.0",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
+    "@types/ws": "8.18.1",
     "eslint": "10.8.1",
     "tsx": "4.23.12",
     "typescript": "6.0.3",

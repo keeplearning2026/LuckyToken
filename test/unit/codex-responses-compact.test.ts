@@ -62,7 +62,7 @@ function summaryMessage(target: Model<string>, text: string): AssistantMessage {
 }
 
 describe("OpenAI Responses compact three-lane routing", () => {
-  it("lets Local Native claim compact without resolving Pi Models or falling through", async () => {
+  it("lets Direct Mode claim compact without resolving Pi Models or falling through", async () => {
     const createSessionId = vi.fn(
       () => "00000000-0000-4000-8000-000000000201",
     );
@@ -77,7 +77,7 @@ describe("OpenAI Responses compact three-lane routing", () => {
     });
     const handler = createOpenAIResponsesCompactHandler({
       models,
-      localNativeLane: local,
+      directLane: local,
       createSessionId,
       stateFile: "unused-compact-local.json",
       maxRequestBytes: 1024,

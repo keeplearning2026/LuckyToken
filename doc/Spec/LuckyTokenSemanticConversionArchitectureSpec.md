@@ -2,7 +2,7 @@
 
 Status: **PROPOSED TARGET CONTRACT — DECOUPLING MIGRATION REQUIRED**
 Date: **2026-08-23**
-Scope: the Semantic Conversion data-plane lane only. Local Native Preservation and Provider Native Preservation remain independent and are governed by their own contracts.
+Scope: the Semantic Conversion data-plane lane only. Direct Mode and Provider Native Preservation remain independent and are governed by their own contracts.
 
 This document is authoritative for the locality rules of Semantic Conversion implementations. Protocol-specific field meanings, invocations, supplements, reasoning policies, semantic execution, request projectors, target-aware response interpretation, response rendering, outcomes, failures, and certification matrices belong to protocol-specific specifications and plans.
 
@@ -403,7 +403,7 @@ Rules:
 
 ## 12. Native-lane isolation
 
-Local Native Preservation and Provider Native Preservation do not use protocol Semantic Invocations, protocol target projectors, or protocol semantic executors.
+Direct Mode and Provider Native Preservation do not use protocol Semantic Invocations, protocol target projectors, or protocol semantic executors.
 
 Native lane eligibility and request reconstruction remain governed by `AGENTS.md`. Failure after lane commitment never falls through into a Semantic Conversion module.
 

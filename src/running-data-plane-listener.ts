@@ -4,9 +4,11 @@ import {
   startLuckyTokenHttpServer,
   type DrainOutcome,
 } from "./server.js";
+import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
 
 export interface FinalizableDataPlane {
   readonly runtime: LuckyTokenRuntime;
+  readonly webSocketUpgrade?: WebSocketUpgradeHandler;
   close(): Promise<void>;
 }
 
@@ -34,6 +36,9 @@ export async function startRunningDataPlaneListener(options: {
       runtime: options.dataPlane.runtime,
       host: options.host,
       port: options.port,
+      ...(options.dataPlane.webSocketUpgrade === undefined
+        ? {}
+        : { webSocketUpgrade: options.dataPlane.webSocketUpgrade }),
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),

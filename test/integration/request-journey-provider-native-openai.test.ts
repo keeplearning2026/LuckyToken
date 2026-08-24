@@ -781,10 +781,10 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
 
       const serializedDetail = JSON.stringify(detail);
       expect(serializedDetail).not.toContain("anthropic");
-      expect(serializedDetail).not.toContain("local_native");
+      expect(serializedDetail).not.toContain("\"lane\":\"direct\"");
       expect(serializedDetail).not.toContain("semantic_conversion");
       for (const forbiddenArtifact of [
-        "local_native_outbound_request_wire",
+        "direct_outbound_request_wire",
         "pi_invocation_snapshot",
         "pi_terminal_summary",
         "pi_provider_outbound_request_wire",

@@ -50,7 +50,7 @@ Anthropic request
    └─ not claimed: this Anthropic Semantic Conversion module
 ```
 
-After Semantic Conversion commitment, failure does not fall through to Provider Native or Local Native.
+After Semantic Conversion commitment, failure does not fall through to Provider Native or Direct Mode.
 
 This specification does not broaden Anthropic Provider Native eligibility. A request claimed by Provider Native bypasses this module. A resolved `anthropic-messages` target not claimed by Provider Native remains a Semantic Conversion target: request supplements need an audited Anthropic-source projector when used, while its response is rendered from Pi `AssistantMessage` by the Anthropic response module. Native eligibility cannot be assumed to cover it.
 

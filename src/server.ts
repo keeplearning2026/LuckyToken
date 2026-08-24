@@ -19,6 +19,8 @@ import {
   type ClientProtocolRequestContext,
 } from "./http.js";
 import type { LuckyTokenRuntime } from "./runtime.js";
+import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
+import { preservesDirectStatusText } from "./local-native-http-response.js";
 
 export interface LuckyTokenHttpServerOptions {
   readonly runtime: LuckyTokenRuntime;
@@ -26,6 +28,7 @@ export interface LuckyTokenHttpServerOptions {
   readonly port?: number;
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly createRequestId?: () => string;
+  readonly webSocketUpgrade?: WebSocketUpgradeHandler;
 }
 
 /** Deterministic time adapter for the quit drain (Ticket 05): production uses
@@ -270,6 +273,7 @@ async function writeWebResponse(
   target: ServerResponse,
   response: Response,
   context: ClientProtocolRequestContext,
+  preserveStatusText: boolean,
 ): Promise<HandoffOutcome> {
   const location = {
     phase: "http_handoff",
@@ -360,9 +364,15 @@ async function writeWebResponse(
       target.once("error", onError);
       try {
         target.statusCode = response.status;
+        if (preserveStatusText && response.statusText.length > 0) {
+          target.statusMessage = response.statusText;
+        }
         for (const [name, value] of response.headers) {
+          if (name.toLowerCase() === "set-cookie") continue;
           target.setHeader(name, value);
         }
+        const setCookies = response.headers.getSetCookie();
+        if (setCookies.length > 0) target.setHeader("set-cookie", setCookies);
         // Prepared means the complete response has been materialized and the
         // atomic status/header/body write is ready, not that Node has already
         // finished handing bytes to the socket.
@@ -421,6 +431,7 @@ export async function startLuckyTokenHttpServer(
     readonly completion: Promise<void>;
   }
   const activeRequests = new Set<ActiveRequest>();
+  const activeWebSocketUpgrades = new Set<Promise<void>>();
   let accepting = true;
   const server = createServer((request, response) => {
     const controller = new AbortController();
@@ -580,7 +591,8 @@ export async function startLuckyTokenHttpServer(
     };
     const writeResponse = (result: Response): Promise<HandoffOutcome> => {
       handoffStarted = true;
-      return writeWebResponse(response, result, context);
+      const preservesNativeStatusText = preservesDirectStatusText(result);
+      return writeWebResponse(response, result, context, preservesNativeStatusText);
     };
     const abortRequest = (reason: unknown): void => {
       if (!controller.signal.aborted) controller.abort(reason);
@@ -720,18 +732,21 @@ export async function startLuckyTokenHttpServer(
       }
     })();
   });
-  server.on("upgrade", (request, socket) => {
+  server.on("upgrade", (request, socket, head) => {
     socket.once("error", () => socket.destroy());
     if (!accepting || !isWebSocketUpgrade(request)) {
       socket.destroy();
       return;
     }
     const method = request.method ?? "GET";
-    const pathname = new URL(request.url ?? "/", origin).pathname;
+    const url = new URL(request.url ?? "/", origin);
+    const pathname = url.pathname;
+    const matchedUpgrade =
+      options.webSocketUpgrade?.matches(request, url) ?? false;
     const context = beginRequestJourney(options.diagnostics, {
       requestId: createRequestJourneyId(options.createRequestId),
-      operationCandidate: "unsupported_transport",
-      transport: "http",
+      operationCandidate: matchedUpgrade ? "pending" : "unsupported_transport",
+      transport: "websocket",
       method,
       path: pathname,
       acceptedAt: Date.now(),
@@ -755,6 +770,55 @@ export async function startLuckyTokenHttpServer(
       completion: "success",
       location: admissionLocation,
     });
+    if (matchedUpgrade && options.webSocketUpgrade !== undefined) {
+      const completion = options.webSocketUpgrade
+        .handleUpgrade({
+          request,
+          socket,
+          head,
+          url,
+          context,
+        })
+        .catch(() => {
+          const location = {
+            phase: "upstream_execution",
+            lane: "direct",
+            step: "dispatch_direct_transport",
+          } as const;
+          const failureId = `${context.requestId}:websocket_upgrade_handler_failed`;
+          observeRequestJourney(context, {
+            kind: "failure_detected",
+            failureId,
+            role: "primary",
+            classification: "websocket_upgrade_handler_failed",
+            origin: "luckytoken",
+            originPrecision: "boundary",
+            location,
+          });
+          observeRequestJourney(context, {
+            kind: "work_outcome_committed",
+            outcome: "failed",
+            terminalAuthority: "http_transport",
+            location: { phase: "outcome_commit", step: "commit_request_outcome" },
+          });
+          observeRequestJourney(context, {
+            kind: "handoff_observed",
+            outcome: "failed",
+            transport: "websocket",
+            location: { phase: "http_handoff", step: "close_websocket_session" },
+          });
+          socket.destroy();
+          closeRequestJourney(context, {
+            outcome: "failed",
+            primaryFailureId: failureId,
+            closeReason: "websocket_upgrade_handler_failed",
+            lastKnownLocation: location,
+          });
+        });
+      activeWebSocketUpgrades.add(completion);
+      void completion.finally(() => activeWebSocketUpgrades.delete(completion));
+      return;
+    }
     rejectWebSocketUpgrade(socket, context);
   });
 
@@ -770,16 +834,21 @@ export async function startLuckyTokenHttpServer(
   let closing: Promise<void> | undefined;
   let draining: Promise<DrainOutcome> | undefined;
   const shutdownReason = new Error("LuckyToken HTTP server is shutting down");
-  const abortActive = (): void => {
+  const abortActive = (forceWebSockets: boolean): void => {
     for (const active of activeRequests) {
       if (!active.controller.signal.aborted) {
         active.controller.abort(shutdownReason);
       }
       if (!active.response.destroyed) active.response.destroy(shutdownReason);
     }
+    if (forceWebSockets) options.webSocketUpgrade?.terminateAll();
+    else options.webSocketUpgrade?.closeAll();
   };
   const awaitQuiescence = async (): Promise<void> => {
-    await Promise.all([...activeRequests].map((active) => active.completion));
+    await Promise.all([
+      ...[...activeRequests].map((active) => active.completion),
+      ...activeWebSocketUpgrades,
+    ]);
   };
   const realClock: DrainClock = {
     now: Date.now,
@@ -823,7 +892,7 @@ export async function startLuckyTokenHttpServer(
         timeout.promise.then(() => true),
       ]).then(async (timedOut): Promise<DrainOutcome> => {
         if (timedOut) {
-          abortActive();
+          abortActive(true);
           server.closeAllConnections();
           await quiescent;
         }
@@ -841,7 +910,7 @@ export async function startLuckyTokenHttpServer(
       if (draining !== undefined) return draining.then(() => undefined);
       accepting = false;
       const serverClosed = closeServer(server);
-      abortActive();
+      abortActive(false);
       server.closeAllConnections();
       closing = Promise.all([serverClosed, awaitQuiescence()]).then(() => {
         closed = true;

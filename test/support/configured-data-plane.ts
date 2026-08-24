@@ -11,10 +11,7 @@ import {
   createConfiguredLuckyTokenDataPlane as createProductionDataPlane,
   type ConfiguredLuckyTokenDataPlane as ProductionDataPlane,
 } from "../../src/composition.js";
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
 import type {
   CredentialProfileManagement,
   ProviderAuthBindingAuthority,
@@ -59,7 +56,6 @@ export interface TestConfiguredDataPlaneOptions {
   readonly configValueAdapters?: ConfigValueAdapters;
   readonly authContext?: AuthContext;
   readonly modelsStore?: ModelsStore;
-  readonly codexLocalAuth?: CodexLocalCredentialAuthority;
   readonly codexNativeModels?: CodexNativeModelSource;
   readonly publicModelAuthority?: PublicModelAuthority;
   readonly providerRuntime?: ProviderRuntime;
@@ -342,9 +338,6 @@ export async function createConfiguredLuckyTokenDataPlane(
       return setting?.value !== false;
     },
     fetch: options.fetch,
-    ...(options.codexLocalAuth === undefined
-      ? {}
-      : { codexLocalAuth: options.codexLocalAuth }),
     ...(options.codexNativeModels === undefined
       ? {}
       : { codexNativeModels: options.codexNativeModels }),

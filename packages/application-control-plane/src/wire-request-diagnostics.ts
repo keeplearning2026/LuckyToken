@@ -80,7 +80,7 @@ const PHASES = new Set<RequestJourneyPhase>([
   "http_handoff",
 ]);
 const LANES = new Set<DataPlaneLane>([
-  "local_native",
+  "direct",
   "provider_native",
   "semantic_conversion",
 ]);
@@ -109,6 +109,8 @@ const OPERATIONS = new Set<RequestJourneyOperationCandidate>([
   "conversation_compaction",
   "model_discovery",
   "web_search",
+  "image_generation",
+  "realtime_session",
   "unmatched_request",
   "unsupported_transport",
 ]);
@@ -360,7 +362,9 @@ function decodeAdmission(value: unknown): RequestJourneyAdmission | undefined {
       "cancellation",
     ]) ||
     !OPERATIONS.has(value.operationCandidate as RequestJourneyOperationCandidate) ||
-    (value.transport !== "http" && value.transport !== "in_process") ||
+    (value.transport !== "http" &&
+      value.transport !== "websocket" &&
+      value.transport !== "in_process") ||
     !boundedText(value.method, 32) ||
     !boundedText(value.path, 2_048) ||
     !isNonNegativeSafeInteger(value.acceptedAt)
@@ -729,7 +733,9 @@ function decodePersistedObservation(
         value.outcome !== "finished" &&
         value.outcome !== "closed" &&
         value.outcome !== "failed") ||
-      (value.transport !== "http" && value.transport !== "in_process") ||
+      (value.transport !== "http" &&
+        value.transport !== "websocket" &&
+        value.transport !== "in_process") ||
       (value.writableFinished !== undefined &&
         typeof value.writableFinished !== "boolean")
     ) {
@@ -881,7 +887,9 @@ function decodeHandoffOutcome(value: unknown): RequestHandoffOutcome | undefined
       value.outcome !== "finished" &&
       value.outcome !== "closed" &&
       value.outcome !== "failed") ||
-    (value.transport !== "http" && value.transport !== "in_process") ||
+    (value.transport !== "http" &&
+      value.transport !== "websocket" &&
+      value.transport !== "in_process") ||
     (value.writableFinished !== undefined && typeof value.writableFinished !== "boolean")
   ) {
     return undefined;

@@ -5,20 +5,20 @@ Version: **1.0 frozen design**
 Reference date: **2026-08-13**
 Owner: LuckyToken OpenAI Responses Client Protocol adapter
 
-This document defines the Client wire, local state, rendering, Local Native / Provider Native preservation seams, Semantic Conversion boundary, and ownership rules for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
+This document defines the Client wire, local state, rendering, Direct Mode / Provider Native preservation seams, Semantic Conversion boundary, and ownership rules for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
 
 ## 1. Execution lanes
 
-### 1.1 Local Native Preservation
+### 1.1 Direct Mode
 
 ```text
 Responses request + raw model selector
 → explicit local model/capability claim
-→ Local credential authority
-→ local native Responses transport
+→ preserve caller credential envelope
+→ direct Responses transport
 ```
 
-The current production local lane is Codex Local Native. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The raw Responses request remains model-visible authority. A request bearer is usable only after the Local Native credential authority validates/derives the request-local forward auth.
+The current production direct lane is Codex Direct Mode. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The original Responses bytes, query, and end-to-end headers remain authoritative. LuckyToken does not read `auth.json`, validate caller credentials, or derive replacement forward auth; the fixed upstream owns authentication.
 
 ### 1.2 Provider Native Preservation
 
@@ -53,7 +53,7 @@ Responses request
 
 The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. It never inspects a concrete Provider protocol merely to change conversion semantics.
 
-Lane selection is capability/contract driven. Local Native, Provider Native, and Semantic Conversion have separate credential/transport authority; once a lane begins execution, failure does not fall through to another lane.
+Lane selection is capability/contract driven. Direct Mode, Provider Native, and Semantic Conversion have separate credential/transport authority; once a lane begins execution, failure does not fall through to another lane.
 
 ## 2. Endpoint, request identity, and credential ownership
 
@@ -66,8 +66,8 @@ LuckyToken does not maintain a Responses-specific global/project client token. R
 
 Credential handling depends on the selected lane:
 
-- Local Native may consume the inbound `Authorization: Bearer ...` only through its local credential authority; that request-local forward auth never becomes Pi/Provider auth.
-- Provider Native uses Backend/Pi Models Provider credential resolution; it does not reuse the Local Native request bearer as a Provider credential.
+- Direct Mode preserves the inbound caller credential envelope to its fixed upstream without reading `auth.json` or producing a local authentication decision; it never becomes Pi/Provider auth.
+- Provider Native uses Backend/Pi Models Provider credential resolution; it does not reuse the Direct Mode request bearer as a Provider credential.
 - Semantic Conversion likewise uses Pi/Provider auth on the upstream side and does not place incoming credential material into Pi AI IR.
 
 Request size and request lifetime are bounded by configured Client handler limits. Cancellation aborts state expansion/resolution/execution and does not write a closed response.
@@ -327,14 +327,14 @@ Every final failed request submits Responses-local structured facts to the proto
 
 ## 12. Native preservation conformance
 
-Local Native and Provider Native must be certified independently where their authority differs, while sharing only protocol-side Responses fidelity assertions.
+Direct Mode and Provider Native must be certified independently where their authority differs, while sharing only protocol-side Responses fidelity assertions.
 
 Required coverage includes:
 
 - lane eligibility/claim behavior;
 - exact target endpoint/base path behavior;
 - model/selector projection policy;
-- Local Native vs Provider credential isolation;
+- Direct Mode vs Provider credential isolation;
 - handle, hosted tool, store/background and future-field fidelity;
 - status/body/headers;
 - completed/incomplete/failed SSE lifecycle;

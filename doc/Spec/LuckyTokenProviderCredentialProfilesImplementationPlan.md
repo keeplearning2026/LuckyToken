@@ -71,7 +71,7 @@ The following are current implementation facts, not proposals:
 12. Pi `Models.streamSimple()` lazily calls its auth-preparation path, then `Models.getAuth(model)`, and applies the resolved `apiKey`, headers, environment, and auth-specific base URL to the Provider request. LuckyToken Semantic Conversion already enters this path and must not pass inbound HTTP authorization as `options.apiKey`.
 13. LuckyToken Provider Native Responses explicitly calls `Models.getAuth(model)` and creates fresh upstream headers from the returned `AuthResult`; the Client Protocol handler passes no inbound request headers into that sender.
 14. Provider Native Anthropic currently constructs `x-api-key` auth generically. Pi's reference implementation has distinct Provider/auth rules, including Anthropic OAuth bearer headers and GitHub Copilot bearer behavior, so Native auth coverage must use an authoritative managed Profile type or an explicit ambient contract plus pinned Provider rules rather than inbound headers or rediscovery from token text.
-15. The Data Plane host is fixed to `127.0.0.1`. OpenAI Responses first selects Local Native by explicit local claim; otherwise it resolves the model and chooses Provider Native by explicit model/API capability or Semantic Conversion before execution begins.
+15. The Data Plane host is fixed to `127.0.0.1`. OpenAI Responses first selects Direct Mode by explicit local claim; otherwise it resolves the model and chooses Provider Native by explicit model/API capability or Semantic Conversion before execution begins.
 16. Responses Native already constructs fresh upstream headers and its model rewriter preserves the original JSON text outside top-level `model` string spans. Anthropic Native currently passes `passthroughRequestHeaders(input.request)` and rewrites a changed model through object serialization; both are implementation-specific behaviors that must be tested or corrected against the new body-preservation and Pi-wire contracts.
 17. The pinned Pi Anthropic implementation makes authentication-dependent body changes only for its first-party OAuth branch: it prepends the required Claude Code system identity and canonicalizes recognized Claude Code tool names through definitions and related message references. OpenAI Responses, Codex Responses, Azure Responses, Anthropic API-key, and GitHub Copilot Native auth do not have a Profile-selected body differential.
 
@@ -353,7 +353,7 @@ Catalog publication remains generation-guarded and Provider-isolated: new reques
 
 ## 5.1 Common rule
 
-The fixed-loopback Client Protocol request supplies only its protocol wire and model selector. The existing Client Protocol/model contract selects the lane first. Neither the handler nor a lane inspects inbound `Authorization` to decide `api_key` versus OAuth behavior; credential type never participates in lane selection. Local Native remains unchanged and receives no Provider Profile dependency.
+The fixed-loopback Client Protocol request supplies only its protocol wire and model selector. The existing Client Protocol/model contract selects the lane first. Neither the handler nor a lane inspects inbound `Authorization` to decide `api_key` versus OAuth behavior; credential type never participates in lane selection. Direct Mode remains unchanged and receives no Provider Profile dependency.
 
 Each Provider-backed lane Adapter performs this sequence independently:
 
@@ -720,7 +720,7 @@ The order below is the implementation dependency order. Each numbered behavior i
 This slice changes test infrastructure and contract tests only; it does not pre-write feature tests.
 
 1. Prove a state-reaching test receives a newly created explicit temporary `CODEX_HOME` and cleans it on success, failure, and cancellation.
-2. Add import-contract assertions that can identify dependencies among Local Native, Provider Native Responses, Anthropic Provider Native, Semantic Conversion/Pi AI IR, and legacy `auth.json` authority code.
+2. Add import-contract assertions that can identify dependencies among Direct Mode, Provider Native Responses, Anthropic Provider Native, Semantic Conversion/Pi AI IR, and legacy `auth.json` authority code.
 3. Add fixture loaders that treat pinned Pi request fixtures as immutable literal input.
 
 Gate: the harness self-tests pass, a deliberately invalid dependency fixture is detected, and production behavior remains unchanged.
@@ -845,7 +845,7 @@ Primary seam: `AnthropicProviderNativeLane.execute()` with literal pinned Pi fix
 4. Reuse the identical input under managed `api_key` and ambient bindings and prove the OAuth body projection is absent.
 5. Put OAuth-shaped text in a managed `api_key` credential/body and prove captured `authType`, not token/body shape, selects the exception.
 6. Certify GitHub Copilot and every other claimed Anthropic-native auth combination independently against pinned Pi wire fixtures.
-7. Add fences proving the OAuth projector is private to Anthropic Native and imports no Pi AI IR, Pi Provider execution, Semantic Conversion, Responses Native, or Local Native Module.
+7. Add fences proving the OAuth projector is private to Anthropic Native and imports no Pi AI IR, Pi Provider execution, Semantic Conversion, Responses Native, or Direct Mode Module.
 
 Gate: every Anthropic-native body follows either the default model-only rule or the one exact OAuth exception; unrelated body semantics remain equal; all transport fields have an explicit owner.
 
@@ -917,7 +917,7 @@ Release gate:
 - run the complete literal-fixture Provider Native auth/body/envelope matrix;
 - run persisted/runtime Provider enumeration, orphan removal, managed/ambient fail-closed, and three-attempt cap matrices;
 - verify repository dependency tests and searches show no production legacy authority and no cross-lane coupling;
-- verify Local Native tests and imports remain unchanged by the feature.
+- verify Direct Mode tests and imports remain unchanged by the feature.
 
 ---
 

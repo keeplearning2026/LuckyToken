@@ -81,7 +81,6 @@ import { DATA_PLANE_LOOPBACK_HOST } from "./settings/data-plane.js";
 import { createFileSettingsStore } from "./settings/file-store.js";
 import { startRunningDataPlaneListener } from "./running-data-plane-listener.js";
 import { resolveCodexHome } from "./integrations/codex/home.js";
-import { createCodexLocalCredentialAuthority } from "./integrations/codex/local-auth.js";
 import { createCodexNativeCatalogSource } from "./integrations/codex/native-catalog-source.js";
 import { buildCodexCatalog } from "./integrations/codex/catalog.js";
 import {
@@ -660,7 +659,6 @@ async function startNormalApplication(options: {
     await catalogController.bind(providerRuntime.catalog);
     await reconcilePublicModels(catalogController.snapshot());
     const codexHome = resolveCodexHome();
-    const codexLocalAuth = createCodexLocalCredentialAuthority({ codexHome });
     const publicModels = Object.freeze({
       requestSnapshot: async () => publicModelAuthority.snapshot(),
     });
@@ -837,7 +835,6 @@ async function startNormalApplication(options: {
             isProtocolEnabled,
             fetch: globalThis.fetch,
             shutdownSignal: shutdownController.signal,
-            codexLocalAuth,
             codexNativeModels: codexIntegrationAuthority.nativeModels,
           });
           const listener = await startRunningDataPlaneListener({

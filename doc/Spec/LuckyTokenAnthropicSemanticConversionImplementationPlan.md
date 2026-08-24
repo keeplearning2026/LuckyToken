@@ -2,7 +2,7 @@
 
 Status: **IMPLEMENTED — ANTHROPIC-SCOPED LOCAL AND ONLINE GATES PASS**
 Date: **2026-08-24**
-Scope: the Anthropic Messages Client Protocol after the request has committed to the Semantic Conversion lane. This plan does not change Local Native Preservation, Provider Native Preservation, or OpenAI Responses Semantic Conversion.
+Scope: the Anthropic Messages Client Protocol after the request has committed to the Semantic Conversion lane. This plan does not change Direct Mode, Provider Native Preservation, or OpenAI Responses Semantic Conversion.
 
 ## 1. Authority and objective
 
@@ -508,7 +508,7 @@ Online scripts use the repository's temporary `CODEX_HOME` guard and independent
 - Do not add a compatibility shim or dual execution path.
 - Do not use diagnostics to determine test correctness.
 - Do not use request `onPayload`, a custom transport, or consumed-stream rereading to recover Provider response facts.
-- Do not enter Local Native or Provider Native after Semantic lane commitment.
+- Do not enter Direct Mode or Provider Native after Semantic lane commitment.
 - Do not add server-owned continuity storage.
 - Do not claim `previous_response_id`; it is not an Anthropic Client capability.
 

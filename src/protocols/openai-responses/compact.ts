@@ -19,7 +19,7 @@ import type {
   ProviderResponsesObservationContext,
 } from "../../provider-native-responses/contract.js";
 import { resolveRequestIdentity } from "../../request-identity.js";
-import type { LocalResponsesCompactLane } from "./compact-contract.js";
+import type { DirectResponsesCompactLane } from "./compact-contract.js";
 import {
   bindOpenAIResponsesConfiguration,
   parseOpenAIResponsesConfiguration,
@@ -50,7 +50,7 @@ import type { RouterOptionDefaults } from "../options.js";
 export interface OpenAIResponsesCompactHandlerOptions {
   readonly models: Models;
   readonly publicModels?: PublicModelSource;
-  readonly localNativeLane?: LocalResponsesCompactLane;
+  readonly directLane?: DirectResponsesCompactLane;
   readonly providerNativeLane?: ProviderResponsesLane;
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly stateFile: string;
@@ -96,10 +96,9 @@ function observeCompactJourney(
 function observeCompactRequestArtifact(
   journey: RequestJourneyObserver | undefined,
   request: Request,
-  rawBody: string,
+  bytes: Uint8Array<ArrayBuffer>,
   location: RequestJourneyLocation,
 ): void {
-  const bytes = new TextEncoder().encode(rawBody);
   const capturedBytes = Math.min(bytes.byteLength, 256 * 1_024);
   observeCompactJourney(journey, {
     kind: "artifact_observed",
@@ -497,7 +496,7 @@ export function createOpenAIResponsesCompactHandler(
         } as const;
         enterCompactStep(journey, "p1.read_and_decode_body", bodyLocation);
         const decoded = await readResponsesRequestBody(request, options.maxRequestBytes);
-        observeCompactRequestArtifact(journey, request, decoded.text, bodyLocation);
+        observeCompactRequestArtifact(journey, request, decoded.wireBytes, bodyLocation);
         completeCompactStep(
           journey,
           "p1.read_and_decode_body",
@@ -534,33 +533,33 @@ export function createOpenAIResponsesCompactHandler(
         );
         const localRecognitionLocation = {
           phase: "request_resolution",
-          lane: "local_native",
-          step: "recognize_local_native",
+          lane: "direct",
+          step: "recognize_direct",
         } as const;
         enterCompactStep(
           journey,
-          "p2.recognize_local_native",
+          "p2.recognize_direct",
           localRecognitionLocation,
         );
-        const localNativeClaimed = options.localNativeLane?.claims(selector) === true;
+        const directClaimed = options.directLane?.claims(selector) === true;
         completeCompactStep(
           journey,
-          "p2.recognize_local_native",
+          "p2.recognize_direct",
           localRecognitionLocation,
         );
-        if (localNativeClaimed) {
+        if (directClaimed) {
           observeCompactJourney(journey, {
             kind: "lane_committed",
-            lane: "local_native",
+            lane: "direct",
             location: {
               phase: "request_resolution",
-              lane: "local_native",
+              lane: "direct",
               step: "commit_lane",
             },
           });
-          return options.localNativeLane.execute({
+          return options.directLane.execute({
             request,
-            rawBody: decoded.text,
+            rawBody: decoded.wireBytes,
             selector,
             ...(journey === undefined ? {} : { journey }),
           });

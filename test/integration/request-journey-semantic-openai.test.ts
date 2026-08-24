@@ -306,7 +306,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       expect(
         observations.some(
           (observation) =>
-            observation.location.lane === "local_native" ||
+            observation.location.lane === "direct" ||
             observation.location.lane === "provider_native",
         ),
       ).toBe(false);

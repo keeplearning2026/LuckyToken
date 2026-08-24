@@ -38,7 +38,7 @@ The management UI is organized around user tasks rather than internal subsystems
   single-slot `pi/auth.json` is ignored, never migrated, never overwritten,
   and never deleted automatically. After verifying that no older LuckyToken
   installation is needed, users may manually remove that obsolete file.
-- This does not affect Codex Local Native Preservation: Codex's own
+- This does not affect Codex Direct Mode: Codex's own
   `CODEX_HOME/auth.json` remains owned by Codex and is not a Provider Profile
   record.
 

@@ -985,8 +985,8 @@ module 完成 responsibility 所直接需要、但 authoritative lifecycle 不�
 Request Identity
 └── fallback identity generation capability
 
-Local Native Credential Authority
-└── local credential source / constant-time comparison capability
+Direct Mode Caller Envelope
+└── request-owned Authorization/account/Cookie/API-key headers and query
 
 CommandCode Provider
 ├── fixed ServerConfig factory
@@ -1391,11 +1391,11 @@ LuckyToken Core
 Data Plane request execution 现在有且只有三条独立 architectural lane：
 
 ```text
-1. Local Native Preservation
+1. Direct Mode
    Compatible Client Wire
    → explicit local model/capability recognition
-   → Local credential authority
-   → local native transport
+   → preserve caller credential envelope
+   → direct transport
    → Compatible Upstream Wire
 
 2. Provider Native Preservation
@@ -1629,9 +1629,9 @@ Request Identity
 → inbound session headers
 → effectiveSessionId / clientSessionId?
 
-Local Native credential authority
-→ selected native request credential
-→ request-local native forward auth
+Direct Mode caller envelope
+→ preserve request-owned credential headers/query
+→ fixed upstream authentication decision
 
 Pi Models / Provider auth
 → LuckyToken → selected upstream authentication
@@ -2742,7 +2742,7 @@ ModelsStore
 
 用于 model-state storage contract。当前 Pi runtime 在调用方未提供 custom store 时使用 in-memory `ModelsStore` implementation。
 
-这些都是 Provider-side runtime infrastructure，不是 conversational state，也不等于 Request Identity、Local Native Codex credential 或 Control Plane capability 的 private state/policy。
+这些都是 Provider-side runtime infrastructure，不是 conversational state，也不等于 Request Identity、Direct Mode Codex credential 或 Control Plane capability 的 private state/policy。
 
 概念上：
 
@@ -3958,8 +3958,8 @@ LuckyToken 不再保留一个全局或 per-Client-Protocol 的 client-token Auth
 Request identity
   → normalize session headers only
 
-Local Native credential
-  → validate/preserve the selected native lane's request credential
+Direct Mode caller envelope
+  → preserve without local authentication
 
 Provider credential
   → Pi Models / Provider Runtime credential resolution
@@ -3992,25 +3992,13 @@ x-session-id
 
 只接受 UUID-shaped value；没有 usable client identity 时生成 fresh request-local UUID。`clientSessionId` 只是“确实来自 client”的窄 fact，`effectiveSessionId` 始终存在。
 
-每个 model-serving Client Protocol HTTP handler 在完成基本 request-content 检查后、选择 Local Native / Provider Native / Semantic Conversion lane 前建立一次 Request Identity。`POST /v1/responses/compact` 遵循相同入口顺序；Semantic Compact 消费已经建立的 identity，不重复解析或生成。
+每个 model-serving Client Protocol HTTP handler 在完成基本 request-content 检查后、选择 Direct Mode / Provider Native / Semantic Conversion lane 前建立一次 Request Identity。`POST /v1/responses/compact` 遵循相同入口顺序；Semantic Compact 消费已经建立的 identity，不重复解析或生成。
 
 Request identity 不产生 `projectDir`，也不拥有 token/project lookup state。
 
-### Local Native Credential Boundary
+### Direct Mode Caller Credential Boundary
 
-Native preservation lane 可以拥有自己的 credential authority，但 credential 不能被提升为 LuckyToken-wide Auth contract。当前 Codex Local Native authority：
-
-```text
-request Authorization: Bearer <token>
-        ↓
-CodexLocalCredentialAuthority
-        ↓ compare with current Codex auth.json access token
-CodexForwardAuth | unavailable
-        ↓
-Local Native transport only
-```
-
-该 credential 不进入 Pi AI IR、Pi CredentialStore 或 Provider Native/Semantic Conversion lane。authority 还可以维护 bounded known-value scrub state 用于 diagnostics redaction；读取 Codex credential 失败只使 Local Native auth unavailable，不应使整个 Backend startup 失败。
+Codex Direct Mode 将调用方 credential 视为兼容 Client Wire 的一部分：不读取 `auth.json`、不解析或比较 token、不生成本地认证结果。Authorization、account ID、Cookie、API-key 类端到端头和原始 query 只到达固定 Direct Mode upstream，由 upstream 决定认证结果。它们不进入 Pi AI IR、Pi CredentialStore、Provider Native 或 Semantic Conversion lane；diagnostics 不捕获这些值。
 
 ### Provider Credential Boundary
 
@@ -4024,7 +4012,7 @@ Control Plane `capability` 是 management-plane authorization。它与 opaque lo
 
 ```text
 request identity ≠ authorization
-Local Native credential ≠ Provider credential
+Direct Mode caller envelope ≠ Provider credential
 Provider credential ≠ Control Plane capability
 Control Plane capability ≠ singleton authority
 ```
@@ -5263,7 +5251,7 @@ Client Protocol validity
 Client → Pi representability
 external model selector resolution
 request-identity normalization
-Local Native credential authority
+Direct Mode caller envelope preservation
 generic Execution outcome
 Client response rendering
 ```
@@ -5343,7 +5331,7 @@ optional provider operations
 
 Must Not Access
 - request-identity implementation internals
-- Local Native credential authority / raw client credential material
+- Direct Mode caller envelope / raw client credential material
 - raw Client Protocol representation
 - Client renderer state
 - generic whole-request context
@@ -5441,7 +5429,7 @@ Provider-specific state 不向前泄漏到：
 
 ```text
 Client Protocol
-Request Identity / Local Native credential authorities
+Request Identity / Direct Mode caller envelope
 Model Resolution
 composeOptions / request assembly
 ```
@@ -5943,7 +5931,7 @@ streamSimple
 
 Must Not Access
 - request-identity implementation internals
-- Local Native credential authority
+- Direct Mode caller envelope
 - raw inbound client headers
 - Client Protocol representation
 - HTTP response object
@@ -6179,7 +6167,7 @@ Private version/client headers
 
 全部在 Provider boundary late-create。
 
-Upstream CommandCode API credential 仍由 Pi Provider authentication path 解决；它与 Request Identity、Local Native Codex credential 和 Control Plane capability 完全分离。
+Upstream CommandCode API credential 仍由 Pi Provider authentication path 解决；它与 Request Identity、Direct Mode Codex credential 和 Control Plane capability 完全分离。
 
 Provider request object 是 temporary transport state，不是 new LuckyToken canonical request。
 
@@ -6839,8 +6827,8 @@ request identity 与 credential concerns 保持分离：
 Request Identity
 → inbound session headers → effectiveSessionId
 
-Local Native credential authority
-→ selected native request credential only
+Direct Mode caller envelope
+→ request-owned credential headers/query only
 
 Pi Models / Provider auth
 → LuckyToken-to-upstream credential resolution and request preparation
@@ -6959,9 +6947,9 @@ Summary：
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
 | **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
 | **Request Identity** | known session-header registry; fallback identity generator | none beyond optional bounded request-id helpers | `resolveRequestIdentity(headers)` | Model; Context; Provider credentials/wire |
-| **Local Native Credential Authority** | local credential source + constant-time comparison/scrub capability | bounded known secret values for redaction when required | resolve request-local native forward auth | Pi AI IR; Provider credential store; unrelated native lanes |
+| **Direct Mode Caller Envelope** | compatible inbound request wire | request-local caller headers/query only | preserve caller envelope to one fixed upstream | local authentication; Pi AI IR; Provider credential store; unrelated native lanes |
 | **Provider Package Loader** | versioned Package Contract; dynamic import capability; narrow host capabilities; Pi `MutableModels` | staged external Providers only during startup | `loadProviderPackages` | Client wire; Provider-native wire; package-private configuration semantics |
-| **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | request-identity internals; Local Native credential authority; Client wire; generic whole-request object |
+| **LuckyToken-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | request-identity internals; Direct Mode caller envelope; Client wire; generic whole-request object |
 | **CommandCode Private Provider** | endpoint/config; compatibility policy; fixed ServerConfig factory; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object; project filesystem/Git state |
 
 Bound configuration/policy may be retained by a module but is not repeated under `Owned State`.
@@ -7512,13 +7500,13 @@ relationships, and atomic stream behavior remain historical v5.9 evidence.
 LuckyToken Core Architecture v6.0
         │
         ├── exactly three independent Data Plane lanes
-        │      ├── Local Native Preservation
+        │      ├── Direct Mode
         │      ├── Provider Native Preservation
         │      └── Semantic Conversion through Pi AI IR
         │
         ├── request-edge facts are split by authority
         │      ├── Request Identity → effectiveSessionId
-        │      ├── Local Native credential → local native lane only
+        │      ├── Direct Mode caller envelope → fixed direct upstream only
         │      ├── Provider credential → Pi/Provider auth only
         │      └── Control Plane capability → management plane only
         │

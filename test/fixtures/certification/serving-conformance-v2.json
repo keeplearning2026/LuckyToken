@@ -6,17 +6,17 @@
     {
       "id": "shared-architecture-policy",
       "path": "doc/Protocols/Protocol Conversion Architecture and Policy.md",
-      "sha256": "sha256:d88e13de9ee72cc2ce5c5b49539d8e3c4767d6be705b8864d784fa9a65d367c8"
+      "sha256": "sha256:4a937cfc286dae684bdd3e2f2cea3629daffd8c008d5171c72440532a30f080d"
     },
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:bb22dc2b61f5a6d6ba16beccb4520596b4b3460c3d16fb5c78d8dae934a045fa"
+      "sha256": "sha256:73ea7e7390769fee1f864181f645c088f0855a84198faf00a5e494a8c8d233f1"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:1a6f761fc6b3aebb59e17c9903e5384e15469104e25b1d5b729e6cfb72783b68"
+      "sha256": "sha256:e042aec96bb37ff65a9e11ced0bcffe3f07fa1db02c04281608323b8a60db878"
     },
     {
       "id": "pi-commandcode-conversion",
@@ -206,10 +206,13 @@
       "dimension": "request-identity-credential-and-lane-isolation",
       "tests": [
         "test/unit/live-client-token-authority.test.ts",
-        "test/unit/codex-local-auth.test.ts",
         "test/unit/profile-bound-pi-execution.test.ts",
         "test/unit/openai-responses-passthrough-architecture.test.ts",
         "test/integration/codex-native-responses.test.ts",
+        "test/integration/codex-native-search.test.ts",
+        "test/integration/codex-native-images.test.ts",
+        "test/integration/codex-native-realtime-http.test.ts",
+        "test/integration/codex-native-realtime-websocket.test.ts",
         "test/integration/request-journey-local-native.test.ts",
         "test/integration/request-journey-provider-native-openai.test.ts",
         "test/integration/request-journey-semantic-openai.test.ts"

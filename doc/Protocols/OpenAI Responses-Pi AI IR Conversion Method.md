@@ -550,23 +550,23 @@ They MUST NOT be represented as having taken effect in the Response object.
 
 OpenAI Responses currently has **two distinct native lanes**. Both preserve Responses-wire semantics without forcing the request through Pi AI IR, but their model/credential authority is intentionally different.
 
-### 15.1 Local Native Responses
+### 15.1 Direct Mode Responses
 
 The handler checks the raw model selector against the explicit local Responses lane **before** Public Model/Pi Model resolution or `previous_response_id` expansion:
 
 ```text
 raw Responses body + selector
-→ LocalResponsesLane.claims(selector)
+→ DirectResponsesLane.claims(selector)
 → local model registry/capability
-→ CodexLocalCredentialAuthority
-→ local native Responses transport
+→ preserve caller envelope
+→ direct Responses transport
 ```
 
-Current production implementation is the Codex Local Native integration. The request bearer is accepted only when the local credential authority validates it against the current Codex credential source; the resulting forward auth is request-local to this lane. No Pi Model, Pi CredentialStore, Provider Native sender, or semantic conversion state participates.
+Current production implementation is the Codex Direct Mode integration. It forwards caller Authorization/account/query facts to the fixed Codex upstream without reading `auth.json` or producing a local authentication decision. No Pi Model, Pi CredentialStore, Provider Native sender, or semantic conversion state participates.
 
 ### 15.2 Provider Native Responses
 
-If Local Native does not claim the selector, the handler resolves the published alias to a Pi `Model`. An explicit Provider Responses transport contract may then claim that model/operation:
+If Direct Mode does not claim the selector, the handler resolves the published alias to a Pi `Model`. An explicit Provider Responses transport contract may then claim that model/operation:
 
 ```text
 raw Responses body
@@ -608,5 +608,5 @@ a time, developer prompt delivery, effective tools/options, Lark grammar
 handling, `store:false=honor`, and message/tool correlation through the public
 route. The 2026-08-14 distribution record is `online-passed`: the Responses
 route completed 60/60 real CommandCode cases and Codex CLI completed 60/60
-(20 scenarios × 3) through the installed Provider Package. Local Native and
+(20 scenarios × 3) through the installed Provider Package. Direct Mode and
 Provider Native Responses preservation remain independently owned/certified paths.

@@ -379,15 +379,46 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
   });
 
-  it("round-trips the Codex Local Native web_search operation", () => {
+  it("round-trips the Codex Direct Mode web_search operation", () => {
     const searchJourney: RequestJourneySummary = Object.freeze({
       ...JOURNEY_SUMMARY,
       operation: "web_search",
       protocol: "codex-alpha-search",
-      lane: "local_native",
+      lane: "direct",
     });
 
     expect(decodeRequestJourneySummary(searchJourney)).toEqual(searchJourney);
+  });
+
+  it("round-trips Codex Images and Realtime WebSocket diagnostics", () => {
+    const imagesJourney: RequestJourneySummary = Object.freeze({
+      ...JOURNEY_SUMMARY,
+      operation: "image_generation",
+      protocol: "codex-images",
+      lane: "direct",
+    });
+    const realtimeJourney: RequestJourneySummary = Object.freeze({
+      ...JOURNEY_SUMMARY,
+      operation: "realtime_session",
+      protocol: "codex-realtime",
+      lane: "direct",
+    });
+    const realtimeRecord = {
+      ...JOURNEY_RECORD,
+      operation: "realtime_session",
+      protocol: "codex-realtime",
+      lane: "direct",
+      admission: { ...JOURNEY_RECORD.admission, transport: "websocket" },
+      handoffOutcome: {
+        outcome: "finished",
+        transport: "websocket",
+        location: { phase: "http_handoff", step: "close_websocket_session" },
+      },
+    } as const;
+
+    expect(decodeRequestJourneySummary(imagesJourney)).toEqual(imagesJourney);
+    expect(decodeRequestJourneySummary(realtimeJourney)).toEqual(realtimeJourney);
+    expect(decodeRequestJourneyRecord(realtimeRecord)).toEqual(realtimeRecord);
   });
 
   it("strictly decodes a bounded Request Journey query result", () => {

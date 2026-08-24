@@ -88,7 +88,7 @@ flowchart LR
 LuckyToken 当前是一个本地模型协议桥接服务。它在 loopback TCP 上提供 Anthropic
 Messages 与 OpenAI Responses endpoints，让 Claude Code、Codex CLI 等 Agent 使用
 本地 Data Plane 固定为 loopback，不需要 LuckyToken 自己的 per-protocol client token。
-每个请求先按明确 contract 选择 Local Native、Provider Native 或 Semantic Conversion lane；
+每个请求先按明确 contract 选择 Direct Mode、Provider Native 或 Semantic Conversion lane；
 只有 Semantic Conversion 把 Client semantics 转成 Pi AI runtime contract，再由注册到 Pi
 `Models` 的 Provider 调用真实上游并渲染回 Client Protocol。`GET /v1/models` 提供当前
 published model discovery。
@@ -109,7 +109,7 @@ Node HTTP adapter
         ▼
 Runtime route/profile selection
         │
-        ├── Local Native Preservation ───────→ compatible local upstream
+        ├── Direct Mode ───────→ compatible local upstream
         │
         ├── Provider Native Preservation ────→ provider-native upstream
         │
@@ -149,7 +149,7 @@ WHATWG Response → Node ServerResponse → Agent
 - 启动本地 Anthropic `/v1/messages`、OpenAI Responses `/v1/responses` 与
   model discovery `/v1/models` routes；
 - Data Plane 固定为 loopback-only，不维护 LuckyToken global/project client-token；
-- Codex Local Native 请求只接受与当前 Codex `auth.json` access token 匹配的 request Bearer，并把该 credential 限定在 Local Native lane；
+- Codex Direct Mode 不读取 `auth.json` 或本地验证 request credential；它把调用方 credential envelope 原样交给固定 upstream；
 - 通过 Pi `Provider.auth` 接口执行 Provider login/logout，并把 credential 保存到
   Provider Profile records；
 - CommandCode Private Provider 作为私有 workspace package 从 `node_modules` 加载
@@ -201,7 +201,7 @@ LuckyToken token file。
 > 合成一个万能 executor。
 
 ```text
-Local Native Preservation
+Direct Mode
 Provider Native Preservation
 Semantic Conversion: Client Wire ↔ Client Protocol ↔ Pi ↔ Provider ↔ Upstream Wire
 ```
@@ -210,7 +210,7 @@ Semantic Conversion: Client Wire ↔ Client Protocol ↔ Pi ↔ Provider ↔ Ups
 
 - Anthropic/OpenAI conversion 模块可以依赖 Pi types，但不能 import、命名或判断 concrete Provider；
 - CommandCode Provider 可以依赖 Pi types，但不能 import、命名或判断 Client Protocol；
-- Local Native 与 Provider Native 不进入 Pi AI IR，也不共享 credential/transport/executor authority；
+- Direct Mode 与 Provider Native 不进入 Pi AI IR，也不共享 credential/transport/executor authority；
 - native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；
 - `sessionId`、`AbortSignal` 等可以作为窄 infrastructure/request facts，但不会形成第二套通用 request DTO；
 - composition root 可以看见各 lane seam 并进行选择/注入，但不做跨侧语义转换；
@@ -230,7 +230,7 @@ LuckyToken 不是一个什么都做的巨大模块，而像一条先分流、再
 ```mermaid
 flowchart LR
     Edge["HTTP request edge"] --> Desk["route/profile + lane selection"]
-    Desk --> Local["Local Native"]
+    Desk --> Local["Direct Mode"]
     Desk --> Native["Provider Native"]
     Desk --> Translator["Semantic Client Protocol"]
     Translator --> Standard["Pi AI IR"]
@@ -240,7 +240,7 @@ flowchart LR
     Buyer --> Supplier
 ```
 
-每个岗位只拿到完成任务必需的信息。例如 request-identity authority 只建立 session identity；Local Native credential 只进入 Local Native transport；Provider credential 只进入 Pi/Provider auth。没有一个通用 Auth/project object 在三条 lane 之间传播。
+每个岗位只拿到完成任务必需的信息。例如 request-identity authority 只建立 session identity；Direct Mode 只保留调用方 credential envelope；Provider credential 只进入 Pi/Provider auth。没有一个通用 Auth/project object 在三条 lane 之间传播。
 
 ## 2.1 五组生产模块
 
@@ -251,7 +251,7 @@ flowchart LR
 | 模块组 | 主要目录/文件 | 负责什么 | 明确不负责什么 |
 | --- | --- | --- | --- |
 | Transport/Runtime | `server.ts`, `runtime.ts`, `http.ts` | TCP、Node/Web 类型适配、route、取消、timeout、response delivery | Anthropic 字段、Pi message、Provider 配置 |
-| Credential/security authorities | `credentials/`, `integrations/codex/local-auth.ts`, Application Control Plane capability | Provider credential mutation/status、Codex Local Native request credential、management capability authentication | Client/Provider semantic conversion |
+| Credential/security authorities | `credentials/`, Application Control Plane capability | Provider credential mutation/status、management capability authentication | Codex caller credential（由 Direct Mode wire 自己保存）、Client/Provider semantic conversion |
 | Anthropic adapter | `protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
 | Pi integration/composition | `pi/`, `composition.ts`, `cli-config.ts`, `cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
 | CommandCode model capability catalog | `packages/commandcode-model-catalog/` | 两个 CommandCode Provider 的稳定模型能力事实；price-free Pi Model projection | Provider identity、credential、transport、wire lifecycle |
@@ -433,8 +433,7 @@ flowchart LR
 | 信息 | 产生位置 | 最远传播位置 | 死亡点 |
 | --- | --- | --- | --- |
 | Node socket / `IncomingMessage` | Node HTTP server | `server.ts` | Web `Request` 建立、response 完成或连接关闭 |
-| Codex request Bearer | Local Native request headers | `CodexLocalCredentialAuthority` → Local Native transport | request-local forward auth 建立并完成 native transport 后 |
-| Codex `auth.json` access token | Codex credential authority | constant-time comparison / bounded scrub memory | 不进入 Pi/Provider credential state |
+| Codex request credentials | Direct Mode request headers/query | fixed Direct Mode upstream transport | native transport 完成后；不进入 Pi/Provider credential state |
 | Provider credential raw value | Profile State Owner / composition-private Pi `CredentialStore` | exact request-bound Provider auth resolution | request-local Provider auth 建立后；management/binding projection 永不返回 secret |
 | Control Plane capability | Backend discovery publication | trusted Main/CLI Control Plane handshake | authenticated management session 关闭后 |
 | `sessionId` / request identity | request identity authority | interested execution/diagnostics consumers | request terminal 后 |
@@ -621,9 +620,9 @@ flowchart LR
 LuckyToken 不再给本地 Agent 发一套 global/project client token。当前安全相关 credential 分成三个独立生命周期：
 
 ```text
-1. Local Native Codex request credential
-   Codex request Bearer
-   → 只在 Local Native lane 验证/转发
+1. Direct Mode caller credential envelope
+   Codex request Authorization / account / Cookie / API-key 类头与 query
+   → Direct Mode 不验证，只转发到固定 upstream
 
 2. Provider credential
    ~/.luckytoken/pi/credential-profiles/<providerId>.json
@@ -643,20 +642,9 @@ Model Data Plane 固定绑定 loopback 地址。Anthropic/OpenAI Responses 的�
 
 这并不表示所有 incoming credential 都被忽略：native preservation lane 可以把 client wire 上的 credential 当作该 lane 自己的 transport/auth fact，但它不能被提升成全局 LuckyToken credential。
 
-## 4.2 Codex Local Native credential authority — `src/integrations/codex/local-auth.ts`
+## 4.2 Codex Direct Mode caller envelope
 
-Local Native Codex lane 使用一个非常窄的 authority：
-
-```ts
-interface CodexLocalCredentialAuthority {
-  resolveForwardAuth(headers: ReadonlyHeaders): Promise<CodexForwardAuth | undefined>;
-  scrub(value: string): string;
-}
-```
-
-它读取当前 Codex `auth.json` 的 access token，只接受 request 中 Bearer 与该当前 token 常量时间相等的请求，然后返回 request-local forward auth。credential 不会进入 Pi Models、Provider credential store 或其他 native lane。
-
-该 authority 还维护有界 known-value scrub snapshot，供 diagnostics/redaction 消除当前和最近的 Codex token；读取失败只是 Local Native auth unavailable，不会让整个 Backend startup 失败。
+Codex Direct Mode 不读取 `auth.json`、不解析 JWT，也不建立 LuckyToken credential authority。调用方的 Authorization、account ID、Cookie、API-key 类端到端头和原始 query 保持在该 Lane 内并转发到固定 Codex upstream，由 upstream 决定认证结果。Direct Mode 只重建 Host、长度、连接级头和 WebSocket 握手头；这些 credential 不进入 Pi Models、Provider credential store、Provider Native 或 Semantic Conversion。
 
 ## 4.3 Provider Profile State Owner — `src/credentials/profile-authority.ts`
 
@@ -756,7 +744,7 @@ handle   = Request → Promise<Response>
 | 输入 | WHATWG `Request`；构造期注入的 `Models`、Public Model source、policy/limits/identity/observation capabilities 与 native passthrough fetch |
 | 输出 | Anthropic JSON/SSE `Response`；连接级 abort 继续向外抛 |
 | 持有状态 | frozen dependency snapshot；无跨请求 message/session store |
-| 配套文件 | 无直接 credential 文件 I/O；Provider credential 与 Local Native credential 由 owning authority 处理 |
+| 配套文件 | 无 Direct Mode credential 文件 I/O；Provider credential 由 owning authority 处理，Direct Mode caller envelope 由请求 wire 自己拥有 |
 | 谁使用它 | Runtime route table |
 | 它使用谁 | 本目录 parsing/conversion/rendering、Request Identity、Public Model resolution、execution、Pi Models 与 narrow native passthrough seam |
 
@@ -1395,10 +1383,10 @@ createConfiguredLuckyTokenDataPlane(options)
 Data Plane composition 同时能看见三条独立 lane 的窄 seam，但不能把它们合并成一个 generic executor：
 
 ```text
-Local Native Preservation
+Direct Mode
   compatible Client Wire
-  → local model recognition + CodexLocalCredentialAuthority
-  → local native transport
+  → local model recognition + preserved caller envelope
+  → direct transport
 
 Provider Native Preservation
   compatible Client Wire
@@ -1493,7 +1481,7 @@ flowchart TB
     owner: Backend Catalog cache store
 ```
 
-Provider credential 不得泄漏到 Client Protocol semantic state；Codex Local Native
+Provider credential 不得泄漏到 Client Protocol semantic state；Codex Direct Mode
 credential authority 也不读写这个 Pi directory。
 
 ---
@@ -2298,7 +2286,7 @@ request identity + credential/lane isolation
 - malformed JSONL/unknown event/EOF fault 由 deterministic assembler tests 拥有；
 - socket disconnect/server shutdown 由 HTTP integration 拥有；
 - request identity precedence/fallback 由 request-identity 与真实 handler/HTTP tests 拥有；
-- Local Native credential 与 Provider credential isolation 由各自 authority/native-lane tests 拥有；
+- Direct Mode caller envelope 与 Provider credential isolation 由 Direct Mode/Provider lane tests 各自拥有；
 - current CommandCode request 明确验证不存在 projectDir/project-slug propagation；
 - healthy upstream 无法稳定制造的 protocol fault 不伪造成 online case。
 
@@ -2389,7 +2377,7 @@ flowchart LR
 | --- | --- | --- |
 | Pi 是 Semantic Conversion 的唯一共享语义边界 | Anthropic/Responses conversion 与 CommandCode package 零互相 import；native lanes bypass Pi IR 且不共享 credential/transport authority | 符合 |
 | High cohesion / low coupling | Client Protocol、三条 Data Plane lane、Backend lifecycle、Desktop connection、Provider credential 各自有独立 owner/test | 符合 |
-| Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Local credential、Provider JSONL state 分模块拥有 | 符合 |
+| Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Direct Mode caller envelope、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
 | 模型单一权威来源 | CommandCode 58 个当前事实只存在于共享 catalog；Private 投影全部 58 个，Goat 按 Go/GOAT 选择 40 个，目录不保存易变价格 | 符合 |
@@ -2626,7 +2614,7 @@ flowchart TB
 1. `src/application.ts` → `instance-authority.ts` / `control-plane-discovery.ts`：Backend 如何取得 authority、启动和关闭；
 2. `packages/desktop-shell/src/main/desktop-backend-connection.ts`：Desktop 如何 discovery/attach/recover；
 3. `src/server.ts` → `runtime.ts` → `http.ts`：Data Plane request 如何进入/取消；
-4. `src/credentials/profile-authority.ts` 与 `src/integrations/codex/local-auth.ts`：Provider Profile binding 与 Local Native credential 如何保持隔离；
+4. `src/credentials/profile-authority.ts` 与 `src/integrations/codex/local-*`：Provider Profile binding 与透明 Direct Mode caller envelope 如何保持隔离；
 5. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
 6. Pi `Models.streamSimple()` public contract；
 7. `src/providers/package-loader.ts` → Private package 的

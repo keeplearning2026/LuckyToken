@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   CodexFetchFunction,
-  CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
 import {
@@ -17,7 +16,7 @@ import {
   type DiagnosticsManagementAuthority,
 } from "../../src/diagnostics/index.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexLocalResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
 import {
@@ -93,7 +92,7 @@ function requireSummary(
   return result;
 }
 
-describe("Local Native terminal usage analytics producer", () => {
+describe("Direct Mode terminal usage analytics producer", () => {
   it("projects Complete usage without changing the served or outbound wire", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "luckytoken-local-native-analytics-"),
@@ -133,20 +132,12 @@ describe("Local Native terminal usage analytics producer", () => {
 
         const piModels = new Proxy({} as Models, {
           get() {
-            throw new Error("Pi Models must not be touched by Local Native");
+            throw new Error("Pi Models must not be touched by Direct Mode");
           },
         });
         const semanticExecution = vi.fn(async () => {
           throw new Error("Semantic Conversion must not execute");
         }) as unknown as ExecutionOperation;
-        const credentials: CodexLocalCredentialAuthority = Object.freeze({
-          resolveForwardAuth: async () =>
-            Object.freeze({
-              authorization: "Bearer local-upstream-token",
-              accountId: "acct-local-usage",
-            }),
-          scrub: (value: string) => value,
-        });
         const nativeModels: CodexNativeModelSource = Object.freeze({
           has: (modelId: string) => modelId === "gpt-native",
         });
@@ -166,8 +157,7 @@ describe("Local Native terminal usage analytics producer", () => {
         };
         const handler = createOpenAIResponsesHandler({
           models: piModels,
-          localNativeLane: createCodexLocalResponsesLane({
-            credentials,
+          directLane: createCodexDirectResponsesLane({
             models: nativeModels,
             fetch: localFetch,
           }),

@@ -28,7 +28,7 @@ The current Data Plane accepts Client Protocol HTTP requests only on the fixed l
 
 Provider Native is not blind HTTP passthrough. Its client body remains the authoritative model-visible request and normally changes only at the boundary-required top-level `model` projection. The sole declared exception is first-party Anthropic Messages with a captured managed OAuth Profile, which applies only the pinned Pi Agent's confirmed OAuth-dependent Claude Code identity and tool-name projections. The outbound transport envelope is reconstructed as the pinned Pi Agent implementation would send it for the captured managed or ambient binding and resolved Pi Model. Binding/Pi-owned URL, authentication, account identity, Provider headers, version/beta headers, session headers, User-Agent, and content encoding never inherit conflicting client values.
 
-Credential profiles are Provider-side infrastructure state. They never enter Pi AI IR or model-visible semantics, and they do not create a shared execution, credential, transport, or fallback abstraction across LuckyToken's independent data-plane lanes. Local Native credential behavior is outside this PRD.
+Credential profiles are Provider-side infrastructure state. They never enter Pi AI IR or model-visible semantics, and they do not create a shared execution, credential, transport, or fallback abstraction across LuckyToken's independent data-plane lanes. Direct Mode caller-envelope behavior is outside this PRD.
 
 ---
 
@@ -468,7 +468,7 @@ POST http://127.0.0.1:<port>/v1/responses
          → Pi AI IR → Responses rendering
 ```
 
-Provider Native does not perform a second credential-type eligibility decision and does not redirect to Semantic Conversion because of the selected auth branch or ambient binding. Semantic Conversion likewise does not inspect a Native result or credential choice. Once either lane begins, failure never falls through to the other. Local Native Responses is an independent contract and is not changed or otherwise specified by this PRD.
+Provider Native does not perform a second credential-type eligibility decision and does not redirect to Semantic Conversion because of the selected auth branch or ambient binding. Semantic Conversion likewise does not inspect a Native result or credential choice. Once either lane begins, failure never falls through to the other. Direct Mode Responses is an independent contract and is not changed or otherwise specified by this PRD.
 
 Provider Native Responses and Semantic Conversion/Pi AI IR are absolutely uncoupled execution paths. Neither may import, call, wrap, or reuse the other's request construction, credential-binding Adapter, execution, transport, retry state, response handling, or semantic types. They may independently consume the Backend-lifetime Pi `Models` capabilities and minimum request-lifecycle facts permitted by the repository architecture. Pi Agent source is a mirror reference for Native wire reconstruction, not a route into Pi Provider execution or Pi AI IR.
 
@@ -641,7 +641,7 @@ Switching the active profile reuses the same Pi `Models` object and existing Pi 
 
 ## 13.4 Data-plane isolation
 
-- Local Native credentials and execution are outside this Provider profile PRD and remain unchanged.
+- Direct Mode caller-envelope forwarding and execution are outside this Provider profile PRD and remain unchanged.
 - The fixed-loopback HTTP Data Plane accepts the client API request before Client Protocol/model capability routing selects Provider Native or Semantic Conversion; no request field selects Pi auth branch or ambient mode.
 - Client Protocol routing selects Provider Native or Semantic Conversion from the existing protocol/model capability contract, not from credential facts.
 - After selection, Provider Native and Semantic Conversion independently capture and consume the managed-or-ambient Provider binding through separate lane-owned seams.
@@ -919,7 +919,7 @@ V1 product decisions are closed:
 15. `MAX_PROFILE_ATTEMPTS_PER_REQUEST` is `3`, including the initial Profile. Each lane retains its own independent inner transport-retry contract.
 16. A committed automatic switch updates the Provider-wide active pointer and advances selection generation; it is not a request-only or session-only override.
 17. V1 does not switch automatically across auth branches or for 401, 403, 5xx, network, refresh, or storage failures.
-18. Client Protocol/lane selection and Provider credential selection are independent. Local Native behavior is outside this PRD.
+18. Client Protocol/lane selection and Provider credential selection are independent. Direct Mode behavior is outside this PRD.
 19. A claimed Provider Native transport must support every managed auth type exposed by that Provider. Auth-type coverage is release certification, not runtime routing or fallback state.
 20. Provider-backed lanes do not inspect inbound credential-shaped headers to choose auth type or Profile; those headers never override or become outbound Provider authentication.
 21. LuckyToken retains one Backend-lifetime Pi `Models` collection and presents only the exact operation binding through a composition-private Pi-compatible CredentialStore Adapter; Pi AI is not modified and does not know about sibling Profiles.

@@ -260,7 +260,7 @@ const CLOSE_PHASES = new Set<RequestJourneyLocation["phase"]>([
   "http_handoff",
 ]);
 const CLOSE_LANES = new Set<NonNullable<RequestJourneyLocation["lane"]>>([
-  "local_native",
+  "direct",
   "provider_native",
   "semantic_conversion",
 ]);

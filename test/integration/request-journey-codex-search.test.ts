@@ -4,10 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type {
-  CodexLocalCredentialAuthority,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
@@ -17,23 +14,12 @@ import {
   createOpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-const credentials: CodexLocalCredentialAuthority = Object.freeze({
-  resolveForwardAuth: async (headers: Headers) =>
-    headers.get("authorization") === "Bearer codex-token"
-      ? Object.freeze({
-          authorization: "Bearer codex-token",
-          accountId: "acct-local",
-        })
-      : undefined,
-  scrub: (value: string) => value.replaceAll("codex-token", "[REDACTED]"),
-});
-
 const nativeModels: CodexNativeModelSource = Object.freeze({
   has: () => false,
 });
 
-describe("Request Journey Codex Local Native web search", () => {
-  it("publishes web_search as a successful Local Native journey", async () => {
+describe("Request Journey Codex Direct Mode web search", () => {
+  it("publishes web_search as a successful Direct Mode journey", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-search-journey-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -48,7 +34,6 @@ describe("Request Journey Codex Local Native web search", () => {
           headers: { "content-type": "application/json" },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexLocalAuth: credentials,
       codexNativeModels: nativeModels,
       diagnostics,
     });
@@ -83,11 +68,11 @@ describe("Request Journey Codex Local Native web search", () => {
       }).toMatchObject({
         operation: "web_search",
         protocol: "codex-alpha-search",
-        lane: "local_native",
+        lane: "direct",
         outcome: "success",
         workOutcome: {
           outcome: "success",
-          terminalAuthority: "codex_local_search_handler",
+          terminalAuthority: "codex_direct_search_handler",
         },
       });
     } finally {

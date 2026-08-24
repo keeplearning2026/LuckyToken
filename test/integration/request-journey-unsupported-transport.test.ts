@@ -17,6 +17,7 @@ import {
   startLuckyTokenHttpServer,
   type RunningLuckyTokenHttpServer,
 } from "../../src/server.js";
+import { createCodexDirectRealtimeModule } from "../../src/integrations/codex/local-realtime.js";
 
 const REQUEST_ID = "68000000-0000-4000-8000-000000000001";
 const PRIMARY_LOCATION = {
@@ -61,6 +62,7 @@ function parseRawHttpResponse(bytes: Buffer): RawHttpResponse {
 
 async function exchangeWebSocketUpgrade(
   server: RunningLuckyTokenHttpServer,
+  path = "/v1/responses",
 ): Promise<Buffer> {
   return await new Promise<Buffer>((resolve, reject) => {
     const socket = net.connect(server.port, server.host);
@@ -83,7 +85,7 @@ async function exchangeWebSocketUpgrade(
     socket.once("connect", () => {
       socket.write(
         [
-          "GET /v1/responses HTTP/1.1",
+          `GET ${path} HTTP/1.1`,
           `Host: ${server.host}:${server.port}`,
           "Connection: Upgrade",
           "Upgrade: websocket",
@@ -153,6 +155,12 @@ describe("Request Journey unsupported HTTP transport", () => {
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
       port: 0,
+      webSocketUpgrade: createCodexDirectRealtimeModule({
+        fetch: globalThis.fetch,
+        connectWebSocket: () => {
+          throw new Error("unsupported route must not connect upstream");
+        },
+      }).webSocketUpgrade,
     });
     servers.push(observedServer);
     const observedBytes = await exchangeWebSocketUpgrade(observedServer);
@@ -199,7 +207,7 @@ describe("Request Journey unsupported HTTP transport", () => {
     const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });
     expect(detail.admission).toMatchObject({
       operationCandidate: "unsupported_transport",
-      transport: "http",
+      transport: "websocket",
       method: "GET",
       path: "/v1/responses",
     });
@@ -292,6 +300,53 @@ describe("Request Journey unsupported HTTP transport", () => {
       transport: "http",
       writableFinished: true,
       location: HANDOFF_LOCATION,
+    });
+  });
+
+  it("closes the Journey when a matched Upgrade handler rejects", async () => {
+    const runtime: LuckyTokenRuntime = Object.freeze({
+      routes: Object.freeze([]),
+      handle: async () => new Response(null, { status: 404 }),
+    });
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-upgrade-failure-"));
+    roots.push(root);
+    const authority = await createDiagnosticsAuthority({
+      configuration: parseDiagnosticsConfiguration({ directory: root }, root),
+    });
+    authorities.push(authority);
+    let publish!: (record: RequestJourneySummary) => void;
+    const published = new Promise<RequestJourneySummary>((resolve) => {
+      publish = resolve;
+    });
+    subscriptions.push(authority.subscribeRequestJourneys(publish));
+    const server = await startLuckyTokenHttpServer({
+      runtime,
+      diagnostics: authority,
+      createRequestId: () => REQUEST_ID,
+      port: 0,
+      webSocketUpgrade: {
+        matches: (_request, url) => url.pathname === "/v1/live",
+        handleUpgrade: async () => {
+          throw new Error("unexpected Upgrade failure");
+        },
+        closeAll: () => undefined,
+        terminateAll: () => undefined,
+      },
+    });
+    servers.push(server);
+
+    expect(await exchangeWebSocketUpgrade(server, "/v1/live?model=gpt-live"))
+      .toEqual(Buffer.alloc(0));
+    await published;
+    const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });
+    expect({
+      outcome: detail.outcome,
+      classification: detail.incident?.failures[0]?.classification,
+      handoff: detail.handoffOutcome,
+    }).toMatchObject({
+      outcome: "failed",
+      classification: "websocket_upgrade_handler_failed",
+      handoff: { outcome: "failed", transport: "websocket" },
     });
   });
 });

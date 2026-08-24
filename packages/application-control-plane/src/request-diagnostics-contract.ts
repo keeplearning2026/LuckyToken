@@ -11,7 +11,7 @@ export const MAX_REQUEST_DIAGNOSTICS_DETAIL_ITEMS = 512 as const;
 export const MAX_REQUEST_ARTIFACT_CHUNK_BYTES = 256 * 1_024;
 
 export type DataPlaneLane =
-  | "local_native"
+  | "direct"
   | "provider_native"
   | "semantic_conversion";
 
@@ -50,6 +50,8 @@ export type RequestJourneyOperation =
   | "conversation_compaction"
   | "model_discovery"
   | "web_search"
+  | "image_generation"
+  | "realtime_session"
   | "unmatched_request"
   | "unsupported_transport";
 
@@ -114,7 +116,7 @@ export interface RequestCancellationSnapshot {
 
 export interface RequestJourneyAdmission {
   readonly operationCandidate: RequestJourneyOperationCandidate;
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
   readonly method: string;
   readonly path: string;
   readonly acceptedAt: number;
@@ -249,7 +251,7 @@ export interface ClientResponsePreparedPersistedObservation
 export interface HandoffPersistedObservation extends LocatedPersistedObservation {
   readonly kind: "handoff_observed";
   readonly outcome: "prepared" | "finished" | "closed" | "failed";
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
   readonly writableFinished?: boolean;
 }
 
@@ -310,7 +312,7 @@ export interface ClientResponsePresentation {
 
 export interface RequestHandoffOutcome {
   readonly outcome: "prepared" | "finished" | "closed" | "failed";
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
   readonly writableFinished?: boolean;
   readonly location: RequestJourneyLocation;
 }

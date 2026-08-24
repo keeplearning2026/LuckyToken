@@ -9,24 +9,24 @@ This document is normative. The protocol-specific conversion documents refine it
 
 LuckyToken has exactly three peer Data Plane execution contracts. They may share only minimum request-edge/lifecycle facts such as request identity, cancellation, timing, and observation; they do not share credential authority, native executor/transport, or semantic-conversion state.
 
-### 1.1 Local Native Preservation
+### 1.1 Direct Mode
 
 ```text
 Compatible Client wire
 → explicit local model/capability recognition
-→ local credential authority
-→ local native request construction/transport
+→ preserved caller envelope
+→ direct request construction/transport
 → protocol-compatible upstream wire
 ```
 
-This lane deliberately does not enter Pi. Its model eligibility, credential source, headers, endpoint construction, transport, and response handling are local-integration-owned.
+This lane deliberately does not enter Pi. Its model eligibility, caller envelope, fixed endpoint construction, transport, and response handling are local-integration-owned.
 
 Requirements:
 
 1. Eligibility comes from an explicit local model/capability contract, never fuzzy name similarity or payload resemblance.
 2. Raw compatible Client wire remains authoritative for model-visible fields; unrelated fields are not reconstructed through a semantic DTO.
-3. Local credentials never become Pi/Provider credentials. A request credential may be forwarded only after the Local Native credential authority has validated/derived the lane's request-local forward auth.
-4. Hop-by-hop headers, stale content length/encoding, cookies, and unrelated credentials are not forwarded merely because the wire protocol matches.
+3. Caller credentials remain opaque Client Wire facts forwarded only to the fixed Direct Mode upstream; LuckyToken does not validate them or reuse them as Pi/Provider credentials.
+4. End-to-end headers, including caller credentials and cookies, are preserved. Host, length, hop-by-hop/connection-declared fields and WebSocket handshake transport headers are rebuilt; stale response representation headers are removed when Fetch exposes decoded bytes.
 5. Failure after this lane begins does not fall through to Provider Native or Semantic Conversion.
 
 ### 1.2 Provider Native Preservation
@@ -39,14 +39,14 @@ Compatible Client wire
 → protocol-compatible provider wire
 ```
 
-This lane also bypasses Pi AI IR and Pi Provider semantic execution. It may use Pi model/catalog/auth facts because those are the authoritative Provider identity/credential source, but it must not reuse Local Native credentials/transports or Client↔Pi conversion code.
+This lane also bypasses Pi AI IR and Pi Provider semantic execution. It may use Pi model/catalog/auth facts because those are the authoritative Provider identity/credential source, but it must not reuse the Direct Mode caller envelope/transport or Client↔Pi conversion code.
 
 Requirements:
 
 1. Eligibility is established by an explicit Provider/protocol transport contract or equivalent model capability; Provider-name similarity is insufficient.
 2. Raw Client wire remains authoritative for model-visible fields. Only boundary-required model identity projection, credential/auth transport, safe header filtering, encoding, and endpoint construction may alter the wire representation.
-3. Provider credentials remain owned by Pi Models/Provider auth resolution and never become Local Native credentials or Pi AI IR content.
-4. Failure after this lane begins does not fall through to Local Native or Semantic Conversion.
+3. Provider credentials remain owned by Pi Models/Provider auth resolution and never become Direct Mode caller-wire facts or Pi AI IR content.
+4. Failure after this lane begins does not fall through to Direct Mode or Semantic Conversion.
 
 ### 1.3 Semantic Conversion
 
@@ -291,7 +291,7 @@ Rules:
 - Authorization, Cookie, Set-Cookie, proxy credentials, and hop-by-hop headers are never forwarded and cannot be enabled by configuration;
 - failures before SSE commit return the Client protocol's non-streaming error response;
 - failures after commit follow that protocol's streaming failure lifecycle.
-- native failure fidelity belongs to the already-selected Local Native or Provider Native lane and its narrow transport; it is not a fallback acquisition path for Semantic Conversion.
+- native failure fidelity belongs to the already-selected Direct Mode or Provider Native lane and its narrow transport; it is not a fallback acquisition path for Semantic Conversion.
 
 ## 9. Per-failure request journal
 

@@ -15,7 +15,7 @@ export const REQUEST_JOURNEY_PHASES = Object.freeze([
 export type RequestJourneyPhase = (typeof REQUEST_JOURNEY_PHASES)[number];
 
 export type DataPlaneLane =
-  | "local_native"
+  | "direct"
   | "provider_native"
   | "semantic_conversion";
 
@@ -43,6 +43,8 @@ export type RequestJourneyOperation =
   | "conversation_compaction"
   | "model_discovery"
   | "web_search"
+  | "image_generation"
+  | "realtime_session"
   | "unmatched_request"
   | "unsupported_transport";
 
@@ -75,7 +77,7 @@ export interface RequestJourneyLocation {
 export interface RequestJourneyBeginInput {
   readonly requestId: string;
   readonly operationCandidate: RequestJourneyOperationCandidate;
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
   readonly method: string;
   readonly path: string;
   readonly acceptedAt: number;
@@ -198,7 +200,7 @@ export interface ClientResponsePreparedObservation extends LocatedObservation {
 export interface HandoffObservedObservation extends LocatedObservation {
   readonly kind: "handoff_observed";
   readonly outcome: "prepared" | "finished" | "closed" | "failed";
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
   readonly writableFinished?: boolean;
 }
 

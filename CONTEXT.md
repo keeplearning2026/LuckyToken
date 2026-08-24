@@ -27,11 +27,11 @@ _Avoid_: Client delivery, client consumption
 ## Data Plane Lanes
 
 **Data Plane Lane**:
-One of the three independent request execution contracts: Local Native Preservation, Provider Native Preservation, or Semantic Conversion.
+One of the three independent request execution contracts: Direct Mode, Provider Native Preservation, or Semantic Conversion.
 _Avoid_: Execution mode, fallback path
 
-**Local Native Preservation**:
-The lane that preserves a compatible Client Wire through local model recognition, local credential authority, and a local native transport without entering Pi.
+**Direct Mode**:
+The lane that preserves a compatible Client Wire through local model recognition and a fixed local-native transport without entering Pi; caller credentials remain part of that wire and are authenticated only by the fixed upstream.
 _Avoid_: Generic native passthrough
 
 **Provider Native Preservation**:

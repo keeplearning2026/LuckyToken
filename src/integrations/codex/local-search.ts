@@ -1,18 +1,15 @@
-import type {
-  CodexFetchFunction,
-  CodexLocalCredentialAuthority,
-} from "../../codex-native-seam.js";
+import type { CodexFetchFunction } from "../../codex-native-seam.js";
 import {
   observeRequestJourney,
   type ClientProtocolHandler,
   type ClientProtocolRequestContext,
 } from "../../http.js";
+import { preserveDirectStatusText } from "../../local-native-http-response.js";
 
 export const CODEX_SEARCH_URL =
   "https://chatgpt.com/backend-api/codex/alpha/search";
 
-export interface CreateCodexLocalSearchHandlerOptions {
-  readonly credentials: CodexLocalCredentialAuthority;
+export interface CreateCodexDirectSearchHandlerOptions {
   readonly fetch: CodexFetchFunction;
   readonly maxRequestBytes: number;
 }
@@ -29,28 +26,19 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
   "host",
   "content-length",
+  "expect",
 ]);
 
-const CLIENT_CREDENTIAL_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "api-key",
-  "x-api-key",
-  "chatgpt-account-id",
-]);
-
-const FORBIDDEN_RESPONSE_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "proxy-authorization",
-  "www-authenticate",
+const STALE_RESPONSE_REPRESENTATION_HEADERS = new Set([
+  "content-encoding",
+  "content-md5",
+  "digest",
+  "content-digest",
+  "repr-digest",
 ]);
 
 function requestHeaders(
   source: Headers,
-  authorization: string,
-  accountId: string | undefined,
 ): Headers {
   const connectionHeaders = new Set(
     (source.get("connection") ?? "")
@@ -63,21 +51,23 @@ function requestHeaders(
     const lower = name.toLowerCase();
     if (
       HOP_BY_HOP_HEADERS.has(lower) ||
-      CLIENT_CREDENTIAL_HEADERS.has(lower) ||
       connectionHeaders.has(lower)
     ) {
       continue;
     }
-    result.set(lower, value);
+    result.append(lower, value);
   }
-  result.set("authorization", authorization);
-  if (accountId !== undefined) {
-    result.set("chatgpt-account-id", accountId);
-  }
+  result.set("accept-encoding", "identity");
   return result;
 }
 
 function responseHeaders(source: Headers): Headers {
+  const contentEncoding = source.get("content-encoding")?.trim().toLowerCase();
+  const representationWasDecoded =
+    contentEncoding === "gzip" ||
+    contentEncoding === "x-gzip" ||
+    contentEncoding === "deflate" ||
+    contentEncoding === "br";
   const connectionHeaders = new Set(
     (source.get("connection") ?? "")
       .split(",")
@@ -89,26 +79,14 @@ function responseHeaders(source: Headers): Headers {
     const lower = name.toLowerCase();
     if (
       HOP_BY_HOP_HEADERS.has(lower) ||
-      FORBIDDEN_RESPONSE_HEADERS.has(lower) ||
+      (representationWasDecoded && STALE_RESPONSE_REPRESENTATION_HEADERS.has(lower)) ||
       connectionHeaders.has(lower)
     ) {
       continue;
     }
-    result.set(lower, value);
+    result.append(lower, value);
   }
   return result;
-}
-
-function authenticationError(): Response {
-  return new Response(
-    JSON.stringify({
-      error: {
-        type: "authentication_error",
-        message: "Local Codex credential is unavailable",
-      },
-    }),
-    { status: 401, headers: { "content-type": "application/json" } },
-  );
 }
 
 function payloadTooLargeError(): Response {
@@ -199,8 +177,8 @@ function completeSearch(
   const failed = response.status >= 400;
   const presentationLocation = {
     phase: "client_response_preparation",
-    lane: "local_native",
-    step: failed ? "render_local_search_error" : "prepare_local_search_response",
+    lane: "direct",
+    step: failed ? "render_direct_search_error" : "prepare_direct_search_response",
   } as const;
   observeSearch(context, {
     kind: "step_entered",
@@ -225,7 +203,7 @@ function completeSearch(
   });
   const outcomeLocation = {
     phase: "outcome_commit",
-    lane: "local_native",
+    lane: "direct",
     step: "commit_request_outcome",
   } as const;
   observeSearch(context, {
@@ -236,7 +214,7 @@ function completeSearch(
   observeSearch(context, {
     kind: "work_outcome_committed",
     outcome: failed ? "failed" : "success",
-    terminalAuthority: "codex_local_search_handler",
+    terminalAuthority: "codex_direct_search_handler",
     location: outcomeLocation,
   });
   observeSearch(context, {
@@ -250,8 +228,8 @@ function completeSearch(
   return response;
 }
 
-export function createCodexLocalSearchHandler(
-  options: CreateCodexLocalSearchHandlerOptions,
+export function createCodexDirectSearchHandler(
+  options: CreateCodexDirectSearchHandlerOptions,
 ): ClientProtocolHandler {
   return Object.freeze({
     method: "POST",
@@ -262,42 +240,32 @@ export function createCodexLocalSearchHandler(
     ): Promise<Response> {
       const laneLocation = {
         phase: "request_resolution",
-        lane: "local_native",
-        step: "commit_local_search_lane",
+        lane: "direct",
+        step: "commit_direct_search_lane",
       } as const;
       observeSearch(context, {
         kind: "step_entered",
-        stepInstanceId: "p2.commit_local_search_lane",
+        stepInstanceId: "p2.commit_direct_search_lane",
         location: laneLocation,
       });
       observeSearch(context, {
         kind: "lane_committed",
-        lane: "local_native",
+        lane: "direct",
         location: laneLocation,
       });
       observeSearch(context, {
         kind: "step_completed",
-        stepInstanceId: "p2.commit_local_search_lane",
+        stepInstanceId: "p2.commit_direct_search_lane",
         completion: "success",
         operation: "web_search",
         protocol: "codex-alpha-search",
         location: laneLocation,
       });
-      const forwardAuth = await options.credentials.resolveForwardAuth(
-        request.headers,
-      );
-      if (forwardAuth === undefined) {
-        return completeSearch(context, authenticationError());
-      }
       const body = await readBoundedBody(request, options.maxRequestBytes);
       if (body === undefined) {
         return completeSearch(context, payloadTooLargeError());
       }
-      const headers = requestHeaders(
-        request.headers,
-        forwardAuth.authorization,
-        forwardAuth.accountId,
-      );
+      const headers = requestHeaders(request.headers);
       const upstreamUrl = `${CODEX_SEARCH_URL}${new URL(request.url).search}`;
       let upstream: Response;
       try {
@@ -329,7 +297,7 @@ export function createCodexLocalSearchHandler(
         headers: responseHeaders(upstream.headers),
         },
       );
-      return completeSearch(context, response);
+      return preserveDirectStatusText(completeSearch(context, response));
     },
   });
 }

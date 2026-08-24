@@ -6,7 +6,7 @@ async function source(path: string): Promise<string> {
 }
 
 describe("OpenAI Responses three-lane architecture certification", () => {
-  it("keeps Local Native independent from Provider Native, Pi IR, and Pi model identity", async () => {
+  it("keeps Direct Mode independent from Provider Native, Pi IR, and Pi model identity", async () => {
     for (const file of [
       "src/codex-native-seam.ts",
       "src/codex-responses-passthrough.ts",
@@ -23,7 +23,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
     }
   });
 
-  it("keeps Provider Native independent from Local Native and Semantic conversion", async () => {
+  it("keeps Provider Native independent from Direct Mode and Semantic conversion", async () => {
     for (const file of [
       "src/provider-native-responses/index.ts",
       "src/provider-native-responses/openai.ts",
@@ -76,7 +76,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
 
   it("keeps the Responses handler as a lane selector instead of a concrete transport owner", async () => {
     const text = await source("src/protocols/openai-responses/handler.ts");
-    expect(text).toContain("localNativeLane");
+    expect(text).toContain("directLane");
     expect(text).toContain("providerNativeLane");
     expect(text).toContain("executeSemanticResponses");
     expect(text).not.toMatch(/integrations[\\/]codex/u);
@@ -87,7 +87,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
 
   it("keeps compact as the same three-lane selector without re-entering the full Responses handler", async () => {
     const text = await source("src/protocols/openai-responses/compact.ts");
-    expect(text).toContain("localNativeLane");
+    expect(text).toContain("directLane");
     expect(text).toContain("providerNativeLane");
     expect(text).toContain("executeSemanticCompact");
     expect(text).not.toContain("executeSemanticResponses");
@@ -97,7 +97,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
     expect(text).not.toMatch(/github-copilot|cloudflare-ai-gateway|azure-openai-responses/u);
   });
 
-  it("requires the Backend-owned Codex integration authority to supply Local Native identity", async () => {
+  it("requires the Backend-owned Codex integration authority to supply Direct Mode identity", async () => {
     const text = await source("src/composition.ts");
     expect(text).not.toMatch(/createCodexNativeModelSource/u);
     expect(text).not.toMatch(/integrations[\\/]codex[\\/]native-models/u);

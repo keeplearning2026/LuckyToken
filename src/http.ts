@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  copyDirectResponseMetadata,
+  preservesDirectStatusText,
+} from "./local-native-http-response.js";
 
 import type {
   RequestJourneyBeginInput,
@@ -11,7 +15,7 @@ import type {
 export interface ClientProtocolRequestContext {
   readonly requestId: string;
   readonly journey: RequestJourneyObserver;
-  readonly transport: "http" | "in_process";
+  readonly transport: "http" | "websocket" | "in_process";
 }
 
 export interface ClientProtocolHandler {
@@ -114,11 +118,12 @@ export function beginRequestJourney(
 function attachRequestId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
   headers.set("x-luckytoken-request-id", requestId);
-  return new Response(response.body, {
+  const preserveStatusText = preservesDirectStatusText(response);
+  return copyDirectResponseMetadata(response, new Response(response.body, {
     status: response.status,
-    statusText: response.statusText,
+    ...(preserveStatusText ? { statusText: response.statusText } : {}),
     headers,
-  });
+  }));
 }
 
 export function observeRequestJourney(

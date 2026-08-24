@@ -4,7 +4,7 @@ Date: 2026-08-23
 
 Status: implementation baseline for `@earendil-works/pi-ai` 0.84.2 and `@anthropic-ai/sdk` 0.91.1
 
-Scope: Anthropic Messages as the Client Protocol after the request has committed to LuckyToken's Semantic Conversion lane. Provider Native and Local Native requests bypass this audit. OpenAI Responses source semantics are deliberately outside this document.
+Scope: Anthropic Messages as the Client Protocol after the request has committed to LuckyToken's Semantic Conversion lane. Provider Native and Direct Mode requests bypass this audit. OpenAI Responses source semantics are deliberately outside this document.
 
 ## Conclusion
 

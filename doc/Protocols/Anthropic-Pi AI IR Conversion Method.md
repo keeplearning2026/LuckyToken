@@ -399,7 +399,7 @@ Provider-derived headers or identifiers.
 
 ## 12. Provider Native Anthropic preservation
 
-The current Anthropic native path is **Provider Native Preservation**, not Local Native and not this conversion method. Eligibility comes from the resolved Pi Model's declared `api === "anthropic-messages"`; Provider credential/auth resolution supplies the Provider-facing auth facts, and the handler binds a narrow `passthroughFetch` used only by this Provider Native lane.
+The current Anthropic native path is **Provider Native Preservation**, not Direct Mode and not this conversion method. Eligibility comes from the resolved Pi Model's declared `api === "anthropic-messages"`; Provider credential/auth resolution supplies the Provider-facing auth facts, and the handler binds a narrow `passthroughFetch` used only by this Provider Native lane.
 
 The raw Anthropic body remains authoritative except for boundary-required model selector projection; Provider/composed headers own upstream auth while only an approved client header set is forwarded. Conversion never receives the native fetch through Pi options, and Provider Native transport outcomes never supply Semantic Conversion failure facts.
 

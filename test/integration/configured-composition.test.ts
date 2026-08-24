@@ -101,10 +101,57 @@ describe("configured serving composition", () => {
       "certification",
       "close",
       "runtime",
+      "webSocketUpgrade",
     ]);
     const first = composition.close();
     expect(composition.close()).toBe(first);
     await first;
+  });
+
+  it("always installs fixed Direct Mode Search, Images, and Realtime routes", async () => {
+    const { configPath } = await writeConfiguration();
+    const config = await loadLuckyTokenCliConfig(configPath);
+    const models = {
+      getProviders: () => [],
+      getModels: () => [],
+    } as unknown as Models;
+    const publicModels = {
+      requestSnapshot: async () => ({
+        version: 0,
+        endpoint: { host: "127.0.0.1", port: 0 },
+        providers: [],
+        resolve: () => undefined,
+        publishedModels: () => [],
+        favoriteModels: () => [],
+      }),
+    };
+    const composition = await createProductionDataPlane({
+      configuration: config,
+      models,
+      providerAuthBindings: {} as never,
+      publicModels,
+      isProtocolEnabled: () => true,
+      fetch: async () => new Response(),
+    });
+    compositions.push(composition);
+
+    expect(composition.runtime.routes).toEqual(
+      expect.arrayContaining([
+        { method: "POST", pathname: "/v1/alpha/search" },
+        { method: "POST", pathname: "/v1/images/generations" },
+        { method: "POST", pathname: "/v1/images/edits" },
+        { method: "POST", pathname: "/v1/live" },
+        { method: "POST", pathname: "/v1/realtime/calls" },
+      ]),
+    );
+    expect(composition.webSocketUpgrade?.matches(
+      {} as never,
+      new URL("http://luckytoken.test/v1/realtime?model=gpt-realtime"),
+    )).toBe(true);
+    expect(composition.webSocketUpgrade?.matches(
+      {} as never,
+      new URL("http://luckytoken.test/v1/responses"),
+    )).toBe(false);
   });
 
   it("registers the packaged CommandCode Provider hidden behind one Client Protocol", async () => {
@@ -158,6 +205,7 @@ describe("configured serving composition", () => {
       "providerAuthBindings",
       "runtime",
       "userConfiguredProviderIds",
+      "webSocketUpgrade",
     ]);
     expect(composition.userConfiguredProviderIds).toEqual([]);
     expect(composition.diagnostics).toBe(diagnostics);
@@ -168,6 +216,11 @@ describe("configured serving composition", () => {
     expect(composition.runtime.routes).toEqual([
       { method: "POST", pathname: "/v1/messages" },
       { method: "GET", pathname: "/v1/models" },
+      { method: "POST", pathname: "/v1/alpha/search" },
+      { method: "POST", pathname: "/v1/images/generations" },
+      { method: "POST", pathname: "/v1/images/edits" },
+      { method: "POST", pathname: "/v1/realtime/calls" },
+      { method: "POST", pathname: "/v1/live" },
     ]);
     expect(composition.certification.result).toBe("CERTIFIED");
     expect(composition.certification.providerRegistrationPolicy).toBe(

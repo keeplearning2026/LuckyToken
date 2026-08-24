@@ -338,7 +338,7 @@ describe("Codex integration authority", () => {
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe('model = "gpt-x"\n');
   });
 
-  it("disable applies the default all-null restore target and clears Local Native", async () => {
+  it("disable applies the default all-null restore target and clears Direct Mode", async () => {
     const original = [
       'model_provider = "custom"',
       'model_catalog_json = "C:/user/catalog.json"',

@@ -15,7 +15,7 @@ function request(model = "local-model"): Request {
 }
 
 describe("OpenAI Responses three-lane routing", () => {
-  it("lets a claiming Local Native lane own the request without touching Pi Models", async () => {
+  it("lets a claiming Direct Mode lane own the request without touching Pi Models", async () => {
     const claims = vi.fn((selector: string) => selector === "local-model");
     const execute = vi.fn(async () =>
       new Response("local-upstream", {
@@ -25,12 +25,12 @@ describe("OpenAI Responses three-lane routing", () => {
     );
     const models = new Proxy({} as Models, {
       get() {
-        throw new Error("Pi Models must not be touched after Local Native claims");
+        throw new Error("Pi Models must not be touched after Direct Mode claims");
       },
     });
     const options = {
       models,
-      localNativeLane: { claims, execute },
+      directLane: { claims, execute },
       stateFile: "unused-local-routing.json",
       maxRequestBytes: 1024,
     } as unknown as OpenAIResponsesHandlerOptions;

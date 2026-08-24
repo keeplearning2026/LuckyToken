@@ -92,6 +92,28 @@ describe("Data Plane HTTP drain lifecycle", () => {
     await expect(drain).resolves.toBe("drained");
   });
 
+  it("does not change the HTTP reason phrase for an existing Responses route", async () => {
+    const runtime = createLuckyTokenRuntime({
+      clientProtocols: [{
+        method: "POST",
+        pathname: "/v1/responses",
+        handle: async () => new Response("response", {
+          status: 299,
+          statusText: "Protocol Custom Reason",
+        }),
+      }],
+    });
+    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    servers.push(server);
+
+    const response = await fetch(`${server.origin}/v1/responses`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(299);
+    expect(response.statusText).not.toBe("Protocol Custom Reason");
+  });
+
   it("does not admit a second request from an existing keep-alive connection", async () => {
     let firstStarted: (() => void) | undefined;
     const started = new Promise<void>((resolve) => {

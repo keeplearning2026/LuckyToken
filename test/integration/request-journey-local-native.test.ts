@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CodexFetchFunction,
-  CodexLocalCredentialAuthority,
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
 import {
@@ -16,7 +15,7 @@ import {
   type DiagnosticsAuthority,
 } from "../../src/diagnostics/index.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexLocalResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
 import {
   createOpenAIResponsesHandler,
 } from "../../src/protocols/openai-responses/handler.js";
@@ -28,26 +27,24 @@ import {
 } from "../../src/server.js";
 
 const REQUEST_ID = "50000000-0000-4000-8000-000000000001";
-const LOCAL_PROFILE_ID =
-  "codex-local:5f7693616d756e8790eaf918d349e8aa2f2804faef32c528a0070778ac472610";
 const FAILURE_LOCATION = {
   phase: "upstream_execution",
-  lane: "local_native",
-  step: "read_local_response",
+  lane: "direct",
+  step: "read_direct_response",
   attempt: 1,
 } as const;
 const CLIENT_PRESENTATION_LOCATION = {
   phase: "client_response_preparation",
-  lane: "local_native",
-  step: "render_local_error_response",
+  lane: "direct",
+  step: "render_direct_error_response",
 } as const;
 const WORK_OUTCOME_LOCATION = {
   phase: "outcome_commit",
-  lane: "local_native",
+  lane: "direct",
   step: "commit_request_outcome",
 } as const;
 
-describe("Local Native Request Journey", () => {
+describe("Direct Mode Request Journey", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const servers: RunningLuckyTokenHttpServer[] = [];
@@ -77,7 +74,7 @@ describe("Local Native Request Journey", () => {
     const piModels = new Proxy({} as Models, {
       get() {
         piModelsTouches += 1;
-        throw new Error("Pi Models must not be touched by Local Native");
+        throw new Error("Pi Models must not be touched by Direct Mode");
       },
     });
     const semanticExecution = vi.fn(async () => {
@@ -94,16 +91,7 @@ describe("Local Native Request Journey", () => {
       execute: providerExecute,
     };
 
-    const credentialSecret = "local-codex-secret";
-    const localAccountId = "acct-local";
-    const credentials: CodexLocalCredentialAuthority = Object.freeze({
-      resolveForwardAuth: async () =>
-        Object.freeze({
-          authorization: `Bearer ${credentialSecret}`,
-          accountId: localAccountId,
-        }),
-      scrub: (value: string) => value.split(credentialSecret).join("[REDACTED]"),
-    });
+    const credentialSecret = "client-token";
     const nativeModels: CodexNativeModelSource = Object.freeze({
       has: (modelId: string) => modelId === "gpt-native",
     });
@@ -134,14 +122,13 @@ describe("Local Native Request Journey", () => {
         },
       );
     };
-    const localNativeLane = createCodexLocalResponsesLane({
-      credentials,
+    const directLane = createCodexDirectResponsesLane({
       models: nativeModels,
       fetch: localFetch,
     });
     const handler = createOpenAIResponsesHandler({
       models: piModels,
-      localNativeLane,
+      directLane,
       providerNativeLane,
       executeOperation: semanticExecution,
       stateFile: join(root, "responses-state.json"),
@@ -208,7 +195,7 @@ describe("Local Native Request Journey", () => {
       requestId: REQUEST_ID,
       operation: "model_generation",
       protocol: "openai-responses",
-      lane: "local_native",
+      lane: "direct",
       outcome: "failed",
       primaryFailureLocation: FAILURE_LOCATION,
     });
@@ -248,34 +235,34 @@ describe("Local Native Request Journey", () => {
           },
         }),
         expect.objectContaining({
-          stepInstanceId: "p2.recognize_local_native",
+          stepInstanceId: "p2.recognize_direct",
           completion: "success",
           location: {
             phase: "request_resolution",
-            lane: "local_native",
-            step: "recognize_local_native",
+            lane: "direct",
+            step: "recognize_direct",
           },
         }),
         expect.objectContaining({
-          stepInstanceId: "p3.resolve_local_credential",
+          stepInstanceId: "p3.preserve_caller_envelope",
           completion: "success",
           location: {
             phase: "lane_request_preparation",
-            lane: "local_native",
-            step: "resolve_local_credential",
+            lane: "direct",
+            step: "preserve_caller_envelope",
           },
         }),
         expect.objectContaining({
-          stepInstanceId: "p3.construct_local_envelope",
+          stepInstanceId: "p3.construct_direct_envelope",
           completion: "success",
           location: {
             phase: "lane_request_preparation",
-            lane: "local_native",
-            step: "construct_local_envelope",
+            lane: "direct",
+            step: "construct_direct_envelope",
           },
         }),
         expect.objectContaining({
-          stepInstanceId: "p4.read_local_response",
+          stepInstanceId: "p4.read_direct_response",
           completion: "failed",
           location: FAILURE_LOCATION,
         }),
@@ -285,7 +272,7 @@ describe("Local Native Request Journey", () => {
       observations.some(
         (observation) =>
           observation.kind === "lane_committed" &&
-          observation.lane === "local_native" &&
+          observation.lane === "direct" &&
           observation.location.phase === "request_resolution" &&
           observation.location.step === "commit_lane",
       ),
@@ -303,18 +290,16 @@ describe("Local Native Request Journey", () => {
     expect(attempts).toEqual([
       expect.objectContaining({
         attempt: 1,
-        profileId: LOCAL_PROFILE_ID,
         transition: "started",
         location: {
           phase: "upstream_execution",
-          lane: "local_native",
-          step: "dispatch_local_transport",
+          lane: "direct",
+          step: "dispatch_direct_transport",
           attempt: 1,
         },
       }),
       expect.objectContaining({
         attempt: 1,
-        profileId: LOCAL_PROFILE_ID,
         status: 200,
         transition: "response",
         location: FAILURE_LOCATION,
@@ -322,7 +307,7 @@ describe("Local Native Request Journey", () => {
     ]);
     expect(detail.workOutcome).toEqual({
       outcome: "failed",
-      terminalAuthority: "codex_local_responses_lane",
+      terminalAuthority: "codex_direct_responses_lane",
       location: WORK_OUTCOME_LOCATION,
     });
     expect(detail.clientPresentation).toEqual({
@@ -376,7 +361,6 @@ describe("Local Native Request Journey", () => {
       ]),
     );
     expect(JSON.stringify(detail)).not.toContain(credentialSecret);
-    expect(JSON.stringify(detail)).not.toContain(localAccountId);
 
     const outboundArtifact = await authority.getRequestArtifact({
       requestId: REQUEST_ID,
