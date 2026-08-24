@@ -218,9 +218,8 @@ function countStrictSchema(
 }
 
 function validateToolControlShapes(tool: Record<string, unknown>): void {
-  const unknown = Object.keys(tool).find((key) => !TOOL_KEYS.has(key));
-  if (unknown !== undefined) {
-    throw new InvalidRequest(`tool.${unknown} is unexpected`);
+  for (const key of Object.keys(tool)) {
+    if (!TOOL_KEYS.has(key)) delete tool[key];
   }
   if (
     tool.cache_control !== undefined &&
@@ -230,11 +229,8 @@ function validateToolControlShapes(tool: Record<string, unknown>): void {
     throw new InvalidRequest("tool.cache_control must be an object or null");
   }
   if (isRecord(tool.cache_control)) {
-    const cacheUnknown = Object.keys(tool.cache_control).find(
-      (key) => key !== "type" && key !== "ttl",
-    );
-    if (cacheUnknown !== undefined) {
-      throw new InvalidRequest(`tool.cache_control.${cacheUnknown} is unexpected`);
+    for (const key of Object.keys(tool.cache_control)) {
+      if (key !== "type" && key !== "ttl") delete tool.cache_control[key];
     }
     if (tool.cache_control.type !== "ephemeral") {
       throw new InvalidRequest("tool.cache_control.type must be ephemeral");
@@ -306,9 +302,16 @@ function validateToolControlShapes(tool: Record<string, unknown>): void {
     throw new InvalidRequest("tool.use_cache must be boolean");
   }
   if (tool.citations !== undefined && tool.citations !== null) {
-    if (!isRecord(tool.citations) ||
-      Object.keys(tool.citations).some((key) => key !== "enabled") ||
-      (tool.citations.enabled !== undefined && typeof tool.citations.enabled !== "boolean")) {
+    if (!isRecord(tool.citations)) {
+      throw new InvalidRequest("tool.citations must be a citations config or null");
+    }
+    for (const key of Object.keys(tool.citations)) {
+      if (key !== "enabled") delete tool.citations[key];
+    }
+    if (
+      tool.citations.enabled !== undefined &&
+      typeof tool.citations.enabled !== "boolean"
+    ) {
       throw new InvalidRequest("tool.citations must be a citations config or null");
     }
   }
@@ -317,8 +320,8 @@ function validateToolControlShapes(tool: Record<string, unknown>): void {
       throw new InvalidRequest("tool.user_location must be an approximate location or null");
     }
     const allowed = new Set(["type", "city", "country", "region", "timezone"]);
-    if (Object.keys(tool.user_location).some((key) => !allowed.has(key))) {
-      throw new InvalidRequest("tool.user_location contains an unexpected field");
+    for (const key of Object.keys(tool.user_location)) {
+      if (!allowed.has(key)) delete tool.user_location[key];
     }
     for (const key of ["city", "country", "region", "timezone"] as const) {
       const value = tool.user_location[key];

@@ -82,7 +82,6 @@ describe("Anthropic Client Wire to final CommandCode Private payload", () => {
           sessionId: "00000000-0000-4000-8000-000000000123",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, commandCodePrivateModel);
-            if (projected.failure !== undefined) throw new Error(projected.failure);
             return capture(projected.payload);
           },
         },
@@ -213,7 +212,6 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, constrainedModel);
-            if (projected.failure !== undefined) throw new Error(projected.failure);
             return capture(projected.payload);
           },
         },
@@ -253,7 +251,6 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           effortOutcome = projected.outcomes.find(
             (entry) => entry.control === "reasoning.effort",
           )?.outcome.kind;
@@ -395,7 +392,6 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           projectedOutcomes = projected.outcomes;
           return capture(projected.payload);
         },
@@ -441,7 +437,6 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -523,14 +518,12 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       model: target,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     const payload = await captureFinalPiPayload((capture) =>
       streamOpenAICompletions(target, converted.invocation.pi.context, {
         ...converted.invocation.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -670,9 +663,6 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, model);
-            if (projected.failure !== undefined) {
-              throw new Error(projected.failure);
-            }
             return capture(projected.payload);
           },
         },
@@ -768,7 +758,6 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, anthropicModel);
             outcomes = projected.outcomes;
-            if (projected.failure !== undefined) throw new Error(projected.failure);
             return capture(projected.payload);
           },
         },
@@ -866,7 +855,6 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, anthropicModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -935,7 +923,6 @@ describe("Anthropic Client Wire to final Google payloads", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, googleModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -982,7 +969,6 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       model: target,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
       start(target as never, converted.invocation.pi.context, {
@@ -991,7 +977,6 @@ describe("Anthropic Client Wire to final Google payloads", () => {
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, target);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1002,7 +987,7 @@ describe("Anthropic Client Wire to final Google payloads", () => {
     });
     const googlePayload = requireRecord(payload, "Google payload");
     const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
-    expect(googleConfig.thinkingConfig).not.toHaveProperty("includeThoughts");
+    expect(googleConfig.thinkingConfig).toHaveProperty("includeThoughts", true);
     expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
       .not.toBe("omitted");
   });
@@ -1034,7 +1019,6 @@ describe("Anthropic Client Wire to final Google payloads", () => {
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, target);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1068,10 +1052,10 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "disabled" },
     }, 1);
-    expect(prepareAnthropicPayloadProjection({
+    expect(() => prepareAnthropicPayloadProjection({
       model: target,
       invocation: converted.invocation,
-    }).initialFailure).toBeUndefined();
+    })).not.toThrow();
   });
 
   it("keeps requests available when Gemini 3 can only use a nearest reasoning mode", () => {
@@ -1086,10 +1070,10 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "enabled", budget_tokens: 1_024 },
     }, 1);
-    expect(prepareAnthropicPayloadProjection({
+    expect(() => prepareAnthropicPayloadProjection({
       model: target,
       invocation: converted.invocation,
-    }).initialFailure).toBeUndefined();
+    })).not.toThrow();
   });
 
   it("projects the independently registered Google Vertex shape", async () => {
@@ -1104,7 +1088,6 @@ describe("Anthropic Client Wire to final Google payloads", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, vertexModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1172,7 +1155,6 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, mistralModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1254,7 +1236,6 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1305,7 +1286,6 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
         fetch,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, mistralModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return projected.payload;
         },
       }),
@@ -1372,14 +1352,12 @@ describe.each([
       model: targetModel,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     const payload = await captureFinalPiPayload((capture) =>
       start(targetModel as never, converted.invocation.pi.context, {
         ...converted.invocation.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, targetModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1426,7 +1404,6 @@ describe.each([
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, targetModel);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1477,7 +1454,6 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
         ...bedrockOptions,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, bedrockClaudeModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1548,7 +1524,6 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       model: target,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
       streamBedrock(target, converted.invocation.pi.context, {
@@ -1557,7 +1532,6 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1613,7 +1587,6 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
         ...bedrockOptions,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, bedrockNovaModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1653,14 +1626,12 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
       model: piMessagesModel,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     const payload = await captureFinalPiPayload((capture) =>
       streamPiMessages(piMessagesModel, converted.invocation.pi.context, {
         ...converted.invocation.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, piMessagesModel);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
@@ -1694,7 +1665,6 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
       model: target,
       invocation: converted.invocation,
     });
-    expect(projection.initialFailure).toBeUndefined();
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
       streamPiMessages(target, converted.invocation.pi.context, {
@@ -1703,7 +1673,6 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
           outcomes = projected.outcomes;
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),

@@ -75,21 +75,6 @@ export function supportsAnthropicBedrockProjection(
   return certifiedBedrockCapabilities(model) !== undefined;
 }
 
-export function initialAnthropicToBedrockFailure(input: {
-  readonly model: Model<string>;
-  readonly invocation: AnthropicSemanticInvocation;
-}): string | undefined {
-  const capabilities = certifiedBedrockCapabilities(input.model);
-  if (capabilities === undefined) {
-    return `Bedrock model ${input.model.provider}/${input.model.id} is not certified for Anthropic semantic projection`;
-  }
-  const family = capabilities.family === "claude" ? "Claude" : "non-Claude";
-  if (input.invocation.supplement.inferenceGeo.kind === "specified") {
-    return `Bedrock ${family} payload cannot select inference geography`;
-  }
-  return undefined;
-}
-
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): Record<string, unknown> | undefined {
@@ -101,15 +86,18 @@ function mappedToolChoice(
   return undefined;
 }
 
-export function projectAnthropicToBedrock(input: {
+interface ProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly payload: unknown;
-}): {
+}
+
+function projectAnthropicToBedrock(
+  input: ProjectionInput,
+  phase: "reasoning" | "supplement",
+): {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
-  readonly failure?: string;
-  readonly failureKind?: "unsupported-semantics";
 } {
   if (
     typeof input.payload !== "object" ||
@@ -143,40 +131,49 @@ export function projectAnthropicToBedrock(input: {
     throw new Error("bedrock-converse-stream payload shape mismatch at inferenceConfig.maxTokens");
   }
 
-  const finalMaxTokens = Math.min(inference.maxTokens, supplement.outputTokenCeiling);
-  exact(outcomes, family, "maxTokens", inference.maxTokens, finalMaxTokens, () => {
-    inference.maxTokens = finalMaxTokens;
-  });
-  for (const [control, field, value] of [
-    ["sampling.topP", "topP", supplement.sampling.topP],
-  ] as const) {
-    if (value === undefined) continue;
-    exact(outcomes, family, control, inference[field], value, () => {
-      inference[field] = value;
+  if (phase === "supplement") {
+    const finalMaxTokens = Math.min(inference.maxTokens, supplement.outputTokenCeiling);
+    exact(outcomes, family, "maxTokens", inference.maxTokens, finalMaxTokens, () => {
+      inference.maxTokens = finalMaxTokens;
     });
-  }
-  if (supplement.stopSequences !== undefined) {
-    exact(
-      outcomes,
-      family,
-      "stopSequences",
-      inference.stopSequences,
-      supplement.stopSequences,
-      () => {
-        inference.stopSequences = [...supplement.stopSequences!];
-      },
-    );
+    for (const [control, field, value] of [
+      ["sampling.temperature", "temperature", supplement.sampling.temperature],
+      ["sampling.topP", "topP", supplement.sampling.topP],
+    ] as const) {
+      if (value === undefined) continue;
+      if (control === "sampling.temperature") {
+        if (same(inference[field], value)) {
+          add(outcomes, control, { kind: "pi-native" });
+        }
+        continue;
+      }
+      exact(outcomes, family, control, inference[field], value, () => {
+        inference[field] = value;
+      });
+    }
+    if (supplement.stopSequences !== undefined) {
+      exact(
+        outcomes,
+        family,
+        "stopSequences",
+        inference.stopSequences,
+        supplement.stopSequences,
+        () => {
+          inference.stopSequences = [...supplement.stopSequences!];
+        },
+      );
+    }
   }
   payload.inferenceConfig = inference;
 
   const choice = supplement.toolChoice;
-  if (choice?.kind === "none") {
+  if (phase === "supplement" && choice?.kind === "none") {
     delete payload.toolConfig;
     add(outcomes, "toolChoice", {
       kind: "payload-projected",
       projector: `anthropic-to-bedrock-${family}`,
     });
-  } else {
+  } else if (phase === "supplement") {
     const mapped = mappedToolChoice(input.invocation);
     if (mapped !== undefined) {
       if (
@@ -200,7 +197,7 @@ export function projectAnthropicToBedrock(input: {
     !Array.isArray(payload.additionalModelRequestFields)
       ? { ...(payload.additionalModelRequestFields as Record<string, unknown>) }
       : {};
-  if (claude && supplement.sampling.topK !== undefined) {
+  if (phase === "supplement" && claude && supplement.sampling.topK !== undefined) {
     exact(outcomes, family, "sampling.topK", additional.top_k, supplement.sampling.topK, () => {
       additional.top_k = supplement.sampling.topK;
     });
@@ -208,7 +205,33 @@ export function projectAnthropicToBedrock(input: {
 
   const activation = input.invocation.reasoning.activation;
   const effort = input.invocation.reasoning.effort;
-  if (claude) {
+  const outputConfig =
+    typeof additional.output_config === "object" &&
+    additional.output_config !== null &&
+    !Array.isArray(additional.output_config)
+      ? { ...(additional.output_config as Record<string, unknown>) }
+      : {};
+  if (phase === "supplement" && claude) {
+    const format = supplement.outputFormat;
+    if (format.kind === "specified") {
+      outputConfig.format = {
+        type: "json_schema",
+        schema: format.value.schema,
+      };
+      add(outcomes, "outputFormat", {
+        kind: "payload-projected",
+        projector: "anthropic-to-bedrock-claude",
+      });
+    } else if (format.kind === "explicit-null") {
+      delete outputConfig.format;
+      add(outcomes, "outputFormat", {
+        kind: "payload-projected",
+        projector: "anthropic-to-bedrock-claude",
+      });
+    }
+  }
+  if (phase === "reasoning" && claude) {
+    const finalMaxTokens = inference.maxTokens;
     const thinkingBudgetDoesNotFit =
       activation.kind === "enabled" &&
       activation.budgetTokens >= finalMaxTokens;
@@ -237,30 +260,20 @@ export function projectAnthropicToBedrock(input: {
         kind: "payload-projected",
         projector: "anthropic-to-bedrock-claude",
       });
+    } else if (activation.kind === "disabled") {
+      delete additional.thinking;
+      delete additional.anthropic_beta;
+      add(outcomes, "reasoning.activation", input.model.reasoning
+        ? {
+            kind: "degraded",
+            warning:
+              "Bedrock Claude used its reasoning default after LuckyToken removed known enabling controls",
+          }
+        : { kind: "pi-native" });
     } else {
       delete additional.thinking;
       delete additional.anthropic_beta;
     }
-    const format = supplement.outputFormat;
-    const outputConfig =
-      typeof additional.output_config === "object" &&
-      additional.output_config !== null &&
-      !Array.isArray(additional.output_config)
-        ? { ...(additional.output_config as Record<string, unknown>) }
-        : {};
-    if (format.kind === "specified") {
-      outputConfig.format = {
-        type: "json_schema",
-        schema: format.value.schema,
-      };
-      add(outcomes, "outputFormat", {
-        kind: "payload-projected",
-        projector: "anthropic-to-bedrock-claude",
-      });
-    } else if (format.kind === "explicit-null") {
-      delete outputConfig.format;
-    }
-
     if (effort.kind === "specified") {
       const explicit = input.model.thinkingLevelMap?.[effort.level];
       const expectedEffort =
@@ -271,23 +284,20 @@ export function projectAnthropicToBedrock(input: {
             : effort.level === "low" || effort.level === "medium" || effort.level === "high"
               ? effort.level
               : undefined;
-      if (activation.kind === "adaptive" && expectedEffort !== undefined) {
-        exact(
-          outcomes,
-          family,
-          "reasoning.effort",
-          outputConfig.effort,
-          expectedEffort,
-          () => {
-            outputConfig.effort = expectedEffort;
-          },
-        );
+      if (
+        activation.kind === "adaptive" &&
+        expectedEffort !== undefined &&
+        same(outputConfig.effort, expectedEffort)
+      ) {
+        add(outcomes, "reasoning.effort", { kind: "pi-native" });
       } else {
         delete outputConfig.effort;
         add(outcomes, "reasoning.effort", {
           kind: "omitted",
           warning:
-            activation.kind === "adaptive"
+            activation.kind === "adaptive" && expectedEffort !== undefined
+              ? "Pi did not emit the certified Bedrock Claude reasoning effort"
+              : activation.kind === "adaptive"
               ? `Bedrock Claude model ${input.model.id} has no certified ${effort.level} effort mapping`
               : "Bedrock Claude effort requires an explicit adaptive-thinking source activation",
         });
@@ -295,14 +305,25 @@ export function projectAnthropicToBedrock(input: {
     } else if (effort.kind === "explicit-null") {
       delete outputConfig.effort;
     }
-    if (Object.keys(outputConfig).length === 0) delete additional.output_config;
-    else additional.output_config = outputConfig;
-  } else if (effort.kind === "specified") {
-    add(outcomes, "reasoning.effort", {
-      kind: "omitted",
-      warning: "Bedrock non-Claude target has no certified Anthropic effort control",
-    });
+  } else if (phase === "reasoning") {
+    if (activation.kind === "disabled") {
+      add(outcomes, "reasoning.activation", input.model.reasoning
+        ? {
+            kind: "degraded",
+            warning:
+              "Bedrock non-Claude used its reasoning default after LuckyToken removed known enabling controls",
+          }
+        : { kind: "pi-native" });
+    }
+    if (effort.kind === "specified") {
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: "Bedrock non-Claude target has no certified Anthropic effort control",
+      });
+    }
   }
+  if (Object.keys(outputConfig).length === 0) delete additional.output_config;
+  else additional.output_config = outputConfig;
   payload.additionalModelRequestFields =
     Object.keys(additional).length === 0 ? undefined : additional;
 
@@ -310,4 +331,12 @@ export function projectAnthropicToBedrock(input: {
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),
   });
+}
+
+export function projectAnthropicToBedrockReasoning(input: ProjectionInput) {
+  return projectAnthropicToBedrock(input, "reasoning");
+}
+
+export function projectAnthropicToBedrockSupplement(input: ProjectionInput) {
+  return projectAnthropicToBedrock(input, "supplement");
 }

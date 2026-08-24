@@ -161,15 +161,18 @@ function reconstructTools(
   return tools;
 }
 
-export function projectAnthropicToAnthropicMessages(input: {
+interface ProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly payload: unknown;
-}): {
+}
+
+function projectAnthropicToAnthropicMessages(
+  input: ProjectionInput,
+  phase: "reasoning" | "supplement",
+): {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
-  readonly failure?: string;
-  readonly failureKind?: "unsupported-semantics";
 } {
   const payload = record(input.payload);
   if (
@@ -183,59 +186,84 @@ export function projectAnthropicToAnthropicMessages(input: {
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
-  if (supplement.content.length > 0) {
+  if (phase === "supplement" && supplement.content.length > 0) {
     const messages = reconstructMessages(payload, input.invocation);
     if (messages !== undefined) {
       payload.messages = messages;
-      add(outcomes, "content", {
-        kind: "payload-projected",
-        projector: "anthropic-to-anthropic-messages",
-      });
+      for (const entry of supplement.content) {
+        add(
+          outcomes,
+          `content[${entry.sourceMessageIndex}:${entry.sourceContentIndex}]`,
+          {
+            kind: "payload-projected",
+            projector: "anthropic-to-anthropic-messages",
+          },
+        );
+      }
     }
   }
-  if (supplement.system?.kind === "blocks") {
+  if (phase === "supplement" && supplement.system?.kind === "blocks") {
     payload.system = supplement.system.blocks.map((block) => structuredClone(block));
     add(outcomes, "system", {
       kind: "payload-projected",
       projector: "anthropic-to-anthropic-messages",
     });
+    if (supplement.system.blocks.some((block) => Object.hasOwn(block, "cache_control"))) {
+      add(outcomes, "system.cacheControl", {
+        kind: "payload-projected",
+        projector: "anthropic-to-anthropic-messages",
+      });
+    }
   }
-  const tools = reconstructTools(payload, input.invocation);
+  const tools = phase === "supplement"
+    ? reconstructTools(payload, input.invocation)
+    : undefined;
   if (tools !== undefined) {
     payload.tools = tools;
-    add(outcomes, "tools", {
-      kind: "payload-projected",
-      projector: "anthropic-to-anthropic-messages",
-    });
+    for (const entry of supplement.tools) {
+      add(outcomes, `tools[${entry.sourceToolIndex}]`, {
+        kind: "payload-projected",
+        projector: "anthropic-to-anthropic-messages",
+      });
+    }
   }
 
-  const finalMaxTokens = Math.min(payload.max_tokens, supplement.outputTokenCeiling);
-  exact(outcomes, "maxTokens", payload.max_tokens, finalMaxTokens, () => {
-    payload.max_tokens = finalMaxTokens;
-  });
-  for (const [control, field, value] of [
-    ["sampling.topP", "top_p", supplement.sampling.topP],
-    ["sampling.topK", "top_k", supplement.sampling.topK],
-  ] as const) {
-    if (value === undefined) continue;
-    exact(outcomes, control, payload[field], value, () => {
-      payload[field] = value;
+  if (phase === "supplement") {
+    const finalMaxTokens = Math.min(payload.max_tokens, supplement.outputTokenCeiling);
+    exact(outcomes, "maxTokens", payload.max_tokens, finalMaxTokens, () => {
+      payload.max_tokens = finalMaxTokens;
     });
-  }
-  if (supplement.stopSequences !== undefined) {
-    exact(
-      outcomes,
-      "stopSequences",
-      payload.stop_sequences,
-      supplement.stopSequences,
-      () => {
-        payload.stop_sequences = [...supplement.stopSequences!];
-      },
-    );
+    for (const [control, field, value] of [
+      ["sampling.temperature", "temperature", supplement.sampling.temperature],
+      ["sampling.topP", "top_p", supplement.sampling.topP],
+      ["sampling.topK", "top_k", supplement.sampling.topK],
+    ] as const) {
+      if (value === undefined) continue;
+      if (control === "sampling.temperature") {
+        if (same(payload[field], value)) {
+          add(outcomes, control, { kind: "pi-native" });
+        }
+        continue;
+      }
+      exact(outcomes, control, payload[field], value, () => {
+        payload[field] = value;
+      });
+    }
+    if (supplement.stopSequences !== undefined) {
+      exact(
+        outcomes,
+        "stopSequences",
+        payload.stop_sequences,
+        supplement.stopSequences,
+        () => {
+          payload.stop_sequences = [...supplement.stopSequences!];
+        },
+      );
+    }
   }
 
   const choice = supplement.toolChoice;
-  if (choice !== undefined) {
+  if (phase === "supplement" && choice !== undefined) {
     const mapped =
       choice.kind === "named"
         ? {
@@ -249,25 +277,39 @@ export function projectAnthropicToAnthropicMessages(input: {
               type: choice.kind,
               disable_parallel_tool_use: choice.disableParallelToolUse,
             };
+    const choiceWasExact = same(payload.tool_choice, mapped);
     exact(outcomes, "toolChoice", payload.tool_choice, mapped, () => {
       payload.tool_choice = mapped;
     });
+    if (choice.kind !== "none" && choice.disableParallelToolUse) {
+      add(
+        outcomes,
+        "toolChoice.disableParallelToolUse",
+        choiceWasExact
+          ? { kind: "pi-native" }
+          : {
+              kind: "payload-projected",
+              projector: "anthropic-to-anthropic-messages",
+              warning: "pi-native-mapping-repaired",
+            },
+      );
+    }
   }
 
-  const thinkingBudgetDoesNotFit =
+  const thinkingBudgetDoesNotFit = phase === "reasoning" &&
     input.invocation.reasoning.activation.kind === "enabled" &&
-    input.invocation.reasoning.activation.budgetTokens >= finalMaxTokens;
+    input.invocation.reasoning.activation.budgetTokens >= payload.max_tokens;
   const expectedThinking = thinkingBudgetDoesNotFit
     ? undefined
     : thinkingValue(input.invocation);
-  if (thinkingBudgetDoesNotFit) {
+  if (phase === "reasoning" && thinkingBudgetDoesNotFit) {
     delete payload.thinking;
     add(outcomes, "reasoning.activation", {
       kind: "degraded",
       warning:
         "Anthropic thinking budget no longer fits below the context-safe final max_tokens ceiling; reasoning was disabled for this request",
     });
-  } else if (expectedThinking === undefined) {
+  } else if (phase === "reasoning" && expectedThinking === undefined) {
     const changed = Object.hasOwn(payload, "thinking");
     delete payload.thinking;
     if (changed) {
@@ -277,7 +319,7 @@ export function projectAnthropicToAnthropicMessages(input: {
         warning: "pi-native-mapping-repaired",
       });
     }
-  } else {
+  } else if (phase === "reasoning") {
     exact(
       outcomes,
       "reasoning.activation",
@@ -296,7 +338,7 @@ export function projectAnthropicToAnthropicMessages(input: {
       !Array.isArray(payload.output_config)
       ? { ...(payload.output_config as Record<string, unknown>) }
       : {};
-  if (effortIntent.kind === "specified") {
+  if (phase === "reasoning" && effortIntent.kind === "specified") {
     if (typeof outputConfig.effort === "string") {
       add(outcomes, "reasoning.effort", { kind: "pi-native" });
     } else {
@@ -306,7 +348,7 @@ export function projectAnthropicToAnthropicMessages(input: {
       });
     }
   }
-  if (format !== undefined) {
+  if (phase === "supplement" && format !== undefined) {
     outputConfig.format =
       format === null
         ? null
@@ -316,42 +358,73 @@ export function projectAnthropicToAnthropicMessages(input: {
     delete payload.output_config;
   } else if (!same(payload.output_config, outputConfig)) {
     payload.output_config = outputConfig;
-    add(outcomes, "outputFormat", {
-      kind: "payload-projected",
-      projector: "anthropic-to-anthropic-messages",
-    });
+    if (phase === "supplement" && format !== undefined) {
+      add(outcomes, "outputFormat", {
+        kind: "payload-projected",
+        projector: "anthropic-to-anthropic-messages",
+      });
+    }
   }
 
-  const userId = nullableValue(supplement.metadataUserId);
-  if (userId === undefined) {
-    delete payload.metadata;
-  } else {
-    exact(
-      outcomes,
-      "metadataUserId",
-      payload.metadata,
-      { user_id: userId },
-      () => {
-        payload.metadata = { user_id: userId };
-      },
-    );
-  }
-  const tier = nullableValue(supplement.serviceTier);
-  if (tier !== undefined) payload.service_tier = tier;
-  const geo = nullableValue(supplement.inferenceGeo);
-  if (geo !== undefined) payload.inference_geo = geo;
-  const container = nullableValue(supplement.container);
-  if (container !== undefined) payload.container = container;
-  const cache = nullableValue(supplement.cacheControl);
-  if (cache !== undefined) {
-    payload.cache_control =
-      cache === null
-        ? null
-        : { type: "ephemeral", ...(cache.ttl === undefined ? {} : { ttl: cache.ttl }) };
+  if (phase === "supplement") {
+    const userId = nullableValue(supplement.metadataUserId);
+    if (userId === undefined) {
+      delete payload.metadata;
+    } else {
+      exact(
+        outcomes,
+        "metadataUserId",
+        payload.metadata,
+        { user_id: userId },
+        () => {
+          payload.metadata = { user_id: userId };
+        },
+      );
+    }
+    const tier = nullableValue(supplement.serviceTier);
+    if (tier !== undefined) {
+      exact(outcomes, "serviceTier", payload.service_tier, tier, () => {
+        payload.service_tier = tier;
+      });
+    }
+    const geo = nullableValue(supplement.inferenceGeo);
+    if (geo !== undefined) {
+      exact(outcomes, "inferenceGeo", payload.inference_geo, geo, () => {
+        payload.inference_geo = geo;
+      });
+    }
+    const container = nullableValue(supplement.container);
+    if (container !== undefined) {
+      exact(outcomes, "container", payload.container, container, () => {
+        payload.container = container;
+      });
+    }
+    const cache = nullableValue(supplement.cacheControl);
+    if (cache !== undefined) {
+      const expected =
+        cache === null
+          ? null
+          : { type: "ephemeral", ...(cache.ttl === undefined ? {} : { ttl: cache.ttl }) };
+      exact(outcomes, "cacheControl", payload.cache_control, expected, () => {
+        payload.cache_control = expected;
+      });
+    }
   }
 
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),
   });
+}
+
+export function projectAnthropicToAnthropicMessagesReasoning(
+  input: ProjectionInput,
+) {
+  return projectAnthropicToAnthropicMessages(input, "reasoning");
+}
+
+export function projectAnthropicToAnthropicMessagesSupplement(
+  input: ProjectionInput,
+) {
+  return projectAnthropicToAnthropicMessages(input, "supplement");
 }

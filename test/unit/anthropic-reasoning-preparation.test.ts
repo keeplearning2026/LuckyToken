@@ -5,14 +5,14 @@ import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/requ
 import { executeAnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/execution.js";
 import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 
-function model(id: string): Model<"google-generative-ai"> {
+function model(id: string, reasoning = true): Model<"google-generative-ai"> {
   return {
     id,
     name: id,
     api: "google-generative-ai",
     provider: "google",
     baseUrl: "https://provider.invalid/v1",
-    reasoning: true,
+    reasoning,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8_192,
@@ -80,6 +80,41 @@ describe("Anthropic reasoning history preparation", () => {
     expect(prepared.outcomes).toEqual([
       expect.objectContaining({ outcome: expect.objectContaining({ kind: "omitted" }) }),
     ]);
+  });
+
+  it("converts visible historical thinking to ordinary text for a non-reasoning target", () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "portable reasoning", signature: "opaque" },
+              { type: "text", text: "visible answer" },
+            ],
+          },
+          { role: "user", content: "continue" },
+        ],
+      },
+      1,
+    ).invocation;
+
+    const prepared = prepareAnthropicReasoning({
+      model: model("gemini-target", false),
+      invocation: source,
+    });
+    const assistant = prepared.invocation.pi.context.messages[0];
+    if (assistant?.role !== "assistant") throw new Error("expected assistant");
+    expect(assistant.content).toEqual([
+      { type: "text", text: "portable reasoning" },
+      { type: "text", text: "visible answer" },
+    ]);
+    expect(prepared.outcomes).toContainEqual({
+      control: "reasoning.history[0:0]",
+      outcome: expect.objectContaining({ kind: "degraded" }),
+    });
   });
 
   it("publishes a fail-open notice when incompatible continuity is omitted", async () => {

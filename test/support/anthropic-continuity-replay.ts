@@ -75,15 +75,11 @@ export async function captureAnthropicContinuityReplay(input: {
     model: input.model,
     invocation: prepared.invocation,
   });
-  if (projection.initialFailure !== undefined) {
-    throw new Error(projection.initialFailure);
-  }
   return captureFinalPiPayload((capture) =>
     input.start(prepared.invocation.pi.context, {
       ...prepared.invocation.pi.options,
       async onPayload(basePayload) {
         const projected = await projection.project(basePayload, input.model);
-        if (projected.failure !== undefined) throw new Error(projected.failure);
         return capture(projected.payload);
       },
     }),

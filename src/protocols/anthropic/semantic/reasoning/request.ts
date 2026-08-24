@@ -76,6 +76,36 @@ export function prepareAnthropicReasoning(input: {
   for (const history of input.invocation.reasoning.history) {
     const block = contentAt(context, history.piMessageIndex, history.piContentIndex);
     if (block?.type !== "thinking") continue;
+    if (!input.model.reasoning) {
+      const visibleThinking =
+        history.representation === "thinking" && typeof block.thinking === "string"
+          ? block.thinking
+          : "";
+      block.type = "text";
+      block.text = visibleThinking;
+      delete block.thinking;
+      delete block.thinkingSignature;
+      delete block.redacted;
+      outcomes.push(
+        Object.freeze({
+          control: `reasoning.history[${history.sourceMessageIndex}:${history.sourceContentIndex}]`,
+          outcome: Object.freeze(
+            visibleThinking.length > 0
+              ? {
+                  kind: "degraded" as const,
+                  warning:
+                    "visible historical thinking was replayed as ordinary assistant text for a non-reasoning target",
+                }
+              : {
+                  kind: "omitted" as const,
+                  warning:
+                    "redacted historical thinking has no visible representation for a non-reasoning target",
+                },
+          ),
+        }),
+      );
+      continue;
+    }
     const key = `${history.piMessageIndex}:${history.piContentIndex}`;
     const candidates = continuityByBlock.get(key) ?? [];
     const nativeProvenance = candidates.find(

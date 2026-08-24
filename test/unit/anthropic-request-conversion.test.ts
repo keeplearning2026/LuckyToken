@@ -152,13 +152,18 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
   });
 
   it("never mutates source objects and keeps state request-local", () => {
-    const source = body([
-      { role: "user", content: "hello" },
-    ]);
+    const unclaimed = { malformed: Symbol("unread") };
+    const source = body([{
+      role: "user",
+      content: [{ type: "text", text: "hello", future_control: unclaimed }],
+    }]);
     const snapshot = JSON.stringify(source);
     const first = parseAnthropicTextInvocation(source, 1);
     const second = parseAnthropicTextInvocation(source, 2);
     expect(JSON.stringify(source)).toBe(snapshot);
+    expect(
+      (source.messages as Array<Record<string, unknown>>)[0]?.content,
+    ).toEqual([{ type: "text", text: "hello", future_control: unclaimed }]);
     expect(first.invocation.pi.context.messages[0]?.timestamp).toBe(1);
     expect(second.invocation.pi.context.messages[0]?.timestamp).toBe(2);
     expect(first.invocation.pi.context.messages).not.toBe(second.invocation.pi.context.messages);
@@ -771,6 +776,55 @@ describe("08: Anthropic known content and tools", () => {
         (notice) => notice.code === "anthropic_unknown_content_ignored",
       ),
     ).toBe(true);
+  });
+
+  it("does not inspect an unclaimed top-level value and emits a bounded warning", () => {
+    const converted = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hello" }], {
+        future_control: { malformed: Symbol("unread") },
+      }),
+      1,
+    );
+
+    expect(converted.invocation.pi.context.messages[0]?.content).toEqual([
+      { type: "text", text: "hello" },
+    ]);
+    expect(converted.client.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_unclaimed_request_field",
+      jsonPath: "$.future_control",
+      action: "ignore",
+    }));
+  });
+
+  it("does not invoke an unclaimed top-level getter", () => {
+    const request = body([{ role: "user", content: "hello" }]);
+    Object.defineProperty(request, "future_control", {
+      enumerable: true,
+      get() {
+        throw new Error("unclaimed value was read");
+      },
+    });
+
+    const converted = parseAnthropicTextInvocation(request, 1);
+    expect(converted.client.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_unclaimed_request_field",
+      jsonPath: "$.future_control",
+      action: "ignore",
+    }));
+  });
+
+  it("bounds unclaimed top-level warnings per request", () => {
+    const extras = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`future_${index}`, index]),
+    );
+    const converted = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hello" }], extras),
+      1,
+    );
+
+    expect(converted.client.notices.filter(
+      (notice) => notice.code === "anthropic_unclaimed_request_field",
+    )).toHaveLength(8);
   });
 
   it("never lets unknown=ignore repair malformed known content", () => {

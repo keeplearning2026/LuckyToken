@@ -2,45 +2,56 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
-import {
-  initialAnthropicToOpenAICompletionsFailure,
-  projectAnthropicToOpenAICompletions,
-} from "./adapters/openai-completions.js";
-import { projectAnthropicToAnthropicMessages } from "./adapters/anthropic-messages.js";
-import {
-  initialAnthropicToGoogleFailure,
-  projectAnthropicToGoogle,
-} from "./adapters/google.js";
-import {
-  initialAnthropicToMistralFailure,
-  projectAnthropicToMistral,
-} from "./adapters/mistral.js";
-import {
-  initialAnthropicToOpenAIResponsesFailure,
-  projectAnthropicToOpenAIResponses,
-  type AnthropicResponsesTargetApi,
-} from "./adapters/openai-responses.js";
-import {
-  initialAnthropicToBedrockFailure,
-  projectAnthropicToBedrock,
-} from "./adapters/bedrock.js";
-import {
-  initialAnthropicToPiMessagesFailure,
-  projectAnthropicToPiMessages,
-} from "./adapters/pi-messages.js";
+import { enumerateAnthropicSupplementCandidates } from "../supplement/candidates.js";
 import type {
   AnthropicPayloadProjectionOperation,
+  AnthropicPayloadProjectionResult,
   AnthropicProjectionOutcome,
 } from "./contract.js";
-import {
-  initialAnthropicToCommandCodePrivateFailure,
-  projectAnthropicToCommandCodePrivate,
-} from "./adapters/commandcode-private.js";
-import {
-  assessUnprojectedAnthropicSupplement,
-  type AnthropicSupplementDisposition,
-} from "./supplement-disposition.js";
-import { selectAnthropicPayloadProjector } from "./registry.js";
+import { selectAnthropicTargetAdapter } from "./registry.js";
+import { assessUnprojectedAnthropicSupplement } from "./supplement-disposition.js";
+
+function unresolvedReasoningOutcomes(
+  model: Model<string>,
+  invocation: AnthropicSemanticInvocation,
+): readonly AnthropicProjectionOutcome[] {
+  const outcomes: AnthropicProjectionOutcome[] = [];
+  const activation = invocation.reasoning.activation;
+  if (activation.kind === "disabled") {
+    outcomes.push(Object.freeze({
+      control: "reasoning.activation",
+      outcome: Object.freeze(
+        model.reasoning
+          ? {
+              kind: "degraded" as const,
+              warning:
+                "the target has no certified reasoning Adapter; known Pi controls were left unchanged and exact disablement is not proved",
+            }
+          : { kind: "pi-native" as const },
+      ),
+    }));
+  } else if (activation.kind === "enabled" || activation.kind === "adaptive") {
+    outcomes.push(Object.freeze({
+      control: "reasoning.activation",
+      outcome: Object.freeze({
+        kind: "degraded" as const,
+        warning: model.reasoning
+          ? `the target has no certified ${activation.kind} reasoning mapping; Pi target defaults were retained`
+          : "the target model does not support reasoning; ordinary generation was retained",
+      }),
+    }));
+  }
+  if (invocation.reasoning.effort.kind === "specified") {
+    outcomes.push(Object.freeze({
+      control: "reasoning.effort",
+      outcome: Object.freeze({
+        kind: "omitted" as const,
+        warning: "the target has no certified reasoning-effort verifier",
+      }),
+    }));
+  }
+  return Object.freeze(outcomes);
+}
 
 export function publishAnthropicProjectionWarnings(
   outcomes: readonly AnthropicProjectionOutcome[],
@@ -67,7 +78,7 @@ export function publishAnthropicProjectionWarnings(
                 code: "anthropic_semantic_projection_degraded",
                 action: "degrade" as const,
               }
-          : undefined;
+            : undefined;
     if (notice === undefined) continue;
     try {
       factsSink?.notice?.({
@@ -80,164 +91,104 @@ export function publishAnthropicProjectionWarnings(
   }
 }
 
+function finalizeProjection(input: {
+  readonly model: Model<string>;
+  readonly invocation: AnthropicSemanticInvocation;
+  readonly result: AnthropicPayloadProjectionResult;
+  readonly factsSink?: ExecutionFactsSink;
+}): AnthropicPayloadProjectionResult {
+  const candidates = enumerateAnthropicSupplementCandidates(
+    input.invocation.supplement,
+  );
+  const candidateControls = new Set(
+    candidates.map((candidate) => candidate.control),
+  );
+  const outcomeByControl = new Map<string, AnthropicProjectionOutcome>();
+  for (const outcome of input.result.outcomes) {
+    if (outcomeByControl.has(outcome.control)) {
+      throw new Error(
+        `Anthropic target Adapter produced duplicate outcome ownership for ${outcome.control}`,
+      );
+    }
+    outcomeByControl.set(outcome.control, outcome);
+  }
+
+  const omitted = assessUnprojectedAnthropicSupplement({
+    supplement: input.invocation.supplement,
+    target: `${input.model.provider}/${input.model.api}/${input.model.id}`,
+    resolvedControls: new Set(outcomeByControl.keys()),
+  });
+  const omittedByControl = new Map(
+    omitted.map((outcome) => [outcome.control, outcome]),
+  );
+  const outcomes = Object.freeze([
+    ...candidates.map((candidate) =>
+      outcomeByControl.get(candidate.control) ??
+      omittedByControl.get(candidate.control)!,
+    ),
+    ...input.result.outcomes.filter(
+      (outcome) => !candidateControls.has(outcome.control),
+    ),
+  ]);
+  publishAnthropicProjectionWarnings(outcomes, input.factsSink);
+  return Object.freeze({
+    payload: input.result.payload,
+    outcomes,
+  });
+}
+
 export function prepareAnthropicPayloadProjection(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly factsSink?: ExecutionFactsSink;
 }): AnthropicPayloadProjectionOperation {
-  const commonInitialFailure =
-    input.invocation.supplement.outputTokenCeiling < 1
-      ? "Anthropic max_tokens=0 cannot be represented by Pi Provider requests without increasing the Client output-token ceiling"
-      : undefined;
-  const finish = <T extends {
-    readonly payload: unknown;
-    readonly outcomes: readonly AnthropicProjectionOutcome[];
-    readonly failure?: string;
-    readonly failureKind?: "unsupported-semantics" | "payload-contract";
-  }>(result: T): T => {
-    const supplementDisposition: AnthropicSupplementDisposition =
-      input.model.api === "anthropic-messages"
-        ? Object.freeze({ outcomes: Object.freeze([]) })
-        : assessUnprojectedAnthropicSupplement({
-            invocation: input.invocation,
-            target: `${input.model.provider}/${input.model.api}/${input.model.id}`,
-            targetSupportsReasoning: input.model.reasoning,
-            resolvedControls: new Set(result.outcomes.map((entry) => entry.control)),
-          });
-    const combined = Object.freeze([
-      ...result.outcomes,
-      ...supplementDisposition.outcomes,
-    ]);
-    const finished = {
-      ...result,
-      outcomes: combined,
-      ...(result.failure === undefined && supplementDisposition.failure !== undefined
-        ? {
-            failure: supplementDisposition.failure,
-            failureKind: "unsupported-semantics" as const,
-          }
-        : result.failure !== undefined && result.failureKind === undefined
-          ? { failureKind: "payload-contract" as const }
-        : {}),
-    } as T;
-    publishAnthropicProjectionWarnings(combined, input.factsSink);
-    return finished;
-  };
-  const failureField = (
-    targetFailure: string | undefined,
-  ): { readonly initialFailure?: string } => {
-    const failure = commonInitialFailure ?? targetFailure;
-    return failure === undefined ? {} : { initialFailure: failure };
-  };
+  const adapter = selectAnthropicTargetAdapter(input.model);
 
-  if (selectAnthropicPayloadProjector(input.model) === undefined) {
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(undefined),
-      project(payload: unknown) {
-        return finish({ payload, outcomes: [] });
-      },
-    });
-  }
-
-  if (input.model.api === "commandcode-private") {
-    const initialFailure = initialAnthropicToCommandCodePrivateFailure(input);
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToCommandCodePrivate({ ...input, payload }));
-      },
-    });
-  }
-
-  if (input.model.api === "anthropic-messages") {
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(undefined),
-      project(payload: unknown) {
-        return finish(projectAnthropicToAnthropicMessages({
-          ...input,
-          payload,
-        }));
-      },
-    });
-  }
-  if (
-    input.model.api === "google-generative-ai" ||
-    input.model.api === "google-vertex"
-  ) {
-    const initialFailure = initialAnthropicToGoogleFailure(input);
-    const api = input.model.api;
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToGoogle({
-          ...input,
-          api,
-          payload,
-        }));
-      },
-    });
-  }
-  if (input.model.api === "bedrock-converse-stream") {
-    const initialFailure = initialAnthropicToBedrockFailure(input);
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToBedrock({ ...input, payload }));
-      },
-    });
-  }
-  if (input.model.api === "pi-messages") {
-    const initialFailure = initialAnthropicToPiMessagesFailure(input);
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToPiMessages({ ...input, payload }));
-      },
-    });
-  }
-  if (input.model.api === "mistral-conversations") {
-    const initialFailure = initialAnthropicToMistralFailure(input);
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToMistral({ ...input, payload }));
-      },
-    });
-  }
-  if (
-    input.model.api === "openai-responses" ||
-    input.model.api === "azure-openai-responses" ||
-    input.model.api === "openai-codex-responses"
-  ) {
-    const api = input.model.api as AnthropicResponsesTargetApi;
-    const initialFailure = initialAnthropicToOpenAIResponsesFailure({ ...input, api });
-    return Object.freeze({
-      initialOutcomes: Object.freeze([]),
-      ...failureField(initialFailure),
-      project(payload: unknown) {
-        return finish(projectAnthropicToOpenAIResponses({ ...input, api, payload }));
-      },
-    });
-  }
-  if (input.model.api !== "openai-completions") {
-    throw new Error(`Anthropic projector registry mismatch for Pi API ${input.model.api}`);
-  }
-  const initialFailure = initialAnthropicToOpenAICompletionsFailure(input);
   return Object.freeze({
     initialOutcomes: Object.freeze([]),
-    ...failureField(initialFailure),
-    project(payload: unknown) {
-      return finish(projectAnthropicToOpenAICompletions({
-        ...input,
-        payload,
-      }));
+    async project(payload: unknown, model: Model<string>) {
+      let currentPayload = payload;
+      const outcomes: AnthropicProjectionOutcome[] = adapter === undefined
+        ? [...unresolvedReasoningOutcomes(model, input.invocation)]
+        : [];
+      const candidateControls = new Set(
+        enumerateAnthropicSupplementCandidates(input.invocation.supplement)
+          .map((candidate) => candidate.control),
+      );
+
+      for (const phase of [
+        { kind: "supplement" as const, project: adapter?.projectSupplement },
+        { kind: "reasoning" as const, project: adapter?.projectReasoning },
+      ]) {
+        if (phase.project === undefined) continue;
+        const result = await phase.project({
+          model,
+          invocation: input.invocation,
+          payload: currentPayload,
+        });
+        for (const outcome of result.outcomes) {
+          const valid = phase.kind === "supplement"
+            ? candidateControls.has(outcome.control)
+            : outcome.control.startsWith("reasoning.");
+          if (!valid) {
+            throw new Error(
+              `Anthropic ${adapter?.id ?? "unknown"} ${phase.kind} projector claimed an unowned control: ${outcome.control}`,
+            );
+          }
+        }
+        currentPayload = result.payload;
+        outcomes.push(...result.outcomes);
+      }
+
+      return finalizeProjection({
+        model,
+        invocation: input.invocation,
+        result: {
+          payload: currentPayload,
+          outcomes: Object.freeze(outcomes),
+        },
+        ...(input.factsSink === undefined ? {} : { factsSink: input.factsSink }),
+      });
     },
   });
 }

@@ -1,17 +1,12 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { InvalidRequest, UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
-import type { ResolvedAnthropicSourceProfile } from "../../src/protocols/anthropic/profile.js";
+import { UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
 import {
   assertAnthropicModelAwareValidity,
   type AnthropicModelValidityPolicy,
 } from "../../src/protocols/anthropic/representability.js";
 import { validateAnthropicSourceRequest } from "../../src/protocols/anthropic/request.js";
-
-const profile: ResolvedAnthropicSourceProfile = {
-  version: "2023-06-01",
-};
 
 function fixtureModel(
   input: Array<"text" | "image"> = ["text"],
@@ -31,19 +26,15 @@ function fixtureModel(
   };
 }
 
-function policy(
-  prefill: "allowed" | "forbidden" | "unknown",
-  imageFidelity: boolean,
-): AnthropicModelValidityPolicy {
+function policy(imageFidelity: boolean): AnthropicModelValidityPolicy {
   return {
     revision: "test-policy-v1",
-    classifyFinalAssistantPrefill: vi.fn(() => prefill),
-    hasCertifiedImageFidelity: vi.fn(() => imageFidelity),
+    hasCertifiedImageFidelity: () => imageFidelity,
   };
 }
 
 describe("Anthropic model-aware validity", () => {
-  it("requires a reasoning-capable model for historical thinking", () => {
+  it("allows historical thinking to fall back visibly on a non-reasoning model", () => {
     const request = validateAnthropicSourceRequest({
       model: "model",
       max_tokens: 32,
@@ -64,16 +55,14 @@ describe("Anthropic model-aware validity", () => {
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text"], false),
-        profile,
-        policy("unknown", false),
+        policy(false),
       ),
-    ).toThrow(UnsupportedFeature);
+    ).not.toThrow();
     expect(() =>
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text"], true),
-        profile,
-        policy("unknown", false),
+        policy(false),
       ),
     ).not.toThrow();
   });
@@ -99,29 +88,26 @@ describe("Anthropic model-aware validity", () => {
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text"]),
-        profile,
-        policy("unknown", true),
+        policy(true),
       ),
     ).toThrow(UnsupportedFeature);
     expect(() =>
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text", "image"]),
-        profile,
-        policy("unknown", false),
+        policy(false),
       ),
     ).toThrow(UnsupportedFeature);
     expect(() =>
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text", "image"]),
-        profile,
-        policy("unknown", true),
+        policy(true),
       ),
     ).not.toThrow();
   });
 
-  it("maps prefill policy outcomes without guessing from model identity", () => {
+  it("allows final assistant content to be sent as ordinary history", () => {
     const request = validateAnthropicSourceRequest({
       model: "model",
       max_tokens: 32,
@@ -136,25 +122,8 @@ describe("Anthropic model-aware validity", () => {
       assertAnthropicModelAwareValidity(
         request,
         resolvedModel,
-        profile,
-        policy("forbidden", false),
+        policy(false),
       ),
-    ).toThrow(InvalidRequest);
-    expect(() =>
-      assertAnthropicModelAwareValidity(
-        request,
-        resolvedModel,
-        profile,
-        policy("allowed", false),
-      ),
-    ).toThrow(UnsupportedFeature);
-    expect(() =>
-      assertAnthropicModelAwareValidity(
-        request,
-        resolvedModel,
-        profile,
-        policy("unknown", false),
-      ),
-    ).toThrow(UnsupportedFeature);
+    ).not.toThrow();
   });
 });

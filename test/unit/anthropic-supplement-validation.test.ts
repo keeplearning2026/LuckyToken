@@ -36,7 +36,6 @@ describe("Anthropic supplement validation", () => {
     [{ type: "document", source: { type: "base64", media_type: "text/plain", data: "AAAA" } }, /application\/pdf/u],
     [{ type: "document", source: { type: "url", url: "https://example.test/a.pdf" }, citations: { enabled: "yes" } }, /citations/u],
     [{ type: "search_result", source: "s", title: "t", content: "body" }, /content.*array/u],
-    [{ type: "container_upload", file_id: "f", unexpected: true }, /unexpected/u],
     [{ type: "web_search_tool_result", tool_use_id: "s", content: { type: "future" } }, /web_search/u],
     [{
       type: "text",
@@ -65,6 +64,20 @@ describe("Anthropic supplement validation", () => {
     }, /tool_name/u],
   ])("rejects malformed recognized supplemental content %#", (block, pattern) => {
     expect(() => parseAnthropicTextInvocation(request([block]), 1)).toThrow(pattern);
+  });
+
+  it("leaves an unclaimed content sibling unread and outside the Supplement view", () => {
+    const converted = parseAnthropicTextInvocation(request([{
+      type: "container_upload",
+      file_id: "f",
+      future_control: { malformed: Symbol("unread") },
+    }]), 1);
+
+    expect(converted.invocation.supplement.content).toContainEqual(
+      expect.objectContaining({
+        value: { type: "container_upload", file_id: "f" },
+      }),
+    );
   });
 
   it.each([
@@ -142,7 +155,6 @@ describe("Anthropic supplement validation", () => {
 
   it.each([
     [{ name: "lookup", input_schema: { type: "object" }, allowed_callers: ["server"] }, /allowed_callers/u],
-    [{ name: "lookup", input_schema: { type: "object" }, future_control: true }, /unexpected/u],
     [{ name: "web_search", type: "web_search_20250305", allowed_domains: [], blocked_domains: [] }, /mutually exclusive/u],
     [{ name: "wrong", type: "web_search_20250305" }, /name must be web_search/u],
   ])("rejects malformed recognized tool controls %#", (tool, pattern) => {
@@ -150,5 +162,27 @@ describe("Anthropic supplement validation", () => {
       ...request("hello"),
       tools: [tool],
     }, 1)).toThrow(pattern);
+  });
+
+  it("leaves an unclaimed tool sibling unread and outside the Supplement view", () => {
+    const converted = parseAnthropicTextInvocation({
+      ...request("hello"),
+      tools: [{
+        name: "lookup",
+        input_schema: { type: "object" },
+        defer_loading: true,
+        future_control: { malformed: Symbol("unread") },
+      }],
+    }, 1);
+
+    expect(converted.invocation.supplement.tools).toContainEqual(
+      expect.objectContaining({
+        value: {
+          name: "lookup",
+          input_schema: { type: "object" },
+          defer_loading: true,
+        },
+      }),
+    );
   });
 });

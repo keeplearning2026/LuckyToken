@@ -1,6 +1,6 @@
 # LuckyToken Anthropic Messages Semantic Conversion Architecture Specification
 
-Status: **PROPOSED PROTOCOL CONTRACT — IMPLEMENTATION AND CERTIFICATION IN PROGRESS**
+Status: **IMPLEMENTED PROTOCOL CONTRACT — ANTHROPIC-SCOPED CERTIFICATION CURRENT**
 Date: **2026-08-24**
 Scope: Anthropic Messages as the Client Protocol on the Semantic Conversion lane. This specification does not govern Anthropic Provider Native Preservation, OpenAI Responses Semantic Conversion, or any other Client Protocol.
 
@@ -56,44 +56,39 @@ This specification does not broaden Anthropic Provider Native eligibility. A req
 
 ## 3. Correctness endpoint
 
-The final Provider request is authoritative.
+The final Provider request is authoritative. Request support is demand-driven: an Anthropic source fact is part of Semantic Conversion only when Section 5.1 positively declares a current consumer for its exact source path.
 
-An Anthropic request field is supported only when one of these is proved for the resolved target:
+For every consumed fact, one of these must be proved for the resolved target:
 
-1. Pi IR/options emit an equivalent Provider control and the Anthropic projector validates it;
-2. the Anthropic projector writes a certified equivalent through the Anthropic-owned `onPayload` seam;
-3. a documented fallback preserves the strongest valid model-visible meaning and emits a warning.
+1. Pi IR/options emit an equivalent Provider control and the Anthropic module verifies it where required;
+2. an Anthropic target Adapter writes a certified equivalent through the Anthropic-owned `onPayload` seam;
+3. a documented bounded fallback preserves the strongest valid model-visible meaning and emits a warning;
+4. target unavailability omits a candidate-only Supplement fact and emits a warning.
 
-A hard Anthropic control that has no valid mapping fails before Provider dispatch. A preference may be omitted only with an explicit outcome and a developer warning through fail-open observation. This specification fixes each bounded non-security availability fallback; there is no end-user strict-mode override. Every fallback is reported as degraded rather than exact. Source-field presence alone never proves effectiveness.
+A field or nested path with no declared consumer remains unread: it is not parsed, shape-validated, projected, guessed, or used for dispatch. A separately declared security, permission, data-residency, server-tool, relationship, or minimum-request contract is consumed by request validation or the authoritative Pi/main-call contract and may fail before Provider dispatch. It does not become terminal merely because a best-effort Supplement Adapter could not project it. There is no end-user strict-mode override. Every fallback is reported as degraded rather than exact, and source-field presence alone never proves effectiveness.
 
-## 4. Anthropic module seam
+## 4. Anthropic module seams
 
-The module presents one deep external Interface to the Anthropic handler:
+The implementation keeps three cohesive Interfaces instead of adding a facade that receives raw request, execution, and response concerns together:
 
 ```ts
-interface AnthropicSemanticRequestFacts {
-  readonly receivedAt: number;
-  readonly effectiveSessionId?: string;
-  readonly signal?: AbortSignal;
-}
+convertValidatedAnthropicRequestWithPolicy(...)
+  -> AnthropicConversionResult
 
-interface AnthropicSemanticExecutionCapabilities {
-  readonly executeOperation: ExecutionOperation;
-  readonly factsSink?: ExecutionFactsSink;
-}
+executeAnthropicSemanticInvocation({
+  models,
+  model,
+  invocation,
+  execution,
+}) -> { message, outcomes }
 
-executeAnthropicSemanticConversion(input: {
-  readonly body: unknown;
-  readonly model: Model<string>;
-  readonly models: Models;
-  readonly requestFacts: AnthropicSemanticRequestFacts;
-  readonly execution: AnthropicSemanticExecutionCapabilities;
-}): Promise<PreparedAnthropicResponse>;
+convertAssistantMessageToAnthropicWithPolicy(...)
+  -> AnthropicResponseConversion
 ```
 
-The exact HTTP packaging, lane selection, Profile binding, retry, and cancellation composition remain outside this Interface. Request facts and execution capabilities are closed, narrow types; they must not become broad configuration bags. Availability disposition is a fixed Anthropic protocol contract, not request state or user configuration, and therefore does not enter the Interface, Pi IR, reasoning, or the supplement. Callers do not assemble reasoning projectors, supplements, target registries, or Pi callbacks.
+The request converter owns Client Wire extraction and creates the protocol-owned Invocation. The semantic executor owns target selection, reasoning preparation, the exclusive `onPayload` lifecycle, central candidate accounting, and the Pi call. The response converter owns Pi `AssistantMessage` to Anthropic JSON/SSE semantics and continuity rendering. None receives another seam's raw internal objects merely for convenience.
 
-Internally the module may use request conversion, reasoning, supplement, projection, response, and streaming seams. Those are Anthropic implementation details and are not extension points for other Client Protocols.
+HTTP packaging, lane selection, Profile binding, retry, cancellation, credentials, and transport remain outside these Interfaces. Availability disposition is a fixed Anthropic protocol contract, not request state or user configuration, and therefore does not enter an Interface, Pi IR, reasoning, or the Supplement. Callers do not assemble target registries or Pi callbacks.
 
 ## 5. Anthropic Semantic Invocation
 
@@ -118,18 +113,78 @@ interface AnthropicConversionResult {
 
 These types are not added to a common Client Invocation union. No other Client Protocol consumes them.
 
-The existing Anthropic converter remains the sole parser. It validates each source fact once and produces all Pi, reasoning, supplement, render-state, and notice outputs in that conversion pass.
+One Anthropic conversion operation remains the sole raw-body reader. It first creates the consumer-specific views defined below and then validates each consumed path once while producing Pi, reasoning, Supplement, render-state, and notice outputs. No downstream parser receives or reinterprets the complete raw body.
+
+### 5.1 Demand-driven request extraction
+
+Anthropic Semantic Conversion does not validate the complete current or future Anthropic request schema. It has exactly two source-request consumers.
+
+The **main Anthropic consumer** constructs the selector, Pi Context/options, reasoning and continuity, response render state, and non-degradable main-call checks from these top-level fields and paths:
+
+```text
+model
+max_tokens
+messages
+system
+stream
+temperature
+top_p
+top_k
+tools
+tool_choice
+stop_sequences
+thinking
+output_config.effort
+metadata.user_id
+cache_control
+inference_geo
+```
+
+Within `messages`, `system`, and `tools`, this consumer reads only:
+
+- message `role`, content ordering, content `type`, and the model-visible fields and identities needed to construct Pi text/image/thinking/tool-call/tool-result history;
+- historical `thinking`, `redacted_thinking`, their native opaque values, and the item-local `luckytoken_continuity` paths defined in Section 7;
+- system string or text-block `text` needed for the Pi system prompt;
+- ordinary tool `name`, `description`, and `input_schema` needed for Pi tools;
+- exact tool-call/result IDs and caller/server-tool facts required to validate permissions, capability ownership, and history relationships;
+- `thinking.type`, `thinking.budget_tokens`, and `thinking.display`;
+- `tool_choice.type`, `tool_choice.name`, and `tool_choice.disable_parallel_tool_use`;
+- `output_config.effort`, `metadata.user_id`, and the exact top-level cache/geography paths named above.
+
+The **Anthropic Supplement consumer** constructs only currently projection-eligible candidates from these source paths:
+
+| Supplement candidate | Positive source paths |
+|---|---|
+| final output ceiling | `max_tokens` |
+| sampling verification/projection | `temperature`, `top_p`, `top_k` |
+| stop control | `stop_sequences` |
+| tool selection/cardinality | `tool_choice.type`, `.name`, `.disable_parallel_tool_use` |
+| structured output | `output_config.format.type`, `.schema` |
+| end-user identity | `metadata.user_id` |
+| target preferences/affinity | `service_tier`, `container` |
+| exact cache semantics | top-level, system-text-block, content-block, and tool `cache_control.type`/`.ttl` |
+| data-residency projection candidate | `inference_geo` |
+| assistant continuation fallback | the final assistant message and its visible content ordering |
+| target-reconstructable structured content | only the recognized system/content/tool tagged variants and their exact fields currently consumed by at least one enabled Anthropic target Adapter |
+
+The last row is closed by the request audit and enabled Adapter tests, not by the entire Anthropic SDK schema. Its current consumed variants are text citations, URL/base64 images, document and search-result sources, tool references, caller/cache attachments, custom/server tool fields, nested tool results, server-tool results, and container uploads only where an enabled Adapter reconstructs or must verify that exact fact. Removing the last enabled consumer for a nested path removes that path from the Supplement declaration; adding future Client grammar does not add it automatically.
+
+The allowlists deliberately overlap only where Pi-first emission followed by final-wire verification/repair is required, or where a non-degradable main-call constraint also has a certified Provider projection. Pi or the main-call contract remains authoritative; a Supplement copy is never a second writer or a terminal-policy owner.
+
+The conversion operation selects own properties and declared nested paths for both consumers before their validators run. For a claimed object, a consumer validates only the paths it reads. An unclaimed sibling does not invalidate the object. The continuity envelope remains closed-world because its complete bounded shape is itself a consumed opaque-replay contract.
+
+A top-level key present in neither consumer is not read. The converter may publish a bounded request-local warning derived from the present keys minus the union of these positive declarations, but that observation is not a third unsupported-field registry. Malformed unclaimed values do not prevent dispatch. Native Preservation lane commitment precedes this extraction and bypasses it entirely.
 
 ## 6. Information ownership
 
-Every recognized request fact has one authoritative owner:
+Every consumed request fact has one authoritative owner:
 
 | Fact | Owner |
 |---|---|
 | ordered messages, system text, images, ordinary tool definitions, tool calls/results | Pi `Context` |
 | target-certified Pi common options, including `temperature` and concrete `output_config.effort` | Pi options |
 | thinking activation, exact budget, historical thinking, continuity | Anthropic reasoning module |
-| validated source controls retained for target-dependent projection or final-wire certification | Anthropic supplement; Pi options remain authoritative where they already own the semantic |
+| current projection candidates retained for target-dependent projection or final-wire certification | Anthropic supplement; Pi options and non-degradable main-call checks remain authoritative where they own the semantic |
 | stream choice, `thinking.display`, and standard Anthropic response envelope | Anthropic response state |
 | Pi `AssistantMessage` facts and Anthropic response mapping | Anthropic response module |
 | conversion, fallback, omission, and repair notices | Anthropic-owned bounded facts published through fail-open observation |
@@ -138,6 +193,8 @@ Every recognized request fact has one authoritative owner:
 | Request Journey and telemetry | fail-open diagnostics owner |
 
 Pi IR is conversation/history IR, not a storage carrier for source request controls. The Anthropic supplement is typed protocol state, not a raw request bag.
+
+Unclaimed source fields have no semantic owner because this module does not consume them. A warning about their presence is observation only and does not turn them into recognized or supported semantics.
 
 ## 7. Anthropic reasoning contract
 
@@ -162,9 +219,11 @@ type AnthropicThinkingActivation =
   | {
       readonly kind: "enabled";
       readonly budgetTokens: number;
+      readonly display: AnthropicThinkingDisplayIntent;
     }
   | {
       readonly kind: "adaptive";
+      readonly display: AnthropicThinkingDisplayIntent;
     };
 
 type AnthropicEffortIntent =
@@ -189,7 +248,9 @@ The exact relationship between `thinking`, `output_config.effort`, and `max_toke
 
 ### 7.2 Historical reasoning
 
-The module preserves visible historical thinking as Pi `ThinkingContent` when valid, while separately retaining the source facts needed for replay decisions:
+The module preserves visible historical thinking as Pi `ThinkingContent` when the resolved target can accept reasoning history, while separately retaining the source facts needed for replay decisions. For a non-reasoning target, preparation converts visible historical thinking to ordinary assistant text, discards only opaque target-bound state, and records a degradation; redacted history with no visible content is omitted with a warning.
+
+Replay decisions retain:
 
 - message/content attachment;
 - whether the source block was `thinking` or `redacted_thinking`;
@@ -260,26 +321,11 @@ No server-side continuity store is part of this contract.
 
 ## 8. Anthropic Projection Supplement
 
-`AnthropicProjectionSupplement` is a preservation carrier: after the existing converter has produced the strongest correct Pi `Context` and Pi options, it retains the validated source facts needed for target-dependent projection or final-wire certification. For contract stability it may also retain a validated source value already represented in Pi options, but that copy is not a second owner and does not authorize a duplicate Provider write. It is not a raw second request model or a promise that every target can project every retained fact. Anthropic reasoning/continuity remains its separately typed special case; concrete effort remains Pi-owned.
+`AnthropicProjectionSupplement` is an immutable **candidate-only carrier**. After the main consumer has produced the strongest correct Pi Context/options and main-call checks, the Supplement retains only the validated facts named by the positive Supplement consumer in Section 5.1. Every retained fact has at least one current enabled target Adapter that can project it, verify its Pi-native final representation, or perform one named bounded fallback.
 
-The field audit must classify at least:
+It is not a copy of the supported Anthropic schema, a future-field holding area, an unsupported-field registry, or a promise that every target can project every candidate. A recognized main-consumer fact does not enter the Supplement unless a current target Adapter also needs it. A field claimed by neither consumer remains unread rather than being captured for possible future use. Anthropic reasoning/continuity remains its separately typed special case; concrete effort remains Pi-owned.
 
-- the Anthropic total-output ceiling retained separately only because Pi thinking preparation may reinterpret its ordinary `maxTokens` option;
-- top-p, top-k, and stop sequences whose Pi support is target-dependent or absent;
-- every tool-choice form and parallel-tool constraint;
-- structured output format, including omitted versus explicit `null`;
-- end-user metadata;
-- service tier and inference geography;
-- container reuse;
-- cache controls and their exact attachment points;
-- tool strictness, loading/caller/streaming controls, examples, and typed server tools;
-- final-assistant prefill/continuation semantics;
-- official `user|assistant` message-role grammar and any separately declared LuckyToken `system`-message extension;
-- text citations/cache, URL images, container uploads, and document `base64`/`url`/`content` sources with title/context/citations/cache;
-- search-result source/content/citations/cache, tool references, tool-use/server-tool caller/cache, tool-result nested content, and every typed server-tool result family;
-- every other known content block or relationship degraded, omitted, repaired, or rejected by current Pi conversion.
-
-For every field, the supplement contract records only the validated value and the minimum source attachment/requirement facts needed by Anthropic projectors or final-wire certification. It does not contain:
+For every candidate, the Supplement records only the validated value and the minimum source attachment/provenance facts needed by an enabled Anthropic Adapter or final-wire verifier. It does not contain:
 
 - the raw Anthropic request;
 - raw unvalidated nested records merely for future use;
@@ -287,15 +333,17 @@ For every field, the supplement contract records only the validated value and th
 - credentials or transport state;
 - another Client Protocol's normalized field name.
 
-“Complete supplement” therefore means complete preservation before target selection, not complete target support. Adding a retained Anthropic field changes the supplement capture and its default unconsumed disposition; it does not require changes to every existing target Adapter.
+Supplement completeness means complete coverage of the current positive candidate declaration, not complete pre-target preservation of Client Wire. Adding a candidate requires a current consumer, an exact source-path declaration, a target mapping or named fallback, and a Client Wire to final Provider Wire test. Removing its last target consumer removes the candidate instead of leaving a dormant field.
+
+The ordinary Supplement projection outcome type excludes `failed`. It may record exact Pi use, payload projection/repair, a named bounded degradation, or central omission. Reasoning and the non-degradable main-call contract own their separate terminal outcomes and do not weaken this candidate-only boundary.
 
 The pinned Pi option remains the sole final writer for `temperature`, even when the Supplement retains the validated Client value alongside other sampling controls. The projector may observe the final field only for bounded certification; it must not restore a temperature that Pi intentionally omitted for a target incompatibility such as Anthropic extended thinking. The separately retained output-token fact is named `outputTokenCeiling` because it is not a second ordinary Pi `maxTokens` value: it preserves Anthropic's hard total-output ceiling after Pi may have added or clamped a thinking budget.
 
-Omission, explicit `null`, explicit disable, and an empty value remain distinct whenever the Anthropic grammar distinguishes them. Block- and tool-local facts carry stable request-local semantic identities such as source message/content indexes, tool name, or call ID. The converter records their association to the Pi block/tool it created without inserting marker text into Pi IR. A target projector mutates a nested Provider field only when that association resolves unambiguously in the audited payload; otherwise it warns or fails according to requirement strength.
+Omission, explicit `null`, explicit disable, and an empty value remain distinct only for consumed paths whose Anthropic semantics or target mapping distinguishes them. Block- and tool-local candidates carry stable request-local semantic identities such as source message/content indexes, tool name, or call ID. The converter records their association to the Pi block/tool it created without inserting marker text into Pi IR. A target projector mutates a nested Provider field only when that association resolves unambiguously in the audited payload; otherwise it leaves the candidate unconsumed for central omission or the named bounded fallback.
 
 The official Anthropic request role grammar is not silently widened. If LuckyToken retains message-level `role: "system"` as a product extension, the audit names it as such, defines its privilege and degradation contract, and tests it separately from standard Anthropic Messages. Otherwise it is rejected during validation.
 
-Target-bound state such as container identity remains explicitly Anthropic-owned with provenance and compatibility conditions. A field becomes a shared mechanism only when it has no Client semantic meaning.
+Target-bound state such as container identity remains explicitly Anthropic-owned with provenance and compatibility conditions only while a current Adapter consumes it. A field becomes a shared mechanism only when it has no Client semantic meaning.
 
 ## 9. Anthropic target projectors
 
@@ -315,9 +363,9 @@ Target families eligible for incremental audit are:
 10. Bedrock Converse Stream, split by Claude and non-Claude model families;
 11. Pi Messages.
 
-This list is not a requirement to implement every target before the module is usable. A target without a projector still uses Pi normally; present supplement facts receive their explicit unconsumed warning/failure dispositions.
+This list is not a requirement to implement every target before the module is usable. A target without a projector still uses Pi normally; every present Supplement candidate receives the central unconsumed omission warning.
 
-Every projector is an Anthropic-source/target-API Adapter with one small Interface: it receives the Pi-built payload, resolved target facts, the complete immutable Anthropic supplement, and prepared Anthropic reasoning; it returns a copied payload plus the facts it consumed and their outcomes. Its implementation owns only:
+Every projector is an Anthropic-source/target-API Adapter with one small Interface: it receives the Pi-built payload, resolved target facts, the immutable Anthropic candidate Supplement, and prepared Anthropic reasoning; it returns a copied payload plus the facts it consumed and their outcomes. Its implementation owns only:
 
 - exact Pi payload shape validation;
 - validation of Pi-native fields relevant to the mappings it actually uses;
@@ -327,7 +375,7 @@ Every projector is an Anthropic-source/target-API Adapter with one small Interfa
 
 A projector is positive-only. It implements only facts it can express with a proven target representation; it does not add branches whose sole result is “unsupported,” “ignored,” or “omitted.”
 
-The Anthropic execution module, not each Adapter, applies the common disposition to Supplement facts left unconsumed: optional facts are omitted with warnings, policy-degradable facts use only their named fallback, and critical facts fail. An Adapter must not add switch branches for fields it cannot project and does not claim support merely by accepting the full Supplement input.
+The Anthropic execution module, not each Adapter, records every ordinary Supplement candidate left unconsumed as `omitted` with a warning. A named bounded degradation remains Adapter-owned only when that Adapter actually constructs or verifies the fallback. Supplement target unavailability never produces `failed`, throws, or prevents dispatch. Non-degradable request conditions are owned and enforced by the main consumer/main-call contract before this best-effort seam. An Adapter must not add switch branches for fields it cannot project and does not claim support merely by accepting the Supplement input.
 
 It may duplicate logic that exists in an OpenAI Responses projector. It does not import that projector or its source semantic types.
 
@@ -343,7 +391,7 @@ Anthropic reasoning and ordinary supplement projection compose inside one Anthro
 
 ### 9.3 Unknown target
 
-An unknown API receives no guessed mutation. A request that needs no Anthropic supplement projection may still use Pi's ordinary Provider Adapter. For each remaining supplement fact, omit an optional fact with a warning and fail only when omission would break a critical semantic such as a server-tool capability, security/permission control, output ceiling, or tool relationship.
+An unknown API receives no guessed mutation. A request that needs no Anthropic supplement projection may still use Pi's ordinary Provider Adapter. Every remaining Supplement candidate is omitted with a warning and dispatch continues. Security/permission/data-residency constraints, server-tool capability, minimum request facts, and tool relationships have already been enforced by the main consumer/main-call contract; they are not reclassified as Supplement failures here.
 
 An audited projector receiving a payload shape different from its pinned contract is a different condition: it indicates a wrong projector selection, an incompatible custom Provider, or Pi dependency drift. The projector fails before dispatch because mutating an unknown body shape could corrupt the whole request. This internal compatibility failure is not controlled by an end-user availability setting.
 
@@ -373,7 +421,7 @@ When exact final-assistant continuation is unsupported, the existing assistant p
 
 All fallbacks must still construct a valid target payload. None relaxes source validation, output-token ceilings, inference geography, safety, caller permissions, tool-call/result relationships, or payload-shape validation. A server tool is never downgraded to an ordinary client tool or removed as an availability fallback: if the resolved target cannot provide the requested server-executed capability, conversion fails before dispatch.
 
-CommandCode GOAT direct wire-probe evidence for `deepseek/deepseek-v4-flash` is version-bound evidence for this fallback, not a completed online certification or a general OpenAI Completions capability. Its required/named forced choices are rejected in thinking mode, while an automatic request with only the named tool exposed succeeded in the recorded probe set. The source-code evidence comment beside the GOAT compatibility rule must remain until a replacement online certification updates both code and this specification.
+CommandCode GOAT direct wire-probe evidence for `deepseek/deepseek-v4-flash` is version-bound evidence for this fallback, not a general OpenAI Completions capability. The independent Anthropic online certification reproduced the bounded automatic fallback on 2026-08-24: required/named forced choices remain incompatible with thinking mode, while automatic selection with only the named tool exposed remains usable. The source-code evidence comment beside the GOAT compatibility rule must remain until replacement online certification updates both code and this specification.
 
 ## 10. Anthropic-owned Pi payload execution
 
@@ -389,7 +437,9 @@ The Anthropic wrapper:
 
 - owns `onPayload`;
 - invokes the operation exactly once;
-- enforces failed outcomes;
+- runs Supplement projection followed by reasoning projection against the same final request and rejects duplicate or unowned outcomes;
+- centrally resolves every remaining ordinary candidate to `omitted + warning`;
+- rejects only internal payload-contract violations at this seam;
 - calls the existing `ExecutionOperation`;
 - returns the Pi `AssistantMessage` and outcomes.
 
@@ -463,14 +513,14 @@ The following decisions are normative for Anthropic Messages Semantic Conversion
 2. `onPayload` selectively consumes only validated Supplement fields with a proven target mapping, and may perform bounded validation of audited Pi-native output. A Supplement copy of a Pi-owned value does not authorize a duplicate write. A known exact contradiction may be repaired with a developer warning; an unknown repair is never guessed.
 3. Unsupported `stop_sequences` are omitted with a warning. LuckyToken does not inject stop instructions into model-visible content, truncate JSON/SSE output, or expose a strict-mode override for this loss.
 4. An unsupported Anthropic server tool fails before dispatch. It is not downgraded to a client tool and is not removed based on `tool_choice` reachability.
-5. Lack of a certified LuckyToken projector does not disable an otherwise valid Pi-only request. Optional supplement facts are omitted with warnings; unprojected critical facts fail.
+5. Lack of a certified LuckyToken projector does not disable an otherwise valid Pi-only request. Every unconsumed Supplement candidate is omitted with a warning. A non-degradable condition is enforced by request validation or the authoritative Pi/main-call contract before Supplement projection, never by converting an unconsumed candidate into failure.
 6. A selected projector receiving a payload shape different from its audited contract fails before dispatch as an internal Pi/projector compatibility fault. This is not an end-user availability setting.
 7. Response conversion consumes Pi `AssistantMessage` and Anthropic render state only. It does not inspect raw Provider responses and does not require a mirror per-Provider response registry; provenance-specific rules are internal to the Anthropic response module and exist only for Pi-retained fields.
 8. If ordinary Pi thinking has no non-empty signature, Anthropic response rendering emits `signature: ""`, warns, and treats that empty value as absent on the next request. This is a lossy placeholder, not exact replay, and never applies to `redacted_thinking.data`.
 9. `thinking.display: "omitted"` is a Client request field governing the Anthropic server response. The renderer emits empty visible thinking and preserves the Pi signature; it is not a Provider-generation projector or a Client-UI-only concern.
-10. The existing Anthropic conversion is authoritative and runs first. The Supplement may remain a stable, relatively complete validated carrier, while Pi IR/options remain authoritative for facts they already own. Projectors consume only their proven subset and never treat Supplement presence alone as permission to rewrite Provider fields.
-11. Supplement completeness means complete pre-target preservation, not universal target support. A target Adapter projects only its proven subset, and adding a supplement field does not require editing every Adapter.
-12. The wrapper receives Pi input, prepared reasoning, and the complete immutable supplement together. It selects an Adapter from resolved target facts, applies only supported mappings, and centrally resolves every unconsumed fact to its documented warning, fallback, or failure. Targets with no proven mappings use the Pi-only path without a no-op Adapter.
+10. The Anthropic conversion operation is authoritative and performs demand-driven extraction before validation. Fields outside both positive consumers remain unread; projectors never receive raw Client Wire.
+11. Supplement completeness means complete coverage of currently projection-eligible candidates, not complete pre-target preservation. Adding a candidate requires a declared source path, a current enabled target consumer, and a final-wire test; it does not require editing non-consuming Adapters.
+12. The wrapper receives Pi input, prepared reasoning, and the immutable candidate Supplement together. It selects an Adapter from resolved target facts, applies only supported mappings, and centrally resolves every ordinary unconsumed candidate to `omitted + warning`. Named fallbacks are recorded only by the Adapter that constructs them. Targets with no proven mappings use the Pi-only path without a no-op Adapter.
 
 The trade-off and rationale are recorded in [`ADR-0005`](../adr/0005-anthropic-semantic-conversion-usability-policy.md).
 
@@ -480,7 +530,8 @@ The dispositions below are fixed protocol behavior; no strict-mode alternative e
 
 | Stage | Condition | Disposition | Rationale |
 |---|---|---|---|
-| Client request parsing | malformed source grammar, invalid ranges, duplicate IDs, or broken tool-call/result relationships | fail | there is no valid source meaning to project |
+| Client request parsing | malformed consumed source path, invalid consumed range, duplicate consumed identity, or broken tool-call/result relationship | fail | there is no valid consumed source meaning to project |
+| Client request extraction | top-level field or nested sibling declared by no consumer | leave unread; optionally emit a bounded warning derived from positive declarations | an unclaimed field is neither supported nor invalid and cannot block dispatch |
 | Client request parsing | unknown Client request content | existing `error|ignore` policy | ignoring an unknown tagged block is already an explicit compatibility choice |
 | Provider request projection | unsupported forced `any` or named tool choice | automatic best effort plus warning | preserves usable tool execution without claiming a guarantee |
 | Provider request projection | unsupported serial-tool guarantee | allow target parallel behavior plus warning | preserves usable tool execution without claiming cardinality |
@@ -497,19 +548,18 @@ The dispositions below are fixed protocol behavior; no strict-mode alternative e
 | Provider request projection | explicit reasoning disable on a reasoning model with no disable control | remove enabling controls, accept target default, and warn | preserves availability without falsely claiming disablement |
 | Client response rendering | explicit `thinking.display: "omitted"` | emit empty visible thinking and retain the Pi signature | this is an Anthropic response contract, not a Provider projection or UI option |
 | Client response rendering / Next-request replay | Pi thinking has no non-empty signature | emit `signature: ""`, warn, and treat it as absent on the next request | preserves a valid visible response without pretending exact opaque continuity |
-| Provider request projection | inference geography, safety, security, or caller/tool permissions | fail | policy boundaries cannot be weakened by conversion availability |
-| Provider request projection | reachable model-visible content, document/media bytes, or server-tool semantics with no valid target representation | fail | dropping input changes what the model can know or do; server-executed tools are never reclassified as ordinary tools |
+| Client request parsing / Pi main-call contract | consumed inference geography, safety, security, or caller/tool permissions cannot be honored | fail before Supplement projection | policy boundaries cannot be weakened by conversion availability |
+| Client request parsing / Pi main-call contract | consumed reachable model-visible content, document/media bytes, or server-tool semantics has no valid target representation | fail before Supplement projection | dropping consumed input changes what the model can know or do; server-executed tools are never reclassified as ordinary tools |
 | Provider request projection | optional request citation/cache annotation, redundant custom-tool type, or nullable metadata cannot be projected | retain visible content, omit only the auxiliary fact, and warn | failure would reduce availability without protecting a critical semantic |
 | Client response rendering | unknown Pi response content | existing `error|ignore` policy | the Client explicitly chooses whether an unknown response block may be dropped |
 | Client response rendering | unavailable citation, usage, container, tier, or other optional response auxiliary field | retain visible response, use a legal nullable/omitted form, and warn | auxiliary parser loss should not replace a usable response |
 | Client response rendering | known Provider stop/refusal fact retained but optional detail discarded by Pi | render the strongest protocol-valid stop/refusal representation and warn | do not turn a usable response into an internal error solely for unavailable optional detail |
 | Next-request replay | malformed, incompatible, or target-mismatched opaque continuity | discard only opaque state, preserve visible reasoning/text/tool identity, and warn | opaque target state must not destroy portable visible history |
 | Client response rendering / Next-request replay | `pause_turn` continuation, server-tool relationship, or replay-required state cannot be reconstructed | fail | ordinary success would be false and may break the next turn |
-| Provider request projection | unknown API or unaudited model family with only optional supplement facts | leave Pi's payload unchanged, omit those facts, and warn | none | lack of a LuckyToken projector does not make Pi's ordinary Provider Adapter unusable |
-| Provider request projection | unknown API or unaudited model family with an unprojected critical fact | fail before dispatch | none | critical semantics cannot be silently lost or guessed |
-| Provider request projection | selected projector receives a final payload shape different from its audited contract | fail before dispatch | none | this is an internal Pi/projector compatibility fault and mutation would be unsafe |
+| Provider request projection | unknown API or unaudited model family with Supplement candidates | leave Pi's payload unchanged, omit every candidate, warn, and dispatch | Supplement target unavailability is candidate-only; hard contracts were enforced earlier |
+| Provider request projection | selected projector receives a final payload shape different from its audited contract | fail before dispatch | this is an internal Pi/projector compatibility fault and mutation would be unsafe |
 
-Malformed source state fails during Anthropic validation. Unsupported preferences and policy-authorized fallbacks produce explicit outcomes and developer warnings. `degraded` is distinct from `omitted`, `pi-native`, and exact `payload-projected`; diagnostics and tests must never report a degraded control as applied exactly.
+Malformed consumed source state fails during Anthropic validation. Malformed unclaimed state remains unread. Unsupported preferences and policy-authorized fallbacks produce explicit outcomes and developer warnings. `degraded` is distinct from `omitted`, `pi-native`, and exact `payload-projected`; diagnostics and tests must never report a degraded control as applied exactly.
 
 ## 13. Certification contract
 
@@ -517,9 +567,10 @@ Malformed source state fails during Anthropic validation. Unsupported preference
 
 The Anthropic module owns tests for:
 
-- every recognized request field and omission state;
+- every consumer-declared request path and semantically relevant omission state;
+- malformed unclaimed top-level fields and nested siblings remaining unread and non-terminal;
 - Pi IR/options construction;
-- complete supplement capture;
+- complete candidate-only Supplement capture and absence of fields with no current target consumer;
 - reasoning omitted/disabled/enabled-budget/adaptive combinations;
 - concrete effort mapped once through Pi options and unsupported effort omitted with a warning;
 - unsupported `stop_sequences` omitted without prompt injection or response truncation;
@@ -530,7 +581,7 @@ The Anthropic module owns tests for:
 - Provider response → Client response → next Provider request replay;
 - every Pi-retained response field disposition and JSON/SSE rendering;
 - no non-standard request-control echo in the Anthropic response;
-- unknown targets with optional versus critical supplement facts, and selected-projector payload-shape mismatch;
+- unknown targets with unconsumed candidate warnings, pre-Supplement main-call failures, and selected-projector payload-shape mismatch;
 - dependency isolation from OpenAI Responses.
 
 ### 13.2 Final-wire tests
@@ -568,13 +619,13 @@ Architecture certification must prove:
 
 The Anthropic Semantic Conversion contract is satisfied when:
 
-1. the field audit is complete and every recognized source fact has one owner;
+1. the request audit defines positive consumers and exact source paths, every consumed fact has one owner, and unclaimed fields remain unread;
 2. Anthropic owns its Invocation, supplement, reasoning, continuity, projectors, response policy, and tests;
 3. Anthropic owns its Pi payload execution wrapper, `onPayload` lifecycle, outcomes, and semantic errors;
 4. every enabled source-to-target mapping has a final-wire test;
 5. every Pi-retained response fact has an audited attachment and Anthropic response disposition;
 6. native-field continuity and `item-extension-v1` foreign continuity have explicit client capability results rather than a vacuous optional gate;
 7. replay-required reasoning metadata survives every certified compatible complete-history round trip;
-8. unsupported hard controls fail before dispatch, policy-authorized availability fallbacks degrade honestly, and preferences warn honestly;
+8. unsupported hard controls fail through request validation or the Pi/main-call contract before Supplement projection, candidate target unavailability warns without blocking dispatch, and policy-authorized fallbacks degrade honestly;
 9. all three fixed-target independent Anthropic online Provider scripts pass;
 10. OpenAI Responses and both Native lanes remain unchanged.

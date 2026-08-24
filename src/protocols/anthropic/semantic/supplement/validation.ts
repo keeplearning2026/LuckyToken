@@ -18,12 +18,12 @@ function record(value: unknown, path: string): Record<string, unknown> {
 function exactKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
-  path: string,
+  _path: string,
 ): void {
+  void _path;
   const set = new Set(allowed);
-  const unknown = Object.keys(value).find((key) => !set.has(key));
-  if (unknown !== undefined) {
-    throw new InvalidRequest(`${path}.${unknown} is unexpected`);
+  for (const key of Object.keys(value)) {
+    if (!set.has(key)) delete value[key];
   }
 }
 

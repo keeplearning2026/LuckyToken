@@ -6,14 +6,12 @@ import {
   executeWithAnthropicPi,
   InvalidAnthropicPiExecution,
 } from "./pi-execution.js";
-import { UnsupportedFeature } from "../failures.js";
 import type { AnthropicSemanticInvocation } from "./invocation.js";
 import {
   prepareAnthropicPayloadProjection,
   publishAnthropicProjectionWarnings,
 } from "./projection/request.js";
 import type { AnthropicProjectionOutcome } from "./projection/contract.js";
-import { prepareAnthropicPiOnlyFallback } from "./projection/pi-only-fallback.js";
 import { prepareAnthropicReasoning } from "./reasoning/request.js";
 
 export interface AnthropicSemanticExecutionResult {
@@ -39,13 +37,9 @@ export async function executeAnthropicSemanticInvocation(input: {
     readonly factsSink?: ExecutionFactsSink;
   };
 }): Promise<AnthropicSemanticExecutionResult> {
-  const fallback = prepareAnthropicPiOnlyFallback({
-    model: input.model,
-    invocation: input.invocation,
-  });
   const prepared = prepareAnthropicReasoning({
     model: input.model,
-    invocation: fallback.invocation,
+    invocation: input.invocation,
   });
   publishAnthropicProjectionWarnings(
     prepared.outcomes,
@@ -58,19 +52,10 @@ export async function executeAnthropicSemanticInvocation(input: {
       ? {}
       : { factsSink: input.execution.factsSink }),
   });
-  if (providerProjection.initialFailure !== undefined) {
-    throw new UnsupportedFeature(providerProjection.initialFailure);
-  }
   const projection = Object.freeze({
     initialOutcomes: prepared.outcomes,
     async project(payload: unknown, model: Model<string>) {
       const result = await providerProjection.project(payload, model);
-      if (
-        result.failure !== undefined &&
-        result.failureKind === "unsupported-semantics"
-      ) {
-        throw new UnsupportedFeature(result.failure);
-      }
       return {
         ...result,
         outcomes: Object.freeze([...prepared.outcomes, ...result.outcomes]),

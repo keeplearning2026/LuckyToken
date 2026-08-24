@@ -750,7 +750,6 @@ async function handleAnthropicMessages(
     assertAnthropicModelAwareValidity(
       validatedRequest,
       model,
-      sourceProfile,
       dependencies.modelValidityPolicy,
     );
     completeJourneyStep(
@@ -1415,19 +1414,9 @@ export function createAnthropicMessagesHandler(
   options: AnthropicMessagesHandlerOptions,
 ): ClientProtocolHandler {
   const policy = options.modelValidityPolicy ?? defaultAnthropicModelValidityPolicy;
-  const classifyFinalAssistantPrefill = policy.classifyFinalAssistantPrefill;
   const hasCertifiedImageFidelity = policy.hasCertifiedImageFidelity;
   const modelValidityPolicy: AnthropicModelValidityPolicy = Object.freeze({
     revision: policy.revision,
-    classifyFinalAssistantPrefill: (
-      model: Parameters<
-        AnthropicModelValidityPolicy["classifyFinalAssistantPrefill"]
-      >[0],
-      profile: Parameters<
-        AnthropicModelValidityPolicy["classifyFinalAssistantPrefill"]
-      >[1],
-    ) =>
-      classifyFinalAssistantPrefill(model, profile),
     hasCertifiedImageFidelity: (
       model: Parameters<
         AnthropicModelValidityPolicy["hasCertifiedImageFidelity"]

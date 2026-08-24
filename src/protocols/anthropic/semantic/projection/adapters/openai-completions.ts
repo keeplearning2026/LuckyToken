@@ -9,7 +9,6 @@ import type {
 export interface AnthropicOpenAICompletionsProjectionResult {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
-  readonly failure?: string;
 }
 
 const TOP_K_CERTIFIED_PROVIDERS = new Set([
@@ -140,16 +139,6 @@ function explicitReasoningDisableWarning(model: Model<string>): string {
     ? "CommandCode GOAT deepseek-v4-flash"
     : "OpenCode Go deepseek-v4-flash";
   return `${target} does not guarantee reasoning disable; LuckyToken removed known reasoning controls and accepted the target default`;
-}
-
-export function initialAnthropicToOpenAICompletionsFailure(input: {
-  readonly model: Model<string>;
-  readonly invocation: AnthropicSemanticInvocation;
-}): string | undefined {
-  if (input.invocation.supplement.inferenceGeo.kind === "specified") {
-    return "openai-completions has no certified inference geography control";
-  }
-  return undefined;
 }
 
 type OpenAIThinkingFormat =
@@ -441,7 +430,7 @@ function projectReasoning(
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
   outcomes: AnthropicProjectionOutcome[],
-): string | undefined {
+): void {
   const activation = invocation.reasoning.activation;
   const effort = invocation.reasoning.effort;
   const compat = resolvePiOpenAIReasoningCompat(model);
@@ -493,30 +482,33 @@ function projectReasoning(
       });
     }
   }
-  return undefined;
 }
 
-export function projectAnthropicToOpenAICompletions(input: {
+type ProjectionInput = {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly payload: unknown;
-}): AnthropicOpenAICompletionsProjectionResult {
+};
+
+function projectAnthropicToOpenAICompletions(
+  input: ProjectionInput,
+  phase: "reasoning" | "supplement",
+): AnthropicOpenAICompletionsProjectionResult {
   const payload = record(input.payload);
   requirePayloadShape(payload);
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
+  if (phase === "supplement") {
   const maxField = Object.hasOwn(payload, "max_completion_tokens")
     ? "max_completion_tokens"
     : Object.hasOwn(payload, "max_tokens")
       ? "max_tokens"
       : undefined;
   if (maxField === undefined || typeof payload[maxField] !== "number") {
-    return {
-      payload,
-      outcomes,
-      failure: "openai-completions payload has no audited output-token field",
-    };
+    throw new Error(
+      "openai-completions payload has no audited output-token field",
+    );
   }
   const finalMaxTokens = Math.min(payload[maxField], supplement.outputTokenCeiling);
   exact(
@@ -530,9 +522,16 @@ export function projectAnthropicToOpenAICompletions(input: {
   );
 
   for (const [control, field, value] of [
+    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "top_p", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
+    if (control === "sampling.temperature") {
+      if (same(payload[field], value)) {
+        add(outcomes, control, { kind: "pi-native" });
+      }
+      continue;
+    }
     exact(outcomes, control, payload[field], value, () => {
       payload[field] = value;
     });
@@ -593,14 +592,14 @@ export function projectAnthropicToOpenAICompletions(input: {
         payload.tool_choice = mapped;
       });
     }
-    if (choice.kind !== "none") {
+    if (choice.kind !== "none" && choice.disableParallelToolUse) {
       exact(
         outcomes,
         "toolChoice.disableParallelToolUse",
         payload.parallel_tool_calls,
-        !choice.disableParallelToolUse,
+        false,
         () => {
-          payload.parallel_tool_calls = !choice.disableParallelToolUse;
+          payload.parallel_tool_calls = false;
         },
       );
     }
@@ -642,15 +641,46 @@ export function projectAnthropicToOpenAICompletions(input: {
     });
   }
 
-  const reasoningFailure = projectReasoning(
-    payload,
-    input.model,
-    input.invocation,
-    outcomes,
-  );
+  if (supplement.finalAssistantPrefill === true) {
+    const finalMessage = (payload.messages as unknown[]).at(-1);
+    if (
+      typeof finalMessage !== "object" ||
+      finalMessage === null ||
+      Array.isArray(finalMessage) ||
+      (finalMessage as Readonly<Record<string, unknown>>).role !== "assistant"
+    ) {
+      throw new Error(
+        "openai-completions final-assistant history association did not resolve",
+      );
+    }
+    degraded(
+      outcomes,
+      "finalAssistantPrefill",
+      "openai-completions retained the prefix as ordinary assistant history; exact continuation is not guaranteed",
+    );
+  }
+  } else {
+    projectReasoning(
+      payload,
+      input.model,
+      input.invocation,
+      outcomes,
+    );
+  }
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),
-    ...(reasoningFailure === undefined ? {} : { failure: reasoningFailure }),
   });
+}
+
+export function projectAnthropicToOpenAICompletionsReasoning(
+  input: ProjectionInput,
+): AnthropicOpenAICompletionsProjectionResult {
+  return projectAnthropicToOpenAICompletions(input, "reasoning");
+}
+
+export function projectAnthropicToOpenAICompletionsSupplement(
+  input: ProjectionInput,
+): AnthropicOpenAICompletionsProjectionResult {
+  return projectAnthropicToOpenAICompletions(input, "supplement");
 }

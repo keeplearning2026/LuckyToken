@@ -55,17 +55,6 @@ function mappedToolChoice(
   return undefined;
 }
 
-export function initialAnthropicToOpenAIResponsesFailure(input: {
-  readonly api: AnthropicResponsesTargetApi;
-  readonly model: Model<string>;
-  readonly invocation: AnthropicSemanticInvocation;
-}): string | undefined {
-  if (input.invocation.supplement.inferenceGeo.kind === "specified") {
-    return `${input.api} has no certified inference geography control`;
-  }
-  return undefined;
-}
-
 function clearResponsesReasoning(payload: Record<string, unknown>): void {
   delete payload.reasoning;
   if (Array.isArray(payload.include)) {
@@ -153,9 +142,16 @@ function projectReasoning(
   const control = activation.kind === "disabled"
     ? "reasoning.activation"
     : "reasoning.effort";
-  exact(outcomes, input.api, control, payload.reasoning, expected, () => {
-    payload.reasoning = expected;
-  });
+  if (same(payload.reasoning, expected)) {
+    add(outcomes, control, { kind: "pi-native" });
+  } else {
+    clearResponsesReasoning(payload);
+    add(outcomes, control, {
+      kind: "omitted",
+      warning: `${input.api} Pi payload did not contain the certified reasoning control`,
+    });
+    return;
+  }
   if (input.model.reasoning) {
     const include = Array.isArray(payload.include) ? [...payload.include] : [];
     if (!include.includes("reasoning.encrypted_content")) {
@@ -165,12 +161,17 @@ function projectReasoning(
   }
 }
 
-export function projectAnthropicToOpenAIResponses(input: {
+type ProjectionInput = {
   readonly api: AnthropicResponsesTargetApi;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly payload: unknown;
-}): {
+};
+
+function projectAnthropicToOpenAIResponses(
+  input: ProjectionInput,
+  phase: "reasoning" | "supplement",
+): {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
 } {
@@ -192,6 +193,7 @@ export function projectAnthropicToOpenAIResponses(input: {
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
+  if (phase === "supplement") {
   if (input.api !== "openai-codex-responses") {
     const piMaxTokens = payload.max_output_tokens;
     if (typeof piMaxTokens !== "number") {
@@ -211,17 +213,18 @@ export function projectAnthropicToOpenAIResponses(input: {
         payload.max_output_tokens = finalMaxTokens;
       },
     );
-  } else {
-    add(outcomes, "maxTokens", {
-      kind: "omitted",
-      warning:
-        "openai-codex-responses has no certified max_output_tokens control; Anthropic max_tokens was omitted",
-    });
   }
   for (const [control, field, value] of [
+    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "top_p", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
+    if (control === "sampling.temperature") {
+      if (same(payload[field], value)) {
+        add(outcomes, control, { kind: "pi-native" });
+      }
+      continue;
+    }
     exact(outcomes, input.api, control, payload[field], value, () => {
       payload[field] = value;
     });
@@ -259,16 +262,19 @@ export function projectAnthropicToOpenAIResponses(input: {
     });
   }
   const sourceChoice = supplement.toolChoice;
-  if (sourceChoice !== undefined && sourceChoice.kind !== "none") {
-    const parallel = !sourceChoice.disableParallelToolUse;
+  if (
+    sourceChoice !== undefined &&
+    sourceChoice.kind !== "none" &&
+    sourceChoice.disableParallelToolUse
+  ) {
     exact(
       outcomes,
       input.api,
       "toolChoice.disableParallelToolUse",
       payload.parallel_tool_calls,
-      parallel,
+      false,
       () => {
-        payload.parallel_tool_calls = parallel;
+        payload.parallel_tool_calls = false;
       },
     );
   }
@@ -294,9 +300,23 @@ export function projectAnthropicToOpenAIResponses(input: {
       payload.service_tier = tier;
     });
   }
-  projectReasoning(input, payload, outcomes);
+  } else {
+    projectReasoning(input, payload, outcomes);
+  }
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),
   });
+}
+
+export function projectAnthropicToOpenAIResponsesReasoning(
+  input: ProjectionInput,
+) {
+  return projectAnthropicToOpenAIResponses(input, "reasoning");
+}
+
+export function projectAnthropicToOpenAIResponsesSupplement(
+  input: ProjectionInput,
+) {
+  return projectAnthropicToOpenAIResponses(input, "supplement");
 }

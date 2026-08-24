@@ -5,5 +5,4 @@ export {
 export {
   defaultAnthropicModelValidityPolicy,
   type AnthropicModelValidityPolicy,
-  type FinalAssistantPrefillValidity,
 } from "./representability.js";

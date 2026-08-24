@@ -93,7 +93,6 @@ describe("certified serving composition", () => {
     const modelInput: Array<"text" | "image"> = ["text", "image"];
     const validityPolicy = {
       revision: "image-policy-v1",
-      classifyFinalAssistantPrefill: () => "unknown",
       hasCertifiedImageFidelity: (): boolean => true,
     } satisfies AnthropicModelValidityPolicy;
     const upstreamRequests: Request[] = [];

@@ -132,4 +132,38 @@ describe("Anthropic-owned Pi execution", () => {
       },
     })).rejects.toBe(expected);
   });
+
+  it("rejects when Pi skips the Anthropic payload seam", async () => {
+    await expect(executeWithAnthropicPi({
+      models: {} as Models,
+      model,
+      pi: { context, options: {} },
+      projection: {
+        initialOutcomes: [],
+        project: (payload) => ({ payload, outcomes: [] }),
+      },
+      infrastructure: {
+        executeOperation: async () => terminal,
+      },
+    })).rejects.toThrow(/without invoking/iu);
+  });
+
+  it("rejects when Pi invokes the Anthropic payload seam twice", async () => {
+    await expect(executeWithAnthropicPi({
+      models: {} as Models,
+      model,
+      pi: { context, options: {} },
+      projection: {
+        initialOutcomes: [],
+        project: (payload) => ({ payload, outcomes: [] }),
+      },
+      infrastructure: {
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.({}, model);
+          await options.onPayload?.({}, model);
+          return terminal;
+        },
+      },
+    })).rejects.toThrow(/more than once/iu);
+  });
 });

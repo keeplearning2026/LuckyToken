@@ -23,7 +23,6 @@ it("preserves accepted conversation semantics on the CommandCode wire", async ()
   };
   const modelValidityPolicy: AnthropicModelValidityPolicy = {
     revision: "fixture-image-v1",
-    classifyFinalAssistantPrefill: () => "unknown",
     hasCertifiedImageFidelity: () => true,
   };
   const runtime = createLuckyTokenRuntime({

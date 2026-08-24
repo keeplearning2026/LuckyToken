@@ -101,7 +101,7 @@ describe("Anthropic semantic conversion Pi-only execution", () => {
     expect(executeOperation).toHaveBeenCalledOnce();
   });
 
-  it("applies model-visible named-tool and structured-output fallbacks before an unaudited Pi-only target builds its payload", async () => {
+  it("leaves Pi input unchanged and omits candidates for an unaudited target", async () => {
     const target: Model<string> = {
       id: "custom-pi-model",
       name: "Custom Pi model",
@@ -133,8 +133,11 @@ describe("Anthropic semantic conversion Pi-only execution", () => {
     const candidate = { model: target.id, prompt: "hello" };
     const executeOperation = vi.fn(async (_models, resolved, context, options) => {
       expect(resolved).toBe(target);
-      expect(context.tools?.map((tool: { readonly name: string }) => tool.name)).toEqual(["lookup"]);
-      expect(context.systemPrompt).toContain("Return one JSON value");
+      expect(context.tools?.map((tool: { readonly name: string }) => tool.name)).toEqual([
+        "lookup",
+        "other",
+      ]);
+      expect(context.systemPrompt).toBeUndefined();
       expect(await options.onPayload?.(candidate)).toEqual(candidate);
       return createTerminal(target);
     });
@@ -147,8 +150,8 @@ describe("Anthropic semantic conversion Pi-only execution", () => {
     });
 
     expect(result.outcomes).toEqual(expect.arrayContaining([
-      { control: "toolChoice", outcome: expect.objectContaining({ kind: "degraded" }) },
-      { control: "outputFormat", outcome: expect.objectContaining({ kind: "degraded" }) },
+      { control: "toolChoice", outcome: expect.objectContaining({ kind: "omitted" }) },
+      { control: "outputFormat", outcome: expect.objectContaining({ kind: "omitted" }) },
     ]));
   });
 });

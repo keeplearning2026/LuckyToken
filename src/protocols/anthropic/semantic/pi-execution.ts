@@ -82,13 +82,6 @@ export async function executeWithAnthropicPi(input: {
       "Anthropic Pi invocation must not supply onPayload",
     );
   }
-  if (input.projection.initialFailure !== undefined) {
-    throw new InvalidAnthropicPiExecution(
-      input.projection.initialFailure,
-      input.projection.initialOutcomes,
-    );
-  }
-
   let projectionCalls = 0;
   let outcomes = input.projection.initialOutcomes;
   let retainedCallbackFailure: unknown | undefined;
@@ -105,9 +98,6 @@ export async function executeWithAnthropicPi(input: {
         }
         const projected = await input.projection.project(payload, input.model);
         outcomes = Object.freeze([...projected.outcomes]);
-        if (projected.failure !== undefined) {
-          throw new InvalidAnthropicPiExecution(projected.failure, outcomes);
-        }
         return projected.payload;
       } catch (error) {
         const wrapped = error instanceof InvalidAnthropicPiExecution

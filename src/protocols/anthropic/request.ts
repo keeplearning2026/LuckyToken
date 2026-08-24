@@ -86,6 +86,7 @@ export interface ValidatedAnthropicSourceRequest {
   systemSource?: string | Array<Record<string, unknown>>;
   tools?: ValidatedAnthropicTool[];
   cacheControl: AnthropicPresence<AnthropicCacheControl>;
+  unclaimedTopLevelKeys: readonly string[];
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
@@ -99,6 +100,30 @@ export const LOCAL_CACHE_PROMOTED_NOTICE_CODE =
   "anthropic_local_cache_promoted";
 export const UNKNOWN_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_content_ignored";
+export const UNCLAIMED_REQUEST_FIELD_NOTICE_CODE =
+  "anthropic_unclaimed_request_field";
+
+const ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS = new Set([
+  "model",
+  "max_tokens",
+  "messages",
+  "system",
+  "stream",
+  "temperature",
+  "top_p",
+  "top_k",
+  "tools",
+  "tool_choice",
+  "stop_sequences",
+  "thinking",
+  "output_config",
+  "metadata",
+  "cache_control",
+  "inference_geo",
+  "service_tier",
+  "container",
+]);
+const MAX_UNCLAIMED_REQUEST_FIELD_NOTICES = 8;
 
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
@@ -121,6 +146,57 @@ const SERVER_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Creates a request-local working view without reading unclaimed properties.
+ * Declared values are cloned lazily when their consumer actually reads them;
+ * validators may therefore prune unclaimed siblings without mutating Client
+ * input or triggering an unclaimed getter.
+ */
+function cloneDemandDrivenValue<T>(
+  value: T,
+  seen = new WeakMap<object, unknown>(),
+): T {
+  if (typeof value !== "object" || value === null) return value;
+  const existing = seen.get(value);
+  if (existing !== undefined) return existing as T;
+
+  const source = value as object;
+  const clone: unknown[] | Record<string, unknown> = Array.isArray(value)
+    ? []
+    : {};
+  seen.set(source, clone);
+  for (const key of Object.keys(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor === undefined) continue;
+    Object.defineProperty(clone, key, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const selected = "value" in descriptor
+          ? descriptor.value
+          : descriptor.get?.call(source);
+        const copied = cloneDemandDrivenValue(selected, seen);
+        Object.defineProperty(clone, key, {
+          value: copied,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return copied;
+      },
+      set(next: unknown) {
+        Object.defineProperty(clone, key, {
+          value: next,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      },
+    });
+  }
+  return clone as T;
 }
 
 function requestNotice(
@@ -729,8 +805,9 @@ export function validateAnthropicSourceRequest(
   if (!isRecord(value)) {
     throw new InvalidRequest("Request body must be a JSON object");
   }
+  const request = cloneDemandDrivenValue(value);
 
-  const { model, max_tokens: maxTokens, messages } = value;
+  const { model, max_tokens: maxTokens, messages } = request;
   if (typeof model !== "string" || model.length === 0) {
     throw new InvalidRequest("model must be a non-empty string");
   }
@@ -738,14 +815,14 @@ export function validateAnthropicSourceRequest(
     throw new InvalidRequest("max_tokens must be a non-negative safe integer");
   }
 
-  validateOptionalFieldShapes(value);
+  validateOptionalFieldShapes(request);
   const messageFacts = validateMessages(messages);
-  const tools = validateAnthropicTools(value.tools);
-  const systemPrompt = validateSystem(value.system);
-  const metadataUserId = validateMetadata(value.metadata);
-  const outputConfig = validateOutputConfig(value.output_config);
-  const thinking = validateThinking(value.thinking);
-  const cacheControl = validateCacheControl(value.cache_control);
+  const tools = validateAnthropicTools(request.tools);
+  const systemPrompt = validateSystem(request.system);
+  const metadataUserId = validateMetadata(request.metadata);
+  const outputConfig = validateOutputConfig(request.output_config);
+  const thinking = validateThinking(request.thinking);
+  const cacheControl = validateCacheControl(request.cache_control);
   if (
     thinking.kind === "enabled" &&
     thinking.budgetTokens >= (maxTokens as number)
@@ -767,35 +844,40 @@ export function validateAnthropicSourceRequest(
     messages: messageFacts.messages,
     hasImages: messageFacts.hasImages,
     hasThinking: messageFacts.hasThinking,
-    stream: value.stream === true,
+    stream: request.stream === true,
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
     outputFormat: outputConfig.format,
     metadataUserId,
-    serviceTier: validateServiceTier(value.service_tier),
-    inferenceGeo: validateNullableString(value, "inference_geo"),
-    container: validateNullableString(value, "container"),
+    serviceTier: validateServiceTier(request.service_tier),
+    inferenceGeo: validateNullableString(request, "inference_geo"),
+    container: validateNullableString(request, "container"),
     cacheControl,
+    unclaimedTopLevelKeys: Object.freeze(
+      Object.keys(request)
+        .filter((key) => !ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS.has(key))
+        .slice(0, MAX_UNCLAIMED_REQUEST_FIELD_NOTICES),
+    ),
   };
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
-  if (value.system !== undefined) {
+  if (request.system !== undefined) {
     validated.systemSource = structuredClone(
-      value.system as string | Array<Record<string, unknown>>,
+      request.system as string | Array<Record<string, unknown>>,
     );
   }
   if (tools !== undefined) validated.tools = tools;
-  if (value.temperature !== undefined) {
-    validated.temperature = value.temperature as number;
+  if (request.temperature !== undefined) {
+    validated.temperature = request.temperature as number;
   }
-  if (value.top_p !== undefined) {
-    validated.topP = value.top_p as number;
+  if (request.top_p !== undefined) {
+    validated.topP = request.top_p as number;
   }
-  if (value.top_k !== undefined) {
-    validated.topK = value.top_k as number;
+  if (request.top_k !== undefined) {
+    validated.topK = request.top_k as number;
   }
-  const stopSequences = validateStopSequences(value.stop_sequences);
+  const stopSequences = validateStopSequences(request.stop_sequences);
   if (stopSequences !== undefined) validated.stopSequences = stopSequences;
-  const toolChoice = validateToolChoice(value.tool_choice);
+  const toolChoice = validateToolChoice(request.tool_choice);
   if (toolChoice?.kind === "named") {
     const exists = tools?.some((tool) => tool.name === toolChoice.name) === true;
     if (!exists) {
@@ -1315,6 +1397,13 @@ export function convertValidatedAnthropicRequestWithPolicy(
   policy: AnthropicRequestConversionPolicy,
 ): AnthropicRequestConversion {
   const notices: ConversionNotice[] = [];
+  for (const key of request.unclaimedTopLevelKeys) {
+    notices.push(requestNotice(
+      UNCLAIMED_REQUEST_FIELD_NOTICE_CODE,
+      "ignore",
+      `$.${key}`,
+    ));
+  }
   const messages: Message[] = [];
   const reasoningHistory: AnthropicReasoningSemantics["history"][number][] = [];
   const reasoningContinuity: AnthropicReasoningSemantics["continuity"][number][] = [];

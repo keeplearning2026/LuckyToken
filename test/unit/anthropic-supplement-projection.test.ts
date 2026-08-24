@@ -42,9 +42,292 @@ const openAICandidate = {
 };
 
 describe("Anthropic supplement target disposition", () => {
-  it("fails before dispatch when max_tokens=0 cannot survive the Pi Provider minimum", () => {
-    const projection = projectionFor(requestWith({ max_tokens: 0 }));
-    expect(projection.initialFailure).toMatch(/max_tokens=0|output-token ceiling/iu);
+  it("keeps an unknown target payload unchanged and omits each present candidate exactly once", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      temperature: 0.4,
+      top_p: 0.8,
+      top_k: 12,
+      stop_sequences: ["END"],
+      tools: [{
+        name: "lookup",
+        input_schema: { type: "object", properties: {} },
+      }],
+      tool_choice: {
+        type: "tool",
+        name: "lookup",
+        disable_parallel_tool_use: true,
+      },
+      output_config: {
+        format: {
+          type: "json_schema",
+          schema: { type: "object", properties: {} },
+        },
+      },
+      metadata: { user_id: "user-123" },
+      service_tier: "auto",
+      container: "container-123",
+      cache_control: { type: "ephemeral" },
+    }), 1).invocation;
+    const target = {
+      ...baseModel,
+      api: "custom-unknown-api",
+    } as Model<string>;
+    const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
+    const candidate = Object.freeze({ opaque: true, nested: { value: 1 } });
+
+    const result = await projection.project(candidate, target);
+
+    expect(result.payload).toEqual(candidate);
+    const controls = result.outcomes.map((entry) => entry.control);
+    expect(controls).toEqual([
+      "maxTokens",
+      "sampling.temperature",
+      "sampling.topP",
+      "sampling.topK",
+      "stopSequences",
+      "toolChoice",
+      "toolChoice.disableParallelToolUse",
+      "outputFormat",
+      "metadataUserId",
+      "serviceTier",
+      "container",
+      "cacheControl",
+    ]);
+    expect(new Set(controls).size).toBe(controls.length);
+    expect(result.outcomes.every((entry) => entry.outcome.kind === "omitted")).toBe(true);
+  });
+
+  it("keeps an unknown reasoning target usable with explicit reasoning outcomes", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      max_tokens: 2_048,
+      thinking: { type: "enabled", budget_tokens: 1_024 },
+      output_config: { effort: "high" },
+    }), 1).invocation;
+    const target = {
+      ...baseModel,
+      api: "custom-unknown-api",
+      reasoning: true,
+    } as Model<string>;
+    const candidate = Object.freeze({ opaque: true });
+
+    const result = await prepareAnthropicPayloadProjection({
+      model: target,
+      invocation,
+    }).project(candidate, target);
+
+    expect(result.payload).toEqual(candidate);
+    expect(result.outcomes).toContainEqual({
+      control: "reasoning.activation",
+      outcome: expect.objectContaining({ kind: "degraded" }),
+    });
+    expect(result.outcomes).toContainEqual({
+      control: "reasoning.effort",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it("rejects a selected Adapter payload shape instead of guessing a mutation", async () => {
+    const target = {
+      ...baseModel,
+      api: "openai-completions",
+    } as Model<string>;
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: parseAnthropicTextInvocation(requestWith({}), 1).invocation,
+    });
+
+    await expect(projection.project({ opaque: true }, target)).rejects.toThrow(
+      /payload shape|messages/iu,
+    );
+  });
+
+  it("treats unsupported inference geography as main-call policy rather than a Supplement failure", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      inference_geo: "us",
+    }), 1).invocation;
+    const target = {
+      ...baseModel,
+      api: "custom-unknown-api",
+    } as Model<string>;
+    const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
+
+    const result = await projection.project({ opaque: true }, target);
+    expect(result.outcomes).toContainEqual({
+      control: "inferenceGeo",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it("accounts for Anthropic-native structured candidates by their candidate identities", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      system: [{
+        type: "text",
+        text: "system",
+        cache_control: { type: "ephemeral" },
+      }],
+      messages: [{
+        role: "user",
+        content: [{
+          type: "text",
+          text: "hello",
+          cache_control: { type: "ephemeral" },
+        }],
+      }],
+      tools: [{
+        type: "custom",
+        name: "lookup",
+        input_schema: { type: "object", properties: {} },
+        defer_loading: true,
+      }],
+    }), 1).invocation;
+    const target = {
+      ...baseModel,
+      api: "anthropic-messages",
+    } as Model<string>;
+    const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
+
+    const result = await projection.project({
+      model: target.id,
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      system: "system",
+      tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }],
+      stream: true,
+      max_tokens: 1_024,
+    }, target);
+
+    const controls = result.outcomes.map((entry) => entry.control);
+    expect(controls).toEqual([
+      "maxTokens",
+      "system",
+      "system.cacheControl",
+      "content[0:0]",
+      "tools[0]",
+    ]);
+    expect(new Set(controls).size).toBe(controls.length);
+  });
+
+  it("gives every scalar candidate an exact Anthropic-native outcome", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      temperature: 0.4,
+      top_p: 0.8,
+      top_k: 12,
+      stop_sequences: ["END"],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+      tool_choice: {
+        type: "tool",
+        name: "lookup",
+        disable_parallel_tool_use: true,
+      },
+      output_config: {
+        format: { type: "json_schema", schema: { type: "object" } },
+      },
+      metadata: { user_id: "user-123" },
+      service_tier: "auto",
+      inference_geo: "us",
+      container: "container-123",
+      cache_control: { type: "ephemeral", ttl: "1h" },
+    }), 1).invocation;
+    const target = {
+      ...baseModel,
+      api: "anthropic-messages",
+    } as Model<string>;
+
+    const result = await prepareAnthropicPayloadProjection({
+      model: target,
+      invocation,
+    }).project({
+      model: target.id,
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+      stream: true,
+      max_tokens: 1_024,
+      temperature: 0.4,
+      top_p: 0.8,
+      top_k: 12,
+      stop_sequences: ["END"],
+      metadata: { user_id: "user-123" },
+    }, target);
+
+    expect(result.outcomes.map((entry) => entry.control)).toEqual([
+      "maxTokens",
+      "sampling.temperature",
+      "sampling.topP",
+      "sampling.topK",
+      "stopSequences",
+      "toolChoice",
+      "toolChoice.disableParallelToolUse",
+      "outputFormat",
+      "metadataUserId",
+      "serviceTier",
+      "inferenceGeo",
+      "container",
+      "cacheControl",
+    ]);
+    expect(result.outcomes.some((entry) => entry.outcome.kind === "omitted")).toBe(false);
+  });
+
+  it("does not use a target Adapter initial failure for unsupported inference geography", async () => {
+    const projection = projectionFor(requestWith({ inference_geo: "us" }));
+
+    const result = await projection.project(openAICandidate, {
+      ...baseModel,
+      api: "openai-completions",
+    } as Model<string>);
+    expect(result.outcomes).toContainEqual({
+      control: "inferenceGeo",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it("verifies but does not rewrite Pi-owned temperature when the final wire differs", async () => {
+    const target = {
+      ...baseModel,
+      api: "openai-completions",
+    } as Model<string>;
+    const result = await prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: parseAnthropicTextInvocation(requestWith({ temperature: 0.4 }), 1)
+        .invocation,
+    }).project({ ...openAICandidate, temperature: 0.9 }, target);
+
+    expect(result.payload).toMatchObject({ temperature: 0.9 });
+    expect(result.outcomes).toContainEqual({
+      control: "sampling.temperature",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it.each([
+    ["auto", "auto"],
+    ["any", "required"],
+  ] as const)("does not invent a serial-tool candidate for %s tool choice", async (
+    sourceChoice,
+    providerChoice,
+  ) => {
+    const target = {
+      ...baseModel,
+      api: "openai-completions",
+    } as Model<string>;
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+      tool_choice: { type: sourceChoice },
+    }), 1).invocation;
+
+    const result = await prepareAnthropicPayloadProjection({
+      model: target,
+      invocation,
+    }).project({
+      ...openAICandidate,
+      tools: [{ type: "function", function: { name: "lookup", parameters: {} } }],
+      tool_choice: providerChoice,
+      parallel_tool_calls: true,
+    }, target);
+
+    expect(result.outcomes.map((entry) => entry.control)).toEqual([
+      "maxTokens",
+      "toolChoice",
+    ]);
+    expect(result.payload).toMatchObject({ parallel_tool_calls: true });
   });
 
   it.each([
@@ -89,8 +372,6 @@ describe("Anthropic supplement target disposition", () => {
       model: target,
       invocation,
     }).project(candidate, target);
-
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toContainEqual({
       control: "reasoning.activation",
       outcome: expect.objectContaining({
@@ -103,6 +384,7 @@ describe("Anthropic supplement target disposition", () => {
   it.each([
     {
       label: "URL document",
+      control: "content[0:0]",
       request: requestWith({
         messages: [{
           role: "user",
@@ -115,18 +397,21 @@ describe("Anthropic supplement target disposition", () => {
     },
     {
       label: "typed server tool",
+      control: "tools[0]",
       request: requestWith({
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       }),
     },
-  ])("fails $label before a non-Anthropic Provider dispatch", async ({ request }) => {
+  ])("does not turn $label main-call policy into a Supplement failure", async ({ request, control }) => {
     const projection = projectionFor(request);
-    expect(projection.initialFailure).toBeUndefined();
     const result = await projection.project(openAICandidate, {
       ...baseModel,
       api: "openai-completions",
     } as Model<string>);
-    expect(result.failure).toMatch(/supplement|server tool|document|defer/iu);
+    expect(result.outcomes).toContainEqual({
+      control,
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
   });
 
   it("keeps a deferred custom tool usable and warns when defer_loading cannot be projected", async () => {
@@ -142,8 +427,6 @@ describe("Anthropic supplement target disposition", () => {
       ...baseModel,
       api: "openai-completions",
     } as Model<string>);
-
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toContainEqual({
       control: "tools[0]",
       outcome: expect.objectContaining({
@@ -163,9 +446,13 @@ describe("Anthropic supplement target disposition", () => {
     const invocation = parseAnthropicTextInvocation(request, 1).invocation;
     const target = { ...baseModel, api: "openai-completions" } as Model<string>;
     const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
-    const result = await projection.project(openAICandidate, target);
-
-    expect(result.failure).toBeUndefined();
+    const result = await projection.project({
+      ...openAICandidate,
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "prefix" },
+      ],
+    }, target);
     expect(result.outcomes).toContainEqual({
       control: "finalAssistantPrefill",
       outcome: expect.objectContaining({ kind: "degraded" }),
@@ -184,7 +471,6 @@ describe("Anthropic supplement target disposition", () => {
         }],
       }],
     }));
-    expect(projection.initialFailure).toBeUndefined();
 
     const result = await projection.project({
       model: "target-model",
@@ -225,14 +511,11 @@ describe("Anthropic supplement target disposition", () => {
         input_schema: { type: "object", properties: {} },
       }],
     }));
-    expect(projection.initialFailure).toBeUndefined();
 
     const result = await projection.project(openAICandidate, {
       ...baseModel,
       api: "openai-completions",
     } as Model<string>);
-
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toEqual(expect.arrayContaining([
       {
         control: "content[0:0]",
@@ -252,7 +535,6 @@ describe("Anthropic supplement target disposition", () => {
         requestWith({ stop_sequences: ["END"] }),
         api,
       );
-      expect(projection.initialFailure).toBeUndefined();
       const candidate = api === "pi-messages"
         ? { model: "target-model", context: {}, options: { maxTokens: 1_024 } }
         : {
@@ -265,7 +547,6 @@ describe("Anthropic supplement target disposition", () => {
         ...baseModel,
         api,
       } as Model<string>);
-      expect(result.failure).toBeUndefined();
       expect(result.outcomes).toContainEqual({
         control: "stopSequences",
         outcome: expect.objectContaining({ kind: "omitted" }),
@@ -288,13 +569,11 @@ describe("Anthropic supplement target disposition", () => {
       }),
       "openai-codex-responses",
     );
-    expect(projection.initialFailure).toBeUndefined();
     const target = { ...baseModel, api: "openai-codex-responses" } as Model<string>;
     const result = await projection.project(
       { model: "target-model", input: [], stream: true },
       target,
     );
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toContainEqual({
       control: "maxTokens",
       outcome: expect.objectContaining({ kind: "omitted" }),
@@ -310,18 +589,16 @@ describe("Anthropic supplement target disposition", () => {
       requestWith({ max_tokens: 2_048 }),
       "openai-codex-responses",
     );
-    expect(projection.initialFailure).toBeUndefined();
     const target = { ...baseModel, api: "openai-codex-responses" } as Model<string>;
     const result = await projection.project(
       { model: "target-model", input: [], stream: true },
       target,
     );
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toContainEqual({
       control: "maxTokens",
       outcome: expect.objectContaining({
         kind: "omitted",
-        warning: expect.stringMatching(/max_output_tokens/iu),
+        warning: expect.stringMatching(/omitted the final output-token ceiling/iu),
       }),
     });
   });
@@ -338,11 +615,9 @@ describe("Anthropic supplement target disposition", () => {
     } as Model<string>;
 
     const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
-    expect(projection.initialFailure).toBeUndefined();
     const candidate = { modelId: target.id, messages: [], opaque: true };
     const result = await projection.project(candidate, target);
     expect(result.payload).toEqual(candidate);
-    expect(result.failure).toBeUndefined();
   });
 
   it("degrades explicit thinking disable on Bedrock by default when no exact disable mapping exists", async () => {
@@ -359,13 +634,11 @@ describe("Anthropic supplement target disposition", () => {
     } as Model<string>;
 
     const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
-    expect(projection.initialFailure).toBeUndefined();
     const result = await projection.project({
       modelId: target.id,
       messages: [],
       inferenceConfig: { maxTokens: 1_024 },
     }, target);
-    expect(result.failure).toBeUndefined();
     expect(result.outcomes).toContainEqual({
       control: "reasoning.activation",
       outcome: expect.objectContaining({ kind: "degraded" }),
@@ -388,7 +661,6 @@ describe("Anthropic supplement target disposition", () => {
       reasoning: true,
     } as Model<string>;
     const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
-    expect(projection.initialFailure).toBeUndefined();
     const result = await projection.project({
       params: {
         model: target.id,
@@ -400,7 +672,6 @@ describe("Anthropic supplement target disposition", () => {
         reasoning_effort: "high",
       },
     }, target);
-    expect(result.failure).toBeUndefined();
     expect(result.payload).toMatchObject({
       params: {
         max_tokens: 2_048,
@@ -446,8 +717,6 @@ describe("Anthropic supplement target disposition", () => {
         max_tokens: 1_024,
       },
     }, target);
-
-    expect(result.failure).toBeUndefined();
     expect(result.payload).toMatchObject({
       params: {
         tools: [{ name: "lookup" }],

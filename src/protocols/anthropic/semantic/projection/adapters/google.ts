@@ -20,6 +20,17 @@ function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function containsExpectedFields(
+  current: unknown,
+  expected: Readonly<Record<string, unknown>>,
+): boolean {
+  if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    return false;
+  }
+  const record = current as Readonly<Record<string, unknown>>;
+  return Object.entries(expected).every(([key, value]) => same(record[key], value));
+}
+
 function exact(
   outcomes: AnthropicProjectionOutcome[],
   api: GoogleApi,
@@ -93,16 +104,6 @@ function googleThinkingBudget(
   return undefined;
 }
 
-export function initialAnthropicToGoogleFailure(input: {
-  readonly model: Model<string>;
-  readonly invocation: AnthropicSemanticInvocation;
-}): string | undefined {
-  if (input.invocation.supplement.inferenceGeo.kind === "specified") {
-    return `${input.model.api} has no certified inference geography control`;
-  }
-  return undefined;
-}
-
 function googleThinking(
   api: GoogleApi,
   model: Model<string>,
@@ -143,15 +144,19 @@ function mappedToolChoice(
   return undefined;
 }
 
-export function projectAnthropicToGoogle(input: {
+type ProjectionInput = {
   readonly api: GoogleApi;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly payload: unknown;
-}): {
+};
+
+function projectAnthropicToGoogle(
+  input: ProjectionInput,
+  phase: "reasoning" | "supplement",
+): {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
-  readonly failure?: string;
 } {
   if (
     typeof input.payload !== "object" ||
@@ -177,6 +182,7 @@ export function projectAnthropicToGoogle(input: {
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
+  if (phase === "supplement") {
   const finalMaxTokens = Math.min(config.maxOutputTokens, supplement.outputTokenCeiling);
   exact(
     outcomes,
@@ -189,10 +195,17 @@ export function projectAnthropicToGoogle(input: {
     },
   );
   for (const [control, field, value] of [
+    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "topP", supplement.sampling.topP],
     ["sampling.topK", "topK", supplement.sampling.topK],
   ] as const) {
     if (value === undefined) continue;
+    if (control === "sampling.temperature") {
+      if (same(config[field], value)) {
+        add(outcomes, control, { kind: "pi-native" });
+      }
+      continue;
+    }
     exact(outcomes, input.api, control, config[field], value, () => {
       config[field] = value;
     });
@@ -238,7 +251,7 @@ export function projectAnthropicToGoogle(input: {
     delete config.responseJsonSchema;
     add(outcomes, "outputFormat", { kind: "pi-native" });
   }
-
+  } else {
   const activation = input.invocation.reasoning.activation;
   const effort = input.invocation.reasoning.effort;
   if (activation.kind === "disabled") {
@@ -320,17 +333,14 @@ export function projectAnthropicToGoogle(input: {
         kind: "omitted",
         warning: `${input.api} has no certified ${effort.level} effort mapping for model ${input.model.id}`,
       });
+    } else if (containsExpectedFields(config.thinkingConfig, thinking)) {
+      add(outcomes, "reasoning.effort", { kind: "pi-native" });
     } else {
-      exact(
-        outcomes,
-        input.api,
-        "reasoning.effort",
-        config.thinkingConfig,
-        thinking,
-        () => {
-          config.thinkingConfig = thinking;
-        },
-      );
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: `${input.api} Pi payload did not contain the certified reasoning effort`,
+      });
     }
   } else if (config.thinkingConfig !== undefined) {
     delete config.thinkingConfig;
@@ -340,10 +350,19 @@ export function projectAnthropicToGoogle(input: {
       warning: "pi-native-mapping-repaired",
     });
   }
+  }
 
   payload.config = config;
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),
   });
+}
+
+export function projectAnthropicToGoogleReasoning(input: ProjectionInput) {
+  return projectAnthropicToGoogle(input, "reasoning");
+}
+
+export function projectAnthropicToGoogleSupplement(input: ProjectionInput) {
+  return projectAnthropicToGoogle(input, "supplement");
 }

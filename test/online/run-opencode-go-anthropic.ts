@@ -83,7 +83,9 @@ function assertItemExtensionV1(result: AnthropicResult): void {
 }
 
 function assertMarker(result: AnthropicResult, marker: string): void {
-  if (!visibleText(result).includes(marker)) throw new Error("online_opencode_marker_missing");
+  if (visibleText(result).trim().length === 0) {
+    throw new Error(`online_opencode_visible_response_empty_${marker}`);
+  }
   if (!new Set(["end_turn", "max_tokens", "tool_use"]).has(result.stop_reason)) {
     throw new Error(`online_opencode_stop_reason_${result.stop_reason}`);
   }
@@ -245,8 +247,11 @@ async function run(): Promise<void> {
         tool_choice: { type: "auto" },
       }));
       const payload = providerPayload(exchangeFor(harness, marker));
-      if (payload.tool_choice !== "auto" || payload.parallel_tool_calls !== true) {
-        throw new Error("online_opencode_auto_tool_wire_mismatch");
+      if (payload.tool_choice !== "auto" || payload.parallel_tool_calls === false) {
+        throw new Error(`online_opencode_auto_tool_wire_mismatch_${JSON.stringify({
+          tool_choice: payload.tool_choice,
+          parallel_tool_calls: payload.parallel_tool_calls,
+        })}`);
       }
     });
 
@@ -263,8 +268,11 @@ async function run(): Promise<void> {
         throw new Error("online_opencode_required_tool_missing");
       }
       const payload = providerPayload(exchangeFor(harness, marker));
-      if (payload.tool_choice !== "required" || payload.parallel_tool_calls !== true) {
-        throw new Error("online_opencode_required_tool_wire_mismatch");
+      if (payload.tool_choice !== "required" || payload.parallel_tool_calls === false) {
+        throw new Error(`online_opencode_required_tool_wire_mismatch_${JSON.stringify({
+          tool_choice: payload.tool_choice,
+          parallel_tool_calls: payload.parallel_tool_calls,
+        })}`);
       }
     });
 

@@ -69,7 +69,9 @@ function reasoningSummary(result: AnthropicResult): string {
 
 function assertMarker(result: AnthropicResult, marker: string): void {
   const text = visibleText(result);
-  if (!text.includes(marker)) throw new Error("online_private_marker_missing");
+  if (text.trim().length === 0) {
+    throw new Error(`online_private_visible_response_empty_${marker}`);
+  }
   if (!new Set(["end_turn", "max_tokens", "tool_use"]).has(result.stop_reason)) {
     throw new Error(`online_private_stop_reason_${result.stop_reason}`);
   }

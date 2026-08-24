@@ -137,7 +137,6 @@ describe("Anthropic foreign continuity full-history round trip", () => {
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, model);
-          if (projected.failure !== undefined) throw new Error(projected.failure);
           return capture(projected.payload);
         },
       }),
