@@ -8,15 +8,29 @@ import {
 
 function message(input: {
   api: string;
+  provider?: string;
+  model?: string;
   rawStopReason?: string;
   stopReason?: AssistantMessage["stopReason"];
   tool?: boolean;
 }): AssistantMessage {
+  const provider = input.provider ??
+    (input.api === "openai-completions"
+      ? "opencode-go"
+      : input.api === "commandcode-private"
+        ? "commandcode-private"
+        : "provider");
+  const model = input.model ??
+    (input.api === "openai-completions"
+      ? "deepseek-v4-flash"
+      : input.api === "commandcode-private"
+        ? "deepseek/deepseek-v4-flash"
+        : "model");
   return {
     role: "assistant",
     api: input.api,
-    provider: "provider",
-    model: "model",
+    provider,
+    model,
     content: input.tool
       ? [{ type: "toolCall", id: "call-1", name: "lookup", arguments: {} }]
       : [{ type: "text", text: "answer" }],
@@ -37,7 +51,11 @@ function message(input: {
 function convert(value: AssistantMessage) {
   return convertAssistantMessageToAnthropicWithPolicy(
     value,
-    { selector: "client-model", createMessageId: () => "msg-1" },
+    {
+      selector: "client-model",
+      createMessageId: () => "msg-1",
+      directToolNames: ["lookup"],
+    },
     { unknownPiContent: "error" },
   );
 }
@@ -47,16 +65,21 @@ describe("target-aware Anthropic response interpretation", () => {
     ["anthropic-messages", "end_turn", "stop", "end_turn"],
     ["anthropic-messages", "max_tokens", "length", "max_tokens"],
     ["openai-completions", "length", "length", "max_tokens"],
-    ["mistral-conversations", "model_length", "length", "max_tokens"],
-    ["google-generative-ai", "MAX_TOKENS", "length", "max_tokens"],
-    ["google-vertex", "STOP", "stop", "end_turn"],
-    ["openai-responses", "incomplete.max_output_tokens", "length", "max_tokens"],
-    ["azure-openai-responses", "completed", "stop", "end_turn"],
-    ["openai-codex-responses", "completed", "stop", "end_turn"],
-    ["bedrock-converse-stream", "max_tokens", "length", "max_tokens"],
     ["commandcode-private", "length", "length", "max_tokens"],
   ] as const)("maps %s raw terminal %s", (api, rawStopReason, stopReason, expected) => {
     expect(convert(message({ api, rawStopReason, stopReason })).message.stop_reason).toBe(expected);
+  });
+
+  it.each([
+    "openai-responses",
+    "azure-openai-responses",
+    "openai-codex-responses",
+    "google-generative-ai",
+    "google-vertex",
+    "mistral-conversations",
+    "bedrock-converse-stream",
+  ])("renders %s from portable Pi AssistantMessage semantics", (api) => {
+    expect(convert(message({ api })).message.stop_reason).toBe("end_turn");
   });
 
   it("uses tool_use only when the committed content contains a valid tool call", () => {
@@ -73,23 +96,36 @@ describe("target-aware Anthropic response interpretation", () => {
     }))).toThrow(OutboundResponseFidelityFailure);
   });
 
-  it.each(["stop_sequence", "pause_turn"])(
-    "fails native Anthropic %s because Pi discarded its required detail or continuation state",
-    (rawStopReason) => {
-      expect(() => convert(message({
-        api: "anthropic-messages",
-        rawStopReason,
-        stopReason: "stop",
-      }))).toThrow(OutboundResponseFidelityFailure);
-    },
-  );
+  it("falls back from native Anthropic stop_sequence when Pi discarded only the optional matched sequence", () => {
+    const converted = convert(message({
+      api: "anthropic-messages",
+      rawStopReason: "stop_sequence",
+      stopReason: "stop",
+    }));
+    expect(converted.message.stop_reason).toBe("end_turn");
+    expect(converted.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_stop_reason_normalized",
+    }));
+  });
 
-  it("fails an unknown raw terminal instead of fabricating end_turn", () => {
+  it("still fails pause_turn because the next-turn continuation state is critical", () => {
     expect(() => convert(message({
-      api: "bedrock-converse-stream",
-      rawStopReason: "future_reason",
+      api: "anthropic-messages",
+      rawStopReason: "pause_turn",
       stopReason: "stop",
     }))).toThrow(OutboundResponseFidelityFailure);
+  });
+
+  it("uses the retained Pi terminal for an unknown optional raw terminal and warns", () => {
+    const converted = convert(message({
+      api: "openai-completions",
+      rawStopReason: "future_reason",
+      stopReason: "stop",
+    }));
+    expect(converted.message.stop_reason).toBe("end_turn");
+    expect(converted.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_stop_reason_normalized",
+    }));
   });
 
   it("warns when an actual Anthropic response field is unavailable after Pi parsing", () => {

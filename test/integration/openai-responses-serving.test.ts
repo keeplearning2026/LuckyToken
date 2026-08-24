@@ -316,6 +316,30 @@ describe("OpenAI Responses serving", () => {
     expect(response.status).toBe(400);
   });
 
+  it("serves the request while omitting an unsupported supplement fact", async () => {
+    let dispatches = 0;
+    const { runtime } = await start({
+      fetch: async () => {
+        dispatches += 1;
+        return commandCodeText("served without background projection");
+      },
+    });
+
+    const response = await runtime.handle(
+      responsesRequest(
+        {
+          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          input: "hello",
+          background: true,
+        },
+        "client-token",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(dispatches).toBe(1);
+  });
+
   it("returns 400 for a non-JSON request body", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("unused"),

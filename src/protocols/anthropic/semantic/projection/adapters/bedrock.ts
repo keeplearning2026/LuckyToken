@@ -38,63 +38,54 @@ function exact(
   });
 }
 
-export function isBedrockClaudeModel(model: Model<string>): boolean {
-  return [model.id, model.name].some((value) => {
-    const lower = value.toLowerCase();
-    return (
-      lower.includes("anthropic.claude") ||
-      lower.includes("anthropic/claude") ||
-      lower.includes("claude")
-    );
-  });
+interface CertifiedBedrockCapabilities {
+  readonly family: "claude" | "non-claude";
+  readonly adaptiveThinking: boolean;
+  readonly explicitThinkingDisable: boolean;
 }
 
-function supportsAdaptive(model: Model<string>): boolean {
-  const candidates = [model.id, model.name].flatMap((value) => {
-    const lower = value.toLowerCase();
-    return [lower, lower.replace(/[\s_.:]+/gu, "-")];
-  });
-  return candidates.some(
-    (value) =>
-      value.includes("opus-4-6") ||
-      value.includes("opus-4-7") ||
-      value.includes("opus-4-8") ||
-      value.includes("opus-5") ||
-      value.includes("sonnet-4-6") ||
-      value.includes("sonnet-5") ||
-      value.includes("fable-5"),
-  );
+const CERTIFIED_BEDROCK_MODELS = new Map<string, CertifiedBedrockCapabilities>([
+  [
+    "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
+    Object.freeze({
+      family: "claude",
+      adaptiveThinking: true,
+      explicitThinkingDisable: false,
+    }),
+  ],
+  [
+    "amazon-bedrock/amazon.nova-pro-v1:0",
+    Object.freeze({
+      family: "non-claude",
+      adaptiveThinking: false,
+      explicitThinkingDisable: false,
+    }),
+  ],
+]);
+
+function certifiedBedrockCapabilities(
+  model: Model<string>,
+): CertifiedBedrockCapabilities | undefined {
+  return CERTIFIED_BEDROCK_MODELS.get(`${model.provider}/${model.id}`);
 }
 
-export function initialBedrockFailure(input: {
+export function supportsAnthropicBedrockProjection(
+  model: Model<string>,
+): boolean {
+  return certifiedBedrockCapabilities(model) !== undefined;
+}
+
+export function initialAnthropicToBedrockFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
-  const family = isBedrockClaudeModel(input.model) ? "Claude" : "non-Claude";
+  const capabilities = certifiedBedrockCapabilities(input.model);
+  if (capabilities === undefined) {
+    return `Bedrock model ${input.model.provider}/${input.model.id} is not certified for Anthropic semantic projection`;
+  }
+  const family = capabilities.family === "claude" ? "Claude" : "non-Claude";
   if (input.invocation.supplement.inferenceGeo.kind === "specified") {
     return `Bedrock ${family} payload cannot select inference geography`;
-  }
-  const choice = input.invocation.supplement.toolChoice;
-  if (
-    choice !== undefined &&
-    choice.kind !== "none" &&
-    choice.disableParallelToolUse
-  ) {
-    return `Bedrock ${family} cannot guarantee serial tool calls`;
-  }
-  const activation = input.invocation.reasoning.activation;
-  if (!isBedrockClaudeModel(input.model)) {
-    if (activation.kind === "enabled" || activation.kind === "adaptive") {
-      return "Bedrock non-Claude target cannot preserve Anthropic thinking";
-    }
-    if (input.invocation.reasoning.effort.kind === "specified") {
-      return "Bedrock non-Claude target has no certified Anthropic effort control";
-    }
-    if (input.invocation.supplement.outputFormat.kind === "specified") {
-      return "Bedrock non-Claude target has no certified structured-output control";
-    }
-  } else if (activation.kind === "adaptive" && !supportsAdaptive(input.model)) {
-    return `Bedrock Claude model ${input.model.id} does not support adaptive thinking`;
   }
   return undefined;
 }
@@ -110,15 +101,6 @@ function mappedToolChoice(
   return undefined;
 }
 
-function displayValue(
-  intent:
-    | { readonly kind: "omitted" }
-    | { readonly kind: "explicit-null" }
-    | { readonly kind: "specified"; readonly value: "summarized" | "omitted" },
-): "summarized" | "omitted" | undefined {
-  return intent.kind === "specified" ? intent.value : undefined;
-}
-
 export function projectAnthropicToBedrock(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
@@ -126,6 +108,8 @@ export function projectAnthropicToBedrock(input: {
 }): {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
+  readonly failure?: string;
+  readonly failureKind?: "unsupported-semantics";
 } {
   if (
     typeof input.payload !== "object" ||
@@ -144,17 +128,26 @@ export function projectAnthropicToBedrock(input: {
   ) {
     throw new Error("bedrock-converse-stream payload shape mismatch");
   }
-  const claude = isBedrockClaudeModel(input.model);
-  const family = claude ? "claude" : "non-claude";
+  const capabilities = certifiedBedrockCapabilities(input.model);
+  if (capabilities === undefined) {
+    throw new Error(
+      `Bedrock model ${input.model.provider}/${input.model.id} is not certified for Anthropic semantic projection`,
+    );
+  }
+  const claude = capabilities.family === "claude";
+  const family = capabilities.family;
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
   const inference = { ...(payload.inferenceConfig as Record<string, unknown>) };
+  if (typeof inference.maxTokens !== "number") {
+    throw new Error("bedrock-converse-stream payload shape mismatch at inferenceConfig.maxTokens");
+  }
 
-  exact(outcomes, family, "maxTokens", inference.maxTokens, supplement.maxTokens, () => {
-    inference.maxTokens = supplement.maxTokens;
+  const finalMaxTokens = Math.min(inference.maxTokens, supplement.outputTokenCeiling);
+  exact(outcomes, family, "maxTokens", inference.maxTokens, finalMaxTokens, () => {
+    inference.maxTokens = finalMaxTokens;
   });
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "topP", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
@@ -211,31 +204,34 @@ export function projectAnthropicToBedrock(input: {
     exact(outcomes, family, "sampling.topK", additional.top_k, supplement.sampling.topK, () => {
       additional.top_k = supplement.sampling.topK;
     });
-  } else if (supplement.sampling.topK !== undefined) {
-    add(outcomes, "sampling.topK", {
-      kind: "omitted",
-      warning: "Bedrock non-Claude has no certified top-k control",
-    });
   }
 
+  const activation = input.invocation.reasoning.activation;
+  const effort = input.invocation.reasoning.effort;
   if (claude) {
-    const activation = input.invocation.reasoning.activation;
-    if (activation.kind === "enabled") {
-      const display = displayValue(activation.display);
+    const thinkingBudgetDoesNotFit =
+      activation.kind === "enabled" &&
+      activation.budgetTokens >= finalMaxTokens;
+    if (thinkingBudgetDoesNotFit) {
+      delete additional.thinking;
+      delete additional.anthropic_beta;
+      add(outcomes, "reasoning.activation", {
+        kind: "degraded",
+        warning:
+          "Bedrock Claude thinking budget no longer fits below the context-safe final maxTokens ceiling; reasoning was disabled for this request",
+      });
+    } else if (activation.kind === "enabled") {
       additional.thinking = {
         type: "enabled",
         budget_tokens: activation.budgetTokens,
-        ...(display === undefined ? {} : { display }),
       };
       add(outcomes, "reasoning.activation", {
         kind: "payload-projected",
         projector: "anthropic-to-bedrock-claude",
       });
     } else if (activation.kind === "adaptive") {
-      const display = displayValue(activation.display);
       additional.thinking = {
         type: "adaptive",
-        ...(display === undefined ? {} : { display }),
       };
       add(outcomes, "reasoning.activation", {
         kind: "payload-projected",
@@ -245,54 +241,71 @@ export function projectAnthropicToBedrock(input: {
       delete additional.thinking;
       delete additional.anthropic_beta;
     }
-
     const format = supplement.outputFormat;
-    const effort = input.invocation.reasoning.effort;
-    if (format.kind === "specified" || effort.kind === "specified") {
-      const outputConfig =
-        typeof additional.output_config === "object" &&
-        additional.output_config !== null &&
-        !Array.isArray(additional.output_config)
-          ? { ...(additional.output_config as Record<string, unknown>) }
-          : {};
-      if (format.kind === "specified") {
-        outputConfig.format = {
-          type: "json_schema",
-          schema: format.value.schema,
-        };
-        add(outcomes, "outputFormat", {
-          kind: "payload-projected",
-          projector: "anthropic-to-bedrock-claude",
-        });
-      }
-      if (effort.kind === "specified") {
-        outputConfig.effort = effort.level;
-        add(outcomes, "reasoning.effort", {
-          kind: "payload-projected",
-          projector: "anthropic-to-bedrock-claude",
-        });
-      }
-      additional.output_config = outputConfig;
-    } else if (format.kind === "explicit-null" || effort.kind === "explicit-null") {
-      delete additional.output_config;
+    const outputConfig =
+      typeof additional.output_config === "object" &&
+      additional.output_config !== null &&
+      !Array.isArray(additional.output_config)
+        ? { ...(additional.output_config as Record<string, unknown>) }
+        : {};
+    if (format.kind === "specified") {
+      outputConfig.format = {
+        type: "json_schema",
+        schema: format.value.schema,
+      };
+      add(outcomes, "outputFormat", {
+        kind: "payload-projected",
+        projector: "anthropic-to-bedrock-claude",
+      });
+    } else if (format.kind === "explicit-null") {
+      delete outputConfig.format;
     }
+
+    if (effort.kind === "specified") {
+      const explicit = input.model.thinkingLevelMap?.[effort.level];
+      const expectedEffort =
+        explicit === null
+          ? undefined
+          : typeof explicit === "string"
+            ? explicit
+            : effort.level === "low" || effort.level === "medium" || effort.level === "high"
+              ? effort.level
+              : undefined;
+      if (activation.kind === "adaptive" && expectedEffort !== undefined) {
+        exact(
+          outcomes,
+          family,
+          "reasoning.effort",
+          outputConfig.effort,
+          expectedEffort,
+          () => {
+            outputConfig.effort = expectedEffort;
+          },
+        );
+      } else {
+        delete outputConfig.effort;
+        add(outcomes, "reasoning.effort", {
+          kind: "omitted",
+          warning:
+            activation.kind === "adaptive"
+              ? `Bedrock Claude model ${input.model.id} has no certified ${effort.level} effort mapping`
+              : "Bedrock Claude effort requires an explicit adaptive-thinking source activation",
+        });
+      }
+    } else if (effort.kind === "explicit-null") {
+      delete outputConfig.effort;
+    }
+    if (Object.keys(outputConfig).length === 0) delete additional.output_config;
+    else additional.output_config = outputConfig;
+  } else if (effort.kind === "specified") {
+    add(outcomes, "reasoning.effort", {
+      kind: "omitted",
+      warning: "Bedrock non-Claude target has no certified Anthropic effort control",
+    });
   }
   payload.additionalModelRequestFields =
     Object.keys(additional).length === 0 ? undefined : additional;
 
-  for (const [control, intent] of [
-    ["metadataUserId", supplement.metadataUserId],
-    ["serviceTier", supplement.serviceTier],
-    ["container", supplement.container],
-    ["cacheControl", supplement.cacheControl],
-  ] as const) {
-    if (intent.kind === "specified") {
-      add(outcomes, control, {
-        kind: "omitted",
-        warning: `bedrock-converse-stream ${family} has no certified equivalent`,
-      });
-    }
-  }
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),

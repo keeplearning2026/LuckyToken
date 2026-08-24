@@ -57,6 +57,9 @@ describe("schema-complete Anthropic JSON response", () => {
     };
     const target = convertAssistantMessageToAnthropic(
       message({
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4-flash",
         content: [
           { type: "text", text: "before" },
           {
@@ -71,6 +74,7 @@ describe("schema-complete Anthropic JSON response", () => {
       }),
       "client-selector",
       "opaque-id",
+      ["Tool_Exact"],
     );
 
     expect(target.content).toMatchObject([
@@ -103,6 +107,7 @@ describe("schema-complete Anthropic JSON response", () => {
       }),
       "client-selector",
       "opaque-id",
+      ["tool"],
     );
 
     expect(target.content).toMatchObject([
@@ -441,6 +446,9 @@ describe("schema-complete Anthropic JSON response", () => {
   it("derives tool_use from actual toolCall content, not the Pi stop reason", () => {
     const target = convertAssistantMessageToAnthropic(
       message({
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4-flash",
         stopReason: "toolUse",
         content: [
           { type: "toolCall", id: "call", name: "tool", arguments: { x: 1 } },
@@ -448,6 +456,7 @@ describe("schema-complete Anthropic JSON response", () => {
       }),
       "client-selector",
       "opaque-id",
+      ["tool"],
     );
     expect(target.stop_reason).toBe("tool_use");
 
@@ -460,13 +469,16 @@ describe("schema-complete Anthropic JSON response", () => {
 
   it("echoes only client identity and includes all required Message fields", () => {
     const source = message({
+      api: "openai-completions",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
       responseModel: "provider-response-model",
       responseId: "provider-response-id",
       diagnostics: [
         { type: "provider-detail", timestamp: 1, details: { secret: "hidden" } },
       ],
       errorMessage: "diagnostic only",
-      rawStopReason: "tool_use",
+      rawStopReason: "tool_calls",
       stopReason: "toolUse",
       content: [
         { type: "text", text: "text", textSignature: "opaque-text" },
@@ -485,6 +497,7 @@ describe("schema-complete Anthropic JSON response", () => {
       source,
       "original-client-selector",
       "client-owned-id",
+      ["tool"],
     );
     // Ticket 09: a valid Pi responseId is preserved; the generator is only a
     // fallback. The source carries provider-response-id, so that wins.
@@ -519,9 +532,9 @@ describe("schema-complete Anthropic JSON response", () => {
       expect.objectContaining({
         luckytoken_continuity: expect.objectContaining({
           source: {
-            api: "anthropic-messages",
-            provider: "internal-provider",
-            model: "internal-model",
+            api: "openai-completions",
+            provider: "opencode-go",
+            model: "deepseek-v4-flash",
           },
         }),
       }),

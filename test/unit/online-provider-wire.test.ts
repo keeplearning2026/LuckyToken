@@ -2,22 +2,22 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
-  expectsForcedToolChoicePredispatchFailure,
+  expectsForcedToolChoiceOmission,
   readOnlineProviderMessages,
   requireOnlineOpenAICompletionsProjection,
   requireOnlineReasoningReplay,
 } from "../online/provider-wire.js";
 
 describe("online final Provider wire reader", () => {
-  it("keeps the GOAT forced-tool incompatibility exact to its certified target", () => {
+  it("keeps the GOAT forced-tool omission exact to its certified target", () => {
     expect(
-      expectsForcedToolChoicePredispatchFailure(
+      expectsForcedToolChoiceOmission(
         "commandcode-goat",
         "deepseek/deepseek-v4-flash",
       ),
     ).toBe(true);
     expect(
-      expectsForcedToolChoicePredispatchFailure(
+      expectsForcedToolChoiceOmission(
         "opencode-go",
         "deepseek-v4-flash",
       ),
@@ -55,6 +55,36 @@ describe("online final Provider wire reader", () => {
         },
       ),
     ).not.toThrow();
+  });
+
+  it("certifies that an incompatible forced tool choice is omitted instead of widened", () => {
+    expect(() =>
+      requireOnlineOpenAICompletionsProjection(
+        {
+          parallel_tool_calls: false,
+          max_completion_tokens: 256,
+        },
+        {
+          omitToolChoice: true,
+          parallelToolCalls: false,
+          maxOutputTokens: 512,
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      requireOnlineOpenAICompletionsProjection(
+        {
+          tool_choice: "auto",
+          parallel_tool_calls: false,
+          max_completion_tokens: 256,
+        },
+        {
+          omitToolChoice: true,
+          parallelToolCalls: false,
+          maxOutputTokens: 512,
+        },
+      ),
+    ).toThrow(/wire_mismatch/u);
   });
 
   it("rejects a permissive success body whose controls are in the wrong dialect", () => {

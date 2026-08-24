@@ -1,11 +1,7 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { createUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
-import {
-  convertAssistantMessageToAnthropic,
-  type AnthropicResponseMessage,
-} from "../../src/protocols/anthropic/response.js";
+import type { AnthropicResponseMessage } from "../../src/protocols/anthropic/response.js";
 import {
   createAnthropicAtomicSseEvents,
   renderAnthropicAtomicSse,
@@ -19,52 +15,43 @@ import {
   requestIdFromFact,
 } from "../../src/protocols/anthropic/failure-rendering.js";
 
-function usage() {
-  return {
-    input: 10,
-    output: 20,
-    cacheRead: 3,
-    cacheWrite: 5,
-    cacheWrite1h: 2,
-    reasoning: 7,
-    totalTokens: 35,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
-function message(): AssistantMessage {
-  return {
-    role: "assistant",
-    api: "anthropic-messages",
-    provider: "provider",
-    model: "internal",
-    content: [
-      { type: "text", text: "hello" },
-      {
-        type: "thinking",
-        thinking: "reason",
-        thinkingSignature: "sig",
-      },
-      {
-        type: "thinking",
-        thinking: "",
-        thinkingSignature: "opaque",
-        redacted: true,
-      },
-      { type: "toolCall", id: "call", name: "tool", arguments: { x: 1 } },
-    ],
-    usage: usage(),
-    stopReason: "toolUse",
-    timestamp: 1,
-  };
-}
-
 function target(): AnthropicResponseMessage {
-  return convertAssistantMessageToAnthropic(
-    message(),
-    "client-selector",
-    "msg_1",
-  );
+  return {
+    id: "msg_1",
+    container: null,
+    content: [
+      { citations: null, text: "hello", type: "text" },
+      { signature: "sig", thinking: "reason", type: "thinking" },
+      { data: "opaque", type: "redacted_thinking" },
+      {
+        id: "call",
+        caller: { type: "direct" },
+        input: { x: 1 },
+        name: "tool",
+        type: "tool_use",
+      },
+    ],
+    model: "client-selector",
+    role: "assistant",
+    stop_details: null,
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    type: "message",
+    usage: {
+      cache_creation: {
+        ephemeral_1h_input_tokens: 2,
+        ephemeral_5m_input_tokens: 3,
+      },
+      cache_creation_input_tokens: 5,
+      cache_read_input_tokens: 3,
+      inference_geo: null,
+      input_tokens: 10,
+      output_tokens: 20,
+      output_tokens_details: { thinking_tokens: 7 },
+      server_tool_use: null,
+      service_tier: null,
+    },
+  };
 }
 
 describe("10: Anthropic rendering and errors", () => {

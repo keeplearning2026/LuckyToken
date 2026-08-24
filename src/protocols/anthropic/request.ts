@@ -45,6 +45,9 @@ import {
 export interface AnthropicRequestRenderState {
   readonly selector: string;
   readonly stream: boolean;
+  readonly thinkingDisplay: AnthropicThinkingDisplayIntent;
+  /** Ordinary Client tools whose response calls have proven direct ownership. */
+  readonly directToolNames: readonly string[];
 }
 
 export type AnthropicRequestConversion = AnthropicConversionResult;
@@ -793,6 +796,14 @@ export function validateAnthropicSourceRequest(
   const stopSequences = validateStopSequences(value.stop_sequences);
   if (stopSequences !== undefined) validated.stopSequences = stopSequences;
   const toolChoice = validateToolChoice(value.tool_choice);
+  if (toolChoice?.kind === "named") {
+    const exists = tools?.some((tool) => tool.name === toolChoice.name) === true;
+    if (!exists) {
+      throw new InvalidRequest(
+        `tool_choice named tool ${toolChoice.name} is not present in tools`,
+      );
+    }
+  }
   if (toolChoice !== undefined) validated.toolChoice = toolChoice;
   return validated;
 }
@@ -1371,18 +1382,20 @@ export function convertValidatedAnthropicRequestWithPolicy(
         messages.push(assistant);
       }
       if (Array.isArray(rawContent)) {
+        let representedPiContentCount = 0;
         for (const [convertedIndex, semanticBlock] of blocks.entries()) {
+          const representsPiContent =
+            semanticBlock.type === "text" ||
+            semanticBlock.type === "thinking" ||
+            semanticBlock.type === "toolUse" ||
+            semanticBlock.type === "transcript";
+          if (!representsPiContent) continue;
+          const piContentIndex = baseContentIndex + representedPiContentCount;
+          representedPiContentCount += 1;
           const sourceContentIndex = blockSourceIndexes[convertedIndex];
           if (sourceContentIndex === undefined || sourceContentIndex < 0) continue;
           const candidate = rawContent[sourceContentIndex];
           if (!isRecord(candidate)) continue;
-          const representsPiContent =
-            (semanticBlock.type === "text" ||
-              semanticBlock.type === "thinking" ||
-              semanticBlock.type === "toolUse" ||
-              semanticBlock.type === "transcript");
-          if (!representsPiContent) continue;
-          const piContentIndex = baseContentIndex + convertedIndex;
           if (
             candidate.type === "thinking" ||
             candidate.type === "redacted_thinking"
@@ -1566,7 +1579,7 @@ export function convertValidatedAnthropicRequestWithPolicy(
     ...(request.topK === undefined ? {} : { topK: request.topK }),
   });
   const supplement: AnthropicProjectionSupplement = Object.freeze({
-    maxTokens: request.maxTokens,
+    outputTokenCeiling: request.maxTokens,
     sampling,
     ...(request.stopSequences === undefined
       ? {}
@@ -1608,7 +1621,20 @@ export function convertValidatedAnthropicRequestWithPolicy(
       supplement,
     },
     client: {
-      renderState: { selector: request.selector, stream: request.stream },
+      renderState: {
+        selector: request.selector,
+        stream: request.stream,
+        directToolNames: Object.freeze(
+          request.tools
+            ?.filter((tool) => tool.kind === "custom")
+            .map((tool) => tool.name) ?? [],
+        ),
+        thinkingDisplay:
+          request.reasoning.activation.kind === "enabled" ||
+          request.reasoning.activation.kind === "adaptive"
+            ? request.reasoning.activation.display
+            : Object.freeze({ kind: "omitted" as const }),
+      },
       notices: Object.freeze(notices),
     },
   };

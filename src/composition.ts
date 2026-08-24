@@ -18,6 +18,7 @@ import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createCodexLocalCompactLane } from "./integrations/codex/local-compact.js";
 import { createCodexLocalResponsesLane } from "./integrations/codex/local-responses.js";
+import { createCodexLocalSearchHandler } from "./integrations/codex/local-search.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import type { PublicModelSource } from "./public-model-seam.js";
 import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/index.js";
@@ -39,7 +40,7 @@ import {
 import { createResponseSessionState } from "./protocols/openai-responses/session-state.js";
 import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
-import { createSemanticProfileExecution } from "./semantic-conversion/profile-execution.js";
+import { createProfileBoundPiExecution } from "./credentials/profile-bound-pi-execution.js";
 
 export type DataPlaneConfiguration = Readonly<
   Pick<
@@ -108,7 +109,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     : undefined;
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const semanticExecution = createSemanticProfileExecution({
+  const semanticExecution = createProfileBoundPiExecution({
     bindings: options.providerAuthBindings,
     execute: createExecutionOperation(resolveUsageSemantics),
     resolveCredentialActivity: credentialActivityForExecutionFacts,
@@ -143,6 +144,15 @@ export async function createConfiguredLuckyTokenDataPlane(
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   ];
+  if (options.codexLocalAuth !== undefined) {
+    handlers.push(
+      createCodexLocalSearchHandler({
+        credentials: options.codexLocalAuth,
+        fetch: options.fetch,
+        maxRequestBytes: config.limits.maxRequestBytes,
+      }),
+    );
+  }
 
   let finalizeResponsesState: (() => Promise<void>) | undefined;
   if (responsesConfig !== undefined) {

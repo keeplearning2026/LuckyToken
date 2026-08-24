@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
 
-describe("OpenAI Responses complete projection supplement", () => {
-  it("captures every recognized Pi-unrepresentable request control before target resolution", () => {
+describe("OpenAI Responses Provider projection supplement", () => {
+  it("captures only request controls with a certified Provider projection", () => {
     const result = convertResponsesRequest(
       {
         model: "client-selector",
@@ -50,51 +50,42 @@ describe("OpenAI Responses complete projection supplement", () => {
     expect(result.invocation.supplement).toMatchObject({
       output: {
         format: {
-          requirement: "hard",
           value: { type: "json_schema", name: "answer", strict: true },
         },
-        verbosity: { requirement: "preference", value: "high" },
-        include: {
-          requirement: "preference",
-          value: ["reasoning.encrypted_content"],
-        },
-        topLogprobs: { requirement: "hard", value: 3 },
+        verbosity: { value: "high" },
+        include: { value: ["reasoning.encrypted_content"] },
       },
       tools: {
-        parallelCalls: { requirement: "hard", value: false },
+        parallelCalls: { value: false },
         choice: {
-          requirement: "hard",
           value: { kind: "named", toolType: "function", name: "lookup" },
         },
       },
       sampling: {
-        maxOutputTokens: { requirement: "hard", value: 512 },
-        temperature: { requirement: "preference", value: 0.4 },
-        topP: { requirement: "preference", value: 0.8 },
+        maxOutputTokens: { value: 512 },
+        temperature: { value: 0.4 },
+        topP: { value: 0.8 },
       },
       cache: {
-        key: { requirement: "preference", value: "cache-key" },
-        retention: { requirement: "preference", value: "24h" },
+        key: { value: "cache-key" },
+        retention: { value: "24h" },
       },
       identity: {
-        safetyIdentifier: { requirement: "preference", value: "safe-user" },
-        deprecatedUser: { requirement: "preference", value: "deprecated-user" },
+        safetyIdentifier: { value: "safe-user" },
+        deprecatedUser: { value: "deprecated-user" },
       },
       lifecycle: {
-        serviceTier: { requirement: "preference", value: "priority" },
-        truncation: { requirement: "hard", value: "disabled" },
-        background: { requirement: "preference", value: false },
-        store: { requirement: "preference", value: false },
-        contextManagement: {
-          requirement: "hard",
-          value: [{ type: "compaction", compact_threshold: 1_000 }],
-        },
-        streamOptions: {
-          requirement: "preference",
-          value: { include_obfuscation: false },
-        },
+        serviceTier: { value: "priority" },
+        truncation: { value: "disabled" },
       },
     });
+    expect(result.client.notices.map((notice) => notice.code)).toEqual(
+      expect.arrayContaining([
+        "openai-responses_top_logprobs_omitted",
+        "openai-responses_context_management_omitted",
+        "openai-responses_stream_options_omitted",
+      ]),
+    );
   });
 
   it("emits an empty immutable supplement when no extra controls are present", () => {
@@ -122,9 +113,6 @@ describe("OpenAI Responses complete projection supplement", () => {
             },
           },
         },
-        context_management: [
-          { type: "compaction", settings: { threshold: 1_000 } },
-        ],
       },
       1,
     );
@@ -134,12 +122,6 @@ describe("OpenAI Responses complete projection supplement", () => {
     if (schema?.type !== "json_schema") throw new Error("expected schema");
     expect(Object.isFrozen(schema.schema)).toBe(true);
     expect(Object.isFrozen(schema.schema.properties)).toBe(true);
-    expect(
-      Object.isFrozen(
-        result.invocation.supplement.lifecycle?.contextManagement?.value[0]
-          ?.settings,
-      ),
-    ).toBe(true);
   });
 
   it("accepts current SDK null absence and in_memory cache spelling", () => {

@@ -12,30 +12,30 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
-import type { ClientConversionResult } from "../../semantic-conversion/contract.js";
+import type { ResponsesConversionResult } from "./semantic/invocation.js";
 import type {
-  HistoricalReasoning,
-  ReasoningContinuityAttachment,
-  ReasoningEffortIntent,
-  ReasoningEffortLevel,
-  ReasoningSemantics,
-  ReasoningSummaryIntent,
-  ReasoningSummaryPreference,
-} from "../../semantic-conversion/reasoning/contract.js";
+  ResponsesHistoricalReasoning,
+  ResponsesReasoningContinuityAttachment,
+  ResponsesReasoningEffortIntent,
+  ResponsesReasoningEffortLevel,
+  ResponsesReasoningSemantics,
+  ResponsesReasoningSummaryIntent,
+  ResponsesReasoningSummaryPreference,
+} from "./semantic/reasoning/contract.js";
 import type {
-  ProjectionSupplement,
-  SemanticToolChoice,
-} from "../../semantic-conversion/supplement/contract.js";
+  ResponsesProjectionSupplement,
+  ResponsesToolChoice,
+} from "./semantic/supplement/contract.js";
 import {
   InvalidResponsesProjectionSupplement,
   parseResponsesProjectionSupplement,
-  parseSemanticToolChoice,
-} from "./projection-supplement.js";
+  parseResponsesToolChoice,
+} from "./semantic/supplement/request.js";
 import {
   decodeResponsesContinuity,
   RESPONSES_CONTINUITY_FIELD,
   type WireContinuityAttachment,
-} from "./reasoning-continuity.js";
+} from "./semantic/reasoning/continuity.js";
 
 export class InvalidRequest extends Error {
   readonly kind = "InvalidRequest";
@@ -99,7 +99,7 @@ export interface ResponsesClientRenderState {
     metadataEcho?: Readonly<Record<string, string>>;
 }
 
-export type ResponsesInvocation = ClientConversionResult<ResponsesClientRenderState>;
+export type ResponsesInvocation = ResponsesConversionResult<ResponsesClientRenderState>;
 
 export interface ValidatedResponsesRequest {
   selector: string;
@@ -113,7 +113,7 @@ export interface ValidatedResponsesRequest {
   metadataUserId?: string;
   reasoning?: string;
   tools?: Tool[];
-  toolChoice?: SemanticToolChoice;
+  toolChoice?: ResponsesToolChoice;
   background: boolean;
   conversationPresent: boolean;
   promptPresent: boolean;
@@ -138,6 +138,14 @@ export const OUTPUT_IMAGE_UNRESOLVED_NOTICE_CODE =
   "openai-responses_output_image_unresolved";
 export const NAMESPACE_COLLISION_NOTICE_CODE =
   "openai-responses_namespace_collision";
+export const TOP_LOGPROBS_OMITTED_NOTICE_CODE =
+  "openai-responses_top_logprobs_omitted";
+export const BACKGROUND_SYNCHRONOUS_NOTICE_CODE =
+  "openai-responses_background_synchronous";
+export const CONTEXT_MANAGEMENT_OMITTED_NOTICE_CODE =
+  "openai-responses_context_management_omitted";
+export const STREAM_OPTIONS_OMITTED_NOTICE_CODE =
+  "openai-responses_stream_options_omitted";
 
 /** Separator for the reversible Responses-owned namespace flattening scheme.
  *  A flattened name is `<namespace>__<child>`; the separator stays inside the
@@ -230,6 +238,52 @@ function requestNotice(
     ...(jsonPath === undefined ? {} : { jsonPath }),
     action,
   });
+}
+
+function appendNonProjectionControlNotices(
+  value: unknown,
+  notices: ConversionNotice[],
+): void {
+  if (!isRecord(value)) return;
+  if (typeof value.top_logprobs === "number" && value.top_logprobs > 0) {
+    notices.push(
+      requestNotice(
+        TOP_LOGPROBS_OMITTED_NOTICE_CODE,
+        "ignore",
+        "$.top_logprobs",
+      ),
+    );
+  }
+  if (value.background === true) {
+    notices.push(
+      requestNotice(
+        BACKGROUND_SYNCHRONOUS_NOTICE_CODE,
+        "degrade",
+        "$.background",
+      ),
+    );
+  }
+  if (Array.isArray(value.context_management) && value.context_management.length > 0) {
+    notices.push(
+      requestNotice(
+        CONTEXT_MANAGEMENT_OMITTED_NOTICE_CODE,
+        "ignore",
+        "$.context_management",
+      ),
+    );
+  }
+  if (
+    isRecord(value.stream_options) &&
+    value.stream_options.include_obfuscation !== undefined
+  ) {
+    notices.push(
+      requestNotice(
+        STREAM_OPTIONS_OMITTED_NOTICE_CODE,
+        "ignore",
+        "$.stream_options.include_obfuscation",
+      ),
+    );
+  }
 }
 
 function parseContentParts(
@@ -693,14 +747,14 @@ function convertTools(
  *   future unknown   → futureReasoningEffort policy (max|omit|error), notice on max/omit
  */
 interface ConvertedReasoningRequest {
-  readonly piReasoning?: ReasoningEffortLevel;
+  readonly piReasoning?: ResponsesReasoningEffortLevel;
   readonly intent: Readonly<{
-    effort: ReasoningEffortIntent;
-    summary: ReasoningSummaryIntent;
+    effort: ResponsesReasoningEffortIntent;
+    summary: ResponsesReasoningSummaryIntent;
   }>;
 }
 
-const REASONING_SUMMARY_PREFERENCES = new Set<ReasoningSummaryPreference>([
+const REASONING_SUMMARY_PREFERENCES = new Set<ResponsesReasoningSummaryPreference>([
   "auto",
   "concise",
   "detailed",
@@ -708,7 +762,7 @@ const REASONING_SUMMARY_PREFERENCES = new Set<ReasoningSummaryPreference>([
 
 function parseReasoningSummary(
   value: Readonly<Record<string, unknown>>,
-): ReasoningSummaryIntent {
+): ResponsesReasoningSummaryIntent {
   const current = value.summary;
   const deprecated = value.generate_summary;
   for (const [field, candidate] of [
@@ -718,7 +772,7 @@ function parseReasoningSummary(
     if (candidate === undefined || candidate === null) continue;
     if (
       typeof candidate !== "string" ||
-      !REASONING_SUMMARY_PREFERENCES.has(candidate as ReasoningSummaryPreference)
+      !REASONING_SUMMARY_PREFERENCES.has(candidate as ResponsesReasoningSummaryPreference)
     ) {
       throw new InvalidRequest(
         `${field} must be auto, concise, or detailed when present`,
@@ -741,7 +795,7 @@ function parseReasoningSummary(
     ? Object.freeze({ kind: "provider-default" })
     : Object.freeze({
         kind: "requested",
-        value: selected as ReasoningSummaryPreference,
+        value: selected as ResponsesReasoningSummaryPreference,
       });
 }
 
@@ -800,7 +854,7 @@ function convertReasoning(
     });
   }
   if (effort === "max" || KNOWN_EFFORTS.has(effort)) {
-    const level = effort as ReasoningEffortLevel;
+    const level = effort as ResponsesReasoningEffortLevel;
     return Object.freeze({
       piReasoning: level,
       intent: Object.freeze({
@@ -832,9 +886,9 @@ function convertReasoning(
   });
 }
 
-function parseToolChoice(value: unknown): SemanticToolChoice | undefined {
+function parseToolChoice(value: unknown): ResponsesToolChoice | undefined {
   try {
-    return parseSemanticToolChoice(value);
+    return parseResponsesToolChoice(value);
   } catch (error) {
     if (error instanceof InvalidResponsesProjectionSupplement) {
       throw new InvalidRequest(error.message);
@@ -899,6 +953,39 @@ export function validateResponsesRequest(
   }
   const toolChoice = parseToolChoice(value.tool_choice);
   validateReasoningShape(value.reasoning);
+  if (
+    value.top_logprobs !== undefined &&
+    value.top_logprobs !== null &&
+    (!Number.isSafeInteger(value.top_logprobs) ||
+      (value.top_logprobs as number) < 0 ||
+      (value.top_logprobs as number) > 20)
+  ) {
+    throw new InvalidRequest(
+      "top_logprobs must be an integer within 0 through 20",
+    );
+  }
+  if (
+    value.context_management !== undefined &&
+    value.context_management !== null &&
+    (!Array.isArray(value.context_management) ||
+      value.context_management.some((entry) => !isRecord(entry)))
+  ) {
+    throw new InvalidRequest("context_management must be an array of objects");
+  }
+  if (
+    value.stream_options !== undefined &&
+    value.stream_options !== null &&
+    (!isRecord(value.stream_options) ||
+      Object.keys(value.stream_options).some(
+        (key) => key !== "include_obfuscation",
+      ) ||
+      (value.stream_options.include_obfuscation !== undefined &&
+        typeof value.stream_options.include_obfuscation !== "boolean"))
+  ) {
+    throw new InvalidRequest(
+      "stream_options must contain only a boolean include_obfuscation",
+    );
+  }
   if (value.conversation !== undefined && value.conversation !== null) {
     throw new InvalidRequest(
       "conversation is not supported by Core conversion v1",
@@ -992,17 +1079,17 @@ function validateReasoningShape(value: unknown): void {
   }
 }
 
-interface HistoricalReasoningCandidate {
+interface ResponsesHistoricalReasoningCandidate {
   readonly block: ThinkingContent;
   readonly summaryText: string;
   readonly sourceItemId?: string;
-  readonly source?: HistoricalReasoning["source"];
+  readonly source?: ResponsesHistoricalReasoning["source"];
 }
 
 type InternalReasoningContinuityCandidate =
   | WireContinuityAttachment
   | {
-      readonly source: ReasoningContinuityAttachment["source"];
+      readonly source: ResponsesReasoningContinuityAttachment["source"];
       readonly target: "thinking";
       readonly kind: "responses-reasoning-item";
       readonly value: string;
@@ -1014,15 +1101,15 @@ interface ReasoningContinuityCandidate {
   readonly wire: InternalReasoningContinuityCandidate;
 }
 
-function resolveHistoricalReasoning(
+function resolveResponsesHistoricalReasoning(
   messages: readonly Message[],
-  candidates: readonly HistoricalReasoningCandidate[],
-): readonly HistoricalReasoning[] {
+  candidates: readonly ResponsesHistoricalReasoningCandidate[],
+): readonly ResponsesHistoricalReasoning[] {
   if (candidates.length === 0) return Object.freeze([]);
   const byBlock = new Map(
     candidates.map((candidate) => [candidate.block, candidate] as const),
   );
-  const resolved: HistoricalReasoning[] = [];
+  const resolved: ResponsesHistoricalReasoning[] = [];
   for (const [messageIndex, message] of messages.entries()) {
     if (message.role !== "assistant") continue;
     for (const [contentIndex, block] of message.content.entries()) {
@@ -1107,7 +1194,7 @@ function serializeResponsesReasoningReplayItem(
 function resolveReasoningContinuity(
   messages: readonly Message[],
   candidates: readonly ReasoningContinuityCandidate[],
-): readonly ReasoningContinuityAttachment[] {
+): readonly ResponsesReasoningContinuityAttachment[] {
   if (candidates.length === 0) return Object.freeze([]);
   const byBlock = new Map<
     ThinkingContent | TextContent | ToolCall,
@@ -1118,7 +1205,7 @@ function resolveReasoningContinuity(
     if (current === undefined) byBlock.set(candidate.block, [candidate]);
     else current.push(candidate);
   }
-  const resolved: ReasoningContinuityAttachment[] = [];
+  const resolved: ResponsesReasoningContinuityAttachment[] = [];
   for (const [messageIndex, message] of messages.entries()) {
     if (message.role !== "assistant") continue;
     for (const [contentIndex, block] of message.content.entries()) {
@@ -1177,7 +1264,7 @@ function convertMessages(
   notices: ConversionNotice[],
   executableNames?: ReadonlySet<string>,
   namespaceReverse?: Readonly<Record<string, { namespace: string; child: string }>>,
-  historicalReasoningCandidates: HistoricalReasoningCandidate[] = [],
+  historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [],
   reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [],
 ): Message[] {
   const messages: Message[] = [];
@@ -2385,7 +2472,7 @@ async function resolveLuckyReferences(
 
 function applyToolChoiceFilter(
   mergedTools: Tool[] | undefined,
-  toolChoice: SemanticToolChoice | undefined,
+  toolChoice: ResponsesToolChoice | undefined,
 ): { tools: Tool[] | undefined; effective: string | undefined } {
   let effectiveTools = mergedTools;
   let effectiveToolChoice: string | undefined;
@@ -2434,8 +2521,8 @@ function buildInvocation(
   freeformNames: Set<string>,
   additionalTools: unknown[],
   messages: Message[],
-  reasoning: ReasoningSemantics,
-  supplement: ProjectionSupplement,
+  reasoning: ResponsesReasoningSemantics,
+  supplement: ResponsesProjectionSupplement,
   notices: ConversionNotice[],
   policy: ResponseRequestConversionPolicy,
   inputForPromotion: unknown = validated.input,
@@ -2579,7 +2666,7 @@ export function convertResponsesRequest(
     freeformNames,
     namespaceReverse,
   );
-  let supplement: ProjectionSupplement;
+  let supplement: ResponsesProjectionSupplement;
   try {
     supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
   } catch (error) {
@@ -2589,6 +2676,7 @@ export function convertResponsesRequest(
     throw error;
   }
   const notices: ConversionNotice[] = [];
+  appendNonProjectionControlNotices(value, notices);
   const convertedReasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
     policy.futureReasoningEffort,
@@ -2598,7 +2686,7 @@ export function convertResponsesRequest(
     validated.reasoning = convertedReasoning.piReasoning;
   }
   const additionalTools: unknown[] = [];
-  const historicalReasoningCandidates: HistoricalReasoningCandidate[] = [];
+  const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
     value,
@@ -2617,9 +2705,9 @@ export function convertResponsesRequest(
     historicalReasoningCandidates,
     reasoningContinuityCandidates,
   );
-  const reasoning: ReasoningSemantics = Object.freeze({
+  const reasoning: ResponsesReasoningSemantics = Object.freeze({
     request: convertedReasoning.intent,
-    history: resolveHistoricalReasoning(
+    history: resolveResponsesHistoricalReasoning(
       messages,
       historicalReasoningCandidates,
     ),
@@ -2670,7 +2758,7 @@ export async function convertResponsesRequestAsync(
     freeformNames,
     namespaceReverse,
   );
-  let supplement: ProjectionSupplement;
+  let supplement: ResponsesProjectionSupplement;
   try {
     supplement = parseResponsesProjectionSupplement(value as Record<string, unknown>);
   } catch (error) {
@@ -2680,6 +2768,7 @@ export async function convertResponsesRequestAsync(
     throw error;
   }
   const notices: ConversionNotice[] = [];
+  appendNonProjectionControlNotices(value, notices);
   const convertedReasoning = convertReasoning(
     isRecord(value) ? value.reasoning : undefined,
     policy.futureReasoningEffort,
@@ -2689,7 +2778,7 @@ export async function convertResponsesRequestAsync(
     validated.reasoning = convertedReasoning.piReasoning;
   }
   const additionalTools: unknown[] = [];
-  const historicalReasoningCandidates: HistoricalReasoningCandidate[] = [];
+  const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
   const executableNames = collectExecutableNames(
     value,
@@ -2719,9 +2808,9 @@ export async function convertResponsesRequestAsync(
     historicalReasoningCandidates,
     reasoningContinuityCandidates,
   );
-  const reasoning: ReasoningSemantics = Object.freeze({
+  const reasoning: ResponsesReasoningSemantics = Object.freeze({
     request: convertedReasoning.intent,
-    history: resolveHistoricalReasoning(
+    history: resolveResponsesHistoricalReasoning(
       messages,
       historicalReasoningCandidates,
     ),

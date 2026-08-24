@@ -68,7 +68,7 @@ describe("Anthropic-owned Semantic Invocation", () => {
       continuity: [],
     });
     expect(converted.invocation.supplement).toEqual({
-      maxTokens: 4_096,
+      outputTokenCeiling: 4_096,
       sampling: { temperature: 0.4, topP: 0.8, topK: 32 },
       stopSequences: ["END", "STOP"],
       toolChoice: {
@@ -103,8 +103,20 @@ describe("Anthropic-owned Semantic Invocation", () => {
       content: [],
       tools: [],
     });
+    expect(converted.invocation.pi.options.samplingParams).toEqual({
+      top_p: 0.8,
+      top_k: 32,
+    });
+    expect(converted.invocation.pi.options.metadata).toEqual({
+      user_id: "user-123",
+    });
     expect(converted.client).toEqual({
-      renderState: { selector: "client-selector", stream: false },
+      renderState: {
+        selector: "client-selector",
+        stream: false,
+        directToolNames: ["lookup"],
+        thinkingDisplay: { kind: "explicit-null" },
+      },
       notices: [],
     });
   });
@@ -175,6 +187,26 @@ describe("Anthropic-owned Semantic Invocation", () => {
         1,
       ),
     ).toThrow(/less than max_tokens/u);
+  });
+
+  it("rejects a named tool choice when the named tool is absent", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
+        {
+          model: "model",
+          max_tokens: 1_024,
+          messages: [{ role: "user", content: "hello" }],
+          tools: [
+            {
+              name: "available",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          tool_choice: { type: "tool", name: "missing" },
+        },
+        1,
+      ),
+    ).toThrow(/tool_choice.*missing.*not present|named tool.*missing/iu);
   });
 
   it("maps a direct tool caller into the ordinary Pi tool-call relationship", () => {

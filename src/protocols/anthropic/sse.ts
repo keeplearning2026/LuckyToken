@@ -420,7 +420,7 @@ export function createAnthropicAtomicSseEvents(
         index,
         content_block: {
           id: block.id,
-          caller: { type: "direct" },
+          caller: block.caller,
           input: {},
           name: block.name,
           type: "tool_use",

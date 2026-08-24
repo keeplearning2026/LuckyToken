@@ -210,6 +210,110 @@ interface ClaudeScenario {
   readonly forbidToolUse?: boolean;
 }
 
+type ClaudeContinuityCarrierCapability =
+  | "native-fields-only"
+  | "item-extension-v1";
+
+const CONTINUITY_CAPABILITY_SCENARIO = "continuity_carrier";
+
+function continuityProbeEnvelope(marker: string): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    version: 1,
+    source: Object.freeze({
+      provider: "claude-cli-capability-probe",
+      api: "pi-messages",
+      model: "probe",
+    }),
+    attachments: Object.freeze([
+      Object.freeze({
+        target: "text",
+        kind: "opaque-signature",
+        value: `CLAUDE_CONTINUITY_${marker}`,
+      }),
+    ]),
+  });
+}
+
+export async function injectClaudeContinuityProbe(
+  response: Response,
+  marker: string,
+): Promise<Response> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const source = await response.text();
+  let injected = false;
+  let body = source;
+  if (contentType.includes("text/event-stream")) {
+    body = source
+      .split(/(?<=\n)/u)
+      .map((line) => {
+        const match = /^(data:\s*)([^\r\n]+)(\r?\n)?$/u.exec(line);
+        if (injected || match === null || match[2] === "[DONE]") return line;
+        let event: unknown;
+        try {
+          event = JSON.parse(match[2] as string);
+        } catch {
+          return line;
+        }
+        if (
+          typeof event !== "object" ||
+          event === null ||
+          (event as { type?: unknown }).type !== "content_block_start"
+        ) {
+          return line;
+        }
+        const contentBlock = (event as { content_block?: unknown }).content_block;
+        if (
+          typeof contentBlock !== "object" ||
+          contentBlock === null ||
+          (contentBlock as { type?: unknown }).type !== "text"
+        ) {
+          return line;
+        }
+        injected = true;
+        const projected = {
+          ...(event as Record<string, unknown>),
+          content_block: {
+            ...(contentBlock as Record<string, unknown>),
+            luckytoken_continuity: continuityProbeEnvelope(marker),
+          },
+        };
+        return `${match[1]}${JSON.stringify(projected)}${match[3] ?? ""}`;
+      })
+      .join("");
+  } else if (contentType.includes("application/json")) {
+    const message = JSON.parse(source) as Record<string, unknown>;
+    if (Array.isArray(message.content)) {
+      message.content = message.content.map((block) => {
+        if (
+          injected ||
+          typeof block !== "object" ||
+          block === null ||
+          (block as { type?: unknown }).type !== "text"
+        ) {
+          return block;
+        }
+        injected = true;
+        return {
+          ...(block as Record<string, unknown>),
+          luckytoken_continuity: continuityProbeEnvelope(marker),
+        };
+      });
+    }
+    body = JSON.stringify(message);
+  }
+  if (!injected) {
+    throw new Error("claude_continuity_probe_response_has_no_text_block");
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.delete("content-encoding");
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function scenarios(): readonly ClaudeScenario[] {
   return Object.freeze([
     Object.freeze({
@@ -236,6 +340,13 @@ function scenarios(): readonly ClaudeScenario[] {
     }),
     Object.freeze({
       id: "multi_turn",
+      prompt: (marker: string) =>
+        `Remember the seed ${marker}_SEED. Immediately reply with exactly: ${marker}_TURN1. ` +
+        "Do not plan, delegate, use tools, inspect unrelated files, or explain.",
+      special: "multi_turn",
+    }),
+    Object.freeze({
+      id: CONTINUITY_CAPABILITY_SCENARIO,
       prompt: (marker: string) =>
         `Remember the seed ${marker}_SEED. Immediately reply with exactly: ${marker}_TURN1. ` +
         "Do not plan, delegate, use tools, inspect unrelated files, or explain.",
@@ -383,6 +494,7 @@ function captureRuntime(
   captures: CapturedRequest[],
   marker: () => string,
 ): LuckyTokenRuntime {
+  const continuityInjected = new Set<string>();
   return Object.freeze({
     routes: runtime.routes,
     async handle(request: Request): Promise<Response> {
@@ -406,7 +518,18 @@ function captureRuntime(
       captures.push(
         Object.freeze({ marker: marker(), url: request.url, requestHeaders, body }),
       );
-      return runtime.handle(request);
+      const response = await runtime.handle(request);
+      const currentMarker = marker();
+      if (
+        currentMarker.startsWith("CLAUDE_CONTINUITY_CARRIER_") &&
+        !continuityInjected.has(currentMarker) &&
+        new URL(request.url).pathname.endsWith("/v1/messages") &&
+        response.ok
+      ) {
+        continuityInjected.add(currentMarker);
+        return injectClaudeContinuityProbe(response, currentMarker);
+      }
+      return response;
     },
   });
 }
@@ -713,10 +836,21 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   } = parseClaudeArguments(args);
   const selector = alias ?? model;
   const requestedScenarios = new Set(requestedList);
-  const scenarioPlan = scenarios().filter(
+  const selectedScenarios = scenarios().filter(
     (scenario) => requestedScenarios.size === 0 || requestedScenarios.has(scenario.id),
   );
-  if (scenarioPlan.length === 0) throw new Error("no matching Claude scenarios");
+  if (selectedScenarios.length === 0) throw new Error("no matching Claude scenarios");
+  const continuityScenario = scenarios().find(
+    (scenario) => scenario.id === CONTINUITY_CAPABILITY_SCENARIO,
+  );
+  if (continuityScenario === undefined) {
+    throw new Error("Claude continuity capability scenario is not registered");
+  }
+  const scenarioPlan = selectedScenarios.some(
+    (scenario) => scenario.id === CONTINUITY_CAPABILITY_SCENARIO,
+  )
+    ? selectedScenarios
+    : [...selectedScenarios, continuityScenario];
   const apiKey = (
     await readFile(
       apiKeyFile.includes("\\") || apiKeyFile.includes("/")
@@ -826,6 +960,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       ms: number;
       error?: string;
     }> = [];
+    let continuityCarrierCapability: ClaudeContinuityCarrierCapability | undefined;
     for (let batch = 1; batch <= batches; batch += 1) {
       for (const scenario of scenarioPlan) {
         marker = `CLAUDE_${scenario.id.toUpperCase()}_${batch}_OK`;
@@ -958,6 +1093,20 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
             ) {
               throw new Error("claude_resume_history_missing");
             }
+            if (scenario.id === CONTINUITY_CAPABILITY_SCENARIO) {
+              const observed: ClaudeContinuityCarrierCapability = serialized.includes(
+                `CLAUDE_CONTINUITY_${marker}`,
+              )
+                ? "item-extension-v1"
+                : "native-fields-only";
+              if (
+                continuityCarrierCapability !== undefined &&
+                continuityCarrierCapability !== observed
+              ) {
+                throw new Error("claude_continuity_capability_changed_within_run");
+              }
+              continuityCarrierCapability = observed;
+            }
           }
           if (scenario.expectedFile !== undefined) {
             const actual = await readFile(
@@ -986,8 +1135,17 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
         }
       }
     }
+    if (continuityCarrierCapability === undefined) {
+      throw new Error("claude_continuity_capability_not_observed");
+    }
     process.stdout.write(
-      `${JSON.stringify({ model: DEFAULT_MODEL, runRoot, batches, matrix }, null, 2)}\n`,
+      `${JSON.stringify({
+        model: DEFAULT_MODEL,
+        runRoot,
+        batches,
+        continuityCarrierCapability,
+        matrix,
+      }, null, 2)}\n`,
     );
     if (matrix.some((entry) => entry.status === "fail")) process.exitCode = 1;
   } finally {

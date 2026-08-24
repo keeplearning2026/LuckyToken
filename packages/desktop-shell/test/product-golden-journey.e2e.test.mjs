@@ -184,7 +184,6 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
             conversion: {
               request: {
                 unknownContent: "error",
-                unresolvedToolCall: "xrepair",
                 localCacheControl: "ignore",
               },
               response: { unknownPiContent: "error" },
@@ -584,17 +583,20 @@ test(
         "first product request",
       );
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
-
-      await page.getByRole("button", { name: "Overview" }).click();
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
       const firstRow = page.locator(`[data-request-id="${firstRequestId}"]`);
       await firstRow.waitFor();
+      await firstRow
+        .getByRole("button", { name: `Show details for request ${firstRequestId}` })
+        .click();
+      await firstRow.getByText(TEST_MODEL, { exact: true }).waitFor();
       await assert.doesNotReject(async () => {
         assert.match((await firstRow.textContent()) ?? "", /Success/u);
-        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_ALIAS, "u"));
+        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_MODEL, "u"));
       });
       await page
-        .locator(".overview-stat-card", { hasText: "Success" })
-        .getByText("100.0%", { exact: true })
+        .locator(".overview-stat-card", { hasText: "Requests" })
+        .getByText("1", { exact: true })
         .waitFor();
 
       await page.close();
@@ -608,7 +610,7 @@ test(
 
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
-      await page.getByRole("button", { name: "Overview" }).click();
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
       const secondRow = page.locator(`[data-request-id="${secondRequestId}"]`);
       await secondRow.waitFor();
       assert.match((await secondRow.textContent()) ?? "", /Success/u);

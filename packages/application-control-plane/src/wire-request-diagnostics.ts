@@ -104,6 +104,7 @@ const OPERATIONS = new Set<RequestJourneyOperationCandidate>([
   "model_generation",
   "conversation_compaction",
   "model_discovery",
+  "web_search",
   "unmatched_request",
   "unsupported_transport",
 ]);

@@ -17,6 +17,13 @@ import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
 import { captureJsonProviderRequest } from "../support/provider-request-capture.js";
 
+function requireRecord(value: unknown, path: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 const baseModelFields = {
   baseUrl: "https://provider.invalid/v1",
   input: ["text"] as ("text" | "image")[],
@@ -151,8 +158,8 @@ const azureResponsesModel: Model<"azure-openai-responses"> = {
 
 const bedrockClaudeModel: Model<"bedrock-converse-stream"> = {
   ...baseModelFields,
-  id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
-  name: "Claude Sonnet 4",
+  id: "us.anthropic.claude-sonnet-4-6",
+  name: "Claude Sonnet 4.6",
   api: "bedrock-converse-stream",
   provider: "amazon-bedrock",
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -179,6 +186,438 @@ const piMessagesModel: Model<"pi-messages"> = {
 };
 
 describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
+  it("preserves Pi's stricter context-clamped output ceiling", async () => {
+    const constrainedModel: Model<"openai-completions"> = {
+      ...model,
+      contextWindow: 4_097,
+    };
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: constrainedModel,
+      invocation: converted.invocation,
+    });
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(
+        constrainedModel,
+        converted.invocation.pi.context,
+        {
+          ...converted.invocation.pi.options,
+          apiKey: "test-only-key",
+          async onPayload(basePayload) {
+            const projected = await projection.project(basePayload, constrainedModel);
+            if (projected.failure !== undefined) throw new Error(projected.failure);
+            return capture(projected.payload);
+          },
+        },
+      ),
+    );
+
+    expect(payload).toMatchObject({ max_completion_tokens: 1 });
+  });
+
+  it("mirrors Pi 0.84.2 compatibility detection when explicit OpenAI compat is absent", async () => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: "deepseek/deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "commandcode-goat",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      reasoning: true,
+      thinkingLevelMap: { off: null, high: "high", max: "max" },
+    };
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "high" },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    let effortOutcome: string | undefined;
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          effortOutcome = projected.outcomes.find(
+            (entry) => entry.control === "reasoning.effort",
+          )?.outcome.kind;
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({ reasoning_effort: "high" });
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("thinking");
+    expect(effortOutcome).toBe("pi-native");
+  });
+
+  it.each([
+    {
+      format: "openrouter" as const,
+      compat: { thinkingFormat: "openrouter" as const },
+      expected: { reasoning: { effort: "high" } },
+      effortOutcome: "pi-native" as const,
+      forbidden: ["reasoning_effort", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "qwen" as const,
+      compat: { thinkingFormat: "qwen" as const, supportsReasoningEffort: true },
+      expected: { enable_thinking: true, reasoning_effort: "high" },
+      effortOutcome: "pi-native" as const,
+      forbidden: ["reasoning", "thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "together-without-effort" as const,
+      compat: { thinkingFormat: "together" as const, supportsReasoningEffort: false },
+      expected: {},
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "qwen-chat-template-without-effort" as const,
+      compat: { thinkingFormat: "qwen-chat-template" as const },
+      expected: {},
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "deepseek-without-effort" as const,
+      compat: { thinkingFormat: "deepseek" as const, supportsReasoningEffort: false },
+      expected: {},
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "zai-without-effort" as const,
+      compat: { thinkingFormat: "zai" as const, supportsReasoningEffort: false },
+      expected: {},
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "qwen-without-effort" as const,
+      compat: { thinkingFormat: "qwen" as const, supportsReasoningEffort: false },
+      expected: {},
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
+    },
+    {
+      format: "chat-template-enable-only" as const,
+      compat: {
+        thinkingFormat: "chat-template" as const,
+        chatTemplateKwargs: {
+          enable_thinking: { $var: "thinking.enabled" as const },
+          literal: "fixed",
+        },
+      },
+      expected: { chat_template_kwargs: { literal: "fixed" } },
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+    },
+    {
+      format: "baseten-enable-only" as const,
+      compat: {
+        thinkingFormat: "baseten" as const,
+        supportsReasoningEffort: false,
+        chatTemplateArgs: {
+          enable_thinking: { $var: "thinking.enabled" as const },
+          literal: "fixed",
+        },
+      },
+      expected: { chat_template_args: { literal: "fixed" } },
+      effortOutcome: "omitted" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+    },
+    {
+      format: "chat-template" as const,
+      compat: {
+        thinkingFormat: "chat-template" as const,
+        chatTemplateKwargs: {
+          enable_thinking: { $var: "thinking.enabled" as const },
+          reasoning_effort: { $var: "thinking.effort" as const },
+          literal: "fixed",
+        },
+      },
+      expected: {
+        chat_template_kwargs: {
+          enable_thinking: true,
+          reasoning_effort: "high",
+          literal: "fixed",
+        },
+      },
+      effortOutcome: "pi-native" as const,
+      forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+    },
+  ])("preserves Pi's explicit $format reasoning wire shape without adding generic fields", async ({ compat, expected, effortOutcome, forbidden }) => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: `reasoning-${compat.thinkingFormat}`,
+      name: `Reasoning ${compat.thinkingFormat}`,
+      provider: "explicit-compat-test",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high" },
+      compat,
+    };
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "high" },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    let projectedOutcomes: readonly { readonly control: string; readonly outcome: { readonly kind: string } }[] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          projectedOutcomes = projected.outcomes;
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject(expected);
+    expect(projectedOutcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .toBe(effortOutcome);
+    for (const field of forbidden) expect(payload).not.toHaveProperty(field);
+  });
+
+  it.each([
+    ["qwen", { thinkingFormat: "qwen" as const }, ["enable_thinking", "reasoning_effort"]],
+    ["together", { thinkingFormat: "together" as const }, ["reasoning", "reasoning_effort"]],
+    ["openrouter", { thinkingFormat: "openrouter" as const }, ["reasoning", "reasoning_effort"]],
+    ["qwen-chat-template", { thinkingFormat: "qwen-chat-template" as const }, ["chat_template_kwargs", "reasoning_effort"]],
+  ] as const)("preserves omitted reasoning as omission for the $0 compat shape", async (_label, compat, forbidden) => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: `omitted-${compat.thinkingFormat}`,
+      name: `Omitted ${compat.thinkingFormat}`,
+      provider: "explicit-compat-test",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high" },
+      compat,
+    };
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    for (const field of forbidden) expect(payload).not.toHaveProperty(field);
+  });
+
+  it.each([
+    ["openai", { thinkingFormat: "openai" as const }, { reasoning_effort: "none" }],
+    ["deepseek", { thinkingFormat: "deepseek" as const }, { thinking: { type: "disabled" } }],
+    ["zai", { thinkingFormat: "zai" as const }, { thinking: { type: "disabled" } }],
+    ["qwen", { thinkingFormat: "qwen" as const }, { enable_thinking: false }],
+    [
+      "qwen-chat-template",
+      { thinkingFormat: "qwen-chat-template" as const },
+      { chat_template_kwargs: { enable_thinking: false, preserve_thinking: true } },
+    ],
+    [
+      "chat-template",
+      {
+        thinkingFormat: "chat-template" as const,
+        chatTemplateKwargs: {
+          enable_thinking: { $var: "thinking.enabled" as const },
+          reasoning_effort: { $var: "thinking.effort" as const },
+          literal: "fixed",
+        },
+      },
+      {
+        chat_template_kwargs: {
+          enable_thinking: false,
+          reasoning_effort: "none",
+          literal: "fixed",
+        },
+      },
+    ],
+    [
+      "baseten",
+      {
+        thinkingFormat: "baseten" as const,
+        chatTemplateArgs: {
+          enable_thinking: { $var: "thinking.enabled" as const },
+          reasoning_effort: { $var: "thinking.effort" as const },
+          literal: "fixed",
+        },
+      },
+      {
+        chat_template_args: {
+          enable_thinking: false,
+          reasoning_effort: "none",
+          literal: "fixed",
+        },
+        reasoning_effort: "none",
+      },
+    ],
+    ["together", { thinkingFormat: "together" as const }, { reasoning: { enabled: false } }],
+    ["openrouter", { thinkingFormat: "openrouter" as const }, { reasoning: { effort: "none" } }],
+    ["string-thinking", { thinkingFormat: "string-thinking" as const }, { thinking: "none" }],
+  ] as const)("preserves explicit disabled reasoning using the $0 compat shape", async (_label, compat, expected) => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: `disabled-${compat.thinkingFormat}`,
+      name: `Disabled ${compat.thinkingFormat}`,
+      provider: "explicit-compat-test",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high" },
+      compat,
+    };
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        thinking: { type: "disabled" },
+      },
+      1,
+    );
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    expect(projection.initialFailure).toBeUndefined();
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject(expected);
+    if (!Object.hasOwn(expected, "reasoning_effort")) {
+      expect(payload).not.toHaveProperty("reasoning_effort");
+    }
+  });
+
+  it("treats OpenCode Go deepseek-v4-flash reasoning disable as an online-certified degradation", async () => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high" },
+      compat: { thinkingFormat: "deepseek" },
+    };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      thinking: { type: "disabled" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    const result = await projection.project({
+      model: target.id,
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      max_tokens: 2_048,
+      thinking: { type: "disabled" },
+    }, target);
+
+    expect(result.payload).not.toHaveProperty("thinking");
+    expect(result.outcomes).toContainEqual({
+      control: "reasoning.activation",
+      outcome: {
+        kind: "degraded",
+        warning: expect.stringMatching(/OpenCode Go.*does not guarantee reasoning disable/iu),
+      },
+    });
+  });
+
+  it("treats CommandCode GOAT deepseek-v4-flash reasoning disable as an online-certified degradation", async () => {
+    const target: Model<"openai-completions"> = {
+      ...model,
+      id: "deepseek/deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "commandcode-goat",
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high" },
+      compat: { thinkingFormat: "deepseek" },
+    };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      thinking: { type: "disabled" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    const result = await projection.project({
+      model: target.id,
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      max_tokens: 2_048,
+      thinking: { type: "disabled" },
+    }, target);
+
+    expect(result.payload).not.toHaveProperty("thinking");
+    expect(result.outcomes).toContainEqual({
+      control: "reasoning.activation",
+      outcome: {
+        kind: "degraded",
+        warning: expect.stringMatching(/CommandCode GOAT.*does not guarantee reasoning disable/iu),
+      },
+    });
+  });
+
   it("projects exact top-level output, sampling, stop, and tool controls", async () => {
     const converted = parseAnthropicTextInvocation(
       {
@@ -317,6 +756,7 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       model: anthropicModel,
       invocation: converted.invocation,
     });
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
 
     const payload = await captureFinalPiPayload((capture) =>
       streamAnthropicMessages(
@@ -327,6 +767,7 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, anthropicModel);
+            outcomes = projected.outcomes;
             if (projected.failure !== undefined) throw new Error(projected.failure);
             return capture(projected.payload);
           },
@@ -346,7 +787,6 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
         display: "omitted",
       },
       output_config: {
-        effort: "high",
         format: {
           type: "json_schema",
           schema: { type: "object", properties: {} },
@@ -358,6 +798,10 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       container: "container-123",
       cache_control: { type: "ephemeral", ttl: "1h" },
       tool_choice: { type: "any", disable_parallel_tool_use: true },
+    });
+    expect(outcomes).toContainEqual({
+      control: "reasoning.effort",
+      outcome: expect.objectContaining({ kind: "omitted" }),
     });
   });
 
@@ -520,6 +964,134 @@ describe("Anthropic Client Wire to final Google payloads", () => {
     });
   });
 
+  it.each([
+    ["Generative AI", googleModel, streamGoogleGenerativeAI],
+    ["Vertex", vertexModel, streamGoogleVertex],
+  ] as const)("maps Anthropic effort through the pinned Gemini 2.5 %s budget resolver", async (
+    _label,
+    target,
+    start,
+  ) => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    expect(projection.initialFailure).toBeUndefined();
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      start(target as never, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload: unknown) {
+          const projected = await projection.project(basePayload, target);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: 32_768 } },
+    });
+    const googlePayload = requireRecord(payload, "Google payload");
+    const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
+    expect(googleConfig.thinkingConfig).not.toHaveProperty("includeThoughts");
+    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .not.toBe("omitted");
+  });
+
+  it.each([
+    ["Generative AI", googleModel, streamGoogleGenerativeAI],
+    ["Vertex", vertexModel, streamGoogleVertex],
+  ] as const)("omits effort for a non-reasoning Google %s target", async (
+    _label,
+    sourceModel,
+    start,
+  ) => {
+    const target = { ...sourceModel, reasoning: false };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      start(target as never, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload: unknown) {
+          const projected = await projection.project(basePayload, target);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    const googlePayload = requireRecord(payload, "Google payload");
+    const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
+    expect(googleConfig.thinkingConfig).toBeUndefined();
+    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .toBe("omitted");
+  });
+
+  it.each([
+    ["google-generative-ai", "gemini-flash-latest"],
+    ["google-generative-ai", "gemma-4-test"],
+    ["google-vertex", "gemini-flash-lite-latest"],
+  ] as const)("keeps requests available when %s model %s cannot exactly disable reasoning", (
+    api,
+    id,
+  ) => {
+    const target = {
+      ...googleModel,
+      api,
+      id,
+      name: id,
+      provider: api === "google-vertex" ? "google-vertex-test" : "google-test",
+    } as Model<string>;
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      thinking: { type: "disabled" },
+    }, 1);
+    expect(prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    }).initialFailure).toBeUndefined();
+  });
+
+  it("keeps requests available when Gemini 3 can only use a nearest reasoning mode", () => {
+    const target: Model<"google-generative-ai"> = {
+      ...googleModel,
+      id: "gemini-3.1-pro",
+      name: "Gemini 3.1 Pro",
+    };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 4_096,
+      messages: [{ role: "user", content: "hello" }],
+      thinking: { type: "enabled", budget_tokens: 1_024 },
+    }, 1);
+    expect(prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    }).initialFailure).toBeUndefined();
+  });
+
   it("projects the independently registered Google Vertex shape", async () => {
     const converted = parseAnthropicTextInvocation(request, 1);
     const projection = prepareAnthropicPayloadProjection({
@@ -628,6 +1200,75 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
     });
   });
 
+  it.each([
+    {
+      label: "certified effort field",
+      target: {
+        ...mistralModel,
+        id: "mistral-small-2603",
+        name: "Mistral Small 2603",
+      } as Model<"mistral-conversations">,
+      effort: "high" as const,
+      expected: { reasoningEffort: "high" },
+      outcome: "pi-native" as const,
+    },
+    {
+      label: "uncertified coarse effort",
+      target: {
+        ...mistralModel,
+        id: "mistral-small-2603",
+        name: "Mistral Small 2603",
+      } as Model<"mistral-conversations">,
+      effort: "low" as const,
+      expected: {},
+      outcome: "omitted" as const,
+    },
+    {
+      label: "prompt-mode-only reasoning",
+      target: mistralModel,
+      effort: "high" as const,
+      expected: {},
+      outcome: "omitted" as const,
+    },
+  ])("handles $label without converting effort into a different reasoning activation", async ({
+    target,
+    effort,
+    expected,
+    outcome,
+  }) => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      streamMistral(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject(expected);
+    if (!Object.hasOwn(expected, "reasoningEffort")) {
+      expect(payload).not.toHaveProperty("reasoningEffort");
+      expect(payload).not.toHaveProperty("promptMode");
+    }
+    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .toBe(outcome);
+  });
+
   it("certifies the post-callback HTTP wire rather than only Pi's internal payload", async () => {
     const converted = parseAnthropicTextInvocation(
       {
@@ -708,7 +1349,6 @@ describe.each([
         temperature: 0.2,
         top_p: 0.6,
         top_k: 12,
-        stop_sequences: ["END"],
         output_config: {
           format: {
             type: "json_schema",
@@ -732,6 +1372,7 @@ describe.each([
       model: targetModel,
       invocation: converted.invocation,
     });
+    expect(projection.initialFailure).toBeUndefined();
     const payload = await captureFinalPiPayload((capture) =>
       start(targetModel as never, converted.invocation.pi.context, {
         ...converted.invocation.pi.options,
@@ -764,6 +1405,37 @@ describe.each([
       user: "user-123",
       service_tier: "default",
     });
+  });
+
+  it("omits effort instead of adding reasoning to a non-reasoning target model", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: targetModel,
+      invocation: converted.invocation,
+    });
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      start(targetModel as never, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload: unknown) {
+          const projected = await projection.project(basePayload, targetModel);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("include");
+    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .toBe("omitted");
   });
 });
 
@@ -819,9 +1491,8 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       },
       additionalModelRequestFields: {
         top_k: 20,
-        thinking: { type: "enabled", budget_tokens: 1_024, display: "omitted" },
+        thinking: { type: "enabled", budget_tokens: 1_024 },
         output_config: {
-          effort: "high",
           format: {
             type: "json_schema",
             schema: { type: "object", properties: { answer: { type: "string" } } },
@@ -829,6 +1500,91 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
         },
       },
     });
+    const bedrockPayload = requireRecord(payload, "Bedrock payload");
+    const additional = requireRecord(
+      bedrockPayload.additionalModelRequestFields,
+      "Bedrock payload.additionalModelRequestFields",
+    );
+    const outputConfig = requireRecord(
+      additional.output_config,
+      "Bedrock payload.additionalModelRequestFields.output_config",
+    );
+    expect(requireRecord(additional.thinking, "Bedrock thinking")).not.toHaveProperty("display");
+    expect(outputConfig.effort).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "Claude effort without activation",
+      target: bedrockClaudeModel,
+      thinking: undefined,
+      expectEffort: false,
+    },
+    {
+      label: "Claude adaptive effort",
+      target: bedrockClaudeModel,
+      thinking: { type: "adaptive" as const },
+      expectEffort: true,
+    },
+    {
+      label: "non-Claude effort",
+      target: bedrockNovaModel,
+      thinking: undefined,
+      expectEffort: false,
+    },
+  ])("handles $label without inventing reasoning activation", async ({
+    target,
+    thinking,
+    expectEffort,
+  }) => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      ...(thinking === undefined ? {} : { thinking }),
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    expect(projection.initialFailure).toBeUndefined();
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      streamBedrock(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        ...bedrockOptions,
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+    const bedrockPayload = requireRecord(payload, "Bedrock payload");
+    const additionalValue = bedrockPayload.additionalModelRequestFields;
+    const additional = additionalValue === undefined
+      ? undefined
+      : requireRecord(additionalValue, "Bedrock payload.additionalModelRequestFields");
+    const outputConfigValue = additional?.output_config;
+    const outputConfig = outputConfigValue === undefined
+      ? undefined
+      : requireRecord(
+          outputConfigValue,
+          "Bedrock payload.additionalModelRequestFields.output_config",
+        );
+    if (expectEffort) {
+      expect(additional?.thinking).toMatchObject({ type: "adaptive" });
+      expect(outputConfig?.effort).toBe("high");
+      expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+        .not.toBe("omitted");
+    } else {
+      expect(additional?.thinking).toBeUndefined();
+      expect(outputConfig?.effort).toBeUndefined();
+      expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+        .toBe("omitted");
+    }
   });
 
   it("uses the separately certified non-Claude Bedrock family", async () => {
@@ -885,7 +1641,6 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
         temperature: 0.3,
         top_p: 0.7,
         top_k: 16,
-        stop_sequences: ["END"],
         output_config: { effort: "high" },
         tools: [
           { name: "lookup", input_schema: { type: "object", properties: {} } },
@@ -898,6 +1653,7 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
       model: piMessagesModel,
       invocation: converted.invocation,
     });
+    expect(projection.initialFailure).toBeUndefined();
     const payload = await captureFinalPiPayload((capture) =>
       streamPiMessages(piMessagesModel, converted.invocation.pi.context, {
         ...converted.invocation.pi.options,
@@ -919,5 +1675,42 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
         toolChoice: { type: "function", function: { name: "lookup" } },
       },
     });
+  });
+
+  it("omits effort for a non-reasoning Pi Messages target instead of failing the request", async () => {
+    const target: Model<"pi-messages"> = {
+      ...piMessagesModel,
+      id: "pi-nonreasoning-target",
+      name: "Pi non-reasoning target",
+      reasoning: false,
+    };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "high" },
+    }, 1);
+    const projection = prepareAnthropicPayloadProjection({
+      model: target,
+      invocation: converted.invocation,
+    });
+    expect(projection.initialFailure).toBeUndefined();
+    let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
+    const payload = await captureFinalPiPayload((capture) =>
+      streamPiMessages(target, converted.invocation.pi.context, {
+        ...converted.invocation.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await projection.project(basePayload, target);
+          outcomes = projected.outcomes;
+          if (projected.failure !== undefined) throw new Error(projected.failure);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).not.toHaveProperty("options.reasoning");
+    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      .toBe("omitted");
   });
 });

@@ -97,6 +97,53 @@ describe("Anthropic item-local continuity codec", () => {
     ).toEqual([]);
   });
 
+  it("does not count supplement-only assistant blocks when locating Pi continuity", () => {
+    const converted = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srv-1",
+                name: "web_search",
+                input: { query: "LuckyToken" },
+              },
+              {
+                type: "thinking",
+                thinking: "summary",
+                signature: "native-signature",
+                luckytoken_continuity: {
+                  version: 1,
+                  source,
+                  attachments: [
+                    { target: "thinking", kind: "opaque-signature", value: "foreign-state" },
+                  ],
+                },
+              },
+            ],
+          },
+          { role: "user", content: "continue" },
+        ],
+      },
+      1,
+    );
+
+    expect(converted.invocation.pi.context.messages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "summary" }],
+    });
+    expect(converted.invocation.reasoning.history).toContainEqual(
+      expect.objectContaining({ piMessageIndex: 0, piContentIndex: 0 }),
+    );
+    expect(converted.invocation.reasoning.continuity).toContainEqual(
+      expect.objectContaining({ piMessageIndex: 0, piContentIndex: 0 }),
+    );
+  });
+
   it("resolves item-local continuity to the exact Pi history attachment", () => {
     const converted = parseAnthropicTextInvocation(
       {

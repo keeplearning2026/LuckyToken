@@ -1,10 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
   CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
-  convertAssistantMessageToAnthropic,
   convertAssistantMessageToAnthropicWithPolicy,
   type AnthropicResponseMessage,
 } from "../../src/protocols/anthropic/response.js";
@@ -15,44 +13,42 @@ import {
 } from "../../src/protocols/anthropic/sse.js";
 
 function target(): AnthropicResponseMessage {
-  const source: AssistantMessage = {
-    role: "assistant",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "internal-model",
+  return {
+    id: "msg_same",
+    container: null,
     content: [
-      { type: "text", text: "" },
+      { citations: null, text: "", type: "text" },
+      { signature: "opaque-signature", thinking: "private reasoning", type: "thinking" },
       {
-        type: "thinking",
-        thinking: "private reasoning",
-        thinkingSignature: "opaque-signature",
-      },
-      {
-        type: "toolCall",
         id: "call_exact",
+        caller: { type: "direct" },
+        input: { nested: [1, true, null, { text: "x\ny" }] },
         name: "tool_exact",
-        arguments: { nested: [1, true, null, { text: "x\ny" }] },
+        type: "tool_use",
       },
-      { type: "text", text: " after " },
+      { citations: null, text: " after ", type: "text" },
     ],
+    model: "client-selector",
+    role: "assistant",
+    stop_details: null,
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    type: "message",
     usage: {
-      input: 11,
-      output: 7,
-      cacheRead: 3,
-      cacheWrite: 5,
-      cacheWrite1h: 2,
-      reasoning: 4,
-      totalTokens: 26,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cache_creation: {
+        ephemeral_1h_input_tokens: 2,
+        ephemeral_5m_input_tokens: 3,
+      },
+      cache_creation_input_tokens: 5,
+      cache_read_input_tokens: 3,
+      inference_geo: null,
+      input_tokens: 11,
+      output_tokens: 7,
+      output_tokens_details: { thinking_tokens: 4 },
+      server_tool_use: null,
+      service_tier: null,
     },
-    stopReason: "toolUse",
-    timestamp: 1,
   };
-  return convertAssistantMessageToAnthropic(
-    source,
-    "client-selector",
-    "msg_same",
-  );
 }
 
 function parseSse(body: Uint8Array): Array<{

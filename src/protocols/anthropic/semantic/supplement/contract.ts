@@ -63,7 +63,8 @@ export interface AnthropicMessageFrame {
 }
 
 export interface AnthropicProjectionSupplement {
-  readonly maxTokens: number;
+  /** Anthropic's total generated-token ceiling, including thinking tokens. */
+  readonly outputTokenCeiling: number;
   readonly sampling: {
     readonly temperature?: number;
     readonly topP?: number;

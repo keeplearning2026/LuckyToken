@@ -175,6 +175,52 @@ describe("atomic HTTP failure delivery", () => {
     expect(never).not.toHaveBeenCalled();
   });
 
+  it("omits unsupported Anthropic stop_sequences without making the request unavailable", async () => {
+    const execute = vi.fn(() =>
+      streamFrom([{ type: "done", reason: "stop", message: message() }]),
+    );
+    const response = await handleHttpRequest(
+      dependencies(execute),
+      request(
+        JSON.stringify({
+          model: "model",
+          max_tokens: 10,
+          messages: [{ role: "user", content: "hello" }],
+          stop_sequences: ["END"],
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: "message",
+      content: [{ type: "text", text: "complete" }],
+    });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("classifies an unrepresentable Anthropic server tool as a client semantic error", async () => {
+    const execute = vi.fn(() =>
+      streamFrom([{ type: "done", reason: "stop", message: message() }]),
+    );
+    const response = await handleHttpRequest(
+      dependencies(execute),
+      request(
+        JSON.stringify({
+          model: "model",
+          max_tokens: 10,
+          messages: [{ role: "user", content: "hello" }],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
+      ),
+    );
+
+    const body = await expectError(response, 400, "invalid_request_error");
+    expect(body).toMatchObject({
+      error: { message: expect.stringMatching(/server tool/iu) },
+    });
+  });
+
   it("keeps transport and model-resolution classifications", async () => {
     const never = vi.fn(() => streamFrom([]));
     const wrongRoute = await handleHttpRequest(

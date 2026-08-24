@@ -2,14 +2,14 @@ import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import type {
-  PreparedReasoning,
-  ReasoningEffortIntent,
-  ReasoningSummaryIntent,
-} from "../../src/semantic-conversion/reasoning/contract.js";
+  PreparedResponsesReasoning as PreparedReasoning,
+  ResponsesReasoningEffortIntent as ReasoningEffortIntent,
+  ResponsesReasoningSummaryIntent as ReasoningSummaryIntent,
+} from "../../src/protocols/openai-responses/semantic/reasoning/contract.js";
 import {
-  InvalidReasoningProjection,
-} from "../../src/semantic-conversion/reasoning/adapters/payload.js";
-import { projectReasoningPayload } from "../../src/semantic-conversion/reasoning/request.js";
+  InvalidResponsesReasoningProjection as InvalidReasoningProjection,
+} from "../../src/protocols/openai-responses/semantic/reasoning/adapters/payload.js";
+import { projectResponsesReasoningPayload as projectReasoningPayload } from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
 
 function model(
   api: string,

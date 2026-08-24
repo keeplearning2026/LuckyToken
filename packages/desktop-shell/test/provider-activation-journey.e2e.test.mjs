@@ -168,7 +168,6 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
             conversion: {
               request: {
                 unknownContent: "error",
-                unresolvedToolCall: "xrepair",
                 localCacheControl: "ignore",
               },
               response: { unknownPiContent: "error" },
@@ -542,15 +541,18 @@ test(
       assert.ok(origin);
       const requestId = await sendAnthropicRequest(origin, CUSTOM_ALIAS);
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
-
-      // 10. Overview shows the successful request through the real ledger
-      // projection, using the client-visible external alias as the Model.
-      await page.getByRole("button", { name: "Overview" }).click();
+      // 10. Overview shows the successful request through Request Journey
+      // diagnostics, whose P2 model fact is the resolved real Provider model.
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
       const row = page.locator(`[data-request-id="${requestId}"]`);
       await row.waitFor();
+      await row
+        .getByRole("button", { name: `Show details for request ${requestId}` })
+        .click();
+      await row.getByText(TEST_MODEL, { exact: true }).waitFor();
       const rowText = (await row.textContent()) ?? "";
       assert.match(rowText, /Success/u);
-      assert.match(rowText, new RegExp(CUSTOM_ALIAS, "u"));
+      assert.match(rowText, new RegExp(TEST_MODEL, "u"));
 
       const quit = await client.executeApplicationCommand({
         command: "quit",

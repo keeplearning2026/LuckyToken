@@ -1,17 +1,17 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import {
-  extractReasoningResponse,
+  extractResponsesReasoning,
   normalizeResponsesReasoningItem,
-  type ReasoningResponseExtraction,
-  type ResponseContinuityBlock,
-} from "../../semantic-conversion/reasoning/response.js";
+  type ResponsesReasoningResponseExtraction,
+  type ResponsesContinuityBlock,
+} from "./semantic/reasoning/response.js";
 import { redactMessage } from "./error-rendering.js";
 import {
   encodeResponsesContinuity,
   type LuckyTokenContinuityEnvelopeV1,
   type WireContinuityAttachment,
-} from "./reasoning-continuity.js";
+} from "./semantic/reasoning/continuity.js";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
@@ -421,7 +421,7 @@ function convertUsage(
 }
 
 function continuityEnvelope(
-  block: ResponseContinuityBlock | undefined,
+  block: ResponsesContinuityBlock | undefined,
 ): LuckyTokenContinuityEnvelopeV1 | undefined {
   if (block === undefined) return undefined;
   const attachments: WireContinuityAttachment[] = [];
@@ -478,7 +478,7 @@ function continuityEnvelope(
 
 function convertOutput(
   message: AssistantMessage,
-  reasoning: ReasoningResponseExtraction,
+  reasoning: ResponsesReasoningResponseExtraction,
   responseId: string,
   freeformToolNames: ReadonlySet<string>,
   namespaceReverse: Readonly<Record<string, { namespace: string; child: string }>>,
@@ -796,7 +796,7 @@ export function convertAssistantMessageToResponses(
   };
   const output = convertOutput(
     message,
-    extractReasoningResponse(message),
+    extractResponsesReasoning(message),
     responseId,
     renderState.freeformToolNames ?? new Set(),
     renderState.namespaceReverse ?? {},

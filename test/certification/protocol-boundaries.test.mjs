@@ -50,28 +50,13 @@ const CLIENT_SHARED_SEAMS = new Set([
   // operation/claim contract. Credential resolution, request construction,
   // and transport implementations remain outside the Client Protocol tree.
   "provider-native-responses/contract.ts",
-  // The Pi execution kernel is mechanism-only. Client protocols own their
-  // semantic contracts and projectors independently and share only this
-  // payload-callback lifecycle seam.
-  "semantic-conversion/kernel/contract.ts",
-  "semantic-conversion/kernel/execution.ts",
   // Ticket 18 neutral handler seam: both Client Protocols observe the
   // Request Lifecycle Ledger only through this narrow seam (observer
   // contract + safe no-op); persistence/configuration/store DTOs stay out
   // of the protocol boundary.
 ]);
 
-const RESPONSES_SHARED_SEAMS = new Set([
-  ...CLIENT_SHARED_SEAMS,
-  // These modules are the existing OpenAI Responses semantic-conversion
-  // implementation. They are not a shared protocol model and Anthropic is
-  // independently forbidden from importing them.
-  "semantic-conversion/contract.ts",
-  "semantic-conversion/reasoning/contract.ts",
-  "semantic-conversion/reasoning/response.ts",
-  "semantic-conversion/supplement/contract.ts",
-  "semantic-conversion/execution.ts",
-]);
+const RESPONSES_SHARED_SEAMS = CLIENT_SHARED_SEAMS;
 
 function slash(value) {
   return value.split(path.sep).join("/");

@@ -2,7 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
-import { prepareReasoning } from "../../src/semantic-conversion/reasoning/request.js";
+import { prepareResponsesReasoning as prepareReasoning } from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
 
 const openAICompletionsModel: Model<"openai-completions"> = {
   id: "deepseek-test",

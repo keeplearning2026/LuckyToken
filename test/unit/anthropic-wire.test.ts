@@ -13,9 +13,9 @@ import {
 function message(): AssistantMessage {
   return {
     role: "assistant",
-    api: "anthropic-messages",
-    provider: "provider",
-    model: "model",
+    api: "openai-completions",
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
     content: [
       { type: "text", text: "first \ud800" },
       { type: "toolCall", id: "call", name: "tool", arguments: { x: 1 } },
@@ -39,6 +39,7 @@ describe("Anthropic atomic wire rendering", () => {
       message(),
       "client-model",
       "msg_client",
+      ["tool"],
     );
     const rendered = renderAnthropicJsonSuccess(target);
 
@@ -56,6 +57,7 @@ describe("Anthropic atomic wire rendering", () => {
       message(),
       "client-model",
       "msg_client",
+      ["tool"],
     );
     expect(() => {
       const later = target.content[1] as unknown as {
@@ -76,9 +78,9 @@ describe("Anthropic atomic wire rendering", () => {
     };
     const source: AssistantMessage = {
       role: "assistant",
-      api: "anthropic-messages",
-      provider: "provider",
-      model: "model",
+      api: "openai-completions",
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
       content: [
         {
           type: "toolCall",

@@ -635,25 +635,45 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.invocation.pi.context.tools).toBeUndefined();
     expect(invocation.invocation.supplement).toMatchObject({
       output: {
-        format: { value: { type: "text" }, requirement: "hard" },
-        verbosity: { value: "low", requirement: "preference" },
-        include: {
-          value: ["reasoning.encrypted_content"],
-          requirement: "preference",
-        },
+        format: { value: { type: "text" } },
+        verbosity: { value: "low" },
+        include: { value: ["reasoning.encrypted_content"] },
       },
       tools: {
-        parallelCalls: { value: false, requirement: "hard" },
+        parallelCalls: { value: false },
       },
-      cache: { key: { value: "cache-key", requirement: "preference" } },
+      cache: { key: { value: "cache-key" } },
       lifecycle: {
-        serviceTier: { value: "priority", requirement: "preference" },
-        truncation: { value: "auto", requirement: "hard" },
-        contextManagement: { requirement: "hard" },
+        serviceTier: { value: "priority" },
+        truncation: { value: "auto" },
       },
+    });
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_context_management_omitted",
+      jsonPath: "$.context_management",
+      action: "ignore",
     });
     // Unknown auxiliary fields must not appear in the typed invocation.
     expect(invocation.invocation.pi.options).not.toHaveProperty("service_tier");
+  });
+
+  it("keeps top_logprobs out of Provider projection and warns when logprobs are requested", () => {
+    const invocation = convertResponsesRequest(
+      { model: "m", input: "x", top_logprobs: 3 },
+      1,
+      policy(),
+    );
+
+    expect(invocation.invocation.supplement.output).toBeUndefined();
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_top_logprobs_omitted",
+      jsonPath: "$.top_logprobs",
+      action: "ignore",
+    });
   });
 
   it("maps reasoning effort minimal through xhigh directly", () => {
@@ -802,15 +822,19 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/tool_choice requires/);
   });
 
-  it("retains background=true as a hard lifecycle requirement", () => {
+  it("keeps background out of Provider projection and degrades true to synchronous", () => {
     const background = convertResponsesRequest(
       { model: "m", input: "x", background: true },
       1,
       policy(),
     );
-    expect(background.invocation.supplement.lifecycle?.background).toEqual({
-      value: true,
-      requirement: "hard",
+    expect(background.invocation.supplement.lifecycle).toBeUndefined();
+    expect(background.client.notices).toContainEqual({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "openai-responses_background_synchronous",
+      jsonPath: "$.background",
+      action: "degrade",
     });
     const sync = convertResponsesRequest(
       { model: "m", input: "x", background: false },
@@ -818,6 +842,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       policy(),
     );
     expect(sync.client.renderState.stream).toBe(false);
+    expect(sync.client.notices).toEqual([]);
   });
 
   it("rejects conversation, prompt, external item_reference, and foreign encrypted compaction", () => {

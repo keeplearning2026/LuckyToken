@@ -17,9 +17,10 @@ import {
   type ExecutionOperation,
 } from "../../execution.js";
 import {
-  executeSemanticConversion,
-  type SemanticConversionResult,
-} from "../../semantic-conversion/execution.js";
+  executeOpenAIResponsesSemanticInvocation,
+  type ResponsesSemanticExecutionResult,
+} from "./semantic/execution.js";
+import { ResponsesProjectionRejected } from "./semantic/pi-execution.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,
@@ -47,7 +48,7 @@ import {
   type ResponsesRenderState,
   type ResponsesResponseObject,
 } from "./response.js";
-import type { SemanticToolChoice } from "../../semantic-conversion/supplement/contract.js";
+import type { ResponsesToolChoice } from "./semantic/supplement/contract.js";
 import {
   ResponseStateConversionFailure,
   type ResponseSessionState,
@@ -401,7 +402,7 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
 
 function buildRenderState(
   invocation: ResponsesInvocation,
-  projection: SemanticConversionResult,
+  projection: ResponsesSemanticExecutionResult,
   unknownPiContent: "error" | "ignore",
   notice: (notice: {
     readonly adapter: string;
@@ -463,7 +464,7 @@ function buildRenderState(
 }
 
 function toResponsesEchoToolChoice(
-  choice: SemanticToolChoice,
+  choice: ResponsesToolChoice,
 ): ResponsesEchoToolChoice {
   if (
     choice.kind === "auto" ||
@@ -779,9 +780,9 @@ export async function executeSemanticResponses(
       "p4.create_pi_stream",
       createStreamLocation,
     );
-    let semanticResult: SemanticConversionResult;
+    let semanticResult: ResponsesSemanticExecutionResult;
     try {
-      semanticResult = await executeSemanticConversion({
+      semanticResult = await executeOpenAIResponsesSemanticInvocation({
         models: options.models,
         model: options.model,
         invocation: Object.freeze({
@@ -839,7 +840,11 @@ export async function executeSemanticResponses(
     if (options.request.signal.aborted || error instanceof ExecutionAbortedError) {
       throw new ExecutionAbortedError(options.request.signal.reason);
     }
-    if (error instanceof InvalidRequest || error instanceof ResponseStateConversionFailure) {
+    if (
+      error instanceof InvalidRequest ||
+      error instanceof ResponseStateConversionFailure ||
+      error instanceof ResponsesProjectionRejected
+    ) {
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );

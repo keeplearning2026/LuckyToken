@@ -18,10 +18,10 @@ import { describe, expect, it } from "vitest";
 
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
 import {
-  prepareReasoning,
-  projectReasoningPayload,
-} from "../../src/semantic-conversion/reasoning/request.js";
-import { projectSupplementPayload } from "../../src/semantic-conversion/supplement/request.js";
+  prepareResponsesReasoning as prepareReasoning,
+  projectResponsesReasoningPayload as projectReasoningPayload,
+} from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
+import { projectResponsesPayload as projectSupplementPayload } from "../../src/protocols/openai-responses/semantic/projection/request.js";
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
 import {
   captureJsonGlobalProviderRequest,
@@ -319,6 +319,18 @@ describe("Client Responses to Provider payload certification", () => {
     });
 
     expect(payload).toMatchObject(expected);
+  });
+
+  it("does not reinsert Anthropic temperature while reasoning is enabled", async () => {
+    const payload = await projectClientWire("anthropic-messages", {
+      model: "client-selector",
+      input: "hello",
+      temperature: 0.4,
+      reasoning: { effort: "high" },
+    });
+
+    expect(payload).toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it.each(formatCases)("projects JSON Schema output for %s", async (api, expected) => {

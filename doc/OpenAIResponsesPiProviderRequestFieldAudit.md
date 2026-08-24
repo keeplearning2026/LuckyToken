@@ -48,7 +48,7 @@ For the same Responses request routed to an OpenAI Chat Completions wire, OpenCo
 
 It also demonstrates real non-OpenAI mappings that the current Pi generic path cannot reach: Responses required/named tool choice maps to Anthropic `any`/named `tool`, JSON Schema maps to Anthropic `output_config.format`, and a named Google choice maps to `ANY + allowedFunctionNames` ([anthropic.ts](../reference/opencodex/src/adapters/anthropic.ts#L967), [google.ts](../reference/opencodex/src/adapters/google.ts#L353)).
 
-OpenCodex is evidence, not a drop-in contract. It still degrades controls according to its own target capability tables, and some parser paths ignore malformed/unsupported format shapes. The applicable lesson is its information flow: retain a typed semantic control until the physical target is known, then let the target adapter either emit an equivalent wire field or report/fail the loss.
+OpenCodex is evidence, not a drop-in contract. It still degrades controls according to its own target capability tables, and some parser paths ignore malformed/unsupported format shapes. The applicable lesson is its information flow: retain a typed semantic control until the physical target is known, then let the Responses target adapter either emit an equivalent wire field, apply one named bounded degradation, or record an omission warning. Supplement unavailability is not itself a dispatch failure.
 
 ## Matrix A: model-output and tool controls
 
@@ -162,7 +162,7 @@ LuckyToken validates and constructs `ModelsSimpleStreamOptions` in the Responses
 
 | Responses field | Current Semantic Conversion behavior | Correctness assessment |
 |---|---|---|
-| `text.format` | Never parsed or projected. | Silent loss of a required output-schema contract; must project or fail. |
+| `text.format` | Never parsed or projected. | Silent loss of a required output-schema contract; the Responses module must carry it, project it when certified, and otherwise omit it with an explicit warning rather than silently losing it. |
 | `parallel_tool_calls` | Never parsed; rendered response always says `true`. | Incorrect for client `false`; final Provider request and response echo both lose it ([response.ts:706](../src/protocols/openai-responses/response.ts#L706)). |
 | `tool_choice:"required"` | Parsed as `"required"`, but `applyToolChoiceFilter()` has no required branch, so it is silently omitted. | Critical semantic loss ([request.ts:726](../src/protocols/openai-responses/request.ts#L726), [request.ts:2099](../src/protocols/openai-responses/request.ts#L2099)). |
 | named `tool_choice` | Parsed as `forced`, then deliberately dropped with a degradation notice. | Avoidable loss for OpenAI Completions/Responses, Anthropic, Mistral, Bedrock, and Pi Messages targets, all of whose direct builders support a named tool. |
@@ -176,13 +176,14 @@ LuckyToken validates and constructs `ModelsSimpleStreamOptions` in the Responses
 | `prompt_cache_retention` | Maps `"in-memory"` and `"24h"` to Pi short/long. | Bug: pinned official SDK spells the first value `"in_memory"`; current code rejects the valid spelling and accepts the wrong one ([request.ts:864](../src/protocols/openai-responses/request.ts#L864), [responses.d.ts:6236](../node_modules/openai/resources/responses/responses.d.ts#L6236)). |
 | `metadata` | String entries are retained for local response echo. | Correct as response annotation, but not Provider metadata. Do not conflate it with model-visible semantics ([request.ts:2256](../src/protocols/openai-responses/request.ts#L2256)). |
 | `user` / `safety_identifier` | Mapped to `options.metadata.user_id`. | Reaches Anthropic only; silently ignored by other adapters ([request.ts:875](../src/protocols/openai-responses/request.ts#L875), [request.ts:2229](../src/protocols/openai-responses/request.ts#L2229)). |
-| `background:true` | Explicit conversion error. | Correct until a target adapter and deferred lifecycle implement it end to end ([request.ts:839](../src/protocols/openai-responses/request.ts#L839)). |
+| `background:true` | Owned by Responses execution preparation and excluded from the Provider projection Supplement. | Semantic Conversion has no deferred fetch/cancel lifecycle, so it executes synchronously and publishes a Responses request degradation notice before projection rather than fabricating a Provider field. |
 | `store` | Type-checked; Responses-owned session state applies local persistence policy rather than forwarding it to the model Provider. | Correct layer ownership for semantic conversion; this is not a Pi model request option ([session-state.ts:484](../src/protocols/openai-responses/session-state.ts#L484)). |
 | `conversation` / `prompt` | Any defined value is an explicit conversion error. | Rejecting non-null values is correct until local resolution or native preservation owns them; rejecting `null` is a parser bug because the SDK defines null as absence. |
-| `include`, `top_logprobs`, `context_management`, `stream_options`, `text.verbosity` | Not explicitly validated or projected. | Silent protocol loss. Some are response-shape or lifecycle controls rather than model semantics, but each recognized field still needs direct handling, warning, or failure. |
+| `include`, `text.verbosity` | Validated and retained as projection candidates because certified target mappings exist. | Correct Supplement ownership; an Adapter consumes only a proven target mapping and central disposition warns for an unconsumed candidate. |
+| `top_logprobs`, `context_management`, `stream_options` | Validated outside the Supplement and reported through Responses-owned request notices when the requested behavior is unavailable. | Correct non-Provider ownership: these facts have no current certified Provider-request consumer and therefore do not enter target projection. |
 | hosted tools (`web_search`, `file_search`, `computer`, MCP, shell, etc.) | Most are skipped because Pi `Tool` represents caller-executed function/schema/grammar tools only. | Intentional capability degradation must be reported; a hosted Provider tool cannot be advertised as a locally executable Pi tool ([types.ts:480](../pi-agent/packages/ai/src/types.ts#L480), [request.ts:661](../src/protocols/openai-responses/request.ts#L661)). |
 
-The boundary correctly rejects `max_output_tokens:0`; the remaining sub-16 problem is target-specific because the Pi OpenAI Responses/Azure builders silently raise positive values below 16 rather than letting the selected target reject them.
+The boundary correctly rejects malformed `max_output_tokens:0`. For a valid positive ceiling, certified target fields are preserved or repaired to no more than the Client value. Targets such as Codex that have no certified ceiling field retain availability by omitting the control with a warning; they are not rejected solely for that loss.
 
 ## Confirmed Responses edge contract drift
 
@@ -213,9 +214,9 @@ The coherent fix belongs to the OpenAI Responses vertical Semantic Conversion mo
 
 1. Preserve typed Responses tool choice, parallel-tool, structured-output, sampling, reasoning, cache, identity, lifecycle, and response-contract facts in the Responses-owned Invocation.
 2. Keep Responses reasoning omission, explicit disable, enabled effort, summary preference, historical summary text, and opaque item continuity distinct.
-3. Let Responses-owned source-to-target projectors validate Pi-native mappings and project only certified final Provider fields through the kernel-owned payload seam.
+3. Let Responses-owned source-to-target projectors validate Pi-native mappings and project only certified final Provider fields through the Responses-owned payload seam.
 4. Keep operational and Client lifecycle facts under their actual Responses owners; do not force them into Pi IR or another Client Protocol's supplement.
 5. Prove every enabled mapping with Client Responses Wire → final Provider Wire tests and full-history Provider response → Responses history → next Provider request tests.
-6. Keep the Pi execution kernel unaware of Responses fields and target mapping policy.
+6. Keep the Responses Pi execution wrapper limited to payload-callback lifecycle mechanics; Responses field and target mapping policy remain in its sibling reasoning and projection modules.
 
 Placing explicitly converted, allow-listed keys into `samplingParams` remains a narrow Pi path only for builders that demonstrably merge it. Never copy the whole Client body: the last-step merge can overwrite authoritative fields such as `model`, `input/messages`, `stream`, and `store`. No behavior in this audit is evidence that another Client Protocol should share Responses semantic contracts or projectors.

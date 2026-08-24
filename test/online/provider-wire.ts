@@ -2,7 +2,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function expectsForcedToolChoicePredispatchFailure(
+export function expectsForcedToolChoiceOmission(
   provider: string,
   model: string,
 ): boolean {
@@ -92,6 +92,7 @@ export function requireOnlineOpenAICompletionsProjection(
   body: unknown,
   expected: {
     readonly toolName?: string;
+    readonly omitToolChoice?: boolean;
     readonly schemaName?: string;
     readonly parallelToolCalls?: boolean;
     readonly maxOutputTokens: number;
@@ -102,11 +103,13 @@ export function requireOnlineOpenAICompletionsProjection(
   const format = body.response_format;
   const tokenLimit = body.max_completion_tokens ?? body.max_tokens;
   const toolMatches =
-    expected.toolName === undefined ||
-    (isRecord(choice) &&
-      choice.type === "function" &&
-      isRecord(choice.function) &&
-      choice.function.name === expected.toolName);
+    expected.omitToolChoice === true
+      ? choice === undefined
+      : expected.toolName === undefined ||
+        (isRecord(choice) &&
+          choice.type === "function" &&
+          isRecord(choice.function) &&
+          choice.function.name === expected.toolName);
   const formatMatches =
     expected.schemaName === undefined ||
     (isRecord(format) &&

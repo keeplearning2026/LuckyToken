@@ -49,7 +49,6 @@ async function writeConfig(home, port) {
             conversion: {
               request: {
                 unknownContent: "error",
-                unresolvedToolCall: "xrepair",
                 localCacheControl: "ignore",
               },
               response: { unknownPiContent: "error" },
@@ -518,7 +517,7 @@ test(
 
       const page = await openWindow(current);
       page.setDefaultTimeout(10_000);
-      await page.getByRole("button", { name: "Overview" }).waitFor();
+      await page.getByRole("button", { name: "Overview", exact: true }).waitFor();
       await page.getByText("Running", { exact: true }).waitFor();
       await page.close();
       await waitForNoWindows(current);
@@ -633,7 +632,7 @@ test(
 
       const page = await openWindow(replacement);
       page.setDefaultTimeout(10_000);
-      await page.getByRole("button", { name: "Overview" }).waitFor();
+      await page.getByRole("button", { name: "Overview", exact: true }).waitFor();
       assert.equal(replacement.windows().length, 1);
       await page.close();
       await waitForNoWindows(replacement);

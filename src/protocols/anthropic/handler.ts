@@ -999,6 +999,8 @@ async function handleAnthropicMessages(
       message,
       {
         selector: invocation.client.renderState.selector,
+        thinkingDisplay: invocation.client.renderState.thinkingDisplay,
+        directToolNames: invocation.client.renderState.directToolNames,
         createMessageId: dependencies.createMessageId,
       },
       dependencies.configuration.conversion.response,

@@ -37,34 +37,13 @@ function exact(
   });
 }
 
-export function initialPiMessagesFailure(input: {
+export function initialAnthropicToPiMessagesFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
   const supplement = input.invocation.supplement;
   if (supplement.inferenceGeo.kind === "specified") {
     return "pi-messages has no certified inference geography control";
-  }
-  if (supplement.outputFormat.kind === "specified") {
-    return "pi-messages has no certified structured-output control";
-  }
-  const choice = supplement.toolChoice;
-  if (
-    choice !== undefined &&
-    choice.kind !== "none" &&
-    choice.disableParallelToolUse
-  ) {
-    return "pi-messages cannot guarantee serial tool calls";
-  }
-  const activation = input.invocation.reasoning.activation;
-  if (activation.kind !== "omitted") {
-    return `pi-messages cannot preserve Anthropic thinking activation ${activation.kind}`;
-  }
-  if (
-    input.invocation.reasoning.effort.kind === "specified" &&
-    !input.model.reasoning
-  ) {
-    return `pi-messages model ${input.model.id} does not support reasoning effort`;
   }
   return undefined;
 }
@@ -111,35 +90,16 @@ export function projectAnthropicToPiMessages(input: {
     throw new Error("pi-messages payload shape mismatch");
   }
   const options = { ...(payload.options as Record<string, unknown>) };
+  if (typeof options.maxTokens !== "number") {
+    throw new Error("pi-messages payload shape mismatch at options.maxTokens");
+  }
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
-  exact(outcomes, "maxTokens", options.maxTokens, supplement.maxTokens, () => {
-    options.maxTokens = supplement.maxTokens;
+  const finalMaxTokens = Math.min(options.maxTokens, supplement.outputTokenCeiling);
+  exact(outcomes, "maxTokens", options.maxTokens, finalMaxTokens, () => {
+    options.maxTokens = finalMaxTokens;
   });
-  if (supplement.sampling.temperature !== undefined) {
-    exact(
-      outcomes,
-      "sampling.temperature",
-      options.temperature,
-      supplement.sampling.temperature,
-      () => {
-        options.temperature = supplement.sampling.temperature;
-      },
-    );
-  }
-  for (const [control, value, reason] of [
-    ["sampling.topP", supplement.sampling.topP, "top-p"],
-    ["sampling.topK", supplement.sampling.topK, "top-k"],
-    ["stopSequences", supplement.stopSequences, "stop sequences"],
-  ] as const) {
-    if (value !== undefined) {
-      add(outcomes, control, {
-        kind: "omitted",
-        warning: `pi-messages has no ${reason} field`,
-      });
-    }
-  }
   const choice = mappedToolChoice(input.invocation);
   if (choice !== undefined) {
     exact(outcomes, "toolChoice", options.toolChoice, choice, () => {
@@ -148,24 +108,19 @@ export function projectAnthropicToPiMessages(input: {
   }
   const effort = input.invocation.reasoning.effort;
   if (effort.kind === "specified") {
-    exact(outcomes, "reasoning.effort", options.reasoning, effort.level, () => {
-      options.reasoning = effort.level;
-    });
-  } else if (effort.kind === "explicit-null") {
-    delete options.reasoning;
-  }
-  for (const [control, intent] of [
-    ["metadataUserId", supplement.metadataUserId],
-    ["serviceTier", supplement.serviceTier],
-    ["container", supplement.container],
-    ["cacheControl", supplement.cacheControl],
-  ] as const) {
-    if (intent.kind === "specified") {
-      add(outcomes, control, {
+    if (!input.model.reasoning) {
+      delete options.reasoning;
+      add(outcomes, "reasoning.effort", {
         kind: "omitted",
-        warning: "pi-messages has no certified equivalent",
+        warning: `pi-messages model ${input.model.id} does not support reasoning effort`,
+      });
+    } else {
+      exact(outcomes, "reasoning.effort", options.reasoning, effort.level, () => {
+        options.reasoning = effort.level;
       });
     }
+  } else if (effort.kind === "explicit-null") {
+    delete options.reasoning;
   }
   payload.options = options;
   return Object.freeze({

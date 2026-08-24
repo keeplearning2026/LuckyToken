@@ -40,59 +40,93 @@ function exact(
   }
 }
 
-function isGemini3(model: Model<string>): boolean {
-  return /gemini-3(?:\.\d+)?-(?:pro|flash)/u.test(model.id.toLowerCase());
+function isGemini3Pro(model: Model<string>): boolean {
+  return /gemini-3(?:\.\d+)?-pro/u.test(model.id.toLowerCase());
 }
 
-export function initialGoogleFailure(input: {
+function isGemini3Flash(model: Model<string>): boolean {
+  const id = model.id.toLowerCase();
+  return /gemini-3(?:\.\d+)?-flash/u.test(id) ||
+    id === "gemini-flash-latest" ||
+    id === "gemini-flash-lite-latest";
+}
+
+function isGemma4(model: Model<string>): boolean {
+  return /gemma-?4/u.test(model.id.toLowerCase());
+}
+
+function usesThinkingLevel(api: GoogleApi, model: Model<string>): boolean {
+  return isGemini3Pro(model) ||
+    isGemini3Flash(model) ||
+    (api === "google-generative-ai" && isGemma4(model));
+}
+
+function googleThinkingLevel(
+  api: GoogleApi,
+  model: Model<string>,
+  effort: "low" | "medium" | "high",
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+  if (isGemini3Pro(model)) {
+    return effort === "low" ? "LOW" : "HIGH";
+  }
+  if (api === "google-generative-ai" && isGemma4(model)) {
+    return effort === "low" ? "MINIMAL" : "HIGH";
+  }
+  return effort.toUpperCase() as "LOW" | "MEDIUM" | "HIGH";
+}
+
+function googleThinkingBudget(
+  api: GoogleApi,
+  model: Model<string>,
+  effort: "low" | "medium" | "high",
+): number | undefined {
+  const id = model.id.toLowerCase();
+  if (id.includes("2.5-pro")) {
+    return { low: 2_048, medium: 8_192, high: 32_768 }[effort];
+  }
+  if (api === "google-generative-ai" && id.includes("2.5-flash-lite")) {
+    return { low: 2_048, medium: 8_192, high: 24_576 }[effort];
+  }
+  if (id.includes("2.5-flash")) {
+    return { low: 2_048, medium: 8_192, high: 24_576 }[effort];
+  }
+  return undefined;
+}
+
+export function initialAnthropicToGoogleFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
   if (input.invocation.supplement.inferenceGeo.kind === "specified") {
     return `${input.model.api} has no certified inference geography control`;
   }
-  const choice = input.invocation.supplement.toolChoice;
-  if (
-    choice !== undefined &&
-    choice.kind !== "none" &&
-    choice.disableParallelToolUse
-  ) {
-    return `${input.model.api} cannot guarantee serial tool calls`;
-  }
-  const activation = input.invocation.reasoning.activation;
-  if (activation.kind === "adaptive") {
-    return `${input.model.api} has no certified Anthropic adaptive-thinking control`;
-  }
-  if (activation.kind === "disabled" && isGemini3(input.model)) {
-    return `${input.model.api} model ${input.model.id} cannot disable reasoning`;
-  }
   return undefined;
 }
 
 function googleThinking(
+  api: GoogleApi,
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
 ): Record<string, unknown> | undefined {
   const activation = invocation.reasoning.activation;
   const effort = invocation.reasoning.effort;
-  if (activation.kind === "disabled") return { thinkingBudget: 0 };
+  if (activation.kind === "disabled") {
+    return model.reasoning ? { thinkingBudget: 0 } : undefined;
+  }
   if (activation.kind === "enabled") {
-    const display = activation.display;
     return {
-      includeThoughts:
-        !(display.kind === "specified" && display.value === "omitted"),
+      includeThoughts: true,
       thinkingBudget: activation.budgetTokens,
     };
   }
   if (activation.kind === "adaptive") return undefined;
-  if (effort.kind !== "specified") return undefined;
-  const level =
-    effort.level === "xhigh" || effort.level === "max"
-      ? "HIGH"
-      : effort.level.toUpperCase();
-  return {
-    thinkingLevel: level,
-  };
+  if (effort.kind !== "specified" || !model.reasoning) return undefined;
+  if (effort.level === "xhigh" || effort.level === "max") return undefined;
+  if (usesThinkingLevel(api, model)) {
+    return { thinkingLevel: googleThinkingLevel(api, model, effort.level) };
+  }
+  const budget = googleThinkingBudget(api, model, effort.level);
+  return budget === undefined ? undefined : { thinkingBudget: budget };
 }
 
 function mappedToolChoice(
@@ -137,21 +171,24 @@ export function projectAnthropicToGoogle(input: {
     throw new Error(`${input.api} payload shape mismatch`);
   }
   const config = { ...(payload.config as Record<string, unknown>) };
+  if (typeof config.maxOutputTokens !== "number") {
+    throw new Error(`${input.api} payload shape mismatch at maxOutputTokens`);
+  }
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
+  const finalMaxTokens = Math.min(config.maxOutputTokens, supplement.outputTokenCeiling);
   exact(
     outcomes,
     input.api,
     "maxTokens",
     config.maxOutputTokens,
-    supplement.maxTokens,
+    finalMaxTokens,
     () => {
-      config.maxOutputTokens = supplement.maxTokens;
+      config.maxOutputTokens = finalMaxTokens;
     },
   );
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "topP", supplement.sampling.topP],
     ["sampling.topK", "topK", supplement.sampling.topK],
   ] as const) {
@@ -202,34 +239,106 @@ export function projectAnthropicToGoogle(input: {
     add(outcomes, "outputFormat", { kind: "pi-native" });
   }
 
-  const thinking = googleThinking(input.model, input.invocation);
-  if (thinking === undefined) {
-    delete config.thinkingConfig;
-  } else {
-    exact(
-      outcomes,
-      input.api,
-      "reasoning",
-      config.thinkingConfig,
-      thinking,
-      () => {
-        config.thinkingConfig = thinking;
-      },
-    );
-  }
-
-  for (const [control, intent] of [
-    ["metadataUserId", supplement.metadataUserId],
-    ["serviceTier", supplement.serviceTier],
-    ["container", supplement.container],
-    ["cacheControl", supplement.cacheControl],
-  ] as const) {
-    if (intent.kind === "specified") {
-      add(outcomes, control, {
+  const activation = input.invocation.reasoning.activation;
+  const effort = input.invocation.reasoning.effort;
+  if (activation.kind === "disabled") {
+    if (!input.model.reasoning) {
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.activation", { kind: "pi-native" });
+    } else if (usesThinkingLevel(input.api, input.model)) {
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.activation", {
+        kind: "degraded",
+        warning: `${input.api} model ${input.model.id} used its target reasoning default because it has no exact disable field`,
+      });
+    } else {
+      const thinking = { thinkingBudget: 0 };
+      exact(
+        outcomes,
+        input.api,
+        "reasoning.activation",
+        config.thinkingConfig,
+        thinking,
+        () => {
+          config.thinkingConfig = thinking;
+        },
+      );
+    }
+    if (effort.kind === "specified") {
+      add(outcomes, "reasoning.effort", {
         kind: "omitted",
-        warning: `${input.api} has no certified equivalent`,
+        warning: "Google reasoning effort cannot be combined with an explicit Anthropic thinking activation",
       });
     }
+  } else if (activation.kind === "enabled") {
+    if (!input.model.reasoning) {
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.activation", {
+        kind: "degraded",
+        warning: `${input.api} model ${input.model.id} does not support reasoning; ordinary generation was used`,
+      });
+    } else if (usesThinkingLevel(input.api, input.model)) {
+      add(outcomes, "reasoning.activation", {
+        kind: "degraded",
+        warning: `${input.api} model ${input.model.id} used Pi's nearest thinking level instead of the exact Anthropic budget`,
+      });
+    } else {
+      const thinking = {
+        includeThoughts: true,
+        thinkingBudget: activation.budgetTokens,
+      };
+      exact(
+        outcomes,
+        input.api,
+        "reasoning.activation",
+        config.thinkingConfig,
+        thinking,
+        () => {
+          config.thinkingConfig = thinking;
+        },
+      );
+    }
+    if (effort.kind === "specified") {
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: "Google reasoning effort cannot be combined with an explicit Anthropic thinking activation",
+      });
+    }
+  } else if (activation.kind === "adaptive") {
+    if (!input.model.reasoning) delete config.thinkingConfig;
+    add(outcomes, "reasoning.activation", {
+      kind: "degraded",
+      warning: input.model.reasoning
+        ? `${input.api} used its nearest target reasoning mode for Anthropic adaptive thinking`
+        : `${input.api} target does not support reasoning; ordinary generation was used`,
+    });
+  } else if (effort.kind === "specified") {
+    const thinking = googleThinking(input.api, input.model, input.invocation);
+    if (thinking === undefined) {
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: `${input.api} has no certified ${effort.level} effort mapping for model ${input.model.id}`,
+      });
+    } else {
+      exact(
+        outcomes,
+        input.api,
+        "reasoning.effort",
+        config.thinkingConfig,
+        thinking,
+        () => {
+          config.thinkingConfig = thinking;
+        },
+      );
+    }
+  } else if (config.thinkingConfig !== undefined) {
+    delete config.thinkingConfig;
+    add(outcomes, "reasoning.activation", {
+      kind: "payload-projected",
+      projector: `anthropic-to-${input.api}`,
+      warning: "pi-native-mapping-repaired",
+    });
   }
 
   payload.config = config;

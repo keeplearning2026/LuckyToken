@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeResponsesContinuity,
   encodeResponsesContinuity,
-} from "../../src/protocols/openai-responses/reasoning-continuity.js";
+} from "../../src/protocols/openai-responses/semantic/reasoning/continuity.js";
 
 describe("OpenAI Responses reasoning continuity codec", () => {
   it("round-trips an item-local thinking signature with source provenance", () => {

@@ -35,6 +35,7 @@ Application-level Runtime Diagnostics facts that have no Request Journey owner, 
 | `model_generation` | `POST /v1/responses` | Local Native, Provider Native, or Semantic Conversion |
 | `conversation_compaction` | `POST /v1/responses/compact` | Local Native, Provider Native, or Semantic Conversion |
 | `model_discovery` | `GET /v1/models` | No execution lane; Backend-owned metadata query |
+| `web_search` | `POST /v1/alpha/search` | Local Native Preservation through the Codex-owned credential and transport boundary |
 | `unmatched_request` | any unmatched method/path | No execution lane; HTTP routing rejection |
 | `unsupported_transport` | WebSocket upgrade | No execution lane; HTTP transport rejection |
 

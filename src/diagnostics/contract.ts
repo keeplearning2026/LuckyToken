@@ -42,6 +42,7 @@ export type RequestJourneyOperation =
   | "model_generation"
   | "conversation_compaction"
   | "model_discovery"
+  | "web_search"
   | "unmatched_request"
   | "unsupported_transport";
 

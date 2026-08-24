@@ -41,6 +41,8 @@ describe("Anthropic Pi invocation controls", () => {
     expect(invocation.client.renderState).toEqual({
       stream: true,
       selector: "model",
+      directToolNames: [],
+      thinkingDisplay: { kind: "omitted" },
     });
     expect(invocation.invocation.pi.options).not.toHaveProperty("stream");
   });

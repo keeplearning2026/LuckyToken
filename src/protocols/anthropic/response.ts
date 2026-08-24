@@ -2,9 +2,12 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
-import { interpretAnthropicAssistantResponse } from "./semantic/response-interpretation/registry.js";
-import type { AnthropicInterpretedResponse } from "./semantic/response-interpretation/contract.js";
+import {
+  interpretAnthropicAssistantResponse,
+  type AnthropicInterpretedResponse,
+} from "./semantic/response.js";
 import type { LuckyTokenAnthropicContinuityEnvelopeV1 } from "./semantic/reasoning/continuity.js";
+import type { AnthropicThinkingDisplayIntent } from "./semantic/reasoning/contract.js";
 
 export class OutboundResponseFidelityFailure extends Error {
   readonly kind = "OutboundResponseFidelityFailure";
@@ -79,7 +82,7 @@ export interface AnthropicResponseMessage {
   model: string;
   role: "assistant";
   stop_details: null;
-  stop_reason: "end_turn" | "max_tokens" | "tool_use";
+  stop_reason: "end_turn" | "max_tokens" | "tool_use" | "refusal";
   stop_sequence: null;
   type: "message";
   usage: AnthropicResponseUsage;
@@ -95,6 +98,9 @@ export interface AnthropicResponseConversion {
 export interface AnthropicResponseRenderState {
   readonly selector: string;
   readonly createMessageId?: () => string;
+  readonly thinkingDisplay?: AnthropicThinkingDisplayIntent;
+  /** Request-local proof that these Pi tool calls originated from Client tools. */
+  readonly directToolNames?: readonly string[];
 }
 
 export interface AnthropicResponseConversionPolicy {
@@ -408,6 +414,7 @@ function convertContent(
   interpreted: AnthropicInterpretedResponse,
   notices: ConversionNotice[],
   policy: AnthropicResponseConversionPolicy,
+  hideThinking: boolean,
 ): Array<
   | AnthropicTextBlock
   | AnthropicThinkingBlock
@@ -469,7 +476,7 @@ function convertContent(
         } else {
           projected.push({
             signature: "",
-            thinking: raw.thinking,
+            thinking: hideThinking ? "" : raw.thinking,
             type: "thinking",
             ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
           });
@@ -490,7 +497,7 @@ function convertContent(
       }
       projected.push({
         signature: signature ?? "",
-        thinking: raw.thinking,
+        thinking: hideThinking ? "" : raw.thinking,
         type: "thinking",
         ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
       });
@@ -552,9 +559,15 @@ function convertContent(
           `Pi content[${index}].namespace cannot be represented by Anthropic Messages`,
         );
       }
+      const caller = interpreted.toolCallerByContentIndex.get(index);
+      if (caller === undefined) {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}] tool caller provenance is unavailable`,
+        );
+      }
       projected.push({
         id: raw.id,
-        caller: { type: "direct" },
+        caller,
         input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
         name: raw.name,
         type: "tool_use",
@@ -641,10 +654,11 @@ export function convertAssistantMessageToAnthropic(
   message: AssistantMessage,
   clientModel: string,
   messageId: string,
+  directToolNames: readonly string[] = [],
 ): AnthropicResponseMessage {
   return convertAssistantMessageToAnthropicWithPolicy(
     message,
-    { selector: clientModel, createMessageId: () => messageId },
+    { selector: clientModel, createMessageId: () => messageId, directToolNames },
     { unknownPiContent: "error" },
   ).message;
 }
@@ -665,13 +679,23 @@ export function convertAssistantMessageToAnthropicWithPolicy(
   const id = createResponseId(message, renderState);
   let interpreted: AnthropicInterpretedResponse;
   try {
-    interpreted = interpretAnthropicAssistantResponse(message);
+    interpreted = interpretAnthropicAssistantResponse(
+      message,
+      new Set(renderState.directToolNames ?? []),
+    );
   } catch (error) {
     throw new OutboundResponseFidelityFailure(
       error instanceof Error ? error.message : String(error),
     );
   }
-  const content = convertContent(message, interpreted, notices, policy);
+  const content = convertContent(
+    message,
+    interpreted,
+    notices,
+    policy,
+    renderState.thinkingDisplay?.kind === "specified" &&
+      renderState.thinkingDisplay.value === "omitted",
+  );
   if (interpreted.stop.normalized) {
     notices.push(
       responseNotice(
@@ -709,10 +733,16 @@ export function convertAssistantMessageToAnthropicWithPolicy(
   };
 }
 
-export function assertOutboundResponseFidelity(message: AssistantMessage): void {
+export function assertOutboundResponseFidelity(
+  message: AssistantMessage,
+  directToolNames: readonly string[] = [],
+): void {
   assertMessageEnvelope(message);
-  const interpreted = interpretAnthropicAssistantResponse(message);
-  convertContent(message, interpreted, [], { unknownPiContent: "error" });
+  const interpreted = interpretAnthropicAssistantResponse(
+    message,
+    new Set(directToolNames),
+  );
+  convertContent(message, interpreted, [], { unknownPiContent: "error" }, false);
   // Usage is fail-open by design (Ticket 20 additive): malformed usage never
   // discards an otherwise valid response and is not part of this strict
   // fidelity assertion.

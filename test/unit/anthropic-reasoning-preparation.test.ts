@@ -1,7 +1,8 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
+import { executeAnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/execution.js";
 import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 
 function model(id: string): Model<"google-generative-ai"> {
@@ -79,5 +80,65 @@ describe("Anthropic reasoning history preparation", () => {
     expect(prepared.outcomes).toEqual([
       expect.objectContaining({ outcome: expect.objectContaining({ kind: "omitted" }) }),
     ]);
+  });
+
+  it("publishes a fail-open notice when incompatible continuity is omitted", async () => {
+    const target: Model<"openai-completions"> = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8_192,
+      maxTokens: 2_048,
+    };
+    const notice = vi.fn();
+    const terminal: AssistantMessage = {
+      role: "assistant",
+      api: target.api,
+      provider: target.provider,
+      model: target.id,
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    };
+
+    await executeAnthropicSemanticInvocation({
+      models: {} as Models,
+      model: target,
+      invocation: invocation(),
+      execution: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.(
+            {
+              model: target.id,
+              messages: [],
+              stream: true,
+              max_completion_tokens: 2_048,
+            },
+            target,
+          );
+          return terminal;
+        },
+      },
+    });
+
+    expect(notice).toHaveBeenCalledWith(expect.objectContaining({
+      code: "anthropic_semantic_projection_omitted",
+      direction: "request",
+      action: "degrade",
+    }));
   });
 });

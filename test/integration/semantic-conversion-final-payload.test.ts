@@ -7,9 +7,11 @@ import { describe, expect, it } from "vitest";
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
 import { convertAssistantMessageToResponses } from "../../src/protocols/openai-responses/response.js";
-import { prepareReasoning } from "../../src/semantic-conversion/reasoning/request.js";
-import { projectReasoningPayload } from "../../src/semantic-conversion/reasoning/request.js";
-import { projectSupplementPayload } from "../../src/semantic-conversion/supplement/request.js";
+import {
+  prepareResponsesReasoning as prepareReasoning,
+  projectResponsesReasoningPayload as projectReasoningPayload,
+} from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
+import { projectResponsesPayload as projectSupplementPayload } from "../../src/protocols/openai-responses/semantic/projection/request.js";
 
 const model: Model<"openai-completions"> = {
   id: "model-test",

@@ -169,6 +169,7 @@ export function projectAnthropicToAnthropicMessages(input: {
   readonly payload: unknown;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
   readonly failure?: string;
+  readonly failureKind?: "unsupported-semantics";
 } {
   const payload = record(input.payload);
   if (
@@ -208,11 +209,11 @@ export function projectAnthropicToAnthropicMessages(input: {
     });
   }
 
-  exact(outcomes, "maxTokens", payload.max_tokens, supplement.maxTokens, () => {
-    payload.max_tokens = supplement.maxTokens;
+  const finalMaxTokens = Math.min(payload.max_tokens, supplement.outputTokenCeiling);
+  exact(outcomes, "maxTokens", payload.max_tokens, finalMaxTokens, () => {
+    payload.max_tokens = finalMaxTokens;
   });
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "top_p", supplement.sampling.topP],
     ["sampling.topK", "top_k", supplement.sampling.topK],
   ] as const) {
@@ -253,8 +254,20 @@ export function projectAnthropicToAnthropicMessages(input: {
     });
   }
 
-  const expectedThinking = thinkingValue(input.invocation);
-  if (expectedThinking === undefined) {
+  const thinkingBudgetDoesNotFit =
+    input.invocation.reasoning.activation.kind === "enabled" &&
+    input.invocation.reasoning.activation.budgetTokens >= finalMaxTokens;
+  const expectedThinking = thinkingBudgetDoesNotFit
+    ? undefined
+    : thinkingValue(input.invocation);
+  if (thinkingBudgetDoesNotFit) {
+    delete payload.thinking;
+    add(outcomes, "reasoning.activation", {
+      kind: "degraded",
+      warning:
+        "Anthropic thinking budget no longer fits below the context-safe final max_tokens ceiling; reasoning was disabled for this request",
+    });
+  } else if (expectedThinking === undefined) {
     const changed = Object.hasOwn(payload, "thinking");
     delete payload.thinking;
     if (changed) {
@@ -275,17 +288,24 @@ export function projectAnthropicToAnthropicMessages(input: {
       },
     );
   }
-
   const format = nullableValue(supplement.outputFormat);
   const effortIntent = input.invocation.reasoning.effort;
-  const effort =
-    effortIntent.kind === "omitted"
-      ? undefined
-      : effortIntent.kind === "explicit-null"
-        ? null
-        : effortIntent.level;
-  const outputConfig: Record<string, unknown> = {};
-  if (effort !== undefined) outputConfig.effort = effort;
+  const outputConfig: Record<string, unknown> =
+    typeof payload.output_config === "object" &&
+      payload.output_config !== null &&
+      !Array.isArray(payload.output_config)
+      ? { ...(payload.output_config as Record<string, unknown>) }
+      : {};
+  if (effortIntent.kind === "specified") {
+    if (typeof outputConfig.effort === "string") {
+      add(outcomes, "reasoning.effort", { kind: "pi-native" });
+    } else {
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: "Pi did not emit a certified Anthropic effort field for this target model",
+      });
+    }
+  }
   if (format !== undefined) {
     outputConfig.format =
       format === null
@@ -294,16 +314,12 @@ export function projectAnthropicToAnthropicMessages(input: {
   }
   if (Object.keys(outputConfig).length === 0) {
     delete payload.output_config;
-  } else {
-    exact(
-      outcomes,
-      "outputConfig",
-      payload.output_config,
-      outputConfig,
-      () => {
-        payload.output_config = outputConfig;
-      },
-    );
+  } else if (!same(payload.output_config, outputConfig)) {
+    payload.output_config = outputConfig;
+    add(outcomes, "outputFormat", {
+      kind: "payload-projected",
+      projector: "anthropic-to-anthropic-messages",
+    });
   }
 
   const userId = nullableValue(supplement.metadataUserId);

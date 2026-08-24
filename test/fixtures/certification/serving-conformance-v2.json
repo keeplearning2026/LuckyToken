@@ -207,7 +207,7 @@
       "tests": [
         "test/unit/live-client-token-authority.test.ts",
         "test/unit/codex-local-auth.test.ts",
-        "test/unit/semantic-profile-execution.test.ts",
+        "test/unit/profile-bound-pi-execution.test.ts",
         "test/unit/openai-responses-passthrough-architecture.test.ts",
         "test/integration/codex-native-responses.test.ts",
         "test/integration/request-journey-local-native.test.ts",

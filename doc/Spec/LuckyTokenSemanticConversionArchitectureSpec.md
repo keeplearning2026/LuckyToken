@@ -4,7 +4,7 @@ Status: **PROPOSED TARGET CONTRACT — DECOUPLING MIGRATION REQUIRED**
 Date: **2026-08-23**
 Scope: the Semantic Conversion data-plane lane only. Local Native Preservation and Provider Native Preservation remain independent and are governed by their own contracts.
 
-This document is authoritative for the structure shared by Semantic Conversion implementations. Protocol-specific field meanings, supplements, reasoning policies, request projectors, target-aware response interpretation, response rendering, and certification matrices belong to protocol-specific specifications and plans.
+This document is authoritative for the locality rules of Semantic Conversion implementations. Protocol-specific field meanings, invocations, supplements, reasoning policies, semantic execution, request projectors, target-aware response interpretation, response rendering, outcomes, failures, and certification matrices belong to protocol-specific specifications and plans.
 
 ## 1. Decision
 
@@ -16,8 +16,7 @@ Each Client Protocol owns a complete vertical slice:
 Client Wire
 → protocol-owned request conversion
 → protocol-owned Semantic Invocation
-→ protocol-owned reasoning and target projection
-→ LuckyToken Pi execution kernel
+→ protocol-owned reasoning, target projection, and semantic execution
 → Pi Provider
 → Provider Wire
 → Pi AssistantMessage
@@ -31,12 +30,14 @@ OpenAI Responses, Anthropic Messages, and future Client Protocols do not share:
 - a supplement type;
 - a reasoning request model;
 - a target projector registry;
+- a semantic execution Module;
+- a projection-outcome or semantic-error type;
 - field mapping policy;
 - target-response interpretation policy;
 - effective-state response policy;
 - protocol test cases or expected-wire assertions.
 
-They may reuse only mechanism-level modules that contain no Client Protocol semantics. The principal shared module is the LuckyToken Pi execution kernel, which owns Pi invocation and the `onPayload` lifecycle but does not know what any projected field means.
+They may call the same pinned Pi AI dependency through an existing narrow infrastructure capability. They may also reuse a proven mechanism-only leaf utility that contains no Client Protocol semantics and owns no execution lifecycle. They do not share a LuckyToken Semantic Conversion kernel: each protocol module owns its own `onPayload`, projection termination, outcome collection, typed semantic failure, and Pi invocation orchestration.
 
 Controlled duplication is preferred when a shared abstraction would make independently evolving Client Protocols change together.
 
@@ -111,22 +112,21 @@ A target-aware Adapter inside one Client Protocol module. It consumes the final 
 
 It cannot recover Provider response data that the pinned Pi Adapter discarded. Such facts must be recorded by the protocol's response audit and resolved through a valid Client default/null, explicit omission with a developer notice, visible fallback, or critical conversion failure. It never uses the request-side `onPayload` seam and never intercepts Provider transport.
 
-### 3.7 LuckyToken Pi execution kernel
+### 3.7 Protocol-owned semantic execution
 
-A protocol-agnostic deep module that owns:
+The request-local execution implementation inside one Client Protocol Semantic Module. It owns:
 
-- the public Pi execution call;
 - rejection of a caller-supplied `onPayload`;
-- installation and invocation of one already-selected projection operation;
-- payload projection failure enforcement;
-- final projection outcome collection;
-- delegation to the existing `ExecutionOperation`.
+- installation and invocation of that protocol's selected projection operation;
+- projection conflict and failure enforcement;
+- that protocol's immutable projection outcomes and typed semantic rejection;
+- invocation of the existing narrow Pi execution capability.
 
-It owns no request-field meaning and selects no Client Protocol or target projector.
+Its Interface, outcome types, errors, and lifecycle are private to the owning Client Protocol. Similar implementations may be locally duplicated. No protocol-neutral LuckyToken wrapper coordinates semantic execution for multiple Client Protocols.
 
 ### 3.8 Mechanism-only leaf utility
 
-A small shared utility is permitted only when it is unaware of all source protocols and semantic policies. Examples include immutable payload cloning, exact shape guards, conflict ledgers, bounded outcome containers, and test transport capture.
+A small shared utility is permitted only when it is unaware of all source protocols and semantic policies. Examples include immutable payload cloning, exact shape guards, and test transport capture. A shared utility must not own `onPayload`, Pi invocation, projection outcomes, semantic failure classification, or protocol field ownership.
 
 The deletion test applies: deleting the utility must reproduce identical mechanics in more than one protocol module. Similar-looking field mappings are not sufficient evidence.
 
@@ -141,31 +141,30 @@ OpenAI Responses Semantic Module
   ├─ Responses supplement
   ├─ Responses reasoning/continuity
   ├─ Responses → target projectors
+  ├─ Responses semantic execution/onPayload
   ├─ target Pi response → Responses interpretation
   └─ Responses response conversion
-        │ Pi input + prepared projection operation
+        │ existing narrow Pi execution capability
         ▼
-┌──────────────────────────────────┐
-│ LuckyToken Pi execution kernel   │
-│ - owns onPayload                 │
-│ - invokes projection operation   │
-│ - calls existing Pi execution    │
-└──────────────────────────────────┘
-        ▲
-        │ Pi input + prepared projection operation
+      Pi Provider
+
+Anthropic Messages Wire
+        │
+        ▼
 Anthropic Messages Semantic Module
   ├─ Anthropic Invocation
   ├─ Anthropic supplement
   ├─ Anthropic reasoning/continuity
   ├─ Anthropic → target projectors
+  ├─ Anthropic semantic execution/onPayload
   ├─ target Pi response → Anthropic interpretation
   └─ Anthropic response conversion
-        ▲
-        │
-Anthropic Messages Wire
+        │ existing narrow Pi execution capability
+        ▼
+      Pi Provider
 ```
 
-The two protocol modules do not converge into a shared semantic representation. They converge only at the execution-mechanism seam.
+The two protocol modules do not converge into a shared Semantic Conversion seam. Their separate executors may depend on the same pinned Pi library or narrow application execution capability, just as unrelated callers may depend on the same external library; neither protocol imports or configures the other.
 
 ## 5. Dependency and locality rules
 
@@ -176,83 +175,82 @@ protocol request/response code
         ↓
 same-protocol semantic contracts and implementation
         ↓
-Pi execution kernel Interface
+same-protocol semantic execution Interface
         ↓
-existing Pi execution / Pi AI
+existing narrow Pi execution capability / Pi AI
 ```
 
 Fixed rules:
 
 1. `protocols/openai-responses` and its semantic implementation do not import Anthropic protocol or semantic modules.
 2. `protocols/anthropic` and its semantic implementation do not import OpenAI Responses protocol or semantic modules.
-3. The Pi execution kernel imports no Client Protocol module, Invocation, supplement, reasoning type, or registry.
-4. No global `ClientProtocol` union or `switch (clientProtocol)` selects semantic behavior in the kernel.
+3. No shared Semantic Conversion executor, kernel, projection outcome union, or semantic error class is imported by multiple Client Protocol modules.
+4. No global `ClientProtocol` union or `switch (clientProtocol)` selects semantic behavior.
 5. A protocol module selects its own target projector only after model resolution, using `model.api` plus certified Provider/model compatibility facts.
 6. Composition registers a Client Protocol handler and supplies shared infrastructure capabilities; it does not translate request controls or mutate Provider payloads.
-7. Adding a Client Protocol creates a new vertical module and composition registration. It does not modify the kernel or existing Client Protocol modules.
+7. Adding a Client Protocol creates a new vertical module and composition registration. It does not modify an existing Client Protocol module or a common semantic executor.
 8. Deleting a Client Protocol removes its vertical module without leaving fields or cases in a common semantic model.
 
 Architecture tests must enforce these rules through import/dependency assertions and a compile-time or fixture-based new-protocol locality test.
 
-## 6. Pi execution kernel Interface
+## 6. Protocol-owned semantic execution Interface
 
-The exact TypeScript packaging may vary, but the kernel seam must remain equivalent to this small Interface:
+Each Client Protocol defines its own small execution Interface. No shared TypeScript Interface is required or allowed for semantic invocation, projection, outcomes, or failures. A protocol-local Interface is equivalent in responsibility to:
 
 ```ts
-interface PiInvocation {
+interface ResponsesPiInvocation {
   readonly context: Context;
   readonly options: ModelsSimpleStreamOptions;
 }
 
-interface PreparedPayloadProjection {
-  readonly pi: PiInvocation;
-  readonly initialOutcomes: readonly ProjectionOutcome[];
+interface ResponsesPreparedPayloadProjection {
+  readonly pi: ResponsesPiInvocation;
+  readonly initialOutcomes: readonly ResponsesProjectionOutcome[];
   project(payload: unknown): {
     readonly payload: unknown;
-    readonly outcomes: readonly ProjectionOutcome[];
+    readonly outcomes: readonly ResponsesProjectionOutcome[];
   };
 }
 
-interface PayloadProjectionOperation {
+interface ResponsesPayloadProjectionOperation {
   prepare(input: {
     readonly model: Model<string>;
-    readonly pi: PiInvocation;
-  }): PreparedPayloadProjection;
+    readonly pi: ResponsesPiInvocation;
+  }): ResponsesPreparedPayloadProjection;
 }
 
-interface PiKernelInfrastructure {
+interface ResponsesExecutionCapabilities {
   readonly executeOperation: ExecutionOperation;
   readonly factsSink?: ExecutionFactsSink;
 }
 
-executeWithPiKernel(input: {
+executeOpenAIResponsesSemanticInvocation(input: {
   readonly models: Models;
   readonly model: Model<string>;
-  readonly pi: PiInvocation;
-  readonly projection: PayloadProjectionOperation;
-  readonly infrastructure: PiKernelInfrastructure;
+  readonly invocation: ResponsesSemanticInvocation;
+  readonly capabilities: ResponsesExecutionCapabilities;
 }): Promise<{
   readonly message: AssistantMessage;
-  readonly outcomes: readonly ProjectionOutcome[];
+  readonly outcomes: readonly ResponsesProjectionOutcome[];
 }>;
 ```
 
-The projection operation hides protocol-specific prepared state behind its implementation. The kernel does not inspect that state or the meaning of its outcomes except for the common terminal `failed` disposition. `PiKernelInfrastructure` is deliberately narrow; it cannot become a bag for Profile, routing, protocol render state, Provider payload types, or raw request facts.
+The example names are intentionally Responses-owned. Anthropic defines its own equivalent Interface and types without importing these declarations. `ResponsesExecutionCapabilities` is deliberately narrow; it cannot become a bag for Profile, routing, raw wire, protocol render state, Provider payload types, or another protocol's facts.
 
-The protocol request converter does not create this operation. The owning protocol's semantic executor creates it after validation and target resolution from typed Invocation facts. The kernel alone creates Pi's `onPayload` callback.
+The request converter does not create `onPayload`. The same protocol's semantic executor creates its prepared projection operation after validation and target resolution from typed Invocation facts, then exclusively creates Pi's `onPayload` callback.
 
-### 6.1 Kernel execution order
+### 6.1 Protocol-local execution order
 
 1. Reject any Pi options already containing `onPayload`.
 2. Invoke the supplied operation's `prepare()` before freezing Pi input.
-3. Reject a failed initial outcome before invoking Pi.
+3. Reject a protocol-declared terminal initial outcome before invoking Pi. A protocol whose Supplement is candidate-only must not classify Supplement unavailability as such an outcome.
 4. Freeze the prepared Pi Context/options using the existing execution guard.
-5. Install one kernel-owned `onPayload` callback.
-6. When Pi supplies its final base payload, invoke `project()` exactly once and throw from the callback before it returns if projection failed, so transport cannot receive the payload.
+5. Install one protocol-executor-owned `onPayload` callback.
+6. When Pi supplies its final base payload, invoke `project()` exactly once. Throw before the callback returns only for a protocol-declared terminal contract or an internal projection-contract violation; a candidate-only Supplement omission remains non-terminal.
 7. Return the Pi `AssistantMessage` and immutable outcomes.
 8. If Pi reaches Provider dispatch or a successful terminal without invoking the certified payload seam, fail; an earlier Pi validation or execution failure remains authoritative and is not replaced by a missing-callback error.
 
-Pi retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion.
+Pi retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion. Protocol executors orchestrate this dependency; they do not duplicate it.
 
 ## 7. Protocol-owned conversion rules
 
@@ -302,8 +300,9 @@ Mappings are source-to-target contracts. Similar names do not establish equivale
 When equivalence is not proven:
 
 - preserve a validated protocol-owned fact until target resolution if a supported mapping may exist;
-- omit a preference with a warning when no mapping exists;
-- fail a hard control before Provider dispatch;
+- apply the owning protocol's declared availability disposition when no mapping exists;
+- for the OpenAI Responses candidate-only Supplement, omit every unavailable candidate with a warning regardless of its source requirement label;
+- enforce any genuinely non-degradable request guarantee in request validation or the authoritative Pi/main-call contract before a best-effort Supplement seam;
 - never invent a required target value unless the target Adapter contract defines that default.
 
 ## 8. Protocol-owned target projection
@@ -335,17 +334,17 @@ An audited Pi-native mapping remains the first choice. The protocol-owned projec
 3. repairs only a certified Provider-native field and emits a warning when repair is allowed;
 4. writes a missing field only for a proven mapping;
 5. rejects incompatible payload shapes rather than guessing;
-6. emits an explicit unsupported or failed outcome for every unconsumed fact.
+6. emits the owning protocol's explicit outcome for every unconsumed fact; a candidate-only Supplement emits `omitted`, never `failed`, for target unavailability.
 
 ### 8.3 One writer and conflicts
 
 One final Provider field has one authoritative writer inside one protocol projection operation. The operation composes its reasoning and ordinary supplement internally and must detect overlap before mutation.
 
-The kernel enforces operation failure but does not decide which semantic owner wins.
+The owning protocol's semantic executor enforces operation failure but does not decide which internal semantic owner wins; that conflict is resolved inside the protocol's projection operation.
 
 ### 8.4 Unknown targets
 
-An unknown Pi API or unaudited payload shape receives no mutation. The owning protocol applies its own requirement policy before dispatch. Unknown target handling is not a kernel mapping policy.
+An unknown Pi API or unaudited payload shape receives no mutation. The owning protocol applies its own requirement policy before dispatch. Unknown target handling is not shared execution policy.
 
 ## 9. Reasoning and continuity
 
@@ -383,7 +382,7 @@ Each Client Protocol owns a response-capability matrix indexed by the actual Pi 
 
 ## 11. Projection outcomes and failures
 
-The kernel may share a small outcome vocabulary because it describes execution mechanics, not Client field meaning:
+Every protocol may use the same conceptual outcome words, but owns its own type and meanings:
 
 - `pi-native`;
 - `payload-projected`;
@@ -391,38 +390,39 @@ The kernel may share a small outcome vocabulary because it describes execution m
 - `omitted`;
 - `failed`.
 
-The protocol module owns the subject/control identifier, warning text, and whether a fact is hard or a preference.
+No common TypeScript outcome union is an extension seam. The protocol module owns the subject/control identifier, warning text, requirement strength, and concrete outcome type.
 
 Rules:
 
-- hard unsupported controls fail before dispatch;
-- unsupported preferences are omitted with a protocol-owned warning;
+- each protocol declares which authoritative request or reasoning contracts may terminate before dispatch;
+- a candidate-only Supplement never turns target unavailability into failure, even when it retains a hard source-provenance label;
+- unsupported candidate facts are omitted with a protocol-owned warning unless a named bounded degradation applies;
 - repairs emit a developer warning identifying the protocol projector;
 - diagnostics are fail-open and never affect projection;
 - Client responses claim effectiveness only from successful final outcomes when their protocol defines an effective-state field; other protocols do not invent an echo.
 
 ## 12. Native-lane isolation
 
-Local Native Preservation and Provider Native Preservation do not use protocol Semantic Invocations, protocol target projectors, or the Pi execution kernel.
+Local Native Preservation and Provider Native Preservation do not use protocol Semantic Invocations, protocol target projectors, or protocol semantic executors.
 
 Native lane eligibility and request reconstruction remain governed by `AGENTS.md`. Failure after lane commitment never falls through into a Semantic Conversion module.
 
 ## 13. Testing contract
 
-### 13.1 Kernel tests
+### 13.1 Protocol semantic execution tests
 
-Kernel tests use a synthetic projection operation and prove only mechanics:
+Each protocol tests its own execution Interface and lifecycle:
 
 - `onPayload` ownership;
 - prepare/project ordering;
 - exactly-once projection;
 - immutable Pi input;
-- failed outcome prevents dispatch;
+- protocol-declared terminal outcomes prevent dispatch, while candidate-only Supplement omissions do not;
 - missing Pi payload callback fails;
 - projection outcomes are returned;
 - diagnostics do not alter execution.
 
-They contain no OpenAI Responses or Anthropic request fixtures.
+OpenAI Responses execution tests contain only Responses fixtures and local types. Anthropic execution tests contain only Anthropic fixtures and local types. Neither imports a shared Semantic Conversion executor test harness.
 
 ### 13.2 Protocol tests
 
@@ -445,9 +445,9 @@ Tests for one Client Protocol do not import another protocol's fixtures, supplem
 Architecture certification must prove:
 
 - no imports between Client Protocol modules;
-- no Client Protocol imports from the kernel;
-- no central Client Protocol discriminant in the kernel;
-- a synthetic new Client Protocol can bind a projection operation and execute without modifying existing protocol modules or the kernel.
+- no Client Protocol imports a common Semantic Conversion executor, projection-outcome union, or semantic error class;
+- no central Client Protocol discriminant selects semantic execution behavior;
+- a synthetic new Client Protocol can own its execution lifecycle without modifying existing protocol modules.
 
 ### 13.4 Online tests
 
@@ -461,37 +461,38 @@ Every direct semantic probe sends complete Client history and asserts the captur
 
 Capture current spec-conforming OpenAI Responses final-wire and round-trip behavior as the regression baseline. A known contradiction with the Responses protocol specification is a bug to correct, not behavior to freeze. Add architecture tests that initially expose the shared-contract coupling.
 
-### Phase 2 — Extract the execution kernel
+### Phase 2 — Copy the OpenAI Responses baseline into its module
 
-Deepen the current wrapper into a mechanism-only kernel. Replace its semantic-conversion-specific Interface with `PiInvocation + PayloadProjectionOperation`. Preserve authentication, Profile binding, retry, transport, response parsing, and existing `ExecutionOperation` ownership.
+Copy the current spec-conforming Invocation, supplement, reasoning, projector, execution, outcome, and semantic-failure implementations into `src/protocols/openai-responses/semantic/`. Do not change a shared implementation while another protocol still uses it.
 
 ### Phase 3 — Localize OpenAI Responses
 
-Move the current shared Invocation, supplement, reasoning policies, target projectors, and effective-state behavior into the OpenAI Responses vertical module. Preserve final-wire behavior through the kernel Interface. Remove obsolete shared registries and types rather than retaining compatibility shims.
+Update only OpenAI Responses imports, composition, and tests to use its copied implementations. Preserve the existing narrow Pi execution capability, final-wire behavior, and response behavior. Once every protocol has cut over and dependency tests prove zero production references, delete the obsolete shared semantic files and `src/semantic-conversion/` directory.
 
 ### Phase 4 — Certify locality
 
-Pass dependency tests, the synthetic new-protocol test, all Responses final-wire tests, and the three independent Responses online Provider scripts.
+Pass dependency tests, the synthetic new-protocol test, all Responses final-wire tests, and the three independent Responses online Provider scripts. Prove that OpenAI Responses imports only its local semantic implementation and that no dormant shared semantic directory remains after all protocols cut over.
 
 ### Phase 5 — Implement Anthropic independently
 
-Audit the complete Anthropic Client request grammar and the Provider response → Pi → Anthropic response surface. Build a separate Anthropic Invocation, supplement, reasoning/continuity module, request projector registry, target-aware response interpreter registry, response renderer, and online suite. Reuse only the kernel and proven mechanism-only leaf utilities.
+Anthropic ownership is performed independently under the Anthropic specification and plan. The OpenAI migration does not require Anthropic to change in the same commit; final shared-directory deletion occurs only after both independent cutovers are complete.
 
 ## 15. Current implementation divergence
 
 The implementation committed before this architecture decision uses a shared `SemanticConversionInvocation`, shared `ProjectionSupplement`, shared reasoning request model, and shared target projector registry under `src/semantic-conversion/`. Those modules represent the implemented OpenAI Responses baseline, not the desired extension seam for new Client Protocols; only spec-conforming behavior is preserved as a migration invariant.
 
-The migration must preserve their tested Responses behavior while localizing them. Anthropic must not be added to those shared semantic contracts as an interim shortcut.
+The OpenAI migration must preserve their tested Responses behavior by copying the necessary implementation into the Responses module and cutting over only Responses callers. The old shared files are temporary migration sources, not an allowed dependency or permanent directory. Delete them after all consumers have local owners.
 
 ## 16. Definition of done
 
 The architecture migration is complete only when:
 
-1. the Pi execution kernel imports no Client Protocol semantic type or registry;
-2. OpenAI Responses owns its Invocation, supplement, reasoning, projectors, continuity, response policy, and tests;
+1. OpenAI Responses owns its Invocation, supplement, reasoning, projectors, semantic execution, outcome/error types, continuity, response policy, and tests;
+2. OpenAI Responses imports neither Anthropic nor a shared Semantic Conversion implementation;
 3. no existing protocol changes are required to register a synthetic new Client Protocol;
 4. final-wire and round-trip behavior remains equivalent to the frozen Responses baseline;
 5. all supported source-protocol/target-API mappings have explicit outcomes and final-wire tests;
 6. each protocol has an explicit Provider-response capability matrix and end-to-end response/replay tests;
 7. native lanes remain independent;
-8. no compatibility shim, dual contract, raw-wire carrier, or global Client Protocol semantic union remains.
+8. no compatibility shim, dual read/write path, raw-wire carrier, or global Client Protocol semantic union is used by OpenAI Responses;
+9. no obsolete `src/semantic-conversion/` directory remains after all protocol cutovers.

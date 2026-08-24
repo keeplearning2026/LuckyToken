@@ -38,7 +38,7 @@ import {
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import { loginOnlineProvider } from "./provider-login.js";
 import {
-  expectsForcedToolChoicePredispatchFailure,
+  expectsForcedToolChoiceOmission,
   readOnlineProviderMessages,
   requireOnlineOpenAICompletionsProjection,
   requireOnlineReasoningReplay,
@@ -317,28 +317,6 @@ async function postResponses(
     throw new Error(`online_http_${response.status}: ${error.slice(0, 200)}`);
   }
   return (await response.json()) as ResponsesResult;
-}
-
-async function postResponsesExpectFailure(
-  origin: string,
-  token: string,
-  body: Record<string, unknown>,
-  signal: AbortSignal,
-): Promise<{ readonly status: number; readonly body: string }> {
-  const response = await fetch(`${origin}/v1/responses`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-  const responseBody = await response.text();
-  if (response.status === 200) {
-    throw new Error("online_expected_projection_failure_missing");
-  }
-  return Object.freeze({ status: response.status, body: responseBody });
 }
 
 interface SseFrame {
@@ -892,39 +870,38 @@ export async function runOpenAIResponsesOnlineSuite(
         tool_choice: { type: "function", name: toolName },
         parallel_tool_calls: false,
       };
-      if (
-        expectsForcedToolChoicePredispatchFailure(
-          providerId,
-          resolvedProviderModel.id,
-        )
-      ) {
-        const failure = await postResponsesExpectFailure(
-          conformanceOrigin,
-          responsesToken,
-          toolRequest,
-          requestSignal(totalSignal),
+      const omitForcedToolChoice = expectsForcedToolChoiceOmission(
+        providerId,
+        resolvedProviderModel.id,
+      );
+      const toolResult = await postResponses(
+        conformanceOrigin,
+        responsesToken,
+        toolRequest,
+        requestSignal(totalSignal),
+      );
+      const toolExchange = capture.exchanges.findLast((exchange) =>
+        exchange.body.includes(toolMarker),
+      );
+      if (toolExchange === undefined) {
+        throw new Error("online_projection_tool_upstream_missing");
+      }
+      if (omitForcedToolChoice) {
+        if (
+          toolResult.status !== "completed" &&
+          toolResult.status !== "incomplete"
+        ) {
+          throw new Error("online_projection_omission_behavior_missing");
+        }
+        requireOnlineOpenAICompletionsProjection(
+          JSON.parse(toolExchange.body) as unknown,
+          {
+            omitToolChoice: true,
+            parallelToolCalls: false,
+            maxOutputTokens: SUCCESS_MAX_TOKENS,
+          },
         );
-        if (
-          !failure.body.includes(
-            "thinking mode does not support forced tool_choice",
-          )
-        ) {
-          throw new Error(
-            `online_projection_wrong_failure_${failure.status}: ${failure.body.slice(0, 200)}`,
-          );
-        }
-        if (
-          capture.exchanges.some((exchange) => exchange.body.includes(toolMarker))
-        ) {
-          throw new Error("online_projection_failure_dispatched_upstream");
-        }
       } else {
-        const toolResult = await postResponses(
-          conformanceOrigin,
-          responsesToken,
-          toolRequest,
-          requestSignal(totalSignal),
-        );
         const toolCall = toolResult.output.find(
           (item) => item.type === "function_call" && item.name === toolName,
         );
@@ -936,12 +913,6 @@ export async function runOpenAIResponsesOnlineSuite(
           toolCall.call_id.length === 0
         ) {
           throw new Error("online_projection_tool_behavior_missing");
-        }
-        const toolExchange = capture.exchanges.findLast((exchange) =>
-          exchange.body.includes(toolMarker),
-        );
-        if (toolExchange === undefined) {
-          throw new Error("online_projection_tool_upstream_missing");
         }
         requireOnlineOpenAICompletionsProjection(
           JSON.parse(toolExchange.body) as unknown,

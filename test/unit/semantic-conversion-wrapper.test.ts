@@ -6,11 +6,12 @@ import type {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import type { SemanticConversionInvocation } from "../../src/semantic-conversion/contract.js";
+import type { ResponsesSemanticInvocation as SemanticConversionInvocation } from "../../src/protocols/openai-responses/semantic/invocation.js";
 import {
-  executeSemanticConversion,
-  InvalidSemanticExecution,
-} from "../../src/semantic-conversion/execution.js";
+  executeOpenAIResponsesSemanticInvocation as executeSemanticConversion,
+  InvalidResponsesSemanticExecution as InvalidSemanticExecution,
+} from "../../src/protocols/openai-responses/semantic/execution.js";
+import { ResponsesProjectionRejected } from "../../src/protocols/openai-responses/semantic/pi-execution.js";
 
 const model: Model<"openai-completions"> = {
   id: "model-test",
@@ -55,6 +56,16 @@ const googleModel: Model<"google-generative-ai"> = {
   maxTokens: 1_024,
 };
 
+const anthropicModel: Model<"anthropic-messages"> = {
+  ...model,
+  api: "anthropic-messages",
+};
+
+const codexResponsesModel: Model<"openai-codex-responses"> = {
+  ...model,
+  api: "openai-codex-responses",
+};
+
 const goatThinkingModel: Model<"openai-completions"> = {
   ...model,
   id: "deepseek/deepseek-v4-flash",
@@ -87,7 +98,6 @@ function invocation(): SemanticConversionInvocation {
     supplement: {
       tools: {
         choice: {
-          requirement: "hard",
           value: { kind: "required" },
         },
       },
@@ -114,6 +124,45 @@ const terminal: AssistantMessage = {
 };
 
 describe("LuckyToken Pi execution wrapper", () => {
+  it.each([
+    ["Codex Responses", codexResponsesModel, { model: "model-test", input: [], stream: true }],
+    ["an uncertified API", unknownApiModel, { model: "model-test", request: [] }],
+  ] as const)("dispatches with a warning when %s cannot guarantee max_output_tokens", async (
+    _label,
+    targetModel,
+    providerPayload,
+  ) => {
+    const target = invocation();
+    const constrained: SemanticConversionInvocation = {
+      ...target,
+      pi: { ...target.pi, options: { ...target.pi.options, maxTokens: 512 } },
+      supplement: {
+        sampling: {
+          maxOutputTokens: { value: 512 },
+        },
+      },
+    };
+    const operation = vi.fn(async (_models, _model, _context, options) => {
+      await options.onPayload?.(providerPayload, targetModel);
+      return terminal;
+    });
+
+    const result = await executeSemanticConversion({
+      models: {} as Models,
+      model: targetModel,
+      invocation: constrained,
+      infrastructure: { executeOperation: operation },
+    });
+    expect(operation).toHaveBeenCalledOnce();
+    expect(result.supplementOutcomes).toContainEqual({
+      control: "sampling.maxOutputTokens",
+      outcome: expect.objectContaining({
+        kind: "omitted",
+        warning: expect.stringMatching(/max_output_tokens|output.*token/iu),
+      }),
+    });
+  });
+
   it("owns onPayload and composes reasoning before supplement projection", async () => {
     let finalPayload: unknown;
     const operation = vi.fn(async (_models, _model, _context, options) => {
@@ -203,7 +252,7 @@ describe("LuckyToken Pi execution wrapper", () => {
       ...target,
       supplement: {
         sampling: {
-          temperature: { requirement: "preference", value: 0.4 },
+          temperature: { value: 0.4 },
         },
       },
     };
@@ -305,7 +354,7 @@ describe("LuckyToken Pi execution wrapper", () => {
           },
         },
       }),
-    ).rejects.toThrow(/certified reasoning payload Adapter/u);
+    ).rejects.toBeInstanceOf(ResponsesProjectionRejected);
     expect(dispatched).toBe(false);
   });
 
@@ -354,74 +403,141 @@ describe("LuckyToken Pi execution wrapper", () => {
     );
     expect(notice).toHaveBeenCalledTimes(2);
     expect(notice).toHaveBeenCalledWith({
-      adapter: "semantic-conversion",
+      adapter: "openai-responses",
       direction: "request",
       code: "semantic_projection_omitted",
       action: "degrade",
     });
   });
 
-  it("does not dispatch when the target cannot satisfy a hard serial-tool requirement", async () => {
+  it("dispatches with a warning when the target cannot project serial-tool intent", async () => {
     const targetInvocation = invocation();
     const serialTools: SemanticConversionInvocation = {
       ...targetInvocation,
       supplement: {
         tools: {
-          parallelCalls: { requirement: "hard", value: false },
+          parallelCalls: { value: false },
         },
       },
     };
+    const notice = vi.fn();
     let dispatched = false;
 
-    await expect(
-      executeSemanticConversion({
-        models: {} as Models,
-        model: googleModel,
-        invocation: serialTools,
-        infrastructure: {
-          executeOperation: async (_models, _model, _context, options) => {
-            await options.onPayload?.(
-              {
-                model: "gemini-3-test",
-                contents: [],
-                config: {},
-              },
-              googleModel,
-            );
-            dispatched = true;
-            return terminal;
-          },
+    const result = await executeSemanticConversion({
+      models: {} as Models,
+      model: googleModel,
+      invocation: serialTools,
+      infrastructure: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.(
+            {
+              model: "gemini-3-test",
+              contents: [],
+              config: {},
+            },
+            googleModel,
+          );
+          dispatched = true;
+          return terminal;
         },
-      }),
-    ).rejects.toThrow(/cannot guarantee serial tool calls/u);
-    expect(dispatched).toBe(false);
+      },
+    });
+
+    expect(dispatched).toBe(true);
+    expect(result.supplementOutcomes).toContainEqual({
+      control: "tools.parallelCalls",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+    expect(notice).toHaveBeenCalledWith({
+      adapter: "openai-responses",
+      direction: "request",
+      code: "semantic_projection_omitted",
+      action: "degrade",
+    });
   });
 
-  it("does not dispatch a forced tool choice rejected by the certified GOAT thinking model", async () => {
+  it("dispatches after omitting a forced tool choice rejected by the GOAT target", async () => {
     let dispatched = false;
 
-    await expect(
-      executeSemanticConversion({
-        models: {} as Models,
-        model: goatThinkingModel,
-        invocation: invocation(),
-        infrastructure: {
-          executeOperation: async (_models, _model, _context, options) => {
-            await options.onPayload?.(
-              {
-                model: "deepseek/deepseek-v4-flash",
-                messages: [],
-                stream: true,
-              },
-              goatThinkingModel,
-            );
-            dispatched = true;
-            return terminal;
+    const result = await executeSemanticConversion({
+      models: {} as Models,
+      model: goatThinkingModel,
+      invocation: invocation(),
+      infrastructure: {
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.(
+            {
+              model: "deepseek/deepseek-v4-flash",
+              messages: [],
+              stream: true,
+            },
+            goatThinkingModel,
+          );
+          dispatched = true;
+          return terminal;
+        },
+      },
+    });
+
+    expect(dispatched).toBe(true);
+    expect(result.supplementOutcomes).toContainEqual({
+      control: "tools.choice",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it("publishes a degraded notice for a verified Anthropic cache fallback", async () => {
+    const target = invocation();
+    const notice = vi.fn();
+    const result = await executeSemanticConversion({
+      models: {} as Models,
+      model: anthropicModel,
+      invocation: {
+        ...target,
+        supplement: {
+          cache: {
+            retention: { value: "24h" },
           },
         },
-      }),
-    ).rejects.toThrow(/thinking mode does not support forced tool_choice/u);
-    expect(dispatched).toBe(false);
+      },
+      infrastructure: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.(
+            {
+              model: "model-test",
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: "hello",
+                      cache_control: { type: "ephemeral", ttl: "1h" },
+                    },
+                  ],
+                },
+              ],
+              stream: true,
+            },
+            anthropicModel,
+          );
+          return terminal;
+        },
+      },
+    });
+
+    expect(result.supplementOutcomes).toContainEqual({
+      control: "cache.retention",
+      outcome: expect.objectContaining({ kind: "degraded" }),
+    });
+    expect(notice).toHaveBeenCalledWith({
+      adapter: "anthropic-messages",
+      direction: "request",
+      code: "semantic_projection_degraded",
+      action: "degrade",
+    });
   });
 
   it("does not apply GOAT's forced-tool restriction to OpenCode GO", async () => {

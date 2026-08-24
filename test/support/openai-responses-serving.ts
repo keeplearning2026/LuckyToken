@@ -29,6 +29,7 @@ import type {
   CodexNativeModelSource,
 } from "../../src/codex-native-seam.js";
 import { createCodexLocalResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexLocalSearchHandler } from "../../src/integrations/codex/local-search.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;
@@ -138,8 +139,20 @@ export async function createOpenAIResponsesServingTestComposition(
     providerIds: [commandCodePrivateProviderId],
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+  const searchHandler =
+    options.codexLocalAuth === undefined
+      ? undefined
+      : createCodexLocalSearchHandler({
+          credentials: options.codexLocalAuth,
+          fetch: options.fetch,
+          maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+        });
   const runtime = createLuckyTokenRuntime({
-    clientProtocols: [handler, modelsHandler],
+    clientProtocols: [
+      handler,
+      modelsHandler,
+      ...(searchHandler === undefined ? [] : [searchHandler]),
+    ],
     ...(options.diagnostics === undefined
       ? {}
       : { diagnostics: options.diagnostics }),

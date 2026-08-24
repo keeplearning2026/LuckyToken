@@ -55,7 +55,7 @@ function mappedToolChoice(
   return undefined;
 }
 
-export function initialOpenAIResponsesFailure(input: {
+export function initialAnthropicToOpenAIResponsesFailure(input: {
   readonly api: AnthropicResponsesTargetApi;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
@@ -63,24 +63,18 @@ export function initialOpenAIResponsesFailure(input: {
   if (input.invocation.supplement.inferenceGeo.kind === "specified") {
     return `${input.api} has no certified inference geography control`;
   }
-  if (input.api === "openai-codex-responses") {
-    return "openai-codex-responses has no certified max_output_tokens control for Anthropic max_tokens";
-  }
-  const activation = input.invocation.reasoning.activation;
-  if (activation.kind === "enabled") {
-    return `${input.api} cannot preserve an exact Anthropic thinking budget`;
-  }
-  if (activation.kind === "adaptive") {
-    return `${input.api} has no certified Anthropic adaptive-thinking control`;
-  }
-  if (
-    activation.kind === "disabled" &&
-    input.model.reasoning &&
-    input.model.thinkingLevelMap?.off === null
-  ) {
-    return `${input.api} model ${input.model.id} cannot disable reasoning`;
-  }
   return undefined;
+}
+
+function clearResponsesReasoning(payload: Record<string, unknown>): void {
+  delete payload.reasoning;
+  if (Array.isArray(payload.include)) {
+    const include = payload.include.filter(
+      (value) => value !== "reasoning.encrypted_content",
+    );
+    if (include.length === 0) delete payload.include;
+    else payload.include = include;
+  }
 }
 
 function projectReasoning(
@@ -94,6 +88,43 @@ function projectReasoning(
 ): void {
   const activation = input.invocation.reasoning.activation;
   const effort = input.invocation.reasoning.effort;
+  if (effort.kind === "specified" && !input.model.reasoning) {
+    clearResponsesReasoning(payload);
+    add(outcomes, "reasoning.effort", {
+      kind: "omitted",
+      warning: `${input.api} target model does not support reasoning effort`,
+    });
+    return;
+  }
+  if (activation.kind === "disabled" && !input.model.reasoning) {
+    clearResponsesReasoning(payload);
+    add(outcomes, "reasoning.activation", { kind: "pi-native" });
+    return;
+  }
+  if (activation.kind === "disabled" && input.model.thinkingLevelMap?.off === null) {
+    clearResponsesReasoning(payload);
+    add(outcomes, "reasoning.activation", {
+      kind: "degraded",
+      warning: `${input.api} model ${input.model.id} used its target reasoning default because it has no exact disable value`,
+    });
+    return;
+  }
+  if (activation.kind === "enabled" || activation.kind === "adaptive") {
+    if (!input.model.reasoning) clearResponsesReasoning(payload);
+    add(outcomes, "reasoning.activation", {
+      kind: "degraded",
+      warning: input.model.reasoning
+        ? `${input.api} used Pi's nearest reasoning mode instead of the exact Anthropic ${activation.kind} mode`
+        : `${input.api} target does not support reasoning; ordinary generation was used`,
+    });
+    if (effort.kind === "specified") {
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: "reasoning effort cannot be applied together with an explicit Anthropic thinking activation",
+      });
+    }
+    return;
+  }
   let expected: Record<string, unknown> | undefined;
   if (activation.kind === "disabled") {
     expected = { effort: input.model.thinkingLevelMap?.off ?? "none" };
@@ -111,7 +142,7 @@ function projectReasoning(
   if (expected === undefined) {
     if (payload.reasoning !== undefined) {
       delete payload.reasoning;
-      add(outcomes, "reasoning", {
+      add(outcomes, "reasoning.activation", {
         kind: "payload-projected",
         projector: `anthropic-to-${input.api}`,
         warning: "pi-native-mapping-repaired",
@@ -119,7 +150,10 @@ function projectReasoning(
     }
     return;
   }
-  exact(outcomes, input.api, "reasoning", payload.reasoning, expected, () => {
+  const control = activation.kind === "disabled"
+    ? "reasoning.activation"
+    : "reasoning.effort";
+  exact(outcomes, input.api, control, payload.reasoning, expected, () => {
     payload.reasoning = expected;
   });
   if (input.model.reasoning) {
@@ -159,19 +193,32 @@ export function projectAnthropicToOpenAIResponses(input: {
   const supplement = input.invocation.supplement;
 
   if (input.api !== "openai-codex-responses") {
+    const piMaxTokens = payload.max_output_tokens;
+    if (typeof piMaxTokens !== "number") {
+      throw new Error(`${input.api} payload shape mismatch at max_output_tokens`);
+    }
+    const finalMaxTokens = Math.min(
+      piMaxTokens,
+      supplement.outputTokenCeiling,
+    );
     exact(
       outcomes,
       input.api,
       "maxTokens",
-      payload.max_output_tokens,
-      supplement.maxTokens,
+      piMaxTokens,
+      finalMaxTokens,
       () => {
-        payload.max_output_tokens = supplement.maxTokens;
+        payload.max_output_tokens = finalMaxTokens;
       },
     );
+  } else {
+    add(outcomes, "maxTokens", {
+      kind: "omitted",
+      warning:
+        "openai-codex-responses has no certified max_output_tokens control; Anthropic max_tokens was omitted",
+    });
   }
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "top_p", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
@@ -179,19 +226,6 @@ export function projectAnthropicToOpenAIResponses(input: {
       payload[field] = value;
     });
   }
-  if (supplement.sampling.topK !== undefined) {
-    add(outcomes, "sampling.topK", {
-      kind: "omitted",
-      warning: `${input.api} has no certified top-k control`,
-    });
-  }
-  if (supplement.stopSequences !== undefined) {
-    add(outcomes, "stopSequences", {
-      kind: "omitted",
-      warning: `${input.api} has no stop-sequence field`,
-    });
-  }
-
   const format = supplement.outputFormat;
   if (format.kind === "specified") {
     const text =
@@ -227,23 +261,16 @@ export function projectAnthropicToOpenAIResponses(input: {
   const sourceChoice = supplement.toolChoice;
   if (sourceChoice !== undefined && sourceChoice.kind !== "none") {
     const parallel = !sourceChoice.disableParallelToolUse;
-    if (input.api === "openai-codex-responses" && !parallel) {
-      add(outcomes, "parallelToolCalls", {
-        kind: "omitted",
-        warning: "openai-codex-responses cannot guarantee serial tool calls",
-      });
-    } else {
-      exact(
-        outcomes,
-        input.api,
-        "parallelToolCalls",
-        payload.parallel_tool_calls,
-        parallel,
-        () => {
-          payload.parallel_tool_calls = parallel;
-        },
-      );
-    }
+    exact(
+      outcomes,
+      input.api,
+      "toolChoice.disableParallelToolUse",
+      payload.parallel_tool_calls,
+      parallel,
+      () => {
+        payload.parallel_tool_calls = parallel;
+      },
+    );
   }
 
   if (supplement.metadataUserId.kind === "specified") {
@@ -267,18 +294,6 @@ export function projectAnthropicToOpenAIResponses(input: {
       payload.service_tier = tier;
     });
   }
-  for (const [control, intent] of [
-    ["container", supplement.container],
-    ["cacheControl", supplement.cacheControl],
-  ] as const) {
-    if (intent.kind === "specified") {
-      add(outcomes, control, {
-        kind: "omitted",
-        warning: `${input.api} has no certified equivalent`,
-      });
-    }
-  }
-
   projectReasoning(input, payload, outcomes);
   return Object.freeze({
     payload: Object.freeze(payload),

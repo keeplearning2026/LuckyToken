@@ -45,37 +45,21 @@ function omitted(
   add(outcomes, control, { kind: "omitted", warning });
 }
 
-export function initialCommandCodePrivateFailure(input: {
+function degraded(
+  outcomes: AnthropicProjectionOutcome[],
+  control: string,
+  warning: string,
+): void {
+  add(outcomes, control, { kind: "degraded", warning });
+}
+
+export function initialAnthropicToCommandCodePrivateFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
-  const { reasoning, supplement } = input.invocation;
+  const { supplement } = input.invocation;
   if (supplement.inferenceGeo.kind === "specified") {
     return "CommandCode Private has no certified inference geography control";
-  }
-  if (supplement.stopSequences !== undefined) {
-    return "CommandCode Private has no stop sequence wire control";
-  }
-  if (supplement.outputFormat.kind === "specified") {
-    return "CommandCode Private has no structured output wire control";
-  }
-  const choice = supplement.toolChoice;
-  if (
-    choice !== undefined &&
-    (choice.kind === "any" ||
-      choice.kind === "named" ||
-      (choice.kind === "auto" && choice.disableParallelToolUse))
-  ) {
-    return "CommandCode Private has no exact requested tool choice or serial-tool control";
-  }
-  if (reasoning.activation.kind === "enabled") {
-    return "CommandCode Private has no exact Anthropic thinking budget control";
-  }
-  if (reasoning.activation.kind === "adaptive") {
-    return "CommandCode Private has no Anthropic adaptive-thinking control";
-  }
-  if (reasoning.activation.kind === "disabled" && input.model.reasoning) {
-    return "CommandCode Private has no explicit reasoning-disable wire control";
   }
   return undefined;
 }
@@ -129,33 +113,59 @@ export function projectAnthropicToCommandCodePrivate(input: {
   const outcomes: AnthropicProjectionOutcome[] = [];
   const { reasoning, supplement } = input.invocation;
 
-  exact(outcomes, "maxTokens", params.max_tokens, supplement.maxTokens, () => {
-    params.max_tokens = supplement.maxTokens;
+  const finalMaxTokens = Math.min(params.max_tokens, supplement.outputTokenCeiling);
+  exact(outcomes, "maxTokens", params.max_tokens, finalMaxTokens, () => {
+    params.max_tokens = finalMaxTokens;
   });
-  if (supplement.sampling.temperature !== undefined) {
-    exact(
+  const choice = supplement.toolChoice;
+  if (choice?.kind === "none") {
+    params.tools = [];
+    degraded(
       outcomes,
-      "sampling.temperature",
-      params.temperature,
-      supplement.sampling.temperature,
-      () => {
-        params.temperature = supplement.sampling.temperature;
-      },
+      "toolChoice",
+      "CommandCode Private removed current-request tools; target-level disablement is not guaranteed",
+    );
+  } else if (choice?.kind === "auto") {
+    add(outcomes, "toolChoice", { kind: "pi-native" });
+  } else if (choice?.kind === "any") {
+    degraded(
+      outcomes,
+      "toolChoice",
+      "CommandCode Private used automatic selection for required tool choice",
+    );
+  } else if (choice?.kind === "named") {
+    params.tools = (params.tools as Array<Record<string, unknown>>).filter(
+      (tool) => tool.name === choice.name,
+    );
+    degraded(
+      outcomes,
+      "toolChoice",
+      "CommandCode Private exposed only the named tool but cannot guarantee a tool call",
     );
   }
-  if (supplement.sampling.topP !== undefined) {
-    omitted(outcomes, "sampling.topP", "CommandCode Private has no top-p wire control");
-  }
-  if (supplement.sampling.topK !== undefined) {
-    omitted(outcomes, "sampling.topK", "CommandCode Private has no top-k wire control");
+  if (
+    choice !== undefined &&
+    choice.kind !== "none" &&
+    choice.disableParallelToolUse
+  ) {
+    degraded(
+      outcomes,
+      "toolChoice.disableParallelToolUse",
+      "CommandCode Private cannot guarantee serial tool execution",
+    );
   }
 
-  if (supplement.toolChoice?.kind === "none") {
-    exact(outcomes, "toolChoice", params.tools, [], () => {
-      params.tools = [];
-    });
-  } else if (supplement.toolChoice?.kind === "auto") {
-    add(outcomes, "toolChoice", { kind: "pi-native" });
+  if (supplement.outputFormat.kind === "specified") {
+    const schema = JSON.stringify(supplement.outputFormat.value.schema);
+    const instruction = `Return one JSON value matching this schema. Conformance is best effort: ${schema}`;
+    params.system = typeof params.system === "string" && params.system.length > 0
+      ? `${params.system}\n\n${instruction}`
+      : instruction;
+    degraded(
+      outcomes,
+      "outputFormat",
+      "CommandCode Private received schema guidance only; conformance is not guaranteed",
+    );
   }
 
   if (reasoning.effort.kind === "specified") {
@@ -168,15 +178,17 @@ export function projectAnthropicToCommandCodePrivate(input: {
     } else {
       const expected = expectedReasoningEffort(input.model, reasoning.effort.level);
       if (expected === undefined) {
-        return Object.freeze({
-          payload: Object.freeze(payload),
-          outcomes: Object.freeze(outcomes),
-          failure: `CommandCode Private has no certified ${reasoning.effort.level} effort mapping`,
+        delete params.reasoning_effort;
+        omitted(
+          outcomes,
+          "reasoning.effort",
+          `CommandCode Private has no certified ${reasoning.effort.level} effort mapping`,
+        );
+      } else {
+        exact(outcomes, "reasoning.effort", params.reasoning_effort, expected, () => {
+          params.reasoning_effort = expected;
         });
       }
-      exact(outcomes, "reasoning.effort", params.reasoning_effort, expected, () => {
-        params.reasoning_effort = expected;
-      });
     }
   } else if (reasoning.effort.kind === "explicit-null" || reasoning.effort.kind === "omitted") {
     const repaired = Object.hasOwn(params, "reasoning_effort");
@@ -188,15 +200,6 @@ export function projectAnthropicToCommandCodePrivate(input: {
           warning: "pi-native-mapping-repaired",
         }
       : { kind: "pi-native" });
-  }
-
-  for (const [control, intent, warning] of [
-    ["metadataUserId", supplement.metadataUserId, "CommandCode Private has no end-user identity field"],
-    ["serviceTier", supplement.serviceTier, "CommandCode Private has no service-tier field"],
-    ["container", supplement.container, "CommandCode Private cannot reuse an Anthropic container"],
-    ["cacheControl", supplement.cacheControl, "CommandCode Private has no Anthropic cache breakpoint"],
-  ] as const) {
-    if (intent.kind === "specified") omitted(outcomes, control, warning);
   }
 
   payload.params = params;

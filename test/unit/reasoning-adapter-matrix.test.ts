@@ -2,8 +2,8 @@ import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
-import { prepareReasoning } from "../../src/semantic-conversion/reasoning/request.js";
-import { PINNED_REASONING_APIS } from "../../src/semantic-conversion/reasoning/registry.js";
+import { prepareResponsesReasoning as prepareReasoning } from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
+import { PINNED_RESPONSES_REASONING_APIS as PINNED_REASONING_APIS } from "../../src/protocols/openai-responses/semantic/reasoning/registry.js";
 
 function model(
   api: string,

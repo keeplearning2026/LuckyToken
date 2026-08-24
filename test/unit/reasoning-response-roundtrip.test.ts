@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
 import { convertAssistantMessageToResponses } from "../../src/protocols/openai-responses/response.js";
-import { prepareReasoning } from "../../src/semantic-conversion/reasoning/request.js";
+import { prepareResponsesReasoning as prepareReasoning } from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
 
 function message(
   source: { provider: string; api: string; model: string },

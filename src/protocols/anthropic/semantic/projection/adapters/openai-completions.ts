@@ -66,6 +66,45 @@ function exact(
   });
 }
 
+function degraded(
+  outcomes: AnthropicProjectionOutcome[],
+  control: string,
+  warning: string,
+): void {
+  add(outcomes, control, { kind: "degraded", warning });
+}
+
+function filterNamedOpenAITool(
+  tools: unknown,
+  name: string,
+): unknown {
+  if (!Array.isArray(tools)) return tools;
+  return tools.filter((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      return false;
+    }
+    const tool = candidate as Readonly<Record<string, unknown>>;
+    const fn = tool.function;
+    return typeof fn === "object" && fn !== null && !Array.isArray(fn) &&
+      (fn as Readonly<Record<string, unknown>>).name === name;
+  });
+}
+
+/**
+ * CommandCode GOAT direct wire-probe evidence. Keep this comment beside the
+ * compatibility rule and do not remove or weaken it without rerunning the
+ * independent GOAT online certification and updating the Anthropic audit.
+ *
+ * Direct upstream probes on 2026-08-23 against
+ * commandcode-goat/deepseek/deepseek-v4-flash showed that named and required
+ * tool_choice requests returned HTTP 400 with "Thinking mode does not support
+ * this tool_choice". The result was unchanged with serial-tool requests, high
+ * or max reasoning effort, `thinking.type=disabled`, or
+ * `enable_thinking=false`; `reasoning_effort=none` was itself rejected. The
+ * bounded best-effort alternative (`tool_choice=auto`, only the named tool
+ * exposed, `parallel_tool_calls=false`) selected that tool in 9/9 probes, but
+ * this observation is not an exact forced-tool guarantee.
+ */
 function forcedToolChoiceFailure(
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
@@ -81,23 +120,320 @@ function forcedToolChoiceFailure(
   return undefined;
 }
 
-export function initialOpenAICompletionsFailure(input: {
+/**
+ * Online evidence captured on 2026-08-24 showed that both targets below
+ * returned reasoning even when Pi emitted `thinking.type=disabled`. Treat that
+ * wire spelling as an unavailable exact control until replacement online
+ * certification proves otherwise.
+ */
+function cannotGuaranteeExplicitReasoningDisable(model: Model<string>): boolean {
+  return (
+    model.provider === "opencode-go" && model.id === "deepseek-v4-flash"
+  ) || (
+    model.provider === "commandcode-goat" &&
+    model.id === "deepseek/deepseek-v4-flash"
+  );
+}
+
+function explicitReasoningDisableWarning(model: Model<string>): string {
+  const target = model.provider === "commandcode-goat"
+    ? "CommandCode GOAT deepseek-v4-flash"
+    : "OpenCode Go deepseek-v4-flash";
+  return `${target} does not guarantee reasoning disable; LuckyToken removed known reasoning controls and accepted the target default`;
+}
+
+export function initialAnthropicToOpenAICompletionsFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
-  const forcedFailure = forcedToolChoiceFailure(input.model, input.invocation);
-  if (forcedFailure !== undefined) return forcedFailure;
   if (input.invocation.supplement.inferenceGeo.kind === "specified") {
     return "openai-completions has no certified inference geography control";
   }
-  const activation = input.invocation.reasoning.activation;
-  if (activation.kind === "adaptive") {
-    return "openai-completions has no certified adaptive-thinking control";
-  }
-  if (activation.kind === "enabled") {
-    return "openai-completions has no certified exact Anthropic thinking budget control";
-  }
   return undefined;
+}
+
+type OpenAIThinkingFormat =
+  | "openai"
+  | "openrouter"
+  | "deepseek"
+  | "together"
+  | "baseten"
+  | "zai"
+  | "qwen"
+  | "chat-template"
+  | "qwen-chat-template"
+  | "string-thinking"
+  | "ant-ling";
+
+type ChatTemplateValue =
+  | string
+  | number
+  | boolean
+  | null
+  | {
+      readonly $var: "thinking.enabled" | "thinking.effort";
+      readonly omitWhenOff?: boolean;
+    };
+
+interface ExplicitOpenAIReasoningCompat {
+  readonly thinkingFormat?: OpenAIThinkingFormat;
+  readonly supportsReasoningEffort?: boolean;
+  readonly chatTemplateKwargs?: Readonly<Record<string, ChatTemplateValue>>;
+  readonly chatTemplateArgs?: Readonly<Record<string, ChatTemplateValue>>;
+}
+
+interface ResolvedOpenAIReasoningCompat extends ExplicitOpenAIReasoningCompat {
+  readonly thinkingFormat: OpenAIThinkingFormat;
+  readonly supportsReasoningEffort: boolean;
+}
+
+function resolvePiOpenAIReasoningCompat(
+  model: Model<string>,
+): ResolvedOpenAIReasoningCompat {
+  const provider = model.provider;
+  const baseUrl = model.baseUrl;
+  const isZai =
+    provider === "zai" ||
+    provider === "zai-coding-cn" ||
+    baseUrl.includes("api.z.ai") ||
+    baseUrl.includes("open.bigmodel.cn");
+  const isTogether =
+    provider === "together" ||
+    baseUrl.includes("api.together.ai") ||
+    baseUrl.includes("api.together.xyz");
+  const isMoonshot =
+    provider === "moonshotai" ||
+    provider === "moonshotai-cn" ||
+    baseUrl.includes("api.moonshot.");
+  const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
+  const isCloudflareAiGateway =
+    provider === "cloudflare-ai-gateway" ||
+    baseUrl.includes("gateway.ai.cloudflare.com");
+  const isNvidia =
+    provider === "nvidia" || baseUrl.includes("integrate.api.nvidia.com");
+  const isAntLing = provider === "ant-ling" || baseUrl.includes("api.ant-ling.com");
+  const isDeepSeek =
+    provider === "deepseek" || baseUrl.toLowerCase().includes("deepseek.com");
+  const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
+  const detectedThinkingFormat: OpenAIThinkingFormat = isDeepSeek
+    ? "deepseek"
+    : isZai
+      ? "zai"
+      : isTogether
+        ? "together"
+        : isAntLing
+          ? "ant-ling"
+          : isOpenRouter
+            ? "openrouter"
+            : "openai";
+  const detectedSupportsReasoningEffort =
+    !isGrok &&
+    !isZai &&
+    !isMoonshot &&
+    !isTogether &&
+    !isCloudflareAiGateway &&
+    !isNvidia &&
+    !isAntLing;
+  const explicit = (model.compat ?? {}) as ExplicitOpenAIReasoningCompat;
+  return Object.freeze({
+    ...explicit,
+    thinkingFormat: explicit.thinkingFormat ?? detectedThinkingFormat,
+    supportsReasoningEffort:
+      explicit.supportsReasoningEffort ?? detectedSupportsReasoningEffort,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deleteField(payload: Record<string, unknown>, field: string): boolean {
+  if (!Object.hasOwn(payload, field)) return false;
+  delete payload[field];
+  return true;
+}
+
+function stripDynamicTemplateValues(
+  payload: Record<string, unknown>,
+  field: "chat_template_kwargs" | "chat_template_args",
+  configured: Readonly<Record<string, ChatTemplateValue>> | undefined,
+): boolean {
+  if (!isRecord(payload[field])) return false;
+  if (configured === undefined) return deleteField(payload, field);
+  const next = { ...payload[field] };
+  let changed = false;
+  for (const [key, value] of Object.entries(configured)) {
+    if (isRecord(value) && typeof value.$var === "string") {
+      if (Object.hasOwn(next, key)) {
+        delete next[key];
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return false;
+  if (Object.keys(next).length === 0) delete payload[field];
+  else payload[field] = next;
+  return true;
+}
+
+function clearOmittedReasoning(
+  payload: Record<string, unknown>,
+  format: OpenAIThinkingFormat,
+  compat: ExplicitOpenAIReasoningCompat,
+): boolean {
+  let changed = deleteField(payload, "reasoning_effort");
+  changed = deleteField(payload, "thinking_token_budget") || changed;
+  switch (format) {
+    case "zai":
+    case "deepseek":
+    case "string-thinking":
+      return deleteField(payload, "thinking") || changed;
+    case "qwen":
+      return deleteField(payload, "enable_thinking") || changed;
+    case "openrouter":
+    case "together":
+    case "ant-ling":
+      return deleteField(payload, "reasoning") || changed;
+    case "qwen-chat-template":
+      return deleteField(payload, "chat_template_kwargs") || changed;
+    case "chat-template":
+      return stripDynamicTemplateValues(
+        payload,
+        "chat_template_kwargs",
+        compat.chatTemplateKwargs,
+      ) || changed;
+    case "baseten":
+      return stripDynamicTemplateValues(
+        payload,
+        "chat_template_args",
+        compat.chatTemplateArgs,
+      ) || changed;
+    case "openai":
+      return changed;
+  }
+}
+
+function nestedField(
+  payload: Record<string, unknown>,
+  field: string,
+  nested: string,
+): unknown {
+  const value = payload[field];
+  return isRecord(value) ? value[nested] : undefined;
+}
+
+function templateHasAppliedEffort(
+  payload: Record<string, unknown>,
+  field: "chat_template_kwargs" | "chat_template_args",
+  configured: Readonly<Record<string, ChatTemplateValue>> | undefined,
+  expected: string,
+): boolean {
+  const projected = payload[field];
+  if (!isRecord(projected) || configured === undefined) return false;
+  return Object.entries(configured).some(([key, value]) =>
+    isRecord(value) &&
+    value.$var === "thinking.effort" &&
+    projected[key] === expected
+  );
+}
+
+function hasDisabledReasoningShape(
+  payload: Record<string, unknown>,
+  model: Model<string>,
+  format: OpenAIThinkingFormat,
+  compat: ExplicitOpenAIReasoningCompat,
+): boolean {
+  const off = model.thinkingLevelMap?.off;
+  switch (format) {
+    case "zai":
+    case "deepseek":
+      return nestedField(payload, "thinking", "type") === "disabled";
+    case "qwen":
+      return payload.enable_thinking === false;
+    case "qwen-chat-template":
+      return nestedField(payload, "chat_template_kwargs", "enable_thinking") === false;
+    case "chat-template": {
+      const projected = payload.chat_template_kwargs;
+      if (!isRecord(projected) || compat.chatTemplateKwargs === undefined) return false;
+      return Object.entries(compat.chatTemplateKwargs).some(([key, value]) => {
+        if (!isRecord(value)) return false;
+        if (value.$var === "thinking.enabled") return projected[key] === false;
+        return value.$var === "thinking.effort" && typeof off === "string" && projected[key] === off;
+      });
+    }
+    case "baseten": {
+      const projected = payload.chat_template_args;
+      if (!isRecord(projected) || compat.chatTemplateArgs === undefined) return false;
+      return Object.entries(compat.chatTemplateArgs).some(([key, value]) => {
+        if (!isRecord(value)) return false;
+        if (value.$var === "thinking.enabled") return projected[key] === false;
+        return value.$var === "thinking.effort" && typeof off === "string" && projected[key] === off;
+      });
+    }
+    case "openrouter":
+      return off !== null && nestedField(payload, "reasoning", "effort") === (off ?? "none");
+    case "together":
+      return nestedField(payload, "reasoning", "enabled") === false;
+    case "string-thinking":
+      return off !== null && payload.thinking === (off ?? "none");
+    case "ant-ling":
+      return false;
+    case "openai":
+      return typeof off === "string" && payload.reasoning_effort === off;
+  }
+}
+
+function hasEffortReasoningShape(
+  payload: Record<string, unknown>,
+  model: Model<string>,
+  format: OpenAIThinkingFormat,
+  compat: ResolvedOpenAIReasoningCompat,
+  effort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
+): boolean {
+  const mapped = model.thinkingLevelMap?.[effort] ?? effort;
+  if (mapped === null) return false;
+  switch (format) {
+    case "openrouter":
+      return nestedField(payload, "reasoning", "effort") === mapped;
+    case "string-thinking":
+      return payload.thinking === mapped;
+    case "ant-ling":
+      return nestedField(payload, "reasoning", "effort") === mapped;
+    case "qwen-chat-template":
+      return false;
+    case "chat-template":
+      return templateHasAppliedEffort(
+        payload,
+        "chat_template_kwargs",
+        compat.chatTemplateKwargs,
+        mapped,
+      );
+    case "baseten":
+      return templateHasAppliedEffort(
+        payload,
+        "chat_template_args",
+        compat.chatTemplateArgs,
+        mapped,
+      ) || (compat.supportsReasoningEffort && payload.reasoning_effort === mapped);
+    case "zai":
+      return compat.supportsReasoningEffort &&
+        nestedField(payload, "thinking", "type") === "enabled" &&
+        payload.reasoning_effort === mapped;
+    case "deepseek":
+      return compat.supportsReasoningEffort &&
+        nestedField(payload, "thinking", "type") === "enabled" &&
+        payload.reasoning_effort === mapped;
+    case "qwen":
+      return compat.supportsReasoningEffort &&
+        payload.enable_thinking === true &&
+        payload.reasoning_effort === mapped;
+    case "together":
+      return compat.supportsReasoningEffort &&
+        nestedField(payload, "reasoning", "enabled") === true &&
+        payload.reasoning_effort === mapped;
+    case "openai":
+      return compat.supportsReasoningEffort && payload.reasoning_effort === mapped;
+  }
 }
 
 function projectReasoning(
@@ -108,9 +444,11 @@ function projectReasoning(
 ): string | undefined {
   const activation = invocation.reasoning.activation;
   const effort = invocation.reasoning.effort;
-  if (activation.kind === "omitted") {
-    if (Object.hasOwn(payload, "thinking")) {
-      delete payload.thinking;
+  const compat = resolvePiOpenAIReasoningCompat(model);
+  const format = compat.thinkingFormat;
+
+  if (activation.kind === "omitted" && effort.kind !== "specified") {
+    if (clearOmittedReasoning(payload, format, compat)) {
       add(outcomes, "reasoning.activation", {
         kind: "payload-projected",
         projector: "anthropic-to-openai-completions",
@@ -118,47 +456,42 @@ function projectReasoning(
       });
     }
   } else if (activation.kind === "disabled") {
-    if (model.thinkingLevelMap?.off === null) {
-      return "openai-completions target cannot express explicit reasoning disable";
-    }
-    const disabled = model.thinkingLevelMap?.off ?? "none";
-    exact(
-      outcomes,
-      "reasoning.activation",
-      payload.reasoning_effort,
-      disabled,
-      () => {
-        payload.reasoning_effort = disabled;
-      },
-    );
-    if (typeof payload.thinking === "object" && payload.thinking !== null) {
-      payload.thinking = { type: "disabled" };
+    delete payload.thinking_token_budget;
+    if (cannotGuaranteeExplicitReasoningDisable(model)) {
+      clearOmittedReasoning(payload, format, compat);
+      degraded(
+        outcomes,
+        "reasoning.activation",
+        explicitReasoningDisableWarning(model),
+      );
+    } else if (!hasDisabledReasoningShape(payload, model, format, compat)) {
+      clearOmittedReasoning(payload, format, compat);
+      degraded(
+        outcomes,
+        "reasoning.activation",
+        `openai-completions ${format} target used its reasoning default after LuckyToken removed known enabling controls`,
+      );
+    } else {
+      add(outcomes, "reasoning.activation", { kind: "pi-native" });
     }
   }
 
   if (effort.kind === "specified") {
     if (model.reasoning !== true) {
+      clearOmittedReasoning(payload, format, compat);
       add(outcomes, "reasoning.effort", {
         kind: "omitted",
         warning: "target model does not support reasoning effort",
       });
+    } else if (hasEffortReasoningShape(payload, model, format, compat, effort.level)) {
+      add(outcomes, "reasoning.effort", { kind: "pi-native" });
     } else {
-      const mapped = model.thinkingLevelMap?.[effort.level] ?? effort.level;
-      if (mapped === null) {
-        return "openai-completions target cannot express requested reasoning effort";
-      }
-      exact(
-        outcomes,
-        "reasoning.effort",
-        payload.reasoning_effort,
-        mapped,
-        () => {
-          payload.reasoning_effort = mapped;
-        },
-      );
+      clearOmittedReasoning(payload, format, compat);
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: `openai-completions ${format} has no certified ${effort.level} effort mapping`,
+      });
     }
-  } else if (effort.kind === "omitted" && activation.kind === "omitted") {
-    delete payload.reasoning_effort;
   }
   return undefined;
 }
@@ -185,18 +518,18 @@ export function projectAnthropicToOpenAICompletions(input: {
       failure: "openai-completions payload has no audited output-token field",
     };
   }
+  const finalMaxTokens = Math.min(payload[maxField], supplement.outputTokenCeiling);
   exact(
     outcomes,
     "maxTokens",
     payload[maxField],
-    supplement.maxTokens,
+    finalMaxTokens,
     () => {
-      payload[maxField] = supplement.maxTokens;
+      payload[maxField] = finalMaxTokens;
     },
   );
 
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "top_p", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
@@ -215,12 +548,6 @@ export function projectAnthropicToOpenAICompletions(input: {
           payload.top_k = supplement.sampling.topK;
         },
       );
-    } else {
-      delete payload.top_k;
-      add(outcomes, "sampling.topK", {
-        kind: "omitted",
-        warning: "target Provider has no certified top_k mapping",
-      });
     }
   }
 
@@ -238,15 +565,34 @@ export function projectAnthropicToOpenAICompletions(input: {
 
   const choice = supplement.toolChoice;
   if (choice !== undefined) {
-    const mapped =
-      choice.kind === "named"
-        ? { type: "function", function: { name: choice.name } }
-        : choice.kind === "any"
-          ? "required"
-          : choice.kind;
-    exact(outcomes, "toolChoice", payload.tool_choice, mapped, () => {
-      payload.tool_choice = mapped;
-    });
+    const forcedUnsupported = forcedToolChoiceFailure(
+      input.model,
+      input.invocation,
+    ) !== undefined;
+    if (
+      forcedUnsupported &&
+      (choice.kind === "any" || choice.kind === "named")
+    ) {
+      payload.tool_choice = "auto";
+      if (choice.kind === "named") {
+        payload.tools = filterNamedOpenAITool(payload.tools, choice.name);
+      }
+      degraded(
+        outcomes,
+        "toolChoice",
+        "CommandCode GOAT used automatic selection because thinking mode rejects forced tool_choice",
+      );
+    } else {
+      const mapped =
+        choice.kind === "named"
+          ? { type: "function", function: { name: choice.name } }
+          : choice.kind === "any"
+            ? "required"
+            : choice.kind;
+      exact(outcomes, "toolChoice", payload.tool_choice, mapped, () => {
+        payload.tool_choice = mapped;
+      });
+    }
     if (choice.kind !== "none") {
       exact(
         outcomes,
@@ -293,19 +639,6 @@ export function projectAnthropicToOpenAICompletions(input: {
     const mapped = tier.value === "standard_only" ? "default" : "auto";
     exact(outcomes, "serviceTier", payload.service_tier, mapped, () => {
       payload.service_tier = mapped;
-    });
-  }
-
-  if (supplement.container.kind === "specified") {
-    add(outcomes, "container", {
-      kind: "omitted",
-      warning: "container identity is not compatible with openai-completions",
-    });
-  }
-  if (supplement.cacheControl.kind === "specified") {
-    add(outcomes, "cacheControl", {
-      kind: "omitted",
-      warning: "Anthropic cache breakpoint has no exact Chat Completions mapping",
     });
   }
 

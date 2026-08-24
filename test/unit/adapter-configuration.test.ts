@@ -187,6 +187,13 @@ describe("adapter-owned configuration", () => {
   it.each<InvalidCase>([
     [() => parseAnthropicConfiguration(null), "clientProtocols.anthropic-messages"],
     [
+      () =>
+        parseAnthropicConfiguration({
+          conversion: { availability: {} },
+        }),
+      "clientProtocols.anthropic-messages.conversion.availability",
+    ],
+    [
       () => parseAnthropicConfiguration({ extra: true }),
       "clientProtocols.anthropic-messages.extra",
     ],

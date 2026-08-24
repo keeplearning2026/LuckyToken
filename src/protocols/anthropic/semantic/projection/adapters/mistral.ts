@@ -37,21 +37,44 @@ function exact(
   });
 }
 
-export function initialMistralFailure(input: {
+export function initialAnthropicToMistralFailure(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
 }): string | undefined {
   if (input.invocation.supplement.inferenceGeo.kind === "specified") {
     return "mistral-conversations has no certified inference geography control";
   }
-  const activation = input.invocation.reasoning.activation;
-  if (activation.kind === "enabled") {
-    return "mistral-conversations cannot preserve an exact Anthropic thinking budget";
-  }
-  if (activation.kind === "adaptive") {
-    return "mistral-conversations has no certified Anthropic adaptive-thinking control";
-  }
   return undefined;
+}
+
+const MISTRAL_REASONING_EFFORT_MODELS = new Set([
+  "mistral-small-2603",
+  "mistral-small-latest",
+  "mistral-medium-3.5",
+]);
+
+function expectedMistralReasoningEffort(
+  model: Model<string>,
+  level: "low" | "medium" | "high" | "xhigh" | "max",
+): string | undefined {
+  if (!model.reasoning || !MISTRAL_REASONING_EFFORT_MODELS.has(model.id)) {
+    return undefined;
+  }
+  const mapped = model.thinkingLevelMap?.[level];
+  if (mapped === null) return undefined;
+  if (typeof mapped === "string") return mapped;
+  return level === "high" ? "high" : undefined;
+}
+
+function clearMistralReasoning(payload: Record<string, unknown>): boolean {
+  let changed = false;
+  for (const field of ["promptMode", "reasoningEffort"] as const) {
+    if (Object.hasOwn(payload, field)) {
+      delete payload[field];
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function mappedToolChoice(
@@ -87,29 +110,24 @@ export function projectAnthropicToMistral(input: {
   if (
     typeof payload.model !== "string" ||
     !Array.isArray(payload.messages) ||
-    payload.stream !== true
+    payload.stream !== true ||
+    typeof payload.maxTokens !== "number"
   ) {
     throw new Error("mistral-conversations payload shape mismatch");
   }
   const outcomes: AnthropicProjectionOutcome[] = [];
   const supplement = input.invocation.supplement;
 
-  exact(outcomes, "maxTokens", payload.maxTokens, supplement.maxTokens, () => {
-    payload.maxTokens = supplement.maxTokens;
+  const finalMaxTokens = Math.min(payload.maxTokens, supplement.outputTokenCeiling);
+  exact(outcomes, "maxTokens", payload.maxTokens, finalMaxTokens, () => {
+    payload.maxTokens = finalMaxTokens;
   });
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
     ["sampling.topP", "topP", supplement.sampling.topP],
   ] as const) {
     if (value === undefined) continue;
     exact(outcomes, control, payload[field], value, () => {
       payload[field] = value;
-    });
-  }
-  if (supplement.sampling.topK !== undefined) {
-    add(outcomes, "sampling.topK", {
-      kind: "omitted",
-      warning: "mistral-conversations has no certified top-k control",
     });
   }
   if (supplement.stopSequences !== undefined) {
@@ -153,7 +171,7 @@ export function projectAnthropicToMistral(input: {
     const parallel = !sourceChoice.disableParallelToolUse;
     exact(
       outcomes,
-      "parallelToolCalls",
+      "toolChoice.disableParallelToolUse",
       payload.parallelToolCalls,
       parallel,
       () => {
@@ -162,25 +180,52 @@ export function projectAnthropicToMistral(input: {
     );
   }
 
-  if (input.invocation.reasoning.activation.kind === "disabled") {
-    delete payload.promptMode;
-    delete payload.reasoningEffort;
-    add(outcomes, "reasoning", { kind: "payload-projected", projector: "anthropic-to-mistral-conversations" });
-  }
-
-  for (const [control, intent] of [
-    ["metadataUserId", supplement.metadataUserId],
-    ["serviceTier", supplement.serviceTier],
-    ["container", supplement.container],
-    ["cacheControl", supplement.cacheControl],
-  ] as const) {
-    if (intent.kind === "specified") {
-      add(outcomes, control, {
+  const activation = input.invocation.reasoning.activation;
+  const effort = input.invocation.reasoning.effort;
+  if (activation.kind === "disabled") {
+    const repaired = clearMistralReasoning(payload);
+    add(
+      outcomes,
+      "reasoning.activation",
+      repaired
+        ? {
+            kind: "payload-projected",
+            projector: "anthropic-to-mistral-conversations",
+            warning: "pi-native-mapping-repaired",
+          }
+        : { kind: "pi-native" },
+    );
+    if (effort.kind === "specified") {
+      add(outcomes, "reasoning.effort", {
         kind: "omitted",
-        warning: "mistral-conversations has no certified equivalent",
+        warning: "reasoning effort cannot be applied while reasoning is explicitly disabled",
       });
     }
+  } else if (effort.kind === "specified") {
+    const expectedEffort = expectedMistralReasoningEffort(
+      input.model,
+      effort.level,
+    );
+    if (expectedEffort === undefined) {
+      clearMistralReasoning(payload);
+      add(outcomes, "reasoning.effort", {
+        kind: "omitted",
+        warning: "mistral-conversations has no certified equivalent for the requested reasoning effort",
+      });
+    } else {
+      delete payload.promptMode;
+      exact(
+        outcomes,
+        "reasoning.effort",
+        payload.reasoningEffort,
+        expectedEffort,
+        () => {
+          payload.reasoningEffort = expectedEffort;
+        },
+      );
+    }
   }
+
   return Object.freeze({
     payload: Object.freeze(payload),
     outcomes: Object.freeze(outcomes),

@@ -41,7 +41,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
 
   it("keeps Semantic conversion independent from both Native transports", async () => {
     for (const file of [
-      "src/semantic-conversion/profile-execution.ts",
+      "src/credentials/profile-bound-pi-execution.ts",
       "src/protocols/openai-responses/semantic.ts",
       "src/protocols/openai-responses/compact-semantic.ts",
     ]) {

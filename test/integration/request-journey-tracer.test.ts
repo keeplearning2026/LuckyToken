@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { decodeRequestJourneyRecord } from "@luckytoken/application-control-plane/control-plane";
+
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
@@ -160,6 +162,8 @@ describe("unified Request Journey tracer", () => {
         writableFinished: true,
       },
     });
+    expect(detail.admission).not.toHaveProperty("requestId");
+    expect(decodeRequestJourneyRecord(detail)).toEqual(detail);
     expect(detail.incident).toBeUndefined();
     expect(detail.artifacts).toEqual(
       expect.arrayContaining([

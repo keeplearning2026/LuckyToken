@@ -1,45 +1,48 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
 
-import type { PayloadProjectionOperation } from "../../../../semantic-conversion/kernel/contract.js";
 import type { AnthropicSemanticInvocation } from "../invocation.js";
 import {
-  initialOpenAICompletionsFailure,
+  initialAnthropicToOpenAICompletionsFailure,
   projectAnthropicToOpenAICompletions,
 } from "./adapters/openai-completions.js";
 import { projectAnthropicToAnthropicMessages } from "./adapters/anthropic-messages.js";
 import {
-  initialGoogleFailure,
+  initialAnthropicToGoogleFailure,
   projectAnthropicToGoogle,
 } from "./adapters/google.js";
 import {
-  initialMistralFailure,
+  initialAnthropicToMistralFailure,
   projectAnthropicToMistral,
 } from "./adapters/mistral.js";
 import {
-  initialOpenAIResponsesFailure,
+  initialAnthropicToOpenAIResponsesFailure,
   projectAnthropicToOpenAIResponses,
   type AnthropicResponsesTargetApi,
 } from "./adapters/openai-responses.js";
 import {
-  initialBedrockFailure,
+  initialAnthropicToBedrockFailure,
   projectAnthropicToBedrock,
 } from "./adapters/bedrock.js";
 import {
-  initialPiMessagesFailure,
+  initialAnthropicToPiMessagesFailure,
   projectAnthropicToPiMessages,
 } from "./adapters/pi-messages.js";
-import type { AnthropicProjectionOutcome } from "./contract.js";
+import type {
+  AnthropicPayloadProjectionOperation,
+  AnthropicProjectionOutcome,
+} from "./contract.js";
 import {
-  initialCommandCodePrivateFailure,
+  initialAnthropicToCommandCodePrivateFailure,
   projectAnthropicToCommandCodePrivate,
 } from "./adapters/commandcode-private.js";
 import {
   assessUnprojectedAnthropicSupplement,
   type AnthropicSupplementDisposition,
 } from "./supplement-disposition.js";
+import { selectAnthropicPayloadProjector } from "./registry.js";
 
-function publishWarnings(
+export function publishAnthropicProjectionWarnings(
   outcomes: readonly AnthropicProjectionOutcome[],
   factsSink: ExecutionFactsSink | undefined,
 ): void {
@@ -58,6 +61,12 @@ function publishWarnings(
               code: "anthropic_semantic_projection_omitted",
               action: "degrade" as const,
             }
+          : disposition.kind === "degraded"
+            ? {
+                adapter: "anthropic-messages",
+                code: "anthropic_semantic_projection_degraded",
+                action: "degrade" as const,
+              }
           : undefined;
     if (notice === undefined) continue;
     try {
@@ -75,40 +84,66 @@ export function prepareAnthropicPayloadProjection(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly factsSink?: ExecutionFactsSink;
-}): PayloadProjectionOperation<AnthropicProjectionOutcome> {
-  const supplementDisposition: AnthropicSupplementDisposition =
-    input.model.api === "anthropic-messages"
-      ? Object.freeze({ outcomes: Object.freeze([]) })
-      : assessUnprojectedAnthropicSupplement({
-          invocation: input.invocation,
-          target: `${input.model.provider}/${input.model.api}/${input.model.id}`,
-        });
+}): AnthropicPayloadProjectionOperation {
+  const commonInitialFailure =
+    input.invocation.supplement.outputTokenCeiling < 1
+      ? "Anthropic max_tokens=0 cannot be represented by Pi Provider requests without increasing the Client output-token ceiling"
+      : undefined;
   const finish = <T extends {
     readonly payload: unknown;
     readonly outcomes: readonly AnthropicProjectionOutcome[];
     readonly failure?: string;
+    readonly failureKind?: "unsupported-semantics" | "payload-contract";
   }>(result: T): T => {
+    const supplementDisposition: AnthropicSupplementDisposition =
+      input.model.api === "anthropic-messages"
+        ? Object.freeze({ outcomes: Object.freeze([]) })
+        : assessUnprojectedAnthropicSupplement({
+            invocation: input.invocation,
+            target: `${input.model.provider}/${input.model.api}/${input.model.id}`,
+            targetSupportsReasoning: input.model.reasoning,
+            resolvedControls: new Set(result.outcomes.map((entry) => entry.control)),
+          });
     const combined = Object.freeze([
-      ...supplementDisposition.outcomes,
       ...result.outcomes,
+      ...supplementDisposition.outcomes,
     ]);
-    const finished = { ...result, outcomes: combined } as T;
-    publishWarnings(combined, input.factsSink);
+    const finished = {
+      ...result,
+      outcomes: combined,
+      ...(result.failure === undefined && supplementDisposition.failure !== undefined
+        ? {
+            failure: supplementDisposition.failure,
+            failureKind: "unsupported-semantics" as const,
+          }
+        : result.failure !== undefined && result.failureKind === undefined
+          ? { failureKind: "payload-contract" as const }
+        : {}),
+    } as T;
+    publishAnthropicProjectionWarnings(combined, input.factsSink);
     return finished;
   };
-  const failure = (targetFailure: string | undefined): string | undefined =>
-    supplementDisposition.failure ?? targetFailure;
   const failureField = (
     targetFailure: string | undefined,
   ): { readonly initialFailure?: string } => {
-    const resolved = failure(targetFailure);
-    return resolved === undefined ? {} : { initialFailure: resolved };
+    const failure = commonInitialFailure ?? targetFailure;
+    return failure === undefined ? {} : { initialFailure: failure };
   };
 
-  if (input.model.api === "commandcode-private") {
-    const initialFailure = initialCommandCodePrivateFailure(input);
+  if (selectAnthropicPayloadProjector(input.model) === undefined) {
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
+      ...failureField(undefined),
+      project(payload: unknown) {
+        return finish({ payload, outcomes: [] });
+      },
+    });
+  }
+
+  if (input.model.api === "commandcode-private") {
+    const initialFailure = initialAnthropicToCommandCodePrivateFailure(input);
+    return Object.freeze({
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToCommandCodePrivate({ ...input, payload }));
@@ -118,7 +153,8 @@ export function prepareAnthropicPayloadProjection(input: {
 
   if (input.model.api === "anthropic-messages") {
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
+      ...failureField(undefined),
       project(payload: unknown) {
         return finish(projectAnthropicToAnthropicMessages({
           ...input,
@@ -131,10 +167,10 @@ export function prepareAnthropicPayloadProjection(input: {
     input.model.api === "google-generative-ai" ||
     input.model.api === "google-vertex"
   ) {
-    const initialFailure = initialGoogleFailure(input);
+    const initialFailure = initialAnthropicToGoogleFailure(input);
     const api = input.model.api;
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToGoogle({
@@ -146,9 +182,9 @@ export function prepareAnthropicPayloadProjection(input: {
     });
   }
   if (input.model.api === "bedrock-converse-stream") {
-    const initialFailure = initialBedrockFailure(input);
+    const initialFailure = initialAnthropicToBedrockFailure(input);
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToBedrock({ ...input, payload }));
@@ -156,9 +192,9 @@ export function prepareAnthropicPayloadProjection(input: {
     });
   }
   if (input.model.api === "pi-messages") {
-    const initialFailure = initialPiMessagesFailure(input);
+    const initialFailure = initialAnthropicToPiMessagesFailure(input);
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToPiMessages({ ...input, payload }));
@@ -166,9 +202,9 @@ export function prepareAnthropicPayloadProjection(input: {
     });
   }
   if (input.model.api === "mistral-conversations") {
-    const initialFailure = initialMistralFailure(input);
+    const initialFailure = initialAnthropicToMistralFailure(input);
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToMistral({ ...input, payload }));
@@ -181,9 +217,9 @@ export function prepareAnthropicPayloadProjection(input: {
     input.model.api === "openai-codex-responses"
   ) {
     const api = input.model.api as AnthropicResponsesTargetApi;
-    const initialFailure = initialOpenAIResponsesFailure({ ...input, api });
+    const initialFailure = initialAnthropicToOpenAIResponsesFailure({ ...input, api });
     return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
+      initialOutcomes: Object.freeze([]),
       ...failureField(initialFailure),
       project(payload: unknown) {
         return finish(projectAnthropicToOpenAIResponses({ ...input, api, payload }));
@@ -191,19 +227,11 @@ export function prepareAnthropicPayloadProjection(input: {
     });
   }
   if (input.model.api !== "openai-completions") {
-    return Object.freeze({
-      initialOutcomes: supplementDisposition.outcomes,
-      initialFailure: failure(
-        `Anthropic semantic projection is not certified for Pi API ${input.model.api}`,
-      )!,
-      project(payload: unknown) {
-        return { payload, outcomes: [] };
-      },
-    });
+    throw new Error(`Anthropic projector registry mismatch for Pi API ${input.model.api}`);
   }
-  const initialFailure = initialOpenAICompletionsFailure(input);
+  const initialFailure = initialAnthropicToOpenAICompletionsFailure(input);
   return Object.freeze({
-    initialOutcomes: supplementDisposition.outcomes,
+    initialOutcomes: Object.freeze([]),
     ...failureField(initialFailure),
     project(payload: unknown) {
       return finish(projectAnthropicToOpenAICompletions({

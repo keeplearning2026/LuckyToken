@@ -311,6 +311,17 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toMatchObject({ outcome: "running" });
   });
 
+  it("round-trips the Codex Local Native web_search operation", () => {
+    const searchJourney: RequestJourneySummary = Object.freeze({
+      ...JOURNEY_SUMMARY,
+      operation: "web_search",
+      protocol: "codex-alpha-search",
+      lane: "local_native",
+    });
+
+    expect(decodeRequestJourneySummary(searchJourney)).toEqual(searchJourney);
+  });
+
   it("strictly decodes a bounded Request Journey query result", () => {
     expect(
       decodeRequestJourneyQueryResult({ records: [JOURNEY_SUMMARY], hasMore: false }),

@@ -1834,7 +1834,6 @@ describe("16: every known Responses tool-definition family", () => {
       expect(invocation.invocation.pi.context.tools).toBeUndefined();
       expect(invocation.invocation.supplement.tools?.choice).toEqual({
         value: { kind: "hosted", toolType: choice.type },
-        requirement: "hard",
       });
       expect(invocation.client.notices).toEqual([]);
     }
@@ -1863,7 +1862,6 @@ describe("16: every known Responses tool-definition family", () => {
         serverLabel: "db-server",
         name: "db_query",
       },
-      requirement: "hard",
     });
     expect(invocation.client.notices).toEqual([]);
   });

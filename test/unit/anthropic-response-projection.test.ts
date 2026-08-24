@@ -73,6 +73,30 @@ describe("09: Pi-to-Anthropic response projection", () => {
     expect(JSON.stringify(result.message)).not.toContain("provider-model-x");
   });
 
+  it("renders an unknown Pi Provider from retained AssistantMessage semantics without a response certification registry", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        api: "custom-pi-api",
+        provider: "custom-provider",
+        model: "custom-model",
+        rawStopReason: "provider-specific-success",
+        stopReason: "stop",
+        content: [{ type: "text", text: "portable result" }],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+
+    expect(result.message).toMatchObject({
+      content: [{ type: "text", text: "portable result" }],
+      stop_reason: "end_turn",
+    });
+    expect(result.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_stop_reason_normalized",
+      action: "degrade",
+    }));
+  });
+
   it("preserves text exactly and ordinary thinking with signature", () => {
     const result = convertAssistantMessageToAnthropicWithPolicy(
       message({
@@ -95,6 +119,29 @@ describe("09: Pi-to-Anthropic response projection", () => {
     expect(result.notices.some(
       (notice) => notice.code === "anthropic_missing_thinking_signature",
     )).toBe(false);
+  });
+
+  it("treats thinking.display omitted as a Client response rendering rule", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        content: [
+          {
+            type: "thinking",
+            thinking: "must not be displayed",
+            thinkingSignature: "sig",
+          },
+        ],
+      }),
+      {
+        selector: "client-selector",
+        thinkingDisplay: { kind: "specified", value: "omitted" },
+      },
+      policy(),
+    );
+
+    expect(result.message.content).toMatchObject([
+      { signature: "sig", thinking: "", type: "thinking" },
+    ]);
   });
 
   it("synthesizes an empty signature with a notice when ordinary thinking lacks one", () => {
@@ -149,6 +196,70 @@ describe("09: Pi-to-Anthropic response projection", () => {
     ).toThrow(OutboundResponseFidelityFailure);
   });
 
+  it("maps an ordinary Pi toolCall to Anthropic's direct caller", () => {
+    const renderState = {
+      selector: "client-selector",
+      directToolNames: ["tool"],
+    };
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          api: "openai-completions",
+          provider: "opencode-go",
+          model: "deepseek-v4-flash",
+          rawStopReason: "tool_use",
+          stopReason: "toolUse",
+          content: [
+            { type: "toolCall", id: "call", name: "tool", arguments: {} },
+          ],
+        }),
+        renderState,
+        policy(),
+      );
+    expect(result.message.content).toMatchObject([
+      { type: "tool_use", caller: { type: "direct" } },
+    ]);
+  });
+
+  it("does not fabricate direct caller provenance for an unrecognized tool call", () => {
+    const renderState = {
+      selector: "client-selector",
+      directToolNames: [] as string[],
+    };
+    expect(() =>
+      convertAssistantMessageToAnthropicWithPolicy(
+        message({
+          rawStopReason: "tool_use",
+          stopReason: "toolUse",
+          content: [
+            { type: "toolCall", id: "call", name: "server-owned", arguments: {} },
+          ],
+        }),
+        renderState,
+        policy(),
+      ),
+    ).toThrow(/caller provenance is unavailable/iu);
+  });
+
+  it("preserves a committed refusal terminal without relabeling it as success", () => {
+    const result = convertAssistantMessageToAnthropicWithPolicy(
+      message({
+        rawStopReason: "refusal",
+        stopReason: "stop",
+        content: [{ type: "text", text: "I cannot help with that." }],
+      }),
+      { selector: "client-selector" },
+      policy(),
+    );
+
+    expect(result.message.stop_reason).toBe("refusal");
+    expect(result.message.stop_details).toBeNull();
+    expect(result.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_provider_response_field_unavailable",
+      jsonPath: "$.stop_details",
+      action: "degrade",
+    }));
+  });
+
   it("preserves empty projected content without inventing a text block", () => {
     const result = convertAssistantMessageToAnthropicWithPolicy(
       message({ content: [] }),
@@ -193,12 +304,15 @@ describe("09: Pi-to-Anthropic response projection", () => {
   it("keeps length authoritative over toolCall content", () => {
     const result = convertAssistantMessageToAnthropicWithPolicy(
       message({
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4-flash",
         stopReason: "length",
         content: [
           { type: "toolCall", id: "call", name: "tool", arguments: {} },
         ],
       }),
-      { selector: "client-selector" },
+      { selector: "client-selector", directToolNames: ["tool"] },
       policy(),
     );
     expect(result.message.stop_reason).toBe("max_tokens");
@@ -210,12 +324,15 @@ describe("09: Pi-to-Anthropic response projection", () => {
   it("emits a non-model-visible notice when stop reason is normalized", () => {
     const result = convertAssistantMessageToAnthropicWithPolicy(
       message({
+        api: "openai-completions",
+        provider: "opencode-go",
+        model: "deepseek-v4-flash",
         stopReason: "stop",
         content: [
           { type: "toolCall", id: "call", name: "tool", arguments: {} },
         ],
       }),
-      { selector: "client-selector" },
+      { selector: "client-selector", directToolNames: ["tool"] },
       policy(),
     );
     expect(result.message.stop_reason).toBe("tool_use");

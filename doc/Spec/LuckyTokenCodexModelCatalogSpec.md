@@ -220,7 +220,7 @@ Runtime contract: on `codex-cli 0.149.0`, the built-in `openai` provider may fir
 
 The catalog field is therefore a capability declaration, not a proven global transport-disable switch. LuckyToken does not add a fourth owned root config field to suppress this behavior.
 
-Likewise, `supports_search_tool: false` prevents LuckyToken from advertising hosted search as a routed model capability, but it does not disable a user's independent global Codex web-search setting. LuckyToken continues to own only the three routing fields in section 7.
+Likewise, `supports_search_tool: false` prevents LuckyToken from advertising hosted search as a routed model capability, but it does not disable a user's independent global Codex web-search setting. Because Codex sends that global search client-side to its configured base URL, LuckyToken serves the exact `POST /v1/alpha/search` route as Codex Local Native Preservation and forwards it to `https://chatgpt.com/backend-api/codex/alpha/search` with the authenticated local Codex credential. The handler preserves the opaque request and response body bytes, does not parse a model or enter Pi/Semantic Conversion, and rebuilds only the target URL, connection-level headers, content length, and trusted credential headers required at a proxy boundary. `/v1/responses` and `/v1/responses/compact` retain their existing routing policies. LuckyToken continues to own only the three routing fields in section 7.
 
 ### 5.3 Forbidden inheritance and inference
 
