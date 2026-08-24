@@ -135,13 +135,35 @@ describe("Anthropic tool definitions", () => {
     ]);
   });
 
-  it.each([
-    ["server tool type on a custom tool", { type: "web_search_20250305" }],
-    ["future control", { future_control: true }],
-  ])("rejects invalid or unknown tool control: %s", (_name, extras) => {
+  it("rejects a server tool type on a custom tool", () => {
     expect(() => validateAnthropicSourceRequest(
-      request([tool({ type: "object", properties: {} }, extras)]),
+      request([
+        tool(
+          { type: "object", properties: {} },
+          { type: "web_search_20250305" },
+        ),
+      ]),
     )).toThrow(/server-tool|unexpected/u);
+  });
+
+  it("leaves an unclaimed future tool control unread and unprojected", () => {
+    const futureControl = { malformed: Symbol("unread") };
+    const sourceTool = tool(
+      { type: "object", properties: {} },
+      { future_control: futureControl },
+    );
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(request([sourceTool])),
+      1,
+    );
+
+    expect(sourceTool.future_control).toBe(futureControl);
+    expect(invocation.invocation.pi.context.tools?.[0]).toEqual({
+      name: "lookup",
+      description: "",
+      parameters: { type: "object", properties: {} },
+    });
+    expect(invocation.invocation.supplement.tools).toEqual([]);
   });
 
   it("passes malformed-shape schemas through for non-strict tools", () => {

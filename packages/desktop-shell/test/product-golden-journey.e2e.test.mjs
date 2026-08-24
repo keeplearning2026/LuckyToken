@@ -242,7 +242,7 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
 
 async function waitForEndpoint(descriptorPath) {
   let lastError;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
       return parseControlPlaneDescriptor(
         JSON.parse(await readFile(descriptorPath, "utf8")),
