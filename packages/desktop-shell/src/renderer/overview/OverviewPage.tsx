@@ -84,16 +84,69 @@ function statusTone(outcome: RequestJourneySummary["outcome"]): string {
   return "error";
 }
 
+function incompleteUsageMessage(
+  usage: Exclude<NonNullable<RequestJourneySummary["usage"]>, { completeness: "complete" }>,
+): string {
+  switch (usage.reason) {
+    case "failed":
+      return "Provider execution failed before complete usage was available.";
+    case "aborted":
+      return "The request was aborted before complete usage was available.";
+    case "unsupported_terminal":
+      return "The terminal response did not provide supported usage.";
+    case "usage_absent":
+      return "The terminal response did not contain usage.";
+    case "component_unreported":
+      return "Provider did not report all required usage components.";
+    case "invalid_components":
+      return "Reported usage components were inconsistent.";
+    case "undeclared_semantics":
+      return "Provider usage semantics are not certified.";
+  }
+}
+
+function UnavailableUsageCell({ message }: { readonly message: string }) {
+  return <td title={message} aria-label={message}>—</td>;
+}
+
+function RequestUsageCells({ record }: { readonly record: RequestJourneySummary }) {
+  if (record.usage === undefined || record.usage.completeness !== "complete") {
+    const message = record.usage === undefined
+      ? record.outcome === "running"
+        ? "Terminal usage is pending."
+        : "Terminal usage was not reported."
+      : incompleteUsageMessage(record.usage);
+    return <>
+      <UnavailableUsageCell message={message} />
+      <UnavailableUsageCell message={message} />
+      <UnavailableUsageCell message={message} />
+      <UnavailableUsageCell message={message} />
+      <UnavailableUsageCell message={message} />
+    </>;
+  }
+  const usage = record.usage;
+  return <>
+    <td>{formatTokenCount(usage.inputTokens)}</td>
+    <td>{formatTokenCount(usage.cacheReadTokens)}</td>
+    {usage.cacheHitRate === undefined
+      ? <UnavailableUsageCell message="Cache hit is unavailable because no input or cache-read tokens were reported." />
+      : <td>{formatPercent(usage.cacheHitRate)}</td>}
+    <td>{formatTokenCount(usage.outputTokens)}</td>
+    {usage.outputTokensPerSecond === undefined
+      ? <UnavailableUsageCell message="Token speed is unavailable because execution timing was incomplete." />
+      : <td>{formatTokensPerSecond(usage.outputTokensPerSecond)}</td>}
+  </>;
+}
+
 function detailProjection(record: RequestJourneyRecord) {
   const observations = record.timeline.map((entry) => entry.observation);
   const identity = observations.findLast((entry) => entry.kind === "request_identity_established");
   const model = observations.findLast((entry) => entry.kind === "model_resolved");
   const profile = observations.findLast((entry) => entry.kind === "profile_attributed");
-  const usage = observations.findLast((entry) => entry.kind === "terminal_usage_observed");
   const failure = record.incident?.failures.find(
     (entry) => entry.failureId === record.incident?.primaryFailureId,
   );
-  return { identity, model, profile, usage, failure };
+  return { identity, model, profile, failure };
 }
 
 function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefined }) {
@@ -192,6 +245,7 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
 
   return <div className="overview-page">
     <SummaryCards summary={summary} />
+    {summary !== undefined && summary.excluded > 0 ? <p className="overview-usage-exclusion" role="status">{summary.excluded} {summary.excluded === 1 ? "request does" : "requests do"} not have complete terminal usage and {summary.excluded === 1 ? "was" : "were"} excluded from usage totals.</p> : null}
     {analyticsUnavailable ? <p className="error-text">Request analytics are temporarily unavailable.</p> : null}
     <section className="overview-requests" aria-label="Requests">
       <div className="overview-requests-toolbar"><h2>Requests</h2><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div>
@@ -208,13 +262,12 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
           const detail = details[record.requestId];
           const projection = typeof detail === "object" ? detailProjection(detail) : undefined;
           const duration = record.closedAt === undefined ? "-" : `${Math.max(0, record.closedAt - record.createdAt)} ms`;
-          const usage = projection?.usage?.usage;
           const location = projection?.failure?.location ?? record.primaryFailureLocation;
           return <Fragment key={record.id}>
             <tr data-request-id={record.requestId} className={expanded ? "expanded" : undefined}>
               <td><button type="button" className="request-disclosure" aria-label={`${expanded ? "Hide" : "Show"} details for request ${record.requestId}`} aria-expanded={expanded} onClick={() => void toggleDetails(record.requestId)}>{expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}<span>{formatTimestamp(record.createdAt)}</span></button></td>
               <td>{projection?.identity?.clientSessionId ?? projection?.identity?.effectiveSessionId ?? "-"}</td><td><code title={record.requestId}>{record.requestId}</code></td><td>{record.protocol ?? "-"}</td>
-              <td>{usage === undefined ? "-" : formatTokenCount(usage.input)}</td><td>{usage === undefined ? "-" : formatTokenCount(usage.cacheRead)}</td><td>-</td><td>{usage === undefined ? "-" : formatTokenCount(usage.output)}</td><td>-</td><td>{duration}</td><td>{projection?.model?.modelId ?? "-"}</td><td><span className={`overview-status ${statusTone(record.outcome)}`}><span aria-hidden="true" />{displayOutcome(record.outcome)}</span></td>
+              <RequestUsageCells record={record} /><td>{duration}</td><td>{projection?.model?.modelId ?? "-"}</td><td><span className={`overview-status ${statusTone(record.outcome)}`}><span aria-hidden="true" />{displayOutcome(record.outcome)}</span></td>
             </tr>
             {expanded ? <tr className="overview-detail-row"><td colSpan={12}><div className="request-diagnosis-panel">
               {detail === undefined ? <p>Loading request details…</p> : detail === "unavailable" ? <p className="error-text">Request details are temporarily unavailable.</p> : <>

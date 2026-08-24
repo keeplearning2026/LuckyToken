@@ -267,6 +267,7 @@ export {
   type RequestJourneyRecord,
   type RequestJourneySubject,
   type RequestJourneySummary,
+  type RequestJourneyUsageSummary,
   type RequestJourneySubscriber,
   type RequestJourneySubscriptionEvent,
   type RequestJourneyTimelineEvent,

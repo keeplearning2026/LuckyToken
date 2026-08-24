@@ -195,6 +195,141 @@ describe("Diagnostics durable subscriptions", () => {
     );
   });
 
+  it("projects trustworthy row usage identically through query and durable subscription", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-subscriptions-usage-"));
+    roots.push(root);
+    let clock = 1_787_558_400_000;
+    const authority = await createDiagnosticsAuthority({
+      configuration: parseDiagnosticsConfiguration({ directory: root }, root),
+      runtimeId: "51000000-0000-4000-8000-000000000010",
+      now: () => clock,
+    });
+    authorities.push(authority);
+    const management = subscriptions(authority);
+    const completeDelivered = deferred<RequestJourneySummary>();
+    const incompleteDelivered = deferred<RequestJourneySummary>();
+    const published: RequestJourneySummary[] = [];
+    const subscription = management.subscribeRequestJourneys((record) => {
+      published.push(record);
+      if (published.length === 1) completeDelivered.resolve(record);
+      if (published.length === 2) incompleteDelivered.resolve(record);
+    });
+
+    const requestId = "51000000-0000-4000-8000-000000000011";
+    const observer = authority.begin({
+      requestId,
+      operationCandidate: "model_generation",
+      transport: "in_process",
+      method: "POST",
+      path: "/v1/messages",
+      acceptedAt: clock,
+      cancellation: { caller: "active", shutdown: "not_bound" },
+    });
+    observer.observe({
+      kind: "step_entered",
+      stepInstanceId: "provider-dispatch",
+      location: {
+        phase: "upstream_execution",
+        lane: "provider_native",
+        step: "dispatch_provider_native",
+      },
+    });
+    clock += 1_000;
+    observer.observe({
+      kind: "terminal_usage_observed",
+      usage: {
+        api: "anthropic-messages",
+        input: 11,
+        cacheRead: 3,
+        cacheWrite: 2,
+        output: 7,
+        normalizedTotal: 23,
+        cacheHitRate: 3 / 16,
+        completeness: "complete",
+      },
+      location: {
+        phase: "upstream_execution",
+        lane: "provider_native",
+        step: "observe_provider_native_usage",
+        subject: "usage",
+      },
+    });
+    observer.observe({
+      kind: "work_outcome_committed",
+      outcome: "success",
+      requestOutcome: "success",
+      terminalAuthority: "provider_native_lane",
+      location: {
+        phase: "outcome_commit",
+        lane: "provider_native",
+        step: "commit_request_outcome",
+      },
+    });
+    observer.close({ outcome: "success" });
+
+    const page = await authority.queryRequestJourneys({ limit: 10 });
+    const expectedUsage = {
+      completeness: "complete",
+      inputTokens: 11,
+      cacheReadTokens: 3,
+      outputTokens: 7,
+      cacheHitRate: 3 / 14,
+      outputTokensPerSecond: 7,
+    } as const;
+    expect(page.records).toHaveLength(1);
+    expect(page.records[0]).toMatchObject({ requestId, usage: expectedUsage });
+    await expect(completeDelivered.promise).resolves.toMatchObject({
+      requestId,
+      usage: expectedUsage,
+    });
+
+    clock += 1;
+    const partialRequestId = "51000000-0000-4000-8000-000000000012";
+    const partialObserver = authority.begin({
+      requestId: partialRequestId,
+      operationCandidate: "model_generation",
+      transport: "in_process",
+      method: "POST",
+      path: "/v1/messages",
+      acceptedAt: clock,
+      cancellation: { caller: "active", shutdown: "not_bound" },
+    });
+    partialObserver.observe({
+      kind: "terminal_usage_observed",
+      usage: {
+        api: "commandcode-chat",
+        input: 99,
+        cacheRead: 88,
+        cacheWrite: 77,
+        output: 66,
+        completeness: "partial",
+        reason: "component_unreported",
+      },
+      location: {
+        phase: "upstream_execution",
+        lane: "semantic_conversion",
+        step: "normalize_terminal_usage",
+        subject: "usage",
+      },
+    });
+    partialObserver.close({ outcome: "success" });
+
+    const updatedPage = await authority.queryRequestJourneys({ limit: 10 });
+    const expectedPartialUsage = {
+      completeness: "partial",
+      reason: "component_unreported",
+    } as const;
+    expect(updatedPage.records).toContainEqual(expect.objectContaining({
+      requestId: partialRequestId,
+      usage: expectedPartialUsage,
+    }));
+    await expect(incompleteDelivered.promise).resolves.toMatchObject({
+      requestId: partialRequestId,
+      usage: expectedPartialUsage,
+    });
+    subscription.unsubscribe();
+  });
+
   it("publishes typed records only after their durable ACK, in records order, and honors unsubscribe", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-subscriptions-ack-"));
     roots.push(root);

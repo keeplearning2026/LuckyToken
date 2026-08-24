@@ -520,7 +520,7 @@ The diagnostics Module applies centralized bounded redaction before persistence.
 
 ### 14.8 Control Plane and compatibility contract
 
-The Application Control Plane is the only management seam into the running diagnostics authority. Its replacement wire contract is version 3 and provides typed operations equivalent to:
+The Application Control Plane is the only management seam into the running diagnostics authority. Its current wire contract is version 4 and provides typed operations equivalent to:
 
 - `queryRequestJourneys(query)`;
 - `getRequestJourney({ requestId })`;
@@ -528,6 +528,15 @@ The Application Control Plane is the only management seam into the running diagn
 - `subscribeRequestJourneys(listener)`;
 - `queryRuntimeEvents(query)` and `subscribeRuntimeEvents(listener)`;
 - `getAnalytics(query)`, preserving current product analytics semantics while sourcing them from Journeys.
+
+Each `queryRequestJourneys` result and closed-Journey subscription may include
+one bounded row-level usage projection. Complete usage exposes only input,
+cache-read, output, product cache-hit rate, and Provider-execution token speed.
+Partial or unavailable usage exposes only its closed completeness reason; its
+uncertified numeric components do not cross the management summary seam. The
+projection is derived from the existing terminal-usage and execution-timing
+facts and does not create another persistence authority or a detail-query
+dependency.
 
 Artifact reads return at most 256 KiB of base64 per call. Subscriber failure is contained in the Control Plane and cannot affect the Worker or Data Plane. When the Worker/database is unavailable, reads return a typed `unavailable` result with diagnostics-health facts; they do not return a fabricated empty-complete result and do not open SQLite directly.
 

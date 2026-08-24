@@ -22,7 +22,7 @@ import type {
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
 
-export const controlPlaneVersion = 3 as const;
+export const controlPlaneVersion = 4 as const;
 
 export interface ApplicationIdentity {
   readonly id: "luckytoken";

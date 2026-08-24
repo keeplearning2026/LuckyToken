@@ -52,7 +52,7 @@ describe("Ticket 25 attention projection through the Control Plane", () => {
       createRequestId: () => `attention-request-${nextId}`,
       pipeConnector: transport,
     });
-    await client.hello(3);
+    await client.hello(4);
     await expect(client.getStatus()).resolves.toMatchObject({ attention });
 
     attention = undefined;

@@ -89,6 +89,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .overview-stat-card { min-width: 0; min-height: 136px; display: grid; align-content: center; gap: 14px; padding: 24px 30px; border: 0; border-radius: var(--radius-card); background: var(--surface-soft); }
 .overview-stat-card span { color: var(--text); font-size: 14px; }
 .overview-stat-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: clamp(25px, 2.3vw, 40px); line-height: 1; font-weight: 650; letter-spacing: -.035em; }
+.overview-usage-exclusion { margin: -16px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
 .overview-requests { min-width: 0; position: relative; }
 .overview-requests-toolbar { height: 32px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .overview-requests-toolbar h2 { margin: 0; font-size: 14px; font-weight: 650; color: var(--text-secondary); }

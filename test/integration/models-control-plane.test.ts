@@ -72,7 +72,7 @@ describe("models.json through the Control Plane", () => {
       createRequestId: () => `models-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(3);
+    const hello = await client.hello(4);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }

@@ -253,7 +253,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     expect(first.exitCode).toBeNull();
 
     const status = await connectToServe(descriptorPath, "attach-status");
-    await status.hello(3);
+    await status.hello(4);
     await waitForRunning(status);
     await expect(status.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
@@ -274,7 +274,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await waitForDescriptor(descriptorPath);
 
     const client = await connectToServe(descriptorPath, "refused-quit");
-    await client.hello(3);
+    await client.hello(4);
     // The gateway starts asynchronously after the descriptor is published;
     // wait for the running state before the quit so the refused-quit
     // snapshot is deterministic.
@@ -294,7 +294,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     // The user-started headless process was not silently killed.
     expect(serve.exitCode).toBeNull();
     const status = await connectToServe(descriptorPath, "after-refusal");
-    await status.hello(3);
+    await status.hello(4);
     await expect(status.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
     });
@@ -317,7 +317,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await waitForDescriptor(descriptorPath);
 
     const client = await connectToServe(descriptorPath, "acknowledged-quit");
-    await client.hello(3);
+    await client.hello(4);
     const result = await client.executeApplicationCommand({
       command: "quit",
       acknowledged: true,
@@ -384,7 +384,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
     const client = await connectToServe(descriptorPath, "timeout-quit");
-    await client.hello(3);
+    await client.hello(4);
     const quitStartedAt = Date.now();
     const result = await client.executeApplicationCommand({
       command: "quit",
@@ -532,7 +532,7 @@ ${exit.stderr}`).toContain("timed out");
     // Windows cannot deliver SIGTERM to another process; end the owner
     // through the acknowledged application quit like an attached client.
     const client = await connectToServe(descriptorPath, "auto-start-quit");
-    await client.hello(3);
+    await client.hello(4);
     await client.executeApplicationCommand({
       command: "quit",
       acknowledged: true,
@@ -558,7 +558,7 @@ ${exit.stderr}`).toContain("timed out");
     await waitForDescriptor(descriptorPath, serve);
 
     const client = await connectToServe(descriptorPath, "desktop-owner");
-    await client.hello(3);
+    await client.hello(4);
     await waitForRunning(client);
     await expect(client.getStatus()).resolves.toMatchObject({
       modelDataPlane: "running",
@@ -624,7 +624,7 @@ ${exit.stderr}`).toContain("timed out");
     await waitForDescriptor(descriptorPath, serve);
 
     const client = await connectToServe(descriptorPath, "first-run");
-    await client.hello(3);
+    await client.hello(4);
     await waitForStartSettled(client);
     const firstStatus = await client.getStatus();
     expect(firstStatus).toMatchObject({
@@ -670,7 +670,7 @@ ${exit.stderr}`).toContain("timed out");
     const secondCapture = captureChild(second);
     await waitForDescriptor(descriptorPath, second);
     const secondClient = await connectToServe(descriptorPath, "first-run-2");
-    await secondClient.hello(3);
+    await secondClient.hello(4);
     const quitResult = await secondClient.executeApplicationCommand({
       command: "quit",
       acknowledged: true,

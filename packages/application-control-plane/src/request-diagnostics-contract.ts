@@ -1,4 +1,7 @@
-import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type {
+  NormalizedTerminalUsage,
+  UsageCompletenessReason,
+} from "@luckytoken/provider-contract/usage";
 
 /** Maximum records returned by one unified diagnostics query. */
 export const MAX_REQUEST_DIAGNOSTICS_QUERY_LIMIT = 1_000 as const;
@@ -60,6 +63,23 @@ export type RequestJourneyOutcome =
   | "aborted"
   | "interrupted";
 
+/** Bounded row-level usage projection for management clients. Incomplete
+ * terminal usage never carries component values because those values are not
+ * certified for product display or aggregation. */
+export type RequestJourneyUsageSummary =
+  | Readonly<{
+      readonly completeness: "complete";
+      readonly inputTokens: number;
+      readonly cacheReadTokens: number;
+      readonly outputTokens: number;
+      readonly cacheHitRate?: number;
+      readonly outputTokensPerSecond?: number;
+    }>
+  | Readonly<{
+      readonly completeness: "partial" | "unavailable";
+      readonly reason: UsageCompletenessReason;
+    }>;
+
 export interface RequestJourneyLocation {
   readonly phase: RequestJourneyPhase;
   readonly lane?: DataPlaneLane;
@@ -83,6 +103,7 @@ export interface RequestJourneySummary {
   readonly createdAt: number;
   readonly closedAt?: number;
   readonly primaryFailureLocation?: RequestJourneyLocation;
+  readonly usage?: RequestJourneyUsageSummary;
 }
 
 export interface RequestCancellationSnapshot {

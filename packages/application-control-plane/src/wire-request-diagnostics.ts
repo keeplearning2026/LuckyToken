@@ -1,4 +1,7 @@
-import { decodeNormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import {
+  decodeNormalizedTerminalUsage,
+  type UsageCompletenessReason,
+} from "@luckytoken/provider-contract/usage";
 
 import {
   MAX_REQUEST_DIAGNOSTICS_DETAIL_ITEMS,
@@ -45,6 +48,7 @@ import {
   type RequestJourneyRecord,
   type RequestJourneySubject,
   type RequestJourneySummary,
+  type RequestJourneyUsageSummary,
   type RequestJourneyTimelineEvent,
   type RequestWorkOutcome,
   type RuntimeEventQuery,
@@ -121,6 +125,15 @@ const ARTIFACT_STATES = new Set<RequestArtifactState>([
   "unavailable",
   "not_applicable",
 ]);
+const USAGE_INCOMPLETE_REASONS = new Set<UsageCompletenessReason>([
+  "failed",
+  "aborted",
+  "unsupported_terminal",
+  "usage_absent",
+  "component_unreported",
+  "invalid_components",
+  "undeclared_semantics",
+]);
 const ANALYTICS_OUTCOMES = new Set<RequestAnalyticsOutcome>([
   "success",
   "failed",
@@ -144,6 +157,62 @@ function hasOnlyKeys(
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isRate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function decodeRequestJourneyUsageSummary(
+  value: unknown,
+): RequestJourneyUsageSummary | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.completeness === "complete") {
+    if (
+      !hasOnlyKeys(value, [
+        "completeness",
+        "inputTokens",
+        "cacheReadTokens",
+        "outputTokens",
+        "cacheHitRate",
+        "outputTokensPerSecond",
+      ]) ||
+      !isNonNegativeSafeInteger(value.inputTokens) ||
+      !isNonNegativeSafeInteger(value.cacheReadTokens) ||
+      !isNonNegativeSafeInteger(value.outputTokens) ||
+      (value.cacheHitRate !== undefined && !isRate(value.cacheHitRate)) ||
+      (value.outputTokensPerSecond !== undefined &&
+        !isNonNegativeFiniteNumber(value.outputTokensPerSecond))
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      completeness: "complete" as const,
+      inputTokens: value.inputTokens,
+      cacheReadTokens: value.cacheReadTokens,
+      outputTokens: value.outputTokens,
+      ...(value.cacheHitRate === undefined ? {} : { cacheHitRate: value.cacheHitRate }),
+      ...(value.outputTokensPerSecond === undefined
+        ? {}
+        : { outputTokensPerSecond: value.outputTokensPerSecond }),
+    });
+  }
+  if (
+    (value.completeness !== "partial" && value.completeness !== "unavailable") ||
+    !hasOnlyKeys(value, ["completeness", "reason"]) ||
+    typeof value.reason !== "string" ||
+    !USAGE_INCOMPLETE_REASONS.has(value.reason as UsageCompletenessReason)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    completeness: value.completeness,
+    reason: value.reason as UsageCompletenessReason,
+  });
 }
 
 function boundedText(value: unknown, maximum: number): value is string {
@@ -847,6 +916,7 @@ export function decodeRequestJourneySummary(
       "createdAt",
       "closedAt",
       "primaryFailureLocation",
+      "usage",
     ]) ||
     !Number.isSafeInteger(value.id) ||
     (value.id as number) < 1 ||
@@ -876,6 +946,11 @@ export function decodeRequestJourneySummary(
   ) {
     return undefined;
   }
+  const usage =
+    value.usage === undefined
+      ? undefined
+      : decodeRequestJourneyUsageSummary(value.usage);
+  if (value.usage !== undefined && usage === undefined) return undefined;
   return Object.freeze({
     id: value.id as number,
     runtimeId: value.runtimeId,
@@ -888,6 +963,7 @@ export function decodeRequestJourneySummary(
     createdAt: value.createdAt,
     ...(value.closedAt === undefined ? {} : { closedAt: value.closedAt as number }),
     ...(primaryFailureLocation === undefined ? {} : { primaryFailureLocation }),
+    ...(usage === undefined ? {} : { usage }),
   });
 }
 
@@ -908,6 +984,7 @@ export function decodeRequestJourneyRecord(
       "createdAt",
       "closedAt",
       "primaryFailureLocation",
+      "usage",
       "admission",
       "timeline",
       "artifacts",
@@ -937,6 +1014,7 @@ export function decodeRequestJourneyRecord(
     ...(value.primaryFailureLocation === undefined
       ? {}
       : { primaryFailureLocation: value.primaryFailureLocation }),
+    ...(value.usage === undefined ? {} : { usage: value.usage }),
   });
   const admission = decodeAdmission(value.admission);
   if (summary === undefined || admission === undefined) return undefined;

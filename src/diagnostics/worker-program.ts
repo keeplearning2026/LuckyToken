@@ -321,6 +321,16 @@ function diagnosticsWorkerMain(): void {
     throw error;
   }
 
+  const incompleteUsageReasons = new Set([
+    "failed",
+    "aborted",
+    "unsupported_terminal",
+    "usage_absent",
+    "component_unreported",
+    "invalid_components",
+    "undeclared_semantics",
+  ]);
+
   const projectSummary = (row: {
     readonly id: number;
     readonly runtimeId: string;
@@ -335,12 +345,57 @@ function diagnosticsWorkerMain(): void {
     readonly admissionJson: string;
     readonly primaryFailureId: string | null;
     readonly primaryFailureJson: string | null;
+    readonly executionStartedAt: number | null;
+    readonly executionTerminalAt: number | null;
+    readonly usageCompleteness: string | null;
+    readonly usageInput: number | null;
+    readonly usageCacheRead: number | null;
+    readonly usageOutput: number | null;
+    readonly usageReason: string | null;
   }): Record<string, unknown> => {
     const primaryFailure =
       row.primaryFailureJson === null
         ? undefined
         : (JSON.parse(row.primaryFailureJson) as Record<string, unknown>);
     const primaryFailureLocation = primaryFailure?.location;
+    let usage: Record<string, unknown> | undefined;
+    if (
+      row.usageCompleteness === "complete" &&
+      row.usageInput !== null &&
+      row.usageCacheRead !== null &&
+      row.usageOutput !== null
+    ) {
+      const inputTokens = Number(row.usageInput);
+      const cacheReadTokens = Number(row.usageCacheRead);
+      const outputTokens = Number(row.usageOutput);
+      const cacheHitDenominator = inputTokens + cacheReadTokens;
+      const executionDurationMs =
+        row.executionStartedAt === null || row.executionTerminalAt === null
+          ? undefined
+          : Number(row.executionTerminalAt) - Number(row.executionStartedAt);
+      usage = {
+        completeness: "complete",
+        inputTokens,
+        cacheReadTokens,
+        outputTokens,
+        ...(cacheHitDenominator > 0
+          ? { cacheHitRate: cacheReadTokens / cacheHitDenominator }
+          : {}),
+        ...(executionDurationMs !== undefined && executionDurationMs > 0
+          ? { outputTokensPerSecond: (outputTokens / executionDurationMs) * 1_000 }
+          : {}),
+      };
+    } else if (
+      (row.usageCompleteness === "partial" ||
+        row.usageCompleteness === "unavailable") &&
+      row.usageReason !== null &&
+      incompleteUsageReasons.has(row.usageReason)
+    ) {
+      usage = {
+        completeness: row.usageCompleteness,
+        reason: row.usageReason,
+      };
+    }
     return {
       id: Number(row.id),
       runtimeId: row.runtimeId,
@@ -356,6 +411,7 @@ function diagnosticsWorkerMain(): void {
       primaryFailureLocation !== null
         ? { primaryFailureLocation }
         : {}),
+      ...(usage === undefined ? {} : { usage }),
     };
   };
 
@@ -366,6 +422,18 @@ function diagnosticsWorkerMain(): void {
            r.completeness AS completeness, r.created_at AS createdAt,
            r.closed_at AS closedAt, j.admission_json AS admissionJson,
            j.primary_failure_id AS primaryFailureId,
+           j.execution_started_at AS executionStartedAt,
+           j.execution_terminal_at AS executionTerminalAt,
+           j.usage_completeness AS usageCompleteness,
+           j.usage_input AS usageInput,
+           j.usage_cache_read AS usageCacheRead,
+           j.usage_output AS usageOutput,
+           (SELECT json_extract(e.payload_json, '$.usage.reason')
+              FROM request_journey_events e
+             WHERE e.request_id = j.request_id
+               AND e.kind = 'terminal_usage_observed'
+             ORDER BY e.sequence
+             LIMIT 1) AS usageReason,
            (SELECT e.payload_json
               FROM request_journey_events e
              WHERE e.request_id = j.request_id

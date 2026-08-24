@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_REQUEST_ARTIFACT_CHUNK_BYTES,
   MAX_REQUEST_DIAGNOSTICS_QUERY_LIMIT,
+  controlPlaneVersion,
   decodeRequestArtifactGetInput,
   decodeRequestArtifactReadResult,
   decodeRequestJourneyGetInput,
@@ -259,6 +260,10 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
   ]);
 
 describe("unified request diagnostics Control Plane contract", () => {
+  it("publishes the unified diagnostics contract through Control Plane v4", () => {
+    expect(controlPlaneVersion).toBe(4);
+  });
+
   it("strictly decodes the bounded Request Journey query", () => {
     expect(decodeRequestJourneyQuery(undefined)).toBeUndefined();
     expect(
@@ -309,6 +314,69 @@ describe("unified request diagnostics Control Plane contract", () => {
         closedAt: undefined,
       }),
     ).toMatchObject({ outcome: "running" });
+  });
+
+  it("strictly decodes trustworthy row-level usage projections", () => {
+    const complete = {
+      ...JOURNEY_SUMMARY,
+      usage: {
+        completeness: "complete",
+        inputTokens: 11,
+        cacheReadTokens: 3,
+        outputTokens: 7,
+        cacheHitRate: 3 / 14,
+        outputTokensPerSecond: 7,
+      },
+    } as const;
+    expect(decodeRequestJourneySummary(complete)).toEqual(complete);
+
+    const partial = {
+      ...JOURNEY_SUMMARY,
+      usage: { completeness: "partial", reason: "component_unreported" },
+    } as const;
+    const unavailable = {
+      ...JOURNEY_SUMMARY,
+      usage: { completeness: "unavailable", reason: "unsupported_terminal" },
+    } as const;
+    expect(decodeRequestJourneySummary(partial)).toEqual(partial);
+    expect(decodeRequestJourneySummary(unavailable)).toEqual(unavailable);
+
+    expect(
+      decodeRequestJourneySummary({
+        ...complete,
+        usage: { ...complete.usage, cacheHitRate: 1.1 },
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...complete,
+        usage: { ...complete.usage, outputTokensPerSecond: Number.POSITIVE_INFINITY },
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...complete,
+        usage: { ...complete.usage, inputTokens: -1 },
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...complete,
+        usage: { ...complete.usage, reason: "failed" },
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...partial,
+        usage: { ...partial.usage, inputTokens: 11 },
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...partial,
+        usage: { completeness: "partial", reason: "not-a-reason" },
+      }),
+    ).toBeUndefined();
   });
 
   it("round-trips the Codex Local Native web_search operation", () => {

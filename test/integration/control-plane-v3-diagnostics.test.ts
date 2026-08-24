@@ -46,8 +46,8 @@ let nextEndpointId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextEndpointId += 1;
   return {
-    address: `\\\\.\\pipe\\luckytoken-v3-diagnostics-${process.pid}-${nextEndpointId}`,
-    capability: "v3-diagnostics-capability-012345678901234567890123456789",
+    address: `\\\\.\\pipe\\luckytoken-v4-diagnostics-${process.pid}-${nextEndpointId}`,
+    capability: "v4-diagnostics-capability-012345678901234567890123456789",
   };
 }
 
@@ -91,6 +91,14 @@ const JOURNEY_SUMMARY: RequestJourneySummary = Object.freeze({
   completeness: "complete",
   createdAt: 1_787_558_400_000,
   closedAt: 1_787_558_400_100,
+  usage: Object.freeze({
+    completeness: "complete",
+    inputTokens: 11,
+    cacheReadTokens: 3,
+    outputTokens: 7,
+    cacheHitRate: 3 / 14,
+    outputTokensPerSecond: 7,
+  }),
 });
 
 const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
@@ -203,7 +211,7 @@ function unavailableDiagnosticsAdapter(): UnifiedDiagnosticsManagement {
   });
 }
 
-describe("Application Control Plane v3 unified diagnostics", () => {
+describe("Application Control Plane v4 unified diagnostics", () => {
   const hosts: RunningControlPlane[] = [];
   const clients: Array<{ close(): Promise<void> }> = [];
   const transport = createNodePipeTransport();
@@ -213,8 +221,8 @@ describe("Application Control Plane v3 unified diagnostics", () => {
     await Promise.all(hosts.splice(0).map((host) => host.close()));
   });
 
-  it("negotiates only v3 and round-trips unified diagnostics reads with typed unavailability", async () => {
-    expect(controlPlaneVersion).toBe(3);
+  it("negotiates only v4 and round-trips unified diagnostics reads with typed unavailability", async () => {
+    expect(controlPlaneVersion).toBe(4);
     const fixture = createDiagnosticsFixture();
     const target = endpoint();
     const host = await startControlPlane({
@@ -235,11 +243,11 @@ describe("Application Control Plane v3 unified diagnostics", () => {
     await expect(connected.hello(2)).resolves.toEqual({
       type: "incompatible",
       requestedVersion: 2,
-      supportedVersions: [3],
+      supportedVersions: [4],
     });
-    await expect(connected.hello(3)).resolves.toMatchObject({
+    await expect(connected.hello(4)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 3,
+      contractVersion: 4,
     });
     await expect(connected.queryRequestJourneys({ limit: 10 })).resolves.toEqual({
       outcome: "ok",
@@ -277,14 +285,14 @@ describe("Application Control Plane v3 unified diagnostics", () => {
     await raw.write(
       encodeRawFrame({
         type: "hello",
-        requestId: "v3-raw-hello",
-        contractVersion: 3,
+        requestId: "v4-raw-hello",
+        contractVersion: 4,
         capability: target.capability,
       }),
     );
     expect(await readRawFrame(raw)).toMatchObject({
       type: "hello_result",
-      result: { type: "compatible", contractVersion: 3 },
+      result: { type: "compatible", contractVersion: 4 },
     });
     for (const [type, requestId] of [
       ["get_diagnostics", "legacy-diagnostics"],
@@ -341,7 +349,7 @@ describe("Application Control Plane v3 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(unavailableClient);
-    await unavailableClient.hello(3);
+    await unavailableClient.hello(4);
     const typedUnavailable = {
       outcome: "unavailable",
       error: {
@@ -388,7 +396,7 @@ describe("Application Control Plane v3 unified diagnostics", () => {
   });
 
   it("round-trips both unified subscriptions and contains one client's listener failure", async () => {
-    expect(controlPlaneVersion).toBe(3);
+    expect(controlPlaneVersion).toBe(4);
     const fixture = createDiagnosticsFixture();
     const host = await startControlPlane({
       endpoint: endpoint(),
@@ -408,8 +416,8 @@ describe("Application Control Plane v3 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(first, second);
-    await first.hello(3);
-    await second.hello(3);
+    await first.hello(4);
+    await second.hello(4);
 
     const journeyDelivered = deferred<void>();
     const runtimeDelivered = deferred<void>();
