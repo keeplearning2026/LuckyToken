@@ -86,7 +86,6 @@ describe("Codex catalog projection", () => {
         { effort: "high", description: "Native high" },
       ],
       support_verbosity: false,
-      supports_parallel_tool_calls: false,
       supports_image_detail_original: false,
       priority: 401,
     });

@@ -157,7 +157,6 @@ function codexEntry(
     support_verbosity: false,
     apply_patch_tool_type: "freeform",
     truncation_policy: Object.freeze({ mode: "tokens", limit: 10_000 }),
-    supports_parallel_tool_calls: false,
     supports_image_detail_original: false,
     supports_search_tool: false,
     experimental_supported_tools: Object.freeze([]),

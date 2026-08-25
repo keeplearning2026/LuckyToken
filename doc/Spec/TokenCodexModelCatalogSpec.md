@@ -65,7 +65,7 @@ No reference project is authoritative for Token. Reference implementations provi
 - [CommandCode model capabilities](../../packages/commandcode-model-catalog/src/index.ts) contain per-model context, modalities, reasoning status, and reasoning-effort data without volatile pricing. Private and Goat project those facts into their own Pi Model identities. For example, DeepSeek V4 Flash exposes `high/max`, Qwen 3.8 Max exposes `low/medium/xhigh`, Grok 4.5 exposes `low/medium/high`, and GPT-5.6 Luna exposes `low/medium/high/xhigh/max`.
 - Pi's installed `Model` contract says missing `thinkingLevelMap` keys use provider defaults, while `null` means unsupported. Its `getSupportedThinkingLevels` implementation exposes `xhigh/max` only when explicitly mapped: [types](../../node_modules/@earendil-works/pi-ai/dist/types.d.ts) and [implementation](../../node_modules/@earendil-works/pi-ai/dist/models.js).
 - Token converts freeform custom/apply-patch and shell tools, but rejects deferred `tool_search` lifecycles: [Responses request conversion](../../src/protocols/openai-responses/request.ts) and [request tests](../../test/unit/openai-responses-request.test.ts).
-- The current Responses conversion drops `text.verbosity` and the request's `parallel_tool_calls` auxiliary field; therefore the catalog must not infer those capabilities merely from Codex defaults.
+- The current Responses conversion drops `text.verbosity`; therefore the catalog must not infer that capability merely from Codex defaults. `parallel_tool_calls` is consumed and projected by Token's Responses supplement, but Codex does not read a model-catalog field for it, so the catalog carries no parallel-tool declaration.
 - Official OpenAI model pages publish capabilities per model rather than as one global family ladder. For example, [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) lists `none/low/medium/high/xhigh/max`, a 1,050,000-token context window, and a 128,000-token maximum output.
 
 ### 2.3 Confirmed reference evidence
@@ -198,7 +198,6 @@ In addition to the required fields, routed entries must explicitly emit these co
 | `context_window` | `128000` | Positive safe Pi `Model.contextWindow` |
 | `max_context_window` | Same as `context_window` | Same as routed context unless a distinct routed maximum has its own authority |
 | `effective_context_window_percent` | `95` | Installed Codex value if it remains valid |
-| `supports_parallel_tool_calls` | `false` | `true` only after the provider/model and Token conversion are both certified |
 | `supports_image_detail_original` | `false` | `true` only after original-detail semantics are preserved end to end; image input alone is insufficient |
 | `supports_search_tool` | `false` | `true` only after Token supports the matching deferred discovery lifecycle |
 | `supports_reasoning_summaries` | `false` when `Model.reasoning === false` | Exactly `Model.reasoning`; this is the Pi model capability authority and is never inferred from model names or from the emitted reasoning ladder |
